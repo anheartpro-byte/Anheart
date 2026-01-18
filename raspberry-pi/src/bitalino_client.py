@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 import threading
+import subprocess
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
 from queue import Queue, Empty
@@ -28,14 +29,120 @@ class SampleBatch:
     channels: list[ChannelData]
 
 
+# BITalino analog channel names
+# These correspond to A1-A6 on the BITalino board
+# You can plug any sensor into any channel, but this is the recommended mapping:
 CHANNEL_NAMES = {
-    0: "ECG",
-    1: "EMG",
-    2: "EDA",
-    3: "EEG",
-    4: "ACC",
-    5: "LUX",
+    0: "ECG",      # A1 - Electrocardiography (heart)
+    1: "EDA",      # A2 - Electrodermal Activity (skin conductance/stress)
+    2: "SpO2",     # A3 - Pulse Oximetry (blood oxygen via finger clip)
+    3: "RESP",     # A4 - Respiration (chest band)
+    4: "EMG",      # A5 - Electromyography (muscle) or LUX (light)
+    5: "LUX",      # A6 - Light sensor or other
 }
+
+# Default BITalino PIN code
+BITALINO_PIN = "1234"
+
+
+def pair_bluetooth_device(mac_address: str, pin: str = BITALINO_PIN) -> bool:
+    """
+    Pair with a Bluetooth device using bluetoothctl.
+    
+    Args:
+        mac_address: Bluetooth MAC address
+        pin: PIN code (default 1234 for BITalino)
+    
+    Returns:
+        True if pairing successful or already paired
+    """
+    try:
+        # Check if already paired
+        result = subprocess.run(
+            ["bluetoothctl", "info", mac_address],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if "Paired: yes" in result.stdout:
+            logger.info(f"Device {mac_address} already paired")
+            return True
+        
+        logger.info(f"Pairing with {mac_address} using PIN {pin}...")
+        
+        # Create expect-like script for pairing
+        pair_script = f"""
+import pexpect
+import sys
+
+child = pexpect.spawn('bluetoothctl', encoding='utf-8', timeout=30)
+child.expect('#')
+child.sendline('agent on')
+child.expect('#')
+child.sendline('default-agent')
+child.expect('#')
+child.sendline('pair {mac_address}')
+
+try:
+    i = child.expect(['PIN code:', 'Passkey:', 'Enter PIN', 'Pairing successful', 'AlreadyExists', 'Failed'], timeout=30)
+    if i in [0, 1, 2]:
+        child.sendline('{pin}')
+        child.expect(['Pairing successful', 'AlreadyExists', 'Failed'], timeout=30)
+except:
+    pass
+
+child.sendline('trust {mac_address}')
+child.expect('#')
+child.sendline('quit')
+child.close()
+print('OK')
+"""
+        
+        # Try using pexpect if available
+        try:
+            result = subprocess.run(
+                ["python3", "-c", pair_script],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if "OK" in result.stdout:
+                logger.info(f"Pairing successful")
+                return True
+        except Exception as e:
+            logger.warning(f"pexpect pairing failed: {e}")
+        
+        # Fallback: simple bluetoothctl commands (may require manual PIN entry)
+        commands = [
+            ["bluetoothctl", "agent", "on"],
+            ["bluetoothctl", "default-agent"],
+            ["bluetoothctl", "pair", mac_address],
+            ["bluetoothctl", "trust", mac_address],
+        ]
+        
+        for cmd in commands:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=15)
+            except Exception:
+                pass
+        
+        # Check if pairing succeeded
+        result = subprocess.run(
+            ["bluetoothctl", "info", mac_address],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if "Paired: yes" in result.stdout:
+            logger.info(f"Pairing successful")
+            return True
+        
+        logger.warning(f"Automatic pairing may have failed. Device might need manual pairing.")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Pairing error: {e}")
+        return False
 
 
 class BITalinoClient:
@@ -46,18 +153,24 @@ class BITalinoClient:
         mac_address: str,
         channels: list[int] | None = None,
         sample_rate: int = 1000,
+        auto_pair: bool = True,
     ):
         """
         Initialize BITalino client.
         
         Args:
-            mac_address: Bluetooth MAC address of the device
+            mac_address: Bluetooth MAC address OR serial port (e.g., /dev/rfcomm0)
             channels: List of analog channels to read (0-5)
             sample_rate: Sampling rate in Hz (1, 10, 100, or 1000)
+            auto_pair: Automatically attempt Bluetooth pairing with PIN 1234
         """
         self.mac_address = mac_address
         self.channels = channels if channels is not None else [0]
         self.sample_rate = sample_rate
+        self.auto_pair = auto_pair
+        
+        # Check if using serial port instead of MAC address
+        self.use_serial = mac_address.startswith("/dev/")
         
         self._device: Optional[BITalino] = None
         self.is_connected = False
@@ -79,6 +192,10 @@ class BITalinoClient:
         """Connect to BITalino device."""
         logger.info(f"Connecting to BITalino at {self.mac_address}...")
         
+        # Auto-pair if using Bluetooth MAC address
+        if self.auto_pair and not self.use_serial:
+            pair_bluetooth_device(self.mac_address, BITALINO_PIN)
+        
         try:
             # Run blocking connection in thread pool
             loop = asyncio.get_event_loop()
@@ -90,11 +207,12 @@ class BITalinoClient:
             logger.info("Connected to BITalino")
             
             # Get device version for debugging
-            try:
-                version = self._device.version()
-                logger.info(f"Device version: {version}")
-            except Exception as e:
-                logger.warning(f"Could not get device version: {e}")
+            if self._device is not None:
+                try:
+                    version = self._device.version()
+                    logger.info(f"Device version: {version}")
+                except Exception as e:
+                    logger.warning(f"Could not get device version: {e}")
             
             return True
             
