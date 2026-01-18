@@ -29,7 +29,8 @@ import {
 } from "@/components/ui/form";
 import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 
-const AVAILABLE_CHANNELS = ["ECG", "EMG", "EDA", "EEG", "ACC", "LUX"];
+// Available BITalino sensor channels (A1-A6)
+const AVAILABLE_CHANNELS = ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"];
 
 const machineSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),

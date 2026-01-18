@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+pytest.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment (mounted separately)
+.env
+.env.local
+.env.example
+
+# Data files (mounted as volume)
+data/
+*.db
+buffer.db
+
+# Documentation
+*.md
+!README.md
+
+# Scripts (not needed in container)
+scripts/
+
+# Build artifacts
+*.tar.gz
