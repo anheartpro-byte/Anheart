@@ -1,7 +1,7 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 
-export type Role = "admin" | "gestionnaire" | "technician" | "user";
+export type Role = "admin" | "gestionnaire" | "user";
 
 /**
  * Require authentication - throws if not logged in
@@ -164,18 +164,6 @@ export async function canAccessUser(
     }
   }
 
-  // Technician can access patients of their gestionnaire
-  if (currentUser.role === "technician" && currentUser.gestionnaireId) {
-    const isManager = await isGestionnaireOfUser(
-      ctx,
-      currentUser.gestionnaireId,
-      targetUserId,
-    );
-    if (isManager) {
-      return true;
-    }
-  }
-
   return false;
 }
 
@@ -201,15 +189,6 @@ export async function canAccessMachine(
   // Gestionnaire can access machines they manage (via machine_gestionnaires relation)
   if (currentUser.role === "gestionnaire") {
     return await isGestionnaireOfMachine(ctx, currentUser._id, machineId);
-  }
-
-  // Technician can access machines managed by their gestionnaire
-  if (currentUser.role === "technician" && currentUser.gestionnaireId) {
-    return await isGestionnaireOfMachine(
-      ctx,
-      currentUser.gestionnaireId,
-      machineId,
-    );
   }
 
   return false;
@@ -239,6 +218,5 @@ export async function canManageMachine(
     return await isGestionnaireOfMachine(ctx, currentUser._id, machineId);
   }
 
-  // Technicians cannot manage machines (only use them)
   return false;
 }

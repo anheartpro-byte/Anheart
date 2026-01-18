@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -19,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Cpu, Search, Pencil, Eye } from "lucide-react";
+import { Plus, Cpu, Search, Eye } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
@@ -39,21 +41,39 @@ type Machine = {
   status: string;
   lastHeartbeat: number;
   location?: string;
+  isDeleted?: boolean;
 };
 
 export default function MachinesPage() {
   const t = useTranslations();
   const locale = useLocale();
   const router = useRouter();
-  const machines = useQuery(api.machines.listMachines, {});
   const user = useQuery(api.users.getCurrentUser);
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+
+  const isAdmin = user?.role === "admin";
+
+  // For admin: always fetch all machines (including deleted) and filter client-side
+  // For others: fetch only non-deleted machines
+  const allMachines = useQuery(api.machines.listMachines, {
+    includeDeleted: isAdmin ? true : undefined,
+  });
+
+  // Filter client-side based on toggle to avoid refetch
+  const machines = useMemo(() => {
+    if (!allMachines) return undefined;
+    if (isAdmin && !showDeleted) {
+      return allMachines.filter((m) => !m.isDeleted);
+    }
+    return allMachines;
+  }, [allMachines, isAdmin, showDeleted]);
 
   const dateLocale = locale === "fr" ? fr : enUS;
-  const canCreate = user?.role === "admin" || user?.role === "gestionnaire";
+  const canCreate = user?.role === "admin"; // Only admin can create machines
 
   const columns = useMemo<ColumnDef<Machine>[]>(
     () => [
@@ -67,7 +87,12 @@ export default function MachinesPage() {
       {
         accessorKey: "status",
         header: t("machines.status"),
-        cell: ({ row }) => <MachineStatusBadge status={row.original.status} />,
+        cell: ({ row }) => (
+          <MachineStatusBadge
+            status={row.original.status}
+            isDeleted={row.original.isDeleted}
+          />
+        ),
       },
       {
         accessorKey: "location",
@@ -144,15 +169,32 @@ export default function MachinesPage() {
         )}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t("common.search")}
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
-          className="pl-9"
-        />
+      {/* Search and Filters */}
+      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t("common.search")}
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Switch
+              id="show-deleted"
+              checked={showDeleted}
+              onCheckedChange={setShowDeleted}
+            />
+            <Label
+              htmlFor="show-deleted"
+              className="text-sm text-muted-foreground"
+            >
+              {t("machines.showDeleted")}
+            </Label>
+          </div>
+        )}
       </div>
 
       {table.getRowModel().rows.length === 0 ? (
@@ -226,8 +268,18 @@ export default function MachinesPage() {
   );
 }
 
-function MachineStatusBadge({ status }: { status: string }) {
+function MachineStatusBadge({
+  status,
+  isDeleted,
+}: {
+  status: string;
+  isDeleted?: boolean;
+}) {
   const t = useTranslations("machines");
+
+  if (isDeleted) {
+    return <Badge variant="destructive">{t("deleted")}</Badge>;
+  }
 
   const variants: Record<
     string,

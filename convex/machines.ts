@@ -15,7 +15,8 @@ import {
 import { generateApiKey, hashApiKey } from "./lib/crypto";
 
 /**
- * Create a new machine (Raspberry Pi)
+ * Create a new machine (Raspberry Pi) - Admin only
+ * Admin creates machines and assigns them to gestionnaires
  */
 export const createMachine = mutation({
   args: {
@@ -28,14 +29,14 @@ export const createMachine = mutation({
         batchInterval: v.number(),
       }),
     ),
-    additionalGestionnaireIds: v.optional(v.array(v.id("users"))), // Admin can assign multiple gestionnaires
+    gestionnaireIds: v.optional(v.array(v.id("users"))), // Gestionnaires to assign this machine to
   },
   returns: v.object({
     machineId: v.id("machines"),
     apiKey: v.string(),
   }),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, ["admin", "gestionnaire"]);
+    const currentUser = await requireRole(ctx, ["admin"]);
 
     const { plain, hashed } = generateApiKey();
     const now = Date.now();
@@ -54,27 +55,16 @@ export const createMachine = mutation({
       createdAt: now,
     });
 
-    // Create machine-gestionnaire relation for the creator (as owner)
-    if (currentUser.role === "gestionnaire") {
-      await ctx.db.insert("machine_gestionnaires", {
-        machineId,
-        gestionnaireId: currentUser._id,
-        isOwner: true,
-        createdAt: now,
-        createdBy: currentUser._id,
-      });
-    }
-
-    // Admin can assign additional gestionnaires
-    if (currentUser.role === "admin" && args.additionalGestionnaireIds) {
-      for (const gestionnaireId of args.additionalGestionnaireIds) {
+    // Assign machine to gestionnaires
+    if (args.gestionnaireIds && args.gestionnaireIds.length > 0) {
+      for (let i = 0; i < args.gestionnaireIds.length; i++) {
+        const gestionnaireId = args.gestionnaireIds[i];
         const gestionnaire = await ctx.db.get(gestionnaireId);
         if (gestionnaire && gestionnaire.role === "gestionnaire") {
           await ctx.db.insert("machine_gestionnaires", {
             machineId,
             gestionnaireId,
-            isOwner:
-              args.additionalGestionnaireIds.indexOf(gestionnaireId) === 0, // First one is owner
+            isOwner: i === 0, // First one is the primary owner
             createdAt: now,
             createdBy: currentUser._id,
           });
@@ -87,6 +77,54 @@ export const createMachine = mutation({
       machineId,
       apiKey: plain,
     };
+  },
+});
+
+/**
+ * Assign a machine to gestionnaires (Admin only)
+ */
+export const assignMachineToGestionnaires = mutation({
+  args: {
+    machineId: v.id("machines"),
+    gestionnaireIds: v.array(v.id("users")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const currentUser = await requireRole(ctx, ["admin"]);
+
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) {
+      throw new Error("Machine not found");
+    }
+
+    const now = Date.now();
+
+    // Remove existing relations
+    const existingRelations = await ctx.db
+      .query("machine_gestionnaires")
+      .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
+      .collect();
+
+    for (const relation of existingRelations) {
+      await ctx.db.delete(relation._id);
+    }
+
+    // Add new relations
+    for (let i = 0; i < args.gestionnaireIds.length; i++) {
+      const gestionnaireId = args.gestionnaireIds[i];
+      const gestionnaire = await ctx.db.get(gestionnaireId);
+      if (gestionnaire && gestionnaire.role === "gestionnaire") {
+        await ctx.db.insert("machine_gestionnaires", {
+          machineId: args.machineId,
+          gestionnaireId,
+          isOwner: i === 0,
+          createdAt: now,
+          createdBy: currentUser._id,
+        });
+      }
+    }
+
+    return null;
   },
 });
 
@@ -152,6 +190,8 @@ export const getMachine = query({
         batchInterval: v.number(),
       }),
       createdAt: v.number(),
+      isDeleted: v.optional(v.boolean()),
+      deletedAt: v.optional(v.number()),
       gestionnaires: v.array(
         v.object({
           _id: v.id("users"),
@@ -164,13 +204,19 @@ export const getMachine = query({
     v.null(),
   ),
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) return null;
+
+    // Check if machine is deleted - only admin can see deleted machines
+    if (machine.isDeleted && currentUser.role !== "admin") {
+      return null;
+    }
+
     const hasAccess = await canAccessMachine(ctx, args.machineId);
     if (!hasAccess) {
       return null;
     }
-
-    const machine = await ctx.db.get(args.machineId);
-    if (!machine) return null;
 
     // Get all gestionnaires for this machine
     const relations = await ctx.db
@@ -205,6 +251,8 @@ export const getMachine = query({
       location: machine.location,
       config: machine.config,
       createdAt: machine.createdAt,
+      isDeleted: machine.isDeleted,
+      deletedAt: machine.deletedAt,
       gestionnaires: validGestionnaires,
     };
   },
@@ -222,6 +270,7 @@ export const listMachines = query({
         v.literal("in_session"),
       ),
     ),
+    includeDeleted: v.optional(v.boolean()), // Admin only - include deleted machines
   },
   returns: v.array(
     v.object({
@@ -230,6 +279,7 @@ export const listMachines = query({
       status: v.string(),
       lastHeartbeat: v.number(),
       location: v.optional(v.string()),
+      isDeleted: v.optional(v.boolean()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -238,12 +288,15 @@ export const listMachines = query({
     let allMachines = await ctx.db.query("machines").collect();
 
     if (currentUser.role === "admin") {
-      // Admin sees all machines
+      // Admin sees all machines, optionally including deleted ones
+      if (!args.includeDeleted) {
+        allMachines = allMachines.filter((m) => !m.isDeleted);
+      }
       if (args.status) {
         allMachines = allMachines.filter((m) => m.status === args.status);
       }
     } else if (currentUser.role === "gestionnaire") {
-      // Gestionnaire sees machines they manage via relation table
+      // Gestionnaire sees machines they manage via relation table (never deleted ones)
       const relations = await ctx.db
         .query("machine_gestionnaires")
         .withIndex("by_gestionnaire", (q) =>
@@ -254,30 +307,8 @@ export const listMachines = query({
       const machineIdSet = new Set(
         relations.map((r) => r.machineId.toString()),
       );
-      allMachines = allMachines.filter((m) =>
-        machineIdSet.has(m._id.toString()),
-      );
-
-      if (args.status) {
-        allMachines = allMachines.filter((m) => m.status === args.status);
-      }
-    } else if (
-      currentUser.role === "technician" &&
-      currentUser.gestionnaireId
-    ) {
-      // Technician sees their gestionnaire's machines via relation table
-      const relations = await ctx.db
-        .query("machine_gestionnaires")
-        .withIndex("by_gestionnaire", (q) =>
-          q.eq("gestionnaireId", currentUser.gestionnaireId!),
-        )
-        .collect();
-
-      const machineIdSet = new Set(
-        relations.map((r) => r.machineId.toString()),
-      );
-      allMachines = allMachines.filter((m) =>
-        machineIdSet.has(m._id.toString()),
+      allMachines = allMachines.filter(
+        (m) => machineIdSet.has(m._id.toString()) && !m.isDeleted,
       );
 
       if (args.status) {
@@ -294,6 +325,7 @@ export const listMachines = query({
       status: m.status,
       lastHeartbeat: m.lastHeartbeat,
       location: m.location,
+      isDeleted: m.isDeleted,
     }));
   },
 });
@@ -340,7 +372,7 @@ export const updateMachine = mutation({
 });
 
 /**
- * Delete a machine
+ * Soft delete a machine (marks as deleted, can be restored by admin)
  */
 export const deleteMachine = mutation({
   args: {
@@ -348,6 +380,7 @@ export const deleteMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId);
     if (!canManage) {
       throw new Error("Not authorized to manage this machine");
@@ -375,16 +408,45 @@ export const deleteMachine = mutation({
       throw new Error("Cannot delete machine with pending sessions");
     }
 
-    // Delete all machine-gestionnaire relations
-    const relations = await ctx.db
-      .query("machine_gestionnaires")
-      .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
-      .collect();
-    for (const relation of relations) {
-      await ctx.db.delete(relation._id);
+    // Soft delete - mark as deleted instead of actually deleting
+    await ctx.db.patch(args.machineId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: currentUser._id,
+      status: "offline", // Set to offline when deleted
+    });
+
+    return null;
+  },
+});
+
+/**
+ * Restore a deleted machine (admin only)
+ */
+export const restoreMachine = mutation({
+  args: {
+    machineId: v.id("machines"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["admin"]);
+
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) {
+      throw new Error("Machine not found");
     }
 
-    await ctx.db.delete(args.machineId);
+    if (!machine.isDeleted) {
+      throw new Error("Machine is not deleted");
+    }
+
+    // Restore the machine
+    await ctx.db.patch(args.machineId, {
+      isDeleted: false,
+      deletedAt: undefined,
+      deletedBy: undefined,
+    });
+
     return null;
   },
 });
@@ -799,24 +861,15 @@ export const getMachinesForGestionnaire = query({
     if (!targetGestionnaireId) {
       if (currentUser.role === "gestionnaire") {
         targetGestionnaireId = currentUser._id;
-      } else if (
-        currentUser.role === "technician" &&
-        currentUser.gestionnaireId
-      ) {
-        targetGestionnaireId = currentUser.gestionnaireId;
       } else if (currentUser.role !== "admin") {
         return [];
       }
     }
 
-    // Admin can query any gestionnaire, others only their own
+    // Admin can query any gestionnaire, gestionnaires only their own
     if (currentUser.role !== "admin") {
       if (currentUser.role === "gestionnaire") {
         if (targetGestionnaireId !== currentUser._id) {
-          return [];
-        }
-      } else if (currentUser.role === "technician") {
-        if (targetGestionnaireId !== currentUser.gestionnaireId) {
           return [];
         }
       } else {

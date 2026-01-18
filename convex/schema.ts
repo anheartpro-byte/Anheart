@@ -8,10 +8,9 @@ export default defineSchema({
     role: v.union(
       v.literal("admin"),
       v.literal("gestionnaire"),
-      v.literal("technician"),
       v.literal("user"),
     ),
-    // For technicians: which gestionnaire they work for (single relationship)
+    // Legacy field - kept for migration compatibility
     gestionnaireId: v.optional(v.id("users")),
     firstName: v.string(),
     lastName: v.string(),
@@ -67,15 +66,19 @@ export default defineSchema({
       batchInterval: v.number(), // ms (default 1000)
     }),
     createdAt: v.number(),
+    isDeleted: v.optional(v.boolean()), // Soft delete flag
+    deletedAt: v.optional(v.number()), // When it was deleted
+    deletedBy: v.optional(v.id("users")), // Who deleted it
   })
     .index("by_api_key", ["apiKey"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_is_deleted", ["isDeleted"]),
 
   // Sessions - ECG recording sessions
   sessions: defineTable({
     machineId: v.id("machines"),
     userId: v.id("users"), // Patient
-    technicianId: v.optional(v.id("users")), // Who started it
+    startedById: v.optional(v.id("users")), // Who started the session
     status: v.union(
       v.literal("pending"),
       v.literal("active"),
@@ -90,7 +93,7 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_machine", ["machineId"])
     .index("by_machine_and_status", ["machineId", "status"])
-    .index("by_technician", ["technicianId"]),
+    .index("by_started_by", ["startedById"]),
 
   // ECG Data - Real-time streaming data batches
   ecg_data: defineTable({
