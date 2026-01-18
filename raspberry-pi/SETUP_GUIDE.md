@@ -2,6 +2,13 @@
 
 This guide assumes you're starting from scratch with a new Raspberry Pi and BITalino device.
 
+> **Note on Deployment Options:** This guide covers manual installation which requires
+> compiling some dependencies. For production deployment with multiple devices, consider:
+>
+> - **Pre-built SD card image** - Clone a fully configured Pi image (see Part 14)
+> - **Docker container** - Package everything in a container (future enhancement)
+> - **Ansible automation** - Automate setup across multiple Pis (future enhancement)
+
 ---
 
 ## Part 1: What You Need
@@ -111,9 +118,34 @@ sudo apt update
 # Upgrade all packages (this takes 5-15 minutes)
 sudo apt upgrade -y
 
-# Install required system packages
-sudo apt install -y python3-pip python3-venv git bluetooth bluez
+# Install required system packages (including Bluetooth dev libraries for pybluez)
+sudo apt install -y python3-pip python3-venv python3-dev git bluetooth bluez libbluetooth-dev
 
+# Check Python version (must be 3.9 or higher)
+python3 --version
+```
+
+### If Python is below 3.9
+
+Older Raspberry Pi OS versions may have Python 3.7 or 3.8. You have two options:
+
+**Option A: Upgrade Raspberry Pi OS (Recommended)**
+
+Flash a new SD card with the latest Raspberry Pi OS (Bookworm or newer), which includes Python 3.11.
+
+**Option B: Install Python 3.11 manually**
+
+```bash
+# Try installing from repos first
+sudo apt install -y python3.11 python3.11-venv python3.11-dev
+
+# If not available, the install.sh script will build from source automatically
+```
+
+> **Note:** The `install.sh` script will automatically detect and upgrade Python if needed.
+> Building from source takes 10-20 minutes on a Raspberry Pi 4.
+
+```bash
 # Reboot to apply updates
 sudo reboot
 ```
@@ -196,6 +228,42 @@ To exit bluetoothctl:
 scan off
 exit
 ```
+
+### Step 5: Pair the BITalino (IMPORTANT!)
+
+BITalino requires Bluetooth pairing with PIN code **1234** before it can connect.
+
+**Automatic pairing (after copying the application):**
+
+```bash
+cd ~/anheart/raspberry-pi
+./scripts/pair_device.sh XX:XX:XX:XX:XX:XX 1234
+```
+
+**Manual pairing (if automatic fails):**
+
+```bash
+# Start bluetoothctl
+sudo bluetoothctl
+
+# Inside bluetoothctl:
+agent on
+default-agent
+pair XX:XX:XX:XX:XX:XX
+# When prompted for PIN, enter: 1234
+trust XX:XX:XX:XX:XX:XX
+quit
+```
+
+**Verify pairing:**
+
+```bash
+bluetoothctl info XX:XX:XX:XX:XX:XX
+# Should show "Paired: yes" and "Trusted: yes"
+```
+
+> **Note:** The device must be paired BEFORE the Python application can connect.
+> If you skip this step, you'll get connection timeout errors.
 
 ---
 
@@ -447,10 +515,28 @@ journalctl -u anheart -f
 
 ### Problem: Connection timeout to BITalino
 
-1. Check BITalino is powered on
-2. Check MAC address is correct in `.env`
-3. Check BITalino is not connected to another device
-4. Try power-cycling the BITalino
+1. **Check device is paired first!** This is the most common issue:
+   ```bash
+   bluetoothctl info XX:XX:XX:XX:XX:XX
+   # Must show "Paired: yes"
+   ```
+2. If not paired, run:
+   ```bash
+   cd ~/anheart/raspberry-pi
+   ./scripts/pair_device.sh XX:XX:XX:XX:XX:XX 1234
+   ```
+3. Check BITalino is powered on (LED blinking)
+4. Check MAC address is correct in `.env`
+5. Check BITalino is not connected to another device (phone, laptop)
+6. Try power-cycling the BITalino
+
+### Problem: "Permission denied" or "Access blocked" on Bluetooth
+
+1. Add user to bluetooth group:
+   ```bash
+   sudo usermod -a -G bluetooth pi
+   ```
+2. Logout and login again, or reboot
 
 ### Problem: "Cannot reach server"
 
@@ -555,3 +641,86 @@ ssh pi@192.168.1.XXX
 - Shave hair if necessary for better contact
 - Use fresh electrodes (gel dries out over time)
 - Ensure good contact (press firmly when applying)
+
+---
+
+## Part 14: Production Deployment (Multiple Devices)
+
+If you're deploying multiple Raspberry Pi devices, the manual setup above is time-consuming.
+Here are better options for production:
+
+### Option A: Clone SD Card Image (Recommended for 2-10 devices)
+
+Once you have ONE Pi fully configured and working:
+
+1. **Shut down the configured Pi**
+
+   ```bash
+   sudo shutdown now
+   ```
+
+2. **Remove the SD card** and insert it into your computer
+
+3. **Create an image** using Raspberry Pi Imager or `dd`:
+
+   ```bash
+   # On Linux/Mac - find your SD card device first with `lsblk`
+   sudo dd if=/dev/sdX of=anheart-pi-image.img bs=4M status=progress
+   ```
+
+4. **Flash new SD cards** with this image for other Pis
+
+5. **On each new Pi**, only update the `.env` file with unique values:
+   ```bash
+   nano ~/anheart/raspberry-pi/.env
+   # Change MACHINE_API_KEY to a unique key for each device
+   ```
+
+### Option B: Pre-install Script (For Fresh Pis)
+
+Run this single command on a fresh Raspberry Pi OS install:
+
+```bash
+curl -sSL https://your-server.com/install-anheart.sh | bash
+```
+
+_(You would need to host this script on your server)_
+
+### Option C: Why Python Requires Compilation
+
+You're right that this feels like a development setup. Here's why:
+
+**The Problem:** The `pybluez` library needs to compile C code to talk to Bluetooth hardware. Unlike web apps that run in standardized environments, IoT/hardware projects often need:
+
+- System libraries (`libbluetooth-dev`)
+- Compilation tools (`python3-dev`, `gcc`)
+- Hardware-specific binaries
+
+**Compiled Languages (C, Go, Rust)** would produce a single binary file that just runs, but:
+
+- Harder to modify/debug in the field
+- Cross-compilation for ARM (Pi) adds complexity
+
+**For true "copy and run" deployment**, consider:
+
+1. **Docker** - Packages everything including system deps (but adds overhead on Pi)
+2. **Pre-built wheel files** - Compile pybluez once, distribute the `.whl` file
+3. **SD card cloning** - Most practical for small-scale deployment
+
+### Creating Pre-built Wheels (Advanced)
+
+On a working Pi, create wheel files for problematic packages:
+
+```bash
+# Activate venv
+cd ~/anheart/raspberry-pi
+source venv/bin/activate
+
+# Build wheels
+pip wheel pybluez -w ./wheels/
+
+# Now you can copy the wheels/ folder to other Pis and install with:
+# pip install ./wheels/pybluez*.whl
+```
+
+This avoids compilation on each device.

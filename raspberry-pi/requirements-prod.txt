@@ -1,0 +1,16 @@
+# AnHeart Raspberry Pi - Production Dependencies
+# Use this for Docker builds (smaller image, no test deps)
+
+# BITalino Bluetooth Classic communication
+bitalino>=1.2.6
+numpy>=1.20.0
+
+# HTTP client
+httpx>=0.27.0
+
+# Configuration and validation
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Bluetooth auto-pairing
+pexpect>=4.8.0

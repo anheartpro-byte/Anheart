@@ -288,6 +288,61 @@ http.route({
 });
 
 /**
+ * GET /api/machine/session/status
+ * RPi checks if session is still active (to detect remote session end)
+ */
+http.route({
+  path: "/api/machine/session/status",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    // Validate API key
+    const authResult = await validateMachineAuth(ctx, req);
+    if ("error" in authResult) {
+      return authResult.error;
+    }
+
+    // Get session ID from query parameter
+    const url = new URL(req.url);
+    const sessionId = url.searchParams.get("sessionId");
+
+    if (!sessionId) {
+      return new Response(JSON.stringify({ error: "Missing sessionId" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const sessionStatus = await ctx.runQuery(
+      internal.sessions.getSessionStatus,
+      {
+        sessionId: sessionId as Parameters<
+          typeof ctx.runQuery<typeof internal.sessions.getSessionStatus>
+        >[1]["sessionId"],
+      },
+    );
+
+    if (!sessionStatus) {
+      return new Response(JSON.stringify({ error: "Session not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        status: sessionStatus.status,
+        endedAt: sessionStatus.endedAt,
+        active: sessionStatus.status === "active",
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }),
+});
+
+/**
  * POST /api/machine/data
  * Receive ECG data batch from Raspberry Pi
  */

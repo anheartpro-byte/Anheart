@@ -36,7 +36,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { LiveECGWaveform } from "@/components/ECGWaveform";
+import { LiveSensorDisplay } from "@/components/charts/LiveSensorDisplay";
 
 /**
  * ECG Live Session Page
@@ -351,46 +351,13 @@ export default function LiveSessionPage({
         </Card>
       </div>
 
-      {/* ECG Channels - Full Width Charts */}
-      <div className="space-y-6">
-        {session.channels.map((channel) => (
-          <Card key={channel}>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Activity className="h-5 w-5 text-green-500" />
-                    {channel} Channel
-                  </CardTitle>
-                  <CardDescription>
-                    Real-time waveform at 1000 Hz | Y-axis: ADC value (0-1023) |
-                    X-axis: Time (seconds)
-                  </CardDescription>
-                </div>
-                {channel.toUpperCase() === "ECG" && heartRate && (
-                  <div className="flex items-center gap-2 bg-red-50 dark:bg-red-950 px-3 py-1.5 rounded-lg">
-                    <Heart className="h-5 w-5 text-red-500 animate-pulse" />
-                    <span className="text-xl font-bold text-red-600 dark:text-red-400">
-                      {heartRate}
-                    </span>
-                    <span className="text-sm text-red-500">BPM</span>
-                  </div>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <LiveECGWaveform
-                sessionId={sessionId}
-                channel={channel}
-                sampleRate={100}
-                displaySeconds={5}
-                height={350}
-                ecgData={ecgData ?? []}
-              />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* Live Sensor Charts - Professional visualizations for each sensor type */}
+      <LiveSensorDisplay
+        sessionId={sessionId}
+        ecgData={ecgData ?? []}
+        sampleRate={100}
+        channels={session.channels}
+      />
 
       {/* No data message */}
       {!hasData && (

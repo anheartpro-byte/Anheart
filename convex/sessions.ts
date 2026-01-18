@@ -68,7 +68,7 @@ export const createSession = mutation({
       throw new Error("At least one channel must be selected");
     }
 
-    // Create session
+    // Create session with sample rate from machine config
     const sessionId = await ctx.db.insert("sessions", {
       machineId: args.machineId,
       userId: args.userId,
@@ -76,6 +76,7 @@ export const createSession = mutation({
       status: "pending",
       startedAt: Date.now(),
       channels: args.channels,
+      sampleRate: machine.config.sampleRate, // Store sample rate for this session
       notes: args.notes,
     });
 
@@ -487,6 +488,31 @@ export const getPendingSessionForMachine = internalQuery({
         sampleRate: machine.config.sampleRate,
         batchInterval: machine.config.batchInterval,
       },
+    };
+  },
+});
+
+/**
+ * Get session status (for RPi to check if session was ended remotely)
+ */
+export const getSessionStatus = internalQuery({
+  args: {
+    sessionId: v.id("sessions"),
+  },
+  returns: v.union(
+    v.object({
+      status: v.string(),
+      endedAt: v.optional(v.number()),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) return null;
+
+    return {
+      status: session.status,
+      endedAt: session.endedAt,
     };
   },
 });

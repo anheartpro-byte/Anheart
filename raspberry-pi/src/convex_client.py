@@ -228,7 +228,7 @@ class ConvexClient:
         reason: Optional[str] = None,
     ) -> ApiResponse:
         """Notify server that session has ended."""
-        payload = {"sessionId": session_id}
+        payload: dict = {"sessionId": session_id}
         if failed:
             payload["failed"] = True
             payload["reason"] = reason or "Unknown error"
@@ -238,3 +238,22 @@ class ConvexClient:
             "/api/machine/session/end",
             json=payload,
         )
+
+    async def check_session_status(self, session_id: str) -> tuple[ApiResponse, Optional[dict]]:
+        """
+        Check if session is still active (to detect remote session end).
+        
+        Returns:
+            Tuple of (response, status_info or None)
+            status_info contains: {"status": str, "active": bool, "endedAt": int|None}
+        """
+        response = await self._request(
+            "GET",
+            f"/api/machine/session/status?sessionId={session_id}",
+            retry=False,
+        )
+        
+        if response.status != ResponseStatus.SUCCESS:
+            return response, None
+        
+        return response, response.data
