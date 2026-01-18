@@ -55,18 +55,22 @@ export default function SessionsPage() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const sessions = useQuery(api.sessions.listSessions, {
-    status: statusFilter === "all" ? undefined : statusFilter,
-    limit: 50,
+  // Fetch all sessions once and filter client-side to avoid skeleton on tab change
+  const allSessions = useQuery(api.sessions.listSessions, {
+    limit: 100,
   });
   const user = useQuery(api.users.getCurrentUser);
 
+  // Filter sessions client-side based on selected tab
+  const sessions = useMemo(() => {
+    if (!allSessions) return undefined;
+    if (statusFilter === "all") return allSessions;
+    return allSessions.filter((s) => s.status === statusFilter);
+  }, [allSessions, statusFilter]);
+
   const dateLocale = locale === "fr" ? fr : enUS;
 
-  const canCreate =
-    user?.role === "admin" ||
-    user?.role === "gestionnaire" ||
-    user?.role === "technician";
+  const canCreate = user?.role === "admin" || user?.role === "gestionnaire";
 
   const columns = useMemo<ColumnDef<Session>[]>(
     () => [
@@ -125,7 +129,7 @@ export default function SessionsPage() {
                   {t("sessions.viewLive")}
                 </Button>
               </Link>
-            ) : row.original.status === "completed" ? (
+            ) : (
               <Link href={`/dashboard/sessions/${row.original._id}`}>
                 <Button
                   variant="ghost"
@@ -135,8 +139,6 @@ export default function SessionsPage() {
                   <Eye className="h-4 w-4" />
                 </Button>
               </Link>
-            ) : (
-              <span className="text-muted-foreground">-</span>
             )}
           </div>
         ),
@@ -159,7 +161,7 @@ export default function SessionsPage() {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  if (sessions === undefined) {
+  if (allSessions === undefined) {
     return <SessionsSkeleton />;
   }
 
@@ -169,7 +171,7 @@ export default function SessionsPage() {
         <div>
           <h1 className="text-2xl font-bold">{t("sessions.title")}</h1>
           <p className="text-muted-foreground">
-            {sessions.length} {t("nav.sessions").toLowerCase()}
+            {sessions?.length ?? 0} {t("nav.sessions").toLowerCase()}
           </p>
         </div>
         {canCreate && (
@@ -253,7 +255,8 @@ export default function SessionsPage() {
                         router.push(
                           `/dashboard/sessions/${row.original._id}/live`,
                         );
-                      } else if (row.original.status === "completed") {
+                      } else {
+                        // All other statuses (completed, pending, failed) go to details
                         router.push(`/dashboard/sessions/${row.original._id}`);
                       }
                     }}

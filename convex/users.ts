@@ -56,7 +56,6 @@ export const getCurrentUser = query({
       role: v.union(
         v.literal("admin"),
         v.literal("gestionnaire"),
-        v.literal("technician"),
         v.literal("user"),
       ),
       gestionnaireId: v.optional(v.id("users")),
@@ -82,10 +81,8 @@ export const updateUserRole = mutation({
     role: v.union(
       v.literal("admin"),
       v.literal("gestionnaire"),
-      v.literal("technician"),
       v.literal("user"),
     ),
-    gestionnaireId: v.optional(v.id("users")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -96,17 +93,7 @@ export const updateUserRole = mutation({
       throw new Error("User not found");
     }
 
-    const updates: {
-      role: "admin" | "gestionnaire" | "technician" | "user";
-      gestionnaireId?: typeof args.gestionnaireId;
-    } = { role: args.role };
-
-    // Set gestionnaireId for technicians
-    if (args.role === "technician" && args.gestionnaireId) {
-      updates.gestionnaireId = args.gestionnaireId;
-    }
-
-    await ctx.db.patch(args.userId, updates);
+    await ctx.db.patch(args.userId, { role: args.role });
     return null;
   },
 });
@@ -144,12 +131,7 @@ export const listUsers = query({
   args: {
     gestionnaireId: v.optional(v.id("users")),
     role: v.optional(
-      v.union(
-        v.literal("admin"),
-        v.literal("gestionnaire"),
-        v.literal("technician"),
-        v.literal("user"),
-      ),
+      v.union(v.literal("admin"), v.literal("gestionnaire"), v.literal("user")),
     ),
   },
   returns: v.array(
@@ -199,21 +181,6 @@ export const listUsers = query({
         .query("user_gestionnaires")
         .withIndex("by_gestionnaire", (q) =>
           q.eq("gestionnaireId", currentUser._id),
-        )
-        .collect();
-
-      const userIds = relations.map((r) => r.userId);
-      const userDocs = await Promise.all(userIds.map((id) => ctx.db.get(id)));
-      users = userDocs.filter((u) => u !== null) as typeof users;
-    } else if (
-      currentUser.role === "technician" &&
-      currentUser.gestionnaireId
-    ) {
-      // Technician sees patients of their gestionnaire
-      const relations = await ctx.db
-        .query("user_gestionnaires")
-        .withIndex("by_gestionnaire", (q) =>
-          q.eq("gestionnaireId", currentUser.gestionnaireId!),
         )
         .collect();
 
@@ -656,6 +623,116 @@ export const getGestionnairesForPatient = query({
 });
 
 /**
+ * List all gestionnaires (admin only)
+ */
+export const listGestionnaires = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("users"),
+      firstName: v.string(),
+      lastName: v.string(),
+      email: v.string(),
+      createdAt: v.number(),
+      machineCount: v.number(),
+      patientCount: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    if (currentUser.role !== "admin") {
+      return [];
+    }
+
+    // Get all users with role gestionnaire
+    const gestionnaires = await ctx.db
+      .query("users")
+      .withIndex("by_role", (q) => q.eq("role", "gestionnaire"))
+      .collect();
+
+    // Get machine and patient counts for each
+    const result = await Promise.all(
+      gestionnaires.map(async (g) => {
+        const machineRelations = await ctx.db
+          .query("machine_gestionnaires")
+          .withIndex("by_gestionnaire", (q) => q.eq("gestionnaireId", g._id))
+          .collect();
+
+        const patientRelations = await ctx.db
+          .query("user_gestionnaires")
+          .withIndex("by_gestionnaire", (q) => q.eq("gestionnaireId", g._id))
+          .collect();
+
+        return {
+          _id: g._id,
+          firstName: g.firstName,
+          lastName: g.lastName,
+          email: g.email,
+          createdAt: g.createdAt,
+          machineCount: machineRelations.length,
+          patientCount: patientRelations.length,
+        };
+      }),
+    );
+
+    return result;
+  },
+});
+
+/**
+ * Assign patients to a gestionnaire (admin only) - replaces all existing assignments
+ */
+export const assignPatientsToGestionnaire = mutation({
+  args: {
+    gestionnaireId: v.id("users"),
+    patientIds: v.array(v.id("users")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const currentUser = await requireRole(ctx, ["admin"]);
+
+    // Verify gestionnaire exists and has correct role
+    const gestionnaire = await ctx.db.get(args.gestionnaireId);
+    if (!gestionnaire) {
+      throw new Error("Gestionnaire not found");
+    }
+    if (gestionnaire.role !== "gestionnaire") {
+      throw new Error("Target user is not a gestionnaire");
+    }
+
+    const now = Date.now();
+
+    // Remove existing relations for this gestionnaire
+    const existingRelations = await ctx.db
+      .query("user_gestionnaires")
+      .withIndex("by_gestionnaire", (q) =>
+        q.eq("gestionnaireId", args.gestionnaireId),
+      )
+      .collect();
+
+    for (const relation of existingRelations) {
+      await ctx.db.delete(relation._id);
+    }
+
+    // Add new relations
+    for (const patientId of args.patientIds) {
+      const patient = await ctx.db.get(patientId);
+      if (patient && patient.role === "user") {
+        await ctx.db.insert("user_gestionnaires", {
+          userId: patientId,
+          gestionnaireId: args.gestionnaireId,
+          createdAt: now,
+          createdBy: currentUser._id,
+        });
+      }
+    }
+
+    return null;
+  },
+});
+
+/**
  * Get all patients for a gestionnaire
  */
 export const getPatientsForGestionnaire = query({
@@ -681,24 +758,15 @@ export const getPatientsForGestionnaire = query({
     if (!targetGestionnaireId) {
       if (currentUser.role === "gestionnaire") {
         targetGestionnaireId = currentUser._id;
-      } else if (
-        currentUser.role === "technician" &&
-        currentUser.gestionnaireId
-      ) {
-        targetGestionnaireId = currentUser.gestionnaireId;
       } else if (currentUser.role !== "admin") {
         return [];
       }
     }
 
-    // Admin can query any gestionnaire, others only their own
+    // Admin can query any gestionnaire, gestionnaires only their own
     if (currentUser.role !== "admin") {
       if (currentUser.role === "gestionnaire") {
         if (targetGestionnaireId !== currentUser._id) {
-          return [];
-        }
-      } else if (currentUser.role === "technician") {
-        if (targetGestionnaireId !== currentUser.gestionnaireId) {
           return [];
         }
       } else {

@@ -45,7 +45,7 @@ export default function SettingsPage() {
         userId: selectedUserId as Parameters<
           typeof updateUserRole
         >[0]["userId"],
-        role: selectedRole as "admin" | "gestionnaire" | "technician" | "user",
+        role: selectedRole as "admin" | "gestionnaire" | "user",
       });
       setSelectedUserId("");
       setSelectedRole("");
@@ -65,7 +65,7 @@ export default function SettingsPage() {
     return (
       <div className="text-center py-12">
         <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <p className="text-muted-foreground">Access denied. Admin only.</p>
+        <p className="text-muted-foreground">{t("settings.accessDenied")}</p>
       </div>
     );
   }
@@ -73,8 +73,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">{t("nav.settings")}</h1>
-        <p className="text-muted-foreground">Manage application settings</p>
+        <h1 className="text-2xl font-bold">{t("settings.title")}</h1>
+        <p className="text-muted-foreground">{t("settings.description")}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -83,30 +83,40 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <User className="h-4 w-4" />
-              Your Account
+              {t("settings.yourAccount")}
             </CardTitle>
-            <CardDescription>Your admin account information</CardDescription>
+            <CardDescription>{t("settings.yourAccountDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="text-muted-foreground">Name</Label>
-                <p className="font-medium">
+              <div className="min-w-0">
+                <Label className="text-muted-foreground">
+                  {t("settings.name")}
+                </Label>
+                <p className="font-medium truncate">
                   {user?.firstName} {user?.lastName}
                 </p>
               </div>
-              <div>
-                <Label className="text-muted-foreground">Email</Label>
-                <p className="font-medium">{user?.email}</p>
+              <div className="min-w-0">
+                <Label className="text-muted-foreground">
+                  {t("users.email")}
+                </Label>
+                <p className="font-medium truncate" title={user?.email}>
+                  {user?.email}
+                </p>
               </div>
               <div>
-                <Label className="text-muted-foreground">Role</Label>
+                <Label className="text-muted-foreground">
+                  {t("users.role")}
+                </Label>
                 <Badge variant="default">
                   {t(`users.roles.${user?.role}`)}
                 </Badge>
               </div>
               <div>
-                <Label className="text-muted-foreground">Language</Label>
+                <Label className="text-muted-foreground">
+                  {t("settings.language")}
+                </Label>
                 <p className="font-medium uppercase">{user?.language}</p>
               </div>
             </div>
@@ -118,25 +128,36 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Shield className="h-4 w-4" />
-              User Role Management
+              {t("settings.roleManagement")}
             </CardTitle>
             <CardDescription>
-              Change user roles across the system
+              {t("settings.roleManagementDesc")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Select User</Label>
+              <Label>{t("settings.selectUser")}</Label>
               <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a user..." />
+                <SelectTrigger className="w-full">
+                  <SelectValue
+                    placeholder={t("settings.selectUserPlaceholder")}
+                  />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
                   {users
                     ?.filter((u) => u._id !== user?._id)
                     .map((u) => (
-                      <SelectItem key={u._id} value={u._id}>
-                        {u.firstName} {u.lastName} ({u.email}) - {u.role}
+                      <SelectItem
+                        key={u._id}
+                        value={u._id}
+                        className="truncate"
+                      >
+                        <span className="truncate">
+                          {u.firstName} {u.lastName}
+                        </span>
+                        <span className="text-muted-foreground ml-1">
+                          - {t(`users.roles.${u.role}`)}
+                        </span>
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -144,10 +165,12 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label>New Role</Label>
+              <Label>{t("settings.newRole")}</Label>
               <Select value={selectedRole} onValueChange={setSelectedRole}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Choose a role..." />
+                  <SelectValue
+                    placeholder={t("settings.selectRolePlaceholder")}
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="admin">
@@ -155,9 +178,6 @@ export default function SettingsPage() {
                   </SelectItem>
                   <SelectItem value="gestionnaire">
                     {t("users.roles.gestionnaire")}
-                  </SelectItem>
-                  <SelectItem value="technician">
-                    {t("users.roles.technician")}
                   </SelectItem>
                   <SelectItem value="user">{t("users.roles.user")}</SelectItem>
                 </SelectContent>
@@ -169,7 +189,7 @@ export default function SettingsPage() {
               disabled={!selectedUserId || !selectedRole || updating}
             >
               <Save className="h-4 w-4 mr-2" />
-              {updating ? t("common.loading") : "Update Role"}
+              {updating ? t("common.loading") : t("settings.updateRole")}
             </Button>
           </CardContent>
         </Card>
@@ -179,38 +199,42 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Globe className="h-4 w-4" />
-              System Information
+              {t("settings.systemInfo")}
             </CardTitle>
-            <CardDescription>Application configuration</CardDescription>
+            <CardDescription>{t("settings.systemInfoDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <Label className="text-muted-foreground">Application</Label>
+                <Label className="text-muted-foreground">
+                  {t("settings.application")}
+                </Label>
                 <p className="font-medium">AnHeart ECG Monitoring</p>
               </div>
               <div>
-                <Label className="text-muted-foreground">Version</Label>
+                <Label className="text-muted-foreground">
+                  {t("settings.version")}
+                </Label>
                 <p className="font-medium">1.0.0</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">
-                  Default Language
+                  {t("settings.defaultLanguage")}
                 </Label>
-                <p className="font-medium">French (fr)</p>
+                <p className="font-medium">{t("settings.french")}</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">
-                  Supported Languages
+                  {t("settings.supportedLanguages")}
                 </Label>
-                <p className="font-medium">French, English</p>
+                <p className="font-medium">{t("settings.languages")}</p>
               </div>
             </div>
             <Separator />
             <div className="text-sm text-muted-foreground">
-              <p>Heartbeat timeout: 90 seconds</p>
-              <p>Default sample rate: 1000 Hz</p>
-              <p>Default batch interval: 1000 ms</p>
+              <p>{t("settings.heartbeatTimeout")}: 90s</p>
+              <p>{t("settings.defaultSampleRate")}: 1000 Hz</p>
+              <p>{t("settings.defaultBatchInterval")}: 1000 ms</p>
             </div>
           </CardContent>
         </Card>

@@ -25,6 +25,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Copy,
   Check,
@@ -32,6 +33,7 @@ import {
   RefreshCw,
   Trash2,
   Pencil,
+  RotateCcw,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
@@ -54,15 +56,19 @@ export default function MachineDetailPage({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const deleteMachine = useMutation(api.machines.deleteMachine);
   const regenerateApiKey = useMutation(api.machines.regenerateApiKey);
+  const restoreMachine = useMutation(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
   const canManage = user?.role === "admin" || user?.role === "gestionnaire";
+  const isAdmin = user?.role === "admin";
 
   const handleDelete = async () => {
     try {
@@ -70,6 +76,18 @@ export default function MachineDetailPage({
       router.push("/dashboard/machines");
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleRestore = async () => {
+    setRestoring(true);
+    try {
+      await restoreMachine({ machineId });
+      setShowRestoreDialog(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -110,64 +128,102 @@ export default function MachineDetailPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="space-y-6">
+      {/* Deleted Machine Alert */}
+      {machine.isDeleted && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>{t("machines.deleted")}</AlertTitle>
+          <AlertDescription className="flex items-center justify-between">
+            <span>
+              {t("machines.deletedAt")}:{" "}
+              {machine.deletedAt
+                ? format(machine.deletedAt, "PPpp", { locale: dateLocale })
+                : "-"}
+            </span>
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowRestoreDialog(true)}
+              >
+                <RotateCcw className="h-4 w-4 mr-2" />
+                {t("machines.restore")}
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">{machine.name}</h1>
           <p className="text-muted-foreground">{machine.location || "-"}</p>
         </div>
-        <MachineStatusBadge status={machine.status} />
+        <MachineStatusBadge
+          status={machine.status}
+          isDeleted={machine.isDeleted}
+        />
       </div>
 
-      {/* Machine Info */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>{t("machines.config")}</CardTitle>
-            {canManage && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowEditModal(true)}
-              >
-                <Pencil className="h-4 w-4 mr-2" />
-                {t("common.edit")}
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t("machines.status")}
-              </p>
-              <p className="font-medium">{machine.status}</p>
+      {/* Machine Info - Full width grid layout */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>{t("machines.config")}</CardTitle>
+              {canManage && !machine.isDeleted && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowEditModal(true)}
+                >
+                  <Pencil className="h-4 w-4 mr-2" />
+                  {t("common.edit")}
+                </Button>
+              )}
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t("machines.lastHeartbeat")}
-              </p>
-              <p className="font-medium">
-                {machine.lastHeartbeat > 0
-                  ? formatDistanceToNow(machine.lastHeartbeat, {
-                      addSuffix: true,
-                      locale: dateLocale,
-                    })
-                  : "-"}
-              </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.status")}
+                </p>
+                <p className="font-medium">{machine.status}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.lastHeartbeat")}
+                </p>
+                <p className="font-medium">
+                  {machine.lastHeartbeat > 0
+                    ? formatDistanceToNow(machine.lastHeartbeat, {
+                        addSuffix: true,
+                        locale: dateLocale,
+                      })
+                    : "-"}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.sampleRate")}
+                </p>
+                <p className="font-medium">{machine.config.sampleRate} Hz</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.batchInterval")}
+                </p>
+                <p className="font-medium">{machine.config.batchInterval} ms</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t("machines.sampleRate")}
-              </p>
-              <p className="font-medium">{machine.config.sampleRate} Hz</p>
-            </div>
+            <Separator />
             <div>
               <p className="text-sm text-muted-foreground">
                 {t("machines.channels")}
               </p>
-              <div className="flex gap-1 flex-wrap">
+              <div className="flex gap-1 flex-wrap mt-1">
                 {machine.config.channels.map((ch) => (
                   <Badge key={ch} variant="secondary">
                     {ch}
@@ -175,36 +231,58 @@ export default function MachineDetailPage({
                 ))}
               </div>
             </div>
+            <Separator />
             <div>
-              <p className="text-sm text-muted-foreground">
-                {t("machines.batchInterval")}
+              <p className="text-sm text-muted-foreground">Created</p>
+              <p className="font-medium">
+                {format(machine.createdAt, "PPP", { locale: dateLocale })}
               </p>
-              <p className="font-medium">{machine.config.batchInterval} ms</p>
             </div>
-          </div>
-          <Separator />
-          <div>
-            <p className="text-sm text-muted-foreground">Created</p>
-            <p className="font-medium">
-              {format(machine.createdAt, "PPP", { locale: dateLocale })}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* Danger Zone */}
-      {canManage && (
+        {/* Gestionnaires Card */}
+        {machine.gestionnaires.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("machines.gestionnaires")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {machine.gestionnaires.map((g) => (
+                  <div
+                    key={g._id}
+                    className="flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="font-medium">
+                        {g.firstName} {g.lastName}
+                      </p>
+                    </div>
+                    {g.isOwner && (
+                      <Badge variant="outline">{t("machines.owner")}</Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Danger Zone - Only show if not deleted */}
+      {canManage && !machine.isDeleted && (
         <Card className="border-destructive/50">
           <CardHeader>
             <CardTitle className="text-destructive">Danger Zone</CardTitle>
-            <CardDescription>Irreversible actions</CardDescription>
+            <CardDescription>{t("machines.dangerZoneDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">{t("machines.regenerateKey")}</p>
                 <p className="text-sm text-muted-foreground">
-                  Generate a new API key. Old key will stop working.
+                  {t("machines.regenerateKeyDesc")}
                 </p>
               </div>
               <Button
@@ -212,7 +290,7 @@ export default function MachineDetailPage({
                 onClick={() => setShowRegenerateDialog(true)}
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
-                Regenerate
+                {t("machines.regenerate")}
               </Button>
             </div>
             <Separator />
@@ -220,7 +298,7 @@ export default function MachineDetailPage({
               <div>
                 <p className="font-medium">{t("common.delete")}</p>
                 <p className="text-sm text-muted-foreground">
-                  Permanently delete this machine.
+                  {t("machines.deleteDesc")}
                 </p>
               </div>
               <Button
@@ -242,8 +320,7 @@ export default function MachineDetailPage({
           <DialogHeader>
             <DialogTitle>{t("machines.deleteConfirm")}</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. This will permanently delete the
-              machine &quot;{machine.name}&quot;.
+              {t("machines.deleteConfirmDesc")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -255,6 +332,29 @@ export default function MachineDetailPage({
             </Button>
             <Button variant="destructive" onClick={handleDelete}>
               {t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Confirmation Dialog */}
+      <Dialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("machines.restoreConfirm")}</DialogTitle>
+            <DialogDescription>
+              {t("machines.restoreConfirmDesc")}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRestoreDialog(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={handleRestore} disabled={restoring}>
+              {restoring ? t("common.loading") : t("machines.restore")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -331,8 +431,22 @@ export default function MachineDetailPage({
   );
 }
 
-function MachineStatusBadge({ status }: { status: string }) {
+function MachineStatusBadge({
+  status,
+  isDeleted,
+}: {
+  status: string;
+  isDeleted?: boolean;
+}) {
   const t = useTranslations("machines");
+
+  if (isDeleted) {
+    return (
+      <Badge variant="destructive" className="text-sm">
+        {t("deleted")}
+      </Badge>
+    );
+  }
 
   const variants: Record<
     string,
@@ -358,26 +472,38 @@ function MachineStatusBadge({ status }: { status: string }) {
 
 function MachineDetailSkeleton() {
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Skeleton className="h-10 w-10" />
         <div className="flex-1">
           <Skeleton className="h-8 w-48" />
           <Skeleton className="h-4 w-32 mt-2" />
         </div>
         <Skeleton className="h-6 w-20" />
       </div>
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-6 w-32" />
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <Skeleton className="h-20 w-full" />
-            <Skeleton className="h-20 w-full" />
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-32" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-32" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
