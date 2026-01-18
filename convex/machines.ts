@@ -452,7 +452,40 @@ export const restoreMachine = mutation({
 });
 
 /**
- * Get machine by API key hash (for HTTP endpoint auth)
+ * Get machine by ID (internal use)
+ */
+export const getMachineById = internalQuery({
+  args: {
+    machineId: v.id("machines"),
+  },
+  returns: v.union(
+    v.object({
+      _id: v.id("machines"),
+      name: v.string(),
+      status: v.string(),
+      config: v.object({
+        sampleRate: v.number(),
+        channels: v.array(v.string()),
+        batchInterval: v.number(),
+      }),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) return null;
+
+    return {
+      _id: machine._id,
+      name: machine.name,
+      status: machine.status,
+      config: machine.config,
+    };
+  },
+});
+
+/**
+ * Get machine by API key (for HTTP endpoints)
  */
 export const getMachineByApiKey = internalQuery({
   args: {

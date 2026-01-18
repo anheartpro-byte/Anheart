@@ -88,6 +88,7 @@ export default defineSchema({
     startedAt: v.number(),
     endedAt: v.optional(v.number()),
     channels: v.array(v.string()),
+    sampleRate: v.optional(v.number()), // Hz - copied from machine config at session start
     notes: v.optional(v.string()),
   })
     .index("by_user", ["userId"])

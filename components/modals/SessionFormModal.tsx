@@ -35,7 +35,36 @@ import {
 } from "@/components/ui/select";
 import { Loader2, AlertCircle } from "lucide-react";
 
-const AVAILABLE_CHANNELS = ["ECG", "EMG", "EDA", "EEG", "ACC", "LUX"];
+// Available BITalino sensor channels
+// Mapped to analog inputs A1-A6
+const AVAILABLE_CHANNELS = [
+  {
+    id: "ECG",
+    name: "ECG (Heart)",
+    description: "Electrocardiography - 3 electrodes on chest",
+  },
+  {
+    id: "EDA",
+    name: "EDA (Stress)",
+    description: "Electrodermal Activity - 2 finger bands",
+  },
+  {
+    id: "SpO2",
+    name: "SpO2 (Oxygen)",
+    description: "Pulse Oximetry - finger clip sensor",
+  },
+  {
+    id: "RESP",
+    name: "Respiration",
+    description: "Breathing - chest band sensor",
+  },
+  {
+    id: "EMG",
+    name: "EMG (Muscle)",
+    description: "Electromyography - muscle sensor",
+  },
+  { id: "LUX", name: "Light", description: "Ambient light sensor" },
+];
 
 const sessionSchema = z.object({
   machineId: z.string().min(1, "Please select a machine"),
@@ -250,20 +279,26 @@ export function SessionFormModal({
                 render={() => (
                   <FormItem>
                     <FormLabel>{t("sessions.selectChannels")} *</FormLabel>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       {AVAILABLE_CHANNELS.map((channel) => (
                         <Button
-                          key={channel}
+                          key={channel.id}
                           type="button"
                           variant={
-                            form.watch("channels").includes(channel)
+                            form.watch("channels").includes(channel.id)
                               ? "default"
                               : "outline"
                           }
                           size="sm"
-                          onClick={() => toggleChannel(channel)}
+                          className="justify-start h-auto py-2"
+                          onClick={() => toggleChannel(channel.id)}
                         >
-                          {channel}
+                          <div className="text-left">
+                            <div className="font-medium">{channel.name}</div>
+                            <div className="text-xs opacity-70">
+                              {channel.description}
+                            </div>
+                          </div>
                         </Button>
                       ))}
                     </div>

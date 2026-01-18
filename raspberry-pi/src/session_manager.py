@@ -36,10 +36,14 @@ class SessionManager:
 
         self._last_heartbeat = 0
         self._last_batch = 0
+        self._last_status_check = 0
         self._batch_counter = 0
 
         self._running = False
         self._online = False
+        
+        # How often to check if session was ended remotely (seconds)
+        self._status_check_interval = 5
 
     async def start(self) -> None:
         """Initialize and start the session manager."""
@@ -193,11 +197,21 @@ class SessionManager:
 
     async def _handle_acquiring(self) -> None:
         """Handle ACQUIRING state - read and send data."""
-        if not self.bitalino or not self.current_session:
+        if not self.bitalino or not self.current_session or not self.convex or not self.buffer:
             self.state = SessionState.ERROR
             return
 
         now = time.time()
+        
+        # Check if session was ended remotely
+        if self._online and (now - self._last_status_check) >= self._status_check_interval:
+            self._last_status_check = now
+            await self._check_remote_session_status()
+            
+            # If state changed (session ended), don't continue acquiring
+            if self.state != SessionState.ACQUIRING:
+                return
+
         if (now - self._last_batch) < (self.config.batch_interval_ms / 1000):
             return
 
@@ -226,6 +240,11 @@ class SessionManager:
                 return
             else:
                 logger.warning(f"Failed to send batch: {response.error}")
+                # Check if it's a "session not active" error - session was ended remotely
+                if response.error and "not active" in response.error.lower():
+                    logger.info("Session was ended remotely")
+                    await self._handle_remote_session_end()
+                    return
                 self._online = False
 
         self.buffer.store(
@@ -278,6 +297,36 @@ class SessionManager:
         logger.error("BITalino disconnected unexpectedly")
         if self.state == SessionState.ACQUIRING:
             self.state = SessionState.ERROR
+
+    async def _check_remote_session_status(self) -> None:
+        """Check if current session was ended remotely."""
+        if not self.current_session or not self.convex:
+            return
+        
+        response, status_info = await self.convex.check_session_status(
+            self.current_session.session_id
+        )
+        
+        if status_info and not status_info.get("active", True):
+            logger.info(f"Session was ended remotely (status: {status_info.get('status')})")
+            await self._handle_remote_session_end()
+
+    async def _handle_remote_session_end(self) -> None:
+        """Handle when session is ended from the web dashboard."""
+        logger.info("Stopping acquisition due to remote session end")
+        
+        # Stop BITalino acquisition
+        if self.bitalino:
+            await self.bitalino.stop_acquisition()
+            await self.bitalino.disconnect()
+            self.bitalino = None
+        
+        # Clear current session (don't call end_session - it's already ended on server)
+        self.current_session = None
+        
+        # Go back to idle state
+        self.state = SessionState.IDLE
+        logger.info("Session ended, returning to idle state")
 
     async def _sync_buffered_data(self) -> None:
         """Sync buffered data to server."""

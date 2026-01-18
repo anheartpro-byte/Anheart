@@ -121,9 +121,11 @@ export const getSessionForSummary = internalQuery({
   returns: v.union(
     v.object({
       _id: v.id("sessions"),
+      machineId: v.id("machines"),
       startedAt: v.number(),
       endedAt: v.optional(v.number()),
       channels: v.array(v.string()),
+      sampleRate: v.optional(v.number()),
     }),
     v.null(),
   ),
@@ -132,9 +134,11 @@ export const getSessionForSummary = internalQuery({
     if (!session) return null;
     return {
       _id: session._id,
+      machineId: session.machineId,
       startedAt: session.startedAt,
       endedAt: session.endedAt,
       channels: session.channels,
+      sampleRate: session.sampleRate,
     };
   },
 });
@@ -289,8 +293,16 @@ export const generateSummary = internalAction({
       ) => a.timestamp - b.timestamp,
     );
 
-    // Extract ECG values and create downsampled version
-    const sampleRate = 1000; // Assuming 1000 Hz
+    // Get sample rate from session (with fallback to machine config or default)
+    let sampleRate: number = session.sampleRate ?? 0;
+    if (!sampleRate) {
+      // Fallback: try to get from machine config
+      const machine = await ctx.runQuery(internal.machines.getMachineById, {
+        machineId: session.machineId,
+      });
+      sampleRate = machine?.config?.sampleRate ?? 1000;
+    }
+    console.log(`Using sample rate: ${sampleRate} Hz`);
     let allEcgValues: number[] = [];
     const downsampledEcg: { timestamp: number; value: number }[] = [];
 
