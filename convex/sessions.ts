@@ -26,11 +26,7 @@ export const createSession = mutation({
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, [
-      "admin",
-      "gestionnaire",
-      "technician",
-    ]);
+    const currentUser = await requireRole(ctx, ["admin", "gestionnaire"]);
 
     // Get and validate machine
     const machine = await ctx.db.get(args.machineId);
@@ -76,8 +72,7 @@ export const createSession = mutation({
     const sessionId = await ctx.db.insert("sessions", {
       machineId: args.machineId,
       userId: args.userId,
-      technicianId:
-        currentUser.role === "technician" ? currentUser._id : undefined,
+      startedById: currentUser._id,
       status: "pending",
       startedAt: Date.now(),
       channels: args.channels,
@@ -132,7 +127,7 @@ export const endSession = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireRole(ctx, ["admin", "gestionnaire", "technician"]);
+    await requireRole(ctx, ["admin", "gestionnaire"]);
 
     const session = await ctx.db.get(args.sessionId);
     if (!session) {
@@ -265,7 +260,7 @@ export const getSession = query({
       _creationTime: v.number(),
       machineId: v.id("machines"),
       userId: v.id("users"),
-      technicianId: v.optional(v.id("users")),
+      startedById: v.optional(v.id("users")),
       status: v.string(),
       startedAt: v.number(),
       endedAt: v.optional(v.number()),
@@ -281,7 +276,7 @@ export const getSession = query({
         _id: v.id("machines"),
         name: v.string(),
       }),
-      technician: v.optional(
+      startedBy: v.optional(
         v.object({
           _id: v.id("users"),
           firstName: v.string(),
@@ -308,14 +303,14 @@ export const getSession = query({
     // Fetch related data
     const patient = await ctx.db.get(session.userId);
     const machine = await ctx.db.get(session.machineId);
-    let technician = null;
-    if (session.technicianId) {
-      const tech = await ctx.db.get(session.technicianId);
-      if (tech) {
-        technician = {
-          _id: tech._id,
-          firstName: tech.firstName,
-          lastName: tech.lastName,
+    let startedBy = null;
+    if (session.startedById) {
+      const starter = await ctx.db.get(session.startedById);
+      if (starter) {
+        startedBy = {
+          _id: starter._id,
+          firstName: starter.firstName,
+          lastName: starter.lastName,
         };
       }
     }
@@ -325,7 +320,7 @@ export const getSession = query({
       _creationTime: session._creationTime,
       machineId: session.machineId,
       userId: session.userId,
-      technicianId: session.technicianId,
+      startedById: session.startedById,
       status: session.status,
       startedAt: session.startedAt,
       endedAt: session.endedAt,
@@ -341,7 +336,7 @@ export const getSession = query({
         _id: machine!._id,
         name: machine!.name,
       },
-      technician: technician ?? undefined,
+      startedBy: startedBy ?? undefined,
     };
   },
 });
@@ -420,7 +415,7 @@ export const listSessions = query({
           accessibleSessions.push(session);
         }
       } else {
-        // Gestionnaire or technician - check if they can access the machine
+        // Gestionnaire - check if they can access the machine
         const canAccess = await canAccessMachine(ctx, session.machineId);
         if (canAccess) {
           accessibleSessions.push(session);
@@ -543,6 +538,78 @@ export const getActiveSessionForMachine = query({
 });
 
 /**
+ * Get completed sessions for the current user (for reports)
+ */
+export const getCompletedSessionsForUser = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("sessions"),
+      status: v.string(),
+      startedAt: v.number(),
+      endedAt: v.optional(v.number()),
+      channels: v.array(v.string()),
+      notes: v.optional(v.string()),
+      patientName: v.string(),
+      machineName: v.string(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    let sessions;
+
+    if (currentUser.role === "user") {
+      // Patient sees only their own completed sessions
+      sessions = await ctx.db
+        .query("sessions")
+        .withIndex("by_user", (q) => q.eq("userId", currentUser._id))
+        .order("desc")
+        .take(100);
+    } else if (currentUser.role === "admin") {
+      // Admin sees all completed sessions
+      sessions = await ctx.db.query("sessions").order("desc").take(100);
+    } else {
+      // Gestionnaire sees sessions for machines they have access to
+      sessions = await ctx.db.query("sessions").order("desc").take(100);
+      const accessibleSessions = [];
+      for (const session of sessions) {
+        const canAccess = await canAccessMachine(ctx, session.machineId);
+        if (canAccess) {
+          accessibleSessions.push(session);
+        }
+      }
+      sessions = accessibleSessions;
+    }
+
+    // Filter to completed sessions only
+    sessions = sessions.filter((s) => s.status === "completed");
+
+    // Enrich with names
+    const result = [];
+    for (const session of sessions) {
+      const patient = await ctx.db.get(session.userId);
+      const machine = await ctx.db.get(session.machineId);
+
+      result.push({
+        _id: session._id,
+        status: session.status,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        channels: session.channels,
+        notes: session.notes,
+        patientName: patient
+          ? `${patient.firstName} ${patient.lastName}`
+          : "Unknown",
+        machineName: machine?.name ?? "Unknown",
+      });
+    }
+
+    return result;
+  },
+});
+
+/**
  * Cancel a pending session
  */
 export const cancelSession = mutation({
@@ -551,7 +618,7 @@ export const cancelSession = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireRole(ctx, ["admin", "gestionnaire", "technician"]);
+    await requireRole(ctx, ["admin", "gestionnaire"]);
 
     const session = await ctx.db.get(args.sessionId);
     if (!session) {

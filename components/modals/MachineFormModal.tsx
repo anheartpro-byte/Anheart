@@ -4,12 +4,13 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from "@/components/ui/form";
 import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 
@@ -35,6 +37,7 @@ const machineSchema = z.object({
   sampleRate: z.number().min(100).max(10000),
   batchInterval: z.number().min(100).max(5000),
   channels: z.array(z.string()).min(1, "Select at least one channel"),
+  gestionnaireIds: z.array(z.string()).optional(),
 });
 
 type MachineFormValues = z.infer<typeof machineSchema>;
@@ -51,6 +54,12 @@ interface MachineFormModalProps {
       channels: string[];
       batchInterval: number;
     };
+    gestionnaires?: Array<{
+      _id: Id<"users">;
+      firstName: string;
+      lastName: string;
+      isOwner: boolean;
+    }>;
   };
   onSuccess?: () => void;
 }
@@ -67,17 +76,22 @@ export function MachineFormModal({
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const gestionnaires = useQuery(api.users.listGestionnaires);
   const createMachine = useMutation(api.machines.createMachine);
   const updateMachine = useMutation(api.machines.updateMachine);
+  const assignMachineToGestionnaires = useMutation(
+    api.machines.assignMachineToGestionnaires,
+  );
 
   const form = useForm<MachineFormValues>({
     resolver: zodResolver(machineSchema),
     defaultValues: {
       name: "",
       location: "",
-      sampleRate: 1000,
+      sampleRate: 100,
       batchInterval: 1000,
       channels: ["ECG"],
+      gestionnaireIds: [],
     },
   });
 
@@ -87,9 +101,10 @@ export function MachineFormModal({
       form.reset({
         name: machine?.name ?? "",
         location: machine?.location ?? "",
-        sampleRate: machine?.config.sampleRate ?? 1000,
+        sampleRate: machine?.config.sampleRate ?? 100,
         batchInterval: machine?.config.batchInterval ?? 1000,
         channels: machine?.config.channels ?? ["ECG"],
+        gestionnaireIds: machine?.gestionnaires?.map((g) => g._id) ?? [],
       });
     }
   }, [open, machine, form]);
@@ -107,6 +122,13 @@ export function MachineFormModal({
             batchInterval: values.batchInterval,
           },
         });
+        // Update gestionnaire assignments
+        if (values.gestionnaireIds) {
+          await assignMachineToGestionnaires({
+            machineId: machine._id,
+            gestionnaireIds: values.gestionnaireIds as Id<"users">[],
+          });
+        }
         onOpenChange(false);
         onSuccess?.();
       } else {
@@ -118,6 +140,7 @@ export function MachineFormModal({
             channels: values.channels,
             batchInterval: values.batchInterval,
           },
+          gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
         });
         setApiKey(result.apiKey);
       }
@@ -322,6 +345,65 @@ export function MachineFormModal({
                 </FormItem>
               )}
             />
+
+            {/* Gestionnaire Assignment (for admin creating/editing) */}
+            {gestionnaires && gestionnaires.length > 0 && (
+              <FormField
+                control={form.control}
+                name="gestionnaireIds"
+                render={() => (
+                  <FormItem>
+                    <FormLabel>{t("machines.assignGestionnaires")}</FormLabel>
+                    <FormDescription>
+                      {t("machines.assignGestionnairesDesc")}
+                    </FormDescription>
+                    <div className="space-y-2 max-h-40 overflow-y-auto border rounded-md p-3">
+                      {gestionnaires.map((g) => {
+                        const isSelected = form
+                          .watch("gestionnaireIds")
+                          ?.includes(g._id);
+                        return (
+                          <div
+                            key={g._id}
+                            className="flex items-center space-x-2"
+                          >
+                            <Checkbox
+                              id={g._id}
+                              checked={isSelected}
+                              onCheckedChange={(checked) => {
+                                const current =
+                                  form.getValues("gestionnaireIds") || [];
+                                if (checked) {
+                                  form.setValue("gestionnaireIds", [
+                                    ...current,
+                                    g._id,
+                                  ]);
+                                } else {
+                                  form.setValue(
+                                    "gestionnaireIds",
+                                    current.filter((id) => id !== g._id),
+                                  );
+                                }
+                              }}
+                            />
+                            <label
+                              htmlFor={g._id}
+                              className="text-sm font-medium leading-none cursor-pointer"
+                            >
+                              {g.firstName} {g.lastName}
+                              <span className="text-muted-foreground ml-2">
+                                ({g.email})
+                              </span>
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <div className="flex gap-3 pt-4">
               <Button

@@ -107,8 +107,65 @@ export const getAllSessionData = internalQuery({
 // ============================================
 
 /**
+ * Get all ECG data for a completed/failed session (for viewing historical data)
+ * Returns up to maxBatches of data (to avoid loading too much)
+ */
+export const getSessionAllData = query({
+  args: {
+    sessionId: v.id("sessions"),
+    maxBatches: v.optional(v.number()),
+  },
+  returns: v.array(
+    v.object({
+      timestamp: v.number(),
+      samples: v.array(
+        v.object({
+          channel: v.string(),
+          values: v.array(v.number()),
+        }),
+      ),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const maxBatches = args.maxBatches ?? 100; // Default to 100 batches (~100 seconds of data)
+
+    // Get session
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) {
+      return [];
+    }
+
+    // Check access
+    const isPatient = currentUser._id === session.userId;
+    const isAdmin = currentUser.role === "admin";
+    const canAccessMach = await canAccessMachine(ctx, session.machineId);
+
+    if (!isPatient && !isAdmin && !canAccessMach) {
+      return [];
+    }
+
+    // Query all data for the session
+    const data = await ctx.db
+      .query("ecg_data")
+      .withIndex("by_session_and_timestamp", (q) =>
+        q.eq("sessionId", args.sessionId),
+      )
+      .take(maxBatches);
+
+    // Sort by timestamp ascending
+    data.sort((a, b) => a.timestamp - b.timestamp);
+
+    return data.map((d) => ({
+      timestamp: d.timestamp,
+      samples: d.samples,
+    }));
+  },
+});
+
+/**
  * Get recent ECG data for live viewing
- * Includes 5-second delay for gestionnaire/technician
+ * Includes 5-second delay for gestionnaire
  */
 export const getRecentEcgData = query({
   args: {
@@ -148,7 +205,7 @@ export const getRecentEcgData = query({
 
     // Determine delay
     // No delay for: patient, admin, or completed sessions
-    // 5s delay for: gestionnaire, technician viewing active sessions
+    // 5s delay for: gestionnaire viewing active sessions
     let delay = 0;
     if (!isPatient && !isAdmin && session.status === "active") {
       delay = 5000; // 5 seconds

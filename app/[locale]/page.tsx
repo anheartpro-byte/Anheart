@@ -17,11 +17,10 @@ import { Footer } from "@/components/landing/Footer";
 import { Globe } from "@/components/ui/globe";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { BorderBeam } from "@/components/ui/border-beam";
+import { Particles } from "@/components/ui/particles";
 import { ArrowRight } from "lucide-react";
 
 export default function Home() {
-  const t = useTranslations("home");
-
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Navbar />
@@ -32,7 +31,6 @@ export default function Home() {
         <HowItWorksSection />
         <BenefitsSection />
         <ResearchSection />
-        <MarketsSection />
         <CTASection />
       </main>
       <Footer />
@@ -45,6 +43,16 @@ function HeroSection() {
 
   return (
     <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden">
+      {/* Particles Background */}
+      <Particles
+        className="absolute inset-0"
+        quantity={80}
+        staticity={30}
+        ease={80}
+        color="#6366f1"
+        size={0.5}
+      />
+
       <BorderBeam
         size={300}
         duration={12}
@@ -54,17 +62,17 @@ function HeroSection() {
       />
 
       <div className="container mx-auto px-4 py-24 relative z-10">
-        <div className="grid lg:grid-cols-2 gap-16 items-center">
+        <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
           <div className="space-y-8 max-w-xl">
             <p className="text-sm font-medium text-primary tracking-wide uppercase">
               {t("badge")}
             </p>
 
-            <h1 className="text-5xl md:text-6xl lg:text-7xl font-semibold leading-[1.1] tracking-tight">
+            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-semibold leading-[1.1] tracking-tight">
               {t("title")}
             </h1>
 
-            <p className="text-xl text-muted-foreground leading-relaxed">
+            <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">
               {t("description")}
             </p>
 
@@ -87,38 +95,41 @@ function HeroSection() {
               </Authenticated>
             </div>
 
-            <div className="flex gap-12 pt-8">
+            <div className="flex gap-8 sm:gap-12 pt-8">
               <div>
-                <div className="text-4xl font-semibold tracking-tight">
+                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
                   <NumberTicker value={40} />+
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   {t("yearsResearch")}
                 </p>
               </div>
               <div>
-                <div className="text-4xl font-semibold tracking-tight">
+                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
                   <NumberTicker value={30} />+
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   {t("publishedPapers")}
                 </p>
               </div>
               <div>
-                <div className="text-4xl font-semibold tracking-tight">
+                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
                   <NumberTicker value={150} />+
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   {t("proClubs")}
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="relative h-[500px] hidden lg:block">
+          {/* Globe - now visible on all screen sizes */}
+          <div className="relative h-[300px] sm:h-[400px] lg:h-[500px]">
             <Globe className="absolute inset-0" />
-            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-card/90 backdrop-blur-sm rounded-lg px-5 py-3">
-              <p className="text-sm font-medium">{t("basedIn")}</p>
+            <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 bg-card/90 backdrop-blur-sm rounded-lg px-4 sm:px-5 py-2 sm:py-3">
+              <p className="text-xs sm:text-sm font-medium text-center">
+                {t("basedIn")}
+              </p>
             </div>
           </div>
         </div>
@@ -170,7 +181,7 @@ function PhysicalExplanationSection() {
   ];
 
   return (
-    <section id="solution" className="py-32 relative overflow-hidden">
+    <section id="solution" className="py-24 lg:py-32 relative overflow-hidden">
       <BorderBeam
         size={400}
         duration={15}
@@ -181,25 +192,27 @@ function PhysicalExplanationSection() {
       />
 
       <div className="container mx-auto px-4 relative">
-        <div className="max-w-3xl mb-20">
+        <div className="max-w-3xl mb-16 lg:mb-20">
           <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
             {t("badge")}
           </p>
-          <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
             {t("title")}
           </h2>
-          <p className="text-xl text-muted-foreground leading-relaxed">
+          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">
             {t("description")}
           </p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-8">
+        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8">
           {steps.map((step) => (
-            <div key={step.number} className="p-8 rounded-2xl bg-card">
-              <span className="text-5xl font-light text-muted-foreground/30">
+            <div key={step.number} className="p-6 lg:p-8 rounded-2xl bg-card">
+              <span className="text-4xl lg:text-5xl font-light text-muted-foreground/30">
                 {step.number}
               </span>
-              <h3 className="text-xl font-semibold mt-4 mb-3">{step.title}</h3>
+              <h3 className="text-lg lg:text-xl font-semibold mt-4 mb-3">
+                {step.title}
+              </h3>
               <p className="text-muted-foreground leading-relaxed">
                 {step.description}
               </p>
@@ -234,36 +247,36 @@ function HeartRateSection() {
   ];
 
   return (
-    <section className="py-32 bg-muted/30">
+    <section className="py-24 lg:py-32 bg-muted/30">
       <div className="container mx-auto px-4">
-        <div className="max-w-3xl mx-auto text-center mb-20">
+        <div className="max-w-3xl mx-auto text-center mb-16 lg:mb-20">
           <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
             {t("badge")}
           </p>
-          <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
             {t("title")}
           </h2>
-          <p className="text-xl text-muted-foreground leading-relaxed">
+          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">
             {t("description")}
           </p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-8 max-w-4xl mx-auto">
+        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8 max-w-4xl mx-auto">
           {states.map((state) => (
             <div
               key={state.title}
-              className={`p-8 rounded-2xl text-center ${
+              className={`p-6 lg:p-8 rounded-2xl text-center ${
                 state.featured
                   ? "bg-primary text-primary-foreground"
                   : "bg-card"
               }`}
             >
               <h3
-                className={`text-lg font-medium mb-4 ${state.featured ? "" : "text-muted-foreground"}`}
+                className={`text-base lg:text-lg font-medium mb-4 ${state.featured ? "" : "text-muted-foreground"}`}
               >
                 {state.title}
               </h3>
-              <div className="text-5xl font-semibold tracking-tight mb-4">
+              <div className="text-4xl lg:text-5xl font-semibold tracking-tight mb-4">
                 {state.bpm}
               </div>
               <p className="text-sm">{t("bpm")}</p>
@@ -284,7 +297,10 @@ function HowItWorksSection() {
   const t = useTranslations("home.technology");
 
   return (
-    <section id="technology" className="py-32 relative overflow-hidden">
+    <section
+      id="technology"
+      className="py-24 lg:py-32 relative overflow-hidden"
+    >
       <BorderBeam
         size={350}
         duration={18}
@@ -294,21 +310,21 @@ function HowItWorksSection() {
       />
 
       <div className="container mx-auto px-4 relative">
-        <div className="grid lg:grid-cols-2 gap-20 items-center">
+        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
           <div>
             <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
               {t("badge")}
             </p>
-            <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
               {t("title")}
             </h2>
-            <p className="text-xl text-muted-foreground leading-relaxed mb-12">
+            <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed mb-8 lg:mb-12">
               {t("description")}
             </p>
 
-            <div className="space-y-8">
+            <div className="space-y-6 lg:space-y-8">
               <div>
-                <h3 className="text-lg font-semibold mb-2">
+                <h3 className="text-base lg:text-lg font-semibold mb-2">
                   {t("step1Title")}
                 </h3>
                 <p className="text-muted-foreground leading-relaxed">
@@ -317,7 +333,7 @@ function HowItWorksSection() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold mb-2">
+                <h3 className="text-base lg:text-lg font-semibold mb-2">
                   {t("step2Title")}
                 </h3>
                 <p className="text-muted-foreground leading-relaxed">
@@ -326,7 +342,7 @@ function HowItWorksSection() {
               </div>
 
               <div>
-                <h3 className="text-lg font-semibold mb-2">
+                <h3 className="text-base lg:text-lg font-semibold mb-2">
                   {t("step3Title")}
                 </h3>
                 <p className="text-muted-foreground leading-relaxed">
@@ -337,11 +353,11 @@ function HowItWorksSection() {
           </div>
 
           <div className="flex items-center justify-center">
-            <div className="p-12 rounded-3xl bg-card text-center max-w-sm">
+            <div className="p-8 lg:p-12 rounded-3xl bg-card text-center max-w-sm w-full">
               <p className="text-sm text-muted-foreground uppercase tracking-wide mb-4">
                 {t("artificialGravity")}
               </p>
-              <div className="text-8xl font-semibold tracking-tight text-primary">
+              <div className="text-6xl lg:text-8xl font-semibold tracking-tight text-primary">
                 3x
               </div>
               <p className="text-muted-foreground mt-4">{t("earthGravity")}</p>
@@ -368,23 +384,23 @@ function BenefitsSection() {
   ];
 
   return (
-    <section id="benefits" className="py-32 bg-muted/30">
+    <section id="benefits" className="py-24 lg:py-32 bg-muted/30">
       <div className="container mx-auto px-4">
-        <div className="max-w-3xl mx-auto text-center mb-20">
+        <div className="max-w-3xl mx-auto text-center mb-16 lg:mb-20">
           <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
             {t("badge")}
           </p>
-          <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
             {t("title")}
           </h2>
-          <p className="text-xl text-muted-foreground leading-relaxed">
+          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">
             {t("description")}
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
           {benefits.map((benefit) => (
-            <div key={benefit.title} className="p-6 rounded-2xl bg-card">
+            <div key={benefit.title} className="p-5 lg:p-6 rounded-2xl bg-card">
               <h3 className="font-semibold mb-2">{benefit.title}</h3>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 {benefit.description}
@@ -401,7 +417,7 @@ function ResearchSection() {
   const t = useTranslations("home.research");
 
   return (
-    <section id="research" className="py-32 relative overflow-hidden">
+    <section id="research" className="py-24 lg:py-32 relative overflow-hidden">
       <BorderBeam
         size={300}
         duration={14}
@@ -412,33 +428,35 @@ function ResearchSection() {
       />
 
       <div className="container mx-auto px-4 relative">
-        <div className="grid lg:grid-cols-2 gap-20 items-center">
+        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
           <div>
             <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
               {t("badge")}
             </p>
-            <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
               {t("title")}
             </h2>
-            <p className="text-xl text-muted-foreground leading-relaxed mb-8">
+            <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed mb-8">
               {t("description")}
             </p>
 
-            <div className="space-y-6">
-              <div className="p-6 rounded-2xl bg-card">
+            <div className="space-y-4 lg:space-y-6">
+              <div className="p-5 lg:p-6 rounded-2xl bg-card">
                 <h3 className="font-semibold mb-2">{t("clinicalResults")}</h3>
                 <p className="text-muted-foreground mb-4">
                   {t("clinicalResultsDesc")}
                 </p>
-                <div className="flex gap-12">
+                <div className="flex gap-8 lg:gap-12">
                   <div>
-                    <div className="text-3xl font-semibold">x15</div>
+                    <div className="text-2xl lg:text-3xl font-semibold">
+                      x15
+                    </div>
                     <p className="text-sm text-muted-foreground">
                       {t("walkingMobility")}
                     </p>
                   </div>
                   <div>
-                    <div className="text-3xl font-semibold">x7</div>
+                    <div className="text-2xl lg:text-3xl font-semibold">x7</div>
                     <p className="text-sm text-muted-foreground">
                       {t("cyclingMobility")}
                     </p>
@@ -446,95 +464,27 @@ function ResearchSection() {
                 </div>
               </div>
 
-              <div className="p-6 rounded-2xl bg-card">
+              <div className="p-5 lg:p-6 rounded-2xl bg-card">
                 <p className="text-muted-foreground">{t("caseStudy")}</p>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
-            <div className="p-8 rounded-2xl bg-card text-center">
-              <div className="text-5xl font-semibold tracking-tight">
+          <div className="grid grid-cols-2 gap-4 lg:gap-6">
+            <div className="p-6 lg:p-8 rounded-2xl bg-card text-center">
+              <div className="text-4xl lg:text-5xl font-semibold tracking-tight">
                 <NumberTicker value={30} />+
               </div>
               <p className="text-muted-foreground mt-2">
                 {t("researchPapers")}
               </p>
             </div>
-            <div className="p-8 rounded-2xl bg-card text-center">
-              <div className="text-5xl font-semibold tracking-tight">
+            <div className="p-6 lg:p-8 rounded-2xl bg-card text-center">
+              <div className="text-4xl lg:text-5xl font-semibold tracking-tight">
                 <NumberTicker value={40} />
               </div>
               <p className="text-muted-foreground mt-2">{t("yearsUruguay")}</p>
             </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function MarketsSection() {
-  const t = useTranslations("home.markets");
-
-  return (
-    <section id="markets" className="py-32 bg-muted/30">
-      <div className="container mx-auto px-4">
-        <div className="max-w-3xl mx-auto text-center mb-20">
-          <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
-            {t("badge")}
-          </p>
-          <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
-            {t("title")}
-          </h2>
-          <p className="text-xl text-muted-foreground leading-relaxed">
-            {t("description")}
-          </p>
-        </div>
-
-        <div className="grid md:grid-cols-3 gap-8 mb-16">
-          <div className="p-8 rounded-2xl bg-card text-center">
-            <div className="text-4xl font-semibold tracking-tight">$38B</div>
-            <p className="font-medium mt-2">{t("tam")}</p>
-            <p className="text-sm text-muted-foreground">{t("tamDesc")}</p>
-          </div>
-          <div className="p-8 rounded-2xl bg-card text-center">
-            <div className="text-4xl font-semibold tracking-tight">$3B</div>
-            <p className="font-medium mt-2">{t("sam")}</p>
-            <p className="text-sm text-muted-foreground">{t("samDesc")}</p>
-          </div>
-          <div className="p-8 rounded-2xl bg-card text-center">
-            <div className="text-4xl font-semibold tracking-tight">$18M</div>
-            <p className="font-medium mt-2">{t("som")}</p>
-            <p className="text-sm text-muted-foreground">{t("somDesc")}</p>
-          </div>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-8">
-          <div className="p-8 rounded-2xl bg-card">
-            <h3 className="text-xl font-semibold mb-2">{t("athleteMarket")}</h3>
-            <p className="text-muted-foreground mb-6">$18M + $1.8M ARR</p>
-            <div className="flex justify-between items-center mb-4">
-              <span className="text-muted-foreground">{t("proClubs")}</span>
-              <span className="font-semibold">150+</span>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {t("athleteMarketDesc")}
-            </p>
-          </div>
-
-          <div className="p-8 rounded-2xl bg-card">
-            <h3 className="text-xl font-semibold mb-2">{t("medicalMarket")}</h3>
-            <p className="text-muted-foreground mb-6">$3B + $300M ARR</p>
-            <div className="flex justify-between items-center mb-4">
-              <span className="text-muted-foreground">
-                {t("medicalCenters")}
-              </span>
-              <span className="font-semibold">27k+</span>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {t("medicalMarketDesc")}
-            </p>
           </div>
         </div>
       </div>
@@ -547,7 +497,16 @@ function CTASection() {
   const tHome = useTranslations("home");
 
   return (
-    <section className="py-32 relative overflow-hidden">
+    <section className="py-24 lg:py-32 relative overflow-hidden">
+      <Particles
+        className="absolute inset-0"
+        quantity={50}
+        staticity={40}
+        ease={80}
+        color="#6366f1"
+        size={0.4}
+      />
+
       <BorderBeam
         size={400}
         duration={16}
@@ -558,10 +517,10 @@ function CTASection() {
 
       <div className="container mx-auto px-4 relative">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
             {t("title")}
           </h2>
-          <p className="text-xl text-muted-foreground mb-10 leading-relaxed">
+          <p className="text-lg sm:text-xl text-muted-foreground mb-8 lg:mb-10 leading-relaxed">
             {t("description")}
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">

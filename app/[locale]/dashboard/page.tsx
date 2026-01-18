@@ -41,9 +41,7 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {(user?.role === "admin" ||
-          user?.role === "gestionnaire" ||
-          user?.role === "technician") && (
+        {(user?.role === "admin" || user?.role === "gestionnaire") && (
           <Link href="/dashboard/machines">
             <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
               <CardHeader className="flex flex-row items-center justify-between pb-2">

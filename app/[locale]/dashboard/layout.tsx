@@ -4,22 +4,23 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/AppSidebar";
 import { Header } from "@/components/dashboard/Header";
 import { LightRays } from "@/components/ui/light-rays";
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [defaultOpen, setDefaultOpen] = useState(true);
-
-  useEffect(() => {
+  // Read sidebar state from cookie on initial render only
+  const defaultOpen = useMemo(() => {
+    if (typeof document === "undefined") return true;
     const sidebarState = document.cookie
       .split("; ")
       .find((row) => row.startsWith("sidebar_state="));
     if (sidebarState) {
-      setDefaultOpen(sidebarState.split("=")[1] !== "false");
+      return sidebarState.split("=")[1] !== "false";
     }
+    return true;
   }, []);
 
   return (
