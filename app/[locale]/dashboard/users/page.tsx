@@ -61,7 +61,7 @@ export default function UsersPage() {
     role:
       roleFilter === "all"
         ? undefined
-        : (roleFilter as "admin" | "gestionnaire" | "technician" | "user"),
+        : (roleFilter as "admin" | "gestionnaire" | "user"),
   });
 
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -174,9 +174,6 @@ export default function UsersPage() {
             <SelectItem value="gestionnaire">
               {t("users.roles.gestionnaire")}
             </SelectItem>
-            <SelectItem value="technician">
-              {t("users.roles.technician")}
-            </SelectItem>
             <SelectItem value="user">{t("users.roles.user")}</SelectItem>
           </SelectContent>
         </Select>
@@ -246,13 +243,12 @@ function RoleBadge({ role }: { role: string }) {
   > = {
     admin: "default",
     gestionnaire: "secondary",
-    technician: "outline",
     user: "outline",
   };
 
   return (
     <Badge variant={variants[role] || "outline"}>
-      {t(role as "admin" | "gestionnaire" | "technician" | "user")}
+      {t(role as "admin" | "gestionnaire" | "user")}
     </Badge>
   );
 }

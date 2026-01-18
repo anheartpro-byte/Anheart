@@ -138,7 +138,6 @@ export function SessionList() {
 | ------------ | ------------------------------------------------------- |
 | admin        | Full access to all users, machines, sessions            |
 | gestionnaire | Manage multiple machines, create users, view their data |
-| technician   | Operate machines, start/stop sessions                   |
 | user         | View own session data only (read-only)                  |
 
 ---

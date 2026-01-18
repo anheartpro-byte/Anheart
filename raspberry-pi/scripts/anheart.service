@@ -1,0 +1,26 @@
+[Unit]
+Description=AnHeart ECG Monitor
+Documentation=https://github.com/yourrepo/anheart
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/anheart/raspberry-pi
+Environment="PATH=/home/pi/anheart/raspberry-pi/venv/bin:/usr/bin"
+ExecStart=/home/pi/anheart/raspberry-pi/venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anheart
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/pi/anheart/raspberry-pi
+
+[Install]
+WantedBy=multi-user.target
