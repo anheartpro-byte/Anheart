@@ -16,8 +16,8 @@ export default function DashboardPage() {
   const t = useTranslations();
   const locale = useLocale();
   const user = useQuery(api.users.getCurrentUser);
-  const machines = useQuery(api.machines.listMachines, {});
-  const sessions = useQuery(api.sessions.listSessions, { limit: 10 });
+  const machines = useQuery(api.machines.listMachines, user ? {} : "skip");
+  const sessions = useQuery(api.sessions.listSessions, user ? { limit: 10 } : "skip");
 
   const dateLocale = locale === "fr" ? fr : enUS;
 

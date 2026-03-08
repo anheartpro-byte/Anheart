@@ -33,7 +33,7 @@ export function Navbar() {
 
   const navLinks = [
     { href: "/#solution", label: t("solution") },
-    { href: "/#technology", label: t("technology") },
+    { href: "/#usecases", label: t("technology") },
     { href: "/#benefits", label: t("benefits") },
     { href: "/#markets", label: t("markets") },
     { href: "/faq", label: t("faq") },
@@ -50,15 +50,15 @@ export function Navbar() {
     >
       <nav className="container mx-auto px-4 h-16 flex items-center justify-between">
         {/* Logo */}
-        <Link href="/" className="font-semibold text-xl tracking-tight flex flex-row">
-           <Image
+        <Link href="/" className="font-semibold text-xl tracking-tight flex flex-row items-center gap-2">
+          <Image
             src="/logo.png"
             width={30}
             height={30}
-            alt="Anheart logo"
+            alt="Gaura logo"
+            className="object-contain"
           />
-          <div>AnHeart</div>
-          
+          <span>Gaura</span>
         </Link>
 
         {/* Desktop Navigation */}

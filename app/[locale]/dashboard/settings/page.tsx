@@ -209,7 +209,7 @@ export default function SettingsPage() {
                 <Label className="text-muted-foreground">
                   {t("settings.application")}
                 </Label>
-                <p className="font-medium">AnHeart ECG Monitoring</p>
+                <p className="font-medium">Gaura ECG Monitoring</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">

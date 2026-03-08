@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AnHeart",
+  title: "Gaura",
   icons: {
     icon: "/image0.ico",
   },
