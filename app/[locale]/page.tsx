@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Navbar } from "@/components/landing/Navbar";
 import { Footer } from "@/components/landing/Footer";
 import { Globe } from "@/components/ui/globe";
-import { NumberTicker } from "@/components/ui/number-ticker";
+
 import { BorderBeam } from "@/components/ui/border-beam";
 import { Particles } from "@/components/ui/particles";
 import { ArrowRight } from "lucide-react";
@@ -28,9 +28,8 @@ export default function Home() {
         <HeroSection />
         <PhysicalExplanationSection />
         <HeartRateSection />
-        <HowItWorksSection />
+        <UseCasesSection />
         <BenefitsSection />
-        <ResearchSection />
         <CTASection />
       </main>
       <Footer />
@@ -93,33 +92,6 @@ function HeroSection() {
               <Authenticated>
                 <AuthenticatedHero />
               </Authenticated>
-            </div>
-
-            <div className="flex gap-8 sm:gap-12 pt-8">
-              <div>
-                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
-                  <NumberTicker value={40} />+
-                </div>
-                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  {t("yearsResearch")}
-                </p>
-              </div>
-              <div>
-                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
-                  <NumberTicker value={30} />+
-                </div>
-                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  {t("publishedPapers")}
-                </p>
-              </div>
-              <div>
-                <div className="text-3xl sm:text-4xl font-semibold tracking-tight">
-                  <NumberTicker value={150} />+
-                </div>
-                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  {t("proClubs")}
-                </p>
-              </div>
             </div>
           </div>
 
@@ -293,76 +265,84 @@ function HeartRateSection() {
   );
 }
 
-function HowItWorksSection() {
-  const t = useTranslations("home.technology");
+function UseCasesSection() {
+  const t = useTranslations("home.useCases");
 
   return (
-    <section
-      id="technology"
-      className="py-24 lg:py-32 relative overflow-hidden"
-    >
-      <BorderBeam
-        size={350}
-        duration={18}
-        colorFrom="#8b5cf6"
-        colorTo="#6366f1"
-        className="opacity-25"
-      />
-
+    <section id="usecases" className="py-24 lg:py-32 relative overflow-hidden">
+      <BorderBeam size={350} duration={18} colorFrom="#8b5cf6" colorTo="#6366f1" className="opacity-25" />
       <div className="container mx-auto px-4 relative">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
-          <div>
-            <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
-              {t("badge")}
-            </p>
-            <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
-              {t("title")}
-            </h2>
-            <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed mb-8 lg:mb-12">
-              {t("description")}
-            </p>
+        <div className="max-w-3xl mb-16 lg:mb-20">
+          <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">{t("badge")}</p>
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">{t("title")}</h2>
+          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">{t("description")}</p>
+        </div>
 
-            <div className="space-y-6 lg:space-y-8">
-              <div>
-                <h3 className="text-base lg:text-lg font-semibold mb-2">
-                  {t("step1Title")}
-                </h3>
-                <p className="text-muted-foreground leading-relaxed">
-                  {t("step1Description")}
-                </p>
-              </div>
-
-              <div>
-                <h3 className="text-base lg:text-lg font-semibold mb-2">
-                  {t("step2Title")}
-                </h3>
-                <p className="text-muted-foreground leading-relaxed">
-                  {t("step2Description")}
-                </p>
-              </div>
-
-              <div>
-                <h3 className="text-base lg:text-lg font-semibold mb-2">
-                  {t("step3Title")}
-                </h3>
-                <p className="text-muted-foreground leading-relaxed">
-                  {t("step3Description")}
-                </p>
-              </div>
+        {/* Maintain physical activity */}
+        <div className="mb-16">
+          <h3 className="text-2xl font-semibold mb-8">{t("maintainTitle")}</h3>
+          <p className="text-muted-foreground mb-8">{t("maintainDesc")}</p>
+          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8">
+            <div className="p-6 lg:p-8 rounded-2xl bg-card">
+              <h4 className="text-lg font-semibold mb-4">{t("injuredAthletes")}</h4>
+              <ul className="space-y-2 text-muted-foreground">
+                <li>{t("injuredAthletes1")}</li>
+                <li>{t("injuredAthletes2")}</li>
+                <li>{t("injuredAthletes3")}</li>
+              </ul>
+            </div>
+            <div className="p-6 lg:p-8 rounded-2xl bg-card">
+              <h4 className="text-lg font-semibold mb-4">{t("elderly")}</h4>
+              <ul className="space-y-2 text-muted-foreground">
+                <li>{t("elderly1")}</li>
+                <li>{t("elderly2")}</li>
+                <li>{t("elderly3")}</li>
+              </ul>
+            </div>
+            <div className="p-6 lg:p-8 rounded-2xl bg-card">
+              <h4 className="text-lg font-semibold mb-4">{t("disabled")}</h4>
+              <ul className="space-y-2 text-muted-foreground">
+                <li>{t("disabled1")}</li>
+                <li>{t("disabled2")}</li>
+                <li>{t("disabled3")}</li>
+              </ul>
             </div>
           </div>
+        </div>
 
-          <div className="flex items-center justify-center">
-            <div className="p-8 lg:p-12 rounded-3xl bg-card text-center max-w-sm w-full">
-              <p className="text-sm text-muted-foreground uppercase tracking-wide mb-4">
-                {t("artificialGravity")}
-              </p>
-              <div className="text-6xl lg:text-8xl font-semibold tracking-tight text-primary">
-                3x
-              </div>
-              <p className="text-muted-foreground mt-4">{t("earthGravity")}</p>
+        {/* Optimize training */}
+        <div className="mb-16">
+          <h3 className="text-2xl font-semibold mb-4">{t("optimizeTitle")}</h3>
+          <p className="text-muted-foreground mb-6">{t("optimizeDesc")}</p>
+          <ul className="space-y-2 text-muted-foreground mb-8 list-disc list-inside">
+            <li>{t("optimize1")}</li>
+            <li>{t("optimize2")}</li>
+            <li>{t("optimize3")}</li>
+            <li>{t("optimize4")}</li>
+          </ul>
+          <div className="grid sm:grid-cols-2 gap-6 lg:gap-8">
+            <div className="p-6 lg:p-8 rounded-2xl bg-card">
+              <h4 className="text-lg font-semibold mb-4">{t("eliteAthletes")}</h4>
+              <ul className="space-y-2 text-muted-foreground">
+                <li>{t("eliteAthletes1")}</li>
+                <li>{t("eliteAthletes2")}</li>
+                <li>{t("eliteAthletes3")}</li>
+              </ul>
+            </div>
+            <div className="p-6 lg:p-8 rounded-2xl bg-card">
+              <h4 className="text-lg font-semibold mb-4">{t("regularAthletes")}</h4>
+              <ul className="space-y-2 text-muted-foreground">
+                <li>{t("regularAthletes1")}</li>
+                <li>{t("regularAthletes2")}</li>
+                <li>{t("regularAthletes3")}</li>
+              </ul>
             </div>
           </div>
+        </div>
+
+        {/* Bottom paragraph */}
+        <div className="p-6 lg:p-8 rounded-2xl bg-primary/5 border border-primary/10">
+          <p className="text-muted-foreground leading-relaxed">{t("ambition")}</p>
         </div>
       </div>
     </section>
@@ -380,7 +360,6 @@ function BenefitsSection() {
     { title: t("injuries"), description: t("injuriesDesc") },
     { title: t("balance"), description: t("balanceDesc") },
     { title: t("muscle"), description: t("muscleDesc") },
-    { title: t("time"), description: t("timeDesc") },
   ];
 
   return (
@@ -407,85 +386,6 @@ function BenefitsSection() {
               </p>
             </div>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function ResearchSection() {
-  const t = useTranslations("home.research");
-
-  return (
-    <section id="research" className="py-24 lg:py-32 relative overflow-hidden">
-      <BorderBeam
-        size={300}
-        duration={14}
-        colorFrom="#6366f1"
-        colorTo="#8b5cf6"
-        className="opacity-20"
-        reverse
-      />
-
-      <div className="container mx-auto px-4 relative">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
-          <div>
-            <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
-              {t("badge")}
-            </p>
-            <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
-              {t("title")}
-            </h2>
-            <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed mb-8">
-              {t("description")}
-            </p>
-
-            <div className="space-y-4 lg:space-y-6">
-              <div className="p-5 lg:p-6 rounded-2xl bg-card">
-                <h3 className="font-semibold mb-2">{t("clinicalResults")}</h3>
-                <p className="text-muted-foreground mb-4">
-                  {t("clinicalResultsDesc")}
-                </p>
-                <div className="flex gap-8 lg:gap-12">
-                  <div>
-                    <div className="text-2xl lg:text-3xl font-semibold">
-                      x15
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {t("walkingMobility")}
-                    </p>
-                  </div>
-                  <div>
-                    <div className="text-2xl lg:text-3xl font-semibold">x7</div>
-                    <p className="text-sm text-muted-foreground">
-                      {t("cyclingMobility")}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-5 lg:p-6 rounded-2xl bg-card">
-                <p className="text-muted-foreground">{t("caseStudy")}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 lg:gap-6">
-            <div className="p-6 lg:p-8 rounded-2xl bg-card text-center">
-              <div className="text-4xl lg:text-5xl font-semibold tracking-tight">
-                <NumberTicker value={30} />+
-              </div>
-              <p className="text-muted-foreground mt-2">
-                {t("researchPapers")}
-              </p>
-            </div>
-            <div className="p-6 lg:p-8 rounded-2xl bg-card text-center">
-              <div className="text-4xl lg:text-5xl font-semibold tracking-tight">
-                <NumberTicker value={40} />
-              </div>
-              <p className="text-muted-foreground mt-2">{t("yearsUruguay")}</p>
-            </div>
-          </div>
         </div>
       </div>
     </section>

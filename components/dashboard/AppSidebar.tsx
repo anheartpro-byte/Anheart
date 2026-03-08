@@ -135,10 +135,11 @@ export function AppSidebar() {
                   src="/logo.png"
                   width={30}
                   height={30}
-                  alt="Anheart logo"
+                  alt="Gaura logo"
+                  className="object-contain"
                 />
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">AnHeart</span>
+                  <span className="truncate font-semibold">Gaura</span>
                 </div>
               </Link>
             </SidebarMenuButton>

@@ -62,10 +62,10 @@ export default function PrivacyPage() {
           <section className="bg-muted/50 rounded-lg p-6">
             <p className="text-muted-foreground mb-4">{t("section7Content")}</p>
             <a
-              href="mailto:anheartpro@gmail.com"
+              href="mailto:contact@gauratechnologies.com"
               className="text-primary hover:underline font-medium"
             >
-              anheartpro@gmail.com
+              contact@gauratechnologies.com
             </a>
           </section>
         </div>
@@ -73,7 +73,7 @@ export default function PrivacyPage() {
         {/* Footer */}
         <div className="mt-12 pt-8 border-t text-center">
           <p className="text-sm text-muted-foreground">
-            &copy; {new Date().getFullYear()} AnHeart. All rights reserved.
+            &copy; {new Date().getFullYear()} Gaura. All rights reserved.
           </p>
         </div>
       </div>

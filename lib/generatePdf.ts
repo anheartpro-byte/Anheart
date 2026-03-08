@@ -255,7 +255,7 @@ export function generateSessionPdf(data: SessionReportData): void {
     doc.setFontSize(8);
     doc.setTextColor(150, 150, 150);
     doc.text(
-      `AnHeart ECG Monitoring System - Page ${i} of ${pageCount}`,
+      `Gaura ECG Monitoring System - Page ${i} of ${pageCount}`,
       pageWidth / 2,
       doc.internal.pageSize.getHeight() - 10,
       { align: "center" },

@@ -13,7 +13,7 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
           {/* Brand */}
           <div className="col-span-2 md:col-span-1">
-            <p className="font-semibold text-lg mb-4">AnHeart</p>
+            <p className="font-semibold text-lg mb-4">Gaura</p>
             <p className="text-sm text-muted-foreground leading-relaxed">
               {t("description")}
             </p>
@@ -75,14 +75,6 @@ export function Footer() {
               </li>
               <li>
                 <Link
-                  href="/#research"
-                  className="hover:text-foreground transition-colors"
-                >
-                  Research
-                </Link>
-              </li>
-              <li>
-                <Link
                   href="/dashboard"
                   className="hover:text-foreground transition-colors"
                 >
@@ -98,10 +90,10 @@ export function Footer() {
             <ul className="space-y-3 text-sm text-muted-foreground">
               <li>
                 <a
-                  href="mailto:anheartpro@gmail.com"
+                  href="mailto:contact@gauratechnologies.com"
                   className="hover:text-foreground transition-colors"
                 >
-                  anheartpro@gmail.com
+                  contact@gauratechnologies.com
                 </a>
               </li>
             </ul>
@@ -110,7 +102,7 @@ export function Footer() {
 
         <div className="border-t mt-12 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-sm text-muted-foreground">
-            &copy; {new Date().getFullYear()} AnHeart. {t("allRightsReserved")}
+            &copy; {new Date().getFullYear()} Gaura. {t("allRightsReserved")}
           </p>
           <div className="flex gap-6 text-sm text-muted-foreground">
             <Link
