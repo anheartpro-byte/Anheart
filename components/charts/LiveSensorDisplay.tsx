@@ -3,12 +3,25 @@
 import { useRef, useEffect, useState, useMemo } from "react";
 import { ECGChart, EDAChart, SpO2Chart, RespChart } from "./SensorCharts";
 
+interface ChannelMetrics {
+  heartRate?: number;
+  hrv?: number;
+  respRate?: number;
+  scrCount?: number;
+  activations?: number;
+  pulse?: number;
+  quality?: string;
+}
+
 interface SensorBatch {
   timestamp: number;
+  sampleRate?: number;
   samples: Array<{
     channel: string;
     values: number[];
+    unit?: string;
   }>;
+  metrics?: Record<string, ChannelMetrics>;
 }
 
 interface LiveSensorDisplayProps {
@@ -84,10 +97,29 @@ export function LiveSensorDisplay({
     lastTimestampRef.current = 0;
   }, [sessionId]);
 
+  // Latest on-device metrics per channel (from the most recent batch that has them).
+  const latestMetrics = useMemo(() => {
+    const result: Record<string, ChannelMetrics> = {};
+    for (const batch of ecgData) {
+      if (!batch.metrics) continue;
+      for (const [ch, m] of Object.entries(batch.metrics)) {
+        result[ch.toUpperCase()] = m;
+      }
+    }
+    return result;
+  }, [ecgData]);
+
+  // Data from the Pi is already treated (filtered, mV) — charts must not re-filter.
+  const isTreated = useMemo(
+    () => ecgData.some((b) => b.samples.some((s) => s.unit)),
+    [ecgData],
+  );
+
   // Render chart for each channel based on type
   const renderChannelChart = (channel: string) => {
     const upperChannel = channel.toUpperCase();
     const data = channelData[upperChannel] || [];
+    const metrics = latestMetrics[upperChannel];
 
     switch (upperChannel) {
       case "ECG":
@@ -99,6 +131,9 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={280}
             showMetrics={true}
+            preFiltered={isTreated}
+            heartRate={metrics ? (metrics.heartRate ?? null) : undefined}
+            hrv={metrics ? (metrics.hrv ?? null) : undefined}
           />
         );
 
@@ -151,12 +186,13 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={200}
             showMetrics={false}
+            preFiltered={isTreated}
           />
         );
 
       case "LUX":
       case "LIGHT":
-        // Light sensor - simple line chart
+        // Light sensor - simple line chart (no ECG band-pass filtering)
         return (
           <ECGChart
             key={channel}
@@ -165,6 +201,7 @@ export function LiveSensorDisplay({
             displaySeconds={30}
             height={150}
             showMetrics={false}
+            filter={false}
           />
         );
 
@@ -178,6 +215,7 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={200}
             showMetrics={false}
+            preFiltered={isTreated}
           />
         );
     }

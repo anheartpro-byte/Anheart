@@ -3,14 +3,22 @@
 
 FROM python:3.11-slim-bookworm
 
-# Install Bluetooth and build dependencies
+# Install Bluetooth and build dependencies. The extra libs (BLAS/LAPACK, HDF5,
+# freetype) let scipy / biosppy install cleanly on ARM if a source build is needed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bluetooth \
     bluez \
     libbluetooth-dev \
     libglib2.0-dev \
+    build-essential \
     gcc \
+    gfortran \
     python3-dev \
+    libopenblas-dev \
+    liblapack-dev \
+    libhdf5-dev \
+    libfreetype6-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -19,9 +27,15 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements-prod.txt .
 
+# Headless matplotlib backend (BioSPPy imports matplotlib).
+ENV MPLBACKEND=Agg
+
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-prod.txt
+
+# Fail the build early if the on-device DSP stack didn't install correctly.
+RUN python -c "from biosppy.signals import ecg; from scipy import signal; print('DSP stack OK')"
 
 # Copy application code
 COPY src/ ./src/

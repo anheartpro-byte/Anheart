@@ -165,15 +165,20 @@ class ConvexClient:
         timestamp: int,
         samples: list[dict],
         batch_id: Optional[str] = None,
+        sample_rate: Optional[int] = None,
+        metrics: Optional[dict] = None,
     ) -> ApiResponse:
         """
-        Send ECG data batch.
+        Send a treated ECG data batch.
 
         Args:
             session_id: Active session ID
             timestamp: Unix timestamp in milliseconds
-            samples: List of {channel: str, values: list[int]}
+            samples: List of {channel: str, values: list[float], unit?: str} of
+                TREATED (filtered, physical-unit, downsampled) data.
             batch_id: Optional batch identifier for deduplication
+            sample_rate: Output/transmitted sample rate in Hz (e.g. 250)
+            metrics: Optional {channel: {metric: value}} computed on-device
         """
         payload = {
             "sessionId": session_id,
@@ -182,6 +187,10 @@ class ConvexClient:
         }
         if batch_id:
             payload["batchId"] = batch_id
+        if sample_rate is not None:
+            payload["sampleRate"] = sample_rate
+        if metrics:
+            payload["metrics"] = metrics
 
         return await self._request(
             "POST",

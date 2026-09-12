@@ -14,7 +14,8 @@ class Config(BaseModel):
     machine_api_key: str = Field(..., description="Machine API key (64 chars)")
     bitalino_mac: str = Field(..., description="BITalino MAC address")
 
-    sample_rate: int = Field(default=1000, description="Sample rate in Hz")
+    sample_rate: int = Field(default=1000, description="Acquisition sample rate in Hz")
+    output_sample_rate: int = Field(default=250, description="Treated/transmitted sample rate in Hz")
     batch_interval_ms: int = Field(default=1000, description="Batch interval in ms")
     heartbeat_interval_s: int = Field(default=30, description="Heartbeat interval in seconds")
     log_level: str = Field(default="INFO", description="Logging level")
@@ -39,6 +40,7 @@ class Config(BaseModel):
             machine_api_key=api_key,
             bitalino_mac=bitalino_mac,
             sample_rate=int(os.getenv("SAMPLE_RATE", "1000")),
+            output_sample_rate=int(os.getenv("OUTPUT_SAMPLE_RATE", "250")),
             batch_interval_ms=int(os.getenv("BATCH_INTERVAL_MS", "1000")),
             heartbeat_interval_s=int(os.getenv("HEARTBEAT_INTERVAL_S", "30")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),

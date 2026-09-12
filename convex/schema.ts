@@ -96,15 +96,35 @@ export default defineSchema({
     .index("by_machine_and_status", ["machineId", "status"])
     .index("by_started_by", ["startedById"]),
 
-  // ECG Data - Real-time streaming data batches
+  // ECG Data - Real-time streaming batches of ON-DEVICE TREATED data.
+  // The Raspberry Pi filters, converts to physical units, downsamples and
+  // computes metrics before sending, so `values` are treated (e.g. mV) at
+  // `sampleRate` Hz (default 250), not raw ADC.
   ecg_data: defineTable({
     sessionId: v.id("sessions"),
     timestamp: v.number(),
+    sampleRate: v.optional(v.number()), // treated/transmitted rate in Hz (e.g. 250)
     samples: v.array(
       v.object({
         channel: v.string(),
-        values: v.array(v.number()), // 1 second of data (~1000 samples at 1kHz)
+        values: v.array(v.number()), // ~1 second of treated data
+        unit: v.optional(v.string()), // physical unit of values, e.g. "mV"
       }),
+    ),
+    // Per-channel clinical metrics computed on-device (BioSPPy).
+    metrics: v.optional(
+      v.record(
+        v.string(),
+        v.object({
+          heartRate: v.optional(v.number()),
+          hrv: v.optional(v.number()),
+          respRate: v.optional(v.number()),
+          scrCount: v.optional(v.number()),
+          activations: v.optional(v.number()),
+          pulse: v.optional(v.number()),
+          quality: v.optional(v.string()),
+        }),
+      ),
     ),
   }).index("by_session_and_timestamp", ["sessionId", "timestamp"]),
 

@@ -231,11 +231,13 @@ export const createPatient = mutation({
 
     // Check email not already in use
     const existingUsers = await ctx.db.query("users").collect();
-    const emailExists = existingUsers.some(
+    const conflictingUser = existingUsers.find(
       (u) => u.email.toLowerCase() === args.email.toLowerCase(),
     );
-    if (emailExists) {
-      throw new Error("Email already in use");
+    if (conflictingUser) {
+      throw new Error(
+        `Email already in use by an existing ${conflictingUser.role} account (${conflictingUser.firstName} ${conflictingUser.lastName})`,
+      );
     }
 
     const now = Date.now();

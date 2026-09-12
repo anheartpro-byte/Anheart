@@ -48,16 +48,13 @@ export const createSession = mutation({
       throw new Error("Machine is already in a session");
     }
 
-    // Get and validate patient
+    // Get and validate patient (any role - admins/gestionnaires can also be session subjects)
     const patient = await ctx.db.get(args.userId);
     if (!patient) {
       throw new Error("Patient not found");
     }
-    if (patient.role !== "user") {
-      throw new Error("Selected user is not a patient");
-    }
 
-    // Check patient access - gestionnaire must manage this patient
+    // Check patient access - gestionnaire must manage this patient (or be creating their own session)
     const patientAccess = await canAccessUser(ctx, args.userId);
     if (!patientAccess) {
       throw new Error("Not authorized to create session for this patient");
@@ -266,6 +263,7 @@ export const getSession = query({
       startedAt: v.number(),
       endedAt: v.optional(v.number()),
       channels: v.array(v.string()),
+      sampleRate: v.optional(v.number()),
       notes: v.optional(v.string()),
       patient: v.object({
         _id: v.id("users"),
@@ -326,6 +324,7 @@ export const getSession = query({
       startedAt: session.startedAt,
       endedAt: session.endedAt,
       channels: session.channels,
+      sampleRate: session.sampleRate,
       notes: session.notes,
       patient: {
         _id: patient!._id,

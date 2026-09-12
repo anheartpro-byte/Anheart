@@ -91,7 +91,7 @@ export function SessionFormModal({
 
   // Fetch online machines and patients
   const machines = useQuery(api.machines.listMachines, { status: "online" });
-  const patients = useQuery(api.users.listUsers, { role: "user" });
+  const patients = useQuery(api.users.listUsers, {});
 
   const createSession = useMutation(api.sessions.createSession);
 
@@ -264,6 +264,7 @@ export function SessionFormModal({
                           <SelectItem key={patient._id} value={patient._id}>
                             {patient.firstName} {patient.lastName} (
                             {patient.email})
+                            {patient.role !== "user" && ` — ${patient.role}`}
                           </SelectItem>
                         ))}
                       </SelectContent>

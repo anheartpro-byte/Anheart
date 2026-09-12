@@ -42,3 +42,28 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# ---------- Python / Raspberry Pi client ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# RPi runtime data (SQLite + exports live in the docker volume)
+raspberry-pi/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Raw capture dumps
+SESSION_*.txt
+Session_data.txt
+
+# Env templates must stay tracked despite the `.env*` rule above
+!.env.example
+!raspberry-pi/.env.example

@@ -10,7 +10,15 @@ from dataclasses import dataclass
 from queue import Queue, Empty
 
 import numpy as np
-from bitalino import BITalino, ExceptionCode
+
+try:
+    from bitalino import BITalino, ExceptionCode
+except ImportError:
+    # The `bitalino` package depends on native Bluetooth libraries that are only
+    # present on the Raspberry Pi. Import it lazily so this module's pure logic
+    # (frame parsing, channel maps) can be imported and unit-tested off-device.
+    BITalino = None  # type: ignore[assignment,misc]
+    ExceptionCode = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +37,21 @@ class SampleBatch:
     channels: list[ChannelData]
 
 
-# BITalino analog channel names
-# These correspond to A1-A6 on the BITalino board
-# You can plug any sensor into any channel, but this is the recommended mapping:
-CHANNEL_NAMES = {
-    0: "ECG",      # A1 - Electrocardiography (heart)
-    1: "EDA",      # A2 - Electrodermal Activity (skin conductance/stress)
-    2: "SpO2",     # A3 - Pulse Oximetry (blood oxygen via finger clip)
-    3: "RESP",     # A4 - Respiration (chest band)
-    4: "EMG",      # A5 - Electromyography (muscle) or LUX (light)
-    5: "LUX",      # A6 - Light sensor or other
+# Authoritative mapping between sensor names and BITalino analog channel indices
+# (A1-A6 -> 0-5). This is the SINGLE source of truth for name<->channel: both this
+# client and the session manager import it, so a requested sensor is always read
+# from the correct column AND labeled consistently in the stored data.
+CHANNEL_MAP: dict[str, int] = {
+    "ECG": 0,   # A1 - Electrocardiography (heart)
+    "EDA": 1,   # A2 - Electrodermal Activity (skin conductance/stress)
+    "SpO2": 2,  # A3 - Pulse Oximetry (blood oxygen via finger clip)
+    "RESP": 3,  # A4 - Respiration (chest band)
+    "EMG": 4,   # A5 - Electromyography (muscle)
+    "LUX": 5,   # A6 - Light sensor or other
 }
+
+# Reverse lookup, derived from CHANNEL_MAP so the two can never drift apart.
+CHANNEL_NAMES: dict[int, str] = {index: name for name, index in CHANNEL_MAP.items()}
 
 # Default BITalino PIN code
 BITALINO_PIN = "1234"
@@ -180,6 +192,15 @@ class BITalinoClient:
         self._acquisition_thread: Optional[threading.Thread] = None
         self._stop_acquisition = threading.Event()
         self._on_disconnect: Optional[Callable[[], Awaitable[None]]] = None
+
+        # Leftover samples carried between read_samples() calls. Owned solely by
+        # the reader side and always prepended (oldest-first) to newly drained
+        # chunks, so batches stay strictly time-contiguous. Never re-inserted into
+        # the shared queue (which the acquisition thread appends newer data to).
+        self._leftover: Optional[np.ndarray] = None
+        self._leftover_ts: int = 0
+        # One-shot signal-integrity check on the first batch of an acquisition.
+        self._first_batch_checked = False
         
         # Validate inputs
         if sample_rate not in [1, 10, 100, 1000]:
@@ -266,6 +287,9 @@ class BITalinoClient:
                     self._buffer.get_nowait()
                 except Empty:
                     break
+            self._leftover = None
+            self._leftover_ts = 0
+            self._first_batch_checked = False
             self._stop_acquisition.clear()
             
             # Start acquisition in background thread
@@ -355,57 +379,84 @@ class BITalinoClient:
         """
         if not self.is_acquiring:
             return None
-        
-        # Collect data from queue
-        all_data = []
-        latest_timestamp = int(time.time() * 1000)
-        
+
+        # Drain the queue in FIFO order. The acquisition thread only ever *appends*
+        # newly read chunks, so draining preserves capture order.
+        rows: list[np.ndarray] = []
+        latest_timestamp = self._leftover_ts or int(time.time() * 1000)
+
+        # Prepend any leftover from the previous call FIRST so the assembled block
+        # stays strictly oldest-to-newest (this is what fixes the reordering race:
+        # older samples are never placed behind newer ones).
+        if self._leftover is not None:
+            rows.append(self._leftover)
+            self._leftover = None
+
         while not self._buffer.empty():
             try:
                 timestamp, data = self._buffer.get_nowait()
-                all_data.append(data)
+                rows.append(data)
                 latest_timestamp = timestamp
             except Empty:
                 break
-        
-        if not all_data:
+
+        if not rows:
             return None
-        
-        # Combine all chunks
-        combined = np.vstack(all_data)
-        
-        # Check if we have enough samples
+
+        combined = np.vstack(rows)
+
+        # Not enough for a full batch yet: keep it (still oldest-first) for later.
         if combined.shape[0] < count:
-            # Put data back for next time
-            self._buffer.put((latest_timestamp, combined))
+            self._leftover = combined
+            self._leftover_ts = latest_timestamp
             return None
-        
-        # Extract channel data
-        # BITalino data format: [seq, d1, d2, d3, d4, a1, a2, a3, a4, a5, a6]
-        # Analog channels start at index 5 (after seq and 4 digital channels)
-        # Channel 0 (A1) -> column 5
-        # Channel 1 (A2) -> column 6
-        # etc.
+
+        # Extract channel data.
+        # BITalino read() matrix layout: [seq, I1, I2, O1, O2, A1, A2, ...].
+        # Analog channels start at column 5, in the SAME order they were requested,
+        # so the Nth requested channel is at column 5 + N.
         channels = []
         for ch_idx, channel in enumerate(self.channels):
-            # Analog data column = 5 + channel_index_in_list
-            # When we request channels [0], we get data at column 5
-            # When we request channels [0, 1], we get data at columns 5, 6
             analog_col = 5 + ch_idx
             if analog_col < combined.shape[1]:
                 values = combined[:count, analog_col].tolist()
             else:
                 values = [0] * count
-            
+
             channel_name = CHANNEL_NAMES.get(channel, f"CH{channel}")
             channels.append(ChannelData(channel=channel_name, values=values))
-        
-        # Keep remaining data in buffer
+
+        # Carry the surplus (newest samples) forward, still oldest-first.
         if combined.shape[0] > count:
-            remaining = combined[count:]
-            self._buffer.put((latest_timestamp, remaining))
-        
+            self._leftover = combined[count:]
+            self._leftover_ts = latest_timestamp
+
+        self._check_signal_integrity(channels)
+
         return SampleBatch(timestamp=latest_timestamp, channels=channels)
+
+    def _check_signal_integrity(self, channels: list[ChannelData]) -> None:
+        """Warn once if a channel carries no real analog signal.
+
+        A live 10-bit analog channel swings across 0-1023; a channel stuck at a
+        near-constant tiny value (e.g. the {0,1,3} we saw when the sensor was not
+        plugged into its port) means no signal is reaching the ADC. Surfacing this
+        immediately prevents silently recording an unusable session.
+        """
+        if self._first_batch_checked:
+            return
+        self._first_batch_checked = True
+
+        for ch in channels:
+            if not ch.values:
+                continue
+            arr = np.asarray(ch.values, dtype=float)
+            if arr.max() <= 4 and arr.std() < 1.0:
+                logger.warning(
+                    "Channel %s has no analog signal (max=%d, std=%.2f) - check "
+                    "the sensor is plugged into its BITalino port and powered.",
+                    ch.channel, int(arr.max()), float(arr.std()),
+                )
 
     async def get_battery_level(self) -> Optional[int]:
         """Get battery level (0-100)."""

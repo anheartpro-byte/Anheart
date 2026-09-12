@@ -3,6 +3,36 @@ import { v } from "convex/values";
 import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
 
 // ============================================
+// Shared validators for treated ECG batches
+// ============================================
+
+const sampleValidator = v.object({
+  channel: v.string(),
+  values: v.array(v.number()),
+  unit: v.optional(v.string()),
+});
+
+const metricsValidator = v.record(
+  v.string(),
+  v.object({
+    heartRate: v.optional(v.number()),
+    hrv: v.optional(v.number()),
+    respRate: v.optional(v.number()),
+    scrCount: v.optional(v.number()),
+    activations: v.optional(v.number()),
+    pulse: v.optional(v.number()),
+    quality: v.optional(v.string()),
+  }),
+);
+
+const batchValidator = v.object({
+  timestamp: v.number(),
+  sampleRate: v.optional(v.number()),
+  samples: v.array(sampleValidator),
+  metrics: v.optional(metricsValidator),
+});
+
+// ============================================
 // Internal Functions (for HTTP endpoints)
 // ============================================
 
@@ -14,12 +44,9 @@ export const storeEcgBatch = internalMutation({
     machineId: v.id("machines"),
     sessionId: v.id("sessions"),
     timestamp: v.number(),
-    samples: v.array(
-      v.object({
-        channel: v.string(),
-        values: v.array(v.number()),
-      }),
-    ),
+    sampleRate: v.optional(v.number()),
+    samples: v.array(sampleValidator),
+    metrics: v.optional(metricsValidator),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -39,11 +66,13 @@ export const storeEcgBatch = internalMutation({
       throw new Error("Session does not belong to this machine");
     }
 
-    // Store the data batch
+    // Store the treated data batch
     await ctx.db.insert("ecg_data", {
       sessionId: args.sessionId,
       timestamp: args.timestamp,
+      sampleRate: args.sampleRate,
       samples: args.samples,
+      metrics: args.metrics,
     });
 
     return null;
@@ -76,17 +105,7 @@ export const getAllSessionData = internalQuery({
   args: {
     sessionId: v.id("sessions"),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const data = await ctx.db
       .query("ecg_data")
@@ -97,7 +116,9 @@ export const getAllSessionData = internalQuery({
 
     return data.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -115,17 +136,7 @@ export const getSessionAllData = query({
     sessionId: v.id("sessions"),
     maxBatches: v.optional(v.number()),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const maxBatches = args.maxBatches ?? 100; // Default to 100 batches (~100 seconds of data)
@@ -158,7 +169,9 @@ export const getSessionAllData = query({
 
     return data.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -172,17 +185,7 @@ export const getRecentEcgData = query({
     sessionId: v.id("sessions"),
     seconds: v.optional(v.number()),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const seconds = args.seconds ?? 10;
@@ -231,7 +234,9 @@ export const getRecentEcgData = query({
 
     return filteredData.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -245,17 +250,7 @@ export const getSessionEcgRange = query({
     startTime: v.number(),
     endTime: v.number(),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
 
@@ -290,7 +285,9 @@ export const getSessionEcgRange = query({
 
     return data.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -380,18 +377,7 @@ export const getLatestEcgBatch = query({
   args: {
     sessionId: v.id("sessions"),
   },
-  returns: v.union(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-    v.null(),
-  ),
+  returns: v.union(batchValidator, v.null()),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const now = Date.now();
@@ -434,7 +420,9 @@ export const getLatestEcgBatch = query({
 
     return {
       timestamp: data.timestamp,
+      sampleRate: data.sampleRate,
       samples: data.samples,
+      metrics: data.metrics,
     };
   },
 });

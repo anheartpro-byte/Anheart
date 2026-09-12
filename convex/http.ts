@@ -361,7 +361,20 @@ http.route({
     let body: {
       sessionId?: string;
       timestamp?: number;
-      samples?: Array<{ channel: string; values: number[] }>;
+      sampleRate?: number;
+      samples?: Array<{ channel: string; values: number[]; unit?: string }>;
+      metrics?: Record<
+        string,
+        {
+          heartRate?: number;
+          hrv?: number;
+          respRate?: number;
+          scrCount?: number;
+          activations?: number;
+          pulse?: number;
+          quality?: string;
+        }
+      >;
       batchId?: string;
     };
 
@@ -436,7 +449,9 @@ http.route({
           typeof ctx.runMutation<typeof internal.ecgData.storeEcgBatch>
         >[1]["sessionId"],
         timestamp: body.timestamp,
+        sampleRate: body.sampleRate,
         samples: body.samples,
+        metrics: body.metrics,
       });
 
       return new Response(

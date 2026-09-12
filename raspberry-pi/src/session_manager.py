@@ -7,9 +7,10 @@ from enum import Enum
 from typing import Optional
 
 from .config import Config
-from .bitalino_client import BITalinoClient, SampleBatch
+from .bitalino_client import BITalinoClient, SampleBatch, CHANNEL_MAP
 from .convex_client import ConvexClient, ResponseStatus, PendingSession
 from .data_buffer import DataBuffer
+from .signal_processing import SignalTreatment
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class SessionManager:
         self.bitalino: Optional[BITalinoClient] = None
         self.convex: Optional[ConvexClient] = None
         self.buffer: Optional[DataBuffer] = None
+        self.treatment: Optional[SignalTreatment] = None
 
         self._last_heartbeat = 0
         self._last_batch = 0
@@ -156,9 +158,12 @@ class SessionManager:
             self.state = SessionState.IDLE
             return
 
-        channel_map = {"ECG": 0, "EMG": 1, "EDA": 2, "EEG": 3, "ACC": 4, "LUX": 5}
+        # Resolve requested sensor names to BITalino channel indices using the
+        # single authoritative CHANNEL_MAP (shared with the client), so the channel
+        # we read is the one we label. Case-insensitive to tolerate "spo2"/"SpO2".
+        name_to_index = {name.upper(): index for name, index in CHANNEL_MAP.items()}
         channels = [
-            channel_map.get(ch.upper(), 0)
+            name_to_index.get(ch.upper(), 0)
             for ch in self.current_session.channels
         ]
 
@@ -193,6 +198,11 @@ class SessionManager:
         logger.info("Session started - acquiring data")
         self._batch_counter = 0
         self._last_batch = time.time()
+        # Fresh on-device treatment pipeline for this session (per-channel state).
+        self.treatment = SignalTreatment(
+            fs_in=self.config.sample_rate,
+            fs_out=self.config.output_sample_rate,
+        )
         self.state = SessionState.ACQUIRING
 
     async def _handle_acquiring(self) -> None:
@@ -222,10 +232,19 @@ class SessionManager:
         self._last_batch = now
         self._batch_counter += 1
 
-        samples = [
+        raw_samples = [
             {"channel": ch.channel, "values": ch.values}
             for ch in batch.channels
         ]
+
+        # Treat on-device: filter, convert to physical units, downsample to the
+        # output rate, and compute metrics. Only the treated data leaves the Pi.
+        if self.treatment is None:
+            self.treatment = SignalTreatment(
+                fs_in=self.config.sample_rate,
+                fs_out=self.config.output_sample_rate,
+            )
+        samples, metrics = self.treatment.treat_batch(raw_samples)
 
         if self._online:
             response = await self.convex.send_data(
@@ -233,6 +252,8 @@ class SessionManager:
                 timestamp=batch.timestamp,
                 samples=samples,
                 batch_id=f"batch-{self._batch_counter}",
+                sample_rate=self.config.output_sample_rate,
+                metrics=metrics or None,
             )
 
             if response.status == ResponseStatus.SUCCESS:
@@ -323,6 +344,7 @@ class SessionManager:
         
         # Clear current session (don't call end_session - it's already ended on server)
         self.current_session = None
+        self.treatment = None
         
         # Go back to idle state
         self.state = SessionState.IDLE
@@ -340,10 +362,12 @@ class SessionManager:
         synced_ids = []
 
         for batch in batches:
+            # Buffered batches already hold treated data at the output rate.
             response = await self.convex.send_data(
                 session_id=batch.session_id,
                 timestamp=batch.timestamp,
                 samples=batch.samples,
+                sample_rate=self.config.output_sample_rate,
             )
 
             if response.status == ResponseStatus.SUCCESS:

@@ -90,9 +90,13 @@ export default function SessionDetailPage({
 
   // Process ECG data for display
   const ecgSamples: Record<string, number[]> = {};
+  let isTreated = false;
+  let transmitRate: number | undefined;
   if (ecgData) {
     for (const batch of ecgData) {
+      if (batch.sampleRate) transmitRate = batch.sampleRate;
       for (const sample of batch.samples) {
+        if (sample.unit) isTreated = true;
         if (!ecgSamples[sample.channel]) {
           ecgSamples[sample.channel] = [];
         }
@@ -100,6 +104,10 @@ export default function SessionDetailPage({
       }
     }
   }
+  // Treated data arrives at the transmit rate (~250 Hz); legacy raw is 1000 Hz.
+  const displayRate = isTreated
+    ? (transmitRate ?? 250)
+    : (session.sampleRate ?? 1000);
 
   return (
     <div className="space-y-6">
@@ -257,9 +265,10 @@ export default function SessionDetailPage({
                   <ECGWaveform
                     data={ecgSamples[channel]}
                     channel={channel}
-                    sampleRate={100}
+                    sampleRate={displayRate}
                     displaySeconds={10}
                     height={250}
+                    preFiltered={isTreated}
                   />
                 ) : (
                   <div className="h-[250px] flex items-center justify-center bg-muted/20 rounded-lg border border-dashed">
