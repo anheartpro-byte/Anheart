@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 from src.bitalino_client import (
+    CHANNEL_MAP,
+    CHANNEL_NAMES,
     BITalinoClient,
     ChannelData,
     SampleBatch,
-    CHANNEL_MAP,
-    CHANNEL_NAMES,
 )
 
 
@@ -31,14 +31,15 @@ def _frame(seq_start: int, analog_values: list[int]) -> np.ndarray:
     n = len(analog_values)
     m = np.zeros((n, 6), dtype=float)
     m[:, 0] = [(seq_start + i) % 16 for i in range(n)]  # seq ramps 0..15
-    m[:, 1] = [i % 2 for i in range(n)]                 # I1 toggles 0/1
-    m[:, 5] = analog_values                             # A1 = the "ECG"
+    m[:, 1] = [i % 2 for i in range(n)]  # I1 toggles 0/1
+    m[:, 5] = analog_values  # A1 = the "ECG"
     return m
 
 
 # ---------------------------------------------------------------------------
 # Initialization / config
 # ---------------------------------------------------------------------------
+
 
 def test_client_initialization(client):
     assert client.mac_address == "AA:BB:CC:DD:EE:FF"
@@ -60,7 +61,7 @@ def test_multiple_channels():
 
 def test_channel_map_is_bijective_and_consistent():
     # The reverse map must be the exact inverse (no drift between the two).
-    assert CHANNEL_NAMES == {index: name for name, index in CHANNEL_MAP.items()}
+    assert {index: name for name, index in CHANNEL_MAP.items()} == CHANNEL_NAMES
     assert CHANNEL_MAP["ECG"] == 0
     assert CHANNEL_NAMES[0] == "ECG"
 
@@ -78,6 +79,7 @@ def test_sample_batch_format():
 # ---------------------------------------------------------------------------
 # Frame parsing: correct analog column is extracted
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_read_samples_extracts_analog_column(client):
@@ -140,6 +142,7 @@ async def test_read_samples_returns_none_until_enough(client):
 # ---------------------------------------------------------------------------
 # Integrity guard: flat channel is flagged
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_flat_channel_logs_warning(client, caplog):

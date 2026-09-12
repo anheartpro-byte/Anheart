@@ -2,8 +2,8 @@
 """Discover BITalino/psychoBIT devices via Bluetooth."""
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,9 +18,9 @@ async def main():
     print("Scanning for Bluetooth devices...")
     print("This may take up to 10 seconds.")
     print()
-    
+
     devices = await discover_bitalino_devices(timeout=10.0)
-    
+
     if not devices:
         print("No BITalino/psychoBIT devices found.")
         print()
@@ -37,16 +37,16 @@ async def main():
         print("  > trust XX:XX:XX:XX:XX:XX")
         print("  > quit")
         return
-    
+
     print(f"Found {len(devices)} compatible device(s):")
     print()
     for d in devices:
         print(f"  Name: {d['name']}")
         print(f"  MAC:  {d['address']}")
         print()
-    
+
     print("To test a device, run:")
-    print(f"  python scripts/test_bitalino.py --mac <MAC_ADDRESS>")
+    print("  python scripts/test_bitalino.py --mac <MAC_ADDRESS>")
 
 
 if __name__ == "__main__":

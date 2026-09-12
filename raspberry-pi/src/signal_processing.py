@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import numpy as np
 from scipy import signal as sps
@@ -34,24 +33,24 @@ logger = logging.getLogger(__name__)
 # needed for metric extraction; import lazily so the waveform path still works if
 # it is unavailable (e.g. a dev machine without the native deps).
 try:
+    from biosppy.signals import bvp as bio_bvp
     from biosppy.signals import ecg as bio_ecg
-    from biosppy.signals import resp as bio_resp
     from biosppy.signals import eda as bio_eda
     from biosppy.signals import emg as bio_emg
-    from biosppy.signals import bvp as bio_bvp
+    from biosppy.signals import resp as bio_resp
 
     BIOSPPY_AVAILABLE = True
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     logger.warning("BioSPPy unavailable, metrics disabled: %s", e)
     BIOSPPY_AVAILABLE = False
 
 
 # --- BITalino transfer-function constants ---------------------------------
-VCC = 3.3          # operating voltage (V)
-ADC_BITS = 10      # A1-A4 resolution
-ADC_LEVELS = 2 ** ADC_BITS
-ECG_GAIN = 1100    # ECG sensor gain
-EMG_GAIN = 1009    # EMG sensor gain
+VCC = 3.3  # operating voltage (V)
+ADC_BITS = 10  # A1-A4 resolution
+ADC_LEVELS = 2**ADC_BITS
+ECG_GAIN = 1100  # ECG sensor gain
+EMG_GAIN = 1009  # EMG sensor gain
 # mV per ADC count for a DC-removed (band-passed) signal: the -0.5 offset cancels.
 ECG_MV_PER_COUNT = (VCC / ADC_LEVELS / ECG_GAIN) * 1000.0
 EMG_MV_PER_COUNT = (VCC / ADC_LEVELS / EMG_GAIN) * 1000.0
@@ -60,11 +59,12 @@ EMG_MV_PER_COUNT = (VCC / ADC_LEVELS / EMG_GAIN) * 1000.0
 @dataclass
 class ChannelSpec:
     """Per-channel treatment configuration."""
-    filt_band: str                    # 'bandpass' | 'lowpass'
-    filt_cutoff: object               # float or [low, high] in Hz
-    unit: str                         # physical unit of the treated waveform
-    mv_per_count: Optional[float] = None  # linear ADC->unit scale (DC-removed)
-    metric: Optional[str] = None      # biosppy extractor key
+
+    filt_band: str  # 'bandpass' | 'lowpass'
+    filt_cutoff: object  # float or [low, high] in Hz
+    unit: str  # physical unit of the treated waveform
+    mv_per_count: float | None = None  # linear ADC->unit scale (DC-removed)
+    metric: str | None = None  # biosppy extractor key
     order: int = 2
 
 
@@ -84,8 +84,9 @@ DEFAULT_SPEC = ChannelSpec("bandpass", [3.0, 45.0], "raw", None, None)
 class ChannelProcessor:
     """Stateful streaming treatment for a single channel."""
 
-    def __init__(self, channel: str, fs_in: int = 1000, fs_out: int = 250,
-                 metric_window_s: float = 8.0):
+    def __init__(
+        self, channel: str, fs_in: int = 1000, fs_out: int = 250, metric_window_s: float = 8.0
+    ):
         self.channel = channel
         self.spec = SENSOR_SPECS.get(channel, DEFAULT_SPEC)
         self.fs_in = fs_in
@@ -147,7 +148,7 @@ class ChannelProcessor:
 
         return out, dict(self._last_metrics)
 
-    def _compute_metrics(self) -> Optional[dict]:
+    def _compute_metrics(self) -> dict | None:
         key = self.spec.metric
         if not key or not BIOSPPY_AVAILABLE:
             return None
@@ -180,17 +181,17 @@ class ChannelProcessor:
                 return None
             if key == "eda":
                 out = bio_eda.eda(signal=sig, sampling_rate=self.fs_in, show=False)
-                return {"scrCount": int(len(out["peaks"]))}
+                return {"scrCount": len(out["peaks"])}
             if key == "emg":
                 out = bio_emg.emg(signal=sig, sampling_rate=self.fs_in, show=False)
-                return {"activations": int(len(out["onsets"]))}
+                return {"activations": len(out["onsets"])}
             if key == "bvp":
                 out = bio_bvp.bvp(signal=sig, sampling_rate=self.fs_in, show=False)
                 hr = out["heart_rate"]
                 if len(hr):
                     return {"pulse": round(float(np.median(hr)))}
                 return None
-        except Exception as e:  # noqa: BLE001 - never let metric extraction break streaming
+        except Exception as e:
             logger.debug("Metric extraction failed for %s: %s", self.channel, e)
             return None
         return None
@@ -218,7 +219,7 @@ class ChannelProcessor:
                 vh = float(np.var(hp))
                 if vh > 0 and 1 - float(np.var(notched)) / vh > 0.6:
                     return "mains_dominated"
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return "good"
 
@@ -231,9 +232,7 @@ class SignalTreatment:
         self.fs_out = fs_out
         self._processors: dict[str, ChannelProcessor] = {}
 
-    def treat_batch(
-        self, samples: list[dict]
-    ) -> tuple[list[dict], dict]:
+    def treat_batch(self, samples: list[dict]) -> tuple[list[dict], dict]:
         """Treat a batch of raw per-channel samples.
 
         Args:
@@ -253,11 +252,13 @@ class SignalTreatment:
                 proc = ChannelProcessor(channel, self.fs_in, self.fs_out)
                 self._processors[channel] = proc
             values, metrics = proc.process(s.get("values", []))
-            treated.append({
-                "channel": channel,
-                "values": values,
-                "unit": proc.spec.unit,
-            })
+            treated.append(
+                {
+                    "channel": channel,
+                    "values": values,
+                    "unit": proc.spec.unit,
+                }
+            )
             if metrics:
                 metrics_by_channel[channel] = metrics
         return treated, metrics_by_channel

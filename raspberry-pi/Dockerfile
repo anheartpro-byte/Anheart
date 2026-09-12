@@ -1,7 +1,9 @@
 # AnHeart Raspberry Pi Client - Docker Image
 # Works on Raspberry Pi 3/4/5 (ARM64)
 
-FROM python:3.11-slim-bookworm
+# 3.12 (not 3.11): numpy's bundled type stubs require a 3.12+ target, and the
+# strict type-check gate runs against this same version.
+FROM python:3.12-slim-bookworm
 
 # Install Bluetooth and build dependencies. The extra libs (BLAS/LAPACK, HDF5,
 # freetype) let scipy / biosppy install cleanly on ARM if a source build is needed.

@@ -18,15 +18,14 @@ Then paste the output. The ECG column is the one that varies widely inside
 """
 
 import argparse
-import sys
 import os
+import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from bitalino import BITalino
-
 
 # Standard BITalino frame layout: [seq, I1, I2, O1, O2, A1, A2, ...]
 BASE_COLUMN_NAMES = ["seq", "I1", "I2", "O1", "O2"]
@@ -52,7 +51,7 @@ def diagnose(mac: str, channels: list[int], fs: int, seconds: float) -> None:
     device = BITalino(mac)
     try:
         print(f"Device version: {device.version()}")
-    except Exception as e:  # noqa: BLE001 - best-effort info only
+    except Exception as e:
         print(f"(could not read version: {e})")
 
     print(f"Starting acquisition: channels={channels}, rate={fs} Hz")
@@ -77,8 +76,7 @@ def diagnose(mac: str, channels: list[int], fs: int, seconds: float) -> None:
     n_rows, n_cols = data.shape
     print()
     print(f"Raw read() matrix: {n_rows} rows x {n_cols} cols")
-    print(f"Expected layout: [seq, I1, I2, O1, O2, A1..] "
-          f"-> analog channels start at column 5")
+    print("Expected layout: [seq, I1, I2, O1, O2, A1..] -> analog channels start at column 5")
     print()
 
     header = f"{'col':>3}  {'name':>6}  {'min':>6}  {'max':>6}  {'mean':>8}  {'std':>7}  {'domFreq(Hz)':>11}  first-8"
@@ -96,9 +94,11 @@ def diagnose(mac: str, channels: list[int], fs: int, seconds: float) -> None:
             name = f"A{ch}"
         freq, power = dominant_freq(column.astype(float), fs)
         first8 = ", ".join(str(int(v)) for v in column[:8])
-        print(f"{col:>3}  {name:>6}  {int(column.min()):>6}  {int(column.max()):>6}  "
-              f"{column.mean():>8.1f}  {column.std():>7.1f}  "
-              f"{freq:>7.1f} ({power:.0%})  [{first8}]")
+        print(
+            f"{col:>3}  {name:>6}  {int(column.min()):>6}  {int(column.max()):>6}  "
+            f"{column.mean():>8.1f}  {column.std():>7.1f}  "
+            f"{freq:>7.1f} ({power:.0%})  [{first8}]"
+        )
 
     print()
     print("Interpretation:")
@@ -111,21 +111,23 @@ def diagnose(mac: str, channels: list[int], fs: int, seconds: float) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose raw BITalino columns")
-    parser.add_argument("--mac", required=True,
-                        help="BITalino MAC address or serial port (/dev/rfcomm0)")
-    parser.add_argument("--channels", default="0",
-                        help="Comma-separated analog channels to read (default: 0)")
-    parser.add_argument("--rate", type=int, default=1000,
-                        help="Sample rate in Hz (default: 1000)")
-    parser.add_argument("--seconds", type=float, default=5.0,
-                        help="How many seconds to capture (default: 5)")
+    parser.add_argument(
+        "--mac", required=True, help="BITalino MAC address or serial port (/dev/rfcomm0)"
+    )
+    parser.add_argument(
+        "--channels", default="0", help="Comma-separated analog channels to read (default: 0)"
+    )
+    parser.add_argument("--rate", type=int, default=1000, help="Sample rate in Hz (default: 1000)")
+    parser.add_argument(
+        "--seconds", type=float, default=5.0, help="How many seconds to capture (default: 5)"
+    )
     args = parser.parse_args()
 
     channels = [int(c) for c in args.channels.split(",") if c.strip() != ""]
 
     try:
         diagnose(args.mac, channels, args.rate, args.seconds)
-    except Exception as e:  # noqa: BLE001 - surface any failure to the operator
+    except Exception as e:
         print(f"\nERROR: {e}", file=sys.stderr)
         return 1
     return 0

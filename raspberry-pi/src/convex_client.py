@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
 
@@ -21,14 +20,16 @@ class ResponseStatus(Enum):
 @dataclass
 class ApiResponse:
     """Generic API response."""
+
     status: ResponseStatus
-    data: Optional[dict] = None
-    error: Optional[str] = None
+    data: dict | None = None
+    error: str | None = None
 
 
 @dataclass
 class PendingSession:
     """Pending session info from poll."""
+
     session_id: str
     channels: list[str]
     config: dict
@@ -48,7 +49,7 @@ class ConvexClient:
         self.api_key = api_key
         self.timeout = timeout
         self.max_retries = max_retries
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self):
         await self.start()
@@ -77,7 +78,7 @@ class ConvexClient:
         self,
         method: str,
         path: str,
-        json: Optional[dict] = None,
+        json: dict | None = None,
         retry: bool = True,
     ) -> ApiResponse:
         """Make HTTP request with retry logic."""
@@ -130,7 +131,7 @@ class ConvexClient:
                 break
 
             if attempt < attempts - 1:
-                delay = 2 ** attempt
+                delay = 2**attempt
                 await asyncio.sleep(delay)
 
         return ApiResponse(
@@ -140,9 +141,9 @@ class ConvexClient:
 
     async def send_heartbeat(
         self,
-        battery_level: Optional[int] = None,
-        wifi_strength: Optional[int] = None,
-        active_session_id: Optional[str] = None,
+        battery_level: int | None = None,
+        wifi_strength: int | None = None,
+        active_session_id: str | None = None,
     ) -> ApiResponse:
         """Send heartbeat to server."""
         payload = {}
@@ -156,7 +157,7 @@ class ConvexClient:
         return await self._request(
             "POST",
             "/api/machine/heartbeat",
-            json=payload if payload else None,
+            json=payload or None,
         )
 
     async def send_data(
@@ -164,9 +165,9 @@ class ConvexClient:
         session_id: str,
         timestamp: int,
         samples: list[dict],
-        batch_id: Optional[str] = None,
-        sample_rate: Optional[int] = None,
-        metrics: Optional[dict] = None,
+        batch_id: str | None = None,
+        sample_rate: int | None = None,
+        metrics: dict | None = None,
     ) -> ApiResponse:
         """
         Send a treated ECG data batch.
@@ -199,7 +200,7 @@ class ConvexClient:
             retry=False,
         )
 
-    async def poll_session(self) -> tuple[ApiResponse, Optional[PendingSession]]:
+    async def poll_session(self) -> tuple[ApiResponse, PendingSession | None]:
         """
         Poll for pending session.
 
@@ -234,7 +235,7 @@ class ConvexClient:
         self,
         session_id: str,
         failed: bool = False,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> ApiResponse:
         """Notify server that session has ended."""
         payload: dict = {"sessionId": session_id}
@@ -248,10 +249,10 @@ class ConvexClient:
             json=payload,
         )
 
-    async def check_session_status(self, session_id: str) -> tuple[ApiResponse, Optional[dict]]:
+    async def check_session_status(self, session_id: str) -> tuple[ApiResponse, dict | None]:
         """
         Check if session is still active (to detect remote session end).
-        
+
         Returns:
             Tuple of (response, status_info or None)
             status_info contains: {"status": str, "active": bool, "endedAt": int|None}
@@ -261,8 +262,8 @@ class ConvexClient:
             f"/api/machine/session/status?sessionId={session_id}",
             retry=False,
         )
-        
+
         if response.status != ResponseStatus.SUCCESS:
             return response, None
-        
+
         return response, response.data

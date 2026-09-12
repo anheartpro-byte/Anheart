@@ -4,11 +4,10 @@ import asyncio
 import logging
 import time
 from enum import Enum
-from typing import Optional
 
+from .bitalino_client import CHANNEL_MAP, BITalinoClient
 from .config import Config
-from .bitalino_client import BITalinoClient, SampleBatch, CHANNEL_MAP
-from .convex_client import ConvexClient, ResponseStatus, PendingSession
+from .convex_client import ConvexClient, PendingSession, ResponseStatus
 from .data_buffer import DataBuffer
 from .signal_processing import SignalTreatment
 
@@ -29,12 +28,12 @@ class SessionManager:
     def __init__(self, config: Config):
         self.config = config
         self.state = SessionState.IDLE
-        self.current_session: Optional[PendingSession] = None
+        self.current_session: PendingSession | None = None
 
-        self.bitalino: Optional[BITalinoClient] = None
-        self.convex: Optional[ConvexClient] = None
-        self.buffer: Optional[DataBuffer] = None
-        self.treatment: Optional[SignalTreatment] = None
+        self.bitalino: BITalinoClient | None = None
+        self.convex: ConvexClient | None = None
+        self.buffer: DataBuffer | None = None
+        self.treatment: SignalTreatment | None = None
 
         self._last_heartbeat = 0
         self._last_batch = 0
@@ -43,7 +42,7 @@ class SessionManager:
 
         self._running = False
         self._online = False
-        
+
         # How often to check if session was ended remotely (seconds)
         self._status_check_interval = 5
 
@@ -162,10 +161,7 @@ class SessionManager:
         # single authoritative CHANNEL_MAP (shared with the client), so the channel
         # we read is the one we label. Case-insensitive to tolerate "spo2"/"SpO2".
         name_to_index = {name.upper(): index for name, index in CHANNEL_MAP.items()}
-        channels = [
-            name_to_index.get(ch.upper(), 0)
-            for ch in self.current_session.channels
-        ]
+        channels = [name_to_index.get(ch.upper(), 0) for ch in self.current_session.channels]
 
         self.bitalino = BITalinoClient(
             mac_address=self.config.bitalino_mac,
@@ -212,12 +208,12 @@ class SessionManager:
             return
 
         now = time.time()
-        
+
         # Check if session was ended remotely
         if self._online and (now - self._last_status_check) >= self._status_check_interval:
             self._last_status_check = now
             await self._check_remote_session_status()
-            
+
             # If state changed (session ended), don't continue acquiring
             if self.state != SessionState.ACQUIRING:
                 return
@@ -232,10 +228,7 @@ class SessionManager:
         self._last_batch = now
         self._batch_counter += 1
 
-        raw_samples = [
-            {"channel": ch.channel, "values": ch.values}
-            for ch in batch.channels
-        ]
+        raw_samples = [{"channel": ch.channel, "values": ch.values} for ch in batch.channels]
 
         # Treat on-device: filter, convert to physical units, downsample to the
         # output rate, and compute metrics. Only the treated data leaves the Pi.
@@ -259,14 +252,13 @@ class SessionManager:
             if response.status == ResponseStatus.SUCCESS:
                 logger.debug(f"Sent batch {self._batch_counter}")
                 return
-            else:
-                logger.warning(f"Failed to send batch: {response.error}")
-                # Check if it's a "session not active" error - session was ended remotely
-                if response.error and "not active" in response.error.lower():
-                    logger.info("Session was ended remotely")
-                    await self._handle_remote_session_end()
-                    return
-                self._online = False
+            logger.warning(f"Failed to send batch: {response.error}")
+            # Check if it's a "session not active" error - session was ended remotely
+            if response.error and "not active" in response.error.lower():
+                logger.info("Session was ended remotely")
+                await self._handle_remote_session_end()
+                return
+            self._online = False
 
         self.buffer.store(
             session_id=self.current_session.session_id,
@@ -291,7 +283,7 @@ class SessionManager:
     async def _end_session(
         self,
         failed: bool = False,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> None:
         """End the current session."""
         if not self.current_session:
@@ -323,11 +315,11 @@ class SessionManager:
         """Check if current session was ended remotely."""
         if not self.current_session or not self.convex:
             return
-        
+
         response, status_info = await self.convex.check_session_status(
             self.current_session.session_id
         )
-        
+
         if status_info and not status_info.get("active", True):
             logger.info(f"Session was ended remotely (status: {status_info.get('status')})")
             await self._handle_remote_session_end()
@@ -335,17 +327,17 @@ class SessionManager:
     async def _handle_remote_session_end(self) -> None:
         """Handle when session is ended from the web dashboard."""
         logger.info("Stopping acquisition due to remote session end")
-        
+
         # Stop BITalino acquisition
         if self.bitalino:
             await self.bitalino.stop_acquisition()
             await self.bitalino.disconnect()
             self.bitalino = None
-        
+
         # Clear current session (don't call end_session - it's already ended on server)
         self.current_session = None
         self.treatment = None
-        
+
         # Go back to idle state
         self.state = SessionState.IDLE
         logger.info("Session ended, returning to idle state")
