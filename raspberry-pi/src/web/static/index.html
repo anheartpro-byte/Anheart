@@ -1,0 +1,231 @@
+<!doctype html>
+<!--
+  The operator page. One file, no build step, no CDN.
+
+  Everything it needs is served by the Pi itself, because the machine is
+  expected to work with no internet at all: a dashboard that renders blank
+  because a font or a framework did not load is a dashboard that is not there
+  at the moment somebody needs it.
+
+  Two display rules from the design are structural here rather than stylistic,
+  and both are marked in place below:
+
+  1. the "is it stopped" indicator reads the MEASURED output speed, never the
+     setpoint. A commanded zero on a coasting centrifuge is not a measured
+     zero, and the difference is minutes of rotation;
+  2. motor rpm, output rpm, Hz and g are shown TOGETHER, always. The gearbox
+     ratio is 49.79, so one of those numbers alone makes a fiftyfold confusion
+     invisible.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AnHeart operator</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+
+<!--
+  The disconnection banner. Fixed, loud, and at the very top of the document
+  so it is the first thing painted: a frozen dashboard that still looks live is
+  the failure that hurts, so losing the socket has to be impossible to miss.
+-->
+<div id="banner" class="banner hidden" role="alert" aria-live="assertive">
+  <strong>NO LIVE DATA</strong>
+  <span id="banner-detail">the connection to the machine has dropped</span>
+</div>
+
+<header class="topbar">
+  <span class="brand">AnHeart</span>
+  <span id="run-state" class="pill">&mdash;</span>
+  <span id="bind" class="bind">&mdash;</span>
+  <nav class="tabs">
+    <button id="tab-setup" class="tab" type="button">Setup</button>
+    <button id="tab-run" class="tab" type="button">Run</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ================= SETUP ================= -->
+  <section id="view-setup" class="view">
+
+    <div class="card" id="card-token">
+      <h2>Access</h2>
+      <p class="note" id="token-note">
+        This interface controls a motor. Off loopback it refuses to start without a token.
+      </p>
+      <label>Shared token
+        <input id="token" type="password" autocomplete="off" placeholder="leave empty on loopback" />
+      </label>
+      <button id="save-token" class="btn" type="button">Use this token</button>
+    </div>
+
+    <!--
+      The attestation gate. Two checkboxes, not one: the STO jumper being gone
+      and a latching mushroom being wired normally-closed are two separate
+      facts about the machine, and an operator who is sure of only one of them
+      must not be able to pass both with a single click. The server refuses a
+      half-attestation without recording anything.
+    -->
+    <div class="card" id="card-attest">
+      <h2>Emergency stop wiring <span id="attest-state" class="pill pill-bad">not attested</span></h2>
+      <p class="note" id="attest-statement">&mdash;</p>
+      <label class="check">
+        <input id="attest-jumper" type="checkbox" />
+        The STO jumper has been removed from the drive.
+      </label>
+      <label class="check">
+        <input id="attest-mushroom" type="checkbox" />
+        A latching emergency stop is wired normally-closed into P24 &rarr; STO.
+      </label>
+      <label>Your name
+        <input id="attest-operator" type="text" autocomplete="off" placeholder="who is attesting" />
+      </label>
+      <button id="attest" class="btn" type="button">Record attestation</button>
+      <p class="note">
+        Recorded per boot, not per installation: a Pi that has rebooted is a Pi
+        whose wiring nobody has vouched for since.
+      </p>
+    </div>
+
+    <div class="card" id="card-profile">
+      <h2>Programme</h2>
+      <label>Profile
+        <select id="profile"></select>
+      </label>
+      <label>Total duration (minutes, blank keeps the profile's own)
+        <input id="duration" type="number" min="1" step="1" placeholder="as profiled" />
+      </label>
+      <label>Operator
+        <input id="operator" type="text" autocomplete="off" placeholder="who is running this" />
+      </label>
+      <button id="preview" class="btn" type="button">Preview plan</button>
+      <button id="start" class="btn btn-go" type="button">Start session</button>
+      <p id="start-note" class="note"></p>
+    </div>
+
+    <div class="card" id="card-plan">
+      <h2>What this programme would do</h2>
+      <dl class="grid" id="plan-limits"></dl>
+      <table class="timeline" id="plan-timeline"></table>
+      <p class="note">
+        Speeds are shown at the motor shaft, at the gearbox output, as drive
+        frequency and as centripetal load, together. HSP is the drive value
+        that matches the software ceiling.
+      </p>
+    </div>
+
+    <div class="card" id="card-system">
+      <h2>System</h2>
+      <dl class="grid" id="system-grid"></dl>
+      <h3>Serial ports</h3>
+      <ul id="ports" class="ports"></ul>
+    </div>
+
+  </section>
+
+  <!-- ================= RUN ================= -->
+  <section id="view-run" class="view hidden">
+
+    <div class="row">
+      <!--
+        The heart rate. Large because it is the number the whole machine is
+        regulating on, and struck through and greyed the moment it is stale:
+        the reading is an 8 s median refreshed at 1 Hz, so one that stopped
+        refreshing looks exactly like a current one unless the page says so.
+      -->
+      <div class="card card-hr">
+        <h2>Heart rate <span id="hr-quality" class="pill">&mdash;</span></h2>
+        <div id="hr" class="bignum">&mdash;</div>
+        <div class="unit">bpm</div>
+        <div class="zoneband" id="zoneband">
+          <div class="zoneband-fill" id="zoneband-fill"></div>
+          <div class="zoneband-marker" id="zoneband-marker"></div>
+        </div>
+        <dl class="grid" id="hr-grid"></dl>
+      </div>
+
+      <div class="card card-phase">
+        <h2>Phase <span id="phase" class="pill">&mdash;</span></h2>
+        <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+        <dl class="grid" id="time-grid"></dl>
+      </div>
+    </div>
+
+    <div class="row">
+      <!--
+        MEASURED first, and it is the indicator that answers "is it stopped".
+        The setpoint is shown beside it, smaller, because a commanded zero and
+        a measured zero are different facts and only one of them is about the
+        shaft.
+      -->
+      <div class="card card-speed">
+        <h2>Measured <span id="motion" class="pill">&mdash;</span></h2>
+        <div id="measured-output" class="bignum">&mdash;</div>
+        <div class="unit">output rpm (at the centrifuge)</div>
+        <dl class="grid" id="measured-grid"></dl>
+      </div>
+
+      <div class="card card-speed">
+        <h2>Setpoint <span id="setpoint-confirmed" class="pill">&mdash;</span></h2>
+        <div id="setpoint-output" class="bignum bignum-dim">&mdash;</div>
+        <div class="unit">output rpm (commanded)</div>
+        <dl class="grid" id="setpoint-grid"></dl>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card card-drive">
+        <h2>Drive <span id="drive-state" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="drive-grid"></dl>
+        <div id="fault" class="fault hidden"></div>
+      </div>
+
+      <div class="card card-safety">
+        <h2>Safety <span id="safety-action" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="safety-grid"></dl>
+        <div class="ackrow">
+          <input id="ack-operator" type="text" autocomplete="off" placeholder="your name" />
+          <label class="check">
+            <input id="ack-released" type="checkbox" />
+            the mushroom has been pulled back out
+          </label>
+          <button id="ack" class="btn" type="button">Acknowledge</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-ecg">
+      <h2>ECG <span id="ecg-state" class="pill">&mdash;</span></h2>
+      <canvas id="ecg" width="1200" height="220"></canvas>
+    </div>
+
+    <div class="card card-events">
+      <h2>Events</h2>
+      <ul id="events" class="events"></ul>
+    </div>
+
+  </section>
+</main>
+
+<!--
+  The footer is fixed and present in BOTH views, because the moment somebody
+  needs to stop the machine is not a moment for finding the right tab.
+
+  The E-stop asks for nothing: no confirmation dialog, no name, no reason. One
+  that asks "are you sure?" is not an emergency stop. It is also, and the page
+  says so, a CONVENIENCE stop - it depends on this browser, a network, a web
+  server and the session process, any one of which can be the thing that has
+  failed. The stop that does not depend on software is the wired mushroom.
+-->
+<footer class="footer">
+  <span id="footer-status" class="footer-status">&mdash;</span>
+  <button id="stop" class="btn btn-stop" type="button">STOP<small>controlled ramp</small></button>
+  <button id="estop" class="btn btn-estop" type="button">E-STOP<small>latches now</small></button>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

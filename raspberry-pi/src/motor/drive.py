@@ -3,7 +3,8 @@
 This module is pure. It imports no ``pymodbus``, no ``serial``, nothing that
 touches a wire - ``tests/test_drive_contract.py`` parses its imports and fails
 if that ever changes. Two things implement :class:`DriveBackend`: the real
-Modbus driver (``src/motor/atv320.py``) and the simulator (``src/sim/``). The
+Modbus driver (``src/motor/atv320.py``) and the simulator
+(``src/motor/simulated.py``). The
 safety layer above is written against this protocol only, so the closed-loop
 safety tests run with no drive attached while still exercising the same types
 the hardware path uses.
@@ -217,11 +218,24 @@ class ControlWord(IntEnum):
       There is no automatic fault reset and no automatic resumption of motion
       anywhere in this system.
 
+    **The stop is two words in that order, and the order is the safety
+    property.** ``SWITCH_ON`` out of OPERATION_ENABLED is CiA402 transition 5
+    ("disable operation"), which on this drive RAMPS. ``SHUTDOWN`` out of
+    OPERATION_ENABLED is transition 8, which DROPS THE OUTPUT STAGE: torque
+    goes away instantly and a loaded centrifuge freewheels for minutes while
+    the drive reports the reassuring-sounding READY. Writing 6 to a turning
+    machine is therefore not a stop, it is the slowest stop there is, and
+    zeroing LFRD a few milliseconds earlier does not save it - the ramp has had
+    no time to act and is then aborted. Measured against this repo's own plant
+    model: standstill at t = 144.6 s for 6, t = 10.0 s when the run command is
+    left in place; with the commissioned ``dEC`` of 3-4 s the ratio is worse.
+
     Note what is absent: there is no "fast stop" word. The DC bus absorbs ~11 J
     of the ~420 J stored in the spinning rig, so a stop commanded faster than
     the commissioned 3-4 s ramp trips ObF and drops the drive into FREEWHEEL -
     a longer, uncontrolled coast-down with a person inside. The fastest stop
-    available is the ramp the drive is commissioned with.
+    available is the ramp the drive is commissioned with, reached by zeroing
+    LFRD and leaving the run command in place.
     """
 
     SHUTDOWN = 6
@@ -718,7 +732,67 @@ class DriveFaulted:
     raw_code: RawRegister
 
 
-type DriveError = CommTimeout | BadResponse | UnexpectedState | DriveFaulted | OutOfRange
+@dataclass(frozen=True, slots=True)
+class EnableUnconfirmed:
+    """The start sequence failed AT the word that energises the output stage.
+
+    This variant exists because of one specific wrong reading. A
+    :class:`CommTimeout` returned by the last step of the start sequence reads
+    as "the link died", and a caller that treats it that way is wrong in the
+    only direction that matters: ``ENABLE_OPERATION`` may already have landed.
+    A Modbus request whose reply was lost was still transmitted, so the output
+    stage may be energised right now - and LFRD may still hold a setpoint from
+    an earlier session, which means "energised" can mean "turning".
+
+    So this says what is actually known: **the output state is UNKNOWN and
+    possibly enabled.** ``reference_zeroed`` and ``run_command_removed`` report
+    whether the rollback the driver attempts before returning was
+    acknowledged. Both ``False`` means nothing is known to have undone the
+    enable, and the drive's own ``ttO`` timeout is the only stop left.
+
+    ``detail`` carries the underlying failure as prose rather than as a nested
+    error value, for the same reason :class:`BadResponse` does: the decision is
+    taken on the variant and on the two booleans, and nesting the union inside
+    one of its own members would make ``DriveError`` recursive for a field
+    nothing branches on.
+    """
+
+    detail: str
+    reference_zeroed: bool
+    run_command_removed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class StopUnconfirmed:
+    """The shaft could not be shown to have stopped, so the run command stays.
+
+    Returned by a close that zeroed the speed reference, read RFRD until its
+    budget ran out and still saw the shaft turning. Removing the run command at
+    that point would be CiA402 transition 8 on a moving centrifuge - the output
+    stage dropped, minutes of uncontrolled coast-down - so the drive is
+    deliberately left in OPERATION_ENABLED with a zero reference, where its own
+    ``ttO`` timeout ramps it down. That is the better of the two available
+    endings, and this variant is how the caller is told which one it got.
+
+    Carries the measured wait and the last speed actually read, because "it did
+    not stop" is unactionable whereas "still 420 rpm after 20 s" names a
+    deceleration ramp that is not what the commissioning notes claim.
+    """
+
+    waited: Seconds
+    last_output_rpm: MotorRpm
+    detail: str
+
+
+type DriveError = (
+    CommTimeout
+    | BadResponse
+    | UnexpectedState
+    | DriveFaulted
+    | OutOfRange
+    | EnableUnconfirmed
+    | StopUnconfirmed
+)
 """Every way a drive operation can fail. Closed; match it with the nested form:
 
     match result:
@@ -734,7 +808,51 @@ type DriveError = CommTimeout | BadResponse | UnexpectedState | DriveFaulted | O
 ``OutOfRange`` is reused from ``src.units`` rather than redefined, because a
 value outside its physical domain is the same failure whether it was noticed
 while parsing an ADC sample or a drive register.
+
+Two of the seven are not transport failures at all. ``EnableUnconfirmed`` and
+``StopUnconfirmed`` say "the output state is unknown and the motor may be
+turning", which is the fact a caller has to act on and the fact the five
+transport variants cannot express: a ``CommTimeout`` from the middle of a start
+sequence reads as "the link died" and hides that the motor is now enabled.
 """
+
+
+# =========================================================================
+# What an emergency attempt achieved
+# =========================================================================
+
+
+@unique
+class EmergencyStopOutcome(Enum):
+    """What one :meth:`DriveBackend.emergency_disable_blocking` call achieved.
+
+    A return value rather than ``None``, because of who calls it: ``atexit``,
+    an OS signal handler, an ``except`` branch. Those are the places with no
+    way to ask a follow-up question, and the places where escalating - cut the
+    mains, tell the operator, refuse to exit quietly - is the only remaining
+    option. "The attempt was made" and "no frame ever reached the wire" demand
+    different responses and must not look alike to the caller.
+
+    None of these means the machine has stopped. With STO jumpered there is no
+    independent torque removal and the ramp takes seconds; every member below
+    is a statement about the attempt, never about the shaft.
+    """
+
+    ACKNOWLEDGED = auto()
+    # The drive answered the zero-reference write with a well-formed ack, so
+    # the reference is 0 and the drive is decelerating down its own ramp. The
+    # strongest thing this call can ever report.
+
+    SENT_UNCONFIRMED = auto()
+    # A frame went out and no usable answer came back. It may well have landed
+    # - a Modbus request whose reply is lost was still transmitted - but
+    # nothing here can prove it. "Probably ramping, possibly not."
+
+    NOTHING_SENT = auto()
+    # No frame reached the wire at all, so nothing was asked of the drive: the
+    # motor is still commanded at whatever setpoint it held. This is the member
+    # that must escalate, and the one that used to be indistinguishable from
+    # success because this method returned nothing.
 
 
 # =========================================================================
@@ -766,11 +884,29 @@ class DriveBackend(Protocol):
         ...
 
     async def close(self) -> Result[None, DriveError]:
-        """Release the link.
+        """Release the link, having first stopped the machine properly.
 
         Must leave the drive in a state it can be left in, not merely drop the
         port. Closing stops the keepalive, which arms the drive's own ttO
         timeout response; that is a backstop, not a stop command.
+
+        Because this is ``async`` it can afford to WAIT, and waiting is what
+        makes the stop a ramp instead of a freewheel. The required order is:
+
+        1. write LFRD = 0 and let the drive decelerate on its own ramp;
+        2. read RFRD until the shaft is at standstill, bounded;
+        3. only then ``SWITCH_ON`` (transition 5) and ``SHUTDOWN``.
+
+        Dropping the output stage before step 2 has succeeded is CiA402
+        transition 8 on a turning centrifuge: see :class:`ControlWord`. An
+        implementation that cannot prove standstill must LEAVE THE RUN COMMAND
+        IN PLACE and say so (:class:`StopUnconfirmed`), because a zero
+        reference plus ttO beats a freewheel by two orders of magnitude.
+
+        Must be idempotent. Teardown paths call close twice - an ``except``
+        branch and then a ``finally``, or a shutdown handler and then
+        ``atexit`` - and the second call must report the same thing rather than
+        raising on a pool that is already gone.
         """
         ...
 
@@ -797,8 +933,8 @@ class DriveBackend(Protocol):
         """
         ...
 
-    def emergency_disable_blocking(self, timeout: Seconds) -> None:
-        """Remove the run command, synchronously, best effort.
+    def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
+        """Zero the speed reference, synchronously, best effort.
 
         **Synchronous on purpose.** This has to be callable from ``atexit``,
         from an OS signal handler, and from an ``except`` branch - places where
@@ -807,15 +943,28 @@ class DriveBackend(Protocol):
         only exists as a coroutine is a disable that does not happen on the
         paths that need it most.
 
+        **It does NOT remove the run command, and that is the whole design.**
+        Unlike :meth:`close` this call is budget-bounded, so it cannot wait for
+        standstill; and a run command removed from a turning machine is CiA402
+        transition 8, i.e. a freewheel (see :class:`ControlWord`). The zeroed
+        reference plus the drive's own commissioned ramp is the fastest stop
+        actually available here, so that is all this does. The drive is left in
+        OPERATION_ENABLED on purpose: once this process stops writing, ``ttO``
+        fires and ramps it down for real.
+
         Contract for implementations:
 
-        * Give up after ``timeout`` and return. A blocking call with no bound
-          hangs process exit, and a Pi that will not shut down is a Pi somebody
-          power-cycles mid-session.
-        * Never raise. There is nobody left up the stack to handle it: log and
-          return.
-        * Do the minimum that removes torque demand - write the stop command
-          word - and nothing that needs a reply to be interpreted.
+        * Send the write that matters - LFRD = 0 - **unconditionally**. Spend
+          the budget on anything optional, never on that one. A budget check
+          that can skip it turns this method into a silent no-op.
+        * Make the bound real. ``timeout`` must bound the whole call, including
+          however long the transport's own read timeout is; if the two cannot
+          be reconciled, say which one won rather than blocking for the larger.
+        * Never raise. There is nobody left up the stack to handle it: log,
+          and report through the return value.
+        * Report what happened (:class:`EmergencyStopOutcome`) so an
+          ``atexit`` or signal path can escalate. In particular
+          ``NOTHING_SENT`` must be distinguishable from success.
         * Returning does NOT mean the motor has stopped. It means the attempt
           was made. With STO jumpered there is no independent torque removal,
           and the ramp-down takes seconds (a faster stop trips ObF into

@@ -20,12 +20,16 @@ What it models, in order of how much it matters:
    bring it up to date from the injected :class:`~src.clock.Clock`. Nothing
    here reads the system clock, so a 45-minute session runs in milliseconds
    (contract rule 4, enforced repo-wide by ``tests/test_clock.py``).
-3. **The stop that is not instant.** Torque exists only in OPERATION_ENABLED
-   (and while a ramp-stop fault reaction is in progress). Everywhere else the
-   shaft coasts on ``exp(-dt / tau_coast)``, because that is what ~420 J of
-   rotating mass does against a DC bus that can absorb ~11 J of it. A
-   simulator that snapped to 0 rpm would quietly bless a safety rule that
-   assumes a stop command stops the machine.
+3. **The stop that is not instant, and the two stops that are not the same.**
+   Torque exists while the drive is commanded, while a ramp-stop fault reaction
+   is in progress, and while a commanded ramp-stop (CiA402 transition 5, command
+   word 7) is bringing the shaft down. Everywhere else - including after command
+   word 6, which is transition 8 and drops the output stage - the shaft coasts
+   on ``exp(-dt / tau_coast)``, because that is what ~420 J of rotating mass
+   does against a DC bus that can absorb ~11 J of it. A simulator that snapped
+   to 0 rpm would quietly bless a safety rule that assumes a stop command stops
+   the machine; a simulator in which 6 and 7 behave alike - which this one was -
+   quietly blesses a stop sequence that freewheels.
 4. **The drive's own ttO watchdog.** Go silent for ``tto`` seconds and the
    drive latches SLF and stops the motor itself. That backstop is the reason
    ``drive.service()`` is called first in the control tick, and this is the
@@ -60,6 +64,7 @@ from src.motor.drive import (
     DriveFaulted,
     DriveState,
     DriveStatus,
+    EmergencyStopOutcome,
     FaultReport,
     UnexpectedState,
     decode_status_word,
@@ -102,6 +107,10 @@ class SimState(Enum):
       ``DriveState.NOT_READY``, a value that reads as "stopped" to anything
       that does not know better. Quick stop is not modelled (see
       :data:`LEGAL_TRANSITIONS`).
+    * ``DISABLING_ON_RAMP`` emits the **same** word as ``SWITCHED_ON``, so a
+      machine decelerating from 1380 rpm and a machine sitting still with its
+      output stage off are indistinguishable through ETA. That is the whole
+      reason nothing may infer motion from a state.
     """
 
     NOT_READY_TO_SWITCH_ON = auto()
@@ -118,7 +127,20 @@ class SimState(Enum):
     # One command word away from torque.
 
     OPERATION_ENABLED = auto()
-    # The ONLY state in which this model produces torque. See _energised.
+    # Commanded, and producing torque. See _energised.
+
+    DISABLING_ON_RAMP = auto()
+    # CiA402 transition 5 in progress: the run command has been removed with
+    # command word 7 and this drive is commissioned to RAMP rather than to
+    # coast, so the output stage is STILL DRIVING - down to zero. It reports
+    # itself as SWITCHED_ON throughout, which is the profile's own answer and
+    # the reason a stop must be verified against RFRD and never against ETA.
+    #
+    # Modelling this at all is what makes command word 7 distinguishable from
+    # command word 6. Before it existed, torque lived in OPERATION_ENABLED
+    # alone, both words dropped straight into a coast, and the difference
+    # between a 10 s ramp-stop and a 145 s freewheel was invisible to every
+    # test in the suite.
 
     FAULT_REACTION_RAMP_STOP = auto()
     # A fault whose commissioned reaction is a controlled deceleration (ttO ->
@@ -149,6 +171,12 @@ ETA_WORDS: Final[Mapping[SimState, StatusWord]] = MappingProxyType(
         SimState.READY_TO_SWITCH_ON: StatusWord(ATV320_UNDEFINED_BITS | 0x31),
         SimState.SWITCHED_ON: StatusWord(ATV320_UNDEFINED_BITS | 0x33),
         SimState.OPERATION_ENABLED: StatusWord(ATV320_UNDEFINED_BITS | 0x37),
+        # Deliberately the SWITCHED_ON word: CiA402 transition 5 lands in
+        # Switched On, and the profile offers no bit for "still ramping". A
+        # caller polling ETA therefore sees the reassuring "switched on" while
+        # the centrifuge is at hundreds of rpm - faithful, and the pessimistic
+        # reading for anything written against this model.
+        SimState.DISABLING_ON_RAMP: StatusWord(ATV320_UNDEFINED_BITS | 0x33),
         # 0x3F is the profile's fault-reaction-active pattern (& 0x4F == 0x0F).
         # Both reactions emit it: the word cannot distinguish them.
         SimState.FAULT_REACTION_RAMP_STOP: StatusWord(ATV320_UNDEFINED_BITS | 0x3F),
@@ -171,6 +199,21 @@ REACTION_STATES: Final[frozenset[SimState]] = frozenset(
 #: Every state in which the drive is signalling a fault.
 FAULT_STATES: Final[frozenset[SimState]] = REACTION_STATES | {SimState.FAULT}
 
+SETTLES_INTO: Final[Mapping[SimState, SimState]] = MappingProxyType(
+    {
+        SimState.FAULT_REACTION_RAMP_STOP: SimState.FAULT,
+        SimState.FAULT_REACTION_FREEWHEEL: SimState.FAULT,
+        SimState.DISABLING_ON_RAMP: SimState.SWITCHED_ON,
+    }
+)
+"""States that are transients, and the state each becomes once the shaft stops.
+
+A transient here is a state whose *reason to exist* is that the machine is still
+moving. Nothing leaves one on a timer: they end when the speed reaches zero and
+not a moment before, which is the only definition that cannot be satisfied by a
+machine that is still turning.
+"""
+
 
 LEGAL_TRANSITIONS: Final[Mapping[tuple[SimState, ControlWord], SimState]] = MappingProxyType(
     {
@@ -178,13 +221,30 @@ LEGAL_TRANSITIONS: Final[Mapping[tuple[SimState, ControlWord], SimState]] = Mapp
         (SimState.SWITCH_ON_DISABLED, ControlWord.SHUTDOWN): SimState.READY_TO_SWITCH_ON,
         (SimState.READY_TO_SWITCH_ON, ControlWord.SHUTDOWN): SimState.READY_TO_SWITCH_ON,
         (SimState.SWITCHED_ON, ControlWord.SHUTDOWN): SimState.READY_TO_SWITCH_ON,
+        # TRANSITION 8, and the reason this table is worth reading twice. Out of
+        # OPERATION_ENABLED, word 6 DROPS THE OUTPUT STAGE. The centrifuge does
+        # not stop, it coasts - for minutes - while the drive reports the
+        # reassuring READY. This entry is not a convenience; it is the hazard,
+        # modelled so that software which stops with word 6 fails here.
         (SimState.OPERATION_ENABLED, ControlWord.SHUTDOWN): SimState.READY_TO_SWITCH_ON,
+        # Word 6 during a ramp-stop abandons the ramp the same way.
+        (SimState.DISABLING_ON_RAMP, ControlWord.SHUTDOWN): SimState.READY_TO_SWITCH_ON,
         # --- SWITCH_ON (7): transition 3, and transition 5 (disable op) ----
         (SimState.READY_TO_SWITCH_ON, ControlWord.SWITCH_ON): SimState.SWITCHED_ON,
         (SimState.SWITCHED_ON, ControlWord.SWITCH_ON): SimState.SWITCHED_ON,
-        (SimState.OPERATION_ENABLED, ControlWord.SWITCH_ON): SimState.SWITCHED_ON,
+        # TRANSITION 5. This drive is commissioned to ramp, so it keeps control
+        # of the motor all the way down instead of letting go of it. THIS is the
+        # stop, and the difference from the line above is two orders of
+        # magnitude of coast-down.
+        (SimState.OPERATION_ENABLED, ControlWord.SWITCH_ON): SimState.DISABLING_ON_RAMP,
+        (SimState.DISABLING_ON_RAMP, ControlWord.SWITCH_ON): SimState.DISABLING_ON_RAMP,
         # --- ENABLE_OPERATION (15): transition 4, from SWITCHED_ON ONLY ----
         (SimState.SWITCHED_ON, ControlWord.ENABLE_OPERATION): SimState.OPERATION_ENABLED,
+        # Re-enabling mid-ramp is legal: the drive never stopped driving, so it
+        # simply goes back to tracking the reference. Accepted rather than
+        # refused because a drive that refused it would make a caller that
+        # changed its mind look like a caller with a sequencing bug.
+        (SimState.DISABLING_ON_RAMP, ControlWord.ENABLE_OPERATION): SimState.OPERATION_ENABLED,
         # Re-issuing 15 while enabled is the keepalive the ttO watchdog is fed
         # with, so it MUST stay legal.
         (SimState.OPERATION_ENABLED, ControlWord.ENABLE_OPERATION): SimState.OPERATION_ENABLED,
@@ -521,6 +581,21 @@ class SimulatedDrive:
         return self._state
 
     @property
+    def commanded_setpoint(self) -> MotorRpm:
+        """LFRD as the drive holds it, readable with the link down.
+
+        Same caveat as :attr:`sim_state`: for tests and simulation logs only. A
+        caller on the drive path must read ``DriveStatus.setpoint_echo_rpm``,
+        which is what the hardware can actually answer.
+
+        It exists because the interesting question about a failed emergency stop
+        - "did the reference actually change?" - has to be answerable precisely
+        when the link is broken, which is the one time ``read_status`` cannot
+        answer anything.
+        """
+        return self._setpoint
+
+    @property
     def ramp_rate(self) -> RpmPerSecond:
         """``nominal_rpm / acceleration_time``: 138 rpm/s by default."""
         return RpmPerSecond(self._config.nominal_rpm / self._config.acceleration_time)
@@ -661,6 +736,11 @@ class SimulatedDrive:
           your way out of a spinning centrifuge;
         * anything not in :data:`LEGAL_TRANSITIONS` returns ``UnexpectedState``
           naming the state the word needed.
+
+        The two stop words are **not** interchangeable here, and a caller that
+        treats them as such gets a different machine: word 7 out of
+        OPERATION_ENABLED keeps driving the shaft down its ramp, word 6 drops
+        the output stage and leaves it coasting. See :data:`LEGAL_TRANSITIONS`.
         """
         self._integrate(self._clock.monotonic())
         error = self._transport_check()
@@ -680,6 +760,10 @@ class SimulatedDrive:
         if target is None:
             return Err(UnexpectedState(expected=COMMAND_REQUIRES[word], actual=self._drive_state()))
         self._state = target
+        # A ramp-stop of a shaft that is already at rest is over before it
+        # starts, so word 7 at standstill lands in SWITCHED_ON directly rather
+        # than parking in a transient no time will ever end.
+        self._settle_standstill()
         if word is ControlWord.FAULT_RESET:
             # Reached only when the reset was legal. LFT physically keeps the
             # last fault, but a status only reports one while the status word
@@ -755,32 +839,43 @@ class SimulatedDrive:
             )
         )
 
-    def emergency_disable_blocking(self, timeout: Seconds) -> None:
-        """Remove the run command, synchronously, best effort. Never raises.
+    def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
+        """Zero the setpoint, synchronously, best effort. Never raises.
 
-        Zeroes the setpoint and takes the drive out of OPERATION_ENABLED. It
-        does **not** stop the shaft: the motor then coasts on ``tau_coast``,
-        which is what happens to 420 J of rotating mass when torque goes away.
-        Nothing may read a return from this call as "the machine has stopped".
+        **The run command is left in place, exactly as the seam requires.** A
+        zeroed reference leaves this drive in OPERATION_ENABLED, driving the
+        shaft down its own ramp; removing the run command with word 6 would
+        drop the output stage and leave 420 J of rotating mass coasting on
+        ``tau_coast`` instead - two orders of magnitude slower. So the fastest
+        stop available here is the one that keeps the drive in control, and the
+        keepalive stopping is what arms ``ttO`` to finish the job.
+
+        Nothing may read a return from this call as "the machine has stopped":
+        the ramp still takes seconds, and the outcome describes the *attempt*.
 
         The attempt can fail silently, and that is modelled rather than
         assumed: with the link closed, during injected comms loss, with latency
         over ``timeout``, or with a register offset error, this returns having
-        changed nothing at all - the write was acknowledged and landed in the
-        wrong parameter. An emergency stop that is acked and does nothing is
-        the failure mode worth having a test for.
+        changed nothing at all. The offset case is the nasty one - it reports
+        ``ACKNOWLEDGED``, because that is what the drive really does with a
+        write into the wrong parameter, and no caller can tell the difference.
+        An emergency stop that is acked and does nothing is the failure mode
+        worth having a test for.
         """
         self._integrate(self._clock.monotonic())
-        if self._latency > timeout:
-            return
-        if self._transport_check() is not None:
-            return
-        if self._misaddressed:
-            return
+        if not self._link_open:
+            # No port, so no frame: nothing was asked of the drive at all.
+            return EmergencyStopOutcome.NOTHING_SENT
+        if self._latency > timeout or self._wire_check() is not None:
+            # The frame goes out and the answer does not come back inside the
+            # budget. It may have landed; this model cannot say, and neither
+            # could the real driver.
+            return EmergencyStopOutcome.SENT_UNCONFIRMED
         self._note_frame(is_write=True)
+        if self._misaddressed:
+            return EmergencyStopOutcome.ACKNOWLEDGED
         self._setpoint = MotorRpm(0)
-        if self._state is SimState.OPERATION_ENABLED:
-            self._state = SimState.SWITCHED_ON
+        return EmergencyStopOutcome.ACKNOWLEDGED
 
     # -- transport ---------------------------------------------------------
 
@@ -865,20 +960,27 @@ class SimulatedDrive:
     def _energised(self) -> bool:
         """Whether the output stage is delivering torque.
 
-        Exactly two states: commanded operation, and a fault reaction that is
-        still a controlled ramp. Everywhere else - ready, switched on, faulted,
-        freewheeling, powering up - there is no torque and the load coasts.
+        Three states: commanded operation, a fault reaction that is still a
+        controlled ramp, and a commanded ramp-stop (CiA402 transition 5, which
+        this drive is commissioned to ramp rather than coast). Everywhere else -
+        ready, switched on, faulted, freewheeling, powering up - there is no
+        torque and the load coasts.
         """
-        return self._state in (SimState.OPERATION_ENABLED, SimState.FAULT_REACTION_RAMP_STOP)
+        return self._state in (
+            SimState.OPERATION_ENABLED,
+            SimState.FAULT_REACTION_RAMP_STOP,
+            SimState.DISABLING_ON_RAMP,
+        )
 
     def _shaft_target(self) -> float:
         """The speed the drive is currently driving towards, in motor rpm.
 
-        Zero during a fault reaction: the drive is stopping, not tracking a
-        reference. Otherwise the written setpoint, reversed if the phase order
-        is wrong, clamped to the HSP ceiling.
+        Zero while stopping - a fault reaction or a commanded ramp-stop - since
+        the drive is bringing the shaft down, not tracking a reference.
+        Otherwise the written setpoint, reversed if the phase order is wrong,
+        clamped to the HSP ceiling.
         """
-        if self._state is SimState.FAULT_REACTION_RAMP_STOP:
+        if self._state in (SimState.FAULT_REACTION_RAMP_STOP, SimState.DISABLING_ON_RAMP):
             return 0.0
         demand = float(-self._setpoint if self._reversed else self._setpoint)
         limit = float(self._config.max_rpm)
@@ -891,6 +993,18 @@ class SimulatedDrive:
         ``rpm *= exp(-dt / tau_coast)``, which is the visible form of the
         hazard: a centrifuge that has lost torque at full speed is still
         turning minutes later, and no state word says so.
+
+        **The standstill floor belongs to the coast and to the coast only.** An
+        exponential decay never reaches zero, so without it a freewheel would
+        report "0.4 rpm" for ever and a fault reaction would never settle. The
+        ramp needs no such help - it assigns the target exactly once the gap is
+        within one step, so a ramp to zero ends at a true ``0.0`` - and
+        applying the floor there was a real defect rather than a tidy-up: it
+        let the shaft jump up to ``standstill_rpm`` in one step, which is more
+        than ``ramp_rate * dt`` allows and therefore broke the one bound the
+        safety layer is entitled to assume. Found by
+        ``tests/test_simulated_drive.py`` under a raised hypothesis budget;
+        there is a regression test pinning the exact case.
         """
         previous = self._rpm
         if self._energised():
@@ -900,22 +1014,37 @@ class SimulatedDrive:
             self._rpm = target if abs(gap) <= step else previous + math.copysign(step, gap)
         else:
             self._rpm = previous * math.exp(-dt / self._config.tau_coast)
-        if abs(self._rpm) < self._config.standstill_rpm:
-            # An exponential decay never reaches zero, and "1 rpm forever" is
-            # not a truer answer than "stopped" - it is the same lie with extra
-            # steps. This is also the finest speed the drive can report.
-            self._rpm = 0.0
+            if self._at_standstill():
+                # "1 rpm forever" is not a truer answer than "stopped", it is
+                # the same lie with extra steps. This is also the finest speed
+                # the drive can report.
+                self._rpm = 0.0
         self._rate = (self._rpm - previous) / dt
 
-    def _settle_standstill(self) -> None:
-        """A fault reaction is over when the shaft has stopped.
+    def _at_standstill(self) -> bool:
+        """Whether the shaft is stopped as far as this machine can tell.
 
-        Exact float comparison on purpose: ``_step_shaft`` assigns the literal
-        0.0 once the speed is below standstill, so this is testing for that
-        assignment and not for an accidentally tiny number.
+        One predicate, used by the coast floor, by the transient settling and by
+        the fault latch, because "has it stopped?" must not have three answers.
+        A threshold rather than ``== 0.0``: ``standstill_rpm`` is the finest
+        speed the drive can report, so below it there is nothing observable left
+        to call motion - and an exact comparison would be a comparison against
+        the accumulated float error of a fifty-step ramp, which lands a whole
+        integration step late and for no physical reason.
         """
-        if self._state in REACTION_STATES and self._rpm == 0.0:
-            self._state = SimState.FAULT
+        return abs(self._rpm) < self._config.standstill_rpm
+
+    def _settle_standstill(self) -> None:
+        """End whichever transient the shaft was still moving for.
+
+        A fault reaction becomes a latched FAULT; a commanded ramp-stop becomes
+        plain SWITCHED_ON. Both only once the shaft has actually stopped: a
+        transient that ended on a timer would be a transient that lies about
+        motion, which is the one thing this module may not do.
+        """
+        settled = SETTLES_INTO.get(self._state)
+        if settled is not None and self._at_standstill():
+            self._state = settled
 
     def _check_watchdog(self) -> None:
         """The drive's own ttO timeout: silence for ``tto`` latches SLF.
@@ -944,7 +1073,7 @@ class SimulatedDrive:
         """
         report = describe_fault(lft_code_for(fault, self._fault_codes), self._fault_codes)
         self._fault = report
-        if abs(self._rpm) < self._config.standstill_rpm:
+        if self._at_standstill():
             self._state = SimState.FAULT
         elif FAULT_REACTIONS[report.fault] is FaultReaction.RAMP_TO_STOP:
             self._state = SimState.FAULT_REACTION_RAMP_STOP

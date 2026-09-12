@@ -48,6 +48,7 @@ from src.motor.drive import (
     DriveFaulted,
     DriveState,
     DriveStatus,
+    EmergencyStopOutcome,
     UnexpectedState,
     decode_status_word,
     describe_fault,
@@ -264,6 +265,9 @@ def test_every_simulated_word_carries_the_bits_the_profile_does_not_define() -> 
         (SimState.READY_TO_SWITCH_ON, DriveState.READY),
         (SimState.SWITCHED_ON, DriveState.SWITCHED_ON),
         (SimState.OPERATION_ENABLED, DriveState.OPERATION_ENABLED),
+        # The dangerous one: a machine decelerating from full speed decodes to
+        # the same reassuring SWITCHED_ON as a machine sitting still.
+        (SimState.DISABLING_ON_RAMP, DriveState.SWITCHED_ON),
         (SimState.FAULT_REACTION_RAMP_STOP, DriveState.FAULT),
         (SimState.FAULT_REACTION_FREEWHEEL, DriveState.FAULT),
         (SimState.FAULT, DriveState.FAULT),
@@ -510,17 +514,18 @@ async def test_a_setpoint_outside_a_signed_register_is_refused_before_anything_i
 # =========================================================================
 
 
-async def test_removing_the_run_command_leaves_the_centrifuge_turning() -> None:
+async def test_dropping_the_output_stage_leaves_the_centrifuge_turning() -> None:
     """The hazard, made measurable. tau_coast = 20 s from 1380 rpm.
 
-    A simulator that snapped to zero here would let every "stop the machine"
-    rule pass while being wrong by minutes.
+    Command word 6 out of OPERATION_ENABLED is CiA402 transition 8: the output
+    stage goes away and the load coasts. A simulator that snapped to zero here
+    would let every "stop the machine" rule pass while being wrong by minutes.
     """
     clock = ManualClock()
     sim = await _spun_up(clock)
 
-    _ok(await sim.write_command(ControlWord.SWITCH_ON))
-    assert _sim_state(sim) is SimState.SWITCHED_ON
+    _ok(await sim.write_command(ControlWord.SHUTDOWN))
+    assert _sim_state(sim) is SimState.READY_TO_SWITCH_ON
 
     await _run_fed(sim, clock, Seconds(0.2))
     assert (await _status(sim)).output_rpm > MotorRpm(1300)  # not a step change
@@ -540,11 +545,125 @@ async def test_the_coast_does_eventually_reach_a_standstill() -> None:
     """
     clock = ManualClock()
     sim = await _spun_up(clock)
-    _ok(await sim.write_command(ControlWord.SWITCH_ON))
+    _ok(await sim.write_command(ControlWord.SHUTDOWN))
 
     # 20 * ln(1380) ~ 145 s to fall below 1 rpm.
     await _run_fed(sim, clock, Seconds(150.0))
     assert (await _status(sim)).output_rpm == MotorRpm(0)
+
+
+async def test_word_seven_ramps_the_machine_down_and_word_six_abandons_it() -> None:
+    """The single most important difference in this module, measured.
+
+    Both words look like "stop" and both take the drive out of OPERATION
+    ENABLED. Only word 7 (CiA402 transition 5, which this drive is commissioned
+    to ramp) keeps the output stage driving the shaft down; word 6 (transition
+    8) drops it and leaves a loaded centrifuge coasting.
+
+    Two orders of magnitude, and it is measured here rather than asserted about
+    a state name, because the drive reports SWITCHED_ON while ramping and READY
+    while coasting - the coasting one being the more reassuring of the two.
+
+    This is the test that fails if the simulator ever goes back to modelling
+    torque as existing in OPERATION_ENABLED alone: with that model both words
+    coast, the real driver's stop sequence looks correct in CI, and the machine
+    freewheels on the bench.
+    """
+    # A clock each: the two machines are being compared over the same elapsed
+    # time, and one shared ManualClock would hand the second one the first
+    # one's advances as silence and trip its ttO watchdog.
+    ramp_clock = ManualClock()
+    ramped = await _spun_up(ramp_clock)
+    _ok(await ramped.write_command(ControlWord.SWITCH_ON))
+    assert _sim_state(ramped) is SimState.DISABLING_ON_RAMP
+
+    coast_clock = ManualClock()
+    coasted = await _spun_up(coast_clock)
+    _ok(await coasted.write_command(ControlWord.SHUTDOWN))
+    assert _sim_state(coasted) is SimState.READY_TO_SWITCH_ON
+
+    # 1380 rpm at 138 rpm/s is 10 s of ramp. One second in, the ramped machine
+    # has already shed ten times what the coasting one has.
+    await _run_fed(ramped, ramp_clock, Seconds(1.0))
+    await _run_fed(coasted, coast_clock, Seconds(1.0))
+    assert (await _status(ramped)).output_rpm == MotorRpm(1242)
+    assert (await _status(coasted)).output_rpm > MotorRpm(1300)
+
+    # Ten seconds: the ramp is finished and the output stage is now genuinely
+    # off. The freewheel is at 1380 * exp(-0.5) ~ 837 rpm and has 135 s to go.
+    await _run_fed(ramped, ramp_clock, Seconds(9.0))
+    await _run_fed(coasted, coast_clock, Seconds(9.0))
+    assert (await _status(ramped)).output_rpm == MotorRpm(0)
+    assert _sim_state(ramped) is SimState.SWITCHED_ON
+    assert (await _status(coasted)).output_rpm > MotorRpm(800)
+
+    await _run_fed(coasted, coast_clock, Seconds(120.0))
+    assert (await _status(coasted)).output_rpm > MotorRpm(0), (
+        "the freewheel is still turning two minutes after the 'stop'"
+    )
+
+
+async def test_the_ramp_stop_keeps_driving_and_says_nothing_about_it() -> None:
+    """Torque and current during transition 5, and an ETA word that hides both.
+
+    The status word is the SWITCHED_ON one - the word a drive with its output
+    stage off also emits - while the drive is drawing current to brake 420 J of
+    rotating mass. Nothing may read "SWITCHED_ON" as "stopped"; only
+    ``output_rpm`` speaks about motion.
+    """
+    clock = ManualClock()
+    sim = await _spun_up(clock)
+    _ok(await sim.write_command(ControlWord.SWITCH_ON))
+    await _run_fed(sim, clock, Seconds(1.0))
+
+    status = await _status(sim)
+    assert status.state is DriveState.SWITCHED_ON
+    assert status.status_word == ETA_WORDS[SimState.SWITCHED_ON]
+    assert status.output_rpm == MotorRpm(1242)
+    assert status.current > Amperes(0.0), "the output stage is braking, so it draws current"
+
+
+async def test_a_ramp_stop_can_be_taken_back_and_abandoned_mid_way() -> None:
+    """Re-enabling mid-ramp resumes the reference; word 6 mid-ramp coasts.
+
+    Both matter for a real close sequence: a caller that changes its mind must
+    not be told it has a sequencing bug, and a caller that gives up half way
+    down the ramp must not be told the machine stopped.
+    """
+    resume_clock = ManualClock()
+    resumed = await _spun_up(resume_clock)
+    _ok(await resumed.write_command(ControlWord.SWITCH_ON))
+    # Silent rather than fed, and under the 3 s ttO: feeding the watchdog with
+    # a zero speed write would zero the reference this test then resumes onto.
+    _run_silent(resumed, resume_clock, Seconds(2.0))
+    _ok(await resumed.write_command(ControlWord.ENABLE_OPERATION))
+    assert _sim_state(resumed) is SimState.OPERATION_ENABLED
+    assert (await _status(resumed)).output_rpm == MotorRpm(1104), "2 s of ramp was real"
+    await _run_enabled(resumed, resume_clock, Seconds(3.0))
+    assert (await _status(resumed)).output_rpm == MotorRpm(1380), "back on the reference"
+
+    abandon_clock = ManualClock()
+    abandoned = await _spun_up(abandon_clock)
+    _ok(await abandoned.write_command(ControlWord.SWITCH_ON))
+    _run_silent(abandoned, abandon_clock, Seconds(2.0))
+    _ok(await abandoned.write_command(ControlWord.SHUTDOWN))
+    assert _sim_state(abandoned) is SimState.READY_TO_SWITCH_ON
+    await _run_fed(abandoned, abandon_clock, Seconds(8.0))
+    # 1104 * exp(-0.4) ~ 740: the ramp stopped ramping the moment the output
+    # stage went away, and what was left of the speed is now coasting.
+    assert (await _status(abandoned)).output_rpm > MotorRpm(700), "coasting, not ramping"
+
+
+async def test_a_ramp_stop_of_a_machine_at_rest_is_over_before_it_starts() -> None:
+    """Word 7 at standstill lands in SWITCHED_ON, not in a transient.
+
+    Otherwise the drive would park in a state whose only exit is a shaft
+    slowing down, on a shaft that is already still.
+    """
+    clock = ManualClock()
+    sim = await _started(clock)
+    _ok(await sim.write_command(ControlWord.SWITCH_ON))
+    assert _sim_state(sim) is SimState.SWITCHED_ON
 
 
 async def test_nothing_turns_while_the_output_stage_is_off() -> None:
@@ -861,7 +980,7 @@ async def test_a_coasting_centrifuge_draws_nothing_while_still_turning() -> None
     """
     clock = ManualClock()
     sim = await _spun_up(clock)
-    _ok(await sim.write_command(ControlWord.SWITCH_ON))
+    _ok(await sim.write_command(ControlWord.SHUTDOWN))
     await _run_fed(sim, clock, Seconds(1.0))
 
     status = await _status(sim)
@@ -1078,25 +1197,58 @@ async def test_reopening_works_and_does_not_disturb_the_drive() -> None:
 # =========================================================================
 
 
-async def test_emergency_disable_zeroes_the_setpoint_and_drops_the_run_command() -> None:
-    """What it does, and - just as importantly - what it does not do.
+async def test_emergency_disable_zeroes_the_reference_and_keeps_the_run_command() -> None:
+    """What it does, and - just as importantly - what it must NOT do.
 
-    It leaves the machine coasting. The call returning means the attempt was
-    made, not that anything has stopped: with STO jumpered there is no
-    independent torque removal, and the coast takes minutes.
+    It leaves the drive in OPERATION_ENABLED on purpose. That is not an
+    oversight or a partial stop: a run command removed from a turning machine
+    is CiA402 transition 8, so the reference is zeroed instead and the drive
+    ramps the shaft down itself. This test fails if the emergency path ever goes
+    back to dropping the output stage, which is the thing that turned a 10 s
+    stop into a 145 s freewheel.
+
+    The call returning means the attempt was made, not that anything has
+    stopped: the ramp still takes ten seconds here and 3-4 s on the bench.
     """
     clock = ManualClock()
     sim = await _spun_up(clock)
-    sim.emergency_disable_blocking(Seconds(1.0))
+    assert sim.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
 
-    assert _sim_state(sim) is SimState.SWITCHED_ON
+    assert _sim_state(sim) is SimState.OPERATION_ENABLED
     status = await _status(sim)
     assert status.setpoint_echo_rpm == MotorRpm(0)
-    assert status.state is DriveState.SWITCHED_ON
+    assert status.state is DriveState.OPERATION_ENABLED
     assert status.output_rpm == MotorRpm(1380)  # nothing has slowed down yet
 
-    await _run_fed(sim, clock, Seconds(10.0))
-    assert (await _status(sim)).output_rpm > MotorRpm(0)
+    # Still driving, so this is a RAMP: 138 rpm/s, standstill after 10 s.
+    await _run_fed(sim, clock, Seconds(9.0))
+    assert (await _status(sim)).output_rpm > MotorRpm(0), "not instant, either"
+    await _run_fed(sim, clock, Seconds(1.2))
+    assert (await _status(sim)).output_rpm == MotorRpm(0)
+
+
+async def test_the_emergency_stop_is_the_fastest_stop_available_here() -> None:
+    """The measurement behind "do not remove the run command".
+
+    Zeroing the reference and leaving the drive enabled reaches standstill on
+    the ramp; taking the output stage away as well leaves the same machine
+    coasting. Ten seconds against a hundred and forty-five, on this plant's own
+    numbers - and worse on the bench, where dEC is 3-4 s and tau_coast is
+    unchanged.
+    """
+    ramp_clock = ManualClock()
+    ramped = await _spun_up(ramp_clock)
+    coast_clock = ManualClock()
+    coasted = await _spun_up(coast_clock)
+
+    ramped.emergency_disable_blocking(Seconds(1.0))
+    coasted.emergency_disable_blocking(Seconds(1.0))
+    _ok(await coasted.write_command(ControlWord.SHUTDOWN))  # the old behaviour
+
+    await _run_fed(ramped, ramp_clock, Seconds(11.0))
+    await _run_fed(coasted, coast_clock, Seconds(11.0))
+    assert (await _status(ramped)).output_rpm == MotorRpm(0)
+    assert (await _status(coasted)).output_rpm > MotorRpm(700)
 
 
 def test_emergency_disable_needs_no_event_loop() -> None:
@@ -1107,8 +1259,8 @@ def test_emergency_disable_needs_no_event_loop() -> None:
     """
     clock = ManualClock()
     sim = asyncio.run(_spun_up(clock))
-    sim.emergency_disable_blocking(Seconds(1.0))
-    assert _sim_state(sim) is SimState.SWITCHED_ON
+    assert sim.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
+    assert asyncio.run(_status(sim)).setpoint_echo_rpm == MotorRpm(0)
 
 
 async def test_emergency_disable_on_a_faulted_drive_still_zeroes_the_reference() -> None:
@@ -1118,7 +1270,7 @@ async def test_emergency_disable_on_a_faulted_drive_still_zeroes_the_reference()
     _ok(await sim.write_speed(MotorRpm(600)))
     sim.inject_fault(DriveFault.INTERNAL)
 
-    sim.emergency_disable_blocking(Seconds(1.0))
+    assert sim.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
     assert _sim_state(sim) is SimState.FAULT
     assert (await _status(sim)).setpoint_echo_rpm == MotorRpm(0)
 
@@ -1140,29 +1292,43 @@ def _break_by_misaddressing(sim: SimulatedDrive) -> None:
 
 
 @pytest.mark.parametrize(
-    "break_it",
+    ("break_it", "reported"),
     [
-        _break_by_closing_the_link,
-        _break_by_losing_comms,
-        _break_by_slow_replies,
-        _break_by_misaddressing,
+        (_break_by_closing_the_link, EmergencyStopOutcome.NOTHING_SENT),
+        (_break_by_losing_comms, EmergencyStopOutcome.SENT_UNCONFIRMED),
+        (_break_by_slow_replies, EmergencyStopOutcome.SENT_UNCONFIRMED),
+        # The nasty one: the drive really does acknowledge a write into the
+        # wrong parameter, so the honest outcome is indistinguishable from
+        # success. No return value can save a caller from this; only reading
+        # the drive back afterwards can.
+        (_break_by_misaddressing, EmergencyStopOutcome.ACKNOWLEDGED),
     ],
 )
-def test_emergency_disable_can_fail_silently_and_leave_the_motor_commanded(
+def test_emergency_disable_can_fail_and_leave_the_setpoint_commanded(
     break_it: Callable[[SimulatedDrive], None],
+    reported: EmergencyStopOutcome,
 ) -> None:
-    """The failure mode worth having a test for: acknowledged, and nothing done.
+    """The failure mode worth having a test for, now with an outcome attached.
 
-    Four ways for the last-resort stop to achieve nothing. It cannot report the
-    failure - there is nobody left up the stack, and it must never raise - so
-    the only things that can catch this are a test like this one and a safety
-    layer that verifies the drive afterwards instead of trusting the call.
+    Four ways for the last-resort stop to achieve nothing. Three of them are
+    now *reportable*, which is the whole reason the call returns something: an
+    atexit or signal path that sees NOTHING_SENT knows the motor is still
+    commanded at its old setpoint and can escalate, where before it saw the
+    same ``None`` as a success.
+
+    The fourth cannot be reported and is asserted as such. A safety layer has
+    to verify the drive afterwards rather than trust this call, whatever it
+    says.
     """
     clock = ManualClock()
     sim = asyncio.run(_spun_up(clock))
     break_it(sim)
 
-    sim.emergency_disable_blocking(Seconds(1.0))
+    assert sim.emergency_disable_blocking(Seconds(1.0)) is reported
+    # The reference is what the emergency write carries, so an unchanged
+    # reference is the evidence that nothing happened. The state cannot be that
+    # evidence any more: this call deliberately leaves the drive enabled.
+    assert sim.commanded_setpoint == DEFAULT_SIM_CONFIG.nominal_rpm
     assert _sim_state(sim) is SimState.OPERATION_ENABLED
 
 
@@ -1258,6 +1424,120 @@ def test_the_shaft_respects_its_ceiling_and_its_slew_rate_always(
     while hypothesis is not.
     """
     asyncio.run(_check_speed_invariants(steps))
+
+
+async def _check_invariants_with_commands(
+    steps: Sequence[tuple[int, float, int]],
+) -> None:
+    """The same two bounds, with command words thrown in between the steps.
+
+    The property above only ever drives an OPERATION_ENABLED drive, so it says
+    nothing about the state introduced for the ramp-stop - which is also
+    energised, and therefore also capable of breaking the slew bound. Here the
+    schedule wanders through the state machine as well: stop on a ramp, drop the
+    output stage, re-enable half way down, keep the keepalive going.
+
+    Refused commands are expected and not asserted about; the point is that
+    whatever the drive ends up doing, the shaft still obeys its ceiling and its
+    rate limit.
+    """
+    words = tuple(ControlWord)
+    clock = ManualClock()
+    sim = await _started(clock)
+    previous = MotorRpm(0)
+    for raw_setpoint, raw_dt, word_index in steps:
+        dt = Seconds(raw_dt)
+        _ok(await sim.write_speed(MotorRpm(raw_setpoint)))
+        await sim.write_command(words[word_index % len(words)])
+        sim.advance(clock.advance(dt))
+        observed = (await _status(sim)).output_rpm
+
+        assert abs(observed) <= DEFAULT_SIM_CONFIG.max_rpm
+        assert abs(observed - previous) <= sim.ramp_rate * dt + 1.0, _sim_state(sim)
+        previous = observed
+
+
+@given(
+    steps=st.lists(
+        st.tuples(
+            st.integers(min_value=-2000, max_value=2000),
+            st.floats(min_value=0.01, max_value=1.0, allow_nan=False, allow_infinity=False),
+            st.integers(min_value=0, max_value=len(ControlWord) - 1),
+        ),
+        min_size=1,
+        max_size=25,
+    )
+)
+@settings(deadline=None, max_examples=150)
+def test_the_bounds_hold_through_any_walk_of_the_state_machine(
+    steps: Sequence[tuple[int, float, int]],
+) -> None:
+    """Ceiling and slew rate, for any mixture of setpoints, steps and commands.
+
+    Added with the ramp-stop state, because that state is the second place in
+    this module where the drive drives the shaft - and a rate limiter that is
+    only exercised from one state is a rate limiter with one untested half.
+    """
+    asyncio.run(_check_invariants_with_commands(steps))
+
+
+#: The case hypothesis found once the example budget was raised from the suite's
+#: 150 to 3000 (seed 0). Five steps, the last of which asked the ramp for
+#: 119.67 rpm of change and got 121: the shaft was at -120.66 rpm, the ramp
+#: brought it to -0.99, and a standstill floor that applied under torque as well
+#: as during a coast then snapped that last 0.99 rpm away in the same step.
+#:
+#: Small in magnitude and large in meaning: the slew bound is one of exactly two
+#: properties the safety layer is entitled to assume about this plant, and a
+#: model that breaks it teaches the layer above to expect something the model
+#: does not provide. Kept as an explicit case because a 150-example run finds it
+#: roughly never.
+SLEW_VIOLATION_CASE: tuple[tuple[int, float], ...] = (
+    (-84, 0.60546875),
+    (-202, 0.857421875),
+    (0, 0.5785372970204371),
+    (0, 0.010000000000000002),
+    (0, 0.8671875),
+)
+
+
+async def test_the_standstill_floor_cannot_break_the_slew_bound_under_torque() -> None:
+    """Regression: the exact schedule that violated the bound, as a plain test.
+
+    Runs the same assertions as the property above, so it fails for the same
+    reason and with the same message, but deterministically - no seed, no
+    example budget, no chance of a green run hiding it.
+    """
+    await _check_speed_invariants(SLEW_VIOLATION_CASE)
+
+
+async def test_a_ramp_to_zero_lands_on_exactly_zero_without_a_floor() -> None:
+    """Why removing the floor from the torque branch is safe as well as correct.
+
+    The floor exists because an exponential coast never reaches zero. A ramp
+    does: it assigns its target once the remaining gap is inside one step. So
+    the ramp needs no floor, and a fault reaction - which ends on an exact
+    comparison against 0.0 - still settles.
+    """
+    clock = ManualClock()
+    sim = await _started(clock)
+    _ok(await sim.write_speed(MotorRpm(60)))
+    await _run_enabled(sim, clock, Seconds(1.0))
+    assert (await _status(sim)).output_rpm == MotorRpm(60)
+
+    _ok(await sim.write_speed(MotorRpm(0)))
+    # 60 rpm at 138 rpm/s is 0.44 s. Step past it in one go and the ramp must
+    # arrive at a true zero rather than at "nearly zero".
+    await _run_enabled(sim, clock, Seconds(1.0))
+    assert (await _status(sim)).output_rpm == MotorRpm(0)
+
+    # And a ramp-stop fault reaction still knows when it is over.
+    _ok(await sim.write_speed(MotorRpm(600)))
+    await _run_enabled(sim, clock, Seconds(5.0))
+    _run_silent(sim, clock, Seconds(3.2))  # silence -> SLF -> ramp to stop
+    assert _sim_state(sim) is SimState.FAULT_REACTION_RAMP_STOP
+    _run_silent(sim, clock, Seconds(6.0))
+    assert _sim_state(sim) is SimState.FAULT, "the reaction ended on an exact zero"
 
 
 # =========================================================================

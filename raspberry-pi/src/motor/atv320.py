@@ -28,7 +28,22 @@ What this driver guarantees, and what it refuses to
 * **A write is not a landing.** Every speed write is read back (see
   :meth:`ATV320Drive.write_speed`). Most Altivar parameters are writable while
   running, so a misaddressed write does not bounce - it is acked while landing
-  in ACC/DEC/HSP next door, and every later read still looks normal.
+  in ACC/DEC/HSP next door, and every later read still looks normal. A write is
+  not acknowledged either until the reply's function code says so: any decoded
+  PDU would otherwise do, including a stale read reply.
+* **A stop never drops the output stage on a moving machine.** CMD = SHUTDOWN
+  out of OPERATION_ENABLED is CiA402 transition 8: torque goes away and a loaded
+  centrifuge freewheels for minutes while the drive reports READY. So
+  :meth:`ATV320Drive.close` zeroes LFRD, polls RFRD to standstill, and only then
+  writes 7 and 6 - and if standstill cannot be confirmed it leaves the run
+  command in place and says so, because the drive's own ``ttO`` ramp beats a
+  freewheel by two orders of magnitude. The budget-bounded
+  :meth:`ATV320Drive.emergency_disable_blocking` cannot wait at all, so it
+  writes LFRD = 0 and touches CMD not at all, for the same reason.
+* **The comms latch never blocks a stop.** Once the link is declared lost this
+  driver stops writing, so the drive's ``ttO`` applies - but the two
+  :data:`STOP_WORDS` and a zero setpoint still go out. The latch exists to stop
+  a keepalive nobody can verify, not to keep a motor commanded.
 * **No internal software watchdog, deliberately.** The independent watchdog is
   the drive's own ``ttO`` Modbus timeout, configured on the drive and therefore
   outside this process. Any watchdog written here would die with the event loop
@@ -75,6 +90,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -96,7 +112,10 @@ from src.motor.drive import (
     DriveFaulted,
     DriveState,
     DriveStatus,
+    EmergencyStopOutcome,
+    EnableUnconfirmed,
     RegisterMap,
+    StopUnconfirmed,
     UnexpectedState,
     decode_current,
     decode_speed,
@@ -156,6 +175,23 @@ class ModbusMaster(Protocol):
     def write_register(self, address: int, value: int, slave: int = 1) -> object:
         """Modbus function 6."""
         ...
+
+
+WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
+"""Modbus function code 6, checked on every write reply.
+
+Without it, any object pymodbus's framer managed to decode counts as an
+acknowledgement - including the answer to a previous READ, which on a noisy
+half-duplex pair is exactly what turns up. "The write was acked" would then be
+a statement about the framer rather than about the drive.
+
+There is deliberately no matching check on the READ path, and it is not an
+oversight: a read reply is already validated by the thing a read actually needs
+(a register block of exactly one value, in range), which no other PDU shape can
+satisfy - ``ModbusPDU`` declares ``registers`` without assigning it, so a write
+echo decoded into a read's window fails there instead. Adding a redundant
+function-code test there would only make that branch unreachable.
+"""
 
 
 @unique
@@ -296,6 +332,77 @@ notes. Writing all three blind is the failure this pairing prevents: if the
 drive did not reach SWITCHED_ON, sending 15 asks a drive in an unknown state to
 energise its output."""
 
+ENERGISING_WORD: Final[ControlWord] = ControlWord.ENABLE_OPERATION
+"""The one word in :data:`ENABLE_SEQUENCE` that can put torque on the shaft.
+
+Named rather than tested for by position, because the consequence attaches to
+the word and not to the index: a failure at this step means the output stage
+may be live, so it gets a rollback and :class:`~src.motor.drive.
+EnableUnconfirmed` instead of the bare transport error.
+"""
+
+STOP_WORDS: Final[frozenset[ControlWord]] = frozenset({ControlWord.SWITCH_ON, ControlWord.SHUTDOWN})
+"""The two words that can only ever reduce torque demand.
+
+These stay writable even when the comms latch is down. The latch exists to stop
+this driver feeding a keepalive to a drive it can no longer verify - but a
+refusal that also blocks a STOP is a refusal that keeps a motor commanded, and
+:meth:`ATV320Drive.enable` failing repeatedly is precisely how a caller ends up
+latched while holding the enable it now wants to undo. One stop attempt costs
+one frame of ttO grace; refusing it costs the stop.
+"""
+
+STANDSTILL_RPM: Final[MotorRpm] = MotorRpm(1)
+"""At or below this the shaft is taken to be stopped.
+
+1 rpm is the finest speed RFRD can report, so nothing observable is being
+discarded. It is a MOTOR-shaft figure: 1 motor rpm is 0.02 output rpm.
+"""
+
+DEFAULT_STOP_ATTEMPTS: Final[int] = 40
+"""RFRD reads allowed while waiting for the shaft to stop in :meth:`close`.
+
+Bounded by a count rather than only by a clock, so the wait terminates even if
+the clock is not advancing. 40 x 0.5 s is 20 s, which is comfortably longer than
+the commissioned 3-4 s ``dEC`` ramp and far shorter than the ~145 s freewheel
+this whole sequence exists to avoid. Reaching the end of it is not a timeout to
+retry; it is evidence the ramp is not what the notes claim.
+"""
+
+DEFAULT_STOP_POLL_INTERVAL: Final[Seconds] = Seconds(0.5)
+"""Pause between those RFRD reads. Slow on purpose: nothing is being controlled
+here, and a tight poll would spend the bus for no information."""
+
+DEFAULT_EMERGENCY_BUDGET: Final[Seconds] = Seconds(1.0)
+"""The smallest whole-call bound :meth:`ATV320Drive.emergency_disable_blocking`
+can honour, and the figure the serial timeout is validated against.
+
+A real bound, not a hope: the constructor refuses any line configuration whose
+per-transaction serial timeout could not fit inside it (see
+:data:`EMERGENCY_WRITE_SHARE`). Before that check existed the parameter only
+gated whether a write STARTED, so a legal ``timeout=5.0`` blocked ~5 s against
+a 0.2 s budget - the "the Pi will not shut down and gets power-cycled
+mid-session" case.
+"""
+
+EMERGENCY_WRITE_SHARE: Final[float] = 0.5
+"""Fraction of the emergency budget the single blind write may consume.
+
+Which is to say: the serial timeout must be at most half the budget, because a
+blocking call already in progress cannot be cut short - the only way to bound it
+is to refuse a configuration that could exceed the bound.
+"""
+
+EMERGENCY_LOCK_SHARE: Final[float] = 0.25
+"""Fraction of the emergency budget spent waiting for the transport lock.
+
+Deliberately smaller than the write's share, and deliberately not "wait as long
+as it takes": if the executor thread is mid-transaction, the right degradation
+is to write anyway and log it, not to sit out an emergency holding a lock
+somebody else has. 0.25 + 0.5 leaves a quarter of the budget as headroom for
+scheduling, which on Windows is ~15 ms of timer granularity per wait.
+"""
+
 
 def _new_executor() -> ThreadPoolExecutor:
     """One worker thread, so the half-duplex bus is serialised by construction.
@@ -336,7 +443,10 @@ class ATV320Drive:
 
     __slots__ = (
         "_clock",
+        "_close_error",
+        "_closed",
         "_consecutive_failures",
+        "_emergency_budget",
         "_executor",
         "_failed_since",
         "_failure_threshold",
@@ -347,6 +457,9 @@ class ATV320Drive:
         "_settings",
         "_settle_attempts",
         "_settle_delay",
+        "_stop_attempts",
+        "_stop_poll_interval",
+        "_wire_lock",
     )
 
     def __init__(
@@ -359,6 +472,9 @@ class ATV320Drive:
         failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
         settle_attempts: int = DEFAULT_SETTLE_ATTEMPTS,
         settle_delay: Seconds = DEFAULT_SETTLE_DELAY,
+        stop_attempts: int = DEFAULT_STOP_ATTEMPTS,
+        stop_poll_interval: Seconds = DEFAULT_STOP_POLL_INTERVAL,
+        emergency_budget: Seconds = DEFAULT_EMERGENCY_BUDGET,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError(
@@ -371,6 +487,33 @@ class ATV320Drive:
                 f"settle_attempts {settle_attempts} must be at least 1; with 0 the "
                 "enable sequence would never read ETA and so would verify nothing"
             )
+        if stop_attempts < 1:
+            raise ValueError(
+                f"stop_attempts {stop_attempts} must be at least 1; with 0 close() "
+                "would never read RFRD, so it could never confirm standstill and "
+                "would leave the run command in place on a machine that had stopped"
+            )
+        if emergency_budget <= 0.0:
+            raise ValueError(
+                f"emergency_budget {emergency_budget} s must be positive; a "
+                "non-positive budget leaves nothing to bound the emergency write with"
+            )
+        # THE BOUND THAT MAKES `timeout` MEAN SOMETHING. A blocking serial call
+        # cannot be interrupted once started, so the only way to promise the
+        # emergency path returns inside its budget is to refuse a line whose
+        # per-transaction timeout could overrun it. Refusing at startup, with
+        # nothing spinning, is the right place: the alternative is discovering
+        # it during shutdown, which is when it hangs the Pi.
+        writable = Seconds(emergency_budget * EMERGENCY_WRITE_SHARE)
+        if settings.timeout > writable:
+            raise ValueError(
+                f"serial timeout {settings.timeout} s cannot be honoured inside an "
+                f"emergency budget of {emergency_budget} s: one blind write may block "
+                f"for the whole serial timeout, so it must be at most {writable} s "
+                f"({EMERGENCY_WRITE_SHARE:.0%} of the budget). Lower the serial "
+                "timeout or raise emergency_budget - do not leave the emergency stop "
+                "with a bound it cannot keep."
+            )
         self._clock: Clock = clock
         self._master: ModbusMaster = master
         self._settings: SerialSettings = settings
@@ -378,11 +521,26 @@ class ATV320Drive:
         self._failure_threshold: int = failure_threshold
         self._settle_attempts: int = settle_attempts
         self._settle_delay: Seconds = settle_delay
+        self._stop_attempts: int = stop_attempts
+        self._stop_poll_interval: Seconds = stop_poll_interval
+        self._emergency_budget: Seconds = emergency_budget
 
         # WHY a lock and not just careful call ordering: RS-485 is half duplex.
         # Two coroutines that each write-then-read do not interleave politely,
         # they transmit over each other and read each other's replies.
         self._lock: asyncio.Lock = asyncio.Lock()
+        # WHY a SECOND, threading lock: the asyncio one only orders coroutines,
+        # and the emergency path is not one - it drives the shared pymodbus
+        # client from the CALLING thread while the executor thread may be
+        # mid-transaction. pymodbus holds its own transaction lock around the
+        # transaction body but calls connect() OUTSIDE it and close()s on every
+        # no-response, so `socket` is None between transactions and both threads
+        # can race to open an exclusive=True port. The loser's connect() returns
+        # False, execute raises ConnectionException, and the emergency write is
+        # lost in the middle of a comms fault. This lock closes that window;
+        # the emergency path takes it with a BOUNDED wait so it degrades to
+        # "write anyway" rather than queueing behind the fault it is reacting to.
+        self._wire_lock: threading.Lock = threading.Lock()
         self._executor: ThreadPoolExecutor = _new_executor()
 
         # Failure accounting. `_failed_since` is the first failure of the
@@ -393,6 +551,11 @@ class ATV320Drive:
         self._failed_since: Monotonic | None = None
         self._lost_since: Monotonic | None = None
 
+        # Close accounting, so a second close() repeats the first verdict
+        # instead of raising on an executor that is already gone.
+        self._closed: bool = False
+        self._close_error: DriveError | None = None
+
     # --- Observable state ------------------------------------------------
 
     @property
@@ -401,8 +564,22 @@ class ATV320Drive:
 
         Exposed so an operator screen can say "link latched, open() required"
         instead of showing a generic timeout for ever.
+
+        Note what it does NOT mean: a latched link still accepts the two
+        :data:`STOP_WORDS` and a zero setpoint. See :meth:`_refusal`.
         """
         return self._lost_since is not None
+
+    @property
+    def emergency_budget(self) -> Seconds:
+        """The smallest whole-call bound the emergency stop can actually honour.
+
+        Exposed so an ``atexit`` or signal handler can pass a budget this
+        driver is able to keep - ``drive.emergency_disable_blocking(
+        drive.emergency_budget)`` - instead of inventing a number that the
+        serial timeout would silently overrun.
+        """
+        return self._emergency_budget
 
     # =====================================================================
     # DriveBackend
@@ -428,6 +605,8 @@ class ATV320Drive:
             self._consecutive_failures = 0
             self._failed_since = None
             self._lost_since = None
+            self._closed = False
+            self._close_error = None
 
             connected = await self._transact(self._blocking_connect)
             if isinstance(connected, Err):
@@ -435,7 +614,7 @@ class ATV320Drive:
             return await self._confirm_addressing()
 
     async def close(self) -> Result[None, DriveError]:
-        """Remove the run command, then release the port. Latches the link down.
+        """Ramp the machine to a stop, then release the port. Latches the link down.
 
         Dropping the port while the drive is in OPERATION_ENABLED would leave a
         commanded motor with nothing talking to it, relying entirely on the
@@ -443,18 +622,44 @@ class ATV320Drive:
         is released either way, because a driver that will not let go of a
         serial port because a write failed is a driver nobody can restart.
 
+        **This method waits, and the waiting is the safety feature.** See
+        :meth:`_attempt_stop`: LFRD = 0, then RFRD polled to standstill, and
+        only then the two command words. It does NOT write SHUTDOWN to a
+        turning machine, because that is CiA402 transition 8 and freewheels.
+
         The error returned is the stop attempt's, not the port's: the caller
         needs to know the motor may still be commanded, which matters strictly
         more than how tidily the file descriptor went away.
+
+        Idempotent, and it has to be: a teardown path may well call it from an
+        ``except`` branch and again from a ``finally``, and the first call has
+        already shut the executor down, so a second attempt at a transaction
+        would raise ``RuntimeError`` out of a shutdown handler. The second call
+        repeats the first verdict rather than inventing a cheerful ``Ok`` for a
+        stop that may never have landed.
         """
         async with self._lock:
-            stop_error = await self._attempt_stop()
+            if self._closed:
+                logger.debug(
+                    "ATV320 close() called again on %s; repeating the first verdict "
+                    "(%r) rather than touching a pool that is already gone",
+                    self._settings.port,
+                    self._close_error,
+                )
+                return self._closed_result()
+            self._closed = True
+            self._close_error = await self._attempt_stop()
             await self._run(self._blocking_close)
             self._executor.shutdown(wait=False)
             self._lost_since = self._clock.monotonic()
-            if stop_error is not None:
-                return Err(stop_error)
-            return Ok(None)
+            return self._closed_result()
+
+    def _closed_result(self) -> Result[None, DriveError]:
+        """The verdict of the one and only stop attempt this object made."""
+        error = self._close_error
+        if error is not None:
+            return Err(error)
+        return Ok(None)
 
     async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
         """Write CMD. Enabling the output stage means the motor may turn.
@@ -463,9 +668,13 @@ class ATV320Drive:
         evidence that a command word landed is the state the drive moves to.
         :meth:`enable` is the verified path; a caller using this primitive is
         responsible for reading ETA afterwards.
+
+        A latched link refuses ENABLE_OPERATION and FAULT_RESET but still
+        accepts the two :data:`STOP_WORDS`. A refusal that blocked a stop would
+        be a refusal that keeps a motor commanded.
         """
         async with self._lock:
-            refusal = self._refusal()
+            refusal = self._refusal(stopping=word in STOP_WORDS)
             if refusal is not None:
                 return Err(refusal)
             return await self._write(self._registers.cmd, RawRegister(word.value))
@@ -494,9 +703,13 @@ class ATV320Drive:
         which the safety layer does anyway - and NOT to loosen this check: a
         tolerance wide enough to absorb clamping is wide enough to absorb a
         write that never landed.
+
+        A setpoint of zero survives the comms latch, for the same reason the
+        :data:`STOP_WORDS` do: it can only ever reduce torque demand. Any other
+        setpoint is refused.
         """
         async with self._lock:
-            refusal = self._refusal()
+            refusal = self._refusal(stopping=rpm == 0)
             if refusal is not None:
                 return Err(refusal)
             # Signed 16-bit at the boundary: -1 rpm goes out as 0xFFFF, and
@@ -514,41 +727,109 @@ class ATV320Drive:
         nothing downstream re-validates: that is contract rule 6.
         """
         async with self._lock:
-            refusal = self._refusal()
+            refusal = self._refusal(stopping=False)
             if refusal is not None:
                 return Err(refusal)
             return await self._assemble_status()
 
-    def emergency_disable_blocking(self, timeout: Seconds) -> None:
-        """Zero the setpoint and remove the run command, synchronously. Never raises.
+    def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
+        """Zero the setpoint, synchronously, unconditionally. Never raises.
 
         **No asyncio.** This runs in the calling thread so it works from
         ``atexit``, from an OS signal handler, and from an ``except`` branch -
         places where the loop may be gone or may be the thing that died. It
         does not take the ``asyncio.Lock`` either, for the same reason.
 
-        Two blind writes: LFRD = 0 first, then CMD = SHUTDOWN. In that order
-        because if only one lands it should be the one that removes the speed
-        demand. Neither reply is interpreted: there is nobody left to act on a
-        diagnosis, and waiting to parse one only spends the budget.
+        **One blind write: LFRD = 0. The run command is left in place.** This
+        is the fastest stop actually available, and the reason is CiA402: out
+        of OPERATION_ENABLED, CMD = SHUTDOWN is transition 8, which drops the
+        output stage and FREEWHEELS a loaded centrifuge for minutes while the
+        drive reports READY. A zeroed reference leaves the drive in control of
+        its own commissioned ramp, and once this process stops writing, the
+        drive's ``ttO`` timeout ramps it down for real. So this call ends in a
+        RAMP, not a freewheel - which is exactly why it does not touch CMD.
 
-        Bounded by ``timeout``, checked before each write. The honest caveat: if
-        a transaction is already in flight on the executor thread, pymodbus's
-        own internal transaction lock makes this call wait it out, so the real
-        worst case is ``timeout`` plus one serial timeout. Still finite, which
-        is the property that matters - an unbounded call here hangs process
-        exit, and a Pi that will not shut down gets power-cycled mid-session.
+        The write is **unconditional**: no budget check can skip it. The budget
+        buys the wait for :attr:`_wire_lock` and nothing else, because the one
+        write this method exists to send is never the write to sacrifice.
+
+        The bound is real rather than advisory. A blocking serial call cannot
+        be cut short once started, so the constructor refuses any line whose
+        per-transaction timeout could overrun
+        :attr:`emergency_budget` (see :data:`EMERGENCY_WRITE_SHARE`), and the
+        lock wait takes a fixed smaller share. A ``timeout`` smaller than that
+        floor cannot be honoured and is reported rather than obeyed: returning
+        early without writing would be the one outcome that is never safer.
+
+        The honest residual, stated rather than glossed: pymodbus calls
+        ``connect()`` from inside ``write_register`` when its socket is closed,
+        and opening a serial device is an OS call that the port's read timeout
+        does not bound. So the guarantee is "one transaction, whose read wait
+        cannot exceed the budget" and not "no syscall can ever be slow". What
+        was wrong before was a bound that existed only as a check the write
+        sailed past; this one is enforced where it can be, at construction.
+
+        The reply is classified but never acted on: no retry, no diagnosis, no
+        second exchange. It costs no wire time (pymodbus has already waited for
+        it) and it is what lets :class:`~src.motor.drive.EmergencyStopOutcome`
+        tell ``NOTHING_SENT`` from success, so an ``atexit`` path can escalate.
 
         Returning does **not** mean the motor stopped. With STO jumpered there
         is no independent torque removal and the ramp takes seconds; this
-        reports only that the attempt was made. It then latches the link down
+        reports only what the attempt achieved. It then latches the link down
         so the async side cannot re-command a speed on the next tick of a loop
-        that is still alive.
+        that is still alive - a stop, however, still gets through the latch.
         """
-        deadline = Monotonic(self._clock.monotonic() + timeout)
-        self._blind_write(self._registers.lfrd, RawRegister(0), deadline)
-        self._blind_write(self._registers.cmd, RawRegister(ControlWord.SHUTDOWN.value), deadline)
+        budget = self._emergency_budget_for(timeout)
+        outcome = self._blind_write(self._registers.lfrd, RawRegister(0), budget)
         self._lost_since = self._clock.monotonic()
+        logger.error(
+            "ATV320 emergency disable on %s: LFRD=0 %s; the run command was left in "
+            "place so the drive ramps on its own dEC and its ttO timeout stops it for "
+            "real. The machine is NOT stopped yet.",
+            self._settings.port,
+            outcome.name,
+        )
+        return outcome
+
+    def _emergency_budget_for(self, timeout: Seconds) -> Seconds:
+        """The bound this driver will actually keep for one emergency call.
+
+        Three cases, and each one is logged rather than silently absorbed,
+        because the caller's number and the achievable number differing is a
+        configuration fact somebody needs to fix before a session:
+
+        * non-positive - rejected outright. ``Seconds(0.0)`` used to mean "skip
+          both writes", i.e. a silent no-op that also latched the link so the
+          following ``close()`` wrote nothing either. There is no reading of
+          "stop the motor in zero seconds" that justifies sending nothing.
+        * below the floor - cannot be honoured, because the serial timeout it
+          would have to fit inside was fixed at construction. The floor is used
+          and said out loud.
+        * at or above the floor - taken as given.
+        """
+        floor = self._emergency_budget
+        if timeout <= 0.0:
+            logger.error(
+                "ATV320 emergency disable: a timeout of %s s is not a budget; using "
+                "%s s. Writing nothing would have been the only unsafe answer.",
+                timeout,
+                floor,
+            )
+            return floor
+        if timeout < floor:
+            logger.error(
+                "ATV320 emergency disable: a budget of %s s cannot be honoured - the "
+                "serial timeout on %s is %s s, so the smallest real bound is %s s. "
+                "Using %s s.",
+                timeout,
+                self._settings.port,
+                self._settings.timeout,
+                floor,
+                floor,
+            )
+            return floor
+        return timeout
 
     # =====================================================================
     # The CiA402 start sequence
@@ -580,7 +861,7 @@ class ATV320Drive:
         than becoming an oversight.
         """
         async with self._lock:
-            refusal = self._refusal()
+            refusal = self._refusal(stopping=False)
             if refusal is not None:
                 return Err(refusal)
             return await self._run_enable_sequence()
@@ -599,8 +880,51 @@ class ATV320Drive:
         for word, expected in ENABLE_SEQUENCE:
             step = await self._enable_step(word, expected)
             if isinstance(step, Err):
+                if word is ENERGISING_WORD:
+                    return Err(await self._unwind_energised(step.error))
                 return step
         return Ok(None)
+
+    async def _unwind_energised(self, cause: DriveError) -> DriveError:
+        """Undo an enable that may have landed, and report that it may have.
+
+        Reached when the step carrying :data:`ENERGISING_WORD` failed. The
+        failure says nothing about whether the word landed: a Modbus request
+        whose reply was lost was still transmitted, and the observed case is
+        ``[6, 7, 15]`` all on the wire, ETA decoding to OPERATION_ENABLED, and
+        ``Err(CommTimeout)`` returned - which reads as "the link died" while
+        the output stage is live and LFRD may still hold a speed from an
+        earlier session.
+
+        So: zero the reference, then remove the run command with SWITCH_ON
+        (transition 5, which ramps - **not** SHUTDOWN, which would drop the
+        output stage on a machine that may already be turning), and report
+        :class:`~src.motor.drive.EnableUnconfirmed` carrying whether either
+        write was acknowledged. Both ``False`` means nothing is known to have
+        undone the enable and only ttO remains.
+
+        These two writes go through the normal accounting on purpose. If the
+        link really has died they add to the failure run and latch it, which is
+        correct - and a latched link still accepts a stop, so a caller can
+        still undo this by hand.
+        """
+        reference = err_of(await self._write(self._registers.lfrd, RawRegister(0)))
+        run_command = err_of(
+            await self._write(self._registers.cmd, RawRegister(ControlWord.SWITCH_ON.value))
+        )
+        unconfirmed = EnableUnconfirmed(
+            detail=(
+                f"the {ENERGISING_WORD.name} step failed with {cause!r}, AFTER the word "
+                "may already have reached the drive, so the output stage may be live. "
+                f"Rollback: LFRD=0 {'acked' if reference is None else f'failed ({reference!r})'}, "
+                f"CMD=SWITCH_ON "
+                f"{'acked' if run_command is None else f'failed ({run_command!r})'}."
+            ),
+            reference_zeroed=reference is None,
+            run_command_removed=run_command is None,
+        )
+        logger.error("ATV320 enable on %s: %s", self._settings.port, unconfirmed.detail)
+        return unconfirmed
 
     async def _enable_step(
         self, word: ControlWord, expected: DriveState
@@ -669,22 +993,121 @@ class ATV320Drive:
         return Ok(None)
 
     async def _attempt_stop(self) -> DriveError | None:
-        """Zero the setpoint and remove the run command. ``None`` when both landed."""
-        refusal = self._refusal()
-        if refusal is not None:
-            # Nothing to write to. Saying so is more useful than two writes
-            # into a link this driver has already declared dead.
-            return refusal
+        """Ramp to a stop, confirm it, and only then drop the output stage.
+
+        The order is the whole point, and it is the order the CiA402 profile
+        requires rather than the one that is quickest to write:
+
+        1. **LFRD = 0.** The drive starts decelerating down its commissioned
+           ``dEC`` ramp while still in full control of the motor.
+        2. **Poll RFRD to standstill.** Bounded by ``stop_attempts``. This step
+           is the one that was missing: the previous version wrote SHUTDOWN
+           ~20 ms after zeroing the reference, which is CiA402 transition 8 -
+           the output stage dropped and a loaded centrifuge left freewheeling.
+           Against this repo's own plant model that is standstill at t = 144.6 s
+           instead of t = 10.0 s, and the drive reports READY throughout.
+        3. **SWITCH_ON, then SHUTDOWN.** Transition 5 then transition 2, on a
+           machine that has already stopped, so there is nothing left to
+           freewheel. The stop pair from the commissioning notes, in order.
+
+        If standstill cannot be CONFIRMED - the RFRD read failed, or the shaft
+        was still turning when the attempts ran out - step 3 is deliberately
+        skipped and the drive is left in OPERATION_ENABLED with a zero
+        reference. That is not giving up: it is choosing ttO's ramp over
+        transition 8's freewheel, which is the better of the two endings
+        available at that point. The caller is told which one it got.
+
+        No comms-latch refusal here. This is a stop, and a latched link that
+        cannot be stopped is the failure the latch was supposed to prevent.
+        """
         zeroed = err_of(await self._write(self._registers.lfrd, RawRegister(0)))
-        # SHUTDOWN is attempted even if zeroing failed: removing the run command
-        # is what removes torque demand, and one lost frame is no reason to skip
-        # it. The first error is the one reported, because it happened first.
+        if zeroed is not None:
+            logger.error(
+                "ATV320 close on %s: could not zero LFRD (%r). The run command is left "
+                "in place so the drive's ttO timeout ramps the motor down; the machine "
+                "is NOT known to be stopped.",
+                self._settings.port,
+                zeroed,
+            )
+            return zeroed
+
+        halted = await self._wait_for_standstill()
+        if isinstance(halted, Err):
+            logger.error(
+                "ATV320 close on %s: standstill not confirmed (%r). Leaving the run "
+                "command in place: removing it now would be CiA402 transition 8 on a "
+                "machine that may still be turning, i.e. a freewheel. The drive's ttO "
+                "timeout will ramp it down instead.",
+                self._settings.port,
+                halted.error,
+            )
+            return halted.error
+
+        logger.info(
+            "ATV320 close on %s: shaft at %d rpm, removing the run command",
+            self._settings.port,
+            halted.value,
+        )
+        # Transition 5 first, then transition 2. SHUTDOWN is attempted even if
+        # SWITCH_ON failed: the shaft is already stopped, so there is no
+        # freewheel left to cause, and the first error is the one reported
+        # because it happened first.
+        disabled = err_of(
+            await self._write(self._registers.cmd, RawRegister(ControlWord.SWITCH_ON.value))
+        )
         removed = err_of(
             await self._write(self._registers.cmd, RawRegister(ControlWord.SHUTDOWN.value))
         )
-        if zeroed is not None:
-            return zeroed
+        if disabled is not None:
+            return disabled
         return removed
+
+    async def _wait_for_standstill(self) -> Result[MotorRpm, DriveError]:
+        """Read RFRD until the shaft has stopped, at most ``stop_attempts`` times.
+
+        RFRD and not ETA, and this is the reason the whole method exists: no
+        status word distinguishes "decelerating on a ramp" from "stopped", and
+        several of them - READY, NOT_READY, FAULT - read as reassuring while a
+        centrifuge is still at hundreds of rpm. Only the measured speed speaks
+        about motion.
+
+        Bounded by a COUNT as well as by the clock, so this terminates even
+        under a clock that is not advancing. Exhausting the count is not a
+        transport failure and must not be reported as one: it means the ramp is
+        slower than the commissioning notes claim, which is a fact about the
+        machine, so it gets :class:`~src.motor.drive.StopUnconfirmed` carrying
+        the last speed actually seen.
+        """
+        started = self._clock.monotonic()
+        # Never read: the constructor refuses stop_attempts < 1, so the loop
+        # below always assigns this before anything looks at it. It is here
+        # because a checker cannot know that range(n) with n >= 1 runs at least
+        # once, and a sentinel is better than silencing the check.
+        observed = MotorRpm(0)
+        for attempt in range(self._stop_attempts):
+            if attempt > 0:
+                await asyncio.sleep(self._stop_poll_interval)
+            reading = await self._read(self._registers.rfrd)
+            if isinstance(reading, Err):
+                return Err(reading.error)
+            observed = decode_speed(reading.value)
+            if abs(observed) <= STANDSTILL_RPM:
+                return Ok(observed)
+        waited = elapsed(started, self._clock.monotonic())
+        return Err(
+            StopUnconfirmed(
+                waited=waited,
+                last_output_rpm=observed,
+                detail=(
+                    f"RFRD still reported {observed} rpm after {self._stop_attempts} "
+                    f"reads over {waited:.1f} s, so the shaft is NOT known to have "
+                    "stopped. The run command has been left in place on purpose: the "
+                    "drive keeps ramping and its ttO timeout finishes the job, whereas "
+                    "removing it now would drop the output stage on a turning "
+                    "centrifuge. Check the commissioned dEC ramp time."
+                ),
+            )
+        )
 
     async def _write_verified_speed(
         self, rpm: MotorRpm, value: RawRegister
@@ -826,15 +1249,40 @@ class ATV320Drive:
     # Failure accounting
     # =====================================================================
 
-    def _refusal(self) -> DriveError | None:
+    def _refusal(self, *, stopping: bool) -> DriveError | None:
         """The error to return instead of touching a latched-down link.
 
         This is the "stops writing" half of the watchdog argument: once this
         driver has decided the link is gone it sends nothing more, so the drive
         stops hearing a keepalive and its own ``ttO`` timeout - the watchdog
         that does not live in this process - ramps the motor down.
+
+        **A stop is never refused.** ``stopping=True`` - the two
+        :data:`STOP_WORDS`, a zero setpoint, the close sequence - goes through
+        the latch. The argument for the latch is that this driver must stop
+        feeding a keepalive it cannot verify; it was never that a motor should
+        stay commanded. And the shape of the bug it caused is real: a run of
+        failures inside :meth:`enable` latches the link, and the caller then
+        finds the very ``write_command(SHUTDOWN)`` it needs to undo that enable
+        refused. One stop attempt costs one frame of ttO grace, which is
+        nothing against leaving the machine running.
+
+        Note what this does NOT do: it does not second-guess which stop word
+        the caller chose. ``SHUTDOWN`` goes through the latch too, and on a
+        turning machine that is a freewheel (see
+        :class:`~src.motor.drive.ControlWord`). That is the caller's decision to
+        make with ``write_command``, which is the unverified primitive;
+        :meth:`close` and :meth:`emergency_disable_blocking` are the paths that
+        own the sequencing and neither of them writes 6 to a moving shaft.
         """
         if self._lost_since is None:
+            return None
+        if stopping:
+            logger.warning(
+                "ATV320 %s: the link is latched down, but this is a stop - letting it "
+                "through rather than refusing it",
+                self._settings.port,
+            )
             return None
         return CommTimeout(after=elapsed(self._lost_since, self._clock.monotonic()))
 
@@ -885,7 +1333,8 @@ class ATV320Drive:
     def _blocking_connect(self) -> Result[None, DriveError]:
         started = self._clock.monotonic()
         try:
-            opened = self._master.connect()
+            with self._wire_lock:
+                opened = self._master.connect()
         except Exception as exc:
             return Err(self._classify(exc, started))
         if not opened:
@@ -900,16 +1349,18 @@ class ATV320Drive:
         commanded?" - is answered by the stop attempt, not by this.
         """
         try:
-            self._master.close()
+            with self._wire_lock:
+                self._master.close()
         except Exception:
             logger.exception("ATV320: releasing %s failed", self._settings.port)
 
     def _blocking_read(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
         started = self._clock.monotonic()
         try:
-            reply: object = self._master.read_holding_registers(
-                address, count=1, slave=self._settings.slave_address
-            )
+            with self._wire_lock:
+                reply: object = self._master.read_holding_registers(
+                    address, count=1, slave=self._settings.slave_address
+                )
         except Exception as exc:
             return Err(self._classify(exc, started))
         return self._interpret_read(reply, address, started)
@@ -919,38 +1370,91 @@ class ATV320Drive:
     ) -> Result[None, DriveError]:
         started = self._clock.monotonic()
         try:
-            reply: object = self._master.write_register(
-                address, value, slave=self._settings.slave_address
-            )
+            with self._wire_lock:
+                reply: object = self._master.write_register(
+                    address, value, slave=self._settings.slave_address
+                )
         except Exception as exc:
             return Err(self._classify(exc, started))
         return self._interpret_write(reply, address, started)
 
     def _blind_write(
-        self, address: RegisterAddress, value: RawRegister, deadline: Monotonic
-    ) -> None:
+        self, address: RegisterAddress, value: RawRegister, budget: Seconds
+    ) -> EmergencyStopOutcome:
         """One fire-and-forget write for the emergency path. Never raises.
 
-        The reply is neither read nor interpreted: an emergency disable has
-        nobody to hand a diagnosis to, and a returned error object is not an
-        exception, so there is nothing to catch either.
+        Unconditional: there is no budget check that can stop this from being
+        attempted, because this is the write the emergency path exists to send.
+        The budget is spent on the lock wait only.
+
+        The lock wait is bounded at :data:`EMERGENCY_LOCK_SHARE` of the budget
+        and then **gives up and writes anyway**, which is the right
+        degradation: the thing being raced against is usually the comms fault
+        that prompted the emergency in the first place, and a frame that may
+        collide is worth more than a frame that never goes out. Which branch
+        ran is logged, because "the emergency write collided" and "the
+        emergency write waited" are different stories afterwards.
+
+        The reply is classified but not acted upon - see
+        :meth:`emergency_disable_blocking`.
         """
-        if self._clock.monotonic() >= deadline:
-            logger.error(
-                "ATV320 emergency disable: out of budget before writing register %d; "
-                "the drive may still be commanded",
-                address,
-            )
-            return
-        try:
-            self._master.write_register(address, value, slave=self._settings.slave_address)
-        except Exception:
-            logger.exception(
-                "ATV320 emergency disable: write of 0x%04X to register %d failed; "
-                "the drive may still be commanded",
+        lock_budget = Seconds(budget * EMERGENCY_LOCK_SHARE)
+        acquired = self._wire_lock.acquire(timeout=lock_budget)
+        if acquired:
+            logger.info(
+                "ATV320 emergency disable: transport lock acquired, writing 0x%04X to "
+                "register %d with the bus to itself",
                 value,
                 address,
             )
+        else:
+            logger.error(
+                "ATV320 emergency disable: transport lock still held after %.3f s, so a "
+                "transaction is in flight on the executor thread. Writing 0x%04X to "
+                "register %d ANYWAY - a frame that may collide beats no frame at all.",
+                lock_budget,
+                value,
+                address,
+            )
+        started = self._clock.monotonic()
+        try:
+            reply: object = self._master.write_register(
+                address, value, slave=self._settings.slave_address
+            )
+        except ConnectionException:
+            # pymodbus could not get (or keep) the port, so nothing was
+            # transmitted. The one outcome that has to escalate.
+            logger.exception(
+                "ATV320 emergency disable: the transport refused to carry the write of "
+                "0x%04X to register %d, so NO frame reached the drive. It is still "
+                "commanded at whatever setpoint it held.",
+                value,
+                address,
+            )
+            return EmergencyStopOutcome.NOTHING_SENT
+        except Exception:
+            # Anything else: the library was already in the middle of something,
+            # so the frame may or may not have gone out. "I do not know" is the
+            # only honest answer and is never a dangerous one.
+            logger.exception(
+                "ATV320 emergency disable: write of 0x%04X to register %d raised; "
+                "whether it reached the drive is unknown",
+                value,
+                address,
+            )
+            return EmergencyStopOutcome.SENT_UNCONFIRMED
+        finally:
+            if acquired:
+                self._wire_lock.release()
+        if isinstance(self._interpret_write(reply, address, started), Err):
+            logger.error(
+                "ATV320 emergency disable: no usable acknowledgement for the write of "
+                "0x%04X to register %d; it was transmitted but cannot be confirmed",
+                value,
+                address,
+            )
+            return EmergencyStopOutcome.SENT_UNCONFIRMED
+        return EmergencyStopOutcome.ACKNOWLEDGED
 
     # --- Reply interpretation (pure apart from the clock) ----------------
 
@@ -1018,6 +1522,14 @@ class ATV320Drive:
         write response echoes the *request*, so a write to the wrong address
         echoes back perfectly. Only a read of the register that was supposed to
         change can tell - see :meth:`_write_verified_speed`.
+
+        The **function code** is compared, and that is a different claim. Being
+        a ``ModbusPDU`` only means the framer decoded something; a
+        ``ReadHoldingRegistersResponse`` is a perfectly good PDU and is what a
+        noisy half-duplex pair hands back when a stale read reply lands in this
+        exchange's window. Accepting it would report "the write was
+        acknowledged" on the strength of somebody else's answer - the one
+        failure mode this driver's whole write-verify argument assumes away.
         """
         if isinstance(reply, ModbusException):
             return Err(self._classify(reply, started))
@@ -1038,6 +1550,18 @@ class ATV320Drive:
                     detail=(
                         f"transport returned {type(reply).__name__} for a write to register "
                         f"{address}, which is neither a Modbus PDU nor a ModbusException"
+                    )
+                )
+            )
+        if reply.function_code != WRITE_SINGLE_REGISTER_CODE:
+            return Err(
+                BadResponse(
+                    detail=(
+                        f"reply to a write of register {address} carries function code "
+                        f"{reply.function_code}, not {WRITE_SINGLE_REGISTER_CODE} "
+                        f"(write single register): the framer matched a "
+                        f"{type(reply).__name__} to this exchange, so the write is NOT "
+                        "acknowledged"
                     )
                 )
             )

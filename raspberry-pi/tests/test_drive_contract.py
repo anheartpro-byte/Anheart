@@ -52,8 +52,11 @@ from src.motor.drive import (
     DriveFaulted,
     DriveState,
     DriveStatus,
+    EmergencyStopOutcome,
+    EnableUnconfirmed,
     FaultReport,
     RegisterMap,
+    StopUnconfirmed,
     UnexpectedState,
     decode_current,
     decode_speed,
@@ -562,19 +565,47 @@ def _handle(result: Result[MotorRpm, DriveError]) -> str:
         case Ok(rpm):
             return f"ok:{rpm}"
         case Err(error):
-            match error:
-                case CommTimeout(after=after):
-                    return f"timeout:{after}"
-                case BadResponse(detail=detail):
-                    return f"bad:{detail}"
-                case UnexpectedState(expected=expected, actual=actual):
-                    return f"state:{expected.name}->{actual.name}"
-                case DriveFaulted(fault=fault, raw_code=code):
-                    return f"fault:{fault.mnemonic}:{code}"
-                case OutOfRange(quantity=quantity):
-                    return f"range:{quantity}"
-                case _ as unreachable:
-                    assert_never(unreachable)
+            return _describe(error)
+
+
+def _describe(error: DriveError) -> str:
+    """The five transport diagnoses, plus the two that are about the motor.
+
+    Split from :func:`_handle` along the seam the union itself draws: five ways
+    the wire can fail, and two statements about the output state being unknown.
+    The ``assert_never`` here is the one a new variant collides with.
+    """
+    match error:
+        case CommTimeout(after=after):
+            return f"timeout:{after}"
+        case BadResponse(detail=detail):
+            return f"bad:{detail}"
+        case UnexpectedState(expected=expected, actual=actual):
+            return f"state:{expected.name}->{actual.name}"
+        case DriveFaulted(fault=fault, raw_code=code):
+            return f"fault:{fault.mnemonic}:{code}"
+        case OutOfRange(quantity=quantity):
+            return f"range:{quantity}"
+        case EnableUnconfirmed() | StopUnconfirmed() as unknown:
+            return _describe_unknown_output_state(unknown)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _describe_unknown_output_state(error: EnableUnconfirmed | StopUnconfirmed) -> str:
+    """The two variants that say "the motor may be turning and I cannot prove it".
+
+    Handled apart from the transport failures because the correct response
+    differs in kind: a CommTimeout says "fix the link", these say "the machine
+    may be running, and here is what is known about the attempt to stop it".
+    """
+    match error:
+        case EnableUnconfirmed(reference_zeroed=zeroed, run_command_removed=removed):
+            return f"enable?:{zeroed}:{removed}"
+        case StopUnconfirmed(waited=waited, last_output_rpm=rpm):
+            return f"stop?:{waited}:{rpm}"
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def test_every_error_variant_is_handled_and_carries_its_context() -> None:
@@ -592,6 +623,19 @@ def test_every_error_variant_is_handled_and_carries_its_context() -> None:
     )
     assert _handle(Err(DriveFaulted(DriveFault.UNDERVOLTAGE, RawRegister(22)))) == "fault:USF:22"
     assert _handle(Err(OutOfRange("rpm", 1500.0, 0.0, 900.0))) == "range:rpm"
+    # The two that are not transport diagnoses. Each carries what the caller has
+    # to branch on: whether the rollback landed, and how fast the shaft still
+    # was when the stop ran out of budget.
+    unconfirmed = EnableUnconfirmed(
+        detail="15 may have landed",
+        reference_zeroed=True,
+        run_command_removed=False,
+    )
+    assert _handle(Err(unconfirmed)) == "enable?:True:False"
+    assert (
+        _handle(Err(StopUnconfirmed(Seconds(20.0), MotorRpm(420), "still turning")))
+        == "stop?:20.0:420"
+    )
 
 
 def test_error_variants_are_immutable() -> None:
@@ -641,8 +685,9 @@ class _RecordingBackend:
     async def read_status(self) -> Result[DriveStatus, DriveError]:
         return Ok(_status(DriveState.OPERATION_ENABLED))
 
-    def emergency_disable_blocking(self, timeout: Seconds) -> None:
+    def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self.emergency_timeouts.append(timeout)
+        return EmergencyStopOutcome.ACKNOWLEDGED
 
 
 def _accepts_a_backend(backend: DriveBackend) -> DriveBackend:
@@ -712,8 +757,30 @@ def test_emergency_disable_is_synchronous_and_everything_else_is_not() -> None:
 def test_emergency_disable_needs_no_event_loop() -> None:
     """Called from plain synchronous code, with no loop anywhere in sight."""
     backend = _RecordingBackend()
-    backend.emergency_disable_blocking(Seconds(1.0))
+    outcome = backend.emergency_disable_blocking(Seconds(1.0))
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
     assert backend.emergency_timeouts == [Seconds(1.0)]
+
+
+def test_the_emergency_stop_reports_what_it_achieved() -> None:
+    """The return value is part of the seam, not an implementation detail.
+
+    The callers are ``atexit``, an OS signal handler and an ``except`` branch:
+    places with no way to ask a follow-up question, and places where escalating
+    is the only option left. So "no frame ever reached the drive" has to be
+    distinguishable from "the drive acknowledged it", and it was not while this
+    method returned ``None``.
+
+    None of the three means the machine has stopped, which is why every member
+    is named after the attempt rather than after the shaft.
+    """
+    assert set(EmergencyStopOutcome) == {
+        EmergencyStopOutcome.ACKNOWLEDGED,
+        EmergencyStopOutcome.SENT_UNCONFIRMED,
+        EmergencyStopOutcome.NOTHING_SENT,
+    }
+    for member in EmergencyStopOutcome:
+        assert "stopped" not in member.name.lower(), member
 
 
 # =========================================================================

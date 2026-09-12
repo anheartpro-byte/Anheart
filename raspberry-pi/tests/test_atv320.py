@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import threading
+import time
 from collections import deque
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -55,12 +57,15 @@ from pymodbus.pdu.register_read_message import ReadHoldingRegistersResponse
 from pymodbus.pdu.register_write_message import WriteSingleRegisterResponse
 from pymodbus.transport import CommParams
 
-from src.clock import ManualClock
+from src.clock import Clock, ManualClock, RealClock
 from src.motor.atv320 import (
     DEFAULT_BAUDRATE,
     DEFAULT_BYTESIZE,
+    DEFAULT_EMERGENCY_BUDGET,
     DEFAULT_STOPBITS,
     DEFAULT_TIMEOUT,
+    EMERGENCY_LOCK_SHARE,
+    EMERGENCY_WRITE_SHARE,
     ATV320Drive,
     ModbusMaster,
     Parity,
@@ -76,7 +81,10 @@ from src.motor.drive import (
     DriveFault,
     DriveFaulted,
     DriveState,
+    EmergencyStopOutcome,
+    EnableUnconfirmed,
     RegisterMap,
+    StopUnconfirmed,
     UnexpectedState,
 )
 from src.result import Err, Ok, Result, err_of
@@ -223,14 +231,18 @@ class FakeBus:
         "clock",
         "close_calls",
         "connect_calls",
+        "entered_read",
         "latency",
         "log",
         "max_in_flight",
         "obeys",
         "on_command",
+        "overlap_raises",
         "port_opens",
         "raise_on_close",
         "raise_on_connect",
+        "real_read_block",
+        "real_write_block",
         "registers",
         "regs",
         "script_reads",
@@ -276,6 +288,34 @@ class FakeBus:
         self._in_flight: int = 0
         self.max_in_flight: int = 0
 
+        # --- REAL wall time, for the bounds a ManualClock cannot express ----
+        #
+        # `latency` above advances the injected clock, which makes measured
+        # CommTimeout values exact and costs no test runtime - but it is
+        # therefore incapable of proving that a call RETURNS within a duration.
+        # A pyserial read really does block the thread, and a budget that is
+        # only enforced against a clock the test advances is not a budget. The
+        # two fields below block for real, honouring the configured serial
+        # timeout the way pyserial does.
+        self.real_read_block: Seconds = Seconds(0.0)
+        self.real_write_block: Seconds = Seconds(0.0)
+
+        self.entered_read: threading.Event = threading.Event()
+        """Set once a read is inside the transaction body, so a test can know
+        the executor thread is genuinely mid-transaction before racing it."""
+
+        self.overlap_raises: bool = False
+        """Raise ConnectionException on any transaction that starts while
+        another is in flight.
+
+        This is the pymodbus race, modelled: `connect()` is called OUTSIDE the
+        library's transaction lock and the port is opened `exclusive=True`, so
+        the second thread in loses the race, `connect()` returns False, and
+        `execute` raises ConnectionException. A driver that drives the shared
+        client from two threads therefore does not get corrupt data, it gets a
+        LOST WRITE - and on the emergency path that is the write that mattered.
+        """
+
     # --- Inspection -----------------------------------------------------
 
     def setpoint(self) -> int:
@@ -310,7 +350,7 @@ class FakeBus:
             raise self.raise_on_close
 
     def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:
-        with self._transaction():
+        with self._transaction(self.real_read_block, self.entered_read):
             self.log.append(Transaction(Access.READ, address, slave))
             scripted = _next_outcome(self.script_reads, self.sticky_reads)
             if scripted is not Behave.NORMALLY:
@@ -322,7 +362,7 @@ class FakeBus:
             return read_reply([self.registers[address]] * count)
 
     def write_register(self, address: int, value: int, slave: int = 1) -> object:
-        with self._transaction():
+        with self._transaction(self.real_write_block, None):
             self.log.append(Transaction(Access.WRITE, address, slave, value))
             scripted = _next_outcome(self.script_writes, self.sticky_writes)
             if scripted is not Behave.NORMALLY:
@@ -337,17 +377,36 @@ class FakeBus:
     # --- Internals ------------------------------------------------------
 
     @contextmanager
-    def _transaction(self) -> Generator[None]:
+    def _transaction(self, real_block: Seconds, entered: threading.Event | None) -> Generator[None]:
         """Assert the half-duplex invariant from inside the slave.
 
         No test can observe two overlapping transactions; the bus can, and a
         single-flight bug shows up on the bench as corrupt frames rather than
         as a failing assertion.
+
+        ``overlap_raises`` turns the observation into the failure a real
+        exclusive serial port produces - see the field's docstring - so the
+        consequence of overlapping can be tested and not merely counted.
+
+        ``entered`` is signalled BEFORE the real block, not after it: a test
+        racing the executor thread needs to know the transaction has started,
+        and an event set once it has nearly finished would make every such race
+        a no-op that quietly passes.
         """
+        overlapping = self._in_flight > 0
         self._in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self._in_flight)
         self.clock.advance(self.latency)
+        if entered is not None:
+            entered.set()
         try:
+            if overlapping and self.overlap_raises:
+                raise connection_exception("the port is already open exclusively elsewhere")
+            if real_block > 0.0:
+                # REAL seconds, in the thread the caller is on, exactly as a
+                # pyserial read does. This is the only way a test can say
+                # anything about how long a call takes to return.
+                time.sleep(real_block)
             yield
         finally:
             self._in_flight -= 1
@@ -445,19 +504,22 @@ def bus(make_bus: BusFactory) -> FakeBus:
 
 
 def build_drive(
-    clock: ManualClock,
+    clock: Clock,
     bus: FakeBus,
     *,
     offset: int = 0,
     failure_threshold: int = 3,
     settle_attempts: int = 1,
+    stop_attempts: int = 1,
     settings: SerialSettings = SETTINGS,
+    emergency_budget: Seconds = DEFAULT_EMERGENCY_BUDGET,
 ) -> ATV320Drive:
     """A driver wired to a fake bus.
 
-    ``settle_attempts`` defaults to 1 so most tests see exactly one ETA read
-    per step and the transaction log stays readable; the retry behaviour has
-    tests of its own. ``settle_delay`` is zero so nothing sleeps.
+    ``settle_attempts`` and ``stop_attempts`` default to 1 so most tests see
+    exactly one ETA read per enable step and one RFRD read per close, keeping
+    the transaction log readable; the retry behaviour of each has tests of its
+    own. ``settle_delay`` and ``stop_poll_interval`` are zero so nothing sleeps.
     """
     return ATV320Drive(
         clock,
@@ -467,6 +529,9 @@ def build_drive(
         failure_threshold=failure_threshold,
         settle_attempts=settle_attempts,
         settle_delay=Seconds(0.0),
+        stop_attempts=stop_attempts,
+        stop_poll_interval=Seconds(0.0),
+        emergency_budget=emergency_budget,
     )
 
 
@@ -540,6 +605,11 @@ def test_the_driver_refuses_tuning_that_would_verify_nothing(
         build_drive(clock, bus, failure_threshold=0)
     with pytest.raises(ValueError, match="settle_attempts"):
         build_drive(clock, bus, settle_attempts=0)
+    # With zero attempts, close() would never read RFRD - so it could never
+    # confirm standstill, and every close would leave the run command in place
+    # on a machine that had in fact stopped.
+    with pytest.raises(ValueError, match="stop_attempts"):
+        build_drive(clock, bus, stop_attempts=0)
 
 
 async def test_the_slave_address_is_on_every_transaction(clock: ManualClock, bus: FakeBus) -> None:
@@ -885,6 +955,36 @@ async def test_a_non_pdu_write_reply_is_a_bad_response(drive: ATV320Drive, bus: 
             pytest.fail(f"expected BadResponse, got {other!r}")
 
 
+async def test_a_write_is_not_acked_by_somebody_elses_reply(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """A read response is a perfectly good PDU, and it is not an acknowledgement.
+
+    On a noisy half-duplex pair the framer can match a stale READ reply to this
+    write's exchange. Accepting any ModbusPDU - which is what "is it a PDU?"
+    amounts to - reports "the write was acked" on the strength of somebody
+    else's answer, which is precisely the assumption the whole write-verify
+    argument in this driver rests on not being true.
+    """
+    bus.script_writes.append(read_reply([0]))
+    match await drive.write_command(ControlWord.SHUTDOWN):
+        case Err(BadResponse(detail=detail)):
+            assert "function code 3" in detail
+            assert "NOT acknowledged" in detail
+        case other:
+            pytest.fail(f"expected BadResponse, got {other!r}")
+
+
+async def test_a_genuine_write_echo_is_accepted(drive: ATV320Drive, bus: FakeBus) -> None:
+    """The other half of the check: function code 6 is what a write ack IS.
+
+    Without this the shape validation could be satisfied by refusing
+    everything, which would be a driver that can never write.
+    """
+    bus.script_writes.append(write_echo(RegisterMap().cmd, ControlWord.SHUTDOWN.value))
+    assert isinstance(await drive.write_command(ControlWord.SHUTDOWN), Ok)
+
+
 async def test_a_register_outside_the_16_bit_domain_is_out_of_range(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
@@ -1015,6 +1115,19 @@ async def test_every_variant_of_the_closed_error_union_is_reachable(
     bus.registers[RegisterMap().lft] = LFT_OVERCURRENT
     produced.add(type(error_of(await build_drive(clock, bus).enable())))
 
+    # EnableUnconfirmed - the enabling word went out and then the link failed,
+    # so the output stage may be live. Not a transport diagnosis: a fact about
+    # the motor.
+    bus = make_bus()
+    bus.script_reads.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY, io_exception()])
+    produced.add(type(error_of(await build_drive(clock, bus).enable())))
+
+    # StopUnconfirmed - the reference was zeroed, the shaft never reported
+    # standstill, and the run command was deliberately left in place.
+    bus = make_bus()
+    bus.registers[RegisterMap().rfrd] = 600
+    produced.add(type(error_of(await build_drive(clock, bus).close())))
+
     assert produced == closed_union_members()
 
 
@@ -1142,13 +1255,18 @@ async def test_enable_writes_no_speed_of_its_own(drive: ATV320Drive, bus: FakeBu
     [
         (ControlWord.SHUTDOWN, DriveState.READY),
         (ControlWord.SWITCH_ON, DriveState.SWITCHED_ON),
-        (ControlWord.ENABLE_OPERATION, DriveState.OPERATION_ENABLED),
     ],
 )
 async def test_enable_fails_at_whichever_step_the_drive_does_not_follow(
     drive: ATV320Drive, bus: FakeBus, stalls_at: ControlWord, expected: DriveState
 ) -> None:
-    """A drive that did not follow must be distinguishable from one that did."""
+    """A drive that did not follow must be distinguishable from one that did.
+
+    The two words that cannot energise the output stage: whatever happened, the
+    motor is not now commanded, so the transport-level diagnosis is the whole
+    story. The energising word gets its own tests below, because there the same
+    error would be understating things badly.
+    """
     bus.obeys = frozenset(CIA402_TRANSITIONS) - {stalls_at}
     match await drive.enable():
         case Err(UnexpectedState(expected=want, actual=got)):
@@ -1158,6 +1276,102 @@ async def test_enable_fails_at_whichever_step_the_drive_does_not_follow(
             pytest.fail(f"expected UnexpectedState at {stalls_at.name}, got {other!r}")
     # Nothing is sent after the step that failed.
     assert bus.command_words()[-1] == stalls_at.value
+
+
+async def test_enable_that_fails_at_the_energising_word_says_the_motor_may_be_running(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """The defect: Err while the output stage is live, reported as a link problem.
+
+    Demonstrated on the previous version: ``enable()`` returned
+    ``Err(CommTimeout)`` with ``[6, 7, 15]`` all on the wire and ETA decoding to
+    OPERATION_ENABLED. ``CommTimeout`` reads as "the link died", not "the motor
+    is now enabled", and LFRD may still hold a speed from an earlier session -
+    so the caller is told to worry about comms while the machine spins up.
+
+    A failure at the word that energises the output stage therefore has to be
+    its own variant, and the driver has to try to undo what it may have done.
+    """
+    regs = RegisterMap()
+    bus.script_reads.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY, io_exception()])
+
+    match await drive.enable():
+        case Err(
+            EnableUnconfirmed(
+                detail=detail,
+                reference_zeroed=zeroed,
+                run_command_removed=removed,
+            )
+        ):
+            assert zeroed, "the rollback zeroed LFRD"
+            assert removed, "and removed the run command"
+            assert "may be live" in detail
+            assert "CommTimeout" in detail, "the underlying failure is still named"
+        case other:
+            pytest.fail(f"expected EnableUnconfirmed, got {other!r}")
+
+    # ETA really did reach OPERATION_ENABLED before the failure: this is the
+    # "reported failure while the motor runs" case and not a hypothetical.
+    assert bus.command_words()[:3] == [6, 7, 15]
+    # The rollback, in the order that cannot freewheel: zero the reference, then
+    # transition 5 (which ramps). NOT SHUTDOWN, which would drop the output
+    # stage on a machine that may already be turning.
+    assert bus.writes()[-2:] == [(regs.lfrd, 0), (regs.cmd, ControlWord.SWITCH_ON.value)]
+    assert ControlWord.SHUTDOWN.value not in bus.command_words()[3:]
+
+
+async def test_an_unconfirmed_enable_reports_a_rollback_that_failed_too(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """Both booleans False is the worst case, and it has to be machine-readable.
+
+    Nothing is known to have undone the enable, so the drive's own ttO timeout
+    is the only stop left. A caller has to be able to branch on that without
+    parsing prose.
+    """
+    bus.script_reads.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY, io_exception()])
+    # The three command words land; only the rollback writes fail.
+    bus.script_writes.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY])
+    bus.sticky_writes = io_exception()
+
+    match await drive.enable():
+        case Err(EnableUnconfirmed(reference_zeroed=zeroed, run_command_removed=removed)):
+            assert not zeroed
+            assert not removed
+        case other:
+            pytest.fail(f"expected EnableUnconfirmed, got {other!r}")
+    assert bus.command_words()[:3] == [6, 7, 15], "the enable really did go out"
+
+
+async def test_an_unconfirmed_enable_can_still_be_stopped_by_hand(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """The second half of the defect: a latched link that refuses the stop.
+
+    The failed reads inside ``enable()`` count towards the failure threshold, so
+    a run of them latches the link - and the refusal then blocked the very
+    ``write_command(SHUTDOWN)`` a caller would reach for to undo the enable. A
+    refusal must never block a stop.
+    """
+    bus.sticky_reads = io_exception()
+    for _ in range(3):
+        assert isinstance(await drive.enable(), Err)
+    assert drive.link_lost
+
+    bus.sticky_reads = Behave.NORMALLY
+    bus.sticky_writes = Behave.NORMALLY
+    bus.log.clear()
+
+    assert isinstance(await drive.write_speed(MotorRpm(0)), Ok), "a zero setpoint is a stop"
+    assert isinstance(await drive.write_command(ControlWord.SWITCH_ON), Ok)
+    assert isinstance(await drive.write_command(ControlWord.SHUTDOWN), Ok)
+    assert bus.command_words() == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
+
+    # And nothing else got through with it.
+    assert isinstance(await drive.write_command(ControlWord.ENABLE_OPERATION), Err)
+    assert isinstance(await drive.write_command(ControlWord.FAULT_RESET), Err)
+    assert isinstance(await drive.write_speed(MotorRpm(600)), Err)
+    assert isinstance(await drive.enable(), Err)
 
 
 async def test_enable_refuses_a_faulted_drive_and_names_the_fault(
@@ -1298,22 +1512,110 @@ async def test_enable_does_not_wait_out_a_fault_that_appears_while_settling(
 # =========================================================================
 
 
-async def test_close_removes_the_run_command_before_releasing_the_port(
+async def test_close_ramps_to_a_stop_before_it_drops_the_output_stage(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
+    """The order is the fix: zero the reference, WAIT, then remove the command.
+
+    CMD = SHUTDOWN out of OPERATION_ENABLED is CiA402 transition 8, which drops
+    the output stage and leaves a loaded centrifuge freewheeling for minutes
+    while the drive reports READY. The previous version wrote it about 20 ms
+    after zeroing LFRD, so the ramp had no time to act and was then aborted.
+
+    So the transaction log itself is the assertion: LFRD = 0, then a READ of
+    RFRD proving standstill was checked and not assumed, and only then the
+    documented stop pair 7 -> 6.
+    """
     regs = RegisterMap()
     assert isinstance(await drive.enable(), Ok)
+    bus.log.clear()
     assert isinstance(await drive.close(), Ok)
 
-    assert bus.writes()[-2:] == [(regs.lfrd, 0), (regs.cmd, ControlWord.SHUTDOWN.value)]
+    assert [(t.access, t.address, t.value) for t in bus.log] == [
+        (Access.WRITE, regs.lfrd, 0),
+        (Access.READ, regs.rfrd, None),
+        (Access.WRITE, regs.cmd, ControlWord.SWITCH_ON.value),
+        (Access.WRITE, regs.cmd, ControlWord.SHUTDOWN.value),
+    ]
     assert bus.close_calls == 1
     assert drive.link_lost
 
 
-async def test_close_removes_the_run_command_even_when_zeroing_fails(
+async def test_close_leaves_the_run_command_in_place_while_the_shaft_still_turns(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    """The whole point of waiting: never drop the output stage on a moving load.
+
+    The fake drive reports 600 rpm on RFRD and keeps reporting it, so standstill
+    is never confirmed. A stop that cannot be confirmed must end with the drive
+    still enabled and a zero reference - ttO's ramp - and must say so, rather
+    than writing the word that turns a 10 s ramp into a 145 s coast.
+    """
+    regs = RegisterMap()
+    drive = build_drive(clock, bus, stop_attempts=3)
+    bus.latency = Seconds(0.1)
+    assert isinstance(await drive.enable(), Ok)
+    bus.registers[regs.rfrd] = 600
+    bus.log.clear()
+
+    match await drive.close():
+        case Err(StopUnconfirmed(waited=waited, last_output_rpm=rpm, detail=detail)):
+            assert rpm == MotorRpm(600)
+            assert waited == pytest.approx(0.3)  # three RFRD reads at 0.1 s each
+            assert "left in place" in detail
+        case other:
+            pytest.fail(f"expected StopUnconfirmed, got {other!r}")
+
+    assert bus.writes() == [(regs.lfrd, 0)], "no command word went out"
+    assert ControlWord.SHUTDOWN.value not in bus.command_words()
+    assert bus.reads() == [regs.rfrd] * 3
+    assert bus.close_calls == 1
+
+
+async def test_close_stops_as_soon_as_the_shaft_has_stopped(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    """The poll is bounded but it is not a fixed wait: it ends on the evidence.
+
+    Twenty attempts are allowed and three are used, because the third RFRD read
+    is the one that says zero. A close that always spent its whole budget would
+    make every session end twenty polls late.
+    """
+    drive = build_drive(clock, bus, stop_attempts=20)
+    assert isinstance(await drive.enable(), Ok)
+    bus.log.clear()
+    # Still turning, still turning, stopped - then the default behaviour, which
+    # reads the fake's RFRD register of 0.
+    bus.script_reads.extend([read_reply([600]), read_reply([600])])
+
+    assert isinstance(await drive.close(), Ok)
+    assert len(bus.reads()) == 3, "it stopped polling the moment RFRD read zero"
+    assert bus.command_words() == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
+
+
+async def test_close_treats_one_rpm_as_stopped(clock: ManualClock, bus: FakeBus) -> None:
+    """1 rpm is the finest speed RFRD can report, so it is the standstill floor.
+
+    Without this, a shaft resting at the drive's own resolution limit would look
+    like a machine that never stops, and every close would refuse to finish.
+    """
+    regs = RegisterMap()
+    drive = build_drive(clock, bus)
+    assert isinstance(await drive.enable(), Ok)
+    bus.registers[regs.rfrd] = 0xFFFF  # -1 rpm, signed
+    assert isinstance(await drive.close(), Ok)
+    assert bus.command_words()[-2:] == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
+
+
+async def test_close_reports_a_failure_to_zero_the_reference_and_writes_no_command(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
-    """One lost frame is no reason to skip the write that removes torque demand."""
+    """A reference that may not be zero is the worst moment to remove torque.
+
+    If LFRD = 0 did not land, the drive may still be holding a speed. Writing
+    the stop pair then risks transition 8 against an unknown speed, so the run
+    command stays and ttO takes over.
+    """
     regs = RegisterMap()
     bus.script_writes.append(io_exception())
     match await drive.close():
@@ -1321,16 +1623,47 @@ async def test_close_removes_the_run_command_even_when_zeroing_fails(
             pass
         case other:
             pytest.fail(f"expected the first failure to be reported, got {other!r}")
-    assert bus.writes() == [(regs.lfrd, 0), (regs.cmd, ControlWord.SHUTDOWN.value)]
+    assert bus.writes() == [(regs.lfrd, 0)]
+    assert bus.reads() == [], "there is no point polling a link that just failed"
+    assert bus.close_calls == 1
+
+
+async def test_close_reports_a_failed_standstill_read(drive: ATV320Drive, bus: FakeBus) -> None:
+    """A link that died mid-poll is the more urgent diagnosis, so it wins."""
+    bus.script_reads.append(io_exception())
+    match await drive.close():
+        case Err(CommTimeout()):
+            pass
+        case other:
+            pytest.fail(f"expected the transport failure, got {other!r}")
+    assert ControlWord.SHUTDOWN.value not in bus.command_words()
     assert bus.close_calls == 1
 
 
 async def test_close_reports_a_failure_to_remove_the_run_command(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
+    """Both words are attempted: the shaft is already stopped, so 6 is safe."""
+    regs = RegisterMap()
     bus.script_writes.extend([Behave.NORMALLY, io_exception()])
     assert isinstance(await drive.close(), Err)
+    assert bus.writes() == [
+        (regs.lfrd, 0),
+        (regs.cmd, ControlWord.SWITCH_ON.value),
+        (regs.cmd, ControlWord.SHUTDOWN.value),
+    ]
     assert bus.close_calls == 1
+
+
+async def test_close_reports_the_first_of_two_failed_command_words(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    bus.script_writes.extend([Behave.NORMALLY, Behave.NORMALLY, io_exception()])
+    match await drive.close():
+        case Err(CommTimeout()):
+            pass
+        case other:
+            pytest.fail(f"expected the failed SHUTDOWN to be reported, got {other!r}")
 
 
 async def test_close_releases_the_port_even_if_releasing_it_raises(
@@ -1344,12 +1677,68 @@ async def test_close_releases_the_port_even_if_releasing_it_raises(
     assert drive.link_lost
 
 
-async def test_close_on_a_latched_link_writes_nothing(drive: ATV320Drive, bus: FakeBus) -> None:
+async def test_close_on_a_latched_link_still_attempts_the_stop(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """A refusal must never block a stop.
+
+    The comms latch exists so this driver stops feeding a keepalive it cannot
+    verify - not so that a motor stays commanded. It used to return the refusal
+    and write nothing, which meant a link latched by a failed enable could not
+    be stopped by the very close the caller reached for.
+    """
+    regs = RegisterMap()
     await latch_the_link(drive, bus)
     bus.log.clear()
-    assert isinstance(await drive.close(), Err)
-    assert bus.log == []
+    assert isinstance(await drive.close(), Ok)
+    assert bus.writes() == [
+        (regs.lfrd, 0),
+        (regs.cmd, ControlWord.SWITCH_ON.value),
+        (regs.cmd, ControlWord.SHUTDOWN.value),
+    ]
     assert bus.close_calls == 1
+
+
+async def test_close_is_idempotent_and_does_not_raise_the_second_time(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """Teardown paths call close twice: an except branch, then a finally.
+
+    The first call shuts the executor pool down, so the second used to raise
+    ``RuntimeError: cannot schedule new futures after shutdown`` - out of a
+    shutdown handler, which is where an exception has nobody left to catch it.
+    """
+    assert isinstance(await drive.close(), Ok)
+    transactions = len(bus.log)
+
+    assert isinstance(await drive.close(), Ok)
+    assert isinstance(await drive.close(), Ok)
+    assert len(bus.log) == transactions, "a second close must not touch the wire"
+    assert bus.close_calls == 1
+
+
+async def test_a_second_close_repeats_the_first_verdict(drive: ATV320Drive, bus: FakeBus) -> None:
+    """Idempotent is not the same as cheerful.
+
+    If the first close could not stop the machine, the second must not report
+    that it did. A caller that retries a close is asking the same question, and
+    the answer has not changed.
+    """
+    bus.script_writes.append(io_exception())
+    first = err_of(await drive.close())
+    assert isinstance(first, CommTimeout)
+    second = err_of(await drive.close())
+    assert isinstance(second, CommTimeout)
+    assert second == first
+
+
+async def test_reopening_after_a_close_clears_the_close(drive: ATV320Drive, bus: FakeBus) -> None:
+    """open() is the one place any latch is cleared, this one included."""
+    assert isinstance(await drive.close(), Ok)
+    assert isinstance(await drive.open(), Ok)
+    bus.log.clear()
+    assert isinstance(await drive.close(), Ok)
+    assert bus.writes()[0] == (RegisterMap().lfrd, 0), "the stop was attempted again"
 
 
 # =========================================================================
@@ -1357,15 +1746,27 @@ async def test_close_on_a_latched_link_writes_nothing(drive: ATV320Drive, bus: F
 # =========================================================================
 
 
-def test_emergency_disable_needs_no_event_loop(clock: ManualClock, bus: FakeBus) -> None:
+def test_emergency_disable_zeroes_the_reference_and_leaves_the_run_command(
+    clock: ManualClock, bus: FakeBus
+) -> None:
     """A synchronous test, on purpose: this has to work from atexit and from an
-    OS signal handler, where there may be no loop and await does not exist."""
+    OS signal handler, where there may be no loop and await does not exist.
+
+    And it writes LFRD = 0 and **nothing else**. Removing the run command here
+    would be CiA402 transition 8 - the output stage dropped on a machine this
+    call cannot afford to wait for - whereas a zeroed reference leaves the drive
+    ramping on its own dEC and arms ttO to finish it. The absence of any CMD
+    write is the assertion.
+    """
     drive = build_drive(clock, bus)
     regs = RegisterMap()
+    bus.registers[regs.lfrd] = 1380
 
-    drive.emergency_disable_blocking(Seconds(0.5))
+    outcome = drive.emergency_disable_blocking(Seconds(1.0))
 
-    assert bus.writes() == [(regs.lfrd, 0), (regs.cmd, ControlWord.SHUTDOWN.value)]
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
+    assert bus.writes() == [(regs.lfrd, 0)]
+    assert bus.command_words() == [], "the run command must stay in place"
     assert bus.setpoint() == 0
     assert drive.link_lost, "the async side must not re-command a speed afterwards"
 
@@ -1373,48 +1774,278 @@ def test_emergency_disable_needs_no_event_loop(clock: ManualClock, bus: FakeBus)
 def test_emergency_disable_returns_when_the_transport_is_dead(
     clock: ManualClock, bus: FakeBus
 ) -> None:
-    """Reaching the end of this test IS the assertion: it must not hang."""
+    """Reaching the end of this test IS the assertion: it must not hang.
+
+    And the outcome has to be reportable, because an atexit path that cannot
+    tell "sent" from "not sent" cannot escalate.
+    """
     drive = build_drive(clock, bus)
     bus.sticky_writes = serial.SerialException("adapter unplugged")
 
-    drive.emergency_disable_blocking(Seconds(0.5))
+    outcome = drive.emergency_disable_blocking(Seconds(1.0))
 
-    assert len(bus.writes()) == 2, "both attempts were made"
+    assert outcome is EmergencyStopOutcome.SENT_UNCONFIRMED
+    assert len(bus.writes()) == 1
     assert drive.link_lost
 
 
-def test_emergency_disable_stops_at_its_deadline(clock: ManualClock, bus: FakeBus) -> None:
-    """An unbounded call here hangs process exit, and a Pi that will not shut
-    down gets power-cycled mid-session."""
-    drive = build_drive(clock, bus)
-    bus.latency = Seconds(0.4)
-
-    drive.emergency_disable_blocking(Seconds(0.3))
-
-    assert len(bus.writes()) == 1, "the second write was outside the budget"
-
-
-def test_emergency_disable_zeroes_the_setpoint_before_removing_the_command(
+def test_emergency_disable_reports_a_transport_that_carried_nothing(
     clock: ManualClock, bus: FakeBus
 ) -> None:
-    """If only one of the two lands it must be the one that removes the speed."""
+    """NOTHING_SENT is the member that exists to be escalated on.
+
+    pymodbus raises ConnectionException when the port will not open, so no frame
+    reached the drive and it is still commanded at whatever setpoint it held.
+    Before the method returned anything, this was indistinguishable from success.
+    """
     drive = build_drive(clock, bus)
     bus.registers[RegisterMap().lfrd] = 1380
-    bus.script_writes.extend([Behave.NORMALLY, io_exception()])
+    bus.accepted_leftover_setpoint = 1380
+    bus.sticky_writes = connection_exception()
 
-    drive.emergency_disable_blocking(Seconds(1.0))
+    assert drive.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.NOTHING_SENT
+    assert bus.setpoint() == 1380, "nothing changed, and the caller is told so"
 
-    assert bus.setpoint() == 0
 
+def test_emergency_disable_reports_a_reply_it_cannot_use(clock: ManualClock, bus: FakeBus) -> None:
+    """The reply is classified, never acted on: no retry, no second exchange.
 
-def test_emergency_disable_does_not_interpret_the_reply(clock: ManualClock, bus: FakeBus) -> None:
-    """Nobody is left to act on a diagnosis; parsing one only spends the budget."""
+    Classifying costs no wire time - pymodbus has already waited for the frame -
+    and it is what lets a caller tell an acknowledged stop from a hopeful one.
+    """
     drive = build_drive(clock, bus)
     bus.sticky_writes = exception_response(WRITE_SINGLE_REGISTER, ILLEGAL_DATA_ADDRESS)
 
-    drive.emergency_disable_blocking(Seconds(1.0))
+    outcome = drive.emergency_disable_blocking(Seconds(1.0))
 
-    assert len(bus.writes()) == 2
+    assert outcome is EmergencyStopOutcome.SENT_UNCONFIRMED
+    assert len(bus.writes()) == 1, "one write, and no retry on a bad answer"
+
+
+@pytest.mark.parametrize("timeout", [Seconds(0.0), Seconds(-1.0), Seconds(-0.0001)])
+def test_emergency_disable_writes_even_with_no_budget_at_all(
+    clock: ManualClock, bus: FakeBus, timeout: Seconds
+) -> None:
+    """A non-positive budget must not be able to turn this into a no-op.
+
+    Measured on the previous version: with ``Seconds(0.0)`` or a negative
+    timeout NOTHING was sent, and the method then latched the link, so the
+    following ``close()`` refused and wrote nothing either. A stop request that
+    silently sends no frames is worse than an unbounded one.
+    """
+    drive = build_drive(clock, bus)
+    regs = RegisterMap()
+    bus.registers[regs.lfrd] = 900
+
+    outcome = drive.emergency_disable_blocking(timeout)
+
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
+    assert bus.writes() == [(regs.lfrd, 0)]
+    assert bus.setpoint() == 0
+
+
+def test_a_budget_smaller_than_the_link_allows_is_reported_not_obeyed(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    """A bound this driver cannot keep must be said out loud, not pretended to.
+
+    The serial timeout was fixed at construction and a blocking call cannot be
+    cut short, so a caller asking for less than the floor is asking for
+    something impossible. Silently returning early without writing would be the
+    only genuinely unsafe answer, so the floor is used and logged - and
+    :attr:`ATV320Drive.emergency_budget` exists so a caller need never guess.
+    """
+    drive = build_drive(clock, bus, emergency_budget=Seconds(1.0))
+    regs = RegisterMap()
+    bus.registers[regs.lfrd] = 1380
+
+    assert drive.emergency_budget == Seconds(1.0)
+    outcome = drive.emergency_disable_blocking(Seconds(0.2))
+
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
+    assert bus.writes() == [(regs.lfrd, 0)]
+
+
+def test_emergency_disable_sends_the_write_even_when_the_budget_is_gone(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    """The write that matters is never the write to sacrifice.
+
+    The previous version checked the deadline BEFORE each write, so whichever
+    write happened to be second was the one that got skipped. There is now only
+    one write and no check in front of it: the budget buys the lock wait, and
+    nothing else.
+    """
+    drive = build_drive(clock, bus)
+    regs = RegisterMap()
+    bus.registers[regs.lfrd] = 1380
+    # Latency ten times the budget, charged to the injected clock, so the
+    # "budget already spent" condition is unambiguously true.
+    bus.latency = Seconds(10.0)
+
+    assert drive.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
+    assert bus.writes() == [(regs.lfrd, 0)]
+    assert bus.setpoint() == 0
+
+
+def test_a_serial_timeout_too_large_for_the_emergency_budget_is_refused() -> None:
+    """The bound is made real at construction, where nothing is spinning yet.
+
+    A blocking serial call cannot be cut short once it has started, so the only
+    way to promise the emergency path returns inside its budget is to refuse a
+    line whose per-transaction timeout could overrun it. Measured on the
+    previous version, which had no such check: a legal ``timeout=5.0`` made the
+    call block ~5 s against a 0.2 s budget, and ~10 s once the second write
+    started - the "the Pi will not shut down and gets power-cycled mid-session"
+    case the docstring claimed to prevent.
+    """
+    budget = Seconds(0.6)
+    too_slow = SerialSettings(
+        port="COM-NONE", timeout=Seconds(budget * EMERGENCY_WRITE_SHARE + 0.01)
+    )
+    with pytest.raises(ValueError, match="cannot be honoured inside an emergency budget"):
+        ATV320Drive(
+            ManualClock(),
+            FakeBus(ManualClock(), RegisterMap()),
+            too_slow,
+            RegisterMap(),
+            emergency_budget=budget,
+        )
+
+    # And the largest timeout that CAN be honoured is accepted, so the check is
+    # a bound rather than a blanket refusal.
+    exactly_right = SerialSettings(port="COM-NONE", timeout=Seconds(budget * EMERGENCY_WRITE_SHARE))
+    assert (
+        ATV320Drive(
+            ManualClock(),
+            FakeBus(ManualClock(), RegisterMap()),
+            exactly_right,
+            RegisterMap(),
+            emergency_budget=budget,
+        ).emergency_budget
+        == budget
+    )
+
+
+def test_a_non_positive_emergency_budget_is_refused() -> None:
+    """There is nothing to bound the emergency write with, so refuse to start."""
+    with pytest.raises(ValueError, match="emergency_budget"):
+        ATV320Drive(
+            ManualClock(),
+            FakeBus(ManualClock(), RegisterMap()),
+            SETTINGS,
+            RegisterMap(),
+            emergency_budget=Seconds(0.0),
+        )
+
+
+def test_emergency_disable_returns_within_its_budget_in_real_wall_time(bus: FakeBus) -> None:
+    """The bound, measured against a transport that blocks in REAL seconds.
+
+    This is the test the old one could not be. ``test_emergency_disable_stops_
+    at_its_deadline`` advanced a ManualClock from inside the fake, so it
+    measured nothing at all about how long the call took to return - it pinned
+    the defect rather than the guarantee. Here the fake sleeps the thread for
+    its whole configured serial timeout, exactly as a pyserial read does, the
+    driver holds a RealClock, and the elapsed time is read with
+    ``perf_counter``.
+
+    Without the fix this fails: with the deadline enforced against a real clock
+    the first write consumes 0.3 s, the deadline check then sees 0.3 < 0.6 and
+    starts the second write, and the call returns after the full 0.6 s budget
+    rather than inside it. With the fix there is one write, bounded by a serial
+    timeout the constructor has already proved fits.
+    """
+    budget = Seconds(0.6)
+    serial_timeout = Seconds(budget * EMERGENCY_WRITE_SHARE)
+    settings = SerialSettings(port="COM-NONE", timeout=serial_timeout)
+    drive = build_drive(RealClock(), bus, settings=settings, emergency_budget=budget)
+    bus.real_write_block = serial_timeout
+
+    started = time.perf_counter()
+    outcome = drive.emergency_disable_blocking(budget)
+    elapsed = time.perf_counter() - started
+
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
+    # The apportioned worst case is one lock wait plus one write, and the
+    # remaining quarter of the budget is headroom for OS scheduling.
+    allowed = budget * (EMERGENCY_LOCK_SHARE + EMERGENCY_WRITE_SHARE)
+    assert elapsed < allowed, f"took {elapsed:.3f} s against a {budget} s budget"
+    assert elapsed >= serial_timeout, "the fake really did block the thread"
+    assert len(bus.writes()) == 1
+
+
+async def _race_the_executor(
+    drive: ATV320Drive, bus: FakeBus, budget: Seconds
+) -> tuple[EmergencyStopOutcome, float]:
+    """Fire the emergency stop while a transaction is in flight on the executor.
+
+    ``open()`` is used as the in-flight operation because it costs exactly one
+    blocking read, so the interleaving is one transaction and not four.
+    ``entered_read`` is set from inside the fake's transaction body, so this
+    really does race a transaction that has started, rather than one that is
+    merely scheduled.
+    """
+    opening = asyncio.get_running_loop().create_task(drive.open())
+    assert await asyncio.to_thread(bus.entered_read.wait, 5.0)
+    started = time.perf_counter()
+    outcome = drive.emergency_disable_blocking(budget)
+    taken = time.perf_counter() - started
+    await opening
+    return outcome, taken
+
+
+def test_emergency_disable_gives_up_on_the_lock_rather_than_waiting_it_out(
+    bus: FakeBus,
+) -> None:
+    """A bounded lock wait, measured in real wall time, then write anyway.
+
+    The lock closes the two-thread race on the shared pymodbus client, but an
+    emergency that queues behind the fault it is reacting to is not an
+    emergency. So the wait is a fixed fraction of the budget and then it writes
+    regardless - and that degradation has to be bounded in REAL time, because a
+    lock held by another thread is nothing an injected clock can model.
+    """
+    budget = Seconds(0.6)  # a 0.15 s lock share
+    settings = SerialSettings(port="COM-NONE", timeout=Seconds(0.05))
+    drive = build_drive(RealClock(), bus, settings=settings, emergency_budget=budget)
+    bus.real_read_block = Seconds(0.5)  # far longer than the lock share
+
+    outcome, taken = asyncio.run(_race_the_executor(drive, bus, budget))
+
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED, "it wrote anyway"
+    assert taken >= budget * EMERGENCY_LOCK_SHARE, "it really did wait for the lock"
+    assert taken < budget, f"and it gave up inside the budget, not after {taken:.3f} s"
+    assert bus.max_in_flight == 2, "it overlapped deliberately rather than sitting out the fault"
+
+
+def test_the_transport_lock_keeps_the_emergency_write_off_a_busy_bus(bus: FakeBus) -> None:
+    """The race from defect 5, and the consequence it has on a real port.
+
+    ``emergency_disable_blocking`` drives the shared ModbusSerialClient from the
+    CALLING thread while the executor thread may be mid-transaction. pymodbus
+    calls ``connect()`` outside its own transaction lock and closes the port on
+    every no-response, so both threads can race to open an ``exclusive=True``
+    port; the loser's ``connect()`` returns False and ``execute`` raises
+    ConnectionException, which ``_blind_write`` swallows. The emergency write is
+    then lost, during a comms fault, which is exactly when it is needed.
+
+    ``overlap_raises`` models that consequence. Without the shared threading
+    lock the emergency write overlaps the in-flight read and is lost; with it,
+    the write waits the short time the bus needs and lands.
+    """
+    budget = Seconds(1.0)  # a 0.25 s lock share
+    regs = RegisterMap()
+    drive = build_drive(RealClock(), bus, emergency_budget=budget)
+    bus.registers[regs.lfrd] = 1380
+    bus.overlap_raises = True
+    bus.real_read_block = Seconds(0.05)  # comfortably inside the lock share
+
+    outcome, _ = asyncio.run(_race_the_executor(drive, bus, budget))
+
+    assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
+    assert bus.max_in_flight == 1, "the two threads did not overlap on the wire"
+    assert bus.setpoint() == 0
 
 
 # =========================================================================
