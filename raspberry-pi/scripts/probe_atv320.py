@@ -24,10 +24,23 @@ import sys
 from pymodbus.client import ModbusSerialClient
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "COM3"
-SLAVE = 1
+# 248 is the Schneider point-to-point access address: the drive answers on it
+# whatever its configured Add is, which is how SoMove finds a drive whose
+# address is unknown. Measured on this bench: 248 answers, 1 does not.
+SLAVE = int(sys.argv[2]) if len(sys.argv) > 2 else 248
 
 # Altivar logical addresses (read-only ones only).
-REGS = {"ETA": 3201, "RFRD": 8604, "LCR": 3204, "LFT": 7121, "LFRD_echo": 8602}
+REGS = {
+    "ETA": 3201,
+    "RFRD": 8604,
+    "LCR": 3204,
+    "LFT": 7121,
+    "LFRD_echo": 8602,
+    "HSP": 3103,
+    "LSP": 3104,
+    "ACC": 9001,
+    "DEC": 9002,
+}
 
 print(f"pymodbus signature : {inspect.signature(ModbusSerialClient.__init__)}")
 print(f"read_holding_registers : {inspect.signature(ModbusSerialClient.read_holding_registers)}")

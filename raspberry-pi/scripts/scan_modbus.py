@@ -68,8 +68,15 @@ def try_one(baud: int, parity: str, stop: int, slaves: range, timeout: float) ->
 
 
 print(f"port {PORT}\n")
-print("=== phase 1 : balayage des adresses 1..247 au format usine 19200 8E1 ===")
-found = try_one(19200, "E", 1, range(1, 248), FAST_TIMEOUT)
+# 248 FIRST, and this ordering is a lesson paid for: Schneider devices answer
+# on 248 as a point-to-point access address regardless of their configured
+# Add, and an earlier sweep of 1..247 missed it by one and concluded the
+# drive was dead when SoMove was talking to it perfectly well.
+print("=== phase 0 : adresse d'acces point-a-point 248 ===")
+found = try_one(19200, "E", 1, range(248, 249), 1.0)
+if not found:
+    print("=== phase 1 : balayage 1..247 au format usine 19200 8E1 ===")
+    found = try_one(19200, "E", 1, range(1, 248), FAST_TIMEOUT)
 if not found:
     print("  aucune reponse sur les 247 adresses\n")
     print("=== phase 2 : autres formats serie, adresses 1..8 ===")
