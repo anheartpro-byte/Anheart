@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements-prod.txt .
+# Both files: requirements-prod.txt starts with `-r requirements-base.txt`,
+# so the base file has to be present in the build context too.
+COPY requirements-base.txt requirements-prod.txt ./
 
 # Headless matplotlib backend (BioSPPy imports matplotlib).
 ENV MPLBACKEND=Agg

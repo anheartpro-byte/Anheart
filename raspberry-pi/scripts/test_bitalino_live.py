@@ -5,6 +5,13 @@ learn whether the signal is USABLE (electrodes, port A1, mains hum), which is
 what actually blocked the previous captures.
 """
 
+import os
+import sys
+
+# Run from anywhere: put the project root (parent of scripts/) on the path,
+# same convention as scripts/diagnose_columns.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import sys
 import time
 

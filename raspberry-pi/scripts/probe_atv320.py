@@ -11,6 +11,13 @@ Deliberately no writes: a misaddressed write could land in a live Altivar
 parameter such as ACC or HSP and silently remove a safety ceiling.
 """
 
+import os
+import sys
+
+# Run from anywhere: put the project root (parent of scripts/) on the path,
+# same convention as scripts/diagnose_columns.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import inspect
 import sys
 
