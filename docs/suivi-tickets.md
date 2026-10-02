@@ -1,0 +1,140 @@
+# Suivi des tickets logiciels
+
+Instantane du 2 octobre 2026. Linear reste la source de verite des etats et des dependances.
+
+## Perimetre
+
+Projet **Roadmap Software** uniquement : 93 tickets ouverts. La file de developpement autonome contient 62 tickets portant les etiquettes `agent` et `aucun`. Les 31 tickets humains ou necessitant le banc ne sont pas des travaux a executer dans cette file ; leurs decisions peuvent cependant bloquer un ticket logiciel.
+
+Sources : [file d'execution](https://linear.app/anheart/document/file-dexecution-pour-les-agents-ordre-des-tickets-b457cc879745), [processus de developpement](https://linear.app/anheart/document/processus-de-developpement-branches-tickets-pr-revue-par-agents-ci-e1d3adb79659), [roadmap](roadmap.md).
+
+Un seul ticket est implemente a la fois. Avant de commencer : lire sa description complete avec ses EX-n, verifier ses bloqueurs dans Linear, identifier les fichiers et tests existants. Avant de passer au suivant : satisfaire les criteres, lancer les controles et exercer le comportement reel. **Done** exige la PR fusionnee dans `develop`, la CI verte, deux approbations et le commentaire de cloture. Un resultat local ne vaut pas une cloture Linear.
+
+## Ticket courant : ANH-71
+
+[ANH-71](https://linear.app/anheart/issue/ANH-71/commiter-et-relire-tout-le-travail-en-cours-branche-featpi-training) : versionner et relire le travail existant de `feat/pi-training-session` avant les nouvelles fonctionnalites.
+
+Etat initial : HEAD `73eb9baa4b1fdbee6b2ff39be1eb046849a653b1`, 72 fichiers suivis modifies et 294 fichiers non suivis. Ces modifications preexistantes ont ete preservees. `develop` a ete cree depuis `origin/main` (`a60e945e5cc61e70d01be4c17a750d65c06883b7`) et publie sur `origin` sans fusion ni modification de la production.
+
+Preparation realisee :
+
+- Exclure `.codex/config.toml`, qui contient une cle administrateur Convex, et le repertoire de donnees local `data/` des futurs commits.
+- Conserver les exclusions des environnements Python, `.env.local`, `raspberry-pi/.env`, `simulation/out/` et du repertoire de build de la simulation hebergee.
+- Installer Git LFS et gitleaks ; configurer le filtre LFS local et `.gitattributes` pour le fichier STEP dont depend la simulation. Le fichier source de 16 382 483 octets reste intact.
+- Inventorier la file logicielle ci-dessous et versionner le logiciel en groupes compilables, verifies depuis des copies de l'index, sans changer le checkout partage.
+- Corriger le tampon de `LiveSensorDisplay` : les effets de reinitialisation effacaient le premier lot et echouaient au lint. La synchronisation pendant le rendu conserve les lots sortis de la requete glissante, deduplique les timestamps, borne les echantillons et reinitialise une nouvelle seance avant de rendre ses graphiques.
+
+Controles :
+
+| Controle | Resultat |
+| --- | --- |
+| `git diff --check` et index de chaque commit | Verts |
+| Gate Pi `bash raspberry-pi/scripts/check.sh` | 3187 tests passes, 100 % des branches couvertes, Ruff/format/basedpyright/mypy verts ; `/tmp/anheart-anh71-pi-gate.log` |
+| Gate simulation `bash simulation/scripts/check.sh` | 984 tests passes, 1 echec attendu strict preexistant, 100 % des branches couvertes ; `/tmp/anheart-anh71-simulation-gate.log` |
+| TypeScript `npx tsc --noEmit` | Aucun diagnostic sur les sources finales et les increments Convex/site isoles |
+| ESLint `app components convex lib hooks i18n proxy.ts next.config.ts` | 0 erreur, 22 avertissements preexistants. Le lint racine `eslint .` reste mal borne aux environnements/builds Python : travail distinct ANH-72/ANH-125 |
+| Build Next.js | Vert avec Turbopack sur le projet, puis Webpack dans les copies de l'index (dependances liees hors de la copie) ; 28 pages generees dans l'etat final ; `/tmp/anheart-anh71-index-site.log` |
+| Increment unites/types | 275 tests passes, basedpyright/mypy/Ruff verts |
+| Increment runtime/variateur | 1557 tests passes puis correction du groupe (ajout du fichier de limites oublie) et 53 tests motion repasses ; basedpyright/mypy/Ruff verts ; `/tmp/anheart-anh71-index-runtime-final.log` |
+| Increment acquisition | 624 tests passes, types/Ruff verts ; `/tmp/anheart-anh71-index-sensors-final-checked.log` |
+| Increment presence | 138 tests passes, types/Ruff verts ; `/tmp/anheart-anh71-index-presence-checked.log` |
+| Increment integration Pi | 690 tests passes, basedpyright/mypy/Ruff/format verts ; `/tmp/anheart-anh71-index-panel.log` |
+| Reproduction du tampon | Le premier lot echoue sur le code initial ; 7 cas passent apres correction (premier lot, chevauchement, historique glissant, changement de seance, seance vide, limites qui augmentent/diminuent) ; `/tmp/anheart-anh71-sensor-before.log`, `/tmp/anheart-anh71-sensor-after.log` |
+| Navigateur Chrome, profil temporaire | Vraie courbe Recharts des le premier lot, boutons lot/seance/seance vide verifies, 0 erreur du fixture ; accueil Next charge, dashboard anonyme HTTP 307 ; `/tmp/anheart-anh71-browser-qa.log` |
+| Simulation utilisee en CLI | `manual_27_rpm` PASS ; aide disponible ; nom inconnu refuse avec sortie 1 (traceback preexistant) ; `/tmp/anheart-anh71-quick-qa.log` |
+| Simulation hebergee, sans deploiement | Build assemble uniquement dans une copie temporaire ; vrai serveur HTTP : catalogue 200 avec 60 scenarios, flux manuel de 1570 trames jusqu'a final/end, scenario inconnu error/end ; `/tmp/anheart-anh71-hosted-qa.log` |
+| Docker Compose | Configuration normale et surcharge de developpement valides avec `--no-env-resolution` ; aucun conteneur ni equipement lance, fichier secret `.env` absent |
+| Analyse gitleaks des fichiers candidats | Un exemple de documentation signale dans `raspberry-pi/README.md:435` ; la ligne d'en-tete utilise un placeholder. Le scanner sort 1 : le resultat n'est pas presente comme un passage automatique vert |
+| Analyse gitleaks de l'historique | Deux en-tetes d'exemple signales dans les commits `8f0e7f25122d35020687a48fc666e76c5e8f1670` et `232717b006119bb852aca6383c83ad782b027b9f`. Le second est explicitement le test d'une cle invalide, avec reponse 401 attendue. Faux positifs relus, sans masquage du scanner ni reecriture de l'historique |
+| Captures des guides | 66 images analysees localement par Apple Vision : aucun candidat aux formats de cle recherches ; domaines de demonstration seulement (dont une erreur OCR). Ceci n'est pas une certification d'absence de secret |
+| Git LFS | Pointeur de 133 octets, objet SHA-256 `033b711170872481f195d82612d23e53b2c35cd61d05c71f88f87a18ff338bf0`, taille 16 382 483 octets ; `git lfs fsck` vert, hook pre-push installe |
+| GitHub | Push de `develop` et des 10 groupes de logiciel reussi, y compris l'objet LFS de 16 Mo. `gh auth status` et `gh api user` renvoient toujours HTTP 401 pour le compte medmdime ; creation de PR en attente de reauthentification. Ne pas confondre l'acces Git avec l'acces de la CLI |
+
+Groupes realises (les adaptations de contrat sont versionnees avec leur producteur) :
+
+1. `921ddcd` : exclusions de secrets/donnees, contrat Python et metadonnees LFS.
+2. `b2c2b6b` : unites et types de seance/occupation.
+3. `38fcae2` : moteur, runtime, supervision, limites et rendu des nouvelles commandes dans l'ancien contrat web.
+4. `a0c9c2f` : acquisition BITalino, DSP, six capteurs, stubs, simulations de signaux et tests.
+5. `bafb3f1` : presence, surveillance, adaptateurs et tests.
+6. `f302ca4` : console locale, synchro cloud, interface web, packaging et tests d'integration.
+7. `ac9b100` : schema/fonctions/routes Convex, API generee, traductions et gardes des anciennes pages pour le patient devenu facultatif.
+8. `fb5f62c` : nouvelles pages/composants du tableau de bord et correction du tampon capteur.
+9. `5c4eb47` : simulation, scenarios, cohorte, visualiseur, tests et source STEP dans Git LFS.
+10. `f3efe9b` : assemblage de la simulation hebergee, valide en HTTP sans deploiement.
+11. Documentation et guides, avec ce suivi.
+
+Les tests d'integration qui importent la console sont dans son commit, et non dans les commits de bibliotheques capteur/presence. Les modifications preexistantes du checkout final ne sont pas annulees pour fabriquer ces etapes. Aucun changement d'etat Linear, fusion ou deploiement n'est realise par ce travail.
+
+Limite historique importante : `develop`, copie du `main` existant, contient encore l'ancienne base `raspberry-pi/buffer.db` et des caches Python. Le checkpoint preexistant `b3c4caf` les retire de l'arbre de la branche ANH-71, mais les objets demeurent dans l'historique deja publie (base introduite par `a317603`). EX-D ne peut donc pas etre declare entierement satisfait. Aucune reecriture destructive n'est autorisee ni effectuee.
+
+Publication cible : branche `mohamdimagh1/anh-71-commiter-et-relire-tout-le-travail-en-cours-branche-featpi`, PR **brouillon** vers `develop`. ANH-71 reste ouvert tant que la publication complete, la PR, les deux revues independantes de la chaine de securite, les controles requis et la fusion ne sont pas attestes. Les controles locaux ne remplacent ni ces approbations ni la future CI (ANH-72). Les limites physiques et les defauts logiciels deja documentes, dont ANH-101 et ANH-121, restent ouverts ; aucune validation sur equipement ou de seuil medical n'est revendiquee. Le prochain ticket de la file est ANH-82, avec le correctif ANH-121 dans la meme etape de fondations.
+
+## File logicielle
+
+L'etape reprend l'ordre de la file Linear. Les parents ANH-122 et ANH-88 se cloturent apres leurs sous-tickets ; ils ne dupliquent pas leur implementation. Les dependances precises sont recontrolees avant chaque ticket. La presence dans cette liste ne signifie pas que ses bloqueurs sont resolus.
+
+| Etape | Ticket | Livrable | Etat constate |
+| --- | --- | --- | --- |
+| 1 | [ANH-71](https://linear.app/anheart/issue/ANH-71/commiter-et-relire-tout-le-travail-en-cours-branche-featpi-training) | Commiter et relire tout le travail en cours (branche feat/pi-training-session) | Backlog |
+| 2 | [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en) | Redéployer Convex avec le nouveau schéma sans casser le site en production | Backlog |
+| 2 | [ANH-121](https://linear.app/anheart/issue/ANH-121/cle-machine-reversible-et-machine-supprimee-encore-authentifiee) | Clé machine réversible et machine supprimée encore authentifiée | Backlog |
+| 3 | [ANH-72](https://linear.app/anheart/issue/ANH-72/integration-continue-gates-pi-simulation-et-site-a-chaque-pr) | Intégration continue : gates Pi, simulation et site à chaque PR | Backlog |
+| 3 | [ANH-125](https://linear.app/anheart/issue/ANH-125/remettre-a-jour-les-readme-scripts-et-chiffres-perimes) | Remettre à jour les README, scripts et chiffres périmés | Backlog |
+| 3 | [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) | Tests Convex : matrice d'autorisation par rôle et organisation, contrat des routes machine, dans la gate CI | Backlog |
+| 4 | [ANH-133](https://linear.app/anheart/issue/ANH-133/contrat-http-pi-convex-versionne-version-logicielle-dans-le-heartbeat) | Contrat HTTP Pi ↔ Convex versionné, version logicielle dans le heartbeat, matrice de compatibilité | Backlog |
+| 4 | [ANH-134](https://linear.app/anheart/issue/ANH-134/processus-de-release-versions-semantiques-pi-convex-site-changelog) | Processus de release : versions sémantiques Pi / Convex / site, changelog, check-list, version validée par machine | Backlog |
+| 5 | [ANH-135](https://linear.app/anheart/issue/ANH-135/retirer-lancien-mode-enregistrement-ecg-srcmain-routes-sessiondata) | Retirer l'ancien mode « enregistrement ECG » (src.main, routes session/data, bouton Nouvelle session) | Backlog |
+| 6 | [ANH-127](https://linear.app/anheart/issue/ANH-127/format-denregistrement-de-seance-v2-partage-par-le-pi-et-la-simulation) | Format d'enregistrement de séance v2, partagé par le Pi et la simulation | Backlog |
+| 6 | [ANH-128](https://linear.app/anheart/issue/ANH-128/boite-noire-locale-la-console-ecrit-lenregistrement-de-seance-sur) | Boîte noire locale : la console écrit l'enregistrement de séance sur disque | Backlog |
+| 6 | [ANH-129](https://linear.app/anheart/issue/ANH-129/synchronisation-cloud-par-relecture-du-journal-local-avec-reprise) | Synchronisation cloud par relecture du journal local, avec reprise après redémarrage | Backlog |
+| 7 | [ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site) | Multi-organisation : séparer les clients dans Convex et le site | Backlog |
+| 8 | [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation) | Corriger les défauts fonctionnels du site relevés par la documentation | Backlog |
+| 8 | [ANH-154](https://linear.app/anheart/issue/ANH-154/site-assigner-des-machines-a-un-gestionnaire-ajoute-au-lieu-de) | Site : assigner des machines à un gestionnaire ajoute au lieu de remplacer, et décocher retire | Backlog |
+| 8 | [ANH-155](https://linear.app/anheart/issue/ANH-155/site-un-gestionnaire-qui-modifie-une-machine-nappelle-plus-une) | Site : un gestionnaire qui modifie une machine n'appelle plus une mutation réservée à l'admin | Backlog |
+| 8 | [ANH-156](https://linear.app/anheart/issue/ANH-156/site-plus-aucune-erreur-silencieuse-chaque-mutation-affiche-succes-ou) | Site : plus aucune erreur silencieuse, chaque mutation affiche succès ou échec (codes d'erreur traduits) | Backlog |
+| 8 | [ANH-157](https://linear.app/anheart/issue/ANH-157/site-invitations-par-clerk-organizations-liaison-dun-patient-pre-cree) | Site : invitations par Clerk Organizations, liaison d'un patient pré-créé à son compte, amorçage du premier admin | Backlog |
+| 8 | [ANH-158](https://linear.app/anheart/issue/ANH-158/convex-listes-de-seances-filtrees-par-droits-et-organisation-avant-la) | Convex : listes de séances filtrées par droits et organisation avant la limite, avec pagination | Backlog |
+| 8 | [ANH-159](https://linear.app/anheart/issue/ANH-159/site-compteurs-du-tableau-de-bord-utilisateurs-patients-machines-en) | Site : compteurs du tableau de bord (utilisateurs, patients, machines en ligne, séances actives) calculés correctement | Backlog |
+| 8 | [ANH-160](https://linear.app/anheart/issue/ANH-160/site-en-direct-et-donnees-perimees-recalcules-a-lhorloge-pas-seulement) | Site : « En direct » et « Données périmées » recalculés à l'horloge, pas seulement au changement de donnée | Backlog |
+| 9 | [ANH-83](https://linear.app/anheart/issue/ANH-83/tests-de-bout-en-bout-du-tableau-de-bord-navigateur-avec-une-console) | Tests de bout en bout du tableau de bord (navigateur) avec une console Pi simulée | Backlog |
+| 10 | [ANH-88](https://linear.app/anheart/issue/ANH-88/securiser-lapi-machine-cles-limitation-de-debit-journal-daudit) | Sécuriser l'API machine : clés, limitation de débit, journal d'audit | Backlog |
+| 10 | [ANH-165](https://linear.app/anheart/issue/ANH-165/convex-rotation-revocation-et-expiration-des-cles-machine-avec) | Convex : rotation, révocation et expiration des clés machine, avec chevauchement et affichage unique | Backlog |
+| 10 | [ANH-166](https://linear.app/anheart/issue/ANH-166/convex-limitation-de-debit-par-machine-et-par-utilisateur-taille) | Convex : limitation de débit par machine et par utilisateur, taille maximale des charges (composant rate-limiter) | Backlog |
+| 10 | [ANH-167](https://linear.app/anheart/issue/ANH-167/convex-journal-daudit-immuable-des-actions-sensibles-consultable-et) | Convex : journal d'audit immuable des actions sensibles, consultable et exportable | Backlog |
+| 11 | [ANH-90](https://linear.app/anheart/issue/ANH-90/messages-derreur-serveur-en-francais-et-alertes-machine-hors-ligne) | Messages d'erreur serveur en français et alertes (machine hors ligne, défaut) | Backlog |
+| 11 | [ANH-123](https://linear.app/anheart/issue/ANH-123/textes-restes-en-anglais-et-promesse-jusqua-3-g-sur-le-site) | Textes restés en anglais et promesse « jusqu'à 3 G » sur le site | Backlog |
+| 12 | [ANH-137](https://linear.app/anheart/issue/ANH-137/catalogue-de-programmes-dans-convex-ecrit-par-lequipe-anheart-seule) | Catalogue de programmes dans Convex, écrit par l'équipe Anheart seule, avec validation identique au Pi et signature médicale | Backlog |
+| 12 | [ANH-138](https://linear.app/anheart/issue/ANH-138/publication-des-programmes-vers-les-machines-le-pi-recupere-revalide) | Publication des programmes vers les machines : le Pi récupère, revalide et accepte ou refuse chaque programme | Backlog |
+| 12 | [ANH-139](https://linear.app/anheart/issue/ANH-139/parametres-medicaux-signes-fichier-versionne-verification-au-demarrage) | Paramètres médicaux signés : fichier versionné, vérification au démarrage de la console, version visible partout | Backlog |
+| 13 | [ANH-84](https://linear.app/anheart/issue/ANH-84/choix-du-passager-sur-la-console-locale-roster-convex) | Choix du passager sur la console locale (roster Convex) | Backlog |
+| 13 | [ANH-85](https://linear.app/anheart/issue/ANH-85/lancement-a-distance-confirmation-physique-obligatoire-a-la-machine) | Lancement à distance : confirmation physique obligatoire à la machine | Backlog |
+| 13 | [ANH-144](https://linear.app/anheart/issue/ANH-144/identite-et-droits-reverifies-a-larmement-passager-affiche-et-confirme) | Identité et droits revérifiés à l'armement : passager affiché et confirmé à la console, expiration des séances en attente, une seule séance par passager et par machine | Backlog |
+| 13 | [ANH-152](https://linear.app/anheart/issue/ANH-152/console-locale-authentification-de-loperateur-connexion-nommee-par) | Console locale : authentification de l'opérateur (connexion nommée par code, liste d'habilitation synchronisée, expiration, journal) | Backlog |
+| 14 | [ANH-142](https://linear.app/anheart/issue/ANH-142/controles-pre-vol-automatiques-avant-chaque-seance-variateur-bitalino) | Contrôles pré-vol automatiques avant chaque séance (variateur, BITalino, batterie, horloge, disque, version, paramètres médicaux) | Backlog |
+| 14 | [ANH-143](https://linear.app/anheart/issue/ANH-143/aptitude-et-consentement-du-passager-questionnaire-de-contre) | Aptitude et consentement du passager : questionnaire de contre-indications, validité, blocage du lancement | Backlog |
+| 14 | [ANH-145](https://linear.app/anheart/issue/ANH-145/registre-des-incidents-creation-automatique-sur-verdict-defaut-ou) | Registre des incidents : création automatique sur verdict, défaut ou arrêt d'urgence, revue, clôture, blocage de la machine | Backlog |
+| 15 | [ANH-141](https://linear.app/anheart/issue/ANH-141/configuration-de-machine-centralisee-dans-convex-appliquee-au-repos) | Configuration de machine centralisée dans Convex, appliquée au repos par le Pi, double validation pour les clés de sûreté | Backlog |
+| 15 | [ANH-147](https://linear.app/anheart/issue/ANH-147/registre-machine-identite-materielle-mesures-fiche-variateur-versions) | Registre machine : identité matérielle, mesures, fiche variateur, versions, état de validation M3 / M5 / M6 par machine | Backlog |
+| 15 | [ANH-148](https://linear.app/anheart/issue/ANH-148/sante-de-la-machine-dans-le-heartbeat-temperature-disque-horloge) | Santé de la machine dans le heartbeat : température, disque, horloge, liaison, batterie BITalino, compteurs, et purge de l'historique | Backlog |
+| 16 | [ANH-89](https://linear.app/anheart/issue/ANH-89/rapports-de-seance-dentrainement-pdf-et-historique-par-passager) | Rapports de séance d'entraînement (PDF) et historique par passager | Backlog |
+| 16 | [ANH-130](https://linear.app/anheart/issue/ANH-130/depot-des-enregistrements-de-seance-dans-convex-storage-organise-par) | Dépôt des enregistrements de séance dans Convex Storage, organisé par organisation et machine | Backlog |
+| 16 | [ANH-131](https://linear.app/anheart/issue/ANH-131/rejeu-dune-seance-reelle-dans-le-simulateur-et-bibliotheque-de-seances) | Rejeu d'une séance réelle dans le simulateur, et bibliothèque de séances réelles en CI | Backlog |
+| 17 | [ANH-118](https://linear.app/anheart/issue/ANH-118/sauvegardes-plan-de-reprise-et-environnements-dev-preprod-prod) | Sauvegardes, plan de reprise et environnements (dev / préprod / prod) | Backlog |
+| 17 | [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) | CI/CD : déploiement Vercel et Convex automatisé, rapports du framework de test publiés | Backlog |
+| 18 | [ANH-74](https://linear.app/anheart/issue/ANH-74/verrou-unique-sur-le-cable-variateur-console-bench-console) | Verrou unique sur le câble variateur (console ↔ bench_console) | Backlog |
+| 18 | [ANH-124](https://linear.app/anheart/issue/ANH-124/defauts-daffichage-de-la-console-locale-releves-en-redigeant-le-guide) | Défauts d'affichage de la console locale relevés en rédigeant le guide | Backlog |
+| 18 | [ANH-136](https://linear.app/anheart/issue/ANH-136/modele-de-menaces-ecrit-docsmenacesmd-revu-a-chaque-jalon) | Modèle de menaces écrit (docs/menaces.md), revu à chaque jalon | Backlog |
+| 18 | [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) | Dépendances, secrets, authentification forte et audit de sécurité externe avant le pilote | Backlog |
+| 18 | [ANH-161](https://linear.app/anheart/issue/ANH-161/pi-image-reproductible-et-service-systemd-qui-lance-la-console-au) | Pi : image reproductible et service systemd qui lance la console au démarrage | Backlog |
+| 19 | [ANH-101](https://linear.app/anheart/issue/ANH-101/residuels-de-securite-connus-cas-s07-et-chute-cardiaque-en-manuel) | Résiduels de sécurité connus : cas S07 et chute cardiaque en manuel occupé | Backlog |
+| 19 | [ANH-146](https://linear.app/anheart/issue/ANH-146/retour-du-passager-apres-seance-echelle-de-nausee-et-de-malaise) | Retour du passager après séance : échelle de nausée et de malaise, ressenti, rattachés à la séance | Backlog |
+| 19 | [ANH-173](https://linear.app/anheart/issue/ANH-173/donnees-de-sante-implementation-retention-et-purge-export-et) | Données de santé, implémentation : rétention et purge, export et suppression à la demande, consentement, suppression de compte | Backlog |
+| 20 | [ANH-140](https://linear.app/anheart/issue/ANH-140/prescription-assigner-un-programme-publie-et-une-serie-de-seances-a-un) | Prescription : assigner un programme publié et une série de séances à un passager | Backlog |
+| 20 | [ANH-149](https://linear.app/anheart/issue/ANH-149/carnet-de-bord-machine-interventions-calibrations-changements) | Carnet de bord machine : interventions, calibrations, changements variateur, mises à jour, incidents | Backlog |
+| 20 | [ANH-150](https://linear.app/anheart/issue/ANH-150/vues-de-flotte-et-alertes-equipe-liste-filtrable-detail-machine) | Vues de flotte et alertes équipe : liste filtrable, détail machine, alertes par e-mail, suivi des erreurs sans données de santé (absorbe ANH-117) | Backlog |
+| 21 | [ANH-168](https://linear.app/anheart/issue/ANH-168/ota-paquets-de-version-signes-par-la-ci-verification-de-signature-sur) | OTA : paquets de version signés par la CI, vérification de signature sur le Pi avant installation | Backlog |
+| 21 | [ANH-169](https://linear.app/anheart/issue/ANH-169/ota-service-heberge-mender-ou-equivalent-inscription-des-machines) | OTA : service hébergé (Mender ou équivalent), inscription des machines, partitions A/B, déploiement par groupe | Backlog |
+| 21 | [ANH-170](https://linear.app/anheart/issue/ANH-170/ota-jamais-pendant-une-seance-installation-seulement-machine-au-repos) | OTA : jamais pendant une séance, installation seulement machine au repos et saine, auto-test après redémarrage | Backlog |
+| 22 | [ANH-119](https://linear.app/anheart/issue/ANH-119/documentation-client-manuel-utilisateur-guide-gestionnaire-et-support) | Documentation client : manuel utilisateur, guide gestionnaire et support | Backlog |
+| 24 | [ANH-73](https://linear.app/anheart/issue/ANH-73/relire-et-maintenir-la-documentation-docs-pages-modules-framework-de) | Relire et maintenir la documentation docs/ (pages, modules, framework de test) | Backlog |

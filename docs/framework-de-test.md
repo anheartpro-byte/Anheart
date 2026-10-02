@@ -1,0 +1,985 @@
+# Framework de test et de simulation
+
+Ce document explique comment le logiciel Anheart est testé, et comment **vous**
+lancez, lisez et étendez ces tests. Les termes techniques (LFT, ttO, verdict,
+xfail…) sont définis dans le [glossaire](glossaire.md).
+
+> **À retenir.** Tout ce qui est décrit ici tourne **en simulation**. Aucun de
+> ces tests ne touche le vrai variateur, le vrai BITalino ni une vraie personne.
+> Un test qui passe prouve que le code se comporte comme prévu **face aux
+> modèles** (variateur simulé, cœur simulé, ECG simulé). Il ne prouve pas que la
+> machine réelle se comporte pareil. Voir [securite.md](securite.md).
+
+## Sommaire
+
+1. [Deux suites de tests](#1-deux-suites-de-tests)
+2. [Prérequis communs](#2-prérequis-communs)
+3. [Les tests du Raspberry Pi](#3-les-tests-du-raspberry-pi)
+4. [Les tests de la simulation](#4-les-tests-de-la-simulation)
+5. [Lancer un scénario : `simulation.run`](#5-lancer-un-scénario--simulationrun)
+6. [Verdicts instantanés : `simulation.quick`](#6-verdicts-instantanés--simulationquick)
+7. [Le visualiseur 2D : `simulation.live`](#7-le-visualiseur-2d--simulationlive)
+8. [Écrire un nouveau scénario JSON](#8-écrire-un-nouveau-scénario-json)
+9. [La cohorte de 30 personnes](#9-la-cohorte-de-30-personnes)
+10. [La matrice de 199 pannes](#10-la-matrice-de-199-pannes)
+11. [Les invariants vérifiés sur chaque trace](#11-les-invariants-vérifiés-sur-chaque-trace)
+12. [Les « xfail strict » et le cas résiduel S07](#12-les--xfail-strict--et-le-cas-résiduel-s07)
+13. [La géométrie extraite de la CAO](#13-la-géométrie-extraite-de-la-cao)
+14. [Pièges connus](#14-pièges-connus)
+
+---
+
+## 1. Deux suites de tests
+
+| Suite | Dossier | Ce qu'elle teste | Nombre de tests (collectés) |
+|---|---|---|---|
+| Tests du Pi | `raspberry-pi/tests/` | chaque module de `raspberry-pi/src` isolément, plus la console complète (`build_panel`) pilotée par son API HTTP | **3187** |
+| Tests de la simulation | `simulation/tests/` | le **vrai** runtime de `raspberry-pi/src` en boucle fermée contre le variateur simulé, la physiologie simulée et l'ECG simulé : scénarios, cohorte, matrice de pannes | **985** |
+
+Les nombres viennent de `pytest --co -q` (voir plus bas). Ils changent à chaque
+ajout de test.
+
+La simulation **ne réimplémente pas** la machine. Elle prend dans
+`raspberry-pi/src` :
+
+| Rôle | Code de production utilisé |
+|---|---|
+| loi de commande, superviseur de sécurité, profileur de mouvement, toutes les sorties | `training/runtime.py` (`TrainingRuntime`) |
+| le variateur ATV320 (CiA402, rampes, roue libre, chien de garde ttO) | `motor/simulated.py` (`SimulatedDrive`) |
+| le cœur du passager (réponse au g, retard, dérive, événements scriptés) | `sim/physiology.py` (`Physiology`) |
+| ECG, BITalino, traitement du signal (mode `dsp`) | `sim/bitalino.py`, `sim/ecg.py`, `signal_processing.py` via `ecg_pipeline.EcgBridge` |
+| géométrie et conversions d'unités | `geometry.py`, `units.py` |
+| programmes, profils, limites anti-nausée | `training/plan.py`, `config/profiles.default.json`, `config/motion_limits.json` |
+
+La simulation ajoute seulement : la boucle, les actions de scénario, un
+enregistreur de toutes les trames envoyées au variateur, un modèle rapide de
+capteur de fréquence cardiaque, le vérificateur d'invariants et le
+visualiseur. Le détail des modules du Pi est dans [raspberry-pi.md](raspberry-pi.md).
+
+> Note : au moment de la rédaction, le dossier `simulation/` n'est **pas suivi
+> par git** (`git status` le montre en `??`). Il existe sur le disque de
+> développement mais n'a pas encore été commité.
+
+## 2. Prérequis communs
+
+Les deux suites utilisent le **même** environnement Python :
+`raspberry-pi/.venv` (Python 3.12). La création du venv est décrite dans
+[demarrage-rapide.md](demarrage-rapide.md).
+
+Pour la simulation, lancez tout **depuis la racine du dépôt**, avec la racine
+**et** `raspberry-pi/` dans le chemin d'import :
+
+```sh
+cd /chemin/vers/Anheart
+export PYTHONPATH=.:raspberry-pi
+PY=raspberry-pi/.venv/bin/python
+```
+
+Sans ce `PYTHONPATH`, `import simulation` ou `import src` échoue.
+
+## 3. Les tests du Raspberry Pi
+
+### 3.1 Organisation
+
+Un fichier de test par module, plus des fichiers « de bout en bout ». Les plus
+gros (nombre de tests collectés) :
+
+| Fichier | Tests | Ce qu'il couvre |
+|---|---|---|
+| `test_runtime.py`, `test_runtime_manual.py` | 265 + 43 | le runtime de séance (AUTO et MANUEL), toutes les sorties |
+| `test_hr_control.py` | 246 | la loi de commande FC → vitesse |
+| `test_plan.py` | 244 | profils, programmes, validation pour un passager |
+| `test_training_types.py` | 238 | types du domaine (verdicts, qualités de signal…) |
+| `test_safety.py` | 182 | le superviseur de sécurité, règle par règle |
+| `test_web_api.py`, `test_web_panel.py` | 142 + 11 | les routes HTTP de la console locale |
+| `test_atv320.py`, `test_drive_contract.py`, `test_ftdi_link.py` | 139 + 79 + 65 | le pilote Modbus ATV320 et la liaison FTDI |
+| `test_simulated_drive.py`, `test_sim.py` | 97 + 114 | les simulateurs (variateur, BITalino, physiologie) |
+| `test_drive_faults_complete.py` | 78 | **chacun** des 66 codes LFT injecté sur la vraie console |
+| `test_failure_drive.py`, `_ecg`, `_process`, `_operator`, `_rig` | 84 + 14 + 11 + 16 + 1 | pannes injectées sur la vraie racine de composition (`build_panel`) |
+| `test_cloud_sync.py` | 83 | le lien avec Convex (lancement, arrêt, réseau mort) |
+| `test_sensor_*.py` | 35 à 57 chacun | un fichier par capteur (ECG, EDA, SpO2, RESP, EMG, LUX) |
+| `test_presence_*.py`, `test_panel_presence.py` | 147 au total | la caméra / présence opérateur |
+| `test_local_panel.py`, `test_local_panel_e2e.py` | 60 + 6 | la console assemblée |
+| `test_typing_contract.py` | 8 | le contrat de typage lui-même (voir 3.4) |
+
+Autres éléments :
+
+* `tests/conftest.py` : une fixture `clean_env` automatique vide les variables
+  d'environnement lues par le client et remet le singleton de configuration à
+  zéro autour de **chaque** test. Un `.env` réel sur votre disque ne peut donc
+  pas fuiter dans les tests.
+* **hypothesis** (tests par propriétés) est utilisé dans 24 fichiers de tests du Pi.
+* Marqueurs pytest : `hardware` (exclu par défaut via `-m 'not hardware'` dans
+  `pyproject.toml`) et `slow`. À ce jour **aucun test n'est marqué
+  `hardware`** : aucun test automatique ne parle à du matériel réel.
+* `tests/typing_fixtures/` contient des modules volontairement faux, sur
+  lesquels `test_typing_contract.py` lance les vérificateurs de types pour
+  prouver qu'ils détectent bien l'erreur.
+
+### 3.2 Compter les tests
+
+```sh
+cd raspberry-pi
+.venv/bin/python -m pytest --co -q | tail -1
+# ======================== 3187 tests collected in 2.08s =========================
+```
+
+### 3.3 Lancer un seul fichier, un seul test
+
+```sh
+cd raspberry-pi
+.venv/bin/python -m pytest tests/test_safety.py                 # un fichier
+.venv/bin/python -m pytest tests/test_safety.py -k hr_drop      # les tests dont le nom contient hr_drop
+.venv/bin/python -m pytest "tests/test_safety.py::test_nom_exact"   # un test précis
+.venv/bin/python -m pytest tests/test_failure_*.py tests/test_local_panel_e2e.py tests/test_cloud_sync.py -q
+```
+
+`pyproject.toml` ajoute `-v` par défaut ; ajoutez `-q` pour une sortie courte.
+
+### 3.4 La « gate » du Pi
+
+La gate est le contrôle complet exigé avant toute fusion
+(`raspberry-pi/scripts/check.sh`, décrit dans le skill
+`.claude/skills/anheart-strict-python/SKILL.md`). Elle enchaîne, **sans
+s'arrêter à la première erreur** :
+
+| Étape | Commande |
+|---|---|
+| lint | `ruff check .` |
+| format | `ruff format --check .` |
+| types (principal) | `basedpyright` en mode strict, zéro `Any` |
+| types (second avis) | `mypy .` en mode strict |
+| tests + couverture | `pytest --cov --cov-branch --cov-fail-under=100` |
+
+Elle affiche `GATE PASSED` ou `GATE FAILED: <étapes>`.
+
+```sh
+cd raspberry-pi
+bash scripts/check.sh          # macOS / Linux
+# .\scripts\check.ps1          # Windows
+```
+
+> **Piège :** `raspberry-pi/scripts/check.sh` n'a **pas** le bit exécutable dans
+> le dépôt (mode git `100644`). `./scripts/check.sh` répond donc
+> « permission denied ». Lancez-le avec `bash scripts/check.sh`.
+
+**Ce que couvre le 100 % de branches.** Le seuil de 100 % ne s'applique qu'à
+la **chaîne de sécurité**, listée dans `[tool.coverage.report] include` de
+`raspberry-pi/pyproject.toml` : `units`, `result`, `clock`, `motor/*`,
+`training/*`, `sim/*`, `bitalino_client`, `geometry`, `ecg_pipeline`,
+`local_config`, `bitalino_rfcomm_macos`, `local_panel`, `panel_status`,
+`cloud_sync`, `dsp`, `sensors/*`, `presence/*`. Le code web, l'ancien client
+Convex et le tampon SQLite sont mesurés mais ne bloquent pas.
+
+**Dette déclarée.** `src/signal_processing.py` fait partie de la chaîne de
+sécurité (la fréquence cardiaque qui pilote le moteur le traverse) mais n'est
+**pas encore** sous le seuil de 100 % ni sous les vérificateurs de types. Il est
+listé dans `[tool.anheart] coverage_pending` ; un test échoue si cette liste
+grandit.
+
+Mesure réelle (Mac Apple silicon, 1er octobre 2026) : `GATE PASSED`, 3187
+tests passés, 100 % de branches sur la chaîne de sécurité (10386 instructions,
+2350 branches), **environ 22 minutes** (1307 s, dont 1296 s de tests).
+
+## 4. Les tests de la simulation
+
+### 4.1 Organisation
+
+| Fichier | Tests | Ce qu'il vérifie |
+|---|---|---|
+| `test_battery.py` | 182 | chaque scénario de `scenarios/` : invariants, attentes, chemin de sortie, aller-retour JSONL |
+| `test_cohort.py` | 202 | les 30 personnes × 3 séances, la reproductibilité du fichier de cohorte, la barrière d'âge et de FC max |
+| `test_failures.py` | 405 | les 199 cas de la matrice de pannes, plus « aucun cas ne laisse du couple ou un arbre qui tourne » |
+| `test_scenario.py` | 49 | le parseur de scénarios (refus des clés inconnues, des valeurs invalides) |
+| `test_limits.py` | 36 | g à 27 et 32 tr/min, limites anti-nausée, profils livrés |
+| `test_invariants.py` | 29 | le vérificateur lui-même : chaque invariant doit se déclencher sur une trace corrompue exprès |
+| `test_cli_and_live.py` | 19 | les CLI `run`, et le serveur `live` |
+| `test_fault_pieces.py` | 18 | les pièces d'injection (`faultdrive.py`, `faultsource.py`) |
+| `test_units_of_the_harness.py` | 16 | petites unités du harnais |
+| `test_geometry.py` | 14 | la géométrie CAO et sa reproductibilité |
+| `test_quick.py` | 9 | `simulation.quick` |
+| `test_properties.py` | 5 | propriétés hypothesis : n'importe quelle suite de consignes, n'importe quel arrêt à n'importe quel moment, n'importe quel sujet plausible |
+| `test_panel_crosscheck.py` | 1 | la vraie console (`build_panel`) monte à 27 tr/min par **exactement** les mêmes consignes que le harnais |
+| **Total** | **985** | |
+
+```sh
+PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m pytest simulation/tests --co -q | tail -15
+```
+
+(La configuration pytest de `simulation/pyproject.toml` affiche un compte par
+fichier au lieu d'un total.)
+
+### 4.2 Commandes
+
+```sh
+export PYTHONPATH=.:raspberry-pi; PY=raspberry-pi/.venv/bin/python
+
+simulation/scripts/check.sh                              # la gate simulation (voir 4.3)
+$PY -m pytest simulation/tests -q                        # toute la batterie
+$PY -m pytest simulation/tests/test_cohort.py -q         # la cohorte seule
+$PY -m pytest simulation/tests/test_failures.py -q       # la matrice de pannes seule
+$PY -m pytest simulation/tests/test_battery.py -q -k manual_27_rpm   # un seul scénario
+```
+
+### 4.3 La gate de la simulation
+
+`simulation/scripts/check.sh` (exécutable, se lance de n'importe où). Il utilise
+`raspberry-pi/.venv` et règle lui-même le `PYTHONPATH`. Étapes : `ruff check`,
+`ruff format --check`, `basedpyright` strict, `mypy -p simulation` strict,
+puis `pytest --cov --cov-branch`. Le seuil est **100 % de branches** sur tout
+`simulation/` sauf `cad/`, `tests/` et `scripts/` (`fail_under = 100` dans
+`simulation/pyproject.toml`). Les arguments supplémentaires sont passés à
+pytest.
+
+Mesure réelle (Mac Apple silicon, 1er octobre 2026) : `GATE PASSED`,
+**984 passés, 1 xfail** (S07, section 12), 100 % de branches (2955
+instructions, 716 branches), **environ 33 minutes** (1951 s, dont 1941 s de
+tests). `simulation/README.md` annonce « ~15 min » pour la batterie : ce
+chiffre est dépassé aujourd'hui.
+
+## 5. Lancer un scénario : `simulation.run`
+
+```text
+usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT] [scenario]
+```
+
+| Option | Effet |
+|---|---|
+| `scenario` | nom (`manual_27_rpm`) ou chemin d'un fichier `.json` |
+| `--list` | liste les scénarios (60 aujourd'hui) |
+| `--all` | lance tous les scénarios et écrit `simulation/out/summary.md` |
+| `--csv` | écrit aussi un CSV des lignes de la trace |
+| `--out DIR` | dossier de sortie (défaut `simulation/out/`, ignoré par git) |
+
+```sh
+$PY -m simulation.run --list
+$PY -m simulation.run manual_27_rpm --csv
+```
+
+Sortie réelle de la seconde commande (≈ 3 s) :
+
+```text
+scenario manual_27_rpm (manual, ecg direct): 1558 ticks, 2629 drive frames
+  start: ok; end: operator_stop; final: finished, drive FAULT, shaft 0 rpm
+  peak 26.99 out rpm (1344 motor rpm, 48.7 Hz); g 1.222 at 1.500 m, 1.976 at the leg tip (2.425 m)
+  peak setpoint rate 0.301, arm accel 0.281 out rpm/s (limit 0.25); peak arm g-dot 0.0201 g/s ref, 0.0324 g/s leg tip (limit 0.03)
+  in zone -; rules []
+  all invariants and expectations hold
+  trace: .../simulation/out/manual_27_rpm.jsonl
+```
+
+Comment lire :
+
+* `drive FAULT` à la fin est **normal** en simulation : `SimulatedDrive.close`
+  modélise une fermeture minimale, donc après la sortie de la console le
+  variateur simulé verrouille SLF par son ttO. Le vrai `ATV320Drive.close`
+  écrit la séquence d'arrêt.
+* Les pics « arm accel » et « g-dot » bruts peuvent dépasser la limite affichée
+  de quelques centièmes : l'invariant tolère une marge (RFRD mesuré, +1 tr/min
+  arrondi). C'est la ligne `all invariants and expectations hold` qui fait foi.
+
+**Code de sortie** : 0 si tous les invariants et attentes tiennent. Un
+scénario `known_defect` qui échoue comme documenté compte comme attendu ; s'il
+passe, la sortie affiche `FIXED? remove known_defect`.
+
+Les traces vont dans `simulation/out/<scénario>.jsonl` (+ `.csv`).
+
+## 6. Verdicts instantanés : `simulation.quick`
+
+```text
+usage: python -m simulation.quick [-h] [--cohort] [--failures] [--all] [--dsp]
+                                  [--workers WORKERS] [--out OUT] [target]
+```
+
+| Option | Effet |
+|---|---|
+| `target` | un **cas de la matrice** (`drive_fault_overcurrent_manual`), un **scénario** (`manual_27_rpm`) ou un **identifiant de sujet** (`S07` : ses trois séances). Cherché dans cet ordre. |
+| `--cohort` | 30 sujets × 3 séances (90 exécutions) |
+| `--failures` | la matrice de pannes (199 cas) |
+| `--all` | scénarios + pannes + cohorte |
+| `--dsp` | exécute la **vraie** chaîne ECG là où elle est demandée. Sans `--dsp`, un scénario `dsp` tourne en mode `direct`, et un cas qui a besoin du vrai DSP est marqué `SKIPPED` |
+| `--workers N` | nombre de processus (0 = un par CPU, défaut) |
+| `--out DIR` | où écrire `report.json` et `report.html` (défaut `simulation/out/`) |
+
+Exemples vérifiés :
+
+```sh
+$PY -m simulation.quick manual_27_rpm
+# PASS    manual_27_rpm operator_stop           27.0  1.98     -    0  1.46
+# 1 runs: 1 PASS - 1.47 s wall (8 workers)
+
+$PY -m simulation.quick S07
+# XFAIL   S07_auto_jog      safety_verdict          18.0  0.88  0.00    4  1.33
+# PASS    S07_auto_standard safety_verdict           5.5  0.08  0.00    0  1.26
+# PASS    S07_manual_bench  operator_stop           27.0  1.98     -    0  1.51
+
+$PY -m simulation.quick --cohort
+# 90 runs: 89 PASS, 1 XFAIL - 26.61 s wall (8 workers)
+
+$PY -m simulation.quick --failures
+# 199 runs: 192 PASS, 7 SKIPPED - 37.74 s wall (8 workers)
+
+$PY -m simulation.quick --failures --dsp     # les 7 cas DSP en plus (~15 s chacun)
+$PY -m simulation.quick --all --dsp          # tout
+```
+
+(Durées mesurées sur un Mac Apple silicon, 8 cœurs.)
+
+**Statuts possibles** :
+
+| Statut | Sens |
+|---|---|
+| `PASS` | aucun invariant ni attente violé |
+| `FAIL` | au moins une violation, sans défaut documenté |
+| `XFAIL` | échoue **comme documenté** (`known_defect`) |
+| `FIXED?` | un défaut était documenté mais l'exécution passe : retirez le `known_defect` |
+| `SKIPPED` | besoin du vrai DSP, relancez avec `--dsp` |
+
+Code de sortie 0 si tout est `PASS`, `XFAIL` ou `SKIPPED`.
+
+Colonnes du tableau : résultat, nom, fin (`end_reason`), pic de vitesse de
+sortie (tr/min), pic de g à la pointe du pied, part du HOLD dans la zone,
+nombre de violations, durée d'exécution (s).
+
+### 6.1 Lire le rapport HTML
+
+`simulation/out/report.html` est un fichier autonome (aucune dépendance,
+thèmes clair et sombre). Ouvrez-le dans un navigateur.
+
+* En tête : nombre d'exécutions par statut et durée totale.
+* Un **tableau** : résultat, exécution, groupe, fin, pic tr/min, g à 1,5 m, g à
+  la pointe du pied, part dans la zone, règles de sécurité vues, violations.
+* Puis **une section repliable par exécution** (cliquez le résumé) : le texte
+  du défaut connu s'il y en a un, la liste des violations, des petites
+  courbes (vitesse de sortie et consigne, FC mesurée et vraie contre la bande
+  de zone, g à 1,5 m et à la pointe du pied) et la liste numérotée des
+  **messages opérateur** (ce que la console aurait affiché : verdicts, défauts
+  variateur avec mnémonique et code LFT, refus).
+
+`report.json` contient les mêmes données, pour un traitement automatique.
+
+## 7. Le visualiseur 2D : `simulation.live`
+
+> Le même visualiseur est aussi **en ligne**, sans rien installer :
+> <https://anheart-simulation.vercel.app> (56 scénarios sur 60, vitesse de 10x
+> à 200x). Ses limites et son déploiement sont décrits dans
+> [deploiement.md](deploiement.md#6-le-moteur-de-simulation-hébergé).
+
+```text
+usage: python -m simulation.live [-h] [--port PORT]
+```
+
+```sh
+$PY -m simulation.live               # http://127.0.0.1:8765/
+$PY -m simulation.live --port 9000
+```
+
+Le serveur (bibliothèque standard seulement, écoute sur `127.0.0.1`) sert
+`simulation/viewer/index.html` et deux points d'accès :
+
+| Chemin | Rôle |
+|---|---|
+| `/` | redirige vers `/viewer/index.html` en gardant les paramètres |
+| `/api/scenarios` | liste JSON des scénarios |
+| `/stream?scenario=…&speed=…&clock=…` | le flux Server-Sent Events d'une exécution (événements `meta`, `row`, `event`, `final`, `error`, `end`) |
+
+Chaque connexion navigateur a sa propre exécution, dans son propre thread.
+
+### 7.1 Paramètres d'URL du visualiseur
+
+| Paramètre | Valeurs | Effet |
+|---|---|---|
+| `live` | nom de scénario | lance ce scénario en direct via `/stream` |
+| `speed` | nombre ; le serveur borne à 0,1 … 200 (défaut 20) | facteur d'accélération du temps simulé |
+| `clock` | `sim` (sinon `manual`) | `manual` (défaut) : temps simulé déterministe, affiché à `speed` × ; `sim` : l'horloge `SimClock` du code (temps réel accéléré). Gardez alors une vitesse modeste : une pause de la machine hôte devient un arrêt de boucle auquel le runtime réagit, comme il doit le faire |
+| `trace` | chemin relatif à `simulation/` (ex. `out/manual_27_rpm.jsonl`) ou absolu (commençant par `/`) | rejoue une trace écrite par `simulation.run` |
+
+Exemples :
+
+```text
+http://127.0.0.1:8765/?live=manual_27_rpm&speed=20
+http://127.0.0.1:8765/?live=vasovagal_auto_hold&speed=60
+http://127.0.0.1:8765/?live=manual_27_rpm&speed=5&clock=sim
+http://127.0.0.1:8765/?trace=out/manual_27_rpm.jsonl
+```
+
+Sans serveur : ouvrez `simulation/viewer/index.html` directement et chargez un
+`.jsonl` avec le bouton fichier ; ou `cd simulation && python -m http.server`
+puis `?trace=out/...`.
+
+> Détail : la liste « vitesse » de l'en-tête ne propose que 1, 5, 20, 60, 120.
+> Une autre valeur passée dans `speed` est bien envoyée au serveur en mode
+> `live`, mais en relecture (`trace`) la liste reste sans sélection ; choisissez
+> alors une vitesse dans la liste.
+
+### 7.2 Ce que montre l'écran
+
+* **Vue de dessus** du bras qui tourne à la vitesse de sortie enregistrée :
+  poutres, contrepoids, capsule, silhouette du passager, rayon de référence et
+  pointe du pied marqués.
+* **Tuiles** : vitesse de sortie, consigne, vitesse moteur, fréquence
+  variateur (Hz), g au rayon de référence, g à la pointe du pied, FC vraie /
+  mesurée, zone / cible, phase / mode, état du variateur, verdict de sécurité
+  en cours, état de fin (comment la machine a été laissée).
+* **Quatre courbes** avec curseur : vitesse (mesurée, consigne), FC (vraie,
+  mesurée, bande de zone), g (référence, pointe du pied), fréquence variateur.
+* **Liste d'événements** : cliquez un événement pour vous y placer.
+* Commandes : bouton fichier, choix du scénario live, vitesse, Lecture/Pause,
+  barre de position.
+
+## 8. Écrire un nouveau scénario JSON
+
+Un scénario = un fichier `simulation/scenarios/<nom>.json`. Ajouter un
+scénario, c'est ajouter un fichier : `test_battery.py` et `simulation.run
+--list` le découvrent seuls. Les fichiers qui commencent par `_` (comme
+`_profiles.json`) ne sont pas des scénarios.
+
+Le parseur (`simulation/scenario.py`) **refuse toute clé inconnue**, à tous les
+niveaux, et rapporte tous les problèmes d'un coup. Une faute de frappe ne peut
+donc pas transformer en silence un scénario de panne en scénario nominal.
+
+### 8.1 Exemple
+
+JSON n'accepte pas de commentaires : l'exemple est « propre », les explications
+suivent dans les tableaux.
+
+```json
+{
+  "name": "manual_20_rpm_then_estop",
+  "description": "Montée manuelle à 20 tr/min, E-STOP à 120 s, acquittement à 200 s.",
+  "tags": ["manual", "estop"],
+  "kind": "manual",
+  "duration_s": 300,
+  "teardown_s": 60,
+  "preroll_s": 15,
+  "geometry": {"reference_radius_m": 1.5, "leg_tip_radius_m": 2.4254},
+  "manual": {"occupancy": "bench", "ceiling_motor_rpm": 1380},
+  "ecg": {"mode": "direct", "period_s": 1.0, "noise_bpm": 0, "seed": 1},
+  "drive": {"tto_s": 3.0, "acceleration_time_s": 10.0, "hsp_motor_rpm": 1380},
+  "actions": [
+    {"at_s": 2, "do": "manual_target", "output_rpm": 20.0, "expect": "accepted"},
+    {"at_s": 120, "do": "estop"},
+    {"at_s": 150, "do": "manual_target", "output_rpm": 10.0, "expect": "refused"},
+    {"at_s": 200, "do": "acknowledge", "estop_released": true}
+  ],
+  "expect": {
+    "end_reason": "emergency_stop",
+    "rules": ["operator_estop"],
+    "reaches_output_rpm": 20.0,
+    "max_output_rpm": 20.05
+  }
+}
+```
+
+Puis :
+
+```sh
+$PY -m simulation.run manual_20_rpm_then_estop
+$PY -m simulation.quick manual_20_rpm_then_estop
+```
+
+Un scénario AUTO remplace le bloc `manual` par un `profile` :
+
+```json
+{
+  "name": "vasovagal_auto_hold",
+  "kind": "auto",
+  "duration_s": 1500,
+  "profile": "jog_150_30_min",
+  "subject_events": [{"event": "vasovagal_drop", "at_s": 915, "duration_s": 20}],
+  "expect": {"rules": ["hr_drop"]}
+}
+```
+
+(Ce second exemple est un fichier réel du dépôt, sans ses champs `description`
+et `tags`.)
+
+### 8.2 Clés de premier niveau
+
+| Clé | Obligatoire | Type / valeurs | Défaut | Sens |
+|---|---|---|---|---|
+| `name` | oui | texte | - | nom du scénario |
+| `description` | non | texte | `""` | une phrase |
+| `tags` | non | liste de textes | `[]` | étiquettes libres |
+| `kind` | oui | `"auto"` \| `"manual"` | - | séance programmée (FC → vitesse) ou manuelle |
+| `duration_s` | oui | nombre > 0 | - | horizon après le START |
+| `teardown_s` | non | nombre ≥ 0 | 60 | temps pendant lequel la machine continue sans personne qui « tick » après la sortie de la console |
+| `preroll_s` | non | nombre ≥ 0 | 15 | console au repos (lecture seule) avant le START |
+| `geometry` | non | objet (8.3) | géométrie CAO | rayons |
+| `profile` | AUTO seulement | id de profil ou objet profil complet | - | le programme. Interdit pour `manual` |
+| `profile_overrides` | non | objet | `{}` | champs du profil à remplacer (ex. `{"total_duration_s": 900}`) |
+| `manual` | non | objet (8.4) | banc, 1380 | séance manuelle |
+| `subject` | non | objet (8.5) | physiologie par défaut | le passager simulé |
+| `subject_events` | non | liste (8.6) | `[]` | événements scriptés du cœur |
+| `ecg` | non | objet (8.7) | mode `direct` | source de FC |
+| `drive` | non | objet (8.8) | - | le variateur simulé |
+| `actions` | non | liste (8.9) | `[]` | ce qui arrive, et quand |
+| `expect` | non | objet (8.10) | - | ce qui doit être vrai à la fin |
+| `known_defect` | non | texte | absent | marque un défaut connu : le test devient un xfail strict (section 12) |
+
+**Profils disponibles** pour `profile` : ceux de
+`raspberry-pi/config/profiles.default.json` (ex. `standard_30_min`,
+`standard_45_min`) plus ceux de `simulation/scenarios/_profiles.json`
+(`jog_150_30_min`, `jog_150_short`). Les profils de `_profiles.json` montent
+jusqu'à 1380 tr/min moteur pour que la zone « jog » 145-155 bpm soit
+atteignable ; ils sont marqués **« NOT clinically signed off: simulation
+only »**.
+
+### 8.3 `geometry`
+
+| Clé | Sens |
+|---|---|
+| `reference_radius_m` | rayon où le runtime calcule le g (l'équivalent de `ARM_RADIUS_M`) ; défaut 1,5 m |
+| `leg_tip_radius_m` | point le plus éloigné du passager ; défaut 2,4254 m (paroi intérieure de la capsule, borne haute) |
+
+### 8.4 `manual`
+
+| Clé | Valeurs | Défaut |
+|---|---|---|
+| `occupancy` | `"bench"` (personne à bord : non) \| `"occupied"` | `"bench"` |
+| `ceiling_motor_rpm` | entier (tr/min moteur) | 1380 |
+
+### 8.5 `subject` (le cœur simulé, `PhysiologyConfig`)
+
+| Clé | Sens |
+|---|---|
+| `hr_rest` | FC de repos (bpm, entier) |
+| `hr_max` | FC max vraie (bpm, entier) |
+| `k_g` | gain : bpm gagnés par g au rayon de référence (défaut du modèle : 110) |
+| `tau_up`, `tau_down` | constantes de temps de montée / descente (s) |
+| `drift_max`, `tau_drift` | dérive cardiaque maximale (bpm) et sa constante de temps (s) |
+| `fatigue` | coefficient de fatigue |
+
+Toute clé absente prend la valeur par défaut du modèle de production.
+
+### 8.6 `subject_events`
+
+Chaque entrée : `{"event": …, "at_s": …, "duration_s": …}` (tous obligatoires).
+
+| `event` | Effet dans le modèle |
+|---|---|
+| `vasovagal_drop` | effondrement vagal (chute rapide de FC) |
+| `hr_spike` | pic cardiaque brutal |
+| `electrode_off` | électrode décollée (artefact rendu par le synthétiseur ECG) |
+| `mains_burst` | bouffée de 50 Hz secteur |
+| `nonresponder` | le cœur ne répond presque plus au g |
+
+### 8.7 `ecg`
+
+| Clé | Valeurs | Défaut | Sens |
+|---|---|---|---|
+| `mode` | `"direct"` \| `"dsp"` | `direct` | `direct` : modèle de capteur rapide (FC vraie arrondie, 1 lecture / `period_s`). `dsp` : vraie chaîne BITalino simulé → `SignalTreatment` (BioSPPy) → `EcgBridge`, ~50 ms de CPU par seconde simulée |
+| `period_s` | > 0 | 1,0 | période des lectures (direct) |
+| `noise_bpm` | ≥ 0 | 0 | bruit gaussien de mesure |
+| `seed` | entier | 0 | graine du bruit |
+| `ectopic_rate` | 0..1 | 0 | probabilité qu'une lecture porte un artefact ectopique (direct) |
+| `ectopic_bpm` | ≥ 0 | 0 | amplitude de cet artefact, bpm, dans les deux sens (direct) |
+| `motion_noise_bpm_per_g` | ≥ 0 | 0 | bruit supplémentaire par g : artefact de mouvement (direct) |
+| `connect_fails` | booléen | false | le BITalino ne se connecte jamais |
+
+### 8.8 `drive` (le variateur simulé)
+
+| Clé | Défaut | Sens |
+|---|---|---|
+| `tto_s` | 3,0 | chien de garde Modbus du variateur (ttO) |
+| `acceleration_time_s` | 10,0 | temps de rampe du variateur |
+| `hsp_motor_rpm` | 1380 | vitesse haute (HSP) en tr/min moteur |
+| `initial_fault` | - | un défaut déjà verrouillé à l'ouverture de la liaison : un nom de `DriveFault` (ex. `"OVERCURRENT"`) |
+| `initial_enabled_rpm` | - | variateur trouvé OPERATION_ENABLED et tournant à cette vitesse (un processus précédent est mort moteur commandé). Dans `(0, hsp_motor_rpm]`, exclusif avec `initial_fault` |
+| `refuse_commands` | `[]` | mots de commande refusés dès la première trame : `SHUTDOWN`, `SWITCH_ON`, `ENABLE_OPERATION`, `FAULT_RESET` |
+
+Les noms de `DriveFault` sont ceux de `raspberry-pi/src/motor/drive.py`
+(la table complète est dans [raspberry-pi.md](raspberry-pi.md)). Un nom
+inconnu est refusé avec la liste des noms valides.
+
+### 8.9 `actions`
+
+Chaque action a `at_s` (≥ 0, secondes après le START) et `do`. Les actions
+sont triées par instant. Clés autorisées dans une action : `at_s`, `do`,
+`output_rpm`, `expect`, `estop_released`, `fault`, `duration_s`, `latency_s`,
+`quality`, `bpm`, `word`, `jump_s`, `gap`, `signal`.
+
+**Opérateur et séance**
+
+| `do` | Paramètres | Effet |
+|---|---|---|
+| `manual_target` | `output_rpm`, `expect` (`accepted` / `refused` / `any`, défaut `accepted`) | consigne manuelle en tr/min de sortie |
+| `operator_stop` | - | bouton STOP de la console |
+| `remote_stop` | - | arrêt demandé à distance (chemin `EndSession`, comme le tableau de bord) |
+| `estop` | - | E-STOP |
+| `acknowledge` | `estop_released` (défaut true) | acquittement |
+| `start_again` | `expect` (défaut `refused`) | second START pendant la séance |
+| `fault_reset` | `expect` (défaut `any`) | demande de réarmement d'un défaut variateur |
+| `attendant_leaves` | - | l'opérateur cesse de « pinger » la console |
+| `shutdown` | - | le processus reçoit SIGTERM |
+| `tick_exception` | - | une exception dans le tick ; la console sort |
+
+**Variateur**
+
+| `do` | Paramètres | Effet |
+|---|---|---|
+| `drive_fault` | `fault` (nom de `DriveFault`, défaut `MOTOR_OVERLOAD`) | le variateur verrouille ce défaut |
+| `comms_loss` | `duration_s` | liaison Modbus morte |
+| `drive_latency` | `latency_s`, `duration_s` | chaque échange prend `latency_s` |
+| `drive_reverse` | - | phases moteur inversées |
+| `register_offset` | - | carte des registres décalée d'un cran |
+| `drive_refuse_command` | `word` (défaut `ENABLE_OPERATION`) | le variateur répond ce mot par une exception Modbus |
+| `drive_echo_mismatch` | - | l'écho LFRD ne suit plus ce qui est écrit |
+| `drive_speed_stuck` | - | RFRD (vitesse mesurée) figé |
+| `drive_status_frozen` | - | chaque lecture d'état répond `Ok` avec un état figé |
+
+**ECG / BITalino**
+
+| `do` | Paramètres | Mode | Effet |
+|---|---|---|---|
+| `ecg_dropout` | `duration_s` | direct | plus aucune FC |
+| `ecg_quality` | `quality` (`good`, `noisy`, `mains_dominated`, `no_signal`), `duration_s` | direct | le DSP classe le signal ainsi |
+| `ecg_repeat_seq` | `duration_s` | direct | le DSP réémet ses métriques précédentes (même numéro de séquence) |
+| `ecg_value` | `bpm`, `duration_s` | direct | le capteur rapporte cette FC (qualité GOOD), quoi que fasse le cœur |
+| `ecg_seq_gap` | `gap` (défaut 5) | direct | le numéro de séquence saute |
+| `ecg_silent_stop` | - | direct | les lectures s'arrêtent, la liaison se dit toujours active |
+| `bitalino_disconnect` | - | tous | la liaison BITalino tombe et ne revient pas |
+| `bitalino_signal` | `signal` (`flat`, `saturated`, `corrupted`, `mains`, `stopped`, `gaps`), `duration_s` | **dsp** | les échantillons bruts sont corrompus **avant** le vrai DSP |
+
+**Processus**
+
+| `do` | Paramètres | Effet |
+|---|---|---|
+| `loop_stall` | `duration_s` | la boucle s'arrête : pas de tick, pas de keepalive, la machine continue |
+| `clock_jump` | `jump_s` (peut être négatif) | l'horloge **murale** saute (NTP, Pi sans RTC). Le temps monotone n'est pas touché |
+
+### 8.10 `expect`
+
+| Clé | Sens |
+|---|---|
+| `start` | `accepted` (défaut) / `refused` / `any` : le START doit-il être accepté ? |
+| `end_reason` | `programme_complete`, `operator_stop`, `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown` |
+| `final_state` | `idle`, `running`, `ending`, `finished` |
+| `rules` | règles de sécurité qui **doivent** s'être déclenchées (ex. `hr_drop`, `comms_lost`) |
+| `forbid_rules` | règles qui **ne doivent pas** se déclencher |
+| `reaches_output_rpm` | vitesse de sortie qui doit être atteinte |
+| `max_output_rpm` | vitesse de sortie à ne jamais dépasser |
+| `min_in_zone_fraction` | part minimale du HOLD passée dans la zone (0..1) |
+
+Les identifiants des règles de sécurité sont listés dans
+[raspberry-pi.md](raspberry-pi.md). Les invariants physiques (section 11)
+sont toujours vérifiés, même sans bloc `expect`.
+
+## 9. La cohorte de 30 personnes
+
+### 9.1 Ce que c'est
+
+`simulation/cohort/generate.py` tire 30 **personnes fictives** d'une seule
+graine (`SEED = 20_260_930`) et les écrit dans `simulation/cohort/cohort.json`.
+Le fichier est reproductible au bit près.
+
+* âges 10 à 50 ans : cinq de 10 à 15 ans (le premier a exactement 10 ans),
+  puis 25 de 16 à 50 ans ;
+* FC max = Tanaka `208 - 0,7 × âge` plus un écart individuel ~N(0, 7) borné à
+  ± 15 bpm ;
+* FC de repos selon la condition physique, gain `k_g`, `tau_up` / `tau_down`,
+  dérive, fatigue, bruit ECG ;
+* onze conditions particulières : 2 répondeurs lents, 2 rapides, 1
+  non-répondeur, 2 sujets à malaise vagal, 2 à extrasystoles, 2 à fort
+  artefact de mouvement.
+
+Chaque trait se traduit uniquement en réglages **existants** du modèle de
+production (`PhysiologyConfig`), du modèle de capteur direct et des
+événements scriptés. Rien n'est ajouté à la physiologie.
+
+`simulation/cohort/battery.py` lance chaque sujet × {jog AUTO 145-155 bpm 30
+min, AUTO `standard_30_min`, MANUEL 27 tr/min au banc}. Avant une séance AUTO,
+le programme est résolu pour la FC max du sujet par `ProfileStore.resolve` (le
+même appel que la console fait pour un lancement depuis le tableau de bord),
+qui doit refuser exactement quand `zone_high > 0,9 × FCmax` ; les sujets sous
+`MIN_RIDER_AGE` (18 par défaut) sont refusés. Pour les séances AUTO : jamais
+au-dessus du plafond du programme ; `hr_drop` doit se déclencher pour un sujet
+à malaise vagal, et **ne doit pas** se déclencher (ni `hr_critical`) pour les
+autres.
+
+Résultat actuel : **89 PASS, 1 XFAIL (S07, jog), 0 FAIL**.
+
+```sh
+$PY -m simulation.cohort.generate --check   # code 0 si cohort.json est à jour, 1 sinon (aucune sortie)
+$PY -m simulation.cohort.generate           # réécrit cohort.json
+$PY -m simulation.quick --cohort            # les 90 exécutions + report.html
+$PY -m pytest simulation/tests/test_cohort.py -q
+```
+
+### 9.2 Ajouter une personne
+
+Le fichier `cohort.json` est **généré** : `test_cohort.py` vérifie qu'il est
+identique à ce que produit la graine, et qu'il contient exactement 30 sujets.
+**N'éditez pas `cohort.json` à la main** : le test échouera.
+
+Deux façons de faire :
+
+1. **Tester une personne précise, sans toucher à la cohorte (recommandé).**
+   Écrivez un scénario (section 8) avec son bloc `subject` et, si besoin, un
+   bloc `ecg` et des `subject_events`. La correspondance avec les champs d'un
+   sujet de la cohorte :
+
+   | Champ de `cohort.json` | Où le mettre dans un scénario |
+   |---|---|
+   | `hr_rest`, `hr_max`, `k_g`, `tau_up`, `tau_down`, `drift_max`, `tau_drift`, `fatigue` | `subject` |
+   | `ecg_noise_bpm` | `ecg.noise_bpm` |
+   | `ectopic_rate`, `ectopic_bpm`, `motion_noise_bpm_per_g` | `ecg` |
+   | `vasovagal_at_s` | `subject_events: [{"event": "vasovagal_drop", "at_s": …, "duration_s": 20}]` |
+   | condition `nonresponder` | `subject_events: [{"event": "nonresponder", …}]` |
+   | `age_years` | pas d'équivalent dans le schéma de scénario : la barrière d'âge est testée par la cohorte et par les tests du Pi |
+
+   Pour partir des nombres d'un sujet existant :
+   `python3 -c "import json;print(json.load(open('simulation/cohort/cohort.json'))['subjects'][6])"`.
+
+2. **Agrandir ou changer la cohorte.** Modifiez `SIZE`, `MINORS` ou `SPECIAL`
+   dans `generate.py`, régénérez avec `python -m simulation.cohort.generate`,
+   puis mettez à jour le test `test_the_cohort_spans_the_brief` (qui exige
+   30) et, si un nouveau couple sujet/séance montre un défaut connu, la table
+   `KNOWN_VASOVAGAL_ONSET` de `battery.py`. Attention : tous les tirages
+   viennent du même générateur, dans un ordre fixe ; changer la taille change
+   aussi les sujets suivants, donc les tableaux de `simulation/README.md`.
+
+## 10. La matrice de 199 pannes
+
+### 10.1 Ce que c'est
+
+`simulation/failures.py` construit 199 **cas**. Chaque cas est un document de
+scénario dans le même schéma JSON (section 8), plus ce qui doit être vrai
+après. Pour chaque cas, `tests/test_failures.py` vérifie :
+
+* tous les invariants physiques (arbre à 0 après démontage, pas de couple,
+  LFRD à 0 là où une trame pouvait être écrite, pas de NaN, sécurité
+  dominante, plus aucune trame après le silence) ;
+* la sortie désactivée, ou, si le runtime s'est tu, que le ttO du variateur a
+  visiblement pris le relais ;
+* la raison de fin fait partie de celles permises, les règles nommées se sont
+  déclenchées ;
+* l'opérateur a été prévenu avec les mots attendus (phrase du verdict,
+  mnémonique du variateur, texte de refus de la console) ;
+* pour les cas de signal ECG, aucune fausse FC classée utilisable (à plus de
+  15 bpm de la vérité) ;
+* l'injection est tombée dans la phase annoncée ; un délai de détection quand
+  il compte.
+
+Un second test vérifie qu'**aucun cas**, défaut connu ou pas, ne laisse du
+couple ou un arbre qui tourne.
+
+Familles (catégories `drive`, `ecg`, `process`, `operator`) : perte de
+communication à chaque phase ; **chacun des 66 codes LFT** plus un code
+inconnu (251), en AUTO et en MANUEL ; variateur trouvé déjà en marche ;
+mots de commande refusés ; écho LFRD faux ; vitesse qui ne suit pas ; état
+figé ; ECG perdu à chaque phase ; échec de connexion ; signaux corrompus avant
+le vrai DSP ; SIGTERM à chaque phase ; exception dans le tick ; arrêt de
+boucle 1-5 s ; saut d'horloge ; erreurs opérateur (double START, réarmement
+interdit, consignes absurdes).
+
+Résultat : **199 PASS, 0 XFAIL** d'après `simulation/README.md` (avec
+`--dsp`). Sans `--dsp`, `simulation.quick --failures` donne 192 PASS et 7
+SKIPPED (les 7 cas à vrai DSP).
+
+```sh
+$PY -m simulation.quick --failures --dsp
+$PY -m simulation.quick drive_fault_overcurrent_manual
+$PY -m pytest simulation/tests/test_failures.py -q
+$PY -m pytest simulation/tests/test_failures.py -q -k drive_fault_overcurrent
+```
+
+Les mêmes familles tournent aussi contre la **vraie racine de composition**
+(`build_panel`, API HTTP, `LocalPanel.run`) dans
+`raspberry-pi/tests/test_failure_{rig,drive,ecg,process,operator}.py`, avec
+les cas que seule la console peut exprimer : serveur web qui meurt, lien
+tableau de bord qui lève une exception ou est injoignable, vrai SIGTERM, refus
+HTTP 409/422, échantillons NaN, déconnexion BITalino transitoire.
+
+### 10.2 Ajouter une panne
+
+Les cas sont construits en Python, pas en fichiers. Ajoutez un
+`FailureCase(...)` dans la fonction de sa famille (`_drive_cases`,
+`_ecg_cases`, `_process_cases`, `_operator_cases`) ; `cases()` les
+rassemble et le test paramétré le découvre seul.
+
+Aides disponibles : `_auto(nom, actions, at=…)` (le jog court
+`jog_150_short` de 13 min), `_manual(nom, actions)` (montée à 27 tr/min, STOP
+à 200 s), `_dsp(nom, signal)`. Les instants par phase sont dans
+`AUTO_PHASES` (baseline 30, warmup 200, hold 500, cooldown 690, recovery 750 s)
+et `MANUAL_PHASES` (ramp_up 40, at_speed 170, ramp_down 230 s).
+
+Champs de `FailureCase` :
+
+| Champ | Sens |
+|---|---|
+| `name` | nom unique du cas |
+| `category` | `Category.DRIVE` / `ECG` / `PROCESS` / `OPERATOR` |
+| `description` | une phrase |
+| `document` | le scénario (dictionnaire au schéma de la section 8) |
+| `end_reasons` | raisons de fin permises (ou `REFUSED` si le START doit être refusé) |
+| `rules` | règles qui doivent se déclencher |
+| `messages` | sous-chaînes qui doivent apparaître dans au moins un message opérateur |
+| `silent` | le runtime doit-il s'être tu (`True`/`False`/`None` = peu importe) |
+| `at`, `phase` | instant d'injection et phase du runtime attendue à cet instant |
+| `rate_window` | fenêtre (début, fin) où aucune FC fausse ne doit être classée utilisable |
+| `deadline` | instant avant lequel chaque règle de `rules` doit avoir tiré |
+| `stopped_by` | instant avant lequel l'arbre doit être à l'arrêt (ou le runtime muet) |
+| `known_defect` | texte : le cas devient un xfail strict |
+
+Exemple (à placer dans `_operator_cases`, par exemple) :
+
+```python
+cases.append(
+    FailureCase(
+        name="operator_stop_twice_manual",
+        category=Category.OPERATOR,
+        description="Deux STOP à 1 s d'intervalle pendant la descente.",
+        document=_manual(
+            "operator_stop_twice_manual",
+            [{"at_s": 201.0, "do": "operator_stop"}],
+        ),
+        end_reasons=frozenset({"operator_stop"}),
+    )
+)
+```
+
+Vérifiez avec `$PY -m simulation.quick operator_stop_twice_manual`, puis
+lancez la gate simulation (la couverture à 100 % doit tenir).
+
+## 11. Les invariants vérifiés sur chaque trace
+
+Vérifiés par `simulation/invariants.py` pour **toute** exécution (scénario,
+cohorte, panne, propriété) :
+
+* aucun NaN ni infini ;
+* consigne dans `{0} ∪ [min_run, plafond]` ; chaque LFRD **écrit au variateur**
+  dans le même domaine ; vitesse mesurée sous HSP ; pas de rotation inverse ;
+* la consigne monte et descend dans ce que promet le runtime (programme :
+  pente de 15 tr/min/s ; manuel : vitesse du profileur de mouvement), le zéro
+  d'urgence excepté ;
+* l'arbre mesuré ne bat jamais la rampe du variateur ;
+* avec un verdict à FREEZE ou plus : la consigne ne monte jamais ; une fois une
+  fin commencée, elle ne monte jamais ; pendant un malaise vagal scripté (+60
+  s), elle ne monte jamais ;
+* séances manuelles : dérivée du g au rayon de référence ≤ 0,03 g/s, et bras
+  mesuré ≤ 0,25 tr/min/s de sortie et ≤ 0,03 g/s sur des fenêtres de 1 s ;
+* après le passage au silence : plus une seule trame, lectures comprises ;
+* un START refusé n'a rien fait bouger ;
+* **toute sortie** : après démontage, le variateur ne produit pas de couple,
+  l'arbre lit 0 tr/min, et (si une trame pouvait passer) LFRD vaut 0 et le
+  runtime ne commande rien.
+
+`test_invariants.py` prouve que chaque invariant se déclenche sur une trace
+corrompue exprès : le vérificateur ne peut pas être aveugle en silence.
+
+## 12. Les « xfail strict » et le cas résiduel S07
+
+### 12.1 Ce que c'est
+
+Un **xfail strict** (`pytest.mark.xfail(strict=True)`) est un test qui décrit
+le **bon** comportement, que le code **ne fournit pas encore**. Il est attendu
+en échec :
+
+* tant que le défaut existe, le test « échoue comme prévu » : la suite reste
+  verte, mais le défaut reste **visible** dans chaque rapport ;
+* le jour où le défaut est corrigé, le test passe… et `strict=True` le fait
+  **devenir rouge**. Il faut alors retirer la marque. Un défaut corrigé ne peut
+  donc pas rester étiqueté « connu » par oubli.
+
+Dans le dépôt, la marque vient de la clé `known_defect` (scénario, cas de
+panne, ou couple de cohorte via `known_defect_for`). `simulation.run` et
+`simulation.quick` affichent le même statut (`XFAIL` / `FIXED?`).
+
+### 12.2 Les xfail stricts actuels
+
+Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
+
+* **aucun** scénario de `simulation/scenarios/` ne porte `known_defect` ;
+* **aucun** cas de `failures.py` n'a de `known_defect` (les deux derniers,
+  `ecg_dsp_corrupted` et `ecg_dsp_gaps`, ont été corrigés) ;
+* **aucun** xfail dans `raspberry-pi/tests/` (les commentaires « was a strict
+  xfail » y marquent d'anciens défauts corrigés) ;
+* **un seul** reste : le couple de cohorte **S07 × jog AUTO**
+  (`KNOWN_VASOVAGAL_ONSET` dans `simulation/cohort/battery.py`).
+
+### 12.3 Le cas résiduel S07
+
+S07 : femme de 48 ans, sujette au malaise vagal (effondrement scripté à
+t = 679 s). Le verrou « vasovagal » du runtime interdit à la consigne de
+**monter** tant que la pente des cinq dernières lectures de FC est sous
+-20 bpm/min (ou inconnue). Mais une montée **décidée au tick même où
+l'effondrement commence**, avant que le capteur ne voie la moindre chute, est
+encore exécutée jusqu'au bout.
+
+Chiffres enregistrés dans le code : 825 → 837 tr/min moteur (+0,24 tr/min de
+sortie) sur t = 679,0-679,8 s, décidé à t = 679,0 s, FC vraie encore 123 bpm,
+lecture 122 ; la première chute visible est à t = 681 s (118 bpm), plus rien ne
+monte ensuite, et `hr_drop` termine la séance à t = 698 s. L'invariant violé
+est `vasovagal_no_accel`. `simulation.quick S07` le montre bien en `XFAIL`
+(4 violations).
+
+Avant ce verrou, le contrôleur continuait d'accélérer pendant tout
+l'effondrement, jusqu'à `hr_drop` (constat n° 1 de `simulation/README.md`).
+
+## 13. La géométrie extraite de la CAO
+
+`simulation/cad/extract_geometry.py` lit le fichier STEP
+`CAO/Gaura_Assy_2907.STEP` avec le lecteur XCAF d'OCCT (chaque pièce avec son
+placement et son nom), calcule les boîtes englobantes et lance des rayons dans
+la capsule pour trouver ses parois intérieures. Le résultat,
+`simulation/cad/machine_geometry.json`, note pour chaque nombre la pièce
+d'origine et une confiance. Il enregistre aussi l'empreinte SHA-256 du STEP
+(128 pièces placées, 30 produits distincts).
+
+Régénérer (environnement Python séparé) :
+
+```sh
+cd simulation/cad
+uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python cadquery-ocp
+.venv-cad/bin/python extract_geometry.py ../../CAO/Gaura_Assy_2907.STEP machine_geometry.json
+```
+
+Un test relance l'extracteur et vérifie que le JSON commité est reproduit à
+l'identique ; il est **sauté** si `.venv-cad` ou le STEP manque.
+
+| Grandeur | Valeur | Source | Confiance |
+|---|---|---|---|
+| axe de rotation | vertical (+Y), passant par (0, 0) | arbre `AXE KZBF45`, coaxial avec les roulements 6009, la butée 81209, le disque de frein et l'entretoise (0,000 mm d'écart) | haute |
+| bras, extrémité extérieure | 1,840 m | deux poutres `Profile Polyester` (nommées « 4000mm », modélisées 3000 mm : **vérifier laquelle est construite**) | haute |
+| bras, extrémité intérieure / centre du contrepoids | 1,160 m / 0,936 m | mêmes poutres / `Support Poids` | haute |
+| roues d'appui | 1,115 m et 1,795 m | `CGZJ50-N` | haute |
+| capsule, paroi intérieure extérieure | 2,378 m au plancher, 2,425 m au max | `Human_Capsule_v2`, rayons à 5..195 mm du plancher | haute |
+| capsule, paroi intérieure proche | 0,328 m, de l'autre côté de l'axe | idem | haute |
+| posture | allongé le long du bras, tête vers l'axe, pieds vers l'extérieur | déduit de la forme de la capsule et de la verrière | faible à moyenne |
+| passager | **absent de la CAO** | - | - |
+
+Comme il n'y a pas de passager dans la CAO, deux rayons sont des
+**paramètres**, marqués `must_be_measured` :
+
+* **pointe du pied** (point le plus éloigné, où le g est maximal) : 2,4254 m par
+  défaut, la paroi extérieure de la capsule, donc une **borne haute** (pieds
+  contre la paroi). Une estimation par la taille est aussi notée : 1,42 m (tête
+  contre la paroi proche, 1,75 m de taille supposée) ;
+* **rayon de référence** (`ARM_RADIUS_M`, où le runtime calcule le g et applique
+  la limite de dérivée du g) : 1,5 m. Il ne vient **pas** de la CAO.
+
+g centripète (voir [glossaire](glossaire.md)) aux vitesses clés, vérifiés par
+`test_limits.py` :
+
+| tr/min sortie | tr/min moteur | Hz variateur | g à 1,5 m | g à 2,4254 m | g à 1,42 m |
+|---|---|---|---|---|---|
+| 27,0 | 1344 | 48,7 | 1,223 | 1,977 | 1,159 |
+| 27,7 (plaque) | 1380 | 50,0 | 1,289 | 2,083 | 1,221 |
+| 32,0 | 1593 | 57,7 | 1,718 | 2,777 | 1,628 |
+
+32 tr/min de sortie demanderait 57,7 Hz, au-dessus de la plaque moteur (1380
+tr/min à 50 Hz) et du HSP de 50 Hz : le runtime le **refuse**, et la batterie
+vérifie ce refus (`manual_32_rpm_refused`, `manual_27_then_32_refused`).
+
+## 14. Pièges connus
+
+| Symptôme | Cause | Solution |
+|---|---|---|
+| `ModuleNotFoundError: simulation` ou `src` | `PYTHONPATH` absent | `export PYTHONPATH=.:raspberry-pi`, depuis la racine |
+| `permission denied: ./scripts/check.sh` | le script du Pi n'est pas exécutable dans git | `bash scripts/check.sh` |
+| cas `SKIPPED` dans `quick --failures` | cas à vrai DSP | ajoutez `--dsp` |
+| `test_the_committed_cohort_is_exactly_what_the_seed_generates` échoue | `cohort.json` édité à la main | `python -m simulation.cohort.generate` (ou annulez l'édition) |
+| test de reproductibilité CAO « skipped » | `simulation/cad/.venv-cad` ou le STEP absent | normal ; voir section 13 pour recréer le venv |
+| `drive FAULT` en fin de `simulation.run` | fermeture minimale du variateur simulé : SLF via ttO | attendu en simulation |
+| la batterie complète est longue | les scénarios `dsp` dominent | pendant le travail, utilisez `simulation.quick` ou `-k` |
