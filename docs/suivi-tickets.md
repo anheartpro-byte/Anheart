@@ -48,7 +48,7 @@ Controles :
 | Analyse gitleaks de l'historique | Deux en-tetes d'exemple signales dans les commits `8f0e7f25122d35020687a48fc666e76c5e8f1670` et `232717b006119bb852aca6383c83ad782b027b9f`. Le second est explicitement le test d'une cle invalide, avec reponse 401 attendue. Faux positifs relus, sans masquage du scanner ni reecriture de l'historique |
 | Captures des guides | 66 images analysees localement par Apple Vision : aucun candidat aux formats de cle recherches ; domaines de demonstration seulement (dont une erreur OCR). Ceci n'est pas une certification d'absence de secret |
 | Git LFS | Pointeur de 133 octets, objet SHA-256 `033b711170872481f195d82612d23e53b2c35cd61d05c71f88f87a18ff338bf0`, taille 16 382 483 octets ; `git lfs fsck` vert, hook pre-push installe |
-| GitHub | Push de `develop` et des 10 groupes de logiciel reussi, y compris l'objet LFS de 16 Mo. `gh auth status` et `gh api user` renvoient toujours HTTP 401 pour le compte medmdime ; creation de PR en attente de reauthentification. Ne pas confondre l'acces Git avec l'acces de la CLI |
+| GitHub | Push de `develop` et du logiciel reussi, y compris l'objet LFS de 16 Mo. Apres reauthentification confirmee par l'utilisateur, `gh api user` avec `GH_CONFIG_DIR=/Users/elmdimegh/.config/gh` confirme `anheartpro-byte` et `viewerPermission=ADMIN`. PR brouillon ciblee vers `develop` |
 
 Groupes realises (les adaptations de contrat sont versionnees avec leur producteur) :
 
@@ -68,7 +68,7 @@ Les tests d'integration qui importent la console sont dans son commit, et non da
 
 Limite historique importante : `develop`, copie du `main` existant, contient encore l'ancienne base `raspberry-pi/buffer.db` et des caches Python. Le checkpoint preexistant `b3c4caf` les retire de l'arbre de la branche ANH-71, mais les objets demeurent dans l'historique deja publie (base introduite par `a317603`). EX-D ne peut donc pas etre declare entierement satisfait. Aucune reecriture destructive n'est autorisee ni effectuee.
 
-Publication cible : branche `mohamdimagh1/anh-71-commiter-et-relire-tout-le-travail-en-cours-branche-featpi`, PR **brouillon** vers `develop`. ANH-71 reste ouvert tant que la publication complete, la PR, les deux revues independantes de la chaine de securite, les controles requis et la fusion ne sont pas attestes. Les controles locaux ne remplacent ni ces approbations ni la future CI (ANH-72). Les limites physiques et les defauts logiciels deja documentes, dont ANH-101 et ANH-121, restent ouverts ; aucune validation sur equipement ou de seuil medical n'est revendiquee. Le prochain ticket de la file est ANH-82, avec le correctif ANH-121 dans la meme etape de fondations.
+Branche de publication : `mohamdimagh1/anh-71-commiter-et-relire-tout-le-travail-en-cours-branche-featpi`, PR **brouillon** vers `develop`. ANH-71 reste ouvert tant que les deux revues independantes de la chaine de securite, les controles requis et la fusion ne sont pas attestes. Les controles locaux ne remplacent ni ces approbations ni la future CI (ANH-72). Les limites physiques et les defauts logiciels deja documentes, dont ANH-101 et ANH-121, restent ouverts ; aucune validation sur equipement ou de seuil medical n'est revendiquee. Le prochain ticket de la file est ANH-82, avec le correctif ANH-121 dans la meme etape de fondations.
 
 ## File logicielle
 
