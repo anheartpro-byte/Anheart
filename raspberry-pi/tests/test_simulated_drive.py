@@ -39,6 +39,7 @@ from hypothesis import strategies as st
 
 from src.clock import ManualClock
 from src.motor.drive import (
+    DEFAULT_MAX_MOTOR_HZ,
     LFT_FAULT_CODES,
     BadResponse,
     CommTimeout,
@@ -46,10 +47,13 @@ from src.motor.drive import (
     DriveBackend,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
+    LowSpeedNotZero,
     UnexpectedState,
+    check_limits,
     decode_status_word,
     describe_fault,
 )
@@ -70,7 +74,7 @@ from src.motor.simulated import (
     lft_code_for,
 )
 from src.result import Err, Ok, Result
-from src.units import Amperes, Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
+from src.units import Amperes, Hertz, Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SIM_SOURCE = PROJECT_ROOT / "src" / "motor" / "simulated.py"
@@ -229,6 +233,12 @@ def test_a_plant_that_cannot_be_integrated_refuses_to_exist() -> None:
         SimulatedDriveConfig(tau_coast=Seconds(-1.0))
     with pytest.raises(ValueError, match="tto must be positive"):
         SimulatedDriveConfig(tto=Seconds(0.0))
+    with pytest.raises(ValueError, match="base_hz must be positive"):
+        SimulatedDriveConfig(base_hz=Hertz(0.0))
+    with pytest.raises(ValueError, match="max_frequency must be positive"):
+        SimulatedDriveConfig(max_frequency=Hertz(0.0))
+    with pytest.raises(ValueError, match="low_speed must not be negative"):
+        SimulatedDriveConfig(low_speed=Hertz(-1.0))
 
 
 def test_the_default_ramp_rate_is_the_nameplate_over_the_ramp_time() -> None:
@@ -784,6 +794,24 @@ async def test_a_read_alone_does_not_feed_the_watchdog() -> None:
     assert _sim_state(sim) is SimState.FAULT
 
 
+async def test_reads_feed_the_watchdog_only_when_configured_like_the_hardware() -> None:
+    """The opt-in model of the real ATV320, for the read-only idle console.
+
+    Same polling as the test above, which latches SLF under the default; with
+    ``reads_reset_watchdog`` the drive stays healthy, as the bench drive does
+    under the bench console's read-only polling.
+    """
+    clock = ManualClock()
+    sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+    assert isinstance(await sim.open(), Ok)
+    for _ in range(40):
+        sim.advance(clock.advance(TICK))
+        await sim.read_status()
+    assert _sim_state(sim) is not SimState.FAULT
+    status = await _status(sim)
+    assert status.fault is None
+
+
 async def test_a_failed_open_still_leaves_the_watchdog_armable() -> None:
     """A drive that would not answer must not end up permanently unwatched.
 
@@ -827,7 +855,7 @@ def test_only_the_comms_timeout_is_commissioned_to_ramp() -> None:
 
 
 def test_fault_codes_come_from_the_shared_table() -> None:
-    """Not from a second copy of a table already marked PROVISIONAL.
+    """Not from a second copy of the table.
 
     A correction made in drive.py has to reach the simulator, or CI starts
     testing fault numbers the drive does not use.
@@ -838,9 +866,9 @@ def test_fault_codes_come_from_the_shared_table() -> None:
 
 
 def test_a_fault_the_table_cannot_name_degrades_to_unknown() -> None:
-    """The table is incomplete by admission, so this path is live in production."""
+    """A newer firmware can report a code the table lacks, so this path is live."""
     assert UNMAPPED_FAULT_CODE not in LFT_FAULT_CODES
-    assert lft_code_for(DriveFault.NO_MOTOR) == UNMAPPED_FAULT_CODE
+    assert lft_code_for(DriveFault.UNKNOWN) == UNMAPPED_FAULT_CODE
     assert describe_fault(UNMAPPED_FAULT_CODE).fault is DriveFault.UNKNOWN
 
 
@@ -881,7 +909,7 @@ async def test_an_injected_fault_at_standstill_settles_immediately() -> None:
 
 
 async def test_a_fault_with_no_code_reports_what_the_hardware_path_would() -> None:
-    """NO_MOTOR has no number in the table, so a real stack would say UNKNOWN.
+    """UNKNOWN has no number in the table, so a real stack would say UNKNOWN.
 
     The simulator says UNKNOWN too, rather than reporting a name only it knows:
     a simulator better informed than the code under test is a simulator that
@@ -889,7 +917,7 @@ async def test_a_fault_with_no_code_reports_what_the_hardware_path_would() -> No
     """
     clock = ManualClock()
     sim = await _started(clock)
-    sim.inject_fault(DriveFault.NO_MOTOR)
+    sim.inject_fault(DriveFault.UNKNOWN)
     assert (await _status(sim)).fault is DriveFault.UNKNOWN
 
 
@@ -1275,6 +1303,27 @@ async def test_emergency_disable_on_a_faulted_drive_still_zeroes_the_reference()
     assert (await _status(sim)).setpoint_echo_rpm == MotorRpm(0)
 
 
+async def test_the_emergency_budget_is_the_modelled_reply_timeout() -> None:
+    """The bound the runtime asks for is the one round trip the model waits for.
+
+    Latency up to it still acknowledges; latency past it is SENT_UNCONFIRMED,
+    exactly as the hardware backend would report a write whose answer came late.
+    """
+    clock = ManualClock()
+    config = SimulatedDriveConfig(response_timeout=Seconds(0.25))
+    sim = await _started(clock, config)
+    assert sim.emergency_budget == Seconds(0.25)
+
+    sim.inject_latency(Seconds(0.25))
+    assert sim.emergency_disable_blocking(sim.emergency_budget) is (
+        EmergencyStopOutcome.ACKNOWLEDGED
+    )
+    sim.inject_latency(Seconds(0.26))
+    assert sim.emergency_disable_blocking(sim.emergency_budget) is (
+        EmergencyStopOutcome.SENT_UNCONFIRMED
+    )
+
+
 def _break_by_closing_the_link(sim: SimulatedDrive) -> None:
     _ok(asyncio.run(sim.close()))
 
@@ -1571,6 +1620,7 @@ def test_only_the_emergency_stop_is_synchronous() -> None:
         SimulatedDrive.write_command,
         SimulatedDrive.write_speed,
         SimulatedDrive.read_status,
+        SimulatedDrive.read_limits,
     ):
         assert inspect.iscoroutinefunction(method), method
 
@@ -1608,3 +1658,42 @@ def test_the_simulator_imports_only_the_standard_library_and_src() -> None:
         "src",
     }
     assert _imported_roots(SIM_SOURCE) <= allowed
+
+
+# =========================================================================
+# The drive's commissioned limits, as the simulator reports them
+# =========================================================================
+
+
+async def test_the_default_simulator_reports_the_bench_limits() -> None:
+    """tFr 60, HSP 50 (1380 rpm at the nameplate), LSP 0 - and it arms by default."""
+    sim = await _opened(ManualClock())
+    limits = _ok(await sim.read_limits())
+    assert limits == DriveLimits(
+        max_frequency=Hertz(60.0),
+        high_speed=Hertz(50.0),
+        low_speed=Hertz(0.0),
+        acceleration=Seconds(10.0),
+        deceleration=Seconds(10.0),
+    )
+    assert check_limits(limits, DEFAULT_MAX_MOTOR_HZ) == Ok(limits)
+
+
+async def test_the_simulated_hsp_follows_max_rpm_at_register_resolution() -> None:
+    """690 rpm is 25.0 Hz; 700 rpm is 25.36 Hz, which the register holds as 25.4."""
+    half = await _opened(ManualClock(), SimulatedDriveConfig(max_rpm=MotorRpm(690)))
+    assert _ok(await half.read_limits()).high_speed == 25.0
+    odd = await _opened(ManualClock(), SimulatedDriveConfig(max_rpm=MotorRpm(700)))
+    assert _ok(await odd.read_limits()).high_speed == 25.4
+
+
+async def test_a_simulated_non_zero_lsp_is_refused_like_the_real_one() -> None:
+    sim = await _opened(ManualClock(), SimulatedDriveConfig(low_speed=Hertz(5.0)))
+    limits = _ok(await sim.read_limits())
+    assert check_limits(limits, DEFAULT_MAX_MOTOR_HZ) == Err(LowSpeedNotZero(low_speed=Hertz(5.0)))
+
+
+async def test_reading_the_limits_needs_the_link() -> None:
+    """Closed link, no answer: the same transport check as any read."""
+    sim = SimulatedDrive(ManualClock())
+    assert isinstance(_err(await sim.read_limits()), BadResponse)

@@ -42,7 +42,10 @@ from src.control_surface import (
     Command,
     EndSession,
     EstopReceipt,
+    FaultReset,
     SessionEvent,
+    SetManualTarget,
+    StartManual,
     StartSession,
 )
 from src.motor.drive import FaultReport
@@ -615,6 +618,22 @@ class CommandRow:
                 return cls(
                     kind="end", operator=command.operator, detail=command.reason, at=command.at
                 )
+            case StartManual():
+                return cls(
+                    kind="manual_start",
+                    operator=command.operator,
+                    detail=command.occupancy.value,
+                    at=command.at,
+                )
+            case SetManualTarget():
+                return cls(
+                    kind="manual_target",
+                    operator=command.operator,
+                    detail=f"{command.output_rpm:.2f} output rpm",
+                    at=command.at,
+                )
+            case FaultReset():
+                return cls(kind="fault_reset", operator=command.operator, detail="", at=command.at)
 
 
 @dataclass(frozen=True, slots=True)

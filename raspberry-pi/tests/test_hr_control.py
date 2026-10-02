@@ -618,6 +618,33 @@ def test_the_rate_of_change_is_a_slope_over_the_retained_window() -> None:
     assert rate == pytest.approx(60.0)
 
 
+def test_the_recent_rate_sees_a_turn_the_whole_window_still_hides() -> None:
+    """The vasovagal gate's trend: the last five readings only.
+
+    Seven flat readings then three falling 1.5 bpm/s (the scripted collapse):
+    the ten-point slope has barely moved, the five-point one already reads the
+    fall - which is why the runtime's gate uses it.
+    """
+    tracker = HeartRateTracker()
+    values = [145] * 7 + [144, 142, 141]
+    for index, bpm in enumerate(values):
+        assert isinstance(tracker.observe(sample(bpm, seq=index + 1, at=float(index))), Ok)
+    whole = tracker.rate
+    recent = tracker.recent_rate(5)
+    assert whole is not None
+    assert recent is not None
+    assert recent < -40.0 < whole
+
+
+def test_the_recent_rate_is_unknown_without_enough_readings() -> None:
+    tracker = HeartRateTracker()
+    for index in range(4):
+        assert isinstance(tracker.observe(sample(80, seq=index + 1, at=float(index))), Ok)
+    assert tracker.recent_rate(5) is None
+    assert tracker.recent_rate(1) is None, "one point has no slope, whatever is retained"
+    assert tracker.recent_rate(4) == pytest.approx(0.0)
+
+
 def test_a_falling_rate_reads_negative() -> None:
     """The vasovagal direction. The supervisor bounds this number, so its sign matters."""
     tracker = HeartRateTracker()
@@ -2080,3 +2107,86 @@ def test_the_module_reads_no_clock_and_depends_on_nothing_in_training() -> None:
         "src.training.types",
         "src.units",
     }
+
+
+# =========================================================================
+# rebase: a verdict decided the output, and the controller must adopt it
+# =========================================================================
+
+
+def test_rebase_adopts_the_applied_speed_as_the_standing_demand() -> None:
+    """The review finding, at unit level: a capped demand must not survive the cap.
+
+    A REDUCE walked the machine from 900 rpm down to 120 while the controller
+    kept wanting 900. Without the rebase, the first tick after the verdict lifts
+    re-emits 900 in one write.
+    """
+    clock = ManualClock(Monotonic(0.0))
+    controller = make_controller(initial_rpm=MotorRpm(900))
+    controller.rebase(clock.monotonic(), MotorRpm(120))
+    assert controller.demand == 120
+    assert controller.residue == 0.0
+    step = controller.update(clock.monotonic(), observation(bpm=90, applied_rpm=120))
+    assert step.decision.desired_rpm == 120
+
+
+def test_rebase_restarts_the_decision_interval() -> None:
+    """The verdict's own step already spent the allowance up to now.
+
+    Keeping the old interval would let the first decision after the verdict move
+    by ``slew * step_cap`` one tick after the verdict itself moved the setpoint.
+    """
+    clock = ManualClock(Monotonic(0.0))
+    controller = make_controller(initial_rpm=MotorRpm(300))
+    controller.update(clock.monotonic(), observation(bpm=90, applied_rpm=300))
+    clock.advance(Gains().period)
+    rebased_at = clock.monotonic()
+    controller.rebase(rebased_at, MotorRpm(200))
+    first: tuple[float, MotorRpm] | None = None
+    for _ in range(round(Gains().period * 2 / TICK)):
+        clock.advance(TICK)
+        step = controller.update(clock.monotonic(), observation(bpm=90, applied_rpm=200))
+        if not step.held:
+            first = (clock.monotonic() - rebased_at, step.decision.desired_rpm)
+            break
+    assert first is not None, "the controller never decided again after the rebase"
+    waited, rpm = first
+    assert waited >= Gains().period - 1e-9, "the pre-rebase interval was spent after the rebase"
+    assert 200 < rpm <= 200 + SLEW * waited + 1
+
+
+def test_rebase_to_the_standing_demand_changes_nothing() -> None:
+    """A verdict that is not actually biting must leave the controller regulating.
+
+    If the no-op rebase restarted the interval, a REDUCE whose cap sat above
+    the controller's own demand would stop it deciding at all.
+    """
+    clock = ManualClock(Monotonic(0.0))
+    controller = make_controller(initial_rpm=MotorRpm(300))
+    controller.update(clock.monotonic(), observation(bpm=140, applied_rpm=300))
+    clock.advance(Gains().period)
+    controller.rebase(clock.monotonic(), MotorRpm(300))
+    step = controller.update(clock.monotonic(), observation(bpm=140, applied_rpm=300))
+    assert not step.held
+    assert step.decision.desired_rpm < 300
+
+
+@pytest.mark.parametrize(
+    ("applied", "adopted"),
+    [
+        pytest.param(MotorRpm(MAX_RPM + 50), MAX_RPM, id="above-max-snaps-to-max"),
+        pytest.param(MotorRpm(MIN_RUN - 1), MotorRpm(0), id="gap-snaps-to-zero"),
+        pytest.param(MotorRpm(-20), MotorRpm(0), id="negative-snaps-to-zero"),
+        pytest.param(MIN_RUN, MIN_RUN, id="minimum-is-kept"),
+    ],
+)
+def test_rebase_snaps_down_into_the_setpoint_domain(applied: MotorRpm, adopted: MotorRpm) -> None:
+    """Total, and wrong only toward a slower machine.
+
+    The standing demand must stay inside ``{0} union [min_run, max]`` - the
+    envelope's promise depends on it - so a value outside is snapped, and always
+    downward: the belief may undershoot the machine, never overshoot it.
+    """
+    controller = make_controller(initial_rpm=MotorRpm(300))
+    controller.rebase(Monotonic(0.0), applied)
+    assert controller.demand == adopted

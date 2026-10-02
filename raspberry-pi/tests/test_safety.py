@@ -63,7 +63,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from src.clock import ManualClock
-from src.motor.drive import DriveFault, DriveState, FaultReport, describe_fault
+from src.geometry import MachineGeometry
+from src.motor.drive import LFT_FAULT_CODES, DriveFault, DriveState, FaultReport, describe_fault
 from src.result import Err, Ok
 from src.training import safety
 from src.training.safety import (
@@ -84,6 +85,7 @@ from src.training.safety import (
     RULE_OPERATOR_ESTOP,
     RULE_REVERSE_ROTATION,
     RULE_SESSION_OVERRUN,
+    RULE_SETPOINT_UNCONFIRMED,
     RULE_TRACKING_ERROR,
     THREAD_TRIP_DETAIL,
     AcknowledgeRefusal,
@@ -105,6 +107,7 @@ from src.training.types import (
     SafetyAction,
     SafetyVerdict,
     SignalQuality,
+    SpeedEnvelope,
     is_rule_id,
     most_severe,
 )
@@ -112,9 +115,11 @@ from src.units import (
     Amperes,
     Bpm,
     BpmPerMinute,
+    GearRatio,
+    GLoad,
+    Metres,
     Monotonic,
     MotorRpm,
-    RawRegister,
     Seconds,
     UnixMillis,
 )
@@ -129,6 +134,10 @@ HARD_MAX = Bpm(150)
 CRITICAL = Bpm(170)
 
 LIMITS: Final[SafetyLimits] = SafetyLimits(hard_max_bpm=HARD_MAX, critical_bpm=CRITICAL)
+
+CONFIRMING: Final[int] = LIMITS.hr_drop_confirm_samples // 2 + LIMITS.hr_drop_persist_samples
+"""Fresh readings at a new level before hr_drop fires: three for the median of the
+last five to reach it, then held on two more for the three-reading persistence."""
 
 #: The same limits with the loop-stall watch pushed out of reach.
 #:
@@ -146,6 +155,9 @@ PATIENT: Final[SafetyLimits] = replace(
 
 EPOCH = UnixMillis(1_700_000_000_000)
 START = Monotonic(1_000.0)
+
+GEOMETRY: Final[MachineGeometry] = MachineGeometry(radius=Metres(1.5), ratio=GearRatio(49.79))
+"""The machine's geometry, for rendering a commanded speed as the load it puts on somebody."""
 
 
 # =========================================================================
@@ -210,6 +222,14 @@ class Rig:
         the start of the session; setting it to an instant models an attendant
         who was there and then left.
         """
+        self.load_known: bool = True
+        """Whether the observation states the load ``commanded`` puts on the occupant."""
+        self.resting: Bpm | None = None
+        """The resting rate BASELINE measured, or ``None`` (a manual session)."""
+        self.echo: MotorRpm | None = None
+        """LFRD read back this tick, or ``None`` when no read followed the write."""
+        self.envelope: SpeedEnvelope | None = None
+        """The band the runtime says the shaft may be in, or ``None`` (the older ``ramping``)."""
 
     def observation(self) -> SafetyObservation:
         """Build the observation for the current clock instant."""
@@ -231,6 +251,10 @@ class Rig:
             fault=self.fault,
             consecutive_comm_failures=self.comm_failures,
             attendant_last_seen=now if self.attendant_present else self.attendant_last_seen,
+            commanded_g=GEOMETRY.view(self.commanded).g_load if self.load_known else None,
+            resting_bpm=self.resting,
+            setpoint_echo_rpm=self.echo,
+            envelope=self.envelope,
         )
 
     def tick(self, advance: Seconds | None = None) -> SafetyVerdict | None:
@@ -406,9 +430,59 @@ def test_the_person_specific_limits_have_no_defaults() -> None:
             id="zero-unresponsive-window",
         ),
         pytest.param(
-            {"unresponsive_rpm_rise": MotorRpm(0)},
-            "unresponsive_rpm_rise",
-            id="zero-rpm-rise",
+            {"unresponsive_g_rise": GLoad(0.0)},
+            "unresponsive_g_rise",
+            id="zero-g-rise",
+        ),
+        pytest.param(
+            {"unresponsive_min_g": GLoad(0.0)},
+            "unresponsive_min_g",
+            id="zero-min-load",
+        ),
+        pytest.param(
+            {"hr_drop_load_window": Seconds(0.0)},
+            "hr_drop_load_window",
+            id="zero-load-window",
+        ),
+        pytest.param(
+            {"hr_drop_confirm_samples": 2},
+            "hr_drop_confirm_samples",
+            id="fall-confirmed-on-too-few",
+        ),
+        pytest.param(
+            {"hr_drop_peak_samples": 5},
+            "hr_drop_peak_samples",
+            id="peak-no-longer-than-the-confirmation",
+        ),
+        pytest.param(
+            {"hr_drop_rest_margin_bpm": Bpm(0)},
+            "hr_drop_rest_margin_bpm",
+            id="zero-rest-margin",
+        ),
+        pytest.param(
+            {"hr_drop_rest_margin_bpm": Bpm(26)},
+            "hr_drop_rest_margin_bpm",
+            id="rest-margin-above-the-drop",
+        ),
+        pytest.param(
+            {"hr_drop_persist_samples": 1},
+            "hr_drop_persist_samples",
+            id="fall-held-on-one-reading",
+        ),
+        pytest.param(
+            {"hr_rate_median_samples": 2},
+            "hr_rate_median_samples",
+            id="rate-median-too-narrow",
+        ),
+        pytest.param(
+            {"hr_rate_median_samples": 4},
+            "hr_rate_median_samples",
+            id="rate-median-even",
+        ),
+        pytest.param(
+            {"setpoint_echo_dwell": Seconds(-1.0)},
+            "setpoint_echo_dwell",
+            id="negative-echo-dwell",
         ),
         pytest.param(
             {"unresponsive_bpm_rise": Bpm(0)}, "unresponsive_bpm_rise", id="zero-bpm-rise"
@@ -624,7 +698,8 @@ def test_a_drive_fault_ends_the_session_and_surfaces_the_lft_code() -> None:
     """
     rig = Rig()
     rig.drive_state = DriveState.FAULT
-    rig.fault = describe_fault(RawRegister(11))
+    code = next(raw for raw, fault in LFT_FAULT_CODES.items() if fault is DriveFault.MOTOR_OVERLOAD)
+    rig.fault = describe_fault(code)
     verdict = rig.tick()
 
     assert verdict is not None
@@ -632,7 +707,7 @@ def test_a_drive_fault_ends_the_session_and_surfaces_the_lft_code() -> None:
     assert verdict.rule == RULE_DRIVE_FAULT
     assert verdict.latched is True
     assert "OLF" in verdict.detail
-    assert "LFT 11" in verdict.detail
+    assert f"LFT {code}" in verdict.detail
     assert rig.fault.fault is DriveFault.MOTOR_OVERLOAD
 
 
@@ -730,6 +805,9 @@ def test_a_falling_heart_rate_ends_the_session_although_it_reads_as_below_zone()
     assert rig.standing() is None
 
     rig.bpm = Bpm(100)
+    for _ in range(CONFIRMING - 1):
+        rig.tick()
+        assert rig.verdict_for(RULE_HR_DROP) is None, "one or two readings ended a session"
     verdict = rig.tick()
 
     assert verdict is not None
@@ -764,11 +842,13 @@ def test_a_fall_of_exactly_the_limit_ends_the_session() -> None:
     rig.run(Seconds(10.0))
 
     rig.bpm = Bpm(130 - LIMITS.hr_drop_bpm + 1)
-    rig.tick()
+    for _ in range(LIMITS.hr_drop_confirm_samples):
+        rig.tick()
     assert rig.verdict_for(RULE_HR_DROP) is None
 
     rig.bpm = Bpm(130 - LIMITS.hr_drop_bpm)
-    rig.tick()
+    for _ in range(CONFIRMING):
+        rig.tick()
     assert rig.action_for(RULE_HR_DROP) is SafetyAction.RAMP_DOWN
 
 
@@ -789,7 +869,8 @@ def test_the_fall_is_measured_from_the_peak_and_not_from_the_start_of_the_window
     assert rig.verdict_for(RULE_HR_DROP) is None
 
     rig.bpm = Bpm(105)
-    rig.tick()
+    for _ in range(CONFIRMING):
+        rig.tick()
 
     verdict = rig.verdict_for(RULE_HR_DROP)
     assert verdict is not None
@@ -821,6 +902,198 @@ def test_a_slow_decline_across_more_than_the_window_does_not_fire() -> None:
     assert final is not None
     assert start - final >= LIMITS.hr_drop_bpm
     assert rig.floor() is None
+
+
+def test_one_or_two_artefact_readings_never_end_the_session() -> None:
+    """An ectopic beat counted into a rate, a motion spike: the fall is confirmed or it is not.
+
+    The cohort's ectopic subjects never left BASELINE: one reading 99 -> 71 bpm
+    at t = 0 was a "fall" of 28 bpm. Now the level is the median of the last
+    five fresh readings, so two artefacts in a row move nothing - downwards, or
+    upwards into a false peak.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(80)
+    rig.run(Seconds(10.0))
+    for spike in (Bpm(40), Bpm(110)):
+        rig.bpm = spike
+        rig.tick()
+        rig.tick()
+        rig.bpm = Bpm(80)
+        rig.run(Seconds(5.0))
+    rig.bpm = Bpm(110)
+    rig.tick()
+    rig.bpm = Bpm(80)
+    rig.run(Seconds(5.0))
+    assert rig.verdict_for(RULE_HR_DROP) is None
+    assert rig.floor() is None
+
+
+def test_a_burst_of_three_artefacts_does_not_end_the_session() -> None:
+    """S27: 97 -> 71, 73, 72 bpm with the true rate steady at 97. Moves the median, briefly.
+
+    Three lows in a row put the median of five at the low level for exactly
+    three readings; the fall must hold on four. Four lows in a row hold it on
+    four readings, and that fires.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(97)
+    rig.run(Seconds(12.0))
+    for low in (71, 72, 71):
+        rig.bpm = Bpm(low)
+        rig.tick()
+    rig.bpm = Bpm(97)
+    rig.run(Seconds(5.0))
+    assert rig.verdict_for(RULE_HR_DROP) is None
+    assert rig.floor() is None
+    for low in (71, 72, 71, 72):
+        rig.bpm = Bpm(low)
+        rig.tick()
+    rig.bpm = Bpm(97)
+    rig.run(Seconds(2.0))
+    floor = rig.floor()
+    assert floor is not None
+    assert floor.rule == RULE_HR_DROP
+
+
+def test_a_peak_that_is_one_reading_long_is_no_peak_at_all() -> None:
+    """With fewer fresh samples in the window than the peak median needs, nothing is judged."""
+    rig = Rig()
+    rig.bpm = Bpm(140)
+    for _ in range(LIMITS.hr_drop_peak_samples - 2):
+        rig.tick()
+    rig.bpm = Bpm(60)
+    rig.tick()
+    assert rig.verdict_for(RULE_HR_DROP) is None
+
+
+def test_the_planned_unload_of_a_cooldown_is_not_presyncope() -> None:
+    """THE finding: hr_drop fired in the programme's own COOLDOWN for 10 of 25 subjects.
+
+    A heart recovering from a load that is being removed falls fast - 25 bpm in
+    30 s for a fast responder. It LAGS the steady state of the load still on,
+    ``rest + (peak - rest) * g_now / g_ref``, so the same fall is judged against
+    what the remaining load explains and it does not fire.
+    """
+    rig = Rig()
+    rig.resting = Bpm(80)
+    rig.commanded = MotorRpm(1000)
+    rig.measured = rig.commanded
+    rig.bpm = Bpm(140)
+    rig.run(Seconds(40.0))
+    # The load comes off over 30 s; the heart follows it down 50 bpm, lagging above.
+    for step in range(150):
+        fraction = 1.0 - (step + 1) / 150
+        rig.commanded = MotorRpm(round(1000 * math.sqrt(fraction)))
+        rig.measured = rig.commanded
+        explained = 80 + 60 * fraction
+        rig.bpm = Bpm(round(explained + 10))
+        rig.tick()
+        assert rig.verdict_for(RULE_HR_DROP) is None, (step, rig.commanded, rig.bpm)
+    assert rig.floor() is None
+
+
+def test_a_collapse_during_the_unload_is_still_caught() -> None:
+    """Below what the remaining load explains, by the margin, is still presyncope."""
+    rig = Rig()
+    rig.resting = Bpm(80)
+    rig.commanded = MotorRpm(1000)
+    rig.bpm = Bpm(140)
+    rig.run(Seconds(40.0))
+    rig.commanded = MotorRpm(700)  # about half the load (g goes as rpm squared)
+    # Explained: 80 + 60 x 0.49 = 109 bpm; the margin there is 15 + 10 x 0.49 = 20.
+    rig.bpm = Bpm(90)
+    for _ in range(CONFIRMING):
+        rig.tick()
+    assert rig.verdict_for(RULE_HR_DROP) is None, "within what the unloading explains"
+    rig.bpm = Bpm(85)
+    for _ in range(CONFIRMING):
+        rig.tick()
+    verdict = rig.verdict_for(RULE_HR_DROP)
+    assert verdict is not None
+    assert verdict.action is SafetyAction.RAMP_DOWN
+
+
+def test_a_collapse_in_recovery_below_the_resting_rate_is_caught() -> None:
+    """RECOVERY: the load is gone, the motor stopped - and the highest vasovagal risk.
+
+    A fall to 15 bpm below the resting rate, 20 bpm inside the window, fires
+    although it is smaller than the 25 bpm the loaded rule asks for.
+    """
+    rig = Rig()
+    rig.phase = Phase.RECOVERY
+    rig.resting = Bpm(80)
+    rig.commanded = MotorRpm(800)
+    rig.bpm = Bpm(85)
+    rig.run(Seconds(10.0))
+    rig.commanded = MotorRpm(0)
+    rig.run(Seconds(20.0))
+    assert rig.verdict_for(RULE_HR_DROP) is None
+    rig.bpm = Bpm(65)
+    for _ in range(CONFIRMING):
+        rig.tick()
+    verdict = rig.verdict_for(RULE_HR_DROP)
+    assert verdict is not None
+    assert "0% of the recent peak" in verdict.detail
+
+
+def test_a_heart_that_settles_below_an_anxious_baseline_is_no_collapse() -> None:
+    """Below the resting rate but no FALL: a baseline measured high is not presyncope later."""
+    rig = Rig()
+    rig.phase = Phase.RECOVERY
+    rig.resting = Bpm(95)
+    rig.commanded = MotorRpm(0)
+    rig.bpm = Bpm(72)
+    rig.run(Seconds(60.0))
+    rig.bpm = Bpm(70)
+    rig.run(Seconds(10.0))
+    assert rig.verdict_for(RULE_HR_DROP) is None
+
+
+def test_with_no_load_recorded_the_fall_is_judged_unconditionally() -> None:
+    """No load stated, or none ever applied: the 25 bpm rule, whatever the resting rate."""
+    for known in (False, True):
+        rig = Rig()
+        rig.load_known = known
+        rig.resting = Bpm(80)
+        rig.commanded = MotorRpm(0)
+        rig.bpm = Bpm(130)
+        rig.run(Seconds(10.0))
+        rig.bpm = Bpm(106)
+        rig.run(Seconds(2.0))
+        assert rig.verdict_for(RULE_HR_DROP) is None, known
+        rig.bpm = Bpm(105)
+        rig.run(Seconds(2.0))
+        assert rig.action_for(RULE_HR_DROP) is SafetyAction.RAMP_DOWN, known
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    base=st.integers(min_value=50, max_value=170),
+    outliers=st.lists(
+        st.tuples(st.integers(min_value=0, max_value=59), st.integers(min_value=-60, max_value=60)),
+        max_size=12,
+    ),
+)
+def test_isolated_outliers_on_a_steady_heart_never_end_the_session(
+    base: int, outliers: list[tuple[int, int]]
+) -> None:
+    """PROPERTY: a steady heart with any outliers no two of which fall within three readings.
+
+    However large they are, in either direction, at any load and with or without
+    a resting rate, they can be neither a confirmed level nor a confirmed peak.
+    """
+    kept: dict[int, int] = {}
+    for index, offset in sorted(outliers):
+        if all(abs(index - other) > 2 for other in kept):
+            kept[index] = offset
+    rig = Rig()
+    rig.resting = Bpm(base)
+    rig.commanded = MotorRpm(600)
+    for index in range(60):
+        rig.bpm = Bpm(max(25, base + kept.get(index, 0)))
+        rig.tick(Seconds(1.0))
+        assert rig.verdict_for(RULE_HR_DROP) is None, (index, kept)
 
 
 def test_the_trend_rules_need_more_than_one_sample() -> None:
@@ -1058,59 +1331,145 @@ def test_a_heart_rate_rising_slowly_does_not_reduce_the_speed() -> None:
     assert rig.verdict_for(RULE_HR_RATE) is None
 
 
+def _ramp(rig: Rig, *, ticks: int, step: int, every: Seconds) -> None:
+    """``ticks`` fresh readings, each ``step`` bpm above the last, ``every`` seconds apart."""
+    for _ in range(ticks):
+        bpm = rig.bpm
+        assert bpm is not None
+        rig.bpm = Bpm(bpm + step)
+        rig.tick(every)
+
+
 def test_the_rate_rule_waits_for_a_long_enough_span_but_does_not_forget() -> None:
     """A slope needs a span, and the guard delays the conclusion without discarding it.
 
-    A 12 bpm step inside five seconds is 144 bpm/min if you divide it by the
-    span you happen to have - which is how one noisy median becomes an alarming
-    rate. Twenty seconds later the same evidence, now spread over a span worth
-    believing, is still a 29 bpm/min rise and the rule does fire.
+    A sustained rise of 2 bpm every 3 s is 40 bpm/min. The medians of five
+    readings trail the raw ones by two readings, so their span reaches the
+    20 s minimum on the twelfth reading (7 medians x 3 s = 21 s) - not before,
+    and then it fires at once: the fitted slope of a straight line is exact.
+
+    This used to be a 12 bpm STEP read as a 29 bpm/min rate once 25 s had
+    passed: the endpoint difference that let one reading be the whole rate.
     """
+    rig = Rig()
+    rig.bpm = Bpm(100)
+    rig.tick(Seconds(3.0))
+    _ramp(rig, ticks=10, step=2, every=Seconds(3.0))
+    assert rig.verdict_for(RULE_HR_RATE) is None
+    _ramp(rig, ticks=1, step=2, every=Seconds(3.0))
+    verdict = rig.verdict_for(RULE_HR_RATE)
+    assert verdict is not None
+    assert verdict.action is SafetyAction.REDUCE
+    assert "40.0 bpm/min" in verdict.detail
+
+
+def test_a_single_step_is_not_a_rate_of_rise() -> None:
+    """The old rule's arithmetic: 100 -> 112 once, then flat, read as 29 bpm/min. Not any more."""
     rig = Rig()
     rig.tick()
     rig.bpm = Bpm(112)
-    rig.run(Seconds(5.0))
+    rig.run(Seconds(25.0))
     assert rig.verdict_for(RULE_HR_RATE) is None
-
-    rig.run(Seconds(20.0))
-    assert rig.action_for(RULE_HR_RATE) is SafetyAction.REDUCE
 
 
 def test_the_rate_rule_holds_inside_its_release_band_and_clears_below_it() -> None:
-    """Hysteresis on an advisory, with the arithmetic checked by hand.
+    """Hysteresis on an advisory, with every slope an exact ratio of integers.
 
-    The series below is stepped at five-second intervals so every slope is an
-    exact ratio of integers, and the numbers are derived here rather than read
-    back from the module - a test that recomputed the slope with the code under
-    test could agree with a bug in it.
+    Readings 3 s apart, so the fitted line through a straight run of them is
+    exact and derived here rather than read back from the module:
 
-    * to t = 35 s: 100 -> 120 bpm, a rise of 20 bpm over a 30 s span = 40
-      bpm/min, above the 25 bpm/min bound, so the rule fires;
-    * at t = 55 s: the same 20 bpm now spread over a 50 s span = 24.0 bpm/min,
-      which is BELOW the bound and ABOVE the 15 bpm/min release level. Without
-      the band the rule would drop out here; with it, it holds;
-    * at t = 90 s: the 60 s window has dropped every sample below 110 bpm, so
-      the rise is 10 bpm over 60 s = 10.0 bpm/min, below the release level, and
-      the rule clears.
+    * +2 bpm per reading = 40 bpm/min, above the 25 bpm/min bound: fires;
+    * then +1 per reading = 20 bpm/min for more than the whole 60 s window:
+      BELOW the bound and ABOVE the 15 bpm/min release level, so it holds;
+    * then flat for more than the window: 0 bpm/min, and it clears.
+
+    A fresh rig that only ever sees the 20 bpm/min ramp never fires at all.
     """
     rig = Rig()
-    for bpm in (100, 100, 100, 100, 100, 110, 120):
-        rig.bpm = Bpm(bpm)
-        rig.tick(Seconds(5.0))
+    rig.bpm = Bpm(100)
+    rig.tick(Seconds(3.0))
+    _ramp(rig, ticks=12, step=2, every=Seconds(3.0))
     assert rig.action_for(RULE_HR_RATE) is SafetyAction.REDUCE
-
-    while rig.elapsed < 55.0:
-        rig.tick(Seconds(5.0))
-    inside_band = (120 - 100) / 50.0 * 60.0
-    assert LIMITS.hr_rise_release < inside_band < LIMITS.hr_rise_limit
-    assert rig.action_for(RULE_HR_RATE) is SafetyAction.REDUCE
-
-    while rig.elapsed < 90.0:
-        rig.tick(Seconds(5.0))
-    below_release = (120 - 110) / 60.0 * 60.0
-    assert below_release < LIMITS.hr_rise_release
+    band = 1 / 3.0 * 60.0
+    assert LIMITS.hr_rise_release < band < LIMITS.hr_rise_limit
+    for _ in range(24):
+        _ramp(rig, ticks=1, step=1, every=Seconds(3.0))
+        assert rig.action_for(RULE_HR_RATE) is SafetyAction.REDUCE
+    _ramp(rig, ticks=22, step=0, every=Seconds(3.0))
     assert rig.action_for(RULE_HR_RATE) is SafetyAction.NONE
     assert rig.floor() is None
+
+    fresh = Rig()
+    fresh.bpm = Bpm(100)
+    fresh.tick(Seconds(3.0))
+    _ramp(fresh, ticks=30, step=1, every=Seconds(3.0))
+    assert fresh.verdict_for(RULE_HR_RATE) is None
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    base=st.integers(min_value=60, max_value=150),
+    slope_per_min=st.floats(min_value=-30.0, max_value=20.0),
+    outliers=st.lists(
+        st.tuples(st.integers(min_value=0, max_value=89), st.integers(min_value=-40, max_value=40)),
+        max_size=20,
+    ),
+)
+def test_isolated_outliers_never_trip_the_rate_rule(
+    base: int, slope_per_min: float, outliers: list[tuple[int, int]]
+) -> None:
+    """PROPERTY: a heart rising slower than the release level, with any isolated outliers.
+
+    Outliers no two of which fall within a median's width of each other (the
+    ectopic and motion-spike case), of any size and sign, at any of 90 readings
+    1 s apart, never raise hr_rate on a heart whose own trend is below the
+    release level: every median is a clean reading, so the fitted line is the
+    heart's.
+    """
+    width = LIMITS.hr_rate_median_samples
+    kept: dict[int, int] = {}
+    for index, offset in sorted(outliers):
+        if all(abs(index - other) >= width for other in kept):
+            kept[index] = offset
+    rig = Rig()
+    for index in range(90):
+        clean = base + slope_per_min * index / 60.0
+        rig.bpm = Bpm(max(25, round(clean) + kept.get(index, 0)))
+        rig.tick(Seconds(1.0))
+        assert rig.verdict_for(RULE_HR_RATE) is None, (index, kept)
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    base=st.integers(min_value=60, max_value=110),
+    slope_per_min=st.floats(min_value=27.0, max_value=90.0),
+)
+def test_a_sustained_rise_beyond_the_limit_always_trips_within_its_span(
+    base: int, slope_per_min: float
+) -> None:
+    """PROPERTY: a sustained rise faster than the limit trips within N = 20 + 5 readings.
+
+    Readings 1 s apart rising at more than 25 bpm/min (27+: whole-bpm rounding
+    can take a little off a fitted slope): the medians' span reaches 20 s on the
+    25th reading at the latest, and the rule has fired by then.
+    """
+    rig = Rig()
+    fired_at: int | None = None
+    for index in range(40):
+        rig.bpm = Bpm(round(base + slope_per_min * index / 60.0))
+        rig.tick(Seconds(1.0))
+        if fired_at is None and rig.verdict_for(RULE_HR_RATE) is not None:
+            fired_at = index + 1
+    assert fired_at is not None
+    assert fired_at <= 20 + LIMITS.hr_rate_median_samples, fired_at
+
+
+def test_a_rate_over_no_spread_of_time_or_absurd_time_is_unknown_not_zero() -> None:
+    """The fit's own guards: no spread in time, or a spread too large to square."""
+    slope = safety._least_squares_slope  # pyright: ignore[reportPrivateUsage]  # the guard itself
+    assert slope((5.0, 5.0, 5.0), (1.0, 2.0, 3.0)) is None
+    assert slope((0.0, 1e200, 2e200), (1.0, 2.0, 3.0)) is None
+    assert slope((0.0, 1.0, 2.0), (1.0, 2.0, 3.0)) == pytest.approx(1.0)
 
 
 # =========================================================================
@@ -1295,9 +1654,13 @@ def test_a_heart_rate_that_ignores_the_speed_reduces_it() -> None:
 
     Either way the control loop is open while believing it is closed, and an
     open loop looking for a response it will never see keeps increasing speed.
+
+    To 1200 motor rpm (24 output rpm, ~1 g at 1.5 m): the rule is judged
+    against the LOAD now, and the 400 rpm this used to ramp to is 0.1 g - below
+    the minimum load at which a flat heart rate means anything.
     """
     rig = Rig()
-    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(400), bpm_per_minute=0.0)
+    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(1200), bpm_per_minute=0.0)
 
     verdict = rig.verdict_for(RULE_HR_UNRESPONSIVE)
     assert verdict is not None
@@ -1310,10 +1673,39 @@ def test_a_heart_rate_that_ignores_the_speed_reduces_it() -> None:
 def test_a_heart_rate_that_does_follow_the_speed_is_left_alone() -> None:
     """Twelve bpm of response across five minutes is a response."""
     rig = Rig()
-    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(400), bpm_per_minute=6.0)
+    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(1200), bpm_per_minute=6.0)
 
     assert rig.verdict_for(RULE_HR_UNRESPONSIVE) is None
     assert rig.standing() is None
+
+
+def test_a_flat_heart_at_a_low_load_is_physiology_not_a_non_responder() -> None:
+    """THE finding: every nominal jog warm-up fired this rule at ~350 s and its REDUCE reversed it.
+
+    The first 150 motor rpm of a warm-up are a few hundredths of a g. A heart
+    that has not moved yet at that load is physiology; judged in rpm it read as
+    unresponsive. Judged in g, a rise to 400 rpm (0.1 g) never qualifies.
+    """
+    rig = Rig()
+    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(400), bpm_per_minute=0.0)
+    assert rig.verdict_for(RULE_HR_UNRESPONSIVE) is None
+
+
+def test_a_high_load_that_did_not_rise_is_not_judged_unresponsive() -> None:
+    """Above the minimum load but steady: nothing was asked of the heart, nothing is concluded."""
+    rig = Rig()
+    rig.commanded = MotorRpm(1200)
+    rig.measured = rig.commanded
+    rig.run(Seconds(300.0))
+    assert rig.verdict_for(RULE_HR_UNRESPONSIVE) is None
+
+
+def test_an_observation_that_states_no_load_leaves_the_rule_unjudged() -> None:
+    """No load stated, no response to judge: the rule releases rather than guess one."""
+    rig = Rig()
+    rig.load_known = False
+    _ramp_the_speed(rig, duration=Seconds(300.0), top=MotorRpm(1200), bpm_per_minute=0.0)
+    assert rig.verdict_for(RULE_HR_UNRESPONSIVE) is None
 
 
 def test_the_unresponsive_rule_will_not_conclude_from_a_short_window() -> None:
@@ -1537,6 +1929,133 @@ def test_tracking_error_tolerates_a_small_divergence() -> None:
     rig.run(Seconds(60.0))
 
     assert rig.verdict_for(RULE_TRACKING_ERROR) is None
+
+
+def test_tracking_is_judged_against_the_envelope_during_a_ramp() -> None:
+    """THE finding: a stuck RFRD during a motion-limited climb was caught 52 s late.
+
+    The rule used to be switched off while the runtime said "ramping", which at
+    the motion limits is the whole ~100 s of a climb. With an envelope it is
+    judged throughout: far from the setpoint but inside the band the drive's
+    ramp allows is fine, outside it for the dwell is not - ramping or not.
+    """
+    rig = Rig()
+    rig.ramping = True
+    rig.commanded = MotorRpm(900)
+    rig.measured = MotorRpm(500)
+    rig.envelope = SpeedEnvelope(low=MotorRpm(450), high=MotorRpm(900))
+    rig.run(Seconds(10.0))
+    assert rig.verdict_for(RULE_TRACKING_ERROR) is None, "inside the band the drive may be"
+
+    rig.envelope = SpeedEnvelope(low=MotorRpm(880), high=MotorRpm(900))
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(1.9))
+    assert rig.verdict_for(RULE_TRACKING_ERROR) is None
+    rig.tick(Seconds(0.1))
+    verdict = rig.verdict_for(RULE_TRACKING_ERROR)
+    assert verdict is not None
+    assert verdict.action is SafetyAction.RAMP_DOWN
+    assert "380 rpm outside the band 880..900" in verdict.detail
+
+
+def test_a_shaft_above_its_envelope_is_a_tracking_failure_too() -> None:
+    """Overspeed against the command is as much "not following" as a stall."""
+    rig = Rig()
+    rig.commanded = MotorRpm(300)
+    rig.measured = MotorRpm(500)
+    rig.envelope = SpeedEnvelope(low=MotorRpm(300), high=MotorRpm(320))
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(2.0))
+    assert rig.action_for(RULE_TRACKING_ERROR) is SafetyAction.RAMP_DOWN
+
+
+def test_a_shaft_and_an_echo_that_both_disagree_hand_the_stop_to_the_drive() -> None:
+    """Misaddressed writes: neither the register nor the shaft shows the command. GO_SILENT.
+
+    The failure matrix: tracking_error RAMP_DOWN, the emergency zero
+    "ACKNOWLEDGED", and the shaft still at 1344 rpm 90 s later - because every
+    misaddressed write, the ramp-down's and the keepalive's, fed the drive's
+    ttO. The only stop that does not need a write to land is to stop writing.
+    """
+    rig = Rig()
+    rig.commanded = MotorRpm(1200)
+    rig.measured = MotorRpm(1344)
+    rig.echo = MotorRpm(1344)
+    rig.envelope = SpeedEnvelope(low=MotorRpm(1200), high=MotorRpm(1210))
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(2.0))
+    verdict = rig.verdict_for(RULE_TRACKING_ERROR)
+    assert verdict is not None
+    assert verdict.action is SafetyAction.GO_SILENT
+    assert verdict.latched
+    assert "echo reads 1344" in verdict.detail
+    assert "ttO" in verdict.detail
+    assert rig.standing_action() is SafetyAction.GO_SILENT
+
+
+def test_an_echo_that_agrees_keeps_a_tracking_failure_at_ramp_down() -> None:
+    """The writes are landing: a controlled descent is still a command the drive obeys."""
+    rig = Rig()
+    rig.commanded = MotorRpm(1200)
+    rig.measured = MotorRpm(700)
+    rig.echo = MotorRpm(1200)
+    rig.envelope = SpeedEnvelope(low=MotorRpm(1190), high=MotorRpm(1200))
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(2.0))
+    assert rig.action_for(RULE_TRACKING_ERROR) is SafetyAction.RAMP_DOWN
+
+
+def test_an_echo_disagreeing_for_less_than_its_dwell_does_not_escalate_tracking() -> None:
+    """One garbled read-back is not evidence the writes are going elsewhere."""
+    rig = Rig()
+    rig.commanded = MotorRpm(1200)
+    rig.measured = MotorRpm(700)
+    rig.envelope = SpeedEnvelope(low=MotorRpm(1190), high=MotorRpm(1200))
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(1.6))
+    rig.echo = MotorRpm(1344)
+    rig.tick(Seconds(0.4))
+    assert rig.action_for(RULE_TRACKING_ERROR) is SafetyAction.RAMP_DOWN
+
+
+def test_an_echo_that_disagrees_with_the_write_ends_the_session() -> None:
+    """LFRD read back is not LFRD written: the commanded speed may be fiction.
+
+    It used to be shown on the screen (``setpoint_confirmed``) and acted on
+    nowhere; a manual session ran to its stop on unconfirmed writes.
+    """
+    rig = Rig()
+    rig.commanded = MotorRpm(1000)
+    rig.measured = rig.commanded
+    rig.echo = MotorRpm(774)
+    rig.tick()
+    rig.tick(Seconds(0.8))
+    assert rig.verdict_for(RULE_SETPOINT_UNCONFIRMED) is None
+    rig.tick(Seconds(0.2))
+    verdict = rig.verdict_for(RULE_SETPOINT_UNCONFIRMED)
+    assert verdict is not None
+    assert verdict.action is SafetyAction.RAMP_DOWN
+    assert verdict.latched
+    assert "echo reads 774" in verdict.detail
+    rig.echo = rig.commanded
+    rig.tick()
+    assert rig.verdict_for(RULE_SETPOINT_UNCONFIRMED) is None
+    floor = rig.floor()
+    assert floor is not None
+    assert floor.rule == RULE_SETPOINT_UNCONFIRMED
+
+
+def test_an_echo_that_was_not_read_says_nothing_about_the_write() -> None:
+    """No read followed the write this tick: the rule releases, in either direction."""
+    rig = Rig()
+    rig.commanded = MotorRpm(1000)
+    rig.measured = rig.commanded
+    rig.echo = MotorRpm(774)
+    rig.tick()
+    rig.echo = None
+    rig.run(Seconds(5.0))
+    assert rig.verdict_for(RULE_SETPOINT_UNCONFIRMED) is None
+    assert rig.floor() is None
 
 
 def test_an_unknown_measured_speed_releases_the_tracking_rule() -> None:

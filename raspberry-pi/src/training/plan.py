@@ -1762,6 +1762,7 @@ class ProfileStore:
         *,
         at: UnixMillis,
         total_duration_s: Seconds | None = None,
+        subject_hr_max: Bpm | None = None,
     ) -> Result[Program, ResolveError]:
         """Freeze a profile into the :class:`Program` a session will run.
 
@@ -1773,11 +1774,25 @@ class ProfileStore:
         the profile already has still counts as an override, because the
         operator typed it: ``total_overridden`` records what was *asked for*,
         which is what somebody reviewing the session wants to know.
+
+        ``subject_hr_max`` is the maximum heart rate of the person actually
+        about to ride, when it is known (a launch from the dashboard always
+        carries it). The profile is **rebuilt** with it, so every cardiac check
+        in :class:`TrainingProfile` is re-run against this rider rather than
+        against whoever the preset was written for: a zone that is fine for a
+        thirty-year-old and above maximum for this person is refused here, as
+        :class:`Rejected`, before anything turns.
         """
         found = self.get(profile_id)
         if isinstance(found, Err):
             return found
         profile = found.value
+        if subject_hr_max is not None and subject_hr_max != profile.subject_hr_max:
+            base = profile
+            fitted = _attempt(lambda: replace(base, subject_hr_max=subject_hr_max))
+            if isinstance(fitted, Err):
+                return fitted
+            profile = fitted.value
         if total_duration_s is None:
             return Ok(
                 Program(

@@ -1,0 +1,7 @@
+{
+  "_comment": "Anti-nausea motion limits for every non-emergency setpoint change. All values are [MED]: to be signed off by the medical side before anybody rides. output_rpm_per_s: angular acceleration of the arm (0.25 = 12.4 motor rpm/s through i = 49.79). g_per_s: rate of change of the centripetal load. min_run_motor_rpm: slowest non-zero setpoint (55 = 1.1 output rpm). max_interval_s: longest interval one step may be paid for with.",
+  "output_rpm_per_s": 0.25,
+  "g_per_s": 0.03,
+  "min_run_motor_rpm": 55,
+  "max_interval_s": 1.0
+}

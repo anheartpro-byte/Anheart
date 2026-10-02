@@ -467,42 +467,65 @@ class HeartRateTracker:
         or when the arithmetic could not produce a finite answer. A ``None``
         here means "unknown", and the supervisor must not read it as "zero".
         """
-        history = list(self._accepted)
-        if len(history) < MIN_SAMPLES_FOR_RATE:
+        return _slope(tuple(self._accepted))
+
+    def recent_rate(self, samples: int) -> BpmPerMinute | None:
+        """The same least-squares slope, over only the newest ``samples`` accepted readings.
+
+        A short fit sees a change sooner and is noisier; the runtime's
+        vasovagal gate wants exactly that trade (see
+        ``RuntimeLimits.falling_trend``). ``None`` - unknown - while fewer than
+        ``samples`` readings are retained, and for every reason :attr:`rate`
+        gives. ``samples`` below two cannot fit a line and always answers
+        ``None``.
+        """
+        history = tuple(self._accepted)
+        if samples < MIN_SAMPLES_FOR_RATE or len(history) < samples:
             return None
-        origin = history[0].at
-        times = [item.at - origin for item in history]
-        rates = [float(item.bpm) for item in history]
-        count = len(history)
-        # Plain summation and plain multiplication, and both choices are
-        # deliberate: this method must not raise, and the two obvious
-        # alternatives do. `math.fsum` raises ValueError when its terms include
-        # both infinities, and `x ** 2` raises OverflowError where `x * x`
-        # simply yields infinity. With absurd timestamps - which a test found,
-        # and which a corrupt clock could produce - either would throw from
-        # inside a method the safety supervisor calls every tick. Float addition
-        # and multiplication never raise, so the pathological cases arrive here
-        # as a NaN or an infinity and leave as `None` through the guards below.
-        # The window holds a few dozen values of similar magnitude, so Kahan
-        # summation would buy no accuracy worth that risk.
-        mean_time = sum(times) / count
-        mean_rate = sum(rates) / count
-        variance = sum((time - mean_time) * (time - mean_time) for time in times)
-        if not variance > 0.0:
-            return None
-        covariance = sum(
-            (time - mean_time) * (rate - mean_rate) for time, rate in zip(times, rates, strict=True)
-        )
-        slope = covariance / variance * 60.0
-        # One guard for both ways the fit can fail to mean anything. The
-        # variance test matters as much as the slope test: with timestamps too
-        # large to square, the spread comes out infinite and the slope comes out
-        # as a perfectly finite ZERO - "the heart rate is not changing", from an
-        # infinitely long window. That is the optimistic reading of "unknown",
-        # and the supervisor must never be handed it.
-        if not math.isfinite(slope) or not math.isfinite(variance):
-            return None
-        return BpmPerMinute(slope)
+        return _slope(history[-samples:])
+
+
+def _slope(history: tuple[_Accepted, ...]) -> BpmPerMinute | None:
+    """Least-squares slope of accepted readings, bpm/min, or ``None`` when it means nothing.
+
+    See :attr:`HeartRateTracker.rate` for why it is a fit and not a difference,
+    and for why every guard below exists.
+    """
+    if len(history) < MIN_SAMPLES_FOR_RATE:
+        return None
+    origin = history[0].at
+    times = [item.at - origin for item in history]
+    rates = [float(item.bpm) for item in history]
+    count = len(history)
+    # Plain summation and plain multiplication, and both choices are
+    # deliberate: this method must not raise, and the two obvious
+    # alternatives do. `math.fsum` raises ValueError when its terms include
+    # both infinities, and `x ** 2` raises OverflowError where `x * x`
+    # simply yields infinity. With absurd timestamps - which a test found,
+    # and which a corrupt clock could produce - either would throw from
+    # inside a method the safety supervisor calls every tick. Float addition
+    # and multiplication never raise, so the pathological cases arrive here
+    # as a NaN or an infinity and leave as `None` through the guards below.
+    # The window holds a few dozen values of similar magnitude, so Kahan
+    # summation would buy no accuracy worth that risk.
+    mean_time = sum(times) / count
+    mean_rate = sum(rates) / count
+    variance = sum((time - mean_time) * (time - mean_time) for time in times)
+    if not variance > 0.0:
+        return None
+    covariance = sum(
+        (time - mean_time) * (rate - mean_rate) for time, rate in zip(times, rates, strict=True)
+    )
+    slope = covariance / variance * 60.0
+    # One guard for both ways the fit can fail to mean anything. The
+    # variance test matters as much as the slope test: with timestamps too
+    # large to square, the spread comes out infinite and the slope comes out
+    # as a perfectly finite ZERO - "the heart rate is not changing", from an
+    # infinitely long window. That is the optimistic reading of "unknown",
+    # and the supervisor must never be handed it.
+    if not math.isfinite(slope) or not math.isfinite(variance):
+        return None
+    return BpmPerMinute(slope)
 
 
 # =========================================================================
@@ -1118,6 +1141,48 @@ class HeartRateController:
             slew_limited=stepped != limited,
             held=False,
         )
+
+    def rebase(self, now: Monotonic, applied: MotorRpm) -> None:
+        """Adopt the setpoint something *else* put in force as the standing demand.
+
+        Called by the runtime on every tick a safety verdict decided the output
+        instead of this controller - a REDUCE cap, a freeze, a ramp-down, a stop.
+        Without it the standing demand is left where the controller last wanted
+        it, and the tick the verdict lifts re-emits that stale demand: a REDUCE
+        that walked the machine down from 276 rpm to 60 would end with one write
+        straight back to 276. The demand *is* the integral state, so a demand the
+        machine is not running at is windup by another name.
+
+        When the applied speed already is the standing demand this is a no-op,
+        which is what keeps a REDUCE that is not actually biting regulating as
+        usual. Otherwise it also:
+
+        * drops the carry and the previous error, because both belong to a
+          demand that was never applied;
+        * restarts the decision interval at ``now``, because the verdict's own
+          step just changed the setpoint and the next change must be paid for
+          by time elapsed *after* it. Keeping the old interval would let the
+          first decision after the verdict spend allowance that the verdict's
+          descent already spent.
+
+        Total, never raises: a value outside the setpoint domain is snapped
+        **down** into it (above ``max_rpm`` to ``max_rpm``, inside the gap below
+        ``min_run_rpm`` to zero), so the belief can only err on the side of a
+        slower machine.
+        """
+        speed = self._plan.speed
+        if applied > speed.max_rpm:
+            adopted = speed.max_rpm
+        elif applied < speed.min_run_rpm:
+            adopted = MotorRpm(0)
+        else:
+            adopted = applied
+        if adopted == self._output:
+            return
+        self._output = adopted
+        self._residue = 0.0
+        self._previous_error = None
+        self._decided_at = now
 
     # ---- state bookkeeping -------------------------------------------------
 

@@ -211,6 +211,7 @@ extend-immutable-calls = [
     "src.units.OutputRpm",
     "src.units.RawRegister",
     "src.units.RegisterAddress",
+    "src.units.ResultantG",
     "src.units.RpmPerSecond",
     "src.units.Seconds",
     "src.units.StatusWord",

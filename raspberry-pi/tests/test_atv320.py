@@ -61,16 +61,21 @@ from src.clock import Clock, ManualClock, RealClock
 from src.motor.atv320 import (
     DEFAULT_BAUDRATE,
     DEFAULT_BYTESIZE,
-    DEFAULT_EMERGENCY_BUDGET,
+    DEFAULT_RETRIES,
+    DEFAULT_SLAVE_ADDRESS,
     DEFAULT_STOPBITS,
     DEFAULT_TIMEOUT,
-    EMERGENCY_LOCK_SHARE,
-    EMERGENCY_WRITE_SHARE,
+    EMERGENCY_SCHEDULING_MARGIN,
+    MAX_EMERGENCY_BUDGET,
+    PYMODBUS_BODY_RETRY_PAUSE,
+    SCHNEIDER_POINT_TO_POINT_ADDRESS,
     ATV320Drive,
+    FtdiModbusClient,
     ModbusMaster,
-    Parity,
     SerialSettings,
+    emergency_budget_for,
     serial_master,
+    transaction_worst_case,
 )
 from src.motor.drive import (
     BadResponse,
@@ -80,6 +85,7 @@ from src.motor.drive import (
     DriveError,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
     DriveState,
     EmergencyStopOutcome,
     EnableUnconfirmed,
@@ -87,8 +93,9 @@ from src.motor.drive import (
     StopUnconfirmed,
     UnexpectedState,
 )
+from src.motor.ftdi_link import USB_STALL_BOUND, Parity, wait_overshoot
 from src.result import Err, Ok, Result, err_of
-from src.units import MotorRpm, OutOfRange, Seconds
+from src.units import Hertz, MotorRpm, OutOfRange, Seconds
 
 # =========================================================================
 # Modbus and CiA402 constants used by the fake drive
@@ -117,7 +124,7 @@ CIA402_TRANSITIONS: Final[Mapping[ControlWord, int]] = {
     ControlWord.ENABLE_OPERATION: ETA_OPERATION_ENABLED,
 }
 
-LFT_OVERCURRENT: Final[int] = 15
+LFT_OVERCURRENT: Final[int] = 9
 LFT_UNDERVOLTAGE: Final[int] = 22
 
 
@@ -512,7 +519,6 @@ def build_drive(
     settle_attempts: int = 1,
     stop_attempts: int = 1,
     settings: SerialSettings = SETTINGS,
-    emergency_budget: Seconds = DEFAULT_EMERGENCY_BUDGET,
 ) -> ATV320Drive:
     """A driver wired to a fake bus.
 
@@ -531,7 +537,6 @@ def build_drive(
         settle_delay=Seconds(0.0),
         stop_attempts=stop_attempts,
         stop_poll_interval=Seconds(0.0),
-        emergency_budget=emergency_budget,
     )
 
 
@@ -570,25 +575,74 @@ def line_settings(master: ModbusMaster) -> CommParams:
 
 def test_serial_master_pins_the_commissioned_line_settings() -> None:
     """19200 8E1, and the port is NOT opened by constructing the client."""
-    master = serial_master(SerialSettings(port="COM-NONE"))
+    master = serial_master(SerialSettings(port="COM-NONE"), ManualClock())
     assert isinstance(master, ModbusMaster)
+    assert type(master) is ModbusSerialClient, "an OS device keeps the stock client"
     params = line_settings(master)
     assert params.host == "COM-NONE"
     assert params.baudrate == DEFAULT_BAUDRATE == 19200
     assert params.bytesize == DEFAULT_BYTESIZE == 8
     assert params.parity == Parity.EVEN.value == "E"
     assert params.stopbits == DEFAULT_STOPBITS == 1
-    assert params.timeout_connect == DEFAULT_TIMEOUT == 0.3
+    assert params.timeout_connect == DEFAULT_TIMEOUT == 0.1
+
+
+@pytest.mark.parametrize("port", ["/dev/cu.usbserial-A10K1234", "/dev/ttyUSB0", "COM3"])
+def test_an_os_serial_device_gets_the_stock_pymodbus_client(port: str) -> None:
+    """pyserial's own ports have a working in_waiting; only ftdi:// needs the adapter."""
+    master = serial_master(SerialSettings(port=port), ManualClock())
+    assert type(master) is ModbusSerialClient
+    assert line_settings(master).host == port
+
+
+@pytest.mark.parametrize("port", ["ftdi://schneider:rs485/1", "FTDI://schneider:rs485/1"])
+def test_an_ftdi_url_gets_the_buffered_ftdi_client(port: str) -> None:
+    """Same line settings, a different port underneath. Nothing is opened here."""
+    master = serial_master(SerialSettings(port=port), ManualClock())
+    assert isinstance(master, FtdiModbusClient)
+    params = line_settings(master)
+    assert params.host == port
+    assert params.parity == "E"
+    assert params.timeout_connect == DEFAULT_TIMEOUT
+
+
+def test_the_defaults_are_what_the_bench_measured() -> None:
+    """Address 248 answered on the bench and address 1 did not."""
+    assert DEFAULT_SLAVE_ADDRESS == SCHNEIDER_POINT_TO_POINT_ADDRESS == 248
+    assert SerialSettings(port="p").slave_address == 248
+    assert DEFAULT_RETRIES == 1
 
 
 def test_serial_settings_reject_the_broadcast_address() -> None:
     """Address 0 commands every drive on the bus and answers nothing."""
     with pytest.raises(ValueError, match="broadcast"):
         SerialSettings(port="p", slave_address=0)
-    with pytest.raises(ValueError, match="broadcast"):
-        SerialSettings(port="p", slave_address=248)
     assert SerialSettings(port="p", slave_address=1).slave_address == 1
     assert SerialSettings(port="p", slave_address=247).slave_address == 247
+
+
+def test_serial_settings_accept_the_schneider_point_to_point_address() -> None:
+    """248 is not a broadcast: it is the address an Altivar answers alone on a link."""
+    assert SerialSettings(port="p", slave_address=248).slave_address == 248
+
+
+@pytest.mark.parametrize("address", [-1, 249, 255, 256])
+def test_serial_settings_reject_every_other_address(address: int) -> None:
+    with pytest.raises(ValueError, match="point-to-point"):
+        SerialSettings(port="p", slave_address=address)
+
+
+@pytest.mark.parametrize("retries", [0, -1])
+def test_serial_settings_refuse_retries_that_never_read_a_reply_body(retries: int) -> None:
+    """pymodbus 3.7.4 reads a reply's body ``retries`` times. With 0: every read fails."""
+    with pytest.raises(ValueError, match="never reads the body"):
+        SerialSettings(port="p", retries=retries)
+
+
+@pytest.mark.parametrize("port", ["", "   "])
+def test_serial_settings_refuse_an_empty_port(port: str) -> None:
+    with pytest.raises(ValueError, match="MOTOR_PORT"):
+        SerialSettings(port=port)
 
 
 def test_serial_settings_reject_a_nonpositive_timeout() -> None:
@@ -903,6 +957,109 @@ async def test_read_status_refuses_once_the_link_is_latched(
             pass
         case other:
             pytest.fail(f"expected CommTimeout, got {other!r}")
+    assert bus.log == []
+
+
+# =========================================================================
+# read_limits: tFr / HSP / LSP / ACC / dEC, read only
+# =========================================================================
+
+
+def seed_bench_limits(bus: FakeBus) -> None:
+    """The five values the bench read today, at the bus's own addressing."""
+    regs = bus.regs
+    bus.registers[regs.tfr] = 600
+    bus.registers[regs.hsp] = 500
+    bus.registers[regs.lsp] = 0
+    bus.registers[regs.acc] = 30
+    bus.registers[regs.dec] = 30
+
+
+async def test_read_limits_reads_the_five_parameters_and_writes_nothing(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    seed_bench_limits(bus)
+    outcome = await drive.read_limits()
+    assert outcome == Ok(
+        DriveLimits(
+            max_frequency=Hertz(60.0),
+            high_speed=Hertz(50.0),
+            low_speed=Hertz(0.0),
+            acceleration=Seconds(3.0),
+            deceleration=Seconds(3.0),
+        )
+    )
+    assert bus.reads() == [3103, 3104, 3105, 9001, 9002]
+    assert bus.writes() == []
+
+
+async def test_read_limits_uses_the_register_offset(
+    clock: ManualClock, make_bus: BusFactory
+) -> None:
+    bus = make_bus(offset=-1)
+    seed_bench_limits(bus)
+    drive = build_drive(clock, bus, offset=-1)
+    assert isinstance(await drive.read_limits(), Ok)
+    assert bus.reads() == [3102, 3103, 3104, 9000, 9001]
+
+
+async def test_read_limits_stops_at_the_first_failed_read(drive: ATV320Drive, bus: FakeBus) -> None:
+    seed_bench_limits(bus)
+    bus.script_reads.extend([Behave.NORMALLY, io_exception()])
+    assert isinstance(await drive.read_limits(), Err)
+    assert len(bus.reads()) == 2
+
+
+async def test_read_limits_reports_a_parameter_the_drive_does_not_have(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    """Unseeded addresses answer exception code 2, as a wrong offset would."""
+    assert bus.regs.tfr not in bus.registers
+    match await drive.read_limits():
+        case Err(BadResponse(detail=detail)):
+            assert "3103" in detail
+        case other:
+            pytest.fail(f"expected BadResponse, got {other!r}")
+
+
+async def test_read_limits_refuses_once_the_link_is_latched(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    await latch_the_link(drive, bus)
+    bus.log.clear()
+    assert isinstance(await drive.read_limits(), Err)
+    assert bus.log == []
+
+
+# =========================================================================
+# read_register: one register, for operator tooling
+# =========================================================================
+
+
+async def test_read_register_reads_one_register_and_writes_nothing(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    bus.registers[bus.regs.eta] = 0x0250
+    assert await drive.read_register(bus.regs.eta) == Ok(0x0250)
+    assert bus.reads() == [3201]
+    assert bus.writes() == []
+
+
+async def test_read_register_reports_a_failed_read(drive: ATV320Drive, bus: FakeBus) -> None:
+    bus.script_reads.append(io_exception())
+    match await drive.read_register(bus.regs.eta):
+        case Err(CommTimeout()):
+            pass
+        case other:
+            pytest.fail(f"expected CommTimeout, got {other!r}")
+
+
+async def test_read_register_refuses_once_the_link_is_latched(
+    drive: ATV320Drive, bus: FakeBus
+) -> None:
+    await latch_the_link(drive, bus)
+    bus.log.clear()
+    assert isinstance(await drive.read_register(bus.regs.eta), Err)
     assert bus.log == []
 
 
@@ -1849,17 +2006,18 @@ def test_a_budget_smaller_than_the_link_allows_is_reported_not_obeyed(
 ) -> None:
     """A bound this driver cannot keep must be said out loud, not pretended to.
 
-    The serial timeout was fixed at construction and a blocking call cannot be
+    The line settings were fixed at construction and a blocking call cannot be
     cut short, so a caller asking for less than the floor is asking for
     something impossible. Silently returning early without writing would be the
     only genuinely unsafe answer, so the floor is used and logged - and
     :attr:`ATV320Drive.emergency_budget` exists so a caller need never guess.
     """
-    drive = build_drive(clock, bus, emergency_budget=Seconds(1.0))
+    drive = build_drive(clock, bus)
     regs = RegisterMap()
     bus.registers[regs.lfrd] = 1380
 
-    assert drive.emergency_budget == Seconds(1.0)
+    assert drive.emergency_budget == emergency_budget_for(SETTINGS)
+    assert drive.emergency_budget > Seconds(0.2)
     outcome = drive.emergency_disable_blocking(Seconds(0.2))
 
     assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
@@ -1881,97 +2039,124 @@ def test_emergency_disable_sends_the_write_even_when_the_budget_is_gone(
     bus.registers[regs.lfrd] = 1380
     # Latency ten times the budget, charged to the injected clock, so the
     # "budget already spent" condition is unambiguously true.
-    bus.latency = Seconds(10.0)
+    bus.latency = Seconds(10.0 * drive.emergency_budget)
 
-    assert drive.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
+    assert (
+        drive.emergency_disable_blocking(drive.emergency_budget)
+        is EmergencyStopOutcome.ACKNOWLEDGED
+    )
     assert bus.writes() == [(regs.lfrd, 0)]
     assert bus.setpoint() == 0
 
 
-def test_a_serial_timeout_too_large_for_the_emergency_budget_is_refused() -> None:
+# --- What one transaction really costs -----------------------------------
+
+
+def _character_time(settings: SerialSettings) -> float:
+    return (1 + settings.bytesize + settings.stopbits) / settings.baudrate
+
+
+def test_a_transaction_costs_five_serial_timeouts_at_worst_not_one() -> None:
+    """The finding this budget was rebuilt for: one write is not one timeout.
+
+    pymodbus 3.7.4, read off its source: the send waits up to T for a
+    transaction state left behind; the head read polls in_waiting for up to T
+    and then reads for up to T; the body the same again, once per ``retries``.
+    With retries=1 that is 5 T, before any overshoot. The old bound assumed
+    one T per write and so promised an emergency stop it could overrun by 5x.
+    """
+    settings = SerialSettings(port="p", timeout=Seconds(0.1))
+    char = _character_time(settings)
+    silence = 3.5 * char
+    per_wait_overshoot = wait_overshoot(settings.frame) + max(4 * char, 0.001)
+
+    worst = transaction_worst_case(settings)
+
+    assert worst == pytest.approx(5 * 0.1 + silence + 5 * per_wait_overshoot + USB_STALL_BOUND)
+    assert worst > 5 * settings.timeout
+
+
+def test_each_extra_retry_adds_two_timeouts_and_pymodbus_s_fixed_pause() -> None:
+    one = SerialSettings(port="p", timeout=Seconds(0.05), retries=1)
+    two = SerialSettings(port="p", timeout=Seconds(0.05), retries=2)
+    per_wait_overshoot = wait_overshoot(one.frame) + max(4 * _character_time(one), 0.001)
+
+    added = transaction_worst_case(two) - transaction_worst_case(one)
+
+    assert added == pytest.approx(2 * 0.05 + PYMODBUS_BODY_RETRY_PAUSE + 2 * per_wait_overshoot)
+
+
+def test_above_19200_baud_pymodbus_uses_a_fixed_inter_frame_silence() -> None:
+    """3.5 characters at 19200 and below; a flat 1.75 ms above, as pymodbus does."""
+    fast = SerialSettings(port="p", baudrate=38400, timeout=Seconds(0.1))
+    slow = SerialSettings(port="p", baudrate=19200, timeout=Seconds(0.1))
+    fast_overshoot = 5 * (wait_overshoot(fast.frame) + max(4 * _character_time(fast), 0.001))
+    slow_overshoot = 5 * (wait_overshoot(slow.frame) + max(4 * _character_time(slow), 0.001))
+
+    assert transaction_worst_case(fast) - fast_overshoot - USB_STALL_BOUND == pytest.approx(
+        0.5 + 0.00175
+    )
+    assert transaction_worst_case(slow) - slow_overshoot - USB_STALL_BOUND == pytest.approx(
+        0.5 + 3.5 * _character_time(slow)
+    )
+
+
+def test_a_stalled_usb_transfer_is_counted_once_per_transaction() -> None:
+    """pyftdi's 5 s USB default would have been invisible to the budget; 0.1 s is not."""
+    settings = SerialSettings(port="p", timeout=Seconds(0.1))
+    assert USB_STALL_BOUND > 0.0
+    assert transaction_worst_case(settings) > 5 * settings.timeout + USB_STALL_BOUND
+
+
+def test_the_emergency_budget_is_two_transactions_plus_headroom() -> None:
+    """One in flight that the emergency write must queue behind, then its own."""
+    worst = transaction_worst_case(SETTINGS)
+    assert emergency_budget_for(SETTINGS) == pytest.approx(2 * worst + EMERGENCY_SCHEDULING_MARGIN)
+    assert emergency_budget_for(SETTINGS) <= MAX_EMERGENCY_BUDGET
+
+
+def test_a_line_whose_emergency_bound_is_too_long_is_refused() -> None:
     """The bound is made real at construction, where nothing is spinning yet.
 
     A blocking serial call cannot be cut short once it has started, so the only
-    way to promise the emergency path returns inside its budget is to refuse a
-    line whose per-transaction timeout could overrun it. Measured on the
-    previous version, which had no such check: a legal ``timeout=5.0`` made the
-    call block ~5 s against a 0.2 s budget, and ~10 s once the second write
-    started - the "the Pi will not shut down and gets power-cycled mid-session"
-    case the docstring claimed to prevent.
+    way to keep the emergency stop short is to refuse a line whose worst case
+    makes it long. Measured on an older version with no such check: a legal
+    ``timeout=5.0`` made the call block ~5 s - the "the Pi will not shut down
+    and gets power-cycled mid-session" case. 0.3 s, the previous default, is
+    refused too: two worst-case transactions of 5 x 0.3 s is a 3 s stop.
     """
-    budget = Seconds(0.6)
-    too_slow = SerialSettings(
-        port="COM-NONE", timeout=Seconds(budget * EMERGENCY_WRITE_SHARE + 0.01)
-    )
-    with pytest.raises(ValueError, match="cannot be honoured inside an emergency budget"):
-        ATV320Drive(
-            ManualClock(),
-            FakeBus(ManualClock(), RegisterMap()),
-            too_slow,
-            RegisterMap(),
-            emergency_budget=budget,
-        )
-
-    # And the largest timeout that CAN be honoured is accepted, so the check is
-    # a bound rather than a blanket refusal.
-    exactly_right = SerialSettings(port="COM-NONE", timeout=Seconds(budget * EMERGENCY_WRITE_SHARE))
-    assert (
-        ATV320Drive(
-            ManualClock(),
-            FakeBus(ManualClock(), RegisterMap()),
-            exactly_right,
-            RegisterMap(),
-            emergency_budget=budget,
-        ).emergency_budget
-        == budget
-    )
-
-
-def test_a_non_positive_emergency_budget_is_refused() -> None:
-    """There is nothing to bound the emergency write with, so refuse to start."""
-    with pytest.raises(ValueError, match="emergency_budget"):
-        ATV320Drive(
-            ManualClock(),
-            FakeBus(ManualClock(), RegisterMap()),
-            SETTINGS,
-            RegisterMap(),
-            emergency_budget=Seconds(0.0),
-        )
+    for too_slow in (
+        SerialSettings(port="COM-NONE", timeout=Seconds(0.3)),
+        SerialSettings(port="COM-NONE", timeout=Seconds(0.1), retries=5),
+    ):
+        with pytest.raises(ValueError, match="emergency-stop bound"):
+            ATV320Drive(
+                ManualClock(),
+                FakeBus(ManualClock(), RegisterMap()),
+                too_slow,
+                RegisterMap(),
+            )
 
 
 def test_emergency_disable_returns_within_its_budget_in_real_wall_time(bus: FakeBus) -> None:
     """The bound, measured against a transport that blocks in REAL seconds.
 
-    This is the test the old one could not be. ``test_emergency_disable_stops_
-    at_its_deadline`` advanced a ManualClock from inside the fake, so it
-    measured nothing at all about how long the call took to return - it pinned
-    the defect rather than the guarantee. Here the fake sleeps the thread for
-    its whole configured serial timeout, exactly as a pyserial read does, the
-    driver holds a RealClock, and the elapsed time is read with
-    ``perf_counter``.
-
-    Without the fix this fails: with the deadline enforced against a real clock
-    the first write consumes 0.3 s, the deadline check then sees 0.3 < 0.6 and
-    starts the second write, and the call returns after the full 0.6 s budget
-    rather than inside it. With the fix there is one write, bounded by a serial
-    timeout the constructor has already proved fits.
+    The fake sleeps the thread for a whole worst-case transaction, the driver
+    holds a RealClock, and the elapsed time is read with ``perf_counter``.
     """
-    budget = Seconds(0.6)
-    serial_timeout = Seconds(budget * EMERGENCY_WRITE_SHARE)
-    settings = SerialSettings(port="COM-NONE", timeout=serial_timeout)
-    drive = build_drive(RealClock(), bus, settings=settings, emergency_budget=budget)
-    bus.real_write_block = serial_timeout
+    settings = SerialSettings(port="COM-NONE", timeout=Seconds(0.02))
+    drive = build_drive(RealClock(), bus, settings=settings)
+    bus.real_write_block = transaction_worst_case(settings)
 
     started = time.perf_counter()
-    outcome = drive.emergency_disable_blocking(budget)
+    outcome = drive.emergency_disable_blocking(drive.emergency_budget)
     elapsed = time.perf_counter() - started
 
     assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
-    # The apportioned worst case is one lock wait plus one write, and the
-    # remaining quarter of the budget is headroom for OS scheduling.
-    allowed = budget * (EMERGENCY_LOCK_SHARE + EMERGENCY_WRITE_SHARE)
-    assert elapsed < allowed, f"took {elapsed:.3f} s against a {budget} s budget"
-    assert elapsed >= serial_timeout, "the fake really did block the thread"
+    assert elapsed < drive.emergency_budget, (
+        f"took {elapsed:.3f} s against a {drive.emergency_budget:.3f} s budget"
+    )
+    assert elapsed >= bus.real_write_block, "the fake really did block the thread"
     assert len(bus.writes()) == 1
 
 
@@ -2000,23 +2185,24 @@ def test_emergency_disable_gives_up_on_the_lock_rather_than_waiting_it_out(
 ) -> None:
     """A bounded lock wait, measured in real wall time, then write anyway.
 
-    The lock closes the two-thread race on the shared pymodbus client, but an
-    emergency that queues behind the fault it is reacting to is not an
-    emergency. So the wait is a fixed fraction of the budget and then it writes
-    regardless - and that degradation has to be bounded in REAL time, because a
-    lock held by another thread is nothing an injected clock can model.
+    The wait is what the budget leaves after reserving the write's own
+    worst-case transaction. This fake has no transaction lock of its own, so
+    the two overlap here, which is the evidence that this driver stopped
+    waiting; the real pymodbus client would queue the write on its ``RLock``
+    until the in-flight exchange ended, which the budget already counts.
     """
-    budget = Seconds(0.6)  # a 0.15 s lock share
-    settings = SerialSettings(port="COM-NONE", timeout=Seconds(0.05))
-    drive = build_drive(RealClock(), bus, settings=settings, emergency_budget=budget)
-    bus.real_read_block = Seconds(0.5)  # far longer than the lock share
+    settings = SerialSettings(port="COM-NONE", timeout=Seconds(0.02))
+    drive = build_drive(RealClock(), bus, settings=settings)
+    budget = drive.emergency_budget
+    lock_wait = budget - transaction_worst_case(settings) - EMERGENCY_SCHEDULING_MARGIN
+    bus.real_read_block = Seconds(budget + 0.2)  # far longer than the lock wait
 
     outcome, taken = asyncio.run(_race_the_executor(drive, bus, budget))
 
     assert outcome is EmergencyStopOutcome.ACKNOWLEDGED, "it wrote anyway"
-    assert taken >= budget * EMERGENCY_LOCK_SHARE, "it really did wait for the lock"
+    assert taken >= lock_wait, "it really did wait for the lock"
     assert taken < budget, f"and it gave up inside the budget, not after {taken:.3f} s"
-    assert bus.max_in_flight == 2, "it overlapped deliberately rather than sitting out the fault"
+    assert bus.max_in_flight == 2, "it stopped waiting rather than sitting out the fault"
 
 
 def test_the_transport_lock_keeps_the_emergency_write_off_a_busy_bus(bus: FakeBus) -> None:
@@ -2034,14 +2220,13 @@ def test_the_transport_lock_keeps_the_emergency_write_off_a_busy_bus(bus: FakeBu
     lock the emergency write overlaps the in-flight read and is lost; with it,
     the write waits the short time the bus needs and lands.
     """
-    budget = Seconds(1.0)  # a 0.25 s lock share
     regs = RegisterMap()
-    drive = build_drive(RealClock(), bus, emergency_budget=budget)
+    drive = build_drive(RealClock(), bus)
     bus.registers[regs.lfrd] = 1380
     bus.overlap_raises = True
-    bus.real_read_block = Seconds(0.05)  # comfortably inside the lock share
+    bus.real_read_block = Seconds(0.05)  # comfortably inside the lock wait
 
-    outcome, _ = asyncio.run(_race_the_executor(drive, bus, budget))
+    outcome, _ = asyncio.run(_race_the_executor(drive, bus, drive.emergency_budget))
 
     assert outcome is EmergencyStopOutcome.ACKNOWLEDGED
     assert bus.max_in_flight == 1, "the two threads did not overlap on the wire"
@@ -2079,8 +2264,17 @@ async def test_transactions_do_not_interleave(clock: ManualClock, bus: FakeBus) 
 # =========================================================================
 
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
-ISOLATED_LIBRARIES: Final[frozenset[str]] = frozenset({"pymodbus", "serial"})
 ISOLATION_MODULE: Final[Path] = PROJECT_ROOT / "src" / "motor" / "atv320.py"
+FTDI_ISOLATION_MODULE: Final[Path] = PROJECT_ROOT / "src" / "motor" / "ftdi_link.py"
+
+#: Each untyped transport library, and the ONE module under src/ allowed to
+#: import it. The same table as rule 5 of the strict-python skill.
+ISOLATION_TABLE: Final[Mapping[str, Path]] = {
+    "pymodbus": ISOLATION_MODULE,
+    "serial": ISOLATION_MODULE,
+    "pyftdi": FTDI_ISOLATION_MODULE,
+    "usb": FTDI_ISOLATION_MODULE,
+}
 
 
 def _imported_roots(source: str) -> set[str]:
@@ -2093,26 +2287,37 @@ def _imported_roots(source: str) -> set[str]:
     return roots
 
 
-def test_atv320_is_the_only_module_that_touches_pymodbus_or_serial() -> None:
-    """Contract rule 5. Everything above this module sees domain types only.
+def test_each_transport_library_has_exactly_one_importer() -> None:
+    """Contract rule 5. Everything above these modules sees domain types only.
 
     A second importer is how the wire format leaks upward: two places that each
-    decide how to handle a returned ModbusIOException will eventually disagree,
-    and the disagreement shows up as a drive error that one of them swallows.
+    decide how to handle a returned ModbusIOException - or a USB error - will
+    eventually disagree, and the disagreement shows up as a drive error that
+    one of them swallows.
     """
     offenders: dict[str, set[str]] = {}
     for path in sorted((PROJECT_ROOT / "src").rglob("*.py")):
-        if path == ISOLATION_MODULE:
-            continue
-        found = _imported_roots(path.read_text(encoding="utf-8")) & ISOLATED_LIBRARIES
+        imported = _imported_roots(path.read_text(encoding="utf-8"))
+        found = {lib for lib, owner in ISOLATION_TABLE.items() if lib in imported and owner != path}
         if found:
             offenders[str(path.relative_to(PROJECT_ROOT))] = found
-    assert not offenders, f"pymodbus/serial imported outside the isolation module: {offenders}"
+    assert not offenders, (
+        f"transport libraries imported outside their isolation module: {offenders}"
+    )
 
 
-def test_the_isolation_module_does_not_read_the_clock_directly() -> None:
+def test_the_isolation_modules_really_do_import_their_libraries() -> None:
+    """Otherwise the test above would pass vacuously after a rename."""
+    for library, owner in ISOLATION_TABLE.items():
+        if library == "serial":
+            continue  # reserved for atv320.py, which needs nothing from it today
+        assert library in _imported_roots(owner.read_text(encoding="utf-8")), library
+
+
+@pytest.mark.parametrize("module", [ISOLATION_MODULE, FTDI_ISOLATION_MODULE])
+def test_the_isolation_modules_do_not_read_the_clock_directly(module: Path) -> None:
     """Contract rule 4: timing comes from the injected Clock, never time.*."""
-    source = ISOLATION_MODULE.read_text(encoding="utf-8")
+    source = module.read_text(encoding="utf-8")
     assert "time.monotonic()" not in source
     assert "time.time()" not in source
     assert "import time" not in source

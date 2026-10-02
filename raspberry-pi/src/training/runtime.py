@@ -85,14 +85,30 @@ WHAT THIS MODULE REFUSES TO ASSUME
   becomes ``COMM_LOST`` - "unknown", never ``NOT_READY``, which reads as
   "stopped" to anything that does not know better.
 
-ONE RUNTIME PER SESSION
------------------------
+ONE SESSION AT A TIME, NEVER RESUMED
+------------------------------------
 
-A :class:`TrainingRuntime` runs one programme and then reports ``FINISHED``.
-That follows from the objects it owns: the safety supervisor is documented as
-one instance per session, and ``Phase.DONE`` says a new session is a new
-object. :meth:`TrainingRuntime.acknowledge` clears the latches so the machine
-can be put back into service - it never resumes the session it cleared.
+A :class:`TrainingRuntime` runs one session - a programme, or a manual session
+(:meth:`TrainingRuntime.start_manual`) - and then reports ``FINISHED``: the
+output stage shown off at standstill. From ``FINISHED`` (and only from there,
+or from ``IDLE``) it may be armed again for a NEW session, from scratch, with
+every start gate re-applied; that is what returns the local console to REPOS
+after a stop. Nothing is carried into the new session but the facts about the
+machine: the link, the last drive observation, the heart-rate tracker.
+:meth:`TrainingRuntime.acknowledge` clears the latches so the machine can be
+put back into service - it never resumes the session it cleared, and a runtime
+that went silent or shut down can never be armed again.
+
+Manual sessions follow the operator's target through the motion profiler
+(:mod:`src.training.motion`), inside the same ``match`` over the verdict as the
+control law: the verdict decides first, always. A programme's setpoint walks the
+same profiler - the controller only chooses where to - and may not rise at all
+while the heart rate is falling fast (the vasovagal gate,
+``RuntimeLimits.falling_trend``).
+
+The idle console is read-only until it finds the drive enabled or turning with
+no session running; then it stops it exactly as a start would
+(:meth:`TrainingRuntime._judge_idle`).
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -102,14 +118,17 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, unique
 from types import MappingProxyType
 from typing import Final, assert_never, final
 
 from src.clock import Clock
+from src.geometry import MachineGeometry
 from src.motor.drive import (
+    DEFAULT_MAX_MOTOR_HZ,
     LFT_FAULT_CODES,
+    UNVERIFIED_PARAMETERS,
     BadResponse,
     CommTimeout,
     ControlWord,
@@ -117,14 +136,18 @@ from src.motor.drive import (
     DriveError,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
     EnableUnconfirmed,
     FaultReport,
+    LimitViolation,
     StopUnconfirmed,
     UnexpectedState,
+    check_limits,
     describe_fault,
+    describe_violation,
 )
 from src.result import Err, Ok, Result
 from src.training.hr_control import (
@@ -139,14 +162,20 @@ from src.training.hr_control import (
     TrackerReading,
     Zone,
 )
+from src.training.motion import (
+    DEFAULT_MOTION_LIMITS,
+    MotionLimits,
+    carry_after,
+    next_setpoint,
+    ramp_duration,
+)
 from src.training.plan import (
     COMMISSIONED_DECEL_S,
     MIN_RECOVERY_S,
-    NAMEPLATE_BASE_HERTZ,
-    NAMEPLATE_MOTOR_RPM,
     Program,
 )
 from src.training.safety import (
+    RULE_DRIVE_FAULT,
     AcknowledgeRefusal,
     AttestationRefusal,
     EmergencyStopStillLatched,
@@ -160,30 +189,38 @@ from src.training.safety import (
     SafetySupervisor,
     Unattributed,
 )
+from src.training.tracking import SpeedFollower, follow_rate
 from src.training.types import (
     DRIVE_STATUS_STALE_AFTER,
     ControlDecision,
     HeartRateSample,
+    ManualView,
+    Occupancy,
     Phase,
+    RunMode,
     SafetyAction,
     SafetyVerdict,
     SignalQuality,
+    SpeedEnvelope,
     SpeedView,
     TelemetrySnapshot,
     ZoneCounters,
 )
 from src.units import (
     Bpm,
-    GearRatio,
+    BpmPerMinute,
     Hertz,
     Metres,
     Monotonic,
     MotorRpm,
     OutOfRange,
+    OutputRpm,
     RawRegister,
     RpmPerSecond,
     Seconds,
     elapsed,
+    hertz_to_motor_rpm,
+    output_to_motor_rpm,
 )
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
@@ -209,14 +246,16 @@ RULE_TICK_EXCEPTION: Final[str] = "tick_exception"
 RULE_ENABLE_UNCONFIRMED: Final[str] = "enable_unconfirmed"
 """The start sequence failed at the word that energises the output stage."""
 
+RULE_DISABLE_REFUSED: Final[str] = "disable_refused"
+"""The drive kept refusing the words that remove the output stage at standstill.
 
-DEFAULT_EMERGENCY_BUDGET: Final[Seconds] = Seconds(0.5)
-"""How long :meth:`~src.motor.drive.DriveBackend.emergency_disable_blocking` may take.
-
-Half a second is two and a half ticks of the 5 Hz loop, and it is spent
-blocking the event loop on purpose: this call *is* the stop, and handing it to
-an executor would hand it to the same loop that may be the thing that failed.
+See :meth:`TrainingRuntime._settle`: bounded retries, then SHUTDOWN at confirmed
+standstill, then silence.
 """
+
+
+MIN_TREND_SAMPLES: Final[int] = 2
+"""The fewest readings a trend can be fitted over at all: one point has no slope."""
 
 DEFAULT_STANDSTILL_RPM: Final[MotorRpm] = MotorRpm(1)
 """Below this the shaft counts as stopped.
@@ -340,43 +379,6 @@ class Subject:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class MachineGeometry:
-    """The rotating geometry every displayed speed is derived through.
-
-    Keyword-only, and with no defaults for the two that matter, for exactly the
-    reason :meth:`~src.training.types.SpeedView.from_motor_rpm` gives: a wrong
-    gear ratio is a fiftyfold error and a wrong radius is a quadratic one, and a
-    default value is how a wrong one gets used without anybody choosing it.
-
-    The nameplate point *does* default, because it is a property of the motor
-    that is bolted on (SEW KA37 DRS71S4: 1380 rpm at 50 Hz) rather than of the
-    installation.
-    """
-
-    ratio: GearRatio
-    """Gearbox reduction, motor turns per output turn. SEW KA37: 49.79."""
-
-    radius: Metres
-    """Distance from the axis to the occupant, where the g load is quoted."""
-
-    nominal_rpm: MotorRpm = NAMEPLATE_MOTOR_RPM
-    base_hz: Hertz = NAMEPLATE_BASE_HERTZ
-
-    def __post_init__(self) -> None:
-        """Refuse geometry that cannot describe a machine.
-
-        Raises rather than returning a ``Result``: this is built at setup with
-        nothing spinning, and refusing to start is the right answer to numbers
-        nobody can vouch for. Contrast the drive path, where a raise would
-        unwind with the motor commanded.
-        """
-        _require_positive("ratio", self.ratio)
-        _require_positive("radius", self.radius)
-        _require_positive("nominal_rpm", float(self.nominal_rpm))
-        _require_positive("base_hz", self.base_hz)
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
 class RuntimeLimits:
     """The machine facts the profile does not carry, plus the runtime's own budgets.
 
@@ -409,7 +411,6 @@ class RuntimeLimits:
     asking for an exemption (contract rule 9: do not weaken a check locally).
     """
 
-    emergency_budget: Seconds = DEFAULT_EMERGENCY_BUDGET
     standstill_rpm: MotorRpm = DEFAULT_STANDSTILL_RPM
 
     ramp_settle: Seconds = COMMISSIONED_DECEL_S
@@ -425,12 +426,63 @@ class RuntimeLimits:
     status_stale_after: Seconds = DRIVE_STATUS_STALE_AFTER
     """Past this age a drive observation is a memory, and the state reads COMM_LOST."""
 
+    max_motor_hz: Hertz = DEFAULT_MAX_MOTOR_HZ
+    """The highest drive HSP this runtime will arm on, read back at every start.
+
+    Defaults to 50.0 Hz because the owner keeps HSP at 50 Hz while the motor is
+    UNCOUPLED from the arm. **Lower it before the arm is coupled**: see
+    :data:`~src.motor.drive.DEFAULT_MAX_MOTOR_HZ`.
+    """
+
+    falling_trend: BpmPerMinute = BpmPerMinute(-20.0)
+    """Below this heart-rate trend the setpoint may NOT rise, whatever the controller wants.
+
+    The vasovagal gate. A collapse falls 60-120 bpm/min (the scripted one: 90,
+    i.e. 1.5 bpm/s); before this gate the controller kept raising the setpoint
+    for ~16 s of one (968 -> 1039 motor rpm while 145 -> 121 bpm) until
+    ``hr_drop`` tripped, because a falling rate reads as "below the zone".
+    -20 bpm/min is a third of a bpm per second: a heart recovering from a
+    speed the controller itself just trimmed falls a few bpm/min, and the
+    slope of five whole-bpm readings carries about +/-6 bpm/min of
+    quantisation noise, so neither reaches it. A trend that is UNKNOWN also
+    blocks a rise. The cost of a false block is one skipped increase - never a
+    faster or a longer anything - so the threshold errs towards blocking.
+    The safety verdict still dominates: this only restricts the controller.
+    """
+
+    trend_samples: int = 5
+    """How many of the newest accepted readings the gate's trend is fitted over.
+
+    Five (~5 s at the 1 Hz refresh) because the controller decides every 5 s
+    and a collapse must show before its next decision: three seconds into the
+    scripted fall a 5-point fit reads -66 bpm/min while the tracker's 10-point
+    one still reads about -10. The price is noise - with +/-4 bpm of i.i.d.
+    measurement noise about two increases in five are skipped - and a skipped
+    increase is only a slower climb.
+    """
+
+    disable_attempts: int = 5
+    """Consecutive refused disable sequences before :meth:`TrainingRuntime._settle` escalates.
+
+    One second at 5 Hz. A word refused that many times in a row at confirmed
+    standstill is a drive that will not take it, not a transient; retrying it
+    every tick for the rest of the session (~480 frames in the failure matrix)
+    left the output stage enabled with nobody told.
+    """
+
     def __post_init__(self) -> None:
         """Refuse budgets that would silently disable the thing they bound."""
         _require_positive("slew", self.slew)
-        _require_positive("emergency_budget", self.emergency_budget)
         _require_positive("ramp_settle", self.ramp_settle)
         _require_positive("status_stale_after", self.status_stale_after)
+        _require_positive("max_motor_hz", self.max_motor_hz)
+        _require_positive("-falling_trend", -self.falling_trend)
+        if self.trend_samples < MIN_TREND_SAMPLES:
+            raise ValueError(
+                f"trend_samples must be at least {MIN_TREND_SAMPLES}, got {self.trend_samples}"
+            )
+        if self.disable_attempts < 1:
+            raise ValueError(f"disable_attempts must be at least 1, got {self.disable_attempts}")
         if self.start_hysteresis_rpm < 0:
             raise ValueError(
                 f"start_hysteresis_rpm must not be negative, got {self.start_hysteresis_rpm}"
@@ -502,6 +554,23 @@ class DriveUnavailable:
 
 
 @dataclass(frozen=True, slots=True)
+class DriveParameterRefused:
+    """A commissioned drive parameter, read back at arming, is not one this runtime accepts.
+
+    ``violation`` names the parameter (``violation.parameter``) and carries the
+    values read; ``limits`` is everything that was read, for the log. Nothing
+    was energised: the check runs before the start sequence.
+    """
+
+    violation: LimitViolation
+    limits: DriveLimits
+
+    @property
+    def detail(self) -> str:
+        return describe_violation(self.violation)
+
+
+@dataclass(frozen=True, slots=True)
 class DrivePrecommanded:
     """The drive was already enabled: a previous process died with the motor commanded.
 
@@ -528,6 +597,7 @@ type StartRefusal = (
     | LimitsMismatch
     | PlanUnusable
     | DriveUnavailable
+    | DriveParameterRefused
     | DrivePrecommanded
     | DriveInFault
 )
@@ -537,6 +607,23 @@ type StartRefusal = (
 # =========================================================================
 # Drive failures, classified once
 # =========================================================================
+
+
+@unique
+class Exchange(Enum):
+    """Which kind of drive transaction a success or failure belongs to.
+
+    The two are counted apart because they prove different things. A write
+    acknowledgement echoes the request, so an acknowledged keepalive shows that
+    *some* frame made a round trip - not that the drive's status is still being
+    observed. Only a successful READ is proof that the drive is reachable and
+    being watched; letting a write reset the read run would hide a status read
+    that fails on every tick behind a keepalive that succeeds on every tick,
+    and ``comms_lost`` would never fire.
+    """
+
+    READ = "read"
+    WRITE = "write"
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,7 +726,7 @@ def fault_report(fault: DriveFault | None) -> FaultReport | None:
     similar.
 
     Returns ``None`` for a fault the table cannot number
-    (:data:`~src.motor.drive.DriveFault.UNKNOWN`, ``NO_MOTOR``). That is the
+    (:data:`~src.motor.drive.DriveFault.UNKNOWN`). That is the
     honest answer and not a shortcut: inventing a code here would print a
     number on the operator's screen that the drive is not showing them. The
     fault is still reported either way - ``drive_fault`` fires on
@@ -651,6 +738,50 @@ def fault_report(fault: DriveFault | None) -> FaultReport | None:
     if code is None:
         return None
     return describe_fault(code)
+
+
+def status_fault_report(status: DriveStatus) -> FaultReport | None:
+    """The operator-facing report for a status, keeping the RAW LFT code when one was read.
+
+    Preferred over :func:`fault_report` wherever a whole status is at hand:
+    the raw number read off the drive is the one the operator compares with its
+    display (LFT = 5 is SLF1, the Modbus loss the bench saw), and a code the
+    table does not know still travels as itself, named UNKNOWN.
+    """
+    code = status.fault_code
+    if code is None:
+        return fault_report(status.fault)
+    return describe_fault(code)
+
+
+def _supervisor_for(
+    clock: Clock, safety: SafetyLimits, shared: SafetySupervisor | None
+) -> SafetySupervisor:
+    """The runtime's supervisor: the shared one, checked, or a new one. Raises on a mismatch."""
+    if shared is None:
+        return SafetySupervisor(clock=clock, limits=safety)
+    if shared.limits != safety:
+        raise ValueError("the shared supervisor was built with different SafetyLimits")
+    return shared
+
+
+def motion_geometry(geometry: MachineGeometry, limit_radius: Metres | None) -> MachineGeometry:
+    """The geometry the motion limits are evaluated through. Raises ``ValueError`` if unsafe.
+
+    ``geometry`` itself when ``limit_radius`` is ``None``; otherwise the same
+    machine with its radius moved out to ``limit_radius``, where the g-rate
+    limit then binds. Refused when not finite or below ``geometry.radius``: a
+    smaller radius would LOOSEN the limit at the radius the screen quotes it
+    for. Startup only, nothing spinning.
+    """
+    if limit_radius is None:
+        return geometry
+    if not (math.isfinite(limit_radius) and limit_radius >= geometry.radius):
+        raise ValueError(
+            f"limit_radius {limit_radius} m must be finite and at least the reference "
+            f"radius {geometry.radius} m: a smaller one would loosen the g-rate limit"
+        )
+    return replace(geometry, radius=limit_radius)
 
 
 def motion_is_over(phase: Phase) -> bool:
@@ -730,6 +861,184 @@ class ShutdownReport:
     detail: str
 
 
+IDLE_POLL_PERIOD: Final[Seconds] = Seconds(0.5)
+"""How often an idle runtime reads the drive: 2 Hz, reads only.
+
+Fast enough that the operator sees a shaft that somebody else set turning
+within half a second, slow enough to leave the link almost idle (one
+``read_status`` is four registers, about 140 ms on the bench link).
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class IdleLink:
+    """What the idle, read-only polling of the drive has seen. For the operator screen.
+
+    Kept apart from the session's own failure counters on purpose: an idle
+    read that fails is "the drive is not answering", shown as unknown, and
+    must never feed ``comms_lost`` - that rule's answer is ``GO_SILENT``, which
+    is one-way, and a console that went permanently silent because a cable was
+    unplugged while nothing was commanded would have to be restarted to show
+    anything at all.
+    """
+
+    open: bool = False
+    """Whether the link is believed open for polling. A failure re-opens it."""
+
+    reads: int = 0
+    """Successful idle reads since this runtime was built."""
+
+    failures: int = 0
+    """Failed idle exchanges (open or read) since this runtime was built."""
+
+    consecutive_failures: int = 0
+    """The current run of failures; 0 after any success."""
+
+    last_latency: Seconds | None = None
+    """How long the last successful ``read_status`` took, by the injected clock."""
+
+    last_error: str | None = None
+    """The operator-facing description of the last failure, or ``None``."""
+
+
+# =========================================================================
+# The manual session
+# =========================================================================
+
+MANUAL_SESSION_LIMIT: Final[Seconds] = Seconds(3600.0)
+"""The longest a manual session runs before it ends itself on the ramp.
+
+A manual session has no timeline, so ``session_overrun`` would otherwise judge
+it against a programme of zero seconds. An hour is the ceiling the operator
+works under; past it the setpoint walks to zero exactly like a STOP.
+"""
+
+BENCH_RECOVERY: Final[Seconds] = Seconds(0.0)
+"""RECOVERY after a BENCH session: none, nobody was on board to recover.
+
+With a person on board a manual session keeps :data:`MIN_RECOVERY_S` of
+monitored RECOVERY, like any programme.
+"""
+
+FAULT_RESET_SETTLE: Final[Seconds] = Seconds(0.2)
+"""Wait between ``FAULT_RESET`` and ``SHUTDOWN``: the bench console's own sequence.
+
+Taken across ticks rather than slept: this runtime never waits on a clock.
+"""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ManualSession:
+    """A manual session, as armed: who is on board, who runs it, how fast it may go.
+
+    Frozen at the start and never changed while the machine turns: an
+    occupancy that could be relaxed mid-rotation by a click is one that will
+    be. The target is the one mutable thing, and it lives on the runtime.
+    """
+
+    occupancy: Occupancy
+    operator: str
+    ceiling: MotorRpm
+    """The highest target accepted, motor rpm. From the occupancy, never above HSP."""
+
+    cooldown: Seconds
+    """How long an ending may take to reach standstill: the motion-limited
+    descent from the ceiling, plus the drive's own commissioned ramp."""
+
+
+@dataclass(frozen=True, slots=True)
+class NoManualSession:
+    """There is no manual session to take a target: start one first."""
+
+    state: RuntimeState
+
+
+@dataclass(frozen=True, slots=True)
+class ManualEnding:
+    """The manual session is ending. A target now would be a resumption."""
+
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class TargetOutOfRange:
+    """The target is not 0 and not inside ``[min_run, ceiling]``.
+
+    Refused rather than clamped: an operator who asked for more than the
+    ceiling must be told so, not quietly given less, and one who asked for less
+    than the slowest running speed may well have meant zero.
+    """
+
+    requested: OutputRpm
+    min_run: MotorRpm
+    ceiling: MotorRpm
+
+
+type ManualTargetRefusal = NoManualSession | ManualEnding | TargetOutOfRange
+"""Every way :meth:`TrainingRuntime.set_manual_target` can refuse. Closed."""
+
+
+@dataclass(frozen=True, slots=True)
+class ResetWhileCommanded:
+    """Motion may still be commanded: a fault reset is only for a machine at rest."""
+
+    state: RuntimeState
+    phase: Phase
+
+
+@dataclass(frozen=True, slots=True)
+class ResetBehindVerdict:
+    """A safety verdict stands. It is acknowledged, by name, before the drive is reset."""
+
+    verdict: SafetyVerdict
+
+
+@dataclass(frozen=True, slots=True)
+class NoFaultToReset:
+    """The drive, freshly read, is not in fault. ``None``: it has not been read at all."""
+
+    state: DriveState | None
+
+
+@dataclass(frozen=True, slots=True)
+class ShaftStillTurning:
+    """The drive reports the shaft turning: you cannot reset your way out of a spinning mass."""
+
+    output_rpm: MotorRpm
+
+
+@dataclass(frozen=True, slots=True)
+class ResetForbidden:
+    """The fault is not one the console may reset: power the drive down and inspect it.
+
+    Short circuits, the drive's own hardware and memory, STO, overspeed - and
+    any code that was not read or that the table cannot name - are not reset
+    from a screen with a person anywhere near the machine
+    (:attr:`~src.motor.drive.DriveFault.resettable`). ``report`` is ``None``
+    when no LFT code was read.
+    """
+
+    report: FaultReport | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResetUndelivered:
+    """The reset word could not be written. Nothing changed that is known of."""
+
+    detail: str
+
+
+type FaultResetRefusal = (
+    ResetWhileCommanded
+    | ResetBehindVerdict
+    | NoFaultToReset
+    | ShaftStillTurning
+    | ResetForbidden
+    | ResetUndelivered
+)
+"""Every way :meth:`TrainingRuntime.fault_reset` can refuse. Closed."""
+
+
 # =========================================================================
 # The runtime
 # =========================================================================
@@ -758,16 +1067,23 @@ class TrainingRuntime:
         "_applied_rpm",
         "_attendant_last_seen",
         "_clock",
-        "_comm_failures",
         "_controller",
         "_counters",
         "_decision",
         "_descent_from",
+        "_disable_failures",
         "_drive",
         "_enabled",
         "_end_reason",
         "_ending",
+        "_failures",
+        "_fault_reset_at",
+        "_follower",
         "_geometry",
+        "_idle_link",
+        "_idle_next_at",
+        "_idle_status",
+        "_idle_status_at",
         "_last_failure",
         "_last_sample",
         "_last_status",
@@ -775,6 +1091,11 @@ class TrainingRuntime:
         "_latched",
         "_limits",
         "_link_open",
+        "_manual",
+        "_manual_target",
+        "_motion",
+        "_motion_from",
+        "_motion_geometry",
         "_phase",
         "_previous_tick_at",
         "_program",
@@ -802,14 +1123,58 @@ class TrainingRuntime:
         limits: RuntimeLimits,
         safety: SafetyLimits,
         tracker_limits: TrackerLimits | None = None,
+        supervisor: SafetySupervisor | None = None,
+        motion: MotionLimits = DEFAULT_MOTION_LIMITS,
+        limit_radius: Metres | None = None,
     ) -> None:
+        """Build an idle runtime. Raises ``ValueError`` on a mismatched supervisor.
+
+        ``supervisor`` lets a composition root share ONE supervisor between
+        this runtime and the web control surface, so an e-stop latched by an
+        HTTP handler is the same latch this runtime judges on its next tick -
+        not a second supervisor nobody reads. Omitted, the runtime builds its
+        own, which is what every test that does not wire a web layer wants.
+        An injected supervisor must have been built with exactly ``safety``:
+        the programme checks (``hard_max``/``critical`` equal to the
+        supervisor's) read ``safety``, so a supervisor judging different
+        thresholds would make those checks vouch for numbers nobody enforces.
+        Raising is right here: this runs at startup with nothing spinning.
+
+        ``motion`` bounds EVERY non-emergency setpoint change - a manual
+        session's walk to its target, and a programme's controller demand,
+        warm-up and cooldown alike: see :mod:`src.training.motion`. Only the
+        safety descents (a verdict's REDUCE or RAMP_DOWN on a programme, at
+        ``RuntimeLimits.slew``) and the emergency zero (QUICK_STOP, the drive's
+        own commissioned ramp) move faster; see :meth:`_descend`.
+
+        ``limit_radius`` is where the g-rate limit of ``motion`` is evaluated,
+        when that is further out than ``geometry.radius`` (the reference radius
+        every g on the screen is quoted at). The load changes ``radius / r``
+        times faster at radius ``radius`` than at ``r``, so the anti-nausea
+        g-dot is honoured by the whole rider only if it is judged at the
+        furthest body part - the leg tip, 2.43 m on the CAD upper bound against
+        a 1.5 m reference. ``None`` keeps today's behaviour (the reference
+        radius). A value below ``geometry.radius`` is refused: it would loosen
+        the limit at the very radius the screen promises it for.
+        """
         self._clock: Clock = clock
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
         self._limits: RuntimeLimits = limits
         self._safety_limits: SafetyLimits = safety
-        self._supervisor: SafetySupervisor = SafetySupervisor(clock=clock, limits=safety)
+        self._supervisor: SafetySupervisor = _supervisor_for(clock, safety, supervisor)
         self._tracker: HeartRateTracker = HeartRateTracker(tracker_limits)
+        self._motion: MotionLimits = motion
+        # The geometry every motion limit is evaluated through: the machine's,
+        # with the radius moved out to `limit_radius` when one was given. Only
+        # the g-rate term depends on the radius. Display keeps `_geometry`.
+        self._motion_geometry: MachineGeometry = motion_geometry(geometry, limit_radius)
+        # Where a drive following the command at its (derated) ramp would be:
+        # the far edge of the envelope tracking_error judges against. Retuned
+        # from ACC/dEC read back at every arming.
+        self._follower: SpeedFollower = SpeedFollower(follow_rate(None, geometry.nominal_rpm))
+        # Consecutive disable sequences the drive refused at standstill.
+        self._disable_failures: int = 0
 
         # --- the session -------------------------------------------------
         self._program: Program | None = None
@@ -826,6 +1191,15 @@ class TrainingRuntime:
         self._stop_requested: str | None = None
         self._warmup_satisfied: bool = False
         self._resting_bpm: Bpm | None = None
+        # A manual session instead of a programme; at most one of the two.
+        self._manual: ManualSession | None = None
+        # What the operator asked for. Zeroed by every ending, never raised by
+        # anything but set_manual_target.
+        self._manual_target: MotorRpm = MotorRpm(0)
+        # Since when the motion profiler's allowance accrues (see motion.py).
+        self._motion_from: Monotonic | None = None
+        # An operator's fault reset between its two words, or None.
+        self._fault_reset_at: Monotonic | None = None
 
         # --- what is believed about the drive ----------------------------
         self._link_open: bool = False
@@ -837,7 +1211,13 @@ class TrainingRuntime:
         self._applied_rpm: MotorRpm = MotorRpm(0)
         self._last_status: DriveStatus | None = None
         self._last_status_at: Monotonic | None = None
-        self._comm_failures: int = 0
+        # Run lengths of failed exchanges, one per kind (see ``Exchange``).
+        # Mutable, owned by this loop alone. A read run is reset only by a
+        # successful read, a write run only by an acknowledged write, and the
+        # safety layer judges the longest. Keyed by the enum rather than held
+        # in one field per kind so that a new kind is counted, and judged, by
+        # construction.
+        self._failures: dict[Exchange, int] = dict.fromkeys(Exchange, 0)
         self._last_failure: DriveFailure | None = None
         self._setpoint_changed_at: Monotonic | None = None
         self._descent_from: Monotonic | None = None
@@ -852,6 +1232,16 @@ class TrainingRuntime:
         self._previous_tick_at: Monotonic | None = None
         self._latched: SafetyVerdict | None = None
         self._shutdown: ShutdownReport | None = None
+
+        # --- idle, read-only polling (see _poll_idle) --------------------
+        # Separate from _last_status on purpose: the safety observation never
+        # sees an idle read, so an idle machine is judged exactly as it was
+        # before polling existed, and a stale fault on an idle drive cannot
+        # end a session that never started.
+        self._idle_link: IdleLink = IdleLink()
+        self._idle_status: DriveStatus | None = None
+        self._idle_status_at: Monotonic | None = None
+        self._idle_next_at: Monotonic | None = None
         self._snapshot: TelemetrySnapshot = self._build_snapshot(clock.monotonic())
 
     # =====================================================================
@@ -862,10 +1252,53 @@ class TrainingRuntime:
     def state(self) -> RuntimeState:
         """Where this runtime is. Derived from the fields, never stored twice."""
         if self._end_reason is None:
-            return RuntimeState.IDLE if self._program is None else RuntimeState.RUNNING
+            idle = self._program is None and self._manual is None
+            return RuntimeState.IDLE if idle else RuntimeState.RUNNING
         if self._phase is Phase.DONE and not self._enabled:
             return RuntimeState.FINISHED
         return RuntimeState.ENDING
+
+    @property
+    def supervisor(self) -> SafetySupervisor:
+        """The ONE safety supervisor this runtime judges every tick with.
+
+        Handed to the web control surface by the composition root, so that the
+        web e-stop latches this instance synchronously, before any tick.
+        """
+        return self._supervisor
+
+    @property
+    def manual(self) -> ManualSession | None:
+        """The manual session as armed, or ``None`` (no session, or a programme)."""
+        return self._manual
+
+    @property
+    def manual_target(self) -> MotorRpm:
+        """The operator's target, motor rpm. 0 outside a manual session and after any stop."""
+        return self._manual_target
+
+    @property
+    def mode(self) -> RunMode:
+        """What the machine is doing, in the operator's words. Derived from :attr:`state`."""
+        match self.state:
+            case RuntimeState.IDLE | RuntimeState.FINISHED:
+                return RunMode.REPOS
+            case RuntimeState.ENDING:
+                return RunMode.ARRET
+            case RuntimeState.RUNNING:
+                return RunMode.MANUEL if self._manual is not None else RunMode.SEANCE
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    @property
+    def idle_link(self) -> IdleLink:
+        """What the idle, read-only polling of the drive has seen."""
+        return self._idle_link
+
+    @property
+    def heart_rate_trend(self) -> BpmPerMinute | None:
+        """The tracker's trend of accepted readings, bpm per minute; ``None`` = unknown."""
+        return self._tracker.rate
 
     @property
     def phase(self) -> Phase:
@@ -1025,6 +1458,16 @@ class TrainingRuntime:
         self._attendant_last_seen = stamp
         return stamp
 
+    def note_presence(self, at: Monotonic) -> None:
+        """Record an attendant ping that arrived elsewhere (the web surface) at ``at``.
+
+        Never moves the record backwards: an old ping forwarded late must not
+        make a present attendant look absent, nor a stale one look present.
+        """
+        seen = self._attendant_last_seen
+        if seen is None or at > seen:
+            self._attendant_last_seen = at
+
     def trip_from_thread(self, rule: str, action: SafetyAction, detail: str = "") -> None:
         """Raise a safety demand from a thread that is not the control loop.
 
@@ -1071,6 +1514,7 @@ class TrainingRuntime:
         if refusal is not None:
             return Err(refusal)
         now = self._clock.monotonic()
+        self._reset_session()
         inspected = await self._open_and_inspect(now)
         if isinstance(inspected, Err):
             return Err(inspected.error)
@@ -1098,16 +1542,240 @@ class TrainingRuntime:
         )
         return Ok(self._snapshot)
 
-    def _refuse_start(self, program: Program) -> StartRefusal | None:
-        """Every precondition that can be judged without touching the drive."""
-        if self._program is not None or self._shutdown is not None:
-            return AlreadyStarted(self.state)
+    async def start_manual(
+        self, occupancy: Occupancy, operator: str, ceiling: MotorRpm
+    ) -> Result[TelemetrySnapshot, StartRefusal]:
+        """Arm the machine for a manual session, target 0, or refuse and say why.
+
+        The same gates and the same arming as :meth:`start` - attestation, no
+        standing verdict, the drive read and never assumed, its limits read
+        back, the output stage energised with a zero reference - and then
+        NOTHING moves until :meth:`set_manual_target` asks for a speed.
+
+        ``occupancy`` is declared here and frozen for the session. With
+        :attr:`~src.training.types.Occupancy.BENCH` (nobody on board) the
+        heart-rate rules are off and every other rule is live; with
+        ``OCCUPIED`` a fresh, trustworthy heart rate is required to start and
+        every rule applies. ``ceiling`` comes from the configuration for that
+        occupancy (``LocalConfig.ceiling_for``) and is refused above the HSP
+        this runtime arms against.
+        """
+        refusal = self._refuse_arming() or self._refuse_manual(occupancy, operator, ceiling)
+        if refusal is not None:
+            return Err(refusal)
+        now = self._clock.monotonic()
+        self._reset_session()
+        inspected = await self._open_and_inspect(now)
+        if isinstance(inspected, Err):
+            return Err(inspected.error)
+        armed = await self._arm(now, inspected.value)
+        if armed is not None:
+            return Err(armed)
+        descent = ramp_duration(ceiling, MotorRpm(0), self._motion, self._motion_geometry)
+        self._manual = ManualSession(
+            occupancy=occupancy,
+            operator=operator,
+            ceiling=ceiling,
+            # Checked by _refuse_manual: the descent from the ceiling exists.
+            cooldown=Seconds((0.0 if descent is None else descent) + COMMISSIONED_DECEL_S),
+        )
+        self._started_at = now
+        self._phase = Phase.HOLD
+        self._attendant_last_seen = now
+        self._snapshot = self._build_snapshot(now)
+        _logger.info(
+            "manual session started: occupancy=%s operator=%s ceiling=%d motor rpm",
+            occupancy.value,
+            operator,
+            ceiling,
+        )
+        return Ok(self._snapshot)
+
+    def _refuse_manual(
+        self, occupancy: Occupancy, operator: str, ceiling: MotorRpm
+    ) -> StartRefusal | None:
+        """What refuses a manual session in particular, before the drive is touched."""
+        if not operator.strip():
+            return PlanUnusable("a manual session must name the operator running it")
+        hsp = hertz_to_motor_rpm(
+            self._limits.max_motor_hz, self._geometry.nominal_rpm, self._geometry.base_hz
+        )
+        minimum = self._motion.min_run
+        if not minimum <= ceiling <= hsp:
+            return PlanUnusable(
+                f"the ceiling {ceiling} motor rpm is outside [{minimum}, {hsp}]: below the "
+                "slowest running speed nothing can be asked for, and above the drive HSP "
+                "this runtime arms against the drive would refuse to follow"
+            )
+        if ramp_duration(MotorRpm(0), ceiling, self._motion, self._motion_geometry) is None:
+            return PlanUnusable(
+                "the motion limits are too slow for this geometry to ever reach the ceiling: "
+                "one control interval never pays for a whole rpm"
+            )
+        heart_rate = self._tracker.usable(self._clock.monotonic())
+        if occupancy is Occupancy.OCCUPIED and heart_rate is None:
+            return PlanUnusable(
+                "a person on board needs a fresh, trustworthy heart rate before anything turns"
+            )
+        return None
+
+    def set_manual_target(self, target: OutputRpm) -> Result[MotorRpm, ManualTargetRefusal]:
+        """Set the manual target, in OUTPUT rpm; the motion profiler walks the setpoint to it.
+
+        Never a setpoint: the value is only a destination, reached tick by tick
+        at the motion limits, and every safety verdict still overrides it. 0,
+        or ``[min_run, ceiling]`` at the motor shaft; anything else is refused
+        rather than clamped. Refused once the session is ending: a target then
+        would be a resumption nobody asked for.
+        """
+        manual = self._manual
+        if manual is None:
+            return Err(NoManualSession(self.state))
+        if self._ending is not None or self._stop_requested is not None:
+            return Err(ManualEnding("the manual session is ending; start a new one to move again"))
+        minimum = self._motion.min_run
+        if not math.isfinite(target) or target < 0.0:
+            return Err(TargetOutOfRange(requested=target, min_run=minimum, ceiling=manual.ceiling))
+        motor = output_to_motor_rpm(target, self._geometry.ratio)
+        if motor != 0 and not minimum <= motor <= manual.ceiling:
+            return Err(TargetOutOfRange(requested=target, min_run=minimum, ceiling=manual.ceiling))
+        self._manual_target = motor
+        _logger.info("manual target set to %d motor rpm (%.2f output rpm)", motor, target)
+        return Ok(motor)
+
+    async def fault_reset(self) -> Result[None, FaultResetRefusal]:
+        """Reset a drive fault, on an operator's explicit request. Never called automatically.
+
+        Only on a machine at rest (phase DONE, setpoint zero), only once every
+        OTHER verdict has been acknowledged by name, only when the drive -
+        freshly read - says FAULT and shows the shaft stopped, and only for a
+        fault the console may reset at all (``DriveFault.resettable``: never a
+        short circuit, the drive's own hardware, STO, overspeed, or a code that
+        was not read or is not known - those need the power off and an
+        inspection). The
+        ``drive_fault`` verdict itself is the one exception, and necessarily:
+        its rule re-latches on every tick for as long as the drive shows the
+        fault, so it can only be acknowledged AFTER the reset - which the next
+        start then insists on. Then ``FAULT_RESET``
+        now and ``SHUTDOWN`` :data:`FAULT_RESET_SETTLE` later, on a later tick:
+        the bench console's own sequence. Nothing is energised and nothing
+        moves: the next start arms the drive from scratch.
+        """
+        now = self._clock.monotonic()
+        checked = self._check_fault_reset(now)
+        if isinstance(checked, Err):
+            return Err(checked.error)
+        readable = checked.value
+        written = await self._drive.write_command(ControlWord.FAULT_RESET)
+        if isinstance(written, Err):
+            return Err(ResetUndelivered(describe_drive_error(written.error).detail))
+        # A drive in FAULT has no torque, and FAULT_RESET leaves it in
+        # SWITCH_ON_DISABLED: the output stage is off, which is what lets an
+        # ending that could not remove the run command from a faulted drive
+        # finish.
+        self._enabled = False
+        self._fault_reset_at = now
+        _logger.warning("drive fault reset by the operator (LFT was %s)", readable.fault_code)
+        return Ok(None)
+
+    def _check_fault_reset(self, now: Monotonic) -> Result[DriveStatus, FaultResetRefusal]:
+        """Every precondition of a fault reset; the fresh faulted status when all hold."""
+        state = self.state
+        if self._shutdown is not None or self._silent:
+            return Err(ResetUndelivered("this runtime no longer writes to the drive"))
+        commanded = self._phase is not Phase.DONE or self._applied_rpm != 0
+        if state is RuntimeState.RUNNING or commanded:
+            return Err(ResetWhileCommanded(state=state, phase=self._phase))
+        standing = self.standing
+        if standing is not None and standing.rule != RULE_DRIVE_FAULT:
+            return Err(ResetBehindVerdict(standing))
+        return self._check_faulted_drive(now)
+
+    def _check_faulted_drive(self, now: Monotonic) -> Result[DriveStatus, FaultResetRefusal]:
+        """The drive's half of the reset preconditions: faulted, stopped, resettable."""
+        _, readable, _ = self._shown_status(now)
+        if readable is None or readable.state is not DriveState.FAULT:
+            return Err(NoFaultToReset(None if readable is None else readable.state))
+        if abs(readable.output_rpm) >= self._limits.standstill_rpm:
+            return Err(ShaftStillTurning(readable.output_rpm))
+        report = status_fault_report(readable)
+        if report is None or not report.fault.resettable:
+            # An unread or unnamed code is not evidence the fault is benign.
+            return Err(ResetForbidden(report))
+        return Ok(readable)
+
+    async def _finish_fault_reset(self, now: Monotonic) -> None:
+        """The second word of an operator's fault reset, once it has settled."""
+        started = self._fault_reset_at
+        if started is None or elapsed(started, now) < FAULT_RESET_SETTLE:
+            return
+        self._fault_reset_at = None
+        if self._silent:
+            return
+        written = await self._drive.write_command(ControlWord.SHUTDOWN)
+        if isinstance(written, Err):
+            _logger.warning(
+                "fault reset: SHUTDOWN after the reset failed: %s",
+                describe_drive_error(written.error).detail,
+            )
+
+    def _refuse_arming(self) -> StartRefusal | None:
+        """What refuses ANY start, programme or manual, before the drive is touched.
+
+        A runtime that has FINISHED may be armed again - that is what puts the
+        console back to REPOS after a stop - but never one that is still
+        running or ending, one that has shut down (its link is released), or
+        one that went silent (it never sends another frame).
+        """
+        state = self.state
+        if self._shutdown is not None or self._silent:
+            return AlreadyStarted(state)
         attested = self._supervisor.require_estop_confirmed()
         if isinstance(attested, Err):
             return NotAttested(attested.error.statement)
         standing = self.standing
         if standing is not None:
             return SafetyStanding(standing)
+        if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
+            return AlreadyStarted(state)
+        return None
+
+    def _reset_session(self) -> None:
+        """Forget the previous session before arming a new one. Link and tracker survive.
+
+        Called only after :meth:`_refuse_arming` passed, so nothing is turning,
+        nothing is latched and the output stage is off. What survives is what
+        describes the machine rather than the session: the link, the drive
+        observation and its failure runs, the heart-rate tracker, the
+        attendant's last ping and the tick clock.
+        """
+        self._program = None
+        self._subject = None
+        self._controller = None
+        self._manual = None
+        self._manual_target = MotorRpm(0)
+        self._motion_from = None
+        self._fault_reset_at = None
+        self._started_at = None
+        self._phase = Phase.DONE
+        self._ending = None
+        self._end_reason = None
+        self._recovery_from = None
+        self._stop_requested = None
+        self._warmup_satisfied = False
+        self._resting_bpm = None
+        self._decision = None
+        self._descent_from = None
+        self._disable_failures = 0
+        self._counters = ZoneCounters(
+            in_zone=Seconds(0.0), above_zone=Seconds(0.0), below_zone=Seconds(0.0)
+        )
+
+    def _refuse_start(self, program: Program) -> StartRefusal | None:
+        """Every precondition that can be judged without touching the drive."""
+        arming = self._refuse_arming()
+        if arming is not None:
+            return arming
         mismatch = self._limits_mismatch(program)
         if mismatch is not None:
             return mismatch
@@ -1180,15 +1848,17 @@ class TrainingRuntime:
         """Acquire the link and read the drive once. Assumes nothing about either."""
         opened = await self._drive.open()
         if isinstance(opened, Err):
-            failure = self._note_failure(opened.error)
+            # An unopened link is no evidence the drive is reachable, so it
+            # extends the read run. A successful open does not shorten it:
+            # opening the adapter proves nothing about the drive behind it.
+            failure = self._note_failure(Exchange.READ, opened.error)
             return Err(DriveUnavailable(f"the drive link could not be opened: {failure.detail}"))
         self._link_open = True
-        self._note_success()
         status = await self._drive.read_status()
         if isinstance(status, Err):
-            failure = self._note_failure(status.error)
+            failure = self._note_failure(Exchange.READ, status.error)
             return Err(DriveUnavailable(f"the drive could not be read: {failure.detail}"))
-        self._note_success()
+        self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
         return Ok(status.value)
@@ -1200,34 +1870,95 @@ class TrainingRuntime:
         if status.fault_present:
             # No automatic fault reset, anywhere. "Reset it and see" with a
             # person inside the machine is how a short circuit becomes a fire.
-            return DriveInFault(report=fault_report(status.fault), state=status.state)
+            return DriveInFault(report=status_fault_report(status), state=status.state)
+        refused = await self._check_drive_limits()
+        if refused is not None:
+            return refused
         return await self._energise(now)
+
+    async def _check_drive_limits(self) -> StartRefusal | None:
+        """Read tFr/HSP/LSP/ACC/dEC back and refuse limits this machine cannot arm on.
+
+        Read at every arming rather than trusted from a commissioning note: HSP
+        is the ceiling that holds when this software is wrong, and LSP = 0 is
+        what makes every zero reference in this module a stop. Runs before a
+        single word is written, so a refusal leaves nothing energised.
+
+        ttO and SLL cannot be read yet (their Modbus addresses are unverified),
+        so every arming says so in the log instead of reading a guessed address.
+        """
+        read = await self._drive.read_limits()
+        if isinstance(read, Err):
+            failure = self._note_failure(Exchange.READ, read.error)
+            return DriveUnavailable(f"the drive's limits could not be read: {failure.detail}")
+        self._note_success(Exchange.READ)
+        limits = read.value
+        # The drive's own ramp, as commissioned today: what the tracking
+        # envelope's follower is derated from (src/training/tracking.py).
+        self._follower.retune(follow_rate(limits, self._geometry.nominal_rpm))
+        checked = check_limits(limits, self._limits.max_motor_hz)
+        if isinstance(checked, Err):
+            refusal = DriveParameterRefused(violation=checked.error, limits=limits)
+            _logger.error(
+                "arming refused on %s: %s (read: %s)",
+                checked.error.parameter.value,
+                refusal.detail,
+                limits.describe(),
+            )
+            return refusal
+        _logger.info(
+            "arming: drive limits %s, accepted against a %.1f Hz ceiling",
+            limits.describe(),
+            self._limits.max_motor_hz,
+        )
+        for unverified in UNVERIFIED_PARAMETERS:
+            _logger.warning("arming: %s", unverified.describe())
+        return None
 
     async def _refuse_precommanded(self, now: Monotonic, status: DriveStatus) -> StartRefusal:
         """A previous process died with the motor commanded. Stop it, latch, refuse.
 
-        The reference goes to zero and the run command is *kept*: that is the
-        fastest stop this machine has, because a stop commanded faster than the
-        commissioned ramp trips overvoltage into freewheel, and removing the run
-        command from a turning shaft is the same hazard by another route. The
-        ramp-stop word and then the shutdown word are issued later, by
-        :meth:`_settle`, once RFRD shows standstill.
+        See :meth:`_stop_found_running`, which the idle poll shares.
         """
-        self._enabled = True
+        await self._stop_found_running(
+            now,
+            status,
+            (
+                f"the drive was already in OPERATION_ENABLED at {status.output_rpm} rpm: a "
+                "previous process died with the motor commanded"
+            ),
+        )
+        return DrivePrecommanded(state=status.state, output_rpm=status.output_rpm)
+
+    async def _stop_found_running(self, now: Monotonic, status: DriveStatus, found: str) -> None:
+        """A drive this runtime did not command is enabled or turning: zero, latch, end.
+
+        Contract rule 8: never assume the drive's state. The reference goes to
+        zero and the run command is *kept*: that is the fastest stop this
+        machine has, because a stop commanded faster than the commissioned ramp
+        trips overvoltage into freewheel, and removing the run command from a
+        turning shaft is the same hazard by another route. The ramp-stop word
+        and then the shutdown word are issued later, by :meth:`_settle`, once
+        RFRD shows standstill. A shaft turning with the output stage NOT
+        enabled (coasting) cannot be braked by anything but that stage, which
+        this runtime will not energise: the zero is still written, so nothing
+        resumes, and the operator is told. Either way the verdict latches: a
+        named operator acknowledges it before any session runs, and nothing
+        here resumes motion.
+        """
+        self._enabled = status.state is DriveState.OPERATION_ENABLED
         await self._exchange_write_speed(now, MotorRpm(0))
         self._latch(
             now,
             RULE_DRIVE_PRECOMMANDED,
             SafetyAction.QUICK_STOP,
             (
-                f"the drive was already in OPERATION_ENABLED at {status.output_rpm} rpm: a "
-                "previous process died with the motor commanded. The reference has been zeroed "
-                "and the run command left in place so the drive ramps it down; a named operator "
-                "must acknowledge this before any session runs"
+                f"{found}. The reference has been zeroed and the run command left in place so "
+                "the drive ramps it down; a named operator must acknowledge this before any "
+                "session runs"
             ),
         )
         self._begin_ending(now, EndReason.EMERGENCY_STOP, self._latched)
-        return DrivePrecommanded(state=status.state, output_rpm=status.output_rpm)
 
     async def _energise(self, now: Monotonic) -> StartRefusal | None:
         """Zero the reference, then SHUTDOWN -> SWITCH_ON -> ENABLE_OPERATION.
@@ -1302,11 +2033,15 @@ class TrainingRuntime:
     async def _tick(self, now: Monotonic) -> None:
         """The tick proper. Read the module docstring before reordering anything."""
         interval = self._interval(now)
+        # 0. Idle only: read the drive, write nothing. A no-op once a session
+        #    has been started, because from then on step 1 owns the link.
+        await self._poll_idle(now)
         # 1. THE KEEPALIVE FIRST.
         await self._service_drive(now)
+        await self._finish_fault_reset(now)
         self._advance_phase(now)
         # 2. Safety, and its verdict.
-        verdict = self._supervisor.evaluate(self._observe(now))
+        verdict = self._supervisor.evaluate(self._observe(now, self._envelope(now)))
         standing = self._worst(self._latched, verdict)
         # 3. The command. The verdict decides; it reaches the controller only
         #    through the two arms that cap it.
@@ -1346,17 +2081,136 @@ class TrainingRuntime:
         After going silent this sends nothing, reads included: a real ATV320
         resets ``ttO`` on any frame it receives, so a poll would restart the
         timeout the stop is now resting on.
+
+        Once a session has armed the drive the zero keepalive continues after
+        it has FINISHED, as it always has: the drive has been talking to a
+        master, and falling silent would arm its communication-loss fault (SLF)
+        on a machine nobody is driving. Only a runtime that never armed is
+        read-only (:meth:`_poll_idle`).
+
+        Only the status read may count as proof the drive is reachable: the
+        keepalive's acknowledgement resets the *write* run and nothing else, so
+        a read that fails on every tick reaches ``comms_lost`` however well the
+        writes are going.
         """
         if self._silent or not self._link_open:
             return
         await self._exchange_write_speed(now, self._applied_rpm)
         status = await self._drive.read_status()
         if isinstance(status, Err):
-            self._note_failure(status.error)
+            self._note_failure(Exchange.READ, status.error)
             return
-        self._note_success()
+        self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
+
+    async def _poll_idle(self, now: Monotonic) -> None:
+        """Read the drive at :data:`IDLE_POLL_PERIOD` while no session was ever started.
+
+        **Reads only - until the drive is found enabled or turning.** A machine
+        nobody has started is shown, not driven: the operator sees measured
+        rpm, state, current and the raw LFT code, and the drive hears nothing
+        but ETA/LFRD/RFRD/LCR reads. ``DriveBackend.open`` is itself
+        contractually read-only (it proves the addressing with a read). The one
+        exception is a drive this console did not command that is enabled or
+        turning: that is stopped at once (:meth:`_judge_idle`), because a
+        read-only poll feeds the drive's ``ttO`` and would otherwise keep it
+        turning for as long as the console sat idle.
+
+        Skipped once a programme exists (the keepalive owns the link then),
+        once this runtime is silent (a frame after silence restarts ``ttO``),
+        and while the session path has the link open (a start that was
+        refused after opening it keeps servicing it through step 1).
+
+        A failure is recorded in :attr:`idle_link` and the link is re-opened on
+        the next poll, because the ATV320 driver latches a lost link until
+        ``open`` is called again. It is never counted towards ``comms_lost``:
+        see :class:`IdleLink`.
+        """
+        armed = self._program is not None or self._manual is not None
+        if armed or self._silent or self._link_open:
+            return
+        due = self._idle_next_at
+        if due is not None and now < due:
+            return
+        self._idle_next_at = Monotonic(now + IDLE_POLL_PERIOD)
+        if not self._idle_link.open:
+            opened = await self._drive.open()
+            if isinstance(opened, Err):
+                self._idle_failed(opened.error)
+                return
+            self._idle_link = replace(self._idle_link, open=True)
+        began = self._clock.monotonic()
+        status = await self._drive.read_status()
+        if isinstance(status, Err):
+            self._idle_failed(status.error)
+            return
+        link = self._idle_link
+        self._idle_link = replace(
+            link,
+            reads=link.reads + 1,
+            consecutive_failures=0,
+            last_latency=elapsed(began, self._clock.monotonic()),
+        )
+        self._idle_status = status.value
+        self._idle_status_at = now
+        await self._judge_idle(now, status.value)
+
+    async def _judge_idle(self, now: Monotonic, status: DriveStatus) -> None:
+        """A drive found enabled, or turning, while nothing is commanded: stop it now.
+
+        Reading and showing it was not enough, and it was the worst of both: a
+        drive left OPERATION_ENABLED at 900 motor rpm by a crashed process kept
+        turning for the whole idle period (60 s in the failure matrix, 120 s on
+        the panel) with no verdict, and the read-only poll was what kept the
+        drive's own ``ttO`` fed, so not even the drive stopped it. Only an
+        operator's START noticed.
+
+        So the idle console now does exactly what a start does on the same
+        evidence (:meth:`_stop_found_running`): it takes the link over (from
+        here on the keepalive and the status read of step 1 run every tick, so
+        the stop is watched and the output stage is removed at standstill by
+        :meth:`_settle`), zeroes the reference, latches ``drive_precommanded``
+        and ends. It never resumes anything, and nothing starts until a named
+        operator acknowledges it.
+        """
+        turning = abs(status.output_rpm) >= self._limits.standstill_rpm
+        if status.state is not DriveState.OPERATION_ENABLED and not turning:
+            return
+        _logger.critical(
+            "idle console: the drive is %s at %d motor rpm with no session running",
+            status.state.name,
+            status.output_rpm,
+        )
+        self._link_open = True
+        self._last_status = status
+        self._last_status_at = now
+        await self._stop_found_running(
+            now,
+            status,
+            (
+                f"the idle console found the drive {status.state.name} at {status.output_rpm} "
+                "motor rpm with no session running: something else commanded it (a process "
+                "that died, another master)"
+            ),
+        )
+
+    def _idle_failed(self, error: DriveError) -> None:
+        """Record a failed idle exchange and mark the link for re-opening."""
+        failure = describe_drive_error(error)
+        link = self._idle_link
+        self._idle_link = replace(
+            link,
+            open=False,
+            failures=link.failures + 1,
+            consecutive_failures=link.consecutive_failures + 1,
+            last_error=failure.detail,
+        )
+        _logger.warning(
+            "idle drive read failed (%d consecutive): %s",
+            self._idle_link.consecutive_failures,
+            failure.detail,
+        )
 
     # =====================================================================
     # The phase machine
@@ -1380,7 +2234,23 @@ class TrainingRuntime:
             self._phase = self._ending_phase(now, ending)
         elif self._program is not None:
             self._phase = self._nominal_phase(now, self._program)
+        elif self._manual is not None:
+            self._phase = self._manual_phase(now)
         self._latch_resting_rate(now)
+
+    def _manual_phase(self, now: Monotonic) -> Phase:
+        """HOLD for as long as the operator drives, until :data:`MANUAL_SESSION_LIMIT`.
+
+        HOLD because it is the phase in which motion is commanded and every
+        rule is live. At the limit the session ends itself exactly as a STOP
+        does - target zero, the motion-limited ramp, standstill - rather than
+        running into ``session_overrun``, which would latch.
+        """
+        if self._session_elapsed(now) < MANUAL_SESSION_LIMIT:
+            return Phase.HOLD
+        _logger.warning("the manual session reached its %.0f s limit", MANUAL_SESSION_LIMIT)
+        self._begin_ending(now, EndReason.PROGRAMME_COMPLETE, None)
+        return Phase.COOLDOWN
 
     def _nominal_phase(self, now: Monotonic, program: Program) -> Phase:
         """Where the programme's own timeline says this session is.
@@ -1392,6 +2262,10 @@ class TrainingRuntime:
         still ends where the timeline says it does.
         """
         phase, _, _ = program.phase_at(self._session_elapsed(now))
+        if phase is Phase.DONE and self._applied_rpm != 0:
+            # The timeline is over but the motion-limited cooldown is not: DONE
+            # would switch the heart-rate rules off over a turning arm.
+            return Phase.RECOVERY
         if phase is Phase.WARMUP:
             if self._warmup_satisfied:
                 return Phase.HOLD
@@ -1429,6 +2303,11 @@ class TrainingRuntime:
             return Phase.RECOVERY
         if elapsed(recovery_from, now) < self._recovery_s():
             return Phase.RECOVERY
+        if self._applied_rpm != 0 and not self._silent:
+            # Still descending at the motion limits: not DONE, which would stop
+            # supervising the heart rate over a turning arm. A silent runtime
+            # never writes again, so its belief cannot reach zero; ttO owns it.
+            return Phase.RECOVERY
         return Phase.DONE
 
     def _latch_resting_rate(self, now: Monotonic) -> None:
@@ -1451,20 +2330,26 @@ class TrainingRuntime:
     # Safety
     # =====================================================================
 
-    def _observe(self, now: Monotonic) -> SafetyObservation:
+    def _observe(self, now: Monotonic, envelope: SpeedEnvelope | None) -> SafetyObservation:
         """Everything the rules are allowed to judge, for this instant.
 
         Note what is absent, and that it is absent by construction rather than by
         omission: no desired speed, no ``ControlDecision``, no error. There is no
         field through which the control law's opinion can reach a rule, which is
-        the whole reason the two layers exist.
+        the whole reason the two layers exist. ``commanded_g`` is the applied
+        setpoint - a measurement - rendered through the geometry, and
+        ``envelope`` is derived from it and from the drive's ramp.
 
         ``measured_rpm`` and ``current`` go to ``None`` the moment the status is
         stale, never to a fabricated zero - a made-up 0 rpm is exactly the lie
         that would make ``no_load`` and ``reverse_rotation`` judge a machine that
-        is not there.
+        is not there. The LFRD echo is passed only when it was read in THIS
+        tick, after the keepalive wrote the setpoint it is compared with.
         """
         status = self._readable_status(now)
+        echo = None
+        if status is not None and self._last_status_at == now:
+            echo = status.setpoint_echo_rpm
         return SafetyObservation(
             now=now,
             phase=self._phase,
@@ -1476,10 +2361,41 @@ class TrainingRuntime:
             drive_state=DriveState.COMM_LOST if status is None else status.state,
             measured_rpm=None if status is None else status.output_rpm,
             current=None if status is None else status.current,
-            fault=None if status is None else fault_report(status.fault),
-            consecutive_comm_failures=self._comm_failures,
+            fault=None if status is None else status_fault_report(status),
+            consecutive_comm_failures=self._comm_failures(),
             attendant_last_seen=self._attendant_last_seen,
+            commanded_g=self._geometry.view(self._applied_rpm).g_load,
+            resting_bpm=self._resting_bpm,
+            setpoint_echo_rpm=echo,
+            envelope=envelope,
+            heart_rate_supervised=self._occupied(),
         )
+
+    def _envelope(self, now: Monotonic) -> SpeedEnvelope | None:
+        """Where the shaft may be this tick, or ``None`` while nothing talks to the drive.
+
+        See :mod:`src.training.tracking`. The follower is advanced towards the
+        setpoint in force, and re-anchored on the measured speed whenever the
+        drive is not working to the reference (disabled, coasting, faulted).
+        """
+        if not self._link_open:
+            return None
+        status = self._readable_status(now)
+        return self._follower.update(
+            now,
+            self._applied_rpm,
+            None if status is None else status.output_rpm,
+            following=status is not None and status.state is DriveState.OPERATION_ENABLED,
+        )
+
+    def _occupied(self) -> bool:
+        """Whether a person may be in the machine: always, except a BENCH manual session.
+
+        A programme is always taken to have somebody on board; so is a runtime
+        with no session at all (it judges nothing but ``DONE`` then anyway).
+        """
+        manual = self._manual
+        return manual is None or manual.occupancy is not Occupancy.BENCH
 
     def _latch(self, now: Monotonic, rule: str, action: SafetyAction, detail: str) -> None:
         """Latch a verdict this module raised on its own behalf.
@@ -1607,6 +2523,7 @@ class TrainingRuntime:
                 # and the test that names this asserts the property that is true
                 # rather than the one that sounds better.
                 self._descent_from = None
+                self._motion_from = None
                 self._decision = None
                 await self._apply_setpoint(now, self._applied_rpm)
             case SafetyAction.REDUCE:
@@ -1626,6 +2543,7 @@ class TrainingRuntime:
                 # drops the drive into freewheel, which is slower still.
                 self._begin_ending(now, EndReason.SAFETY_VERDICT, standing)
                 self._descent_from = None
+                self._motion_from = None
                 self._decision = None
                 await self._apply_setpoint(now, MotorRpm(0))
             case SafetyAction.GO_SILENT:
@@ -1634,6 +2552,25 @@ class TrainingRuntime:
                 self._go_silent(now, ending.detail)
             case _ as unreachable:
                 assert_never(unreachable)
+        if action is not SafetyAction.NONE:
+            self._rebase_controller(now)
+
+    def _rebase_controller(self, now: Monotonic) -> None:
+        """Hand the controller the setpoint a verdict put in force.
+
+        Every tick a verdict decided the output, the controller's standing
+        demand is replaced by the speed actually applied. Otherwise the tick the
+        verdict lifts re-emits whatever the controller last wanted: a REDUCE
+        that walked the machine down to 60 rpm would end by writing the 276 rpm
+        the controller was still holding, in one step, with a person inside.
+
+        ``_applied_rpm`` and not the capped value that was asked for, because a
+        write that failed left the previous value in force - and that is the
+        value the next increment must be added to.
+        """
+        controller = self._controller
+        if controller is not None:
+            controller.rebase(now, self._applied_rpm)
 
     async def _follow_controller(
         self, now: Monotonic, *, allow_increase: bool, cap: MotorRpm | None
@@ -1644,12 +2581,18 @@ class TrainingRuntime:
         zero - so an idle runtime still writes a zero reference every tick, and
         still proves the link.
         """
+        if self._manual is not None:
+            await self._follow_manual(now, allow_increase=allow_increase, cap=cap)
+            return
         controller = self._controller
         if controller is None:
             self._decision = None
             await self._apply_setpoint(now, MotorRpm(0) if cap is None else cap)
             return
-        step = controller.update(now, self._control_input(now), allow_increase=allow_increase)
+        rise = self._increase_permitted()
+        step = controller.update(
+            now, self._control_input(now), allow_increase=allow_increase and rise
+        )
         if not step.held:
             # Only a tick that actually decided replaces the published decision.
             # The control period is five seconds and the loop runs at 5 Hz, so
@@ -1660,7 +2603,107 @@ class TrainingRuntime:
             # has not moved at all.
             self._decision = step.decision
         demand = step.decision.desired_rpm
-        await self._apply_setpoint(now, demand if cap is None else MotorRpm(min(demand, cap)))
+        if cap is not None:
+            # REDUCE: the verdict's own descent IS the setpoint, at the safety
+            # ramp (_descend), which may be faster than the motion limits. Not
+            # min(demand, cap): the demand runs ahead of the motion-limited
+            # setpoint, and jumping down to it would outrun every ramp there is.
+            await self._apply_setpoint(now, cap)
+            return
+        # Every non-emergency change of a programme's setpoint - the controller's
+        # demand, the warm-up, the cooldown - is walked at the anti-nausea
+        # limits exactly as a manual target is. The controller decides once per
+        # five-second period and may ask for up to slew x period (75 rpm) at
+        # once; the drive would execute that on its own ACC ramp.
+        moved = self._motion_step(now, demand)
+        applied = self._applied_rpm
+        if moved > applied and not (rise and self._readable_status(now) is not None):
+            # The vasovagal gate holds the setpoint where it is, including a
+            # climb towards a demand decided before the heart began to fall -
+            # and so does a drive whose state is no longer known. The
+            # controller adopts the speed actually held.
+            moved = applied
+            self._motion_from = now
+            controller.rebase(now, moved)
+        elif self._passage_too_soon(now, moved):
+            moved = applied
+        await self._apply_setpoint(now, moved)
+
+    def _passage_too_soon(self, now: Monotonic, moved: MotorRpm) -> bool:
+        """Whether a step across the gap ``(0, min_run)`` would outrun the programme's slew.
+
+        The motion limiter takes the passage between 0 and ``min_run`` on any
+        tick that has earned one rpm (see :mod:`src.training.motion`), because
+        its own allowance is capped below a whole ``min_run``. The control law
+        promises more for a programme: every change of the setpoint within
+        ``slew x`` the time since the previous one. So a programme's passage
+        waits until that much time has passed since the setpoint last moved -
+        at 15 rpm/s, under four seconds at 1.1 output rpm - and never deadlocks,
+        because that time is not capped.
+        """
+        applied = self._applied_rpm
+        if (moved == 0) == (applied == 0):
+            return False
+        changed = self._setpoint_changed_at
+        if changed is None:
+            return False
+        return self._limits.slew * elapsed(changed, now) < abs(moved - applied)
+
+    async def _follow_manual(
+        self, now: Monotonic, *, allow_increase: bool, cap: MotorRpm | None
+    ) -> None:
+        """Step 3 for a manual session: the operator's target, at the motion limits.
+
+        Under REDUCE the verdict's descent (``cap``) IS the setpoint: the
+        target no longer matters when the only direction allowed is down. With
+        nobody asking for anything, the setpoint steps towards the target -
+        which is 0 once the session is ending - and it may not rise while a
+        person on board has no usable heart rate.
+        """
+        self._decision = None
+        if cap is not None:
+            await self._apply_setpoint(now, cap)
+            return
+        target = MotorRpm(0) if self._ending is not None else self._manual_target
+        moved = self._motion_step(now, target)
+        heart_rate_allows = not self._occupied() or (
+            self._tracker.usable(now) is not None and self._increase_permitted()
+        )
+        if not (allow_increase and heart_rate_allows) and moved > self._applied_rpm:
+            moved = self._applied_rpm
+        await self._apply_setpoint(now, moved)
+
+    def _increase_permitted(self) -> bool:
+        """Whether the heart rate allows the setpoint to RISE this tick: the vasovagal gate.
+
+        No rise while the short trend (``RuntimeLimits.trend_samples``) falls
+        faster than ``RuntimeLimits.falling_trend``, nor while it is unknown. A
+        falling heart rate reads to the control law as "below the zone", and
+        its answer is to accelerate; before this gate it did so for ~16 s of a
+        collapse until ``hr_drop`` tripped. Restricts the controller only:
+        every safety verdict still decides first.
+        """
+        trend = self._tracker.recent_rate(self._limits.trend_samples)
+        return trend is not None and trend >= self._limits.falling_trend
+
+    def _motion_step(self, now: Monotonic, target: MotorRpm) -> MotorRpm:
+        """One motion-limited step towards ``target``, with the accrual of motion.py.
+
+        The allowance accrues from the instant the setpoint last moved (minus
+        the carry), and restarts whenever the setpoint is where it is asked to
+        be, so a setpoint parked for a minute does not bank a minute of motion.
+        """
+        applied = self._applied_rpm
+        started = self._motion_from
+        if started is None or applied == target:
+            self._motion_from = now
+            return applied
+        interval = elapsed(started, now)
+        moved = next_setpoint(applied, target, self._motion, self._motion_geometry, interval)
+        if moved != applied:
+            carried = carry_after(applied, moved, self._motion, self._motion_geometry, interval)
+            self._motion_from = Monotonic(now - carried)
+        return moved
 
     def _control_input(self, now: Monotonic) -> ControlInput:
         """What the control law is allowed to know this tick.
@@ -1693,7 +2736,15 @@ class TrainingRuntime:
         return None if status is None else status.setpoint_echo_rpm
 
     def _descend(self, now: Monotonic) -> MotorRpm:
-        """The next step of a controlled descent, at the configured slew rate.
+        """The next step of a SAFETY descent (a REDUCE or RAMP_DOWN verdict).
+
+        On a programme this is the configured slew (15 rpm/s), deliberately
+        faster than the anti-nausea motion limits every ordinary setpoint change
+        now obeys (12.4 rpm/s or less): a verdict that asks for less speed is
+        a safety demand, and a slightly faster, still controlled, descent is
+        the right trade there. Only QUICK_STOP is faster (the drive's own
+        commissioned ramp). A manual session descends at the motion limits
+        even under a verdict, as it always has.
 
         Mirrors the control law's own limiter rather than inventing a second one,
         including the part that is easy to get wrong: the setpoint domain is
@@ -1708,6 +2759,9 @@ class TrainingRuntime:
         machine never stops - with a person inside it, and with the telemetry
         showing a controller dutifully demanding zero.
         """
+        if self._manual is not None:
+            # Deceleration exactly as acceleration: see src/training/motion.py.
+            return self._motion_step(now, MotorRpm(0))
         previous = self._applied_rpm
         if previous == 0:
             self._descent_from = None
@@ -1770,14 +2824,76 @@ class TrainingRuntime:
             return
         if self._applied_rpm != 0 or not self._at_standstill(now):
             return
+        status = self._readable_status(now)
+        if status is not None and status.state is DriveState.FAULT:
+            # No torque at standstill, and every word but FAULT_RESET is refused
+            # by design: the ending waits for the operator's fault reset.
+            return
         # Transition 5 (ramps, keeps control of the shaft) and only then
         # transition 2.
-        if await self._exchange_command(ControlWord.SWITCH_ON) is not None:
+        word = ControlWord.SWITCH_ON
+        failure = await self._exchange_command(word)
+        if failure is None:
+            word = ControlWord.SHUTDOWN
+            failure = await self._exchange_command(word)
+        if failure is None:
+            self._enabled = False
+            self._disable_failures = 0
+            _logger.info("output stage disabled at standstill")
             return
-        if await self._exchange_command(ControlWord.SHUTDOWN) is not None:
+        self._disable_failures += 1
+        if self._disable_failures >= self._limits.disable_attempts:
+            await self._escalate_disable(now, word, failure)
+
+    async def _escalate_disable(
+        self, now: Monotonic, word: ControlWord, failure: DriveFailure
+    ) -> None:
+        """The drive keeps refusing to have its output stage removed: say so, then force it.
+
+        Retrying forever was the defect: ~480 refused frames until the console
+        exited, the output stage left enabled, no verdict and nothing on the
+        operator's screen. After ``RuntimeLimits.disable_attempts`` refusals in
+        a row:
+
+        * if it was SWITCH_ON (transition 5) that was refused, SHUTDOWN is sent
+          directly. That is transition 8, which on a TURNING shaft drops the
+          output stage into a freewheel - but this is only ever reached at a
+          standstill confirmed from a fresh RFRD with a zero reference, where
+          removing the stage lets nothing coast. A latched ``disable_refused``
+          RAMP_DOWN tells the operator which word was refused;
+        * if SHUTDOWN is refused too (or was the word refused in the first
+          place), no word this runtime has removes the output stage, and a
+          drive that will not take its words cannot be trusted with any: the
+          verdict is GO_SILENT, and the drive's own ``ttO`` drops the stage.
+        """
+        attempts = self._disable_failures
+        refused = (
+            f"the drive refused {word.name} {attempts} times in a row at confirmed standstill "
+            f"({failure.detail})"
+        )
+        if (
+            word is ControlWord.SWITCH_ON
+            and await self._exchange_command(ControlWord.SHUTDOWN) is None
+        ):
+            self._enabled = False
+            self._disable_failures = 0
+            self._latch(
+                now,
+                RULE_DISABLE_REFUSED,
+                SafetyAction.RAMP_DOWN,
+                (
+                    f"{refused}: the output stage was removed with SHUTDOWN instead, which is "
+                    "harmless only because the shaft is confirmed stopped. Have the drive "
+                    "checked before the next session"
+                ),
+            )
             return
-        self._enabled = False
-        _logger.info("output stage disabled at standstill")
+        detail = (
+            f"{refused}, and SHUTDOWN too: no word removes the output stage, so no further "
+            "frame will be sent and the drive's own ttO timeout drops it"
+        )
+        self._latch(now, RULE_DISABLE_REFUSED, SafetyAction.GO_SILENT, detail)
+        self._go_silent(now, detail)
 
     # =====================================================================
     # Out-of-band requests
@@ -1824,9 +2940,16 @@ class TrainingRuntime:
     def _emergency_zero(self, now: Monotonic) -> EmergencyStopOutcome:
         """Zero the speed reference synchronously, best effort, never raising.
 
-        Blocks the event loop for up to the configured budget, on purpose: this
+        Blocks the event loop for up to the drive's own
+        :attr:`~src.motor.drive.DriveBackend.emergency_budget`, on purpose: this
         call *is* the stop, and handing it to an executor would hand it to the
         same loop that may be the thing that failed.
+
+        The budget is the backend's, not a constant of this module. A figure
+        chosen here (it used to be 0.5 s) cannot know that one Modbus
+        transaction may spend its serial timeout several times over, so it
+        would be a bound the drive silently overruns - and one the ATV320
+        driver would have to replace with its real floor anyway.
 
         The run command is deliberately not removed - see
         :meth:`~src.motor.drive.DriveBackend.emergency_disable_blocking`. The
@@ -1834,7 +2957,7 @@ class TrainingRuntime:
         like success: it means the motor is still commanded at whatever setpoint
         it held, and somebody has to be told.
         """
-        outcome = self._drive.emergency_disable_blocking(self._limits.emergency_budget)
+        outcome = self._drive.emergency_disable_blocking(self._drive.emergency_budget)
         match outcome:
             case EmergencyStopOutcome.ACKNOWLEDGED:
                 # The drive acked the zero write, so the reference IS zero and it
@@ -1907,6 +3030,8 @@ class TrainingRuntime:
         self._ending = ending
         self._end_reason = reason
         self._phase = Phase.COOLDOWN
+        # After ANY stop the target is zero: moving again takes a new start.
+        self._manual_target = MotorRpm(0)
         _logger.warning("session ending (%s) at %.3f s", reason.value, self._session_elapsed(now))
         return ending
 
@@ -1977,7 +3102,7 @@ class TrainingRuntime:
                 output_disabled=True,
                 detail=detail,
             )
-        failure = self._note_failure(closed.error)
+        failure = self._note_failure(Exchange.WRITE, closed.error)
         self._enabled = self._enabled or failure.output_unknown
         return ShutdownReport(
             reason=reason,
@@ -2002,8 +3127,8 @@ class TrainingRuntime:
         """
         outcome = await self._drive.write_speed(rpm)
         if isinstance(outcome, Err):
-            return self._note_failure(outcome.error)
-        self._note_success()
+            return self._note_failure(Exchange.WRITE, outcome.error)
+        self._note_success(Exchange.WRITE)
         if rpm != self._applied_rpm:
             self._applied_rpm = rpm
             self._setpoint_changed_at = now
@@ -2013,23 +3138,35 @@ class TrainingRuntime:
         """Write CMD, and record what the exchange said about the link."""
         outcome = await self._drive.write_command(word)
         if isinstance(outcome, Err):
-            return self._note_failure(outcome.error)
-        self._note_success()
+            return self._note_failure(Exchange.WRITE, outcome.error)
+        self._note_success(Exchange.WRITE)
         return None
 
-    def _note_failure(self, error: DriveError) -> DriveFailure:
-        """Count a failed exchange and classify it once."""
+    def _note_failure(self, kind: Exchange, error: DriveError) -> DriveFailure:
+        """Count a failed exchange of one kind and classify it once."""
         failure = describe_drive_error(error)
-        self._comm_failures += 1
+        self._failures[kind] += 1
         self._last_failure = failure
         _logger.warning(
-            "drive exchange failed (%d consecutive): %s", self._comm_failures, failure.detail
+            "drive %s failed (%d consecutive): %s",
+            kind.value,
+            self._failures[kind],
+            failure.detail,
         )
         return failure
 
-    def _note_success(self) -> None:
-        """Reset the failure run length. It is a run length, not a total."""
-        self._comm_failures = 0
+    def _note_success(self, kind: Exchange) -> None:
+        """Reset the run length of this kind only. It is a run length, not a total."""
+        self._failures[kind] = 0
+
+    def _comm_failures(self) -> int:
+        """The run length the safety layer judges: the worse of the two kinds.
+
+        The longer run, not the sum: one tick of a dead link fails both a write
+        and a read, and counting that as two would make ``comms_lost`` fire at
+        half its configured number of ticks.
+        """
+        return max(self._failures.values())
 
     # =====================================================================
     # Derived facts about the session and the machine
@@ -2041,9 +3178,11 @@ class TrainingRuntime:
         return Seconds(0.0) if started is None else elapsed(started, now)
 
     def _total_duration(self) -> Seconds:
-        """The programme's intended length; zero when there is no programme."""
+        """The programme's intended length, the manual limit, or zero with neither."""
         program = self._program
-        return Seconds(0.0) if program is None else program.total_duration_s
+        if program is not None:
+            return program.total_duration_s
+        return Seconds(0.0) if self._manual is None else MANUAL_SESSION_LIMIT
 
     def _cooldown_s(self) -> Seconds:
         """How long an abort may spend bringing the machine down.
@@ -2053,12 +3192,26 @@ class TrainingRuntime:
         and this machine's stop still takes as long as it takes.
         """
         program = self._program
-        return COMMISSIONED_DECEL_S if program is None else program.profile.cooldown_s
+        if program is not None:
+            return program.profile.cooldown_s
+        manual = self._manual
+        return COMMISSIONED_DECEL_S if manual is None else manual.cooldown
 
     def _recovery_s(self) -> Seconds:
-        """How long monitoring continues with nothing turning."""
+        """How long monitoring continues with nothing turning.
+
+        None with nobody on board: after a BENCH session, and after an ending
+        with no session at all (an e-stop pressed at rest), which would
+        otherwise hold the console out of service for a minute of monitoring
+        a person who was never in the machine.
+        """
         program = self._program
-        return MIN_RECOVERY_S if program is None else program.profile.recovery_s
+        if program is not None:
+            return program.profile.recovery_s
+        manual = self._manual
+        if manual is None or manual.occupancy is Occupancy.BENCH:
+            return BENCH_RECOVERY
+        return MIN_RECOVERY_S
 
     def _min_run_rpm(self) -> MotorRpm:
         """The slowest speed worth running at: the size of the last step of a stop.
@@ -2151,14 +3304,26 @@ class TrainingRuntime:
 
     def _speed_view(self, rpm: MotorRpm) -> SpeedView:
         """One speed in all four units, through the only module that converts."""
-        geometry = self._geometry
-        return SpeedView.from_motor_rpm(
-            rpm,
-            ratio=geometry.ratio,
-            radius=geometry.radius,
-            nominal_rpm=geometry.nominal_rpm,
-            base_hz=geometry.base_hz,
-        )
+        return self._geometry.view(rpm)
+
+    def _shown_status(
+        self, now: Monotonic
+    ) -> tuple[DriveStatus | None, DriveStatus | None, Seconds | None]:
+        """The drive observation to DISPLAY: last, still-fresh, and its age.
+
+        The session's own observation whenever the session path owns the
+        link; the idle poll's before any session was started. Display only:
+        the safety observation reads :meth:`_readable_status` and never this.
+        """
+        armed = self._program is not None or self._manual is not None
+        if armed or self._link_open:
+            return self._last_status, self._readable_status(now), self._status_age(now)
+        stamped = self._idle_status_at
+        if stamped is None:
+            return None, None, None
+        age = elapsed(stamped, now)
+        status = self._idle_status
+        return status, (None if age > self._limits.status_stale_after else status), age
 
     def _build_snapshot(self, now: Monotonic) -> TelemetrySnapshot:
         """One complete, internally consistent picture of the session.
@@ -2173,8 +3338,7 @@ class TrainingRuntime:
         "stopped" - which is what the field docstrings in
         :class:`~src.training.types.TelemetrySnapshot` warn about.
         """
-        status = self._last_status
-        readable = self._readable_status(now)
+        status, readable, status_age = self._shown_status(now)
         sample = self._last_sample
         decision = self._decision
         total = self._total_duration()
@@ -2194,9 +3358,27 @@ class TrainingRuntime:
                 readable is not None and readable.setpoint_echo_rpm == self._applied_rpm
             ),
             drive_state=DriveState.COMM_LOST if readable is None else readable.state,
-            drive_status_age=self._status_age(now),
+            drive_status_age=status_age,
             current=None if readable is None else readable.current,
-            fault=None if readable is None else fault_report(readable.fault),
+            fault=None if readable is None else status_fault_report(readable),
             safety=self.standing,
             counters=self._counters,
+            mode=self.mode,
+            manual=self._manual_view(),
+        )
+
+    def _manual_view(self) -> ManualView | None:
+        """The manual session for the screen: target, ceiling, and the ramp still to come."""
+        manual = self._manual
+        if manual is None:
+            return None
+        applied = self._applied_rpm
+        target = MotorRpm(0) if self._ending is not None else self._manual_target
+        return ManualView(
+            occupancy=manual.occupancy,
+            target=self._speed_view(target),
+            ceiling=self._speed_view(manual.ceiling),
+            min_run=self._speed_view(self._motion.min_run),
+            ramping=applied != target,
+            ramp_eta=ramp_duration(applied, target, self._motion, self._motion_geometry),
         )

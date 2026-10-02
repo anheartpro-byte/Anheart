@@ -1,17 +1,26 @@
 """The real Modbus RTU driver for the ATV320. The ONLY module that imports pymodbus.
 
 This is the isolation module required by contract rule 5: ``pymodbus`` and
-``serial`` are touched here and nowhere else, so everything above
-:mod:`src.motor.drive` sees domain types only. It implements
-``drive.DriveBackend`` and adds :meth:`ATV320Drive.enable`, which is a
-mechanism (the CiA402 start sequence) rather than a policy.
+``serial`` are touched here and nowhere else (``pyftdi`` has its own, in
+:mod:`src.motor.ftdi_link`), so everything above :mod:`src.motor.drive` sees
+domain types only. It implements ``drive.DriveBackend`` and adds
+:meth:`ATV320Drive.enable`, which is a mechanism (the CiA402 start sequence)
+rather than a policy.
 
-Hardware, from the commissioning notes: ATV320U04M2C driving a SEW KA37
-DRS71S4 through i = 49.79. Modbus RTU on the drive's embedded RJ45,
-**address 1, 19200 baud, 8E1** - which is where the constructor defaults come
-from. Nothing is hardcoded: every transport parameter arrives in
-:class:`SerialSettings` so the bench can change one without editing a safety
-module.
+Hardware, from the commissioning notes and the bench: ATV320U04M2C driving a
+SEW KA37 DRS71S4 (1380 rpm at 50 Hz) through i = 49.79. Modbus RTU at
+**19200 baud, 8E1**, answering on **address 248** - Schneider's point-to-point
+address, measured on the bench; the drive's configured address did not answer.
+Those are the constructor defaults. Nothing is hardcoded beyond defaults: every
+transport parameter arrives in :class:`SerialSettings` so the bench can change
+one without editing a safety module.
+
+The port is either an OS serial device (``/dev/ttyUSB0``, ``/dev/cu.*``,
+``COM3``) or, for the Schneider USB-RS485 cable that macOS gives no device
+node, the pyftdi URL ``ftdi://schneider:rs485/1``. The second goes through
+:class:`FtdiModbusClient`, whose port has a working ``in_waiting``; see
+:mod:`src.motor.ftdi_link` for why that is the difference between 2 s and
+tens of milliseconds per register.
 
 What this driver guarantees, and what it refuses to
 ---------------------------------------------------
@@ -82,6 +91,18 @@ package, not assumed - the keyword names moved across 3.x)
   raises ``AttributeError`` on access rather than answering empty. Guarded.
 * ``serial.SerialException`` derives from ``OSError`` while ``ModbusException``
   does not, so catching ``OSError`` covers pyserial without importing it.
+  pyftdi's ``FtdiError`` derives from ``IOError``, which is the same class.
+* ``retries`` does NOT retransmit anything in the synchronous client, whatever
+  its name says. ``SyncModbusTransactionManager.execute`` wraps the response
+  check in ``while retries > 0:`` and then ``break``s unconditionally on the
+  first pass; ``_retry_transaction`` is never called. Its one live effect is in
+  ``_recv``, where it bounds how many ``recv()`` calls fetch the frame BODY
+  after the 4-byte head. With ``retries=0`` the body is never read, every reply
+  is "incomplete", and every transaction returns ``ModbusIOException`` - which
+  is what the bench saw. Hence :data:`MIN_RETRIES`.
+* One transaction can spend several serial timeouts, not one: see
+  :func:`transaction_worst_case`, from which the emergency-stop budget is
+  derived.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -94,8 +115,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from enum import Enum, unique
-from typing import Final, Protocol, final, runtime_checkable
+from typing import Final, Protocol, final, override, runtime_checkable
 
 from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
@@ -108,19 +128,31 @@ from src.motor.drive import (
     CommTimeout,
     ControlWord,
     DriveError,
-    DriveFault,
     DriveFaulted,
+    DriveLimits,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
     EnableUnconfirmed,
+    FaultReport,
     RegisterMap,
     StopUnconfirmed,
     UnexpectedState,
     decode_current,
+    decode_limits,
     decode_speed,
     decode_status_word,
     describe_fault,
+)
+from src.motor.ftdi_link import (
+    USB_STALL_BOUND,
+    BufferedFtdiPort,
+    DeviceFactory,
+    Parity,
+    UartFrame,
+    is_ftdi_url,
+    open_ftdi_port,
+    wait_overshoot,
 )
 from src.result import Err, Ok, Result, err_of
 from src.units import (
@@ -194,48 +226,72 @@ function-code test there would only make that branch unreachable.
 """
 
 
-@unique
-class Parity(Enum):
-    """Serial parity, in the single-character spelling pymodbus and pyserial use.
-
-    An enum rather than a bare ``str`` because "E" is a value from a fixed set
-    with meaning attached, and this drive is commissioned for 8**E**1: a silent
-    "N" gives a port that opens and then fails every CRC.
-    """
-
-    NONE = "N"
-    EVEN = "E"
-    ODD = "O"
-
-
-# --- Transport defaults, all from the commissioning notes ---------------
+# --- Transport defaults, from the commissioning notes and the bench -----
 DEFAULT_BAUDRATE: Final[int] = 19200
 DEFAULT_BYTESIZE: Final[int] = 8
 DEFAULT_PARITY: Final[Parity] = Parity.EVEN
 DEFAULT_STOPBITS: Final[int] = 1
 
-DEFAULT_TIMEOUT: Final[Seconds] = Seconds(0.3)
-"""Per-transaction serial timeout.
+DEFAULT_TIMEOUT: Final[Seconds] = Seconds(0.1)
+"""Per-read serial timeout.
 
-Sized against the control budget, not against the drive: the loop runs at 5 Hz
-(200 ms), a status read costs four transactions, and a timeout long enough to
-feel "generous" turns one missing reply into a missed control cycle.
+Sized against the control budget and against what the link really takes, not
+against the drive's patience. A healthy exchange is tens of milliseconds - an
+8-byte request and a 7-byte reply at 19200 8E1 are ~9 ms of wire time, plus the
+drive's turnaround and one USB latency period - so 0.1 s is several times the
+real answer while keeping a MISSING answer cheap. That matters twice over: one
+transaction spends this timeout several times (see
+:func:`transaction_worst_case`), and the emergency-stop budget, which blocks
+the event loop, is derived from it. Raise it only against a bench measurement
+that shows real replies arriving late.
 """
 
-DEFAULT_SLAVE_ADDRESS: Final[int] = 1
-DEFAULT_RETRIES: Final[int] = 1
-"""No pymodbus-internal retransmission.
+SCHNEIDER_POINT_TO_POINT_ADDRESS: Final[int] = 248
+"""Schneider's point-to-point Modbus address.
 
-A retry is a policy decision - it depends on whether somebody is in the
-machine - and a hidden one multiplies the timeout inside a single ``await``,
-silently spending a budget the layer above thinks it still has.
+An Altivar answers on 248 whatever its configured ``Add`` is, provided it is
+the only device on the link - which is the case here: one drive, one cable. It
+is outside the standard 1..247 unit-address range on purpose, so it can never
+collide with a configured address. Measured on the bench: the drive answers
+248, and did not answer 1.
+"""
+
+DEFAULT_SLAVE_ADDRESS: Final[int] = SCHNEIDER_POINT_TO_POINT_ADDRESS
+
+MIN_RETRIES: Final[int] = 1
+"""The smallest ``retries`` pymodbus 3.7.4 can work with.
+
+Not a retry count, whatever pymodbus calls it: see the module docstring. With 0
+the body of every reply is never read and every transaction fails.
+"""
+
+DEFAULT_RETRIES: Final[int] = MIN_RETRIES
+"""One body read per reply, and no retransmission - the 3.7.4 synchronous
+client never retransmits at any setting.
+
+More would buy nothing on a healthy link, where the body is already waiting
+when the head has been read, and each extra one adds two serial timeouts plus a
+fixed 0.1 s pause to the worst case of a transaction (see
+:func:`transaction_worst_case`). That worst case is a time budget the layer
+above is spending without seeing it, and a retry is a policy decision - it
+depends on whether somebody is in the machine - that does not belong hidden in
+the transport.
 """
 
 MODBUS_SLAVE_MIN: Final[int] = 1
 MODBUS_SLAVE_MAX: Final[int] = 247
-"""Modbus RTU unit-address range. 0 is the BROADCAST address and is rejected
-below: a broadcast write commands every drive on the bus and gets no reply, so
-it is both wider than intended and impossible to verify."""
+"""Standard Modbus RTU unit-address range. 0 is the BROADCAST address and is
+rejected: a broadcast write commands every drive on the bus and gets no reply,
+so it is both wider than intended and impossible to verify. The one address
+accepted outside this range is :data:`SCHNEIDER_POINT_TO_POINT_ADDRESS`."""
+
+
+def is_valid_slave_address(address: int) -> bool:
+    """A standard unit address, or Schneider's point-to-point 248. Never broadcast."""
+    return (
+        MODBUS_SLAVE_MIN <= address <= MODBUS_SLAVE_MAX
+        or address == SCHNEIDER_POINT_TO_POINT_ADDRESS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,15 +301,19 @@ class SerialSettings:
     Frozen so the link cannot be re-parameterised under a running session, and
     a plain record so the operator-visible configuration is one object to log.
 
-    Two fields are validated at construction, in the style
-    :class:`src.motor.drive.RegisterMap` already sets (startup boundary,
-    nothing spinning, refusing to start is the correct answer). The rest are
-    not: a wrong baud rate or parity fails loudly on the first CRC, whereas a
-    wrong unit address talks confidently to the wrong device.
+    Validated at construction, in the style :class:`src.motor.drive.RegisterMap`
+    already sets (startup boundary, nothing spinning, refusing to start is the
+    correct answer), where a wrong value would fail silently or confidently
+    rather than loudly: the unit address (talks to the wrong device), the
+    timeout (reads nothing), ``retries`` (never reads a reply body) and an empty
+    port. A wrong baud rate or parity is not checked: it fails loudly on the
+    first CRC.
     """
 
     port: str
-    """OS device name: ``/dev/ttyUSB0`` on the Pi, ``COM3`` on a bench laptop."""
+    """``/dev/ttyUSB0`` on the Pi, ``COM3`` on Windows, a ``/dev/cu.*`` device
+    on macOS - or ``ftdi://schneider:rs485/1`` for the Schneider USB-RS485
+    cable, which macOS gives no device node (see :mod:`src.motor.ftdi_link`)."""
 
     baudrate: int = DEFAULT_BAUDRATE
     bytesize: int = DEFAULT_BYTESIZE
@@ -264,10 +324,15 @@ class SerialSettings:
     retries: int = DEFAULT_RETRIES
 
     def __post_init__(self) -> None:
-        if self.slave_address < MODBUS_SLAVE_MIN or self.slave_address > MODBUS_SLAVE_MAX:
+        if not self.port.strip():
             raise ValueError(
-                f"Modbus slave address {self.slave_address} is outside "
-                f"{MODBUS_SLAVE_MIN}..{MODBUS_SLAVE_MAX}; address 0 is the broadcast "
+                "the drive's port is empty; set MOTOR_PORT to a serial device or to an ftdi:// URL"
+            )
+        if not is_valid_slave_address(self.slave_address):
+            raise ValueError(
+                f"Modbus slave address {self.slave_address} is neither in "
+                f"{MODBUS_SLAVE_MIN}..{MODBUS_SLAVE_MAX} nor Schneider's point-to-point "
+                f"address {SCHNEIDER_POINT_TO_POINT_ADDRESS}; address 0 is the broadcast "
                 "address, which commands every drive on the bus and cannot be verified"
             )
         if self.timeout <= 0.0:
@@ -276,15 +341,209 @@ class SerialSettings:
                 "makes every read return nothing, which this driver would report as "
                 "a dead drive"
             )
+        if self.retries < MIN_RETRIES:
+            raise ValueError(
+                f"retries={self.retries} must be at least {MIN_RETRIES}: pymodbus 3.7.4 "
+                "uses it as the number of reads of a reply's body, not as a "
+                "retransmission count, so with 0 it never reads the body and every "
+                "transaction fails with 'No response'"
+            )
+
+    @property
+    def frame(self) -> UartFrame:
+        """The character format alone, as the FTDI chip is told it."""
+        return UartFrame(
+            baudrate=self.baudrate,
+            bytesize=self.bytesize,
+            parity=self.parity,
+            stopbits=self.stopbits,
+        )
 
 
-def serial_master(settings: SerialSettings) -> ModbusMaster:
-    """Build the real pymodbus RTU master. The ONE place the client is constructed.
+# =========================================================================
+# What one transaction can cost
+# =========================================================================
 
-    Constructing does not touch the hardware - ``ModbusSerialClient`` opens the
-    port in ``connect()`` - so this is safe at startup and testable with a port
-    name that does not exist.
+PYMODBUS_BODY_RETRY_PAUSE: Final[Seconds] = Seconds(0.1)
+"""The fixed ``time.sleep(0.1)`` pymodbus 3.7.4 takes before each body read
+after the first (``SyncModbusTransactionManager._recv``)."""
+
+EMERGENCY_SCHEDULING_MARGIN: Final[Seconds] = Seconds(0.05)
+"""Headroom in the emergency budget for thread scheduling and lock hand-over.
+Windows timer granularity alone is ~15 ms per wait."""
+
+MAX_EMERGENCY_BUDGET: Final[Seconds] = Seconds(2.0)
+"""The longest emergency-stop budget this driver agrees to be built with.
+
+The emergency zero blocks the calling thread - in the training runtime, the
+event loop, on purpose (see ``TrainingRuntime._emergency_zero``). A line whose
+worst case pushes the bound past this refuses to start, at startup, with
+nothing spinning, rather than discovering at shutdown that the stop takes long
+enough for somebody to pull the plug on the Pi.
+"""
+
+
+def _character_time(settings: SerialSettings) -> Seconds:
+    """One character, as pymodbus counts it: start + data + stop bits, no parity bit."""
+    return Seconds((1 + settings.bytesize + settings.stopbits) / settings.baudrate)
+
+
+def _silent_interval(settings: SerialSettings) -> Seconds:
+    """pymodbus's inter-frame silence: 3.5 characters, or 1.75 ms above 19200 baud."""
+    if settings.baudrate > DEFAULT_BAUDRATE:
+        return Seconds(0.00175)
+    return Seconds(3.5 * _character_time(settings))
+
+
+def transaction_worst_case(settings: SerialSettings) -> Seconds:
+    """The longest one pymodbus 3.7.4 transaction can block, from its first byte out.
+
+    Not one serial timeout ``T``. Read off ``pymodbus/client/serial.py`` and
+    ``pymodbus/transaction.py``, with ``r`` = ``retries``:
+
+    * **send, up to T + silence.** ``ModbusSerialClient.send`` waits for the
+      client's state to return to IDLE, polling until ``T`` has passed, when a
+      previous exchange left it mid-transaction (an exception escaping
+      ``execute``, or another thread's in-flight transaction); plus 3.5
+      characters of inter-frame silence.
+    * **head, up to 2T.** ``recv(4)``: ``_wait_for_data`` polls ``in_waiting``
+      for up to ``T``, and then ``read(4)`` waits up to ``T`` again. A drive
+      that says nothing costs both.
+    * **body, up to r x 2T, plus (r - 1) x 0.1 s.** The same pair per body
+      read, with pymodbus's fixed pause between them.
+    * **overshoot**, per timed wait (3 + 2r of them): one poll interval of
+      pymodbus's and one drain of the FTDI port, which on a chattering line
+      is several characters long, not one latency period (see
+      :func:`~src.motor.ftdi_link.wait_overshoot`).
+    * **one stalled USB transfer**, once: libusb gives up on a chip that stops
+      answering after :data:`~src.motor.ftdi_link.USB_STALL_BOUND`, the
+      transfer raises, and pymodbus ends the transaction on it, so no
+      transaction pays it twice. On an OS serial device these two terms
+      over-count, which errs on the safe side.
+
+    What it does NOT bound, stated rather than glossed: ``connect()``. pymodbus
+    closes the port after every failed exchange and reopens it on the next,
+    and opening a device (a tty, or a USB interface through libusb) is an OS
+    call no read timeout covers. For an ``ftdi://`` port it also includes
+    :func:`~src.motor.ftdi_link.settle`: at least ``SETTLE_DWELL`` (0.25 s),
+    at most ``SETTLE_BUDGET`` (1.0 s), because the FT232R times out USB
+    transfers for ~100-200 ms after being configured (measured on the bench).
     """
+    timeout = settings.timeout
+    retries = settings.retries
+    waits = 3 + 2 * retries
+    poll = max(4 * _character_time(settings), 0.001)
+    overshoot = waits * (wait_overshoot(settings.frame) + poll)
+    return Seconds(
+        (timeout + _silent_interval(settings))
+        + 2 * timeout
+        + retries * 2 * timeout
+        + (retries - 1) * PYMODBUS_BODY_RETRY_PAUSE
+        + overshoot
+        + USB_STALL_BOUND
+    )
+
+
+def emergency_budget_for(settings: SerialSettings) -> Seconds:
+    """The smallest whole-call bound the emergency zero can keep on this line.
+
+    Two transactions plus headroom, and the reason it is two is pymodbus's own
+    transaction lock (an ``RLock`` around ``execute``). When the emergency
+    arrives while the executor thread is mid-transaction, the emergency write
+    cannot overlap it however it is written: it waits, on this driver's wire
+    lock or failing that on pymodbus's, until the in-flight transaction ends -
+    at most one :func:`transaction_worst_case` after the call began - and then
+    spends at most one more on its own.
+    """
+    return Seconds(2 * transaction_worst_case(settings) + EMERGENCY_SCHEDULING_MARGIN)
+
+
+# =========================================================================
+# Building the pymodbus client
+# =========================================================================
+
+
+@final
+class FtdiModbusClient(ModbusSerialClient):
+    """``ModbusSerialClient`` whose port is :class:`~src.motor.ftdi_link.BufferedFtdiPort`.
+
+    Only :meth:`connect` differs. pymodbus 3.7.4 opens ports with
+    ``serial.serial_for_url``, which for ``ftdi://`` would hand back pyftdi's
+    own port, the one whose ``in_waiting`` is always 0. Everything after the
+    port is open - framing, CRC, inter-frame silence, the transaction lock,
+    closing on failure - is pymodbus's, unchanged.
+
+    Why a subclass rather than a pyserial URL handler: a handler has to live in
+    a module named ``protocol_ftdi`` inside a package on pyserial's global
+    search list, and it would silently change what ``ftdi://`` means for every
+    other user of pyserial in the process. This changes one client, visibly.
+    """
+
+    def __init__(self, settings: SerialSettings, open_port: Callable[[], BufferedFtdiPort]) -> None:
+        super().__init__(
+            port=settings.port,
+            framer=FramerType.RTU,
+            baudrate=settings.baudrate,
+            bytesize=settings.bytesize,
+            parity=settings.parity.value,
+            stopbits=settings.stopbits,
+            timeout=settings.timeout,
+            retries=settings.retries,
+        )
+        self._port_opener: Callable[[], BufferedFtdiPort] = open_port
+
+    @override
+    def connect(self) -> bool:
+        """Open the cable if it is not open. ``False``, never an exception, on failure.
+
+        Mirrors ``ModbusSerialClient.connect``: pymodbus calls this before every
+        transaction and after every failure, and turns ``False`` into
+        ``ConnectionException``, which the driver maps to ``CommTimeout``.
+        """
+        if self.socket is not None:
+            return True
+        try:
+            port = self._port_opener()
+        except Exception:
+            logger.exception("ATV320: could not open %s", self.comm_params.host)
+            return False
+        # pymodbus annotates `socket` as `serial.Serial`, but everything it does
+        # with it is in_waiting / read / write / close / is_open /
+        # inter_byte_timeout - verified against pymodbus 3.7.4's
+        # client/serial.py and transaction.py, and exercised end to end through
+        # the real transaction manager in tests/test_ftdi_link.py.
+        self.socket = port  # pyright: ignore[reportAttributeAccessIssue]
+        self.last_frame_end = None
+        return True
+
+
+def serial_master(
+    settings: SerialSettings,
+    clock: Clock,
+    *,
+    open_device: DeviceFactory | None = None,
+) -> ModbusMaster:
+    """Build the real pymodbus RTU master. The ONE place a client is constructed.
+
+    An ``ftdi://`` port gets :class:`FtdiModbusClient`; anything else - a tty,
+    a ``/dev/cu.*``, a ``COM`` port - the stock ``ModbusSerialClient``, whose
+    pyserial port has a working ``in_waiting`` of its own.
+
+    Constructing does not touch the hardware - both clients open the port in
+    ``connect()`` - so this is safe at startup and testable with a port that
+    does not exist. ``open_device`` replaces the USB opener, for tests.
+    """
+    if is_ftdi_url(settings.port):
+        return FtdiModbusClient(
+            settings,
+            lambda: open_ftdi_port(
+                settings.port,
+                settings.frame,
+                timeout=settings.timeout,
+                clock=clock,
+                create=open_device,
+            ),
+        )
     return ModbusSerialClient(
         port=settings.port,
         framer=FramerType.RTU,
@@ -373,36 +632,6 @@ DEFAULT_STOP_POLL_INTERVAL: Final[Seconds] = Seconds(0.5)
 """Pause between those RFRD reads. Slow on purpose: nothing is being controlled
 here, and a tight poll would spend the bus for no information."""
 
-DEFAULT_EMERGENCY_BUDGET: Final[Seconds] = Seconds(1.0)
-"""The smallest whole-call bound :meth:`ATV320Drive.emergency_disable_blocking`
-can honour, and the figure the serial timeout is validated against.
-
-A real bound, not a hope: the constructor refuses any line configuration whose
-per-transaction serial timeout could not fit inside it (see
-:data:`EMERGENCY_WRITE_SHARE`). Before that check existed the parameter only
-gated whether a write STARTED, so a legal ``timeout=5.0`` blocked ~5 s against
-a 0.2 s budget - the "the Pi will not shut down and gets power-cycled
-mid-session" case.
-"""
-
-EMERGENCY_WRITE_SHARE: Final[float] = 0.5
-"""Fraction of the emergency budget the single blind write may consume.
-
-Which is to say: the serial timeout must be at most half the budget, because a
-blocking call already in progress cannot be cut short - the only way to bound it
-is to refuse a configuration that could exceed the bound.
-"""
-
-EMERGENCY_LOCK_SHARE: Final[float] = 0.25
-"""Fraction of the emergency budget spent waiting for the transport lock.
-
-Deliberately smaller than the write's share, and deliberately not "wait as long
-as it takes": if the executor thread is mid-transaction, the right degradation
-is to write anyway and log it, not to sit out an emergency holding a lock
-somebody else has. 0.25 + 0.5 leaves a quarter of the budget as headroom for
-scheduling, which on Windows is ~15 ms of timer granularity per wait.
-"""
-
 
 def _new_executor() -> ThreadPoolExecutor:
     """One worker thread, so the half-duplex bus is serialised by construction.
@@ -474,7 +703,6 @@ class ATV320Drive:
         settle_delay: Seconds = DEFAULT_SETTLE_DELAY,
         stop_attempts: int = DEFAULT_STOP_ATTEMPTS,
         stop_poll_interval: Seconds = DEFAULT_STOP_POLL_INTERVAL,
-        emergency_budget: Seconds = DEFAULT_EMERGENCY_BUDGET,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError(
@@ -493,26 +721,21 @@ class ATV320Drive:
                 "would never read RFRD, so it could never confirm standstill and "
                 "would leave the run command in place on a machine that had stopped"
             )
-        if emergency_budget <= 0.0:
+        # THE BOUND THAT MAKES THE EMERGENCY STOP'S PROMISE MEAN SOMETHING. A
+        # blocking serial call cannot be interrupted once started, so the only
+        # way to promise the emergency path returns inside its budget is to
+        # derive that budget from what the line can really cost, and to refuse
+        # a line whose cost is unacceptable. Refusing at startup, with nothing
+        # spinning, is the right place: the alternative is discovering it
+        # during shutdown, which is when it hangs the Pi.
+        emergency_budget = emergency_budget_for(settings)
+        if emergency_budget > MAX_EMERGENCY_BUDGET:
             raise ValueError(
-                f"emergency_budget {emergency_budget} s must be positive; a "
-                "non-positive budget leaves nothing to bound the emergency write with"
-            )
-        # THE BOUND THAT MAKES `timeout` MEAN SOMETHING. A blocking serial call
-        # cannot be interrupted once started, so the only way to promise the
-        # emergency path returns inside its budget is to refuse a line whose
-        # per-transaction timeout could overrun it. Refusing at startup, with
-        # nothing spinning, is the right place: the alternative is discovering
-        # it during shutdown, which is when it hangs the Pi.
-        writable = Seconds(emergency_budget * EMERGENCY_WRITE_SHARE)
-        if settings.timeout > writable:
-            raise ValueError(
-                f"serial timeout {settings.timeout} s cannot be honoured inside an "
-                f"emergency budget of {emergency_budget} s: one blind write may block "
-                f"for the whole serial timeout, so it must be at most {writable} s "
-                f"({EMERGENCY_WRITE_SHARE:.0%} of the budget). Lower the serial "
-                "timeout or raise emergency_budget - do not leave the emergency stop "
-                "with a bound it cannot keep."
+                f"serial timeout {settings.timeout} s with retries={settings.retries} "
+                f"gives a worst-case transaction of {transaction_worst_case(settings):.3f} s "
+                f"and so an emergency-stop bound of {emergency_budget:.3f} s, over the "
+                f"{MAX_EMERGENCY_BUDGET} s this driver accepts. Lower the serial timeout "
+                "or retries - do not leave the emergency stop with a bound that long."
             )
         self._clock: Clock = clock
         self._master: ModbusMaster = master
@@ -574,10 +797,13 @@ class ATV320Drive:
     def emergency_budget(self) -> Seconds:
         """The smallest whole-call bound the emergency stop can actually honour.
 
-        Exposed so an ``atexit`` or signal handler can pass a budget this
-        driver is able to keep - ``drive.emergency_disable_blocking(
+        Derived from the line, never configured: :func:`emergency_budget_for`
+        of the :class:`SerialSettings` this driver was built with, i.e. two
+        worst-case pymodbus transactions plus scheduling headroom. Exposed so
+        the training runtime, an ``atexit`` or a signal handler can pass a
+        budget this driver is able to keep - ``drive.emergency_disable_blocking(
         drive.emergency_budget)`` - instead of inventing a number that the
-        serial timeout would silently overrun.
+        serial timeouts would silently overrun.
         """
         return self._emergency_budget
 
@@ -732,6 +958,57 @@ class ATV320Drive:
                 return Err(refusal)
             return await self._assemble_status()
 
+    async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+        """Read ONE holding register, range-checked. Nothing is written.
+
+        For operator tooling - the bench console and the link-latency script -
+        that needs one register timed on its own rather than a whole
+        :meth:`read_status`. It is the same transaction every other read here
+        is: single flight, executor thread, failure accounting, and refused
+        once the link is latched, so a tool cannot hammer a link this driver
+        has already declared lost.
+
+        ``address`` is used as given: resolve it through the same
+        :class:`~src.motor.drive.RegisterMap` the driver was built with, so a
+        tool and the driver cannot disagree about the offset.
+        """
+        async with self._lock:
+            refusal = self._refusal(stopping=False)
+            if refusal is not None:
+                return Err(refusal)
+            return await self._read(address)
+
+    async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        """Read tFr, HSP, LSP, ACC and dEC, parsed. Five READS; nothing is written.
+
+        Deliberately no judgement here: whether HSP is acceptable depends on
+        whether the arm is coupled, which is the installation's call
+        (:func:`~src.motor.drive.check_limits`), not the transport's. Short-
+        circuits on the first failure, like :meth:`read_status`, and a latched
+        link refuses it like any other non-stop exchange.
+        """
+        async with self._lock:
+            refusal = self._refusal(stopping=False)
+            if refusal is not None:
+                return Err(refusal)
+            values: list[RawRegister] = []
+            for address in (
+                self._registers.tfr,
+                self._registers.hsp,
+                self._registers.lsp,
+                self._registers.acc,
+                self._registers.dec,
+            ):
+                outcome = await self._read(address)
+                if isinstance(outcome, Err):
+                    return Err(outcome.error)
+                values.append(outcome.value)
+            limits = decode_limits(
+                tfr=values[0], hsp=values[1], lsp=values[2], acc=values[3], dec=values[4]
+            )
+            logger.info("ATV320 limits on %s: %s", self._settings.port, limits.describe())
+            return Ok(limits)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         """Zero the setpoint, synchronously, unconditionally. Never raises.
 
@@ -753,21 +1030,27 @@ class ATV320Drive:
         buys the wait for :attr:`_wire_lock` and nothing else, because the one
         write this method exists to send is never the write to sacrifice.
 
-        The bound is real rather than advisory. A blocking serial call cannot
-        be cut short once started, so the constructor refuses any line whose
-        per-transaction timeout could overrun
-        :attr:`emergency_budget` (see :data:`EMERGENCY_WRITE_SHARE`), and the
-        lock wait takes a fixed smaller share. A ``timeout`` smaller than that
-        floor cannot be honoured and is reported rather than obeyed: returning
-        early without writing would be the one outcome that is never safer.
+        The bound is real rather than advisory, and it is two transactions, not
+        one. A blocking serial call cannot be cut short once started, and one
+        pymodbus transaction can spend the serial timeout several times over
+        (:func:`transaction_worst_case`). If the executor thread is
+        mid-transaction, this write cannot overlap it either way - pymodbus
+        serialises ``execute`` with its own ``RLock`` - so it waits for that
+        transaction to end (at most one worst case after this call began) and
+        then spends at most one more. :attr:`emergency_budget` is exactly that
+        sum plus headroom, the constructor refuses a line that makes it
+        unacceptably long, and the lock wait is whatever the budget leaves
+        after reserving this call's own transaction. A ``timeout`` smaller than
+        that floor cannot be honoured and is reported rather than obeyed:
+        returning early without writing would be the one outcome that is never
+        safer.
 
         The honest residual, stated rather than glossed: pymodbus calls
         ``connect()`` from inside ``write_register`` when its socket is closed,
-        and opening a serial device is an OS call that the port's read timeout
-        does not bound. So the guarantee is "one transaction, whose read wait
-        cannot exceed the budget" and not "no syscall can ever be slow". What
-        was wrong before was a bound that existed only as a check the write
-        sailed past; this one is enforced where it can be, at construction.
+        and opening a device - a tty, or the USB interface of the FTDI cable -
+        is an OS call that no read timeout bounds. So the guarantee is "at most
+        two transactions, each bounded by its timeouts" and not "no syscall can
+        ever be slow".
 
         The reply is classified but never acted on: no retry, no diagnosis, no
         second exchange. It costs no wire time (pymodbus has already waited for
@@ -803,8 +1086,8 @@ class ATV320Drive:
           both writes", i.e. a silent no-op that also latched the link so the
           following ``close()`` wrote nothing either. There is no reading of
           "stop the motor in zero seconds" that justifies sending nothing.
-        * below the floor - cannot be honoured, because the serial timeout it
-          would have to fit inside was fixed at construction. The floor is used
+        * below the floor - cannot be honoured, because the line settings it
+          would have to fit inside were fixed at construction. The floor is used
           and said out loud.
         * at or above the floor - taken as given.
         """
@@ -819,12 +1102,14 @@ class ATV320Drive:
             return floor
         if timeout < floor:
             logger.error(
-                "ATV320 emergency disable: a budget of %s s cannot be honoured - the "
-                "serial timeout on %s is %s s, so the smallest real bound is %s s. "
-                "Using %s s.",
+                "ATV320 emergency disable: a budget of %s s cannot be honoured - a "
+                "transaction on %s (timeout %s s, retries %d) can block for %.3f s, so "
+                "the smallest real bound is %.3f s. Using %.3f s.",
                 timeout,
                 self._settings.port,
                 self._settings.timeout,
+                self._settings.retries,
+                transaction_worst_case(self._settings),
                 floor,
                 floor,
             )
@@ -1145,6 +1430,7 @@ class ATV320Drive:
         named = await self._read_fault(state)
         if isinstance(named, Err):
             return Err(named.error)
+        report = named.value
         return Ok(
             DriveStatus(
                 state=state,
@@ -1152,7 +1438,8 @@ class ATV320Drive:
                 setpoint_echo_rpm=decode_speed(lfrd_raw),
                 output_rpm=decode_speed(rfrd_raw),
                 current=decode_current(lcr_raw),
-                fault=named.value,
+                fault=None if report is None else report.fault,
+                fault_code=None if report is None else report.raw_code,
             )
         )
 
@@ -1194,7 +1481,7 @@ class ATV320Drive:
         # function; the caller unpacks named values.
         return Ok((values[0], values[1], values[2], values[3]))
 
-    async def _read_fault(self, state: DriveState) -> Result[DriveFault | None, DriveError]:
+    async def _read_fault(self, state: DriveState) -> Result[FaultReport | None, DriveError]:
         """Name the latched fault, but only when the status word says there is one.
 
         LFT holds the LAST fault, so reading it unconditionally would hang a
@@ -1206,7 +1493,7 @@ class ATV320Drive:
         outcome = await self._read(self._registers.lft)
         if isinstance(outcome, Err):
             return Err(outcome.error)
-        return Ok(describe_fault(outcome.value).fault)
+        return Ok(describe_fault(outcome.value))
 
     async def _observe_state(self) -> Result[DriveState, DriveError]:
         """One ETA read, decoded."""
@@ -1387,18 +1674,23 @@ class ATV320Drive:
         attempted, because this is the write the emergency path exists to send.
         The budget is spent on the lock wait only.
 
-        The lock wait is bounded at :data:`EMERGENCY_LOCK_SHARE` of the budget
-        and then **gives up and writes anyway**, which is the right
-        degradation: the thing being raced against is usually the comms fault
-        that prompted the emergency in the first place, and a frame that may
-        collide is worth more than a frame that never goes out. Which branch
-        ran is logged, because "the emergency write collided" and "the
-        emergency write waited" are different stories afterwards.
+        The lock wait is bounded by what the budget leaves after reserving
+        this write's own worst-case transaction (and the scheduling margin),
+        and then **gives up and writes anyway**. With the real pymodbus client
+        "anyway" still cannot put two frames on the wire at once - its own
+        transaction ``RLock`` makes the write queue behind an in-flight
+        ``execute`` - but it no longer waits behind this driver's lock, which
+        also covers ``connect()``: a USB open that is hanging is not something
+        the emergency write should sit out. Which branch ran is logged, because
+        "the emergency write waited" and "it went without the lock" are
+        different stories afterwards.
 
         The reply is classified but not acted upon - see
         :meth:`emergency_disable_blocking`.
         """
-        lock_budget = Seconds(budget * EMERGENCY_LOCK_SHARE)
+        lock_budget = Seconds(
+            budget - transaction_worst_case(self._settings) - EMERGENCY_SCHEDULING_MARGIN
+        )
         acquired = self._wire_lock.acquire(timeout=lock_budget)
         if acquired:
             logger.info(
@@ -1410,8 +1702,8 @@ class ATV320Drive:
         else:
             logger.error(
                 "ATV320 emergency disable: transport lock still held after %.3f s, so a "
-                "transaction is in flight on the executor thread. Writing 0x%04X to "
-                "register %d ANYWAY - a frame that may collide beats no frame at all.",
+                "transaction or a port open is in flight on the executor thread. Writing "
+                "0x%04X to register %d ANYWAY - a frame that goes late beats no frame.",
                 lock_budget,
                 value,
                 address,

@@ -59,7 +59,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Protocol, final, runtime_checkable
+from typing import Final, Protocol, final, runtime_checkable
 
 from src.clock import Clock
 from src.result import Err, Ok, Result
@@ -71,10 +71,13 @@ from src.training.safety import (
     SafetyAcknowledgement,
     SafetySupervisor,
 )
-from src.training.types import SafetyVerdict, TelemetrySnapshot
-from src.units import Monotonic, Seconds, UnixMillis
+from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
+from src.units import Bpm, Monotonic, OutputRpm, Seconds, UnixMillis
 
 _logger: logging.Logger = logging.getLogger(__name__)
+
+LOCAL_SUBJECT: Final[str] = "local"
+"""The subject id of a start typed at the console, where no rider is named."""
 
 
 # =========================================================================
@@ -105,6 +108,23 @@ class SessionEnder(Protocol):
 
     def request_end_session(self) -> None:
         """Ask for the current recording session to end. Must not block."""
+        ...
+
+
+class Acknowledger(Protocol):
+    """Whatever clears the latched verdicts, by name.
+
+    The supervisor by default. The local console hands in the runtime, whose
+    :meth:`~src.training.runtime.TrainingRuntime.acknowledge` clears the
+    supervisor AND the runtime's own latches (a drive found already running, a
+    tick that raised) - with the supervisor alone, those would stand forever
+    behind a screen that says "acknowledged".
+    """
+
+    def acknowledge(
+        self, operator: str, *, estop_released: bool = False
+    ) -> Result[SafetyAcknowledgement, AcknowledgeRefusal]:
+        """Clear the latches, or refuse and say why. Synchronous, no I/O."""
         ...
 
 
@@ -152,6 +172,7 @@ class EventKind(Enum):
     """
 
     START_REQUESTED = "start_requested"
+    FAULT_RESET_REQUESTED = "fault_reset_requested"
     END_REQUESTED = "end_requested"
     EMERGENCY_STOP = "emergency_stop"
     ACKNOWLEDGED = "acknowledged"
@@ -235,6 +256,17 @@ class StartSession:
     operator: str
     total_duration_s: Seconds | None
     at: Monotonic
+    subject_id: str = LOCAL_SUBJECT
+    """Who rides. :data:`LOCAL_SUBJECT` for a start typed at the console."""
+
+    subject_hr_max: Bpm | None = None
+    """The rider's maximum heart rate, when known; the profile is re-checked against it."""
+
+    subject_age: int | None = None
+    """The rider's age in years. A programmed session refuses an unknown or too-young rider."""
+
+    cloud_session_id: str | None = None
+    """The dashboard session this start answers, or ``None`` for a local start."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,7 +284,38 @@ class EndSession:
     at: Monotonic
 
 
-type Command = StartSession | EndSession
+@dataclass(frozen=True, slots=True)
+class StartManual:
+    """Start a manual session for ``occupancy``, target 0.
+
+    The occupancy is declared here, before anything turns, and never changes
+    during the rotation. The ceiling is resolved in the loop from the
+    configuration for that occupancy, not carried here.
+    """
+
+    occupancy: Occupancy
+    operator: str
+    at: Monotonic
+
+
+@dataclass(frozen=True, slots=True)
+class SetManualTarget:
+    """Set the manual target, in OUTPUT rpm. The loop walks the setpoint to it."""
+
+    output_rpm: OutputRpm
+    operator: str
+    at: Monotonic
+
+
+@dataclass(frozen=True, slots=True)
+class FaultReset:
+    """Reset a drive fault: an explicit operator action, never an automatic one."""
+
+    operator: str
+    at: Monotonic
+
+
+type Command = StartSession | EndSession | StartManual | SetManualTarget | FaultReset
 """What the loop can find in the mailbox. Closed; match it with the nested form."""
 
 
@@ -304,6 +367,13 @@ same thing is a second place for the wording to drift.
 type EndRefusal = NothingRunning | SurfaceBusy
 """Every way an end can be refused. Closed."""
 
+type CommandRefusal = NothingRunning | SurfaceBusy
+"""Every way a target or a fault reset can be refused by the surface. Closed.
+
+The surface only judges whether the mailbox can take it; whether the machine
+can act on it is the runtime's answer, published as a REFUSED event.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class EstopReceipt:
@@ -348,6 +418,7 @@ class ControlSurface:
 
     __slots__ = (
         "_accepted",
+        "_acknowledger",
         "_clock",
         "_ender",
         "_ending",
@@ -371,6 +442,7 @@ class ControlSurface:
         supervisor: SafetySupervisor,
         sink: TelemetrySink,
         ender: SessionEnder | None = None,
+        acknowledger: Acknowledger | None = None,
     ) -> None:
         """Wire the surface to the clock, the supervisor and the telemetry sink.
 
@@ -378,11 +450,15 @@ class ControlSurface:
         session manager are separable: a motor bench run has no BITalino session
         to end. ``None`` means "nothing to tell", not "ignore the stop" - the
         mailbox still carries the command to the loop either way.
+
+        ``acknowledger`` clears latches on :meth:`acknowledge`; the supervisor
+        when omitted. See :class:`Acknowledger`.
         """
         self._clock: Clock = clock
         self._supervisor: SafetySupervisor = supervisor
         self._sink: TelemetrySink = sink
         self._ender: SessionEnder | None = ender
+        self._acknowledger: Acknowledger = supervisor if acknowledger is None else acknowledger
 
         self._pending: Command | None = None
         self._latest: TelemetrySnapshot | None = None
@@ -537,7 +613,15 @@ class ControlSurface:
     # =====================================================================
 
     def submit_start(
-        self, *, profile_id: str, operator: str, total_duration_s: Seconds | None
+        self,
+        *,
+        profile_id: str,
+        operator: str,
+        total_duration_s: Seconds | None,
+        subject_id: str = "",
+        subject_hr_max: Bpm | None = None,
+        subject_age: int | None = None,
+        cloud_session_id: str | None = None,
     ) -> Result[StartSession, StartRefusal]:
         """Ask for a session to start. Refused unless everything below is true.
 
@@ -570,6 +654,10 @@ class ControlSurface:
             operator=operator,
             total_duration_s=total_duration_s,
             at=self._clock.monotonic(),
+            subject_id=subject_id or LOCAL_SUBJECT,
+            subject_hr_max=subject_hr_max,
+            subject_age=subject_age,
+            cloud_session_id=cloud_session_id,
         )
         self._starting = True
         self._pending = command
@@ -580,6 +668,64 @@ class ControlSurface:
             operator,
             f"start {profile_id}",
         )
+        return Ok(command)
+
+    def submit_start_manual(
+        self, *, occupancy: Occupancy, operator: str
+    ) -> Result[StartManual, StartRefusal]:
+        """Ask for a manual session to start. The same three gates as :meth:`submit_start`."""
+        attested = self._supervisor.require_estop_confirmed()
+        if isinstance(attested, Err):
+            return self._refuse_start(attested.error)
+        standing = self._supervisor.standing
+        if standing is not None and standing.latched:
+            return self._refuse_start(SafetyHolding(standing))
+        state = self.run_state
+        if state is not RunState.IDLE:
+            return self._refuse_start(SurfaceBusy(state=state, pending=self._pending))
+        command = StartManual(occupancy=occupancy, operator=operator, at=self._clock.monotonic())
+        self._starting = True
+        self._pending = command
+        self._accepted += 1
+        self._publish(EventKind.START_REQUESTED, command.at, operator, f"manuel {occupancy.value}")
+        return Ok(command)
+
+    def submit_manual_target(
+        self, *, output_rpm: OutputRpm, operator: str
+    ) -> Result[SetManualTarget, CommandRefusal]:
+        """Hand the loop a new manual target. Only while a session runs, one at a time.
+
+        No event is published for the request itself: the operator adjusts the
+        target in steps, and the setpoint that follows is in every snapshot.
+        """
+        state = self.run_state
+        if state is not RunState.RUNNING:
+            return self._refuse_command(NothingRunning(state))
+        if self._pending is not None:
+            return self._refuse_command(SurfaceBusy(state=state, pending=self._pending))
+        command = SetManualTarget(
+            output_rpm=output_rpm, operator=operator, at=self._clock.monotonic()
+        )
+        self._pending = command
+        self._accepted += 1
+        return Ok(command)
+
+    def submit_fault_reset(self, *, operator: str) -> Result[FaultReset, CommandRefusal]:
+        """Hand the loop an operator's fault reset. Whether it is safe is the runtime's call.
+
+        Accepted whenever the mailbox is empty and no start is in flight: a
+        drive can fault during a session that then cannot finish, and that is
+        exactly when the reset is needed. The runtime refuses it unless the
+        machine is at rest, every verdict is acknowledged and the shaft is
+        shown stopped.
+        """
+        state = self.run_state
+        if state is RunState.STARTING or self._pending is not None:
+            return self._refuse_command(SurfaceBusy(state=state, pending=self._pending))
+        command = FaultReset(operator=operator, at=self._clock.monotonic())
+        self._pending = command
+        self._accepted += 1
+        self._publish(EventKind.FAULT_RESET_REQUESTED, command.at, operator, "reset defaut")
         return Ok(command)
 
     def submit_end(self, *, operator: str, reason: str) -> Result[EndSession, EndRefusal]:
@@ -657,6 +803,17 @@ class ControlSurface:
         self._ending = False
         self._publish(EventKind.SESSION_IDLE, self._clock.monotonic(), "", "session idle")
 
+    def note_refused(self, operator: str, detail: str) -> None:
+        """The loop could not act on a command it took from the mailbox. Say so, once.
+
+        A start that the runtime refused leaves the surface idle again, so the
+        operator can correct and retry; the reason goes out as an event.
+        """
+        self._refused += 1
+        self._starting = False
+        self._publish(EventKind.REFUSED, self._clock.monotonic(), operator, detail)
+        _logger.warning("command refused by the loop: %s", detail)
+
     def note_presence(self, operator: str) -> Monotonic:
         """Record an attendant presence ping. Returns the instant recorded.
 
@@ -703,7 +860,7 @@ class ControlSurface:
         the same reason it does in the supervisor: forgetting to ask whether the
         mushroom has been pulled back out must fail closed.
         """
-        cleared = self._supervisor.acknowledge(operator, estop_released=estop_released)
+        cleared = self._acknowledger.acknowledge(operator, estop_released=estop_released)
         match cleared:
             case Ok(record):
                 self._estop_latched = False
@@ -738,6 +895,12 @@ class ControlSurface:
         """Count and log a refused start, then return it."""
         self._refused += 1
         _logger.warning("start refused: %r", refusal)
+        return Err(refusal)
+
+    def _refuse_command(self, refusal: CommandRefusal) -> Err[CommandRefusal]:
+        """Count and log a refused target or fault reset, then return it."""
+        self._refused += 1
+        _logger.warning("command refused: %r", refusal)
         return Err(refusal)
 
     def _refuse_end(self, refusal: EndRefusal) -> Err[EndRefusal]:

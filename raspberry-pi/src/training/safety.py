@@ -83,9 +83,10 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
-from statistics import fmean
+from statistics import fmean, median
 from typing import Final, final
 
 from src.clock import Clock
@@ -96,12 +97,14 @@ from src.training.types import (
     Phase,
     SafetyAction,
     SafetyVerdict,
+    SpeedEnvelope,
     most_severe,
 )
 from src.units import (
     Amperes,
     Bpm,
     BpmPerMinute,
+    GLoad,
     Monotonic,
     MotorRpm,
     Seconds,
@@ -138,6 +141,7 @@ RULE_REVERSE_ROTATION: Final[str] = "reverse_rotation"
 RULE_SESSION_OVERRUN: Final[str] = "session_overrun"
 RULE_LOOP_STALL: Final[str] = "loop_stall"
 RULE_ATTENDANT_ABSENT: Final[str] = "attendant_absent"
+RULE_SETPOINT_UNCONFIRMED: Final[str] = "setpoint_unconfirmed"
 
 ALL_RULES: Final[tuple[str, ...]] = (
     RULE_OPERATOR_ESTOP,
@@ -156,6 +160,7 @@ ALL_RULES: Final[tuple[str, ...]] = (
     RULE_SESSION_OVERRUN,
     RULE_LOOP_STALL,
     RULE_ATTENDANT_ABSENT,
+    RULE_SETPOINT_UNCONFIRMED,
 )
 """Every rule this supervisor can fire. One dwell tracker is allocated per entry."""
 
@@ -168,9 +173,6 @@ NO_DWELL: Final[Seconds] = Seconds(0.0)
 """For a rule that fires on the first tick its condition holds."""
 
 SECONDS_PER_MINUTE: Final[float] = 60.0
-
-MIN_TREND_POINTS: Final[int] = 2
-"""The fewest points from which a fall or a slope can be computed at all."""
 
 HISTORY_LIMIT: Final[int] = 2048
 """Hard cap on retained heart-rate evidence.
@@ -298,6 +300,64 @@ class SafetyLimits:
     hr_drop_window: Seconds = Seconds(30.0)
     """Window the fall is measured over. A presyncopal fall is seconds, not minutes."""
 
+    hr_drop_confirm_samples: int = 5
+    """Fresh samples the fall must be confirmed on: it is judged on their MEDIAN.
+
+    So at least three of the last five fresh readings must lie at or below the
+    threshold, and one or two artefacts - an ectopic beat counted into a rate,
+    a motion spike - can never end a session on their own (the cohort's ectopic
+    subjects ended BASELINE on one reading, 99 -> 71 bpm). At the pipeline's
+    1 Hz refresh this costs about two seconds on a real collapse: the scripted
+    vasovagal falls 1.5 bpm/s, so the median trails the truth by ~3 bpm.
+    """
+
+    hr_drop_persist_samples: int = 4
+    """Consecutive fresh readings the confirmed fall must hold on before the session ends.
+
+    The median of five removes any two artefacts; a BURST of three (the
+    cohort's ectopic subject S27 produced 97 -> 71, 73, 72 bpm with the true rate
+    steady at 97) stays in the last five readings for three consecutive
+    readings, and so moves the median for three. Four is one more than any
+    three-reading burst can hold; a burst of four readings 25 bpm off in the
+    same direction is rarer than one in a hundred sessions at the cohort's 8 %
+    ectopic rate. A real collapse keeps deepening, so it holds for as long as
+    it lasts: the scripted one still ends the session inside its own 20 s
+    window, about three seconds later than without this.
+    """
+
+    hr_drop_peak_samples: int = 9
+    """Fresh samples the PEAK is taken over: the running median of this many.
+
+    Nine (five of nine must agree) because the peak is a MAXIMUM over the whole
+    window, and a maximum picks out the rarest excursion. With 8 % of readings
+    +/-25 bpm off (the cohort's ectopic model), a peak built from 3-of-5 is
+    inflated about once in a 30-minute session and a 5-of-9 one about once in
+    forty. A real peak is a plateau lasting seconds, so the longer median costs
+    nothing on a genuine collapse. Below this many samples in the window the
+    rule does not judge at all: a peak that is one reading is not a peak.
+    """
+
+    hr_drop_rest_margin_bpm: Bpm = Bpm(15)
+    """With the load fully removed, how far below the RESTING rate a fall must reach.
+
+    Also the smallest fall the rule ever reports: whatever the load, the
+    confirmed level must be at least this far below the confirmed peak, so a
+    heart that simply settles below an anxious BASELINE is not a collapse.
+    Fifteen because normal recovery approaches the resting rate from above and
+    does not undershoot it by that much, while a vasovagal episode in RECOVERY
+    (the highest-risk window) drives the rate well below it - the scripted one
+    falls 30 bpm.
+    """
+
+    hr_drop_load_window: Seconds = Seconds(120.0)
+    """How far back the rule looks for the load a heart rate is still coming down from.
+
+    Two minutes is more than two time constants of the slowest documented
+    recovery here (tau_down 55 s nominal): past that, what remains of a
+    recovery falls a few bpm per 30 s window and the unconditional fall
+    threshold is safe again.
+    """
+
     hr_rise_limit: BpmPerMinute = BpmPerMinute(25.0)
     """Above this rate of rise, back the speed off (REDUCE)."""
 
@@ -313,6 +373,19 @@ class SafetyLimits:
     Dividing a bpm difference by a two-second span turns one noisy median into
     an alarming rate. Twenty seconds is two and a half of the pipeline's own
     8 s windows.
+    """
+
+    hr_rate_median_samples: int = 5
+    """Width of the running median the rate of rise is fitted to. Odd.
+
+    The rate is the least-squares slope of the running medians of this many
+    consecutive fresh readings, not the difference of two raw endpoints. The
+    endpoint difference was one reading's hostage: an ectopic subject's single
+    +25 bpm reading at the end of the window read as 30 bpm/min and raised a
+    REDUCE - about eighty times in one 30-minute programme. A median of five
+    removes any two outliers in five readings, so isolated artefacts cannot
+    move the fitted line at all; a genuine rise passes through the median
+    unchanged (lagging it by two readings, ~2 s at 1 Hz).
     """
 
     hr_stale_freeze_after: Seconds = Seconds(10.0)
@@ -346,15 +419,28 @@ class SafetyLimits:
     constants.
     """
 
-    unresponsive_rpm_rise: MotorRpm = MotorRpm(150)
-    """Rise in MEAN commanded motor rpm between the halves of the window.
+    unresponsive_g_rise: GLoad = GLoad(0.08)
+    """Rise in MEAN commanded centripetal load (g at the reference radius) between halves.
+
+    Judged in g, not rpm, because g is the stimulus the heart answers and it goes
+    as the SQUARE of speed: the 150 motor-rpm rise this replaced is 0.02 g at the
+    bottom of a warm-up (nothing a heart can be expected to notice) and 0.3 g at
+    the top. Judged in rpm, the rule fired in every nominal jog warm-up at
+    ~350 s and its REDUCE reversed the ramp. 0.08 g is ~9 bpm of steady-state
+    response at the modelled 110 bpm/g, three times the 3 bpm "did not move"
+    threshold below, before the lag of a 30-60 s time constant is counted.
 
     Means rather than endpoints: a single spike in the setpoint moves a mean by
-    only its own share of it, while a sustained increase moves it fully. The
-    endpoint-to-endpoint comparison this replaced could be satisfied by one
-    stray sample, and its mirror - comparing the minimum of the later half
-    against the maximum of the earlier one - was blind to a smooth ramp, which
-    is exactly how the setpoint actually moves.
+    only its own share of it, while a sustained increase moves it fully.
+    """
+
+    unresponsive_min_g: GLoad = GLoad(0.15)
+    """The rule cannot fire below this MEAN load over the later half of its window.
+
+    At low g a heart barely responds (0.15 g is ~16 bpm at the modelled gain,
+    and far less at a lagging half-window mean), so a flat heart rate there is
+    physiology, not a non-responder. At the jog's working point (~0.6 g) and
+    above, a heart that does not move is evidence.
     """
 
     unresponsive_bpm_rise: Bpm = Bpm(3)
@@ -400,7 +486,21 @@ class SafetyLimits:
     """
 
     tracking_error_dwell: Seconds = Seconds(2.0)
-    """Only applied while the runtime says it is NOT ramping."""
+    """How long the shaft must stay outside its envelope before the session ends.
+
+    Ten ticks of the 5 Hz loop: long enough that one late status read is not a
+    stall, short enough that a stuck measurement during a climb at the motion
+    limits (12.4 rpm/s) is caught about seven seconds after it sticks.
+    """
+
+    setpoint_echo_dwell: Seconds = Seconds(1.0)
+    """How long LFRD read back may disagree with LFRD written before it counts.
+
+    The keepalive writes the setpoint in force and the status read that follows
+    it in the same tick reads it back, so a healthy drive NEVER disagrees - not
+    for one tick. One second is five consecutive cycles all disagreeing, which
+    one garbled frame cannot produce.
+    """
 
     reverse_rpm: MotorRpm = MotorRpm(10)
     """Measured motor rpm against the commanded direction that counts as reverse.
@@ -519,6 +619,33 @@ class SafetyLimits:
             ("unresponsive_window", self.unresponsive_window),
         )
         _require_increasing(
+            "the rate's running median needs at least three samples to reject an outlier",
+            ("two", 2.0),
+            ("hr_rate_median_samples", self.hr_rate_median_samples),
+        )
+        if self.hr_rate_median_samples % 2 == 0:
+            raise ValueError(
+                f"hr_rate_median_samples must be odd, got {self.hr_rate_median_samples}: an even "
+                "median averages two readings and reports a level nobody measured"
+            )
+        _require_increasing(
+            "a fall held on one reading is one reading",
+            ("one", 1.0),
+            ("hr_drop_persist_samples", self.hr_drop_persist_samples),
+        )
+        _require_increasing(
+            "a fall must be confirmed on several samples, and its peak on more of them",
+            ("two", 2.0),
+            ("hr_drop_confirm_samples", self.hr_drop_confirm_samples),
+            ("hr_drop_peak_samples", self.hr_drop_peak_samples),
+        )
+        _require_increasing(
+            "the rest margin is the smallest fall reported, so it cannot exceed the drop",
+            ("zero", 0.0),
+            ("hr_drop_rest_margin_bpm", self.hr_drop_rest_margin_bpm),
+            ("hr_drop_bpm + 1", self.hr_drop_bpm + 1),
+        )
+        _require_increasing(
             "at least one failed exchange is needed before the link is declared lost",
             ("zero", 0.0),
             ("comms_lost_failures", self.comms_lost_failures),
@@ -526,8 +653,10 @@ class SafetyLimits:
         for name, value in (
             ("hr_drop_bpm", self.hr_drop_bpm),
             ("hr_drop_window", self.hr_drop_window),
+            ("hr_drop_load_window", self.hr_drop_load_window),
             ("unresponsive_window", self.unresponsive_window),
-            ("unresponsive_rpm_rise", self.unresponsive_rpm_rise),
+            ("unresponsive_g_rise", self.unresponsive_g_rise),
+            ("unresponsive_min_g", self.unresponsive_min_g),
             ("unresponsive_bpm_rise", self.unresponsive_bpm_rise),
             ("no_load_min_rpm", self.no_load_min_rpm),
             ("tracking_error_rpm", self.tracking_error_rpm),
@@ -540,6 +669,7 @@ class SafetyLimits:
             ("current_warn_dwell", self.current_warn_dwell),
             ("no_load_dwell", self.no_load_dwell),
             ("tracking_error_dwell", self.tracking_error_dwell),
+            ("setpoint_echo_dwell", self.setpoint_echo_dwell),
             ("overrun_grace", self.overrun_grace),
         ):
             _require_non_negative(name, value, "a negative dwell is not a shorter dwell")
@@ -596,10 +726,13 @@ class SafetyObservation:
     ramping: bool
     """Whether the runtime is deliberately moving the setpoint right now.
 
-    ``tracking_error`` is suppressed while this is true, because commanded and
-    measured speed are *supposed* to differ during a ramp; that is what a ramp
-    is. It must be the runtime's own statement, not something inferred here
-    from two successive setpoints, or a stalled shaft would look like a ramp.
+    Used by ``tracking_error`` only when no :attr:`envelope` is given, and then
+    it suppresses the rule, because commanded and measured speed are
+    *supposed* to differ during a step the drive is chasing. That suppression
+    is what made the rule blind for the ~100 s of a motion-limited climb, which
+    is why the runtime now states an envelope instead. It must be the runtime's
+    own statement, not something inferred here from two successive setpoints,
+    or a stalled shaft would look like a ramp.
     """
 
     heart_rate: HeartRateSample | None
@@ -641,6 +774,55 @@ class SafetyObservation:
     ``None`` is not treated as "fine": the age is then measured from the start
     of the session, so a session that never had an attendant escalates exactly
     like one that lost theirs.
+    """
+
+    commanded_g: GLoad | None = None
+    """The centripetal load ``commanded_rpm`` puts on the occupant, at the reference radius.
+
+    A MEASUREMENT like ``commanded_rpm`` (it is that number rendered through the
+    machine's geometry, which the supervisor does not own), and the stimulus the
+    heart actually answers: ``hr_unresponsive`` judges the response against it
+    and ``hr_drop`` uses it to tell a planned unload from a collapse. ``None``
+    - an observation that does not say what load it commanded - leaves
+    ``hr_unresponsive`` unjudged and ``hr_drop`` on its unconditional fall.
+    """
+
+    resting_bpm: Bpm | None = None
+    """The resting rate measured at standstill in BASELINE, or ``None``.
+
+    What a heart rate recovering from a removed load falls TOWARDS, and the
+    reference ``hr_drop`` measures a collapse during that recovery against.
+    ``None`` (no BASELINE, as in a manual session) keeps the unconditional
+    fall threshold: nothing is inferred from a rate nobody measured.
+    """
+
+    setpoint_echo_rpm: MotorRpm | None = None
+    """LFRD READ BACK in this tick, after the keepalive wrote ``commanded_rpm``.
+
+    The only evidence a speed write landed: a Modbus write response echoes the
+    request, so a write to the wrong register is "acknowledged". ``None`` when
+    no read followed a write this tick; a stale echo is not evidence of
+    anything, in either direction.
+    """
+
+    envelope: SpeedEnvelope | None = None
+    """Where the measured speed may legitimately be this tick (see ``src.training.tracking``).
+
+    The runtime's statement, from what it commanded and how fast the drive
+    ramps. ``tracking_error`` judges the shaft against it instead of switching
+    itself off while the setpoint ramps. ``None`` keeps the older statement,
+    :attr:`ramping`.
+    """
+
+    heart_rate_supervised: bool = True
+    """Whether the heart rate on screen belongs to somebody in the machine.
+
+    ``False`` only for :attr:`~src.training.types.Occupancy.BENCH` - nobody on
+    board, the capsule empty or the motor uncoupled - where the heart-rate
+    rules (``hr_*``) would judge the pulse of an operator standing beside the
+    rig and stop a bench test because they walked away from the electrodes.
+    Every other rule is unaffected. Defaults to ``True``, the fail-safe
+    direction: an observation built without saying so is supervised.
     """
 
 
@@ -865,6 +1047,41 @@ class _HrPoint:
     at: Monotonic
     bpm: Bpm
     commanded_rpm: MotorRpm
+    load: GLoad | None
+    """The commanded centripetal load at that instant, or ``None`` if it was not stated."""
+
+
+def _running_medians(values: tuple[int, ...], width: int) -> tuple[float, ...]:
+    """The median of every run of ``width`` consecutive values, oldest first.
+
+    Only whole runs: fewer than ``width`` values give no median at all, so a
+    single reading can never be promoted to a level.
+    """
+    return tuple(
+        float(median(values[start : start + width])) for start in range(len(values) - width + 1)
+    )
+
+
+def _least_squares_slope(times: tuple[float, ...], values: tuple[float, ...]) -> float | None:
+    """The least-squares slope of ``values`` against ``times``, per second, or ``None``.
+
+    ``None`` - unknown, never zero - when the times have no spread or the
+    arithmetic produced something non-finite. Plain sums and products only, for
+    the reason :attr:`src.training.hr_control.HeartRateTracker.rate` gives:
+    nothing here may raise inside the control loop.
+    """
+    count = len(times)
+    mean_time = sum(times) / count
+    mean_value = sum(values) / count
+    variance = sum((time - mean_time) * (time - mean_time) for time in times)
+    covariance = sum(
+        (time - mean_time) * (value - mean_value) for time, value in zip(times, values, strict=True)
+    )
+    if not (variance > 0.0 and math.isfinite(variance)):
+        # An infinite spread would divide a finite covariance down to a perfectly
+        # finite ZERO - "not changing" - from nonsense timestamps.
+        return None
+    return covariance / variance
 
 
 def _severity(verdict: SafetyVerdict) -> SafetyAction:
@@ -943,6 +1160,8 @@ class SafetySupervisor:
     __slots__ = (
         "_attestation",
         "_clock",
+        "_drop_counted_at",
+        "_drop_run",
         "_estop",
         "_floor",
         "_history",
@@ -954,6 +1173,7 @@ class SafetySupervisor:
         "_thread_trips",
         "_tick_gap",
         "_trackers",
+        "_tracking_echo",
     )
 
     def __init__(self, *, clock: Clock, limits: SafetyLimits) -> None:
@@ -966,10 +1186,28 @@ class SafetySupervisor:
         self._thread_trips: deque[ThreadTrip] = deque(maxlen=THREAD_TRIP_LIMIT)
         self._history: deque[_HrPoint] = deque(maxlen=HISTORY_LIMIT)
         self._trackers: dict[str, _RuleTracker] = {rule: _RuleTracker() for rule in ALL_RULES}
+        # The echo dwell as tracking_error sees it: a second, private tracker so
+        # that rule reads the same evidence without reading another rule's verdict.
+        self._tracking_echo: _RuleTracker = _RuleTracker()
+        # hr_drop's persistence: how many consecutive fresh readings its
+        # condition has held on, and the instant of the last one counted (the
+        # rule runs at 5 Hz, the readings arrive at 1 Hz).
+        self._drop_run: int = 0
+        self._drop_counted_at: Monotonic | None = None
         self._last_tick_at: Monotonic | None = None
         self._tick_gap: Seconds | None = None
         self._last_seq: int | None = None
         self._last_good_at: Monotonic | None = None
+
+    @property
+    def limits(self) -> SafetyLimits:
+        """The thresholds this supervisor judges against. Read-only.
+
+        Exposed so a composition root that shares one supervisor between the
+        runtime and the web e-stop can prove it was built with the same limits
+        the runtime checks a programme against.
+        """
+        return self._limits
 
     # =====================================================================
     # The startup gate
@@ -1310,13 +1548,23 @@ class SafetySupervisor:
             return
         self._last_good_at = sample.at
         self._history.append(
-            _HrPoint(at=sample.at, bpm=bpm, commanded_rpm=observation.commanded_rpm)
+            _HrPoint(
+                at=sample.at,
+                bpm=bpm,
+                commanded_rpm=observation.commanded_rpm,
+                load=observation.commanded_g,
+            )
         )
 
     def _prune(self, now: Monotonic) -> None:
         """Drop evidence older than the longest window any rule asks for."""
         limits = self._limits
-        longest = max(limits.hr_drop_window, limits.hr_rate_window, limits.unresponsive_window)
+        longest = max(
+            limits.hr_drop_window,
+            limits.hr_drop_load_window,
+            limits.hr_rate_window,
+            limits.unresponsive_window,
+        )
         while self._history and elapsed(self._history[0].at, now) > longest:
             self._history.popleft()
 
@@ -1384,6 +1632,7 @@ class SafetySupervisor:
             self._rule_session_overrun(observation),
             self._rule_loop_stall(observation),
             self._rule_attendant_absent(observation),
+            self._rule_setpoint_unconfirmed(observation),
         )
         return tuple(verdict for verdict in candidates if verdict is not None)
 
@@ -1412,8 +1661,12 @@ class SafetySupervisor:
         vasovagal risk. ``DONE`` opts out because the programme is over, no
         setpoint will be issued again, and a rig alarming forever about an
         absent heart rate teaches an operator to ignore the alarm that matters.
+
+        An observation that says nobody is on board
+        (:attr:`SafetyObservation.heart_rate_supervised` ``False``, the BENCH
+        occupancy) opts out too: that heart rate is not an occupant's.
         """
-        return observation.phase is not Phase.DONE
+        return observation.heart_rate_supervised and observation.phase is not Phase.DONE
 
     def _usable_bpm(self, observation: SafetyObservation) -> Bpm | None:
         """The heart rate the level rules may act on, or ``None``.
@@ -1513,7 +1766,7 @@ class SafetySupervisor:
         )
 
     def _rule_hr_drop(self, observation: SafetyObservation) -> SafetyVerdict | None:
-        """THE VASOVAGAL RULE: a fall of more than 25 bpm inside 30 s ends the session.
+        """THE VASOVAGAL RULE: a confirmed fall the load does not explain ends the session.
 
         This is the rule the entire two-layer design exists for. A person
         beginning to faint under centripetal load shows a **falling** heart
@@ -1523,10 +1776,38 @@ class SafetySupervisor:
         let one of those two be weighed against the other would be a place
         where the wrong one could win.
 
-        Measured against the **peak** inside the window rather than the single
-        sample at its start: a fall is a fall from wherever the rate actually
-        was, and pinning it to whichever 30-second-old median happened to land
-        there would make the rule depend on one sample.
+        **Robust to one reading.** Both ends of the fall are medians of fresh
+        samples, never single readings (see ``hr_drop_confirm_samples`` and
+        ``hr_drop_peak_samples``): the *level* is the median of the last five,
+        the *peak* the highest running median of nine inside the window. An
+        ectopic beat, a motion spike or one mis-detected window moves neither,
+        and the fall must then hold on ``hr_drop_persist_samples`` consecutive
+        fresh readings, which a burst of three artefacts cannot do.
+        Measured from the peak rather than the start of the window: a fall is a
+        fall from wherever the rate actually was.
+
+        **Aware of the load coming off.** A heart recovering from a load that is
+        being removed falls too - 25 bpm in 30 s for a fast responder in the
+        programme's own cooldown - and that is recovery, not presyncope. So the
+        threshold depends on how much of the recent load is still applied,
+        ``phi = g_now / g_ref`` (``g_ref`` the highest commanded load in the last
+        ``hr_drop_load_window``, clamped to [0, 1]):
+
+        * the level the remaining load explains is ``E = rest + (peak - rest) * phi``
+          - the heart's response is modelled linear in g, and a recovering heart
+          LAGS that steady state from above, so a normal recovery never goes
+          below it;
+        * the margin below it that counts as a collapse shrinks from the full
+          ``hr_drop_bpm`` at ``phi = 1`` to ``hr_drop_rest_margin_bpm`` at
+          ``phi = 0``: ``M = rest_margin + (drop - rest_margin) * phi``;
+        * it fires when the confirmed level is at or below ``E - M`` AND at
+          least ``rest_margin`` below the confirmed peak.
+
+        With nothing removed (``phi = 1``, or the load or the resting rate
+        unknown) that is exactly the old rule: 25 bpm below the peak within
+        30 s. With everything removed - COOLDOWN's end, and RECOVERY, the
+        highest-risk window - it fires at 15 bpm below the resting rate, which
+        normal recovery does not reach and a collapse does.
 
         Latched, so a rate that recovers does not resume the session. Presyncope
         that resolves because the load came off is not evidence that more load
@@ -1535,17 +1816,39 @@ class SafetySupervisor:
         """
         tracker = self._trackers[RULE_HR_DROP]
         if not self._heart_rate_supervised(observation):
+            self._drop_run = 0
             tracker.release()
             return None
-        points = self._points_within(observation.now, self._limits.hr_drop_window)
-        if len(points) < MIN_TREND_POINTS:
+        limits = self._limits
+        points = self._points_within(observation.now, limits.hr_drop_window)
+        rates = tuple(point.bpm for point in points)
+        peaks = _running_medians(rates, limits.hr_drop_peak_samples)
+        if not peaks:
+            self._drop_run = 0
             tracker.release()
             return None
-        peak = max(point.bpm for point in points)
-        latest = points[-1].bpm
-        fall = peak - latest
+        peak = max(peaks)
+        level = float(median(rates[-limits.hr_drop_confirm_samples :]))
+        phi = self._load_still_applied(observation.now, points[-1])
+        rest = observation.resting_bpm
+        if rest is None:
+            threshold = peak - limits.hr_drop_bpm
+        else:
+            margin = (
+                limits.hr_drop_rest_margin_bpm
+                + (limits.hr_drop_bpm - limits.hr_drop_rest_margin_bpm) * phi
+            )
+            threshold = rest + (peak - rest) * phi - margin
+        fall = peak - level
+        below = level <= threshold and fall >= limits.hr_drop_rest_margin_bpm
+        latest = points[-1].at
+        if not below:
+            self._drop_run = 0
+        elif latest != self._drop_counted_at:
+            self._drop_run += 1
+        self._drop_counted_at = latest
         firing = tracker.update(
-            condition=fall >= self._limits.hr_drop_bpm,
+            condition=below and self._drop_run >= limits.hr_drop_persist_samples,
             now=observation.now,
             dwell=NO_DWELL,
         )
@@ -1555,13 +1858,33 @@ class SafetySupervisor:
             action=SafetyAction.RAMP_DOWN,
             rule=RULE_HR_DROP,
             detail=(
-                f"heart rate fell {fall} bpm (from {peak} to {latest}) within "
-                f"{self._limits.hr_drop_window:.0f} s: a falling rate under load is "
-                "presyncope, and the control law would answer it by accelerating"
+                f"heart rate fell {fall:.0f} bpm (from {peak:.0f} to {level:.0f}, confirmed "
+                f"over {limits.hr_drop_confirm_samples} fresh readings) within "
+                f"{limits.hr_drop_window:.0f} s, below the {threshold:.0f} bpm the "
+                f"remaining load ({phi:.0%} of the recent peak) explains: a falling rate "
+                "under load is presyncope, and the control law would answer it by "
+                "accelerating"
             ),
             latched=True,
             since=firing.since,
         )
+
+    def _load_still_applied(self, now: Monotonic, latest: _HrPoint) -> float:
+        """How much of the recent load is still commanded: ``g_now / g_ref``, in [0, 1].
+
+        ``1.0`` - "nothing was removed", the unconditional reading - whenever
+        either number is unknown, or there was no load to remove.
+        """
+        current = latest.load
+        loads = tuple(
+            point.load
+            for point in self._points_within(now, self._limits.hr_drop_load_window)
+            if point.load is not None
+        )
+        reference = max(loads, default=None)
+        if current is None or reference is None or reference <= 0.0:
+            return 1.0
+        return min(1.0, max(0.0, current / reference))
 
     def _rule_hr_hard_max(self, observation: SafetyObservation) -> SafetyVerdict | None:
         """Above the hard maximum for five continuous seconds: end the session.
@@ -1636,10 +1959,21 @@ class SafetySupervisor:
     def _rule_hr_rate(self, observation: SafetyObservation) -> SafetyVerdict | None:
         """Rising faster than the bound allows: back the speed off.
 
-        A rate of rise, so it needs two points and a span between them. The
-        minimum span exists because dividing one bpm difference by a two-second
-        gap turns a single noisy median into an alarming slope; twenty seconds
-        is two and a half of the pipeline's own 8 s windows.
+        The rate is the least-squares slope of the RUNNING MEDIANS of the fresh
+        readings in the window (``hr_rate_median_samples`` wide, each stamped at
+        its middle reading), never the difference of two raw endpoints: one
+        ectopic or motion-spiked reading at either end of the window used to be
+        the whole rate. Isolated outliers - no two within a median's width -
+        leave every median, and so the slope, exactly where the heart is. A
+        genuine sustained rise beyond the limit reads at its full value once the
+        medians span ``hr_rate_min_span``: with a whole window of it, the rule
+        fires as soon as that span is reached, i.e. within
+        ``hr_rate_min_span`` plus half a median's width of fresh readings.
+
+        The minimum span exists because a slope over a few seconds turns a
+        couple of noisy medians into an alarming rate; twenty seconds is two and
+        a half of the pipeline's own 8 s windows. Falls are not this rule's:
+        a fall is ``hr_drop``.
 
         Unlatched with a release band, because this is genuinely advisory: a
         heart rate settling back inside its bound is evidence the reduction
@@ -1652,14 +1986,18 @@ class SafetySupervisor:
             tracker.release()
             return None
         points = self._points_within(observation.now, limits.hr_rate_window)
-        if len(points) < MIN_TREND_POINTS:
-            tracker.release()
-            return None
-        span = elapsed(points[0].at, points[-1].at)
+        width = limits.hr_rate_median_samples
+        levels = _running_medians(tuple(point.bpm for point in points), width)
+        times = tuple(float(point.at) for point in points[width // 2 : width // 2 + len(levels)])
+        span = Seconds(times[-1] - times[0]) if times else Seconds(0.0)
         if span < limits.hr_rate_min_span:
             tracker.release()
             return None
-        rise = BpmPerMinute((points[-1].bpm - points[0].bpm) / span * SECONDS_PER_MINUTE)
+        # A 20 s minimum span inside a 60 s window keeps the fit's spread positive
+        # and finite, so an unknown slope cannot occur here; were it ever to, NaN
+        # compares False below and the rule stays quiet, as it did on no evidence.
+        slope = _least_squares_slope(times, levels)
+        rise = BpmPerMinute(math.nan if slope is None else slope * SECONDS_PER_MINUTE)
         rising = rise > limits.hr_rise_limit or (tracker.held and rise > limits.hr_rise_release)
         firing = tracker.update(condition=rising, now=observation.now, dwell=NO_DWELL)
         if firing is None:
@@ -1669,7 +2007,8 @@ class SafetySupervisor:
             rule=RULE_HR_RATE,
             detail=(
                 f"heart rate is rising at {rise:.1f} bpm/min over the last {span:.0f} s "
-                f"(limit {limits.hr_rise_limit:.1f} bpm/min)"
+                f"(the fitted slope of {width}-reading medians; limit "
+                f"{limits.hr_rise_limit:.1f} bpm/min)"
             ),
             latched=False,
             since=firing.since,
@@ -1746,6 +2085,16 @@ class SafetySupervisor:
         30-60 s: any shorter window would report normal physiology as a fault.
         The window itself is the dwell.
 
+        **Judged against the LOAD, not the speed.** The stimulus is centripetal
+        g, which goes as the square of speed: a 150 motor-rpm rise at the start
+        of a warm-up is a few hundredths of a g, which no heart answers, and
+        judging it in rpm made this rule fire in every nominal jog warm-up and
+        reverse the ramp with its REDUCE. Two thresholds, both in g: the mean
+        load must rise by ``unresponsive_g_rise`` across the halves, and the
+        later half must average at least ``unresponsive_min_g`` - below that a
+        flat heart rate is physiology. An observation that does not state its
+        load is not judged at all.
+
         The comparison is between the **means** of the two halves of the
         window, for both signals. A mean is moved only fractionally by one
         stray sample and fully by a sustained change, which is the
@@ -1765,15 +2114,21 @@ class SafetySupervisor:
         if elapsed(points[0].at, points[-1].at) < limits.unresponsive_min_span:
             tracker.release()
             return None
+        loads = tuple(point.load for point in points if point.load is not None)
+        if len(loads) != len(points):
+            tracker.release()
+            return None
         half = len(points) // WINDOW_HALVES
-        early = points[:half]
-        late = points[half:]
-        rpm_rise = fmean(point.commanded_rpm for point in late) - fmean(
-            point.commanded_rpm for point in early
+        early_load = fmean(loads[:half])
+        late_load = fmean(loads[half:])
+        g_rise = late_load - early_load
+        bpm_rise = fmean(point.bpm for point in points[half:]) - fmean(
+            point.bpm for point in points[:half]
         )
-        bpm_rise = fmean(point.bpm for point in late) - fmean(point.bpm for point in early)
         unresponsive = (
-            rpm_rise >= limits.unresponsive_rpm_rise and bpm_rise < limits.unresponsive_bpm_rise
+            g_rise >= limits.unresponsive_g_rise
+            and late_load >= limits.unresponsive_min_g
+            and bpm_rise < limits.unresponsive_bpm_rise
         )
         firing = tracker.update(condition=unresponsive, now=observation.now, dwell=NO_DWELL)
         if firing is None:
@@ -1782,7 +2137,7 @@ class SafetySupervisor:
             action=SafetyAction.REDUCE,
             rule=RULE_HR_UNRESPONSIVE,
             detail=(
-                f"mean commanded speed rose {rpm_rise:.0f} motor rpm across "
+                f"mean commanded load rose {g_rise:.2f} g (to {late_load:.2f} g) across "
                 f"{limits.unresponsive_window:.0f} s while the mean heart rate moved only "
                 f"{bpm_rise:.1f} bpm: a non-responder, or a sensor unrelated to the person"
             ),
@@ -1898,32 +2253,57 @@ class SafetySupervisor:
         )
 
     def _rule_tracking_error(self, observation: SafetyObservation) -> SafetyVerdict | None:
-        """Commanded and measured speed diverging while not ramping: end the session.
+        """The shaft is not where the command puts it: end the session, or go silent.
 
-        Stalled, overloaded, or writing to the wrong register. The last of
-        those is the one that makes this rule worth its complexity: most
-        Altivar parameters are writable while the drive is running, so an
-        address off by one does not bounce - it writes the speed setpoint into
-        whatever parameter is next door, and every subsequent read looks
-        perfectly normal. The shaft not following the command is how that
-        becomes visible.
+        Stalled, overloaded, a slipping coupling, a frozen status - or writing
+        to the wrong register. The last of those is the one that makes this
+        rule worth its complexity: most Altivar parameters are writable while
+        the drive is running, so an address off by one does not bounce - it
+        writes the speed setpoint into whatever parameter is next door, and
+        every subsequent read looks perfectly normal. The shaft not following
+        the command is how that becomes visible.
 
-        Only judged while the runtime says it is not ramping, because during a
-        ramp commanded and measured speed are *supposed* to differ - that is
-        what a ramp is. The flag has to be the runtime's own statement rather
-        than something inferred here from successive setpoints, or a stalled
-        shaft would look like a ramp that never finished.
+        **Judged against an envelope, during ramps too.** The runtime states
+        where the shaft may legitimately be (:attr:`SafetyObservation.envelope`:
+        between the setpoint and a derated follower of it at the drive's own
+        ramp), and the rule fires when the measured speed has been further than
+        ``tracking_error_rpm`` outside that band for ``tracking_error_dwell``.
+        It used to be switched off while the setpoint ramped, which at the
+        motion limits is ~100 s of every climb and every stop: a stuck RFRD was
+        caught 52 s late, a frozen status 63-110 s late. Without an envelope the
+        older statement applies (off while :attr:`~SafetyObservation.ramping`).
+
+        **Two levels.** ``RAMP_DOWN`` when only the shaft disagrees: the writes
+        are landing (LFRD reads back what was written), so a controlled descent
+        is still a command the drive will obey. ``GO_SILENT`` when LFRD read
+        back has ALSO disagreed with the command for ``setpoint_echo_dwell``:
+        neither the register nor the shaft shows the command landing, so no
+        write - not the ramp-down, not the emergency zero - can be trusted, and
+        every one of them keeps the drive's ``ttO`` fed. The one stop that does
+        not need a write to land is to stop writing.
         """
         tracker = self._trackers[RULE_TRACKING_ERROR]
+        limits = self._limits
+        echo = observation.setpoint_echo_rpm
+        unconfirmed = self._tracking_echo.update(
+            condition=echo is not None and echo != observation.commanded_rpm,
+            now=observation.now,
+            dwell=limits.setpoint_echo_dwell,
+        )
         measured = observation.measured_rpm
         if measured is None:
             tracker.release()
             return None
-        limits = self._limits
-        divergence = abs(observation.commanded_rpm - measured)
+        envelope = observation.envelope
+        if envelope is None:
+            divergence = abs(observation.commanded_rpm - measured)
+            judged = not observation.ramping
+        else:
+            divergence = envelope.distance(measured)
+            judged = True
         firing = tracker.update(
             condition=(
-                not observation.ramping
+                judged
                 and observation.drive_state is DriveState.OPERATION_ENABLED
                 and divergence > limits.tracking_error_rpm
             ),
@@ -1932,13 +2312,79 @@ class SafetySupervisor:
         )
         if firing is None:
             return None
+        where = (
+            "the commanded setpoint"
+            if envelope is None
+            else f"the band {envelope.low}..{envelope.high} rpm the drive's ramp allows"
+        )
+        seen = (
+            f"commanded {observation.commanded_rpm} motor rpm but the drive measures "
+            f"{measured} rpm, {divergence} rpm outside {where} for {firing.held:.1f} s "
+            f"(tolerance {limits.tracking_error_rpm} rpm)"
+        )
+        if unconfirmed is None:
+            return SafetyVerdict(
+                action=SafetyAction.RAMP_DOWN,
+                rule=RULE_TRACKING_ERROR,
+                detail=seen,
+                latched=True,
+                since=firing.since,
+            )
         return SafetyVerdict(
-            action=SafetyAction.RAMP_DOWN,
+            action=SafetyAction.GO_SILENT,
             rule=RULE_TRACKING_ERROR,
             detail=(
-                f"commanded {observation.commanded_rpm} motor rpm but the drive measures "
-                f"{measured} rpm, a divergence of {divergence} rpm for {firing.held:.1f} s "
-                f"while not ramping (tolerance {limits.tracking_error_rpm} rpm)"
+                f"{seen}, and the LFRD echo reads {echo} rpm instead of the setpoint written: "
+                "the writes are not landing, so none can be trusted to stop the motor. No "
+                "further frame will be sent and the drive's own ttO timeout ramps it down"
+            ),
+            latched=True,
+            since=firing.since,
+        )
+
+    def _rule_setpoint_unconfirmed(self, observation: SafetyObservation) -> SafetyVerdict | None:
+        """LFRD read back is not what was written: the commanded speed may be fiction.
+
+        A Modbus write response echoes the request, so a write that lands in the
+        wrong register - or a drive that is not listening - is "acknowledged"
+        while the speed reference never moves. Reading LFRD back in the same
+        tick the keepalive wrote it is the only evidence a write landed, and a
+        healthy drive never disagrees, not for one tick. It used to be shown on
+        the screen and acted on nowhere.
+
+        ``RAMP_DOWN``, latched, after ``setpoint_echo_dwell``: the session ends
+        on the controlled descent, and the shaft is watched while it does. If
+        the shaft follows the descent the writes are demonstrably landing (the
+        read path is what lies) and the stop completes under control; if it
+        does not, ``tracking_error`` escalates to ``GO_SILENT``. The mismatch
+        alone is not that escalation: a lying read-back with obeyed writes is
+        better stopped under control than handed to a communication-loss fault.
+
+        ``None`` (no read followed a write this tick) releases the rule: a
+        stale echo says nothing about the last write.
+        """
+        tracker = self._trackers[RULE_SETPOINT_UNCONFIRMED]
+        echo = observation.setpoint_echo_rpm
+        if echo is None:
+            tracker.release()
+            return None
+        written = observation.commanded_rpm
+        firing = tracker.update(
+            condition=echo != written,
+            now=observation.now,
+            dwell=self._limits.setpoint_echo_dwell,
+        )
+        if firing is None:
+            return None
+        return SafetyVerdict(
+            action=SafetyAction.RAMP_DOWN,
+            rule=RULE_SETPOINT_UNCONFIRMED,
+            detail=(
+                f"the drive's LFRD echo reads {echo} motor rpm while {written} was written, "
+                f"for {firing.held:.1f} s: the speed writes are acknowledged but not landing in "
+                "the speed reference (a wrong register, or a drive that is not listening). "
+                "The session ends on the controlled ramp; if the shaft does not follow it, "
+                "writing stops and the drive's ttO timeout takes over"
             ),
             latched=True,
             since=firing.since,

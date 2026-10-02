@@ -62,6 +62,7 @@ from src.motor.drive import (
     DriveError,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
@@ -73,6 +74,7 @@ from src.motor.drive import (
 from src.result import Err, Ok, Result, is_err
 from src.units import (
     Amperes,
+    Hertz,
     Monotonic,
     MotorRpm,
     RawRegister,
@@ -80,6 +82,7 @@ from src.units import (
     Seconds,
     StatusWord,
     elapsed,
+    motor_rpm_to_hertz,
     signed_to_register,
 )
 
@@ -313,44 +316,34 @@ class FaultReaction(Enum):
     # drive cannot control the motor any more, and the conservative default.
 
 
+def fault_reaction(fault: DriveFault) -> FaultReaction:
+    """What the simulated drive does to the shaft for ``fault``. Total over ``DriveFault``.
+
+    A ramp for exactly one fault, SLF1 (Modbus loss): it fires when this software
+    goes silent, and a freewheel there would leave a silent controller's
+    centrifuge uncontrolled, so the drive is commissioned to ramp (verify the
+    Modbus-fault-management setting on the bench). Every other fault - the
+    other communication losses included, whose reaction is configurable and
+    not commissioned on this machine - is modelled as a FREEWHEEL: where the
+    real reaction is configurable or unknown, the simulator picks the slower,
+    uncontrolled stop.
+    """
+    if fault is DriveFault.MODBUS_COMM_LOSS:
+        return FaultReaction.RAMP_TO_STOP
+    return FaultReaction.FREEWHEEL
+
+
 FAULT_REACTIONS: Final[Mapping[DriveFault, FaultReaction]] = MappingProxyType(
-    {
-        # Nothing here can be ramped: the bus, a phase or the output stage is
-        # gone, so the drive has no way to influence the shaft.
-        DriveFault.UNDERVOLTAGE: FaultReaction.FREEWHEEL,
-        DriveFault.MOTOR_PHASE_LOSS: FaultReaction.FREEWHEEL,
-        DriveFault.OVERCURRENT: FaultReaction.FREEWHEEL,
-        DriveFault.OUTPUT_SHORT: FaultReaction.FREEWHEEL,
-        DriveFault.NO_MOTOR: FaultReaction.FREEWHEEL,
-        DriveFault.INTERNAL: FaultReaction.FREEWHEEL,
-        # ObF is freewheel by definition: the bus tripped *because* it could
-        # not absorb the braking energy, so braking is what stops.
-        DriveFault.DC_BUS_OVERVOLTAGE: FaultReaction.FREEWHEEL,
-        # The ATV320's factory setting for a motor overload is a freewheel
-        # stop, and a drive that thinks the motor is too hot is the last thing
-        # that should keep pushing current through it.
-        DriveFault.MOTOR_OVERLOAD: FaultReaction.FREEWHEEL,
-        # The one that must be a ramp. SLF fires when this software goes
-        # silent, and a freewheel there would mean a silent controller leaves a
-        # spinning centrifuge uncontrolled. The drive is healthy, so it can and
-        # must ramp it down. This assumes the drive is commissioned that way;
-        # verify the Modbus-fault-management setting on the bench.
-        DriveFault.MODBUS_COMM_LOSS: FaultReaction.RAMP_TO_STOP,
-        # Neither of these is a real fault reaction: they are what a fault
-        # *report* degrades to when LFT holds 0 or an unrecognised code. If one
-        # ever reaches the plant, freewheel is the conservative reading.
-        DriveFault.NO_FAULT_STORED: FaultReaction.FREEWHEEL,
-        DriveFault.UNKNOWN: FaultReaction.FREEWHEEL,
-    }
+    {fault: fault_reaction(fault) for fault in DriveFault}
 )
-"""Reaction per fault. Total over ``DriveFault``; a test proves it."""
+"""Reaction per fault, derived from :func:`fault_reaction`."""
 
 
 UNMAPPED_FAULT_CODE: Final[RawRegister] = RawRegister(251)
 """The LFT value reported for a fault the code table cannot name.
 
 Deliberately absent from :data:`~src.motor.drive.LFT_FAULT_CODES`, so injecting
-a fault that has no number in that (provisional) table produces exactly what
+a fault that has no number in that table produces exactly what
 the hardware path would produce for an unrecognised code: ``DriveFault.UNKNOWN``
 carrying the raw value. That path has to be exercisable, because the table is
 known to be incomplete and the safety layer meets it in production.
@@ -363,10 +356,10 @@ def lft_code_for(
 ) -> RawRegister:
     """The LFT register value this drive shows for ``fault``.
 
-    Inverted from the shared table rather than duplicated, so a correction made
-    during commissioning reaches the simulator too; a second hardcoded copy of
-    a table already marked PROVISIONAL is how a simulator starts testing a
-    fiction. Linear scan over nine entries, at injection time only.
+    Inverted from the shared table rather than duplicated, so an extension made
+    during commissioning reaches the simulator too; a second hardcoded copy is
+    how a simulator starts testing a fiction. Linear scan over the 67 entries,
+    at injection time only.
     """
     for code, mapped in codes.items():
         if mapped is fault:
@@ -411,6 +404,18 @@ class SimulatedDriveConfig:
     tto: Seconds = Seconds(3.0)
     """The drive's Modbus timeout. Silence for this long latches SLF."""
 
+    reads_reset_watchdog: bool = False
+    """Whether a READ frame resets ``tto``, as the real ATV320 does.
+
+    ``False`` by default, deliberately stricter than the hardware: software
+    written against the default must keep a *write* keepalive alive whenever it
+    commands motion (see :meth:`SimulatedDrive._note_frame`). ``True`` is for
+    exactly one purpose: a read-only console that polls an idle drive at a few
+    hertz and never writes. The real drive stays quiet under that polling (the
+    bench console did it for hours), and a dry run that latched SLF three
+    seconds after launch would be teaching the operator to ignore a fault
+    display. Every test of the motion path keeps the default."""
+
     response_timeout: Seconds = Seconds(0.5)
     """How long a caller is modelled to wait for a reply before calling it a
     timeout. A placeholder: a Modbus exchange at 19200 8E1 takes single-digit
@@ -441,6 +446,18 @@ class SimulatedDriveConfig:
     """Where the drive's own current limit clips. ~170% of the ATV320U04M2C's
     ~2.3 A rating; a placeholder, since the notes do not give the figure."""
 
+    base_hz: Hertz = Hertz(50.0)
+    """Nameplate frequency at ``nominal_rpm``: 50 Hz. Converts ``max_rpm`` to HSP."""
+
+    max_frequency: Hertz = Hertz(60.0)
+    """The drive's tFr, as read on the bench: 60.0 Hz."""
+
+    low_speed: Hertz = Hertz(0.0)
+    """The drive's LSP, as read on the bench: 0 Hz. Reported by
+    :meth:`SimulatedDrive.read_limits` only - the plant does NOT clamp a zero
+    reference up to it, so a non-zero value here exists to test the refusal,
+    never to model a machine anyone may run."""
+
     def __post_init__(self) -> None:
         # Only the knobs that break the arithmetic are checked, and they raise
         # rather than returning a Result: this is built at startup with nothing
@@ -452,9 +469,31 @@ class SimulatedDriveConfig:
             ("acceleration_time", float(self.acceleration_time)),
             ("tau_coast", float(self.tau_coast)),
             ("tto", float(self.tto)),
+            ("base_hz", float(self.base_hz)),
+            ("max_frequency", float(self.max_frequency)),
         ):
             if value <= 0.0:
                 raise ValueError(f"{name} must be positive, got {value}")
+        if self.low_speed < 0.0:
+            raise ValueError(f"low_speed must not be negative, got {self.low_speed}")
+
+    @property
+    def limits(self) -> DriveLimits:
+        """What this drive's tFr/HSP/LSP/ACC/dEC registers would read, in units.
+
+        HSP is ``max_rpm`` at the nameplate point, rounded to the 0.1 Hz the
+        register holds. ACC and dEC are both ``acceleration_time``, because the
+        plant uses one rate for both (see that field) - reporting a dEC the
+        plant does not follow would be a lie about the model.
+        """
+        high_speed = motor_rpm_to_hertz(self.max_rpm, self.nominal_rpm, self.base_hz)
+        return DriveLimits(
+            max_frequency=self.max_frequency,
+            high_speed=Hertz(round(high_speed * 10) / 10),
+            low_speed=self.low_speed,
+            acceleration=self.acceleration_time,
+            deceleration=self.acceleration_time,
+        )
 
 
 DEFAULT_SIM_CONFIG: Final[SimulatedDriveConfig] = SimulatedDriveConfig()
@@ -836,8 +875,32 @@ class SimulatedDrive:
                 output_rpm=MotorRpm(round(self._rpm)),
                 current=self._current(),
                 fault=None if latched is None else latched.fault,
+                fault_code=None if latched is None else latched.raw_code,
             )
         )
+
+    async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        """The configured tFr/HSP/LSP/ACC/dEC, through the same link checks as a read.
+
+        Five reads on copper, one modelled exchange here; like any read it does
+        not feed ttO.
+        """
+        self._integrate(self._clock.monotonic())
+        error = self._transport_check()
+        if error is not None:
+            return Err(error)
+        self._note_frame(is_write=False)
+        return Ok(self._config.limits)
+
+    @property
+    def emergency_budget(self) -> Seconds:
+        """``response_timeout``: the modelled wait for the one reply the zero write gets.
+
+        The simulator's exchange is a single modelled round trip, so its bound
+        is that round trip's timeout; a latency injected above it makes the
+        emergency write come back ``SENT_UNCONFIRMED``, as the hardware would.
+        """
+        return self._config.response_timeout
 
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         """Zero the setpoint, synchronously, best effort. Never raises.
@@ -907,7 +970,7 @@ class SimulatedDrive:
         watchdog, because a drive that has never heard from a master does not
         raise SLF - otherwise every ATV320 on a shelf would show one.
         """
-        if is_write or not self._comms_established:
+        if is_write or self._config.reads_reset_watchdog or not self._comms_established:
             self._last_frame_at = self._last_at
         self._comms_established = True
 

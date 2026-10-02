@@ -1069,6 +1069,35 @@ def test_resolving_with_an_override_records_that_it_was_overridden(tmp_path: Pat
     assert program.profile.warmup_max_s == BASE.warmup_max_s
 
 
+def test_a_rider_s_own_maximum_refits_the_programme(tmp_path: Path) -> None:
+    """A fitter rider's measured maximum replaces the preset's conservative one."""
+    store = _written_store(tmp_path)
+    program = _ok(store.resolve(BASE.profile_id, at=UnixMillis(1), subject_hr_max=Bpm(185)))
+    assert program.profile.subject_hr_max == Bpm(185)
+    assert program.profile.zone_high_bpm == BASE.zone_high_bpm
+    # The stored preset is untouched: the refit is this session's, not the store's.
+    assert _ok(store.get(BASE.profile_id)).subject_hr_max == BASE.subject_hr_max
+
+
+def test_a_zone_too_high_for_this_rider_is_refused_before_anything_turns(
+    tmp_path: Path,
+) -> None:
+    """A 138 bpm zone top and a 148 bpm hard max are both too high for a 140 bpm maximum."""
+    store = _written_store(tmp_path)
+    error = _err(store.resolve(BASE.profile_id, at=UnixMillis(1), subject_hr_max=Bpm(140)))
+    assert isinstance(error, Rejected)
+    assert Violation.ZONE_ABOVE_SUBJECT_CEILING in error.violations
+    assert Violation.HARD_MAX_ABOVE_SUBJECT_MAX in error.violations
+
+
+def test_the_preset_s_own_maximum_is_not_a_refit(tmp_path: Path) -> None:
+    store = _written_store(tmp_path)
+    program = _ok(
+        store.resolve(BASE.profile_id, at=UnixMillis(1), subject_hr_max=BASE.subject_hr_max)
+    )
+    assert program.profile == BASE
+
+
 def test_an_override_equal_to_the_stored_total_still_counts_as_one(tmp_path: Path) -> None:
     """The flag records what was asked for, because that is the auditable fact."""
     store = _written_store(tmp_path)

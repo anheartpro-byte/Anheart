@@ -50,11 +50,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, IntEnum, auto, unique
 from types import MappingProxyType
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol, assert_never, runtime_checkable
 
-from src.result import Result
+from src.result import Err, Ok, Result
 from src.units import (
     Amperes,
+    Hertz,
     MotorRpm,
     OutOfRange,
     RawRegister,
@@ -250,168 +251,816 @@ class ControlWord(IntEnum):
 
 
 @unique
+class FaultCategory(Enum):
+    """What kind of thing failed. Drives the operator's first move, never the stop:
+    every category stops the machine the same way."""
+
+    COMMUNICATION = "communication"
+    """A communication link to the drive was lost; the drive itself is healthy."""
+    SUPPLY = "supply"
+    """The mains supply or the DC bus is out of bounds."""
+    MOTOR = "motor"
+    """The motor, its cable or its windings."""
+    DRIVE_HARDWARE = "drive_hardware"
+    """The drive's own electronics failed a self-check."""
+    THERMAL = "thermal"
+    """Something is too hot."""
+    CONFIGURATION = "configuration"
+    """The drive's configuration is wrong or was not accepted."""
+    EXTERNAL = "external"
+    """A fault signalled to the drive from outside."""
+    LOAD = "load"
+    """The mechanical load behaved unexpectedly."""
+    FEEDBACK = "feedback"
+    """The drive no longer trusts its speed or position measurement."""
+    SAFETY = "safety"
+    """An integrated safety function (STO) reported a fault."""
+    INPUT = "input"
+    """An analog input the drive uses is out of range."""
+    BRAKE = "brake"
+    """The brake or its control."""
+    NONE = "none"
+    """No fault (LFT reads 0)."""
+    UNIDENTIFIED = "unidentified"
+    """A code this build cannot name."""
+
+
+@dataclass(frozen=True, slots=True)
+class FaultSpec:
+    """What the drive's manual says about one fault, and this machine's policy for it."""
+
+    mnemonic: str
+    """What the drive's own display shows."""
+
+    category: FaultCategory
+    resettable: bool
+    """Whether an operator may reset it from the console, at standstill, after
+    acknowledging. ``False``: power the drive down and inspect; the console refuses."""
+
+    meaning: str
+    """French, for the operator standing at the drive: what happened, what to do."""
+
+
+@unique
 class DriveFault(Enum):
-    """A fault the drive latched, named as its own display names it.
+    """A fault the drive latched, one member per LFT code of the ATV320.
 
-    Members carry ``auto()`` values on purpose. The numeric LFT codes live in
-    :data:`LFT_FAULT_CODES` (one table, provisional, overridable) and the
-    keypad mnemonics in the mapping below, so nothing in this enum depends on a
-    number that has not been verified against the drive.
+    COMPLETE: every code of the Schneider enumeration of LFT (parameter 7121,
+    "Altivar fault code", ``ATV32_communication_parameters`` A1.2IE03,
+    Enumerations sheet; the ATV320 inherits the ATV32 fault set), plus
+    :attr:`NO_FAULT_STORED` for LFT = 0 and :attr:`UNKNOWN` for any code this
+    table does not list (a newer firmware). Values are ``auto()``: the numbers
+    live in :data:`LFT_FAULT_CODES`, overridable at commissioning.
+
+    **Every member stops the machine.** The drive has already applied its own
+    fault reaction when this is read; the ``drive_fault`` safety rule latches on
+    the FAULT state whatever the code, and nothing here ever resets a fault by
+    itself. What the member decides is only what the operator is told and
+    whether the console may later reset it (:attr:`resettable`).
     """
-
-    UNDERVOLTAGE = auto()
-    MOTOR_PHASE_LOSS = auto()
-    OVERCURRENT = auto()
-    MOTOR_OVERLOAD = auto()
-    OUTPUT_SHORT = auto()
-    MODBUS_COMM_LOSS = auto()
-    NO_MOTOR = auto()
-    INTERNAL = auto()
-    DC_BUS_OVERVOLTAGE = auto()
 
     NO_FAULT_STORED = auto()
     # LFT read back as 0. Not a fault: the register holds the LAST fault and is
-    # empty when none has occurred. Reading this while the status word says
-    # FAULT is a contradiction worth logging, not a fault to name.
+    # empty when none has occurred.
+
+    INTERNAL = auto()
+    CONTROL_EEPROM = auto()
+    INCORRECT_CONFIG = auto()
+    INVALID_CONFIG = auto()
+    MODBUS_COMM_LOSS = auto()
+    INTERNAL_COM_LINK = auto()
+    COM_NETWORK = auto()
+    EXTERNAL_FAULT_INPUT = auto()
+    OVERCURRENT = auto()
+    PRECHARGE = auto()
+    SPEED_FEEDBACK_LOSS = auto()
+    DRIVE_OVERHEAT = auto()
+    MOTOR_OVERLOAD = auto()
+    DC_BUS_OVERVOLTAGE = auto()
+    MAINS_OVERVOLTAGE = auto()
+    OUTPUT_PHASE_LOSS = auto()
+    INPUT_PHASE_LOSS = auto()
+    UNDERVOLTAGE = auto()
+    MOTOR_SHORT_CIRCUIT = auto()
+    OVERSPEED = auto()
+    AUTO_TUNING = auto()
+    RATING_ERROR = auto()
+    POWER_CALIBRATION = auto()
+    INTERNAL_SERIAL_LINK = auto()
+    INTERNAL_MFG_AREA = auto()
+    POWER_EEPROM = auto()
+    IMPEDANT_SHORT_CIRCUIT = auto()
+    GROUND_SHORT_CIRCUIT = auto()
+    THREE_PHASE_LOSS = auto()
+    CANOPEN_COMM_LOSS = auto()
+    BRAKE_CONTROL = auto()
+    EXTERNAL_FAULT_COM = auto()
+    BRAKE_FEEDBACK = auto()
+    PC_COMM_LOSS = auto()
+    ENCODER_COUPLING = auto()
+    TORQUE_CURRENT_LIMIT = auto()
+    HMI_COMM_LOSS = auto()
+    POWER_REMOVAL = auto()
+    PTC_PROBE = auto()
+    PTC_OVERHEAT = auto()
+    INTERNAL_CURRENT_MEASURE = auto()
+    INTERNAL_MAINS_CIRCUIT = auto()
+    INTERNAL_THERMAL_SENSOR = auto()
+    IGBT_OVERHEAT = auto()
+    IGBT_SHORT_CIRCUIT = auto()
+    MOTOR_SHORT_CIRCUIT_2 = auto()
+    TORQUE_TIMEOUT = auto()
+    OUTPUT_CONTACTOR_STUCK = auto()
+    OUTPUT_CONTACTOR_OPEN = auto()
+    AI2_INPUT = auto()
+    INPUT_CONTACTOR = auto()
+    DIFFERENTIAL_CURRENT = auto()
+    IGBT_DESATURATION = auto()
+    INTERNAL_OPTION = auto()
+    INTERNAL_CPU = auto()
+    AI3_CURRENT_LOSS = auto()
+    CARDS_PAIRING = auto()
+    LOAD_FAULT = auto()
+    BAD_CONFIG_TRANSFER = auto()
+    CHANNEL_SWITCH = auto()
+    PROCESS_UNDERLOAD = auto()
+    PROCESS_OVERLOAD = auto()
+    ANGLE_ERROR = auto()
+    SAFETY_FUNCTION = auto()
+    FIELDBUS = auto()
+    FIELDBUS_STOP = auto()
 
     UNKNOWN = auto()
-    # A code this build does not recognise. Always paired with the raw number
-    # in a FaultReport, so an operator can read the mnemonic off the drive
-    # instead of being told a fault we cannot actually identify.
+    # A code absent from the table: always paired with the raw number, never
+    # resettable from the console (nobody can say what resetting it means).
+
+    @property
+    def spec(self) -> FaultSpec:
+        """Everything known about this fault. Total: a test proves it."""
+        return _FAULT_SPECS[self]
 
     @property
     def mnemonic(self) -> str:
-        """The short code the drive shows on its own display.
-
-        The operator is standing in front of the drive. Handing them the same
-        four characters it is showing them is worth more than any prose.
-        """
-        return _FAULT_MNEMONIC[self]
+        """The short code the drive shows on its own display."""
+        return self.spec.mnemonic
 
     @property
     def meaning(self) -> str:
-        """One operator-facing sentence: what happened, and what it implies."""
-        return _FAULT_MEANING[self]
+        """One operator-facing sentence (French): what happened, what to do."""
+        return self.spec.meaning
+
+    @property
+    def category(self) -> FaultCategory:
+        """What kind of thing failed."""
+        return self.spec.category
+
+    @property
+    def resettable(self) -> bool:
+        """Whether the console may reset it (at standstill, after acknowledgement)."""
+        return self.spec.resettable
 
 
-_FAULT_MNEMONIC: Final[Mapping[DriveFault, str]] = MappingProxyType(
+_FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
     {
-        DriveFault.UNDERVOLTAGE: "USF",
-        DriveFault.MOTOR_PHASE_LOSS: "OPF",
-        DriveFault.OVERCURRENT: "OCF",
-        DriveFault.MOTOR_OVERLOAD: "OLF",
-        DriveFault.OUTPUT_SHORT: "SCF",
-        DriveFault.MODBUS_COMM_LOSS: "SLF",
-        # Both of these are spelled "nOF" in the sources available here, with
-        # two different meanings. See the NOTE above LFT_FAULT_CODES: the
-        # ambiguity is preserved rather than resolved by guesswork.
-        DriveFault.NO_MOTOR: "nOF",
-        DriveFault.NO_FAULT_STORED: "nOF",
-        DriveFault.INTERNAL: "InF",
-        DriveFault.DC_BUS_OVERVOLTAGE: "ObF",
-        DriveFault.UNKNOWN: "?",
+        DriveFault.NO_FAULT_STORED: FaultSpec(
+            mnemonic="nOF",
+            category=FaultCategory.NONE,
+            resettable=False,
+            meaning=(
+                "aucun defaut memorise (LFT = 0). Si le mot d'etat indique un defaut en meme "
+                "temps, les deux sont en desaccord : le mot d'etat fait foi."
+            ),
+        ),
+        DriveFault.INTERNAL: FaultSpec(
+            mnemonic="InF",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "erreur de calibration interne du variateur : couper l'alimentation ; si le "
+                "defaut revient, le variateur est defaillant."
+            ),
+        ),
+        DriveFault.CONTROL_EEPROM: FaultSpec(
+            mnemonic="EEF1",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "memoire EEPROM de controle defaillante : couper l'alimentation, verifier la "
+                "configuration ; remplacer le variateur si le defaut persiste."
+            ),
+        ),
+        DriveFault.INCORRECT_CONFIG: FaultSpec(
+            mnemonic="CFF",
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "configuration incorrecte (carte changee ou parametres incoherents) : ne pas "
+                "relancer, verifier et recharger la configuration mise en service."
+            ),
+        ),
+        DriveFault.INVALID_CONFIG: FaultSpec(
+            mnemonic="CFI",
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "configuration invalide transferee au variateur : recharger la configuration "
+                "mise en service avant tout redemarrage."
+            ),
+        ),
+        DriveFault.MODBUS_COMM_LOSS: FaultSpec(
+            mnemonic="SLF1",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=(
+                "perte de communication Modbus : le variateur n'entendait plus la console et a "
+                "applique son arret ttO. Verifier le cable RJ45/RS485 et la liaison 19200 8E1."
+            ),
+        ),
+        DriveFault.INTERNAL_COM_LINK: FaultSpec(
+            mnemonic="ILF",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "liaison interne du variateur (carte option) en defaut : couper l'alimentation "
+                "et verifier la carte option."
+            ),
+        ),
+        DriveFault.COM_NETWORK: FaultSpec(
+            mnemonic="CnF",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=(
+                "defaut du reseau de communication (carte de communication) : verifier le "
+                "reseau, puis acquitter."
+            ),
+        ),
+        DriveFault.EXTERNAL_FAULT_INPUT: FaultSpec(
+            mnemonic="EPF1",
+            category=FaultCategory.EXTERNAL,
+            resettable=True,
+            meaning=(
+                "defaut externe signale par une entree logique ou un bit : trouver et lever la "
+                "cause externe avant d'acquitter."
+            ),
+        ),
+        DriveFault.OVERCURRENT: FaultSpec(
+            mnemonic="OCF",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "surintensite en sortie : declenchement instantane. Suspecter un blocage "
+                "mecanique ou un bobinage en court-circuit ; ne pas rearmer sans inspection."
+            ),
+        ),
+        DriveFault.PRECHARGE: FaultSpec(
+            mnemonic="CrF",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "defaut du circuit de precharge du bus continu : couper l'alimentation ; defaut "
+                "materiel du variateur."
+            ),
+        ),
+        DriveFault.SPEED_FEEDBACK_LOSS: FaultSpec(
+            mnemonic="SPF",
+            category=FaultCategory.FEEDBACK,
+            resettable=False,
+            meaning=(
+                "perte du retour vitesse : la vitesse mesuree n'est plus fiable. Verifier le "
+                "capteur et son cablage avant tout redemarrage."
+            ),
+        ),
+        DriveFault.DRIVE_OVERHEAT: FaultSpec(
+            mnemonic="OHF",
+            category=FaultCategory.THERMAL,
+            resettable=True,
+            meaning=(
+                "surchauffe du variateur : laisser refroidir, verifier la ventilation et la "
+                "temperature ambiante avant d'acquitter."
+            ),
+        ),
+        DriveFault.MOTOR_OVERLOAD: FaultSpec(
+            mnemonic="OLF",
+            category=FaultCategory.THERMAL,
+            resettable=True,
+            meaning=(
+                "surcharge thermique du moteur : laisser refroidir. Des declenchements repetes "
+                "signifient une charge trop forte, pas un seuil faux."
+            ),
+        ),
+        DriveFault.DC_BUS_OVERVOLTAGE: FaultSpec(
+            mnemonic="ObF",
+            category=FaultCategory.SUPPLY,
+            resettable=True,
+            meaning=(
+                "surtension du bus continu au freinage : le variateur est en roue libre, le "
+                "bras ralentit sans controle. Allonger la rampe de deceleration, ne jamais la "
+                "raccourcir."
+            ),
+        ),
+        DriveFault.MAINS_OVERVOLTAGE: FaultSpec(
+            mnemonic="OSF",
+            category=FaultCategory.SUPPLY,
+            resettable=True,
+            meaning=(
+                "surtension du reseau d'alimentation : verifier la tension secteur avant "
+                "d'acquitter."
+            ),
+        ),
+        DriveFault.OUTPUT_PHASE_LOSS: FaultSpec(
+            mnemonic="OPF1",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "perte d'une phase moteur en sortie : verifier le cable moteur et le couplage "
+                "avant tout redemarrage."
+            ),
+        ),
+        DriveFault.INPUT_PHASE_LOSS: FaultSpec(
+            mnemonic="PHF",
+            category=FaultCategory.SUPPLY,
+            resettable=True,
+            meaning=(
+                "perte d'une phase d'alimentation : verifier l'alimentation et les fusibles "
+                "avant d'acquitter."
+            ),
+        ),
+        DriveFault.UNDERVOLTAGE: FaultSpec(
+            mnemonic="USF",
+            category=FaultCategory.SUPPLY,
+            resettable=True,
+            meaning=(
+                "sous-tension secteur : l'alimentation a chute ou a ete coupee. Le moteur "
+                "ralentit seul ; verifier l'alimentation avant de redemarrer."
+            ),
+        ),
+        DriveFault.MOTOR_SHORT_CIRCUIT: FaultSpec(
+            mnemonic="SCF1",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "court-circuit moteur : ne pas rearmer. Trouver le court-circuit (cable, "
+                "bornier, bobinage) d'abord."
+            ),
+        ),
+        DriveFault.OVERSPEED: FaultSpec(
+            mnemonic="SOF",
+            category=FaultCategory.FEEDBACK,
+            resettable=False,
+            meaning=(
+                "survitesse : le moteur a depasse sa vitesse maximale. Inspecter la mecanique "
+                "et la configuration avant tout redemarrage."
+            ),
+        ),
+        DriveFault.AUTO_TUNING: FaultSpec(
+            mnemonic="tnF",
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "echec de l'auto-reglage : refaire la mise en service moteur avant toute seance."
+            ),
+        ),
+        DriveFault.RATING_ERROR: FaultSpec(
+            mnemonic="InF1",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "calibre du variateur incoherent : defaut interne, couper l'alimentation et "
+                "contacter la maintenance."
+            ),
+        ),
+        DriveFault.POWER_CALIBRATION: FaultSpec(
+            mnemonic="InF2",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "carte de puissance incompatible ou non calibree : defaut interne, couper "
+                "l'alimentation."
+            ),
+        ),
+        DriveFault.INTERNAL_SERIAL_LINK: FaultSpec(
+            mnemonic="InF3",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=("liaison serie interne en defaut : defaut interne, couper l'alimentation."),
+        ),
+        DriveFault.INTERNAL_MFG_AREA: FaultSpec(
+            mnemonic="InF4",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "zone de fabrication interne invalide : defaut interne, contacter la maintenance."
+            ),
+        ),
+        DriveFault.POWER_EEPROM: FaultSpec(
+            mnemonic="EEF2",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "memoire EEPROM de puissance defaillante : couper l'alimentation ; remplacer le "
+                "variateur si le defaut persiste."
+            ),
+        ),
+        DriveFault.IMPEDANT_SHORT_CIRCUIT: FaultSpec(
+            mnemonic="SCF2",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "court-circuit impedant en sortie : ne pas rearmer, inspecter le cable et le "
+                "moteur."
+            ),
+        ),
+        DriveFault.GROUND_SHORT_CIRCUIT: FaultSpec(
+            mnemonic="SCF3",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "court-circuit a la terre : ne pas rearmer, danger electrique. Inspecter "
+                "l'isolement du moteur et du cable."
+            ),
+        ),
+        DriveFault.THREE_PHASE_LOSS: FaultSpec(
+            mnemonic="OPF2",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "perte des trois phases moteur : moteur deconnecte ou contacteur ouvert. "
+                "Verifier le cablage avant tout redemarrage."
+            ),
+        ),
+        DriveFault.CANOPEN_COMM_LOSS: FaultSpec(
+            mnemonic="COF",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=("perte de communication CANopen : verifier le bus, puis acquitter."),
+        ),
+        DriveFault.BRAKE_CONTROL: FaultSpec(
+            mnemonic="bLF",
+            category=FaultCategory.BRAKE,
+            resettable=False,
+            meaning=(
+                "defaut de commande du frein : inspecter le frein et sa commande avant tout "
+                "redemarrage."
+            ),
+        ),
+        DriveFault.EXTERNAL_FAULT_COM: FaultSpec(
+            mnemonic="EPF2",
+            category=FaultCategory.EXTERNAL,
+            resettable=True,
+            meaning=(
+                "defaut externe signale par le reseau de communication : lever la cause avant "
+                "d'acquitter."
+            ),
+        ),
+        DriveFault.BRAKE_FEEDBACK: FaultSpec(
+            mnemonic="brF",
+            category=FaultCategory.BRAKE,
+            resettable=False,
+            meaning=(
+                "retour du contact de frein incoherent : inspecter le frein avant tout redemarrage."
+            ),
+        ),
+        DriveFault.PC_COMM_LOSS: FaultSpec(
+            mnemonic="SLF2",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=(
+                "perte de communication avec le logiciel PC : verifier la liaison, puis acquitter."
+            ),
+        ),
+        DriveFault.ENCODER_COUPLING: FaultSpec(
+            mnemonic="ECF",
+            category=FaultCategory.FEEDBACK,
+            resettable=False,
+            meaning=("defaut d'accouplement du codeur : inspecter la mecanique du codeur."),
+        ),
+        DriveFault.TORQUE_CURRENT_LIMIT: FaultSpec(
+            mnemonic="SSF",
+            category=FaultCategory.LOAD,
+            resettable=True,
+            meaning=(
+                "limitation de couple ou de courant prolongee : verifier que rien ne freine le "
+                "bras avant d'acquitter."
+            ),
+        ),
+        DriveFault.HMI_COMM_LOSS: FaultSpec(
+            mnemonic="SLF3",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=(
+                "perte de communication avec le terminal : verifier le terminal, puis acquitter."
+            ),
+        ),
+        DriveFault.POWER_REMOVAL: FaultSpec(
+            mnemonic="PrF",
+            category=FaultCategory.SAFETY,
+            resettable=False,
+            meaning=(
+                "defaut de la fonction de securite STO (suppression de puissance) : ne pas "
+                "rearmer, faire controler la chaine de securite."
+            ),
+        ),
+        DriveFault.PTC_PROBE: FaultSpec(
+            mnemonic="PtFL",
+            category=FaultCategory.THERMAL,
+            resettable=True,
+            meaning=("defaut de la sonde PTC sur LI6 : verifier la sonde et son cablage."),
+        ),
+        DriveFault.PTC_OVERHEAT: FaultSpec(
+            mnemonic="OtFL",
+            category=FaultCategory.THERMAL,
+            resettable=True,
+            meaning=(
+                "surchauffe detectee par la sonde PTC du moteur : laisser refroidir avant "
+                "d'acquitter."
+            ),
+        ),
+        DriveFault.INTERNAL_CURRENT_MEASURE: FaultSpec(
+            mnemonic="InF9",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "mesure de courant interne en defaut : defaut interne, couper l'alimentation."
+            ),
+        ),
+        DriveFault.INTERNAL_MAINS_CIRCUIT: FaultSpec(
+            mnemonic="InFA",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=("circuit d'entree interne en defaut : defaut interne, couper l'alimentation."),
+        ),
+        DriveFault.INTERNAL_THERMAL_SENSOR: FaultSpec(
+            mnemonic="InFb",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "capteur thermique interne en defaut : defaut interne, couper l'alimentation."
+            ),
+        ),
+        DriveFault.IGBT_OVERHEAT: FaultSpec(
+            mnemonic="tJF",
+            category=FaultCategory.THERMAL,
+            resettable=True,
+            meaning=(
+                "surchauffe des IGBT : laisser refroidir, reduire la charge ; des "
+                "declenchements repetes signalent un probleme."
+            ),
+        ),
+        DriveFault.IGBT_SHORT_CIRCUIT: FaultSpec(
+            mnemonic="SCF4",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=("court-circuit IGBT : defaut materiel grave, ne pas rearmer."),
+        ),
+        DriveFault.MOTOR_SHORT_CIRCUIT_2: FaultSpec(
+            mnemonic="SCF5",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "court-circuit moteur (detection a la mise sous tension) : ne pas rearmer, "
+                "inspecter."
+            ),
+        ),
+        DriveFault.TORQUE_TIMEOUT: FaultSpec(
+            mnemonic="SrF",
+            category=FaultCategory.LOAD,
+            resettable=True,
+            meaning=("delai de couple depasse : verifier la charge mecanique avant d'acquitter."),
+        ),
+        DriveFault.OUTPUT_CONTACTOR_STUCK: FaultSpec(
+            mnemonic="FCF1",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "contacteur de sortie colle : ne pas rearmer, faire intervenir la maintenance."
+            ),
+        ),
+        DriveFault.OUTPUT_CONTACTOR_OPEN: FaultSpec(
+            mnemonic="FCF2",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "contacteur de sortie reste ouvert : verifier le contacteur avant tout redemarrage."
+            ),
+        ),
+        DriveFault.AI2_INPUT: FaultSpec(
+            mnemonic="AI2F",
+            category=FaultCategory.INPUT,
+            resettable=True,
+            meaning=("defaut de l'entree analogique AI2 : verifier le signal et son cablage."),
+        ),
+        DriveFault.INPUT_CONTACTOR: FaultSpec(
+            mnemonic="LCF",
+            category=FaultCategory.SUPPLY,
+            resettable=False,
+            meaning=(
+                "defaut du contacteur de ligne : verifier le contacteur avant tout redemarrage."
+            ),
+        ),
+        DriveFault.DIFFERENTIAL_CURRENT: FaultSpec(
+            mnemonic="dCF",
+            category=FaultCategory.MOTOR,
+            resettable=False,
+            meaning=(
+                "courant differentiel (fuite) detecte : danger electrique, ne pas rearmer, "
+                "inspecter l'isolement."
+            ),
+        ),
+        DriveFault.IGBT_DESATURATION: FaultSpec(
+            mnemonic="HdF",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "desaturation IGBT (court-circuit en sortie) : defaut materiel grave, ne pas "
+                "rearmer."
+            ),
+        ),
+        DriveFault.INTERNAL_OPTION: FaultSpec(
+            mnemonic="InF6",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=("carte option interne en defaut : couper l'alimentation, verifier la carte."),
+        ),
+        DriveFault.INTERNAL_CPU: FaultSpec(
+            mnemonic="InFE",
+            category=FaultCategory.DRIVE_HARDWARE,
+            resettable=False,
+            meaning=(
+                "defaut du processeur interne : couper l'alimentation ; si le defaut revient, "
+                "le variateur est defaillant."
+            ),
+        ),
+        DriveFault.AI3_CURRENT_LOSS: FaultSpec(
+            mnemonic="LFF3",
+            category=FaultCategory.INPUT,
+            resettable=True,
+            meaning=("perte du signal 4-20 mA sur AI3 : verifier le capteur et son cablage."),
+        ),
+        DriveFault.CARDS_PAIRING: FaultSpec(
+            mnemonic="HCF",
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=("appairage des cartes incorrect : verifier les cartes et la configuration."),
+        ),
+        DriveFault.LOAD_FAULT: FaultSpec(
+            mnemonic="dLF",
+            category=FaultCategory.LOAD,
+            resettable=True,
+            meaning=(
+                "defaut de charge dynamique : verifier la mecanique entrainee avant d'acquitter."
+            ),
+        ),
+        DriveFault.BAD_CONFIG_TRANSFER: FaultSpec(
+            mnemonic="CFI2",
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "transfert de configuration invalide : recharger la configuration mise en service."
+            ),
+        ),
+        DriveFault.CHANNEL_SWITCH: FaultSpec(
+            mnemonic="CSF",
+            category=FaultCategory.CONFIGURATION,
+            resettable=True,
+            meaning=(
+                "defaut de commutation de canal de commande : verifier la configuration des canaux."
+            ),
+        ),
+        DriveFault.PROCESS_UNDERLOAD: FaultSpec(
+            mnemonic="ULF",
+            category=FaultCategory.LOAD,
+            resettable=True,
+            meaning=(
+                "sous-charge du process : le moteur ne rencontre plus la charge attendue "
+                "(accouplement ?). Inspecter avant d'acquitter."
+            ),
+        ),
+        DriveFault.PROCESS_OVERLOAD: FaultSpec(
+            mnemonic="OLC",
+            category=FaultCategory.LOAD,
+            resettable=True,
+            meaning=(
+                "surcharge du process : quelque chose freine le bras. Inspecter avant d'acquitter."
+            ),
+        ),
+        DriveFault.ANGLE_ERROR: FaultSpec(
+            mnemonic="ASF",
+            category=FaultCategory.FEEDBACK,
+            resettable=False,
+            meaning=("erreur d'angle (moteur synchrone) : refaire le reglage moteur."),
+        ),
+        DriveFault.SAFETY_FUNCTION: FaultSpec(
+            mnemonic="SAFF",
+            category=FaultCategory.SAFETY,
+            resettable=False,
+            meaning=(
+                "defaut d'une fonction de securite integree : ne pas rearmer, faire controler "
+                "la chaine de securite."
+            ),
+        ),
+        DriveFault.FIELDBUS: FaultSpec(
+            mnemonic="FbE",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=("defaut du module de bus de terrain : verifier le module, puis acquitter."),
+        ),
+        DriveFault.FIELDBUS_STOP: FaultSpec(
+            mnemonic="FbES",
+            category=FaultCategory.COMMUNICATION,
+            resettable=True,
+            meaning=("arret sur defaut du bus de terrain : verifier le reseau, puis acquitter."),
+        ),
+        DriveFault.UNKNOWN: FaultSpec(
+            mnemonic="?",
+            category=FaultCategory.UNIDENTIFIED,
+            resettable=False,
+            meaning=(
+                "code de defaut non reconnu : lire le code affiche sur le variateur et le "
+                "rechercher dans son manuel. Ne pas rearmer depuis la console."
+            ),
+        ),
     }
 )
-"""Keypad mnemonic per fault. Total over ``DriveFault``; a test proves it."""
+"""Manual facts and reset policy per fault. Total over ``DriveFault``; a test proves it."""
 
-_FAULT_MEANING: Final[Mapping[DriveFault, str]] = MappingProxyType(
-    {
-        DriveFault.UNDERVOLTAGE: (
-            "mains undervoltage: the 230 V supply dipped or was removed. The motor "
-            "coasts down on its own; check the supply before restarting."
-        ),
-        DriveFault.MOTOR_PHASE_LOSS: (
-            "motor phase loss: one of the three output phases is open. Check the "
-            "motor cable and the delta terminal links before restarting."
-        ),
-        DriveFault.OVERCURRENT: (
-            "overcurrent on the output: the drive tripped instantaneously. Suspect a "
-            "mechanical jam or a shorted winding; do not reset without inspecting."
-        ),
-        DriveFault.MOTOR_OVERLOAD: (
-            "motor thermal overload: the drive's thermal model of the motor says it "
-            "is too hot. Let it cool. Repeated trips mean the load is too high, not "
-            "that the threshold is wrong."
-        ),
-        DriveFault.OUTPUT_SHORT: (
-            "short circuit on the drive output. Do not reset: find the short first."
-        ),
-        DriveFault.MODBUS_COMM_LOSS: (
-            "Modbus communication loss: the drive stopped hearing this controller and "
-            "applied its own ttO timeout response. Check the RJ45 cable and that the "
-            "port is still 19200 8E1, address 1."
-        ),
-        DriveFault.NO_MOTOR: (
-            "no motor detected on the output. Check the motor cable; the drive cannot "
-            "control a load it cannot see."
-        ),
-        DriveFault.INTERNAL: (
-            "internal drive fault: the drive has failed its own self-check. Power it "
-            "down completely. If it returns, the drive is faulty - do not keep "
-            "resetting it with somebody in the machine."
-        ),
-        DriveFault.DC_BUS_OVERVOLTAGE: (
-            "DC bus overvoltage while braking: the deceleration ramp asked the bus to "
-            "absorb more than the ~11 J it can hold, against the ~420 J stored in the "
-            "spinning rig. The drive has dropped to freewheel, so the centrifuge is "
-            "coasting down uncontrolled. Lengthen the ramp; shortening it makes this "
-            "worse, not faster."
-        ),
-        DriveFault.NO_FAULT_STORED: (
-            "no fault stored: the drive's LFT register is empty. If the status word "
-            "reported a fault at the same time then the two disagree - treat the "
-            "status word as authoritative and log the disagreement."
-        ),
-        DriveFault.UNKNOWN: (
-            "unrecognised fault code. Read the mnemonic from the drive's display and "
-            "look it up in the ATV320 programming manual."
-        ),
-    }
-)
-"""Operator-facing meaning per fault. Total over ``DriveFault``; a test proves it."""
-
-
-# -------------------------------------------------------------------------
-# NOTE ON THE NUMERIC LFT CODES - READ THIS BEFORE TRUSTING THEM
-# -------------------------------------------------------------------------
-# The commissioning notes give fault MNEMONICS (USF, OPF, OCF, ...) but no
-# numeric LFT values, so the numbers below are the ATV32/ATV320 enumeration as
-# best known here and are PROVISIONAL. They must be verified against the LFT
-# enumeration in the drive's own programming manual, or by triggering each
-# fault on the bench and reading the register, before this machine carries a
-# person.
-#
-# The design is arranged so a MISSING entry degrades safely: any code absent
-# from this table yields DriveFault.UNKNOWN carrying the raw number, never a
-# fault name we cannot justify. The residual risk is a WRONG entry - telling an
-# operator "motor overload" when the drive is showing something else - which is
-# why describe_fault() takes the table as a parameter: commissioning can
-# correct it without editing this module.
-#
-# One entry is not a guess and must not be removed: code 0 is "no fault
-# stored". LFT holds the LAST fault, so it reads 0 on a healthy drive, and
-# mapping 0 to a real fault would make every faultless drive report one.
-#
-# The notes also gloss "nOF" as "no motor detected", whereas in Altivar
-# parameter tables nOF reads as "no fault". Both meanings are kept as separate
-# enum members (NO_MOTOR, NO_FAULT_STORED) and only the defensible one is given
-# a code here. Resolve this from the manual; do not pick one by feel.
-# -------------------------------------------------------------------------
 
 LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
     {
         RawRegister(0): DriveFault.NO_FAULT_STORED,
-        RawRegister(2): DriveFault.INTERNAL,
-        RawRegister(3): DriveFault.OUTPUT_SHORT,
-        RawRegister(11): DriveFault.MOTOR_OVERLOAD,
-        RawRegister(14): DriveFault.DC_BUS_OVERVOLTAGE,
-        RawRegister(15): DriveFault.OVERCURRENT,
-        RawRegister(16): DriveFault.MOTOR_PHASE_LOSS,
-        RawRegister(19): DriveFault.MODBUS_COMM_LOSS,
+        RawRegister(1): DriveFault.INTERNAL,
+        RawRegister(2): DriveFault.CONTROL_EEPROM,
+        RawRegister(3): DriveFault.INCORRECT_CONFIG,
+        RawRegister(4): DriveFault.INVALID_CONFIG,
+        RawRegister(5): DriveFault.MODBUS_COMM_LOSS,
+        RawRegister(6): DriveFault.INTERNAL_COM_LINK,
+        RawRegister(7): DriveFault.COM_NETWORK,
+        RawRegister(8): DriveFault.EXTERNAL_FAULT_INPUT,
+        RawRegister(9): DriveFault.OVERCURRENT,
+        RawRegister(10): DriveFault.PRECHARGE,
+        RawRegister(11): DriveFault.SPEED_FEEDBACK_LOSS,
+        RawRegister(16): DriveFault.DRIVE_OVERHEAT,
+        RawRegister(17): DriveFault.MOTOR_OVERLOAD,
+        RawRegister(18): DriveFault.DC_BUS_OVERVOLTAGE,
+        RawRegister(19): DriveFault.MAINS_OVERVOLTAGE,
+        RawRegister(20): DriveFault.OUTPUT_PHASE_LOSS,
+        RawRegister(21): DriveFault.INPUT_PHASE_LOSS,
         RawRegister(22): DriveFault.UNDERVOLTAGE,
+        RawRegister(23): DriveFault.MOTOR_SHORT_CIRCUIT,
+        RawRegister(24): DriveFault.OVERSPEED,
+        RawRegister(25): DriveFault.AUTO_TUNING,
+        RawRegister(26): DriveFault.RATING_ERROR,
+        RawRegister(27): DriveFault.POWER_CALIBRATION,
+        RawRegister(28): DriveFault.INTERNAL_SERIAL_LINK,
+        RawRegister(29): DriveFault.INTERNAL_MFG_AREA,
+        RawRegister(30): DriveFault.POWER_EEPROM,
+        RawRegister(31): DriveFault.IMPEDANT_SHORT_CIRCUIT,
+        RawRegister(32): DriveFault.GROUND_SHORT_CIRCUIT,
+        RawRegister(33): DriveFault.THREE_PHASE_LOSS,
+        RawRegister(34): DriveFault.CANOPEN_COMM_LOSS,
+        RawRegister(35): DriveFault.BRAKE_CONTROL,
+        RawRegister(38): DriveFault.EXTERNAL_FAULT_COM,
+        RawRegister(41): DriveFault.BRAKE_FEEDBACK,
+        RawRegister(42): DriveFault.PC_COMM_LOSS,
+        RawRegister(43): DriveFault.ENCODER_COUPLING,
+        RawRegister(44): DriveFault.TORQUE_CURRENT_LIMIT,
+        RawRegister(45): DriveFault.HMI_COMM_LOSS,
+        RawRegister(46): DriveFault.POWER_REMOVAL,
+        RawRegister(49): DriveFault.PTC_PROBE,
+        RawRegister(50): DriveFault.PTC_OVERHEAT,
+        RawRegister(51): DriveFault.INTERNAL_CURRENT_MEASURE,
+        RawRegister(52): DriveFault.INTERNAL_MAINS_CIRCUIT,
+        RawRegister(53): DriveFault.INTERNAL_THERMAL_SENSOR,
+        RawRegister(54): DriveFault.IGBT_OVERHEAT,
+        RawRegister(55): DriveFault.IGBT_SHORT_CIRCUIT,
+        RawRegister(56): DriveFault.MOTOR_SHORT_CIRCUIT_2,
+        RawRegister(57): DriveFault.TORQUE_TIMEOUT,
+        RawRegister(58): DriveFault.OUTPUT_CONTACTOR_STUCK,
+        RawRegister(59): DriveFault.OUTPUT_CONTACTOR_OPEN,
+        RawRegister(61): DriveFault.AI2_INPUT,
+        RawRegister(64): DriveFault.INPUT_CONTACTOR,
+        RawRegister(66): DriveFault.DIFFERENTIAL_CURRENT,
+        RawRegister(67): DriveFault.IGBT_DESATURATION,
+        RawRegister(68): DriveFault.INTERNAL_OPTION,
+        RawRegister(69): DriveFault.INTERNAL_CPU,
+        RawRegister(71): DriveFault.AI3_CURRENT_LOSS,
+        RawRegister(73): DriveFault.CARDS_PAIRING,
+        RawRegister(76): DriveFault.LOAD_FAULT,
+        RawRegister(77): DriveFault.BAD_CONFIG_TRANSFER,
+        RawRegister(99): DriveFault.CHANNEL_SWITCH,
+        RawRegister(100): DriveFault.PROCESS_UNDERLOAD,
+        RawRegister(101): DriveFault.PROCESS_OVERLOAD,
+        RawRegister(105): DriveFault.ANGLE_ERROR,
+        RawRegister(107): DriveFault.SAFETY_FUNCTION,
+        RawRegister(108): DriveFault.FIELDBUS,
+        RawRegister(109): DriveFault.FIELDBUS_STOP,
     }
 )
-"""LFT register value -> fault. PROVISIONAL: see the note above."""
+"""LFT register value -> fault: the complete Schneider enumeration (see :class:`DriveFault`).
+
+Taken from the manufacturer's parameter file, not from memory; the bench
+observation "LFT = 5 after a Modbus loss" agrees with it (SLF1 = 5), where the
+provisional table this replaced had SLF at 19 (really OSF, mains overvoltage).
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -441,15 +1090,15 @@ def describe_fault(
     look at the drive, whereas a plausible-but-wrong name sends them to fix the
     wrong thing.
 
-    ``codes`` is a parameter so commissioning can correct the provisional table
-    (see the note above it) without a code change.
+    ``codes`` is a parameter so commissioning can extend the table (a newer
+    firmware's codes) without a code change.
     """
     fault = codes.get(raw)
     if fault is None:
         return FaultReport(
             fault=DriveFault.UNKNOWN,
             raw_code=raw,
-            message=f"unknown drive fault code {raw} (0x{raw:04X}): {DriveFault.UNKNOWN.meaning}",
+            message=f"code de defaut inconnu {raw} (0x{raw:04X}) : {DriveFault.UNKNOWN.meaning}",
         )
     return FaultReport(
         fault=fault,
@@ -508,6 +1157,14 @@ class DriveStatus:
 
     fault: DriveFault | None
     """The named fault, or None when no LFT value was read or none applies."""
+
+    fault_code: RawRegister | None = None
+    """The raw LFT value behind :attr:`fault`, or ``None`` when none was read.
+
+    Kept so the operator can compare the number with the drive's own display
+    (and so a code newer than the table still travels): LFT = 5 was seen on the
+    bench right after a Modbus loss, which the complete table now names SLF1.
+    """
 
     @property
     def fault_present(self) -> bool:
@@ -594,6 +1251,28 @@ LCR_LOGICAL: Final[RegisterAddress] = RegisterAddress(3204)
 LFT_LOGICAL: Final[RegisterAddress] = RegisterAddress(7121)
 """Last fault code, read. See :func:`describe_fault`."""
 
+# --- The commissioned limits, READ ONLY -------------------------------------
+#
+# Measured on the bench (offset 0, address 248): tFr@3103 = 600, HSP@3104 = 500,
+# LSP@3105 = 0, ACC@9001 = 30, dEC@9002 = 30, matching the keypad. This code
+# never writes any of them: they are the ceilings that survive a software bug,
+# and a ceiling the software can move is not one.
+
+TFR_LOGICAL: Final[RegisterAddress] = RegisterAddress(3103)
+"""tFr, max output frequency, read, 0.1 Hz per count."""
+
+HSP_LOGICAL: Final[RegisterAddress] = RegisterAddress(3104)
+"""HSP, high speed (the reference ceiling), read, 0.1 Hz per count."""
+
+LSP_LOGICAL: Final[RegisterAddress] = RegisterAddress(3105)
+"""LSP, low speed (the reference floor), read, 0.1 Hz per count."""
+
+ACC_LOGICAL: Final[RegisterAddress] = RegisterAddress(9001)
+"""ACC, acceleration ramp time, read, 0.1 s per count."""
+
+DEC_LOGICAL: Final[RegisterAddress] = RegisterAddress(9002)
+"""dEC, deceleration ramp time, read, 0.1 s per count."""
+
 # The only offsets that can be right: a 0/1-based indexing disagreement.
 # Anything outside this band is a typo or a unit mix-up, and the consequence of
 # accepting one is writing a speed reference into an unrelated parameter. The
@@ -665,6 +1344,268 @@ class RegisterMap:
     def lft(self) -> RegisterAddress:
         """LFT, read: the last fault code."""
         return self.resolve(LFT_LOGICAL)
+
+    @property
+    def tfr(self) -> RegisterAddress:
+        """tFr, read only: max output frequency."""
+        return self.resolve(TFR_LOGICAL)
+
+    @property
+    def hsp(self) -> RegisterAddress:
+        """HSP, read only: high speed."""
+        return self.resolve(HSP_LOGICAL)
+
+    @property
+    def lsp(self) -> RegisterAddress:
+        """LSP, read only: low speed."""
+        return self.resolve(LSP_LOGICAL)
+
+    @property
+    def acc(self) -> RegisterAddress:
+        """ACC, read only: acceleration ramp time."""
+        return self.resolve(ACC_LOGICAL)
+
+    @property
+    def dec(self) -> RegisterAddress:
+        """dEC, read only: deceleration ramp time."""
+        return self.resolve(DEC_LOGICAL)
+
+
+# =========================================================================
+# The commissioned limits, parsed and judged
+# =========================================================================
+
+TENTH_HERTZ_PER_COUNT: Final[float] = 0.1
+"""tFr, HSP and LSP are in 0.1 Hz units: 500 is 50.0 Hz."""
+
+TENTH_SECONDS_PER_COUNT: Final[float] = 0.1
+"""ACC and dEC are in 0.1 s units (the drive's default ``Inr`` = 0.1): 30 is 3.0 s."""
+
+
+def decode_tenth_hertz(raw: RawRegister) -> Hertz:
+    """A 0.1 Hz register as Hertz. Divided rather than multiplied so 500 is exactly 50.0."""
+    return Hertz(raw / 10)
+
+
+def decode_tenth_seconds(raw: RawRegister) -> Seconds:
+    """A 0.1 s register as Seconds. Divided so 30 is exactly 3.0."""
+    return Seconds(raw / 10)
+
+
+@unique
+class DriveParameter(Enum):
+    """A commissioned drive parameter this system depends on, by keypad mnemonic.
+
+    ``value`` is the mnemonic exactly as the ATV320 display spells it, so a
+    refusal names the thing the operator will look for on the keypad.
+    """
+
+    TFR = "tFr"
+    HSP = "HSP"
+    LSP = "LSP"
+    ACC = "ACC"
+    DEC = "dEC"
+    TTO = "ttO"
+    SLL = "SLL"
+
+
+@dataclass(frozen=True, slots=True)
+class DriveLimits:
+    """The drive's own commissioned limits, read back and parsed into units.
+
+    Read, never written, and read on every arming: these are the limits that
+    hold when this software is wrong, so the software must not be armed on a
+    belief about them that nobody checked today.
+    """
+
+    max_frequency: Hertz
+    """tFr: the drive will never output above this."""
+
+    high_speed: Hertz
+    """HSP: the reference ceiling. The last line against a software speed bug."""
+
+    low_speed: Hertz
+    """LSP: the reference floor. Must be 0, see :class:`LowSpeedNotZero`."""
+
+    acceleration: Seconds
+    """ACC: ramp time from 0 to nominal frequency."""
+
+    deceleration: Seconds
+    """dEC: ramp time from nominal frequency to 0. Every stop in this system is this ramp."""
+
+    def describe(self) -> str:
+        """One line for the arming log, in the keypad's own names and units."""
+        return (
+            f"tFr={self.max_frequency:.1f} Hz, HSP={self.high_speed:.1f} Hz, "
+            f"LSP={self.low_speed:.1f} Hz, ACC={self.acceleration:.1f} s, "
+            f"dEC={self.deceleration:.1f} s"
+        )
+
+
+def decode_limits(
+    *,
+    tfr: RawRegister,
+    hsp: RawRegister,
+    lsp: RawRegister,
+    acc: RawRegister,
+    dec: RawRegister,
+) -> DriveLimits:
+    """Parse the five raw registers. Keyword-only: five same-typed values in a row
+    is exactly the call where two get swapped."""
+    return DriveLimits(
+        max_frequency=decode_tenth_hertz(tfr),
+        high_speed=decode_tenth_hertz(hsp),
+        low_speed=decode_tenth_hertz(lsp),
+        acceleration=decode_tenth_seconds(acc),
+        deceleration=decode_tenth_seconds(dec),
+    )
+
+
+DEFAULT_MAX_MOTOR_HZ: Final[Hertz] = Hertz(50.0)
+"""The ceiling HSP must not exceed for this software to arm.
+
+50.0 Hz is the motor's nameplate (1380 rpm) and what the owner keeps HSP at on
+the bench while the motor is UNCOUPLED from the arm.
+
+**This MUST be lowered before the arm is coupled.** At 50 Hz the output shaft
+turns 1380 / 49.79 = 27.7 rpm; with a person in the machine the HSP ceiling has
+to match the highest speed any approved profile may reach, so that a software
+bug commanding more is clamped by the drive and not by luck. Lower HSP on the
+keypad first, then this, never the other way round.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class LowSpeedNotZero:
+    """LSP is above 0 Hz, so a zero reference does NOT stop the motor.
+
+    With LSP > 0 the drive clamps every reference up to LSP: LFRD = 0 - the
+    emergency path, the close sequence, a safety descent - holds the motor at
+    LSP instead of ramping it to rest. Every stop in this system assumes the
+    opposite.
+    """
+
+    low_speed: Hertz
+
+    @property
+    def parameter(self) -> DriveParameter:
+        return DriveParameter.LSP
+
+
+@dataclass(frozen=True, slots=True)
+class HighSpeedAboveMaxFrequency:
+    """HSP is above tFr: the commissioning is incoherent and HSP is not the real ceiling."""
+
+    high_speed: Hertz
+    max_frequency: Hertz
+
+    @property
+    def parameter(self) -> DriveParameter:
+        return DriveParameter.HSP
+
+
+@dataclass(frozen=True, slots=True)
+class HighSpeedAboveCeiling:
+    """HSP is above the ceiling this installation was configured to accept."""
+
+    high_speed: Hertz
+    ceiling: Hertz
+
+    @property
+    def parameter(self) -> DriveParameter:
+        return DriveParameter.HSP
+
+
+type LimitViolation = LowSpeedNotZero | HighSpeedAboveMaxFrequency | HighSpeedAboveCeiling
+"""Every reason :func:`check_limits` refuses. Closed; match it nested."""
+
+
+def check_limits(limits: DriveLimits, ceiling: Hertz) -> Result[DriveLimits, LimitViolation]:
+    """Refuse drive limits this software cannot arm on. Pure.
+
+    In order of how badly each one breaks an assumption the rest of the system
+    makes: a zero reference that does not stop the motor, a ceiling that is not
+    one, and a ceiling above what this installation accepts. The comparisons
+    are exact on values that are whole tenths, so HSP = 50.0 Hz passes a
+    50.0 Hz ceiling and 50.1 Hz does not.
+    """
+    if limits.low_speed != 0.0:
+        return Err(LowSpeedNotZero(low_speed=limits.low_speed))
+    if limits.high_speed > limits.max_frequency:
+        return Err(
+            HighSpeedAboveMaxFrequency(
+                high_speed=limits.high_speed, max_frequency=limits.max_frequency
+            )
+        )
+    if limits.high_speed > ceiling:
+        return Err(HighSpeedAboveCeiling(high_speed=limits.high_speed, ceiling=ceiling))
+    return Ok(limits)
+
+
+def describe_violation(violation: LimitViolation) -> str:
+    """One operator-facing sentence per refusal, naming the keypad parameter."""
+    detail: str
+    match violation:
+        case LowSpeedNotZero(low_speed):
+            detail = (
+                f"LSP is {low_speed:.1f} Hz, not 0: a zero speed reference would hold the "
+                "motor at LSP instead of stopping it. Set LSP = 0 on the keypad."
+            )
+        case HighSpeedAboveMaxFrequency(high_speed, max_frequency):
+            detail = (
+                f"HSP ({high_speed:.1f} Hz) is above tFr ({max_frequency:.1f} Hz), so HSP is "
+                "not the drive's real speed ceiling. Fix the commissioning on the keypad."
+            )
+        case HighSpeedAboveCeiling(high_speed, ceiling):
+            detail = (
+                f"HSP is {high_speed:.1f} Hz, above the {ceiling:.1f} Hz this installation "
+                "accepts. Lower HSP on the keypad; do not raise the ceiling to match."
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+    return detail
+
+
+@dataclass(frozen=True, slots=True)
+class UnverifiedParameter:
+    """A parameter the safety argument relies on that this code cannot read.
+
+    Named rather than guessed: a Modbus address nobody has verified for this
+    drive could read a neighbouring parameter and report it as this one, which
+    is worse than admitting the gap.
+    """
+
+    parameter: DriveParameter
+    why_it_matters: str
+
+    def describe(self) -> str:
+        return (
+            f"{self.parameter.value}: not verified over Modbus - check on the keypad "
+            f"({self.why_it_matters})"
+        )
+
+
+# TODO(commissioning): read ttO and SLL over Modbus once their logical
+# addresses are verified against the ATV320 communication parameter list AND
+# read back on the bench (compare with the keypad). Until then they are listed
+# in every arming log instead of being read from an unverified address.
+UNVERIFIED_PARAMETERS: Final[tuple[UnverifiedParameter, ...]] = (
+    UnverifiedParameter(
+        parameter=DriveParameter.TTO,
+        why_it_matters=(
+            "the Modbus timeout is the only watchdog outside this process; it must be "
+            "set, and short (the simulator assumes 3 s)"
+        ),
+    ),
+    UnverifiedParameter(
+        parameter=DriveParameter.SLL,
+        why_it_matters=(
+            "the response to a Modbus loss must be a ramp stop, never freewheel or "
+            "'ignore'; otherwise a dead link leaves the motor commanded"
+        ),
+    ),
+)
+"""Parameters to check on the keypad before every session, until read over Modbus."""
 
 
 # =========================================================================
@@ -930,6 +1871,29 @@ class DriveBackend(Protocol):
         One call rather than five, so the fields of a :class:`DriveStatus`
         describe the same moment: a status assembled from reads seconds apart
         can show a speed that never coexisted with its state.
+        """
+        ...
+
+    async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        """Read tFr, HSP, LSP, ACC and dEC. READ ONLY - never writes a parameter.
+
+        Parsed at the boundary into :class:`DriveLimits`; judging them is the
+        caller's business (:func:`check_limits`), because the acceptable
+        ceiling is a property of the installation, not of the transport.
+        """
+        ...
+
+    @property
+    def emergency_budget(self) -> Seconds:
+        """The smallest whole-call bound :meth:`emergency_disable_blocking` can keep.
+
+        A property of the transport, not a number the caller gets to pick: a
+        blocking exchange cannot be cut short, so only the backend knows how
+        long its one write can really take (on the Modbus link, two worst-case
+        transactions - see ``src.motor.atv320.emergency_budget_for``). Callers
+        pass this, so the bound they plan around is the one that holds; a
+        smaller figure is reported and replaced, never obeyed by writing
+        nothing.
         """
         ...
 

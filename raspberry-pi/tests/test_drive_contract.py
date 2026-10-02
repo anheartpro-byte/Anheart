@@ -27,22 +27,29 @@ import inspect
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import assert_never
+from typing import assert_never, cast
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from src.motor.drive import (
+    ACC_LOGICAL,
     CMD_LOGICAL,
+    DEC_LOGICAL,
+    DEFAULT_MAX_MOTOR_HZ,
     ETA_LOGICAL,
+    HSP_LOGICAL,
     LCR_LOGICAL,
     LFRD_LOGICAL,
     LFT_FAULT_CODES,
     LFT_LOGICAL,
+    LSP_LOGICAL,
     REGISTER_OFFSET_MAX,
     REGISTER_OFFSET_MIN,
     RFRD_LOGICAL,
+    TFR_LOGICAL,
+    UNVERIFIED_PARAMETERS,
     BadResponse,
     CommTimeout,
     ControlWord,
@@ -50,21 +57,32 @@ from src.motor.drive import (
     DriveError,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
+    DriveParameter,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
     EnableUnconfirmed,
     FaultReport,
+    HighSpeedAboveCeiling,
+    HighSpeedAboveMaxFrequency,
+    LimitViolation,
+    LowSpeedNotZero,
     RegisterMap,
     StopUnconfirmed,
     UnexpectedState,
+    check_limits,
     decode_current,
+    decode_limits,
     decode_speed,
     decode_status_word,
+    decode_tenth_hertz,
+    decode_tenth_seconds,
     describe_fault,
+    describe_violation,
 )
 from src.result import Err, Ok, Result
-from src.units import Amperes, MotorRpm, OutOfRange, RawRegister, Seconds, StatusWord
+from src.units import Amperes, Hertz, MotorRpm, OutOfRange, RawRegister, Seconds, StatusWord
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DRIVE_SOURCE = PROJECT_ROOT / "src" / "motor" / "drive.py"
@@ -271,11 +289,11 @@ def test_code_zero_means_no_fault_stored_not_a_fault() -> None:
     assert describe_fault(RawRegister(0)).fault == DriveFault.NO_FAULT_STORED
 
 
-@pytest.mark.parametrize("code", [1, 27, 99, 0xFFFF])
+@pytest.mark.parametrize("code", [12, 110, 200, 0xFFFF])
 def test_unknown_codes_degrade_to_unknown_carrying_the_raw_number(code: int) -> None:
     """The module never claims a fault it cannot identify.
 
-    "unknown drive fault code 27" sends an operator to read the drive's own
+    "code de defaut inconnu 110" sends an operator to read the drive's own
     display. A plausible-but-wrong name sends them to fix the wrong thing, and
     they have no way to tell which they were given.
     """
@@ -288,7 +306,7 @@ def test_unknown_codes_degrade_to_unknown_carrying_the_raw_number(code: int) -> 
 
 def test_an_unknown_code_never_borrows_a_known_mnemonic() -> None:
     """The failure mode being excluded: an unrecognised code reading as a real fault."""
-    message = describe_fault(RawRegister(27)).message
+    message = describe_fault(RawRegister(110)).message
     for fault in DriveFault:
         if fault == DriveFault.UNKNOWN:
             continue
@@ -296,7 +314,7 @@ def test_an_unknown_code_never_borrows_a_known_mnemonic() -> None:
 
 
 def test_the_code_table_can_be_corrected_without_a_code_change() -> None:
-    """The numeric codes are provisional, so commissioning must be able to fix them.
+    """Commissioning must be able to extend the table (a newer firmware's codes).
 
     Passing a corrected table has to work, because the alternative - editing
     this module on the bench, under time pressure, next to a machine - is how
@@ -323,10 +341,10 @@ def test_every_fault_has_a_mnemonic_and_a_meaning() -> None:
 
 
 def test_the_commissioning_notes_vocabulary_is_all_present() -> None:
-    """Every mnemonic the notes ask us to surface exists as a member."""
+    """Every mnemonic the notes ask us to surface exists (the manual numbers some: SLF1...)."""
     mnemonics = {fault.mnemonic for fault in DriveFault}
     for required in ("USF", "OPF", "OCF", "OLF", "SCF", "SLF", "nOF", "InF", "ObF"):
-        assert required in mnemonics, required
+        assert any(m.startswith(required) for m in mnemonics), required
 
 
 def test_fault_report_is_immutable() -> None:
@@ -685,6 +703,13 @@ class _RecordingBackend:
     async def read_status(self) -> Result[DriveStatus, DriveError]:
         return Ok(_status(DriveState.OPERATION_ENABLED))
 
+    async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        return Ok(BENCH_LIMITS)
+
+    @property
+    def emergency_budget(self) -> Seconds:
+        return Seconds(1.0)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self.emergency_timeouts.append(timeout)
         return EmergencyStopOutcome.ACKNOWLEDGED
@@ -728,6 +753,7 @@ async def test_a_backend_reports_results_rather_than_raising() -> None:
     status = await backend.read_status()
     assert isinstance(status, Ok)
     assert status.value.state == DriveState.OPERATION_ENABLED
+    assert await backend.read_limits() == Ok(BENCH_LIMITS)
     assert isinstance(await backend.close(), Ok)
 
     assert backend.commands == [ControlWord.ENABLE_OPERATION]
@@ -750,6 +776,7 @@ def test_emergency_disable_is_synchronous_and_everything_else_is_not() -> None:
         DriveBackend.write_command,
         DriveBackend.write_speed,
         DriveBackend.read_status,
+        DriveBackend.read_limits,
     ):
         assert inspect.iscoroutinefunction(method), method
 
@@ -851,9 +878,146 @@ def test_fault_report_is_a_record_not_a_pair() -> None:
     first caller that wanted the number back would have parsed it out of a
     sentence.
     """
-    report: FaultReport = describe_fault(RawRegister(15))
+    report: FaultReport = describe_fault(RawRegister(9))
     assert report.fault == DriveFault.OVERCURRENT
     # The raw code is a field in its own right, not only a substring of the
     # message: DriveFaulted and every log line need the number, not the prose.
-    assert report.raw_code == RawRegister(15)
+    assert report.raw_code == RawRegister(9)
     assert str(int(report.raw_code)) in report.message
+
+
+# =========================================================================
+# The commissioned limits: read back, parsed, judged
+# =========================================================================
+
+BENCH_LIMITS = decode_limits(
+    tfr=RawRegister(600),
+    hsp=RawRegister(500),
+    lsp=RawRegister(0),
+    acc=RawRegister(30),
+    dec=RawRegister(30),
+)
+"""What the bench read today: tFr 600, HSP 500, LSP 0, ACC 30, dEC 30."""
+
+
+def test_the_limit_addresses_are_the_ones_read_on_the_bench() -> None:
+    """tFr, HSP and LSP are 3103/3104/3105 - an earlier probe had them shifted by one."""
+    assert (TFR_LOGICAL, HSP_LOGICAL, LSP_LOGICAL) == (3103, 3104, 3105)
+    assert (ACC_LOGICAL, DEC_LOGICAL) == (9001, 9002)
+    shifted = RegisterMap(offset=-1)
+    assert (shifted.tfr, shifted.hsp, shifted.lsp, shifted.acc, shifted.dec) == (
+        3102,
+        3103,
+        3104,
+        9000,
+        9001,
+    )
+
+
+def test_the_bench_registers_parse_into_units_exactly() -> None:
+    """500 is exactly 50.0 Hz, so an exact comparison against a 50.0 Hz ceiling is sound."""
+    assert (
+        DriveLimits(
+            max_frequency=Hertz(60.0),
+            high_speed=Hertz(50.0),
+            low_speed=Hertz(0.0),
+            acceleration=Seconds(3.0),
+            deceleration=Seconds(3.0),
+        )
+        == BENCH_LIMITS
+    )
+    assert BENCH_LIMITS.describe() == ("tFr=60.0 Hz, HSP=50.0 Hz, LSP=0.0 Hz, ACC=3.0 s, dEC=3.0 s")
+
+
+@given(st.integers(min_value=0, max_value=0xFFFF))
+def test_tenths_decode_exactly(raw: int) -> None:
+    """Dividing by ten is correctly rounded, so every register round-trips."""
+    assert round(decode_tenth_hertz(RawRegister(raw)) * 10) == raw
+    assert round(decode_tenth_seconds(RawRegister(raw)) * 10) == raw
+
+
+def test_the_bench_limits_arm_under_the_default_ceiling() -> None:
+    """HSP = 50.0 Hz against the 50.0 Hz default: equal is accepted."""
+    assert DEFAULT_MAX_MOTOR_HZ == 50.0
+    assert check_limits(BENCH_LIMITS, DEFAULT_MAX_MOTOR_HZ) == Ok(BENCH_LIMITS)
+
+
+def _limits(*, tfr: int = 600, hsp: int = 500, lsp: int = 0) -> DriveLimits:
+    return decode_limits(
+        tfr=RawRegister(tfr),
+        hsp=RawRegister(hsp),
+        lsp=RawRegister(lsp),
+        acc=RawRegister(30),
+        dec=RawRegister(30),
+    )
+
+
+def test_a_non_zero_low_speed_is_refused() -> None:
+    """LSP > 0 means LFRD = 0 holds the motor at LSP: no zero reference would stop it."""
+    outcome = check_limits(_limits(lsp=1), DEFAULT_MAX_MOTOR_HZ)
+    assert outcome == Err(LowSpeedNotZero(low_speed=Hertz(0.1)))
+    assert isinstance(outcome, Err)
+    assert outcome.error.parameter is DriveParameter.LSP
+
+
+def test_a_high_speed_above_max_frequency_is_refused() -> None:
+    """HSP above tFr is incoherent commissioning: HSP is then not the real ceiling."""
+    outcome = check_limits(_limits(tfr=400, hsp=450), DEFAULT_MAX_MOTOR_HZ)
+    assert outcome == Err(
+        HighSpeedAboveMaxFrequency(high_speed=Hertz(45.0), max_frequency=Hertz(40.0))
+    )
+    assert isinstance(outcome, Err)
+    assert outcome.error.parameter is DriveParameter.HSP
+
+
+def test_a_high_speed_above_the_ceiling_is_refused() -> None:
+    """One count above the ceiling is enough."""
+    outcome = check_limits(_limits(hsp=501), DEFAULT_MAX_MOTOR_HZ)
+    assert outcome == Err(HighSpeedAboveCeiling(high_speed=Hertz(50.1), ceiling=Hertz(50.0)))
+    assert isinstance(outcome, Err)
+    assert outcome.error.parameter is DriveParameter.HSP
+
+
+def test_a_lowered_ceiling_refuses_the_uncoupled_bench_setting() -> None:
+    """The coupling procedure: lower the ceiling, and HSP = 50 Hz no longer arms."""
+    outcome = check_limits(BENCH_LIMITS, Hertz(20.0))
+    assert isinstance(outcome, Err)
+    assert isinstance(outcome.error, HighSpeedAboveCeiling)
+
+
+def test_low_speed_is_judged_first() -> None:
+    """Several violations at once: the one that breaks every stop is the one named."""
+    outcome = check_limits(_limits(tfr=100, hsp=900, lsp=50), DEFAULT_MAX_MOTOR_HZ)
+    assert isinstance(outcome, Err)
+    assert isinstance(outcome.error, LowSpeedNotZero)
+
+
+@pytest.mark.parametrize(
+    ("violation", "mnemonic"),
+    [
+        (LowSpeedNotZero(low_speed=Hertz(5.0)), "LSP"),
+        (HighSpeedAboveMaxFrequency(high_speed=Hertz(70.0), max_frequency=Hertz(60.0)), "tFr"),
+        (HighSpeedAboveCeiling(high_speed=Hertz(60.0), ceiling=Hertz(50.0)), "HSP"),
+    ],
+)
+def test_every_refusal_names_the_keypad_parameter(violation: LimitViolation, mnemonic: str) -> None:
+    """The operator is standing at the keypad: the sentence names what to look for."""
+    detail = describe_violation(violation)
+    assert mnemonic in detail
+    assert violation.parameter.value in detail
+
+
+def test_a_value_that_is_not_a_violation_fails_loudly() -> None:
+    """The exhaustive match's last arm, reached only by an ill-typed caller."""
+    with pytest.raises(AssertionError):
+        describe_violation(cast("LimitViolation", "not-a-violation"))
+
+
+def test_tto_and_sll_are_listed_as_unverified_rather_than_read() -> None:
+    """No guessed address: the two parameters are named for a keypad check instead."""
+    named = {item.parameter for item in UNVERIFIED_PARAMETERS}
+    assert named == {DriveParameter.TTO, DriveParameter.SLL}
+    for item in UNVERIFIED_PARAMETERS:
+        line = item.describe()
+        assert line.startswith(f"{item.parameter.value}: not verified over Modbus")
+        assert "check on the keypad" in line

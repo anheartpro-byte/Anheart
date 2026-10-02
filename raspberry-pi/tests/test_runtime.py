@@ -33,7 +33,7 @@ from __future__ import annotations
 import ast
 import math
 from collections.abc import Awaitable, Callable, Iterator, Sequence
-from dataclasses import FrozenInstanceError, dataclass, field
+from dataclasses import FrozenInstanceError, dataclass, field, replace
 from enum import Enum, auto, unique
 from itertools import pairwise
 from pathlib import Path
@@ -44,8 +44,10 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from src.clock import ManualClock
+from src.geometry import MachineGeometry
 from src.motor.drive import (
     LFT_FAULT_CODES,
+    UNVERIFIED_PARAMETERS,
     BadResponse,
     CommTimeout,
     ControlWord,
@@ -53,11 +55,16 @@ from src.motor.drive import (
     DriveError,
     DriveFault,
     DriveFaulted,
+    DriveLimits,
+    DriveParameter,
     DriveState,
     DriveStatus,
     EmergencyStopOutcome,
     EnableUnconfirmed,
     FaultReport,
+    HighSpeedAboveCeiling,
+    HighSpeedAboveMaxFrequency,
+    LowSpeedNotZero,
     StopUnconfirmed,
     UnexpectedState,
     decode_status_word,
@@ -66,24 +73,28 @@ from src.motor.drive import (
 from src.result import Err, Ok, Result, is_err, is_ok
 from src.training.hr_control import (
     Gains,
+    HeartRateTracker,
     StaleSequence,
     TrackerLimits,
 )
+from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
 from src.training.plan import INITIAL_REV, Channel, Program, TrainingProfile
 from src.training.runtime import (
-    DEFAULT_EMERGENCY_BUDGET,
+    IDLE_POLL_PERIOD,
+    RULE_DISABLE_REFUSED,
     RULE_DRIVE_PRECOMMANDED,
     RULE_ENABLE_UNCONFIRMED,
     RULE_TICK_EXCEPTION,
     AlreadyStarted,
     DriveFailure,
     DriveInFault,
+    DriveParameterRefused,
     DrivePrecommanded,
     DriveUnavailable,
     Ending,
     EndReason,
+    IdleLink,
     LimitsMismatch,
-    MachineGeometry,
     NotAttested,
     PlanUnusable,
     RuntimeLimits,
@@ -95,10 +106,12 @@ from src.training.runtime import (
     TrainingRuntime,
     describe_drive_error,
     fault_report,
+    motion_geometry,
     motion_is_over,
 )
 from src.training.safety import (
     RULE_ATTENDANT_ABSENT,
+    RULE_COMMS_LOST,
     RULE_HR_STALE,
     AcknowledgeRefusal,
     EmergencyStopStillLatched,
@@ -111,6 +124,7 @@ from src.training.safety import (
     Unattributed,
 )
 from src.training.types import (
+    HeartRateSample,
     Phase,
     SafetyAction,
     SafetyVerdict,
@@ -121,11 +135,15 @@ from src.training.types import (
 from src.units import (
     Amperes,
     Bpm,
+    BpmPerMinute,
     GearRatio,
+    GLoadPerSecond,
+    Hertz,
     Metres,
     Monotonic,
     MotorRpm,
     OutOfRange,
+    OutputRpmPerSecond,
     RawRegister,
     RpmPerSecond,
     Seconds,
@@ -164,6 +182,19 @@ control period may not authorise less than that or the machine can never start.
 ``min_run_rpm``), so a configuration in the 10 rpm gap between the two passes
 validation and then never turns the motor. Reported upstream; here the rig
 simply stays out of the gap.
+"""
+
+RIG_MOTION: Final[MotionLimits] = MotionLimits(
+    output_accel=OutputRpmPerSecond(1.4),
+    g_rate=GLoadPerSecond(0.5),
+    min_run=MotorRpm(55),
+)
+"""The accelerated rig's anti-nausea limits: every programme setpoint change now walks them.
+
+1.4 output rpm/s is 69.7 motor rpm/s, just under the rig's 70 rpm/s slew, so the
+motion limiter never outruns the slew guarantee these tests assert and the rig
+still reaches its ceiling in seconds. The machine's own limits (0.25 output
+rpm/s, 0.03 g/s) are exercised by the motion tests further down.
 """
 
 REAL_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
@@ -227,6 +258,20 @@ _REQUIRES: Final[dict[ControlWord, DriveState]] = {
 }
 
 
+BENCH_LIMITS: Final[DriveLimits] = DriveLimits(
+    max_frequency=Hertz(60.0),
+    high_speed=Hertz(50.0),
+    low_speed=Hertz(0.0),
+    acceleration=Seconds(3.0),
+    deceleration=Seconds(3.0),
+)
+"""tFr/HSP/LSP/ACC/dEC exactly as the bench read them today."""
+
+
+FAKE_EMERGENCY_BUDGET: Final[Seconds] = Seconds(0.37)
+"""What :class:`FakeDrive` says its emergency write can be bounded by."""
+
+
 @final
 class FakeDrive:
     """A ``DriveBackend`` with a state machine, a shaft, and a ``ttO`` timeout.
@@ -261,6 +306,8 @@ class FakeDrive:
         "emergency_budgets",
         "emergency_calls",
         "emergency_override",
+        "limits",
+        "limits_error",
         "raise_on_status",
         "speed_error",
         "status_error",
@@ -299,6 +346,8 @@ class FakeDrive:
         self.status_error: DriveError | None = None
         self.close_error: DriveError | None = None
         self.emergency_override: EmergencyStopOutcome | None = None
+        self.limits: DriveLimits = BENCH_LIMITS
+        self.limits_error: DriveError | None = None
         self.raise_on_status: bool = False
         self.swallow_writes: bool = False
 
@@ -492,6 +541,20 @@ class FakeDrive:
             )
         )
 
+    async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        self.advance(self._clock.monotonic())
+        self.trace.append("limits")
+        error = self.limits_error or self._transport()
+        if error is not None:
+            return Err(error)
+        self._note("limits:ack", is_write=False)
+        return Ok(self.limits)
+
+    @property
+    def emergency_budget(self) -> Seconds:
+        """A figure no module constant happens to equal, so a test can tell whose it is."""
+        return FAKE_EMERGENCY_BUDGET
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self.advance(self._clock.monotonic())
         self.emergency_calls += 1
@@ -597,6 +660,22 @@ def _safety_for(profile: TrainingProfile) -> SafetyLimits:
     return SafetyLimits(hard_max_bpm=profile.hard_max_bpm, critical_bpm=profile.critical_bpm)
 
 
+def _lenient_comms() -> SafetyLimits:
+    """The default profile's limits with ``comms_lost`` pushed out of reach.
+
+    For the tests that isolate what one failing kind of exchange does to the
+    *setpoint*. With the real limit, three consecutive failures of either kind
+    end the session, which is the behaviour the comms tests assert - and which
+    would end these tests before the thing they measure could happen.
+    """
+    profile = _profile()
+    return SafetyLimits(
+        hard_max_bpm=profile.hard_max_bpm,
+        critical_bpm=profile.critical_bpm,
+        comms_lost_failures=1000,
+    )
+
+
 @dataclass(slots=True)
 class Rig:
     """One runtime, its fake drive, its clock, and the loop that drives them."""
@@ -688,17 +767,27 @@ def _rig(
     tracker_limits: TrackerLimits | None = None,
     occupant: Occupant | None = None,
     tto: Seconds = Seconds(2.0),
+    safety: SafetyLimits | None = None,
+    shared_supervisor: bool = False,
+    motion: MotionLimits = RIG_MOTION,
+    limit_radius: Metres | None = None,
 ) -> Rig:
     clock = ManualClock(Monotonic(1000.0), UnixMillis(1_700_000_000_000))
     drive = FakeDrive(clock, state=state, rpm=rpm, tto=tto)
     resolved = profile if profile is not None else _profile()
+    resolved_safety = _safety_for(resolved) if safety is None else safety
     runtime = TrainingRuntime(
         clock=clock,
         drive=drive,
         geometry=GEOMETRY,
         limits=limits,
-        safety=_safety_for(resolved),
+        safety=resolved_safety,
         tracker_limits=tracker_limits,
+        supervisor=(
+            SafetySupervisor(clock=clock, limits=resolved_safety) if shared_supervisor else None
+        ),
+        motion=motion,
+        limit_radius=limit_radius,
     )
     return Rig(
         clock=clock, drive=drive, runtime=runtime, program=_program(resolved), occupant=occupant
@@ -730,7 +819,12 @@ async def _running_rig(**kwargs: object) -> Rig:
 
 def test_the_rule_ids_are_well_formed() -> None:
     """Rule ids key a dashboard, an alert and a session log. Malformed is forever."""
-    for rule in (RULE_DRIVE_PRECOMMANDED, RULE_TICK_EXCEPTION, RULE_ENABLE_UNCONFIRMED):
+    for rule in (
+        RULE_DRIVE_PRECOMMANDED,
+        RULE_TICK_EXCEPTION,
+        RULE_ENABLE_UNCONFIRMED,
+        RULE_DISABLE_REFUSED,
+    ):
         assert is_rule_id(rule), rule
 
 
@@ -753,7 +847,7 @@ def test_every_named_fault_round_trips_to_its_own_code(code: RawRegister) -> Non
     assert fault_report(expected.fault) == expected
 
 
-@pytest.mark.parametrize("fault", [None, DriveFault.UNKNOWN, DriveFault.NO_MOTOR])
+@pytest.mark.parametrize("fault", [None, DriveFault.UNKNOWN])
 def test_a_fault_with_no_code_reports_nothing_rather_than_a_made_up_number(
     fault: DriveFault | None,
 ) -> None:
@@ -911,11 +1005,15 @@ def test_geometry_refuses_a_zero_nameplate_speed() -> None:
     [
         ("slew", RpmPerSecond(0.0), "slew"),
         ("slew", RpmPerSecond(math.nan), "slew"),
-        ("emergency_budget", Seconds(0.0), "emergency_budget"),
         ("ramp_settle", Seconds(-1.0), "ramp_settle"),
         ("status_stale_after", Seconds(0.0), "status_stale_after"),
         ("start_hysteresis_rpm", MotorRpm(-1), "start_hysteresis_rpm"),
         ("standstill_rpm", MotorRpm(0), "standstill_rpm"),
+        ("falling_trend", BpmPerMinute(0.0), "falling_trend"),
+        ("falling_trend", BpmPerMinute(5.0), "falling_trend"),
+        ("falling_trend", BpmPerMinute(math.nan), "falling_trend"),
+        ("trend_samples", 1, "trend_samples"),
+        ("disable_attempts", 0, "disable_attempts"),
     ],
 )
 def test_runtime_limits_refuse_a_budget_that_would_disable_what_it_bounds(
@@ -1037,6 +1135,135 @@ async def test_a_drive_that_cannot_be_read_refuses_the_start() -> None:
     assert "could not be read" in refusal.error.detail
 
 
+# --- The drive's own limits, read back at every arming ---------------------
+
+
+@pytest.mark.parametrize(
+    ("limits", "parameter", "violation"),
+    [
+        (
+            DriveLimits(
+                max_frequency=Hertz(60.0),
+                high_speed=Hertz(50.0),
+                low_speed=Hertz(5.0),
+                acceleration=Seconds(3.0),
+                deceleration=Seconds(3.0),
+            ),
+            DriveParameter.LSP,
+            LowSpeedNotZero,
+        ),
+        (
+            DriveLimits(
+                max_frequency=Hertz(40.0),
+                high_speed=Hertz(45.0),
+                low_speed=Hertz(0.0),
+                acceleration=Seconds(3.0),
+                deceleration=Seconds(3.0),
+            ),
+            DriveParameter.HSP,
+            HighSpeedAboveMaxFrequency,
+        ),
+        (
+            DriveLimits(
+                max_frequency=Hertz(60.0),
+                high_speed=Hertz(55.0),
+                low_speed=Hertz(0.0),
+                acceleration=Seconds(3.0),
+                deceleration=Seconds(3.0),
+            ),
+            DriveParameter.HSP,
+            HighSpeedAboveCeiling,
+        ),
+    ],
+)
+async def test_drive_limits_this_machine_cannot_arm_on_refuse_the_start(
+    limits: DriveLimits, parameter: DriveParameter, violation: type[object]
+) -> None:
+    """Refused BEFORE a single word is written: nothing is energised, nothing latched."""
+    rig = _rig()
+    rig.drive.limits = limits
+    refusal = await rig.start()
+    assert is_err(refusal)
+    error = refusal.error
+    assert isinstance(error, DriveParameterRefused)
+    assert isinstance(error.violation, violation)
+    assert error.violation.parameter is parameter
+    assert error.limits == limits
+    assert parameter.value in error.detail
+    assert rig.drive.commands == []
+    assert rig.drive.writes == []
+    assert rig.runtime.output_enabled is False
+    assert rig.runtime.standing is None
+
+
+async def test_a_lowered_ceiling_refuses_the_uncoupled_bench_hsp() -> None:
+    """The coupling procedure: lower max_motor_hz and the 50 Hz bench HSP stops arming."""
+    rig = _rig(
+        limits=RuntimeLimits(
+            slew=LIMITS.slew,
+            start_hysteresis_rpm=LIMITS.start_hysteresis_rpm,
+            gains=LIMITS.gains,
+            max_motor_hz=Hertz(20.0),
+        )
+    )
+    refusal = await rig.start()
+    assert is_err(refusal)
+    assert isinstance(refusal.error, DriveParameterRefused)
+    assert refusal.error.violation == HighSpeedAboveCeiling(
+        high_speed=Hertz(50.0), ceiling=Hertz(20.0)
+    )
+
+
+def test_the_default_ceiling_is_the_uncoupled_bench_hsp() -> None:
+    assert LIMITS.max_motor_hz == 50.0
+
+
+def test_a_ceiling_that_is_not_positive_is_refused() -> None:
+    with pytest.raises(ValueError, match="max_motor_hz"):
+        RuntimeLimits(
+            slew=LIMITS.slew,
+            start_hysteresis_rpm=LIMITS.start_hysteresis_rpm,
+            max_motor_hz=Hertz(0.0),
+        )
+
+
+async def test_drive_limits_that_cannot_be_read_refuse_the_start() -> None:
+    """An unread ceiling is not an accepted one."""
+    rig = _rig()
+    rig.drive.limits_error = CommTimeout(after=Seconds(0.1))
+    refusal = await rig.start()
+    assert is_err(refusal)
+    assert isinstance(refusal.error, DriveUnavailable)
+    assert "limits could not be read" in refusal.error.detail
+    assert rig.drive.commands == []
+    assert rig.drive.writes == []
+
+
+async def test_arming_reads_the_limits_and_names_what_it_could_not(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Accepted limits are logged, and ttO/SLL are named for a keypad check every time."""
+    rig = _rig()
+    with caplog.at_level("INFO", logger="src.training.runtime"):
+        started = await rig.start()
+    assert is_ok(started)
+    assert "limits" in rig.drive.trace
+    assert rig.drive.trace.index("limits") < rig.drive.trace.index("lfrd:0")
+    assert "HSP=50.0 Hz" in caplog.text
+    for unverified in UNVERIFIED_PARAMETERS:
+        assert unverified.describe() in caplog.text
+
+
+async def test_a_precommanded_drive_is_stopped_before_its_limits_are_even_read() -> None:
+    """The stop comes first: judging HSP must never delay zeroing a turning motor."""
+    rig = _rig(state=FakeState.OPERATION_ENABLED, rpm=MotorRpm(240))
+    rig.drive.limits_error = CommTimeout(after=Seconds(0.1))
+    refusal = await rig.start()
+    assert is_err(refusal)
+    assert isinstance(refusal.error, DrivePrecommanded)
+    assert "limits" not in rig.drive.trace
+
+
 async def test_a_drive_found_already_enabled_is_stopped_latched_and_refused() -> None:
     """``restart: unless-stopped`` guarantees this happens for real, with a person inside.
 
@@ -1135,6 +1362,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         LimitsMismatch(threshold="hard_max_bpm", profile_bpm=Bpm(1), supervisor_bpm=Bpm(2)),
         PlanUnusable("detail"),
         DriveUnavailable("detail"),
+        DriveParameterRefused(violation=LowSpeedNotZero(low_speed=Hertz(1.0)), limits=BENCH_LIMITS),
         DrivePrecommanded(state=DriveState.OPERATION_ENABLED, output_rpm=MotorRpm(1)),
         DriveInFault(report=None, state=DriveState.FAULT),
     )
@@ -1157,6 +1385,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:
             label = "plan_unusable"
         case DriveUnavailable():
             label = "drive_unavailable"
+        case DriveParameterRefused():
+            label = "drive_parameter_refused"
         case DrivePrecommanded():
             label = "drive_precommanded"
         case DriveInFault():
@@ -1893,6 +2123,65 @@ async def test_an_emergency_stop_zeroes_the_reference_without_waiting_for_a_tick
     assert rig.drive.emergency_calls == 1
 
 
+def test_the_runtime_exposes_the_supervisor_it_judges_with() -> None:
+    """One instance, reachable, so a composition root can hand it to the web e-stop."""
+    rig = _rig()
+    assert isinstance(rig.runtime.supervisor, SafetySupervisor)
+    assert rig.runtime.supervisor is rig.runtime.supervisor
+
+
+def test_an_injected_supervisor_is_the_one_the_runtime_uses() -> None:
+    clock = ManualClock()
+    safety = _safety_for(_profile())
+    shared = SafetySupervisor(clock=clock, limits=safety)
+    runtime = TrainingRuntime(
+        clock=clock,
+        drive=FakeDrive(clock),
+        geometry=GEOMETRY,
+        limits=LIMITS,
+        safety=safety,
+        supervisor=shared,
+    )
+    assert runtime.supervisor is shared
+
+
+def test_a_supervisor_built_with_other_limits_is_refused() -> None:
+    """The programme checks read ``safety``; a supervisor judging other numbers would lie."""
+    clock = ManualClock()
+    safety = _safety_for(_profile())
+    other = SafetySupervisor(
+        clock=clock,
+        limits=SafetyLimits(
+            hard_max_bpm=Bpm(safety.hard_max_bpm - 1), critical_bpm=safety.critical_bpm
+        ),
+    )
+    with pytest.raises(ValueError, match="different SafetyLimits"):
+        TrainingRuntime(
+            clock=clock,
+            drive=FakeDrive(clock),
+            geometry=GEOMETRY,
+            limits=LIMITS,
+            safety=safety,
+            supervisor=other,
+        )
+
+
+async def test_an_estop_latched_on_the_shared_supervisor_stops_the_motor_on_the_next_tick() -> None:
+    """The web path: the handler latches the SHARED supervisor, before any tick.
+
+    The runtime reports the latch at once (it reads the same instance) and
+    commands zero on its next tick. This is what makes the web e-stop real
+    rather than a latch on a second supervisor nobody reads.
+    """
+    rig = await _running_rig(shared_supervisor=True)
+    verdict = rig.runtime.supervisor.latch_estop("the browser button")
+    assert verdict.action is SafetyAction.QUICK_STOP
+    assert rig.runtime.standing_action is SafetyAction.QUICK_STOP
+    await rig.step()
+    assert rig.runtime.applied_rpm == 0
+    assert rig.drive.commanded_rpm == 0
+
+
 async def test_an_emergency_stop_after_going_silent_sends_nothing() -> None:
     """A frame now would restart the timeout that is carrying out the stop."""
     rig = await _running_rig()
@@ -2172,11 +2461,17 @@ async def test_shutting_down_a_runtime_that_never_started_is_harmless() -> None:
 # =========================================================================
 
 
-async def test_the_budget_constant_is_the_one_the_drive_is_asked_for() -> None:
-    """A budget that does not reach the backend bounds nothing."""
+async def test_the_emergency_zero_uses_the_budget_the_drive_says_it_can_keep() -> None:
+    """The drive owns the bound, because only the transport knows what one write costs.
+
+    A constant chosen here (it used to be 0.5 s) was a bound the ATV320 driver
+    silently overran: one Modbus transaction can spend its serial timeout
+    several times, and the emergency write may first wait out one in flight.
+    """
     rig = _rig()
     rig.runtime.request_estop("test")
-    assert rig.drive.emergency_budgets == [DEFAULT_EMERGENCY_BUDGET]
+    assert rig.drive.emergency_budgets == [FAKE_EMERGENCY_BUDGET]
+    assert rig.drive.emergency_budgets == [rig.drive.emergency_budget]
 
 
 def _phases(snapshots: Sequence[TelemetrySnapshot]) -> Iterator[Phase]:
@@ -2367,7 +2662,14 @@ async def test_a_command_word_refused_mid_sequence_abandons_the_start() -> None:
 
 
 async def test_a_refused_shutdown_word_leaves_the_output_believed_live() -> None:
-    """Word 7 landed and word 6 did not, so the run command is still there. Say so."""
+    """Word 7 landed and word 6 did not, so the run command is still there. Say so.
+
+    And say it to the operator, not only to the log: after
+    ``RuntimeLimits.disable_attempts`` refusals no word removes the output
+    stage, so the runtime latches ``disable_refused`` GO_SILENT and stops
+    writing - the drive's own ttO then drops the stage. It used to retry every
+    tick for the rest of the session with no verdict at all.
+    """
     rig = await _running_rig()
     rig.drive.command_errors[ControlWord.SHUTDOWN] = CommTimeout(after=Seconds(0.5))
     rig.runtime.request_stop("stop")
@@ -2376,6 +2678,14 @@ async def test_a_refused_shutdown_word_leaves_the_output_believed_live() -> None
     assert ControlWord.SWITCH_ON in rig.drive.commands[3:]
     assert ControlWord.SHUTDOWN not in rig.drive.commands[3:]
     assert rig.runtime.output_enabled, "a disable was claimed that never landed"
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_DISABLE_REFUSED
+    assert standing.action is SafetyAction.GO_SILENT
+    assert "SHUTDOWN" in standing.detail
+    assert rig.runtime.silent
+    refused = [entry for entry in rig.drive.trace if entry == "cmd:SHUTDOWN"]
+    assert len(refused) == 1 + LIMITS.disable_attempts, "retried past the bound (arming +5)"
 
 
 async def test_going_silent_with_no_link_sends_nothing_and_claims_nothing() -> None:
@@ -2460,21 +2770,53 @@ async def test_the_run_command_is_never_removed_on_a_remembered_standstill() -> 
     assert rig.runtime.output_enabled
 
 
-async def test_a_refused_ramp_stop_word_is_not_followed_by_a_shutdown_word() -> None:
-    """Word 6 after word 7 was refused would remove a run command nobody ramped.
+async def test_a_refused_ramp_stop_word_is_retried_a_bounded_number_of_times_then_forced() -> None:
+    """Word 7 refused at standstill: a few more tries, then word 6 - and the operator is told.
 
-    The refusal means the drive is still in OPERATION_ENABLED and still driving
-    the shaft. Pressing on to word 6 there is transition 8 - exactly the
-    freewheel the sequence exists to avoid.
+    Word 6 straight after a refused word 7 would be transition 8, which on a
+    TURNING shaft drops the output stage into a freewheel; so within the bound
+    only word 7 is retried. This test used to assert that word 6 was never sent
+    at all, which is the defect the failure matrix found
+    (drive_refuses_switch_on_at_stop): ~480 refused frames, the stage left
+    enabled, no verdict, nothing on the screen. At the bound the shaft is
+    confirmed stopped by a fresh RFRD with a zero reference, where transition 8
+    lets nothing coast, so word 6 removes the stage and a latched
+    ``disable_refused`` names the refused word.
     """
     rig = await _running_rig()
     rig.drive.command_errors[ControlWord.SWITCH_ON] = CommTimeout(after=Seconds(0.5))
+    mark = len(rig.drive.trace)
     rig.runtime.request_stop("stop")
     await rig.run(20.0)
     assert rig.runtime.applied_rpm == 0
     assert abs(rig.drive.shaft_rpm) < 1.0
-    assert ControlWord.SHUTDOWN not in rig.drive.commands[3:]
-    assert rig.runtime.output_enabled
+    words = [e for e in rig.drive.trace[mark:] if e in {"cmd:SWITCH_ON", "cmd:SHUTDOWN"}]
+    assert words == ["cmd:SWITCH_ON"] * LIMITS.disable_attempts + ["cmd:SHUTDOWN"]
+    assert not rig.runtime.output_enabled
+    assert rig.drive.state is FakeState.READY
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_DISABLE_REFUSED
+    assert standing.action is SafetyAction.RAMP_DOWN
+    assert standing.latched
+    assert "SWITCH_ON" in standing.detail
+    assert not rig.runtime.silent
+
+
+async def test_a_disable_refused_fewer_times_than_the_bound_is_simply_retried() -> None:
+    """A transient refusal: the next tick's word 7 lands, nothing is latched."""
+    rig = await _running_rig()
+    # Back to the resting rate before the stop: the rig's 65 bpm lure, 17 below the
+    # measured 82 once the load is off, is exactly what hr_drop now calls a collapse.
+    rig.fed_bpm = Bpm(82)
+    rig.drive.command_errors[ControlWord.SWITCH_ON] = CommTimeout(after=Seconds(0.5))
+    rig.runtime.request_stop("stop")
+    while not rig.drive.trace.count("cmd:SWITCH_ON") > 1 + LIMITS.disable_attempts - 2:
+        await rig.step()
+    del rig.drive.command_errors[ControlWord.SWITCH_ON]
+    await rig.run(2.0)
+    assert not rig.runtime.output_enabled
+    assert rig.runtime.standing is None
 
 
 async def test_the_runtimes_own_latch_outranks_a_milder_supervisor_verdict() -> None:
@@ -2522,8 +2864,14 @@ async def test_an_unknown_applied_speed_holds_the_setpoint_rather_than_rebuildin
     dangerous alternative is a fabricated zero base: the increment would then be
     the whole demand, and a machine at 165 rpm would be commanded to something
     near its minimum instead of holding.
+
+    ``comms_lost`` is pushed out of reach here on purpose. With its real limit a
+    status read that fails on every tick ends the session within three ticks -
+    long before the status goes stale - which is the point of counting reads
+    apart from writes. What this test isolates is the controller's behaviour
+    on a stale base, so it needs a link that stays up long enough to go stale.
     """
-    rig = await _running_rig()
+    rig = await _running_rig(safety=_lenient_comms())
     held = rig.runtime.applied_rpm
     rig.drive.status_error = BadResponse(detail="short read")
     await rig.run(6.0)
@@ -2544,8 +2892,12 @@ async def test_a_failed_write_does_not_advance_the_believed_setpoint() -> None:
     that fail are writes that would have CHANGED the value. A test that failed
     only the keepalive would pass on a runtime with no such rule at all, which is
     why the attempted frames are checked too.
+
+    ``comms_lost`` is out of reach here (see :func:`_lenient_comms`): writes
+    that fail on every tick for four seconds would otherwise, correctly, end
+    the session within three ticks.
     """
-    rig = await _running_rig()
+    rig = await _running_rig(safety=_lenient_comms())
     while rig.phase() is not Phase.HOLD:
         await rig.step()
     before = rig.runtime.applied_rpm
@@ -2573,3 +2925,730 @@ async def test_transient_failures_do_not_accumulate_into_a_lost_link() -> None:
         await rig.run(1.0)
     assert not rig.runtime.silent
     assert rig.runtime.standing is None
+
+
+# =========================================================================
+# Comms loss is judged per kind of exchange
+# =========================================================================
+
+
+def _comms_limit() -> int:
+    """The ``comms_lost`` threshold the standard rig runs with."""
+    return _safety_for(_profile()).comms_lost_failures
+
+
+async def test_a_status_read_failing_on_every_tick_is_comms_lost_while_writes_succeed() -> None:
+    """THE review finding: an acknowledged keepalive is not proof the drive is watched.
+
+    The keepalive goes out first on every tick and its acknowledgement used to
+    reset the one shared failure counter, so a status read failing on every
+    tick never got past a run length of one and ``comms_lost`` could not fire.
+    Only a successful READ may shorten the read run.
+    """
+    rig = await _running_rig()
+    limit = _comms_limit()
+    rig.drive.status_error = BadResponse(detail="short read")
+    acknowledged = len(rig.drive.writes)
+    for _ in range(limit):
+        assert not rig.runtime.silent
+        await rig.step()
+    assert len(rig.drive.writes) > acknowledged, "the keepalive writes were not succeeding"
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_COMMS_LOST
+    assert standing.action is SafetyAction.GO_SILENT
+    assert rig.runtime.silent
+
+
+async def test_writes_failing_on_every_tick_are_comms_lost_while_reads_succeed() -> None:
+    """The mirror image: a drive that can be read but not commanded is not in hand."""
+    rig = await _running_rig()
+    limit = _comms_limit()
+    rig.drive.speed_error = CommTimeout(after=Seconds(0.5))
+    for _ in range(limit):
+        assert not rig.runtime.silent
+        await rig.step()
+    assert not rig.runtime.snapshot().drive_status_is_stale, "the reads were not succeeding"
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_COMMS_LOST
+    assert rig.runtime.silent
+
+
+async def test_a_dead_tick_counts_once_not_once_per_exchange() -> None:
+    """The run length judged is the longer of the two, never their sum.
+
+    A tick on a dead link fails its write and its read. Summing them would fire
+    ``comms_lost`` at half its configured number of ticks, and a brief glitch
+    shorter than the configured tolerance would end a session.
+    """
+    rig = await _running_rig()
+    limit = _comms_limit()
+    rig.drive.speed_error = CommTimeout(after=Seconds(0.5))
+    rig.drive.status_error = CommTimeout(after=Seconds(0.5))
+    for _ in range(limit - 1):
+        await rig.step()
+    assert not rig.runtime.silent
+    rig.drive.speed_error = None
+    rig.drive.status_error = None
+    await rig.run(2.0)
+    assert not rig.runtime.silent
+    assert rig.runtime.standing is None
+
+
+# =========================================================================
+# A verdict that lifts must not release the controller's stale demand
+# =========================================================================
+
+
+@dataclass(slots=True)
+class _Imposed:
+    """A verdict a test forces onto the supervisor's exit, or ``None`` for none.
+
+    Mutable on purpose: the test flips it between ticks to make a non-latched
+    verdict appear and lift on demand, which no heart-rate script can do
+    precisely enough.
+    """
+
+    action: SafetyAction | None = None
+
+
+def _imposing(
+    imposed: _Imposed,
+) -> Callable[[SafetySupervisor, SafetyObservation], SafetyVerdict | None]:
+    """Wrap the real ``evaluate`` so ``imposed`` wins while it is set.
+
+    The real supervisor still runs on every tick, so its own rules (and their
+    latches) stay live underneath the imposed verdict.
+    """
+    original = SafetySupervisor.evaluate
+
+    def evaluate(self: SafetySupervisor, observation: SafetyObservation) -> SafetyVerdict | None:
+        real = original(self, observation)
+        action = imposed.action
+        if action is None:
+            return real
+        return SafetyVerdict(
+            action=action,
+            rule="rig_imposed",
+            detail="under test",
+            latched=False,
+            since=observation.now,
+        )
+
+    return evaluate
+
+
+def _changes(
+    trace: Sequence[tuple[float, MotorRpm, SafetyAction]],
+) -> list[tuple[float, MotorRpm, SafetyAction]]:
+    """Keep only the ticks on which the setpoint actually moved (plus the first)."""
+    kept = [trace[0]]
+    for entry in trace[1:]:
+        if entry[1] != kept[-1][1]:
+            kept.append(entry)
+    return kept
+
+
+def _assert_slew_between_changes(
+    trace: Sequence[tuple[float, MotorRpm, SafetyAction]], slew: float
+) -> None:
+    """``|delta setpoint| <= slew * dt`` between successive changes, verdicts or not.
+
+    ``dt`` is the time since the setpoint last *moved*, which is the form of the
+    bound the rest of this file states (see the freeze test): the control law
+    decides once per period and may spend the whole period's allowance in one
+    write. The only exemption is the one the design names: a QUICK_STOP (or
+    anything more severe) zeroes the reference at once.
+    """
+    for (before_at, before_rpm, _), (after_at, after_rpm, action) in pairwise(_changes(trace)):
+        if after_rpm == 0 and action >= SafetyAction.QUICK_STOP:
+            continue
+        span = after_at - before_at
+        assert abs(after_rpm - before_rpm) <= slew * span + 1, (before_rpm, after_rpm, span, action)
+
+
+def _history(rig: Rig) -> list[tuple[float, MotorRpm, SafetyAction]]:
+    """Every tick so far, so the first change measured has its true predecessor.
+
+    Seeding the trace with only "now" would date the previous change to the
+    moment recording began, when the setpoint may have last moved seconds
+    earlier - and the bound is stated from the last *change*.
+    """
+    return [
+        (float(snapshot.at), snapshot.setpoint.motor_rpm, SafetyAction.NONE)
+        for snapshot in rig.snapshots
+    ]
+
+
+async def _record(
+    rig: Rig, imposed: _Imposed, ticks: int, trace: list[tuple[float, MotorRpm, SafetyAction]]
+) -> None:
+    for _ in range(ticks):
+        await rig.step()
+        standing = rig.runtime.standing_action
+        forced = SafetyAction.NONE if imposed.action is None else imposed.action
+        trace.append((float(rig.now), rig.runtime.applied_rpm, max(standing, forced)))
+
+
+async def test_a_lifted_reduce_does_not_jump_back_to_the_old_demand() -> None:
+    """THE review finding, reproduced: 60 -> 276 rpm in one write when REDUCE lifted.
+
+    The controller ran the rig up to its ceiling, a non-latched REDUCE walked the
+    setpoint down, and while it did so the controller kept its standing demand
+    at the ceiling. The tick the verdict lifted re-emitted that demand.
+    """
+    rig = await _running_rig()
+    await rig.run(14.0)
+    high = rig.runtime.applied_rpm
+    assert high == REAL_PROFILE.max_rpm, "the rig never reached its ceiling"
+    imposed = _Imposed()
+    trace = _history(rig)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SafetySupervisor, "evaluate", _imposing(imposed))
+        imposed.action = SafetyAction.REDUCE
+        while rig.runtime.applied_rpm > 60:
+            await _record(rig, imposed, 1, trace)
+        low = rig.runtime.applied_rpm
+        imposed.action = None
+        await _record(rig, imposed, 1, trace)
+        assert rig.runtime.applied_rpm <= low, (low, rig.runtime.applied_rpm)
+        await _record(rig, imposed, 20, trace)
+    _assert_slew_between_changes(trace, LIMITS.slew)
+    assert max(rpm for _, rpm, _ in trace[-20:]) < high, "the old demand came back"
+
+
+_VERDICTS: Final[tuple[SafetyAction | None, ...]] = (
+    None,
+    None,
+    SafetyAction.FREEZE,
+    SafetyAction.REDUCE,
+    SafetyAction.REDUCE,
+    SafetyAction.RAMP_DOWN,
+    SafetyAction.QUICK_STOP,
+)
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    segments=st.lists(
+        st.tuples(
+            st.sampled_from(_VERDICTS),
+            st.integers(min_value=40, max_value=150),
+            st.integers(min_value=1, max_value=30),
+        ),
+        min_size=2,
+        max_size=10,
+    )
+)
+async def test_the_setpoint_respects_the_slew_limit_across_verdict_transitions(
+    segments: list[tuple[SafetyAction | None, int, int]],
+) -> None:
+    """The slew bound, over arbitrary appearances and liftings of verdicts.
+
+    Every tick a verdict decides the output the controller is rebased onto what
+    was actually applied, so no transition - into a verdict, out of one, or
+    from one to another - can release a demand the machine is not running at.
+    """
+    rig = await _running_rig()
+    imposed = _Imposed()
+    trace = _history(rig)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SafetySupervisor, "evaluate", _imposing(imposed))
+        for action, rate, ticks in segments:
+            imposed.action = action
+            rig.fed_bpm = Bpm(rate)
+            await _record(rig, imposed, ticks, trace)
+    _assert_slew_between_changes(trace, LIMITS.slew)
+
+
+# =========================================================================
+# Idle, read-only polling
+# =========================================================================
+
+
+def _writes_in(trace: Sequence[str]) -> list[str]:
+    """Every frame in ``trace`` that is a write of any kind."""
+    return [entry for entry in trace if entry.startswith(("lfrd", "cmd", "estop"))]
+
+
+async def test_an_idle_runtime_reads_the_drive_at_two_hertz_and_writes_nothing() -> None:
+    """Invariant 7 of the console plan: at rest, ``read_status`` and nothing else.
+
+    At REST. This test used to run on a drive found OPERATION_ENABLED at 300 rpm
+    and assert that it was only read - which is the defect the failure matrix
+    found (drive_stuck_enabled_idle_console): the read-only poll fed the drive's
+    ttO and a crashed predecessor's motor kept turning for as long as the
+    console sat idle. A drive found enabled or turning is now stopped; see
+    ``test_a_drive_found_enabled_while_idle_is_stopped_latched_and_disabled``.
+    """
+    rig = _rig(state=FakeState.SWITCHED_ON, rpm=MotorRpm(0))
+    snapshots = await rig.run(1.0, feed=False, ping=False)
+    assert rig.drive.trace[0] == "open"
+    assert rig.drive.trace.count("open") == 1
+    # Five ticks at 5 Hz, one read every 0.5 s: the ticks at 0.2, 0.8 (and not 0.4, 0.6).
+    assert rig.drive.trace.count("eta") == 2
+    assert _writes_in(rig.drive.trace) == []
+    last = snapshots[-1]
+    assert last.measured.motor_rpm == 0
+    assert last.drive_state is DriveState.SWITCHED_ON
+    assert last.drive_status_age is not None
+    assert last.setpoint.motor_rpm == 0
+    link = rig.runtime.idle_link
+    assert link == IdleLink(open=True, reads=2, last_latency=Seconds(0.0))
+    assert rig.state() is RuntimeState.IDLE
+    assert rig.runtime.standing is None
+
+
+async def test_a_drive_found_enabled_while_idle_is_stopped_latched_and_disabled() -> None:
+    """Contract rule 8 on the IDLE console: zero, ramp-stop, disable, latch, tell. Never resume.
+
+    The failure matrix's evidence: a drive left OPERATION_ENABLED at 900 motor
+    rpm stayed there for the whole 60 s idle pre-roll (120 s on the panel) with
+    no verdict, because the idle poll only read it - and the reads fed its ttO.
+    """
+    rig = _rig(state=FakeState.OPERATION_ENABLED, rpm=MotorRpm(300))
+    first = await rig.step(feed=False, ping=False)
+    # The first idle read found it; the reference was zeroed in the same tick.
+    assert rig.drive.commanded_rpm == 0
+    assert rig.drive.writes[0] == 0
+    standing = first.safety
+    assert standing is not None
+    assert standing.rule == RULE_DRIVE_PRECOMMANDED
+    assert standing.action is SafetyAction.QUICK_STOP
+    assert standing.latched
+    assert "idle console" in standing.detail
+    # No SHUTDOWN (transition 8) while it turns: the drive ramps on its own ramp.
+    assert ControlWord.SHUTDOWN not in rig.drive.commands
+    assert rig.drive.is_enabled()
+    await rig.run(8.0, feed=False, ping=False)
+    # At standstill: word 7 then word 6, and the output stage is off.
+    assert abs(rig.drive.shaft_rpm) < 1.0
+    assert rig.drive.commands == [ControlWord.SWITCH_ON, ControlWord.SHUTDOWN]
+    assert not rig.drive.is_enabled()
+    assert not rig.runtime.output_enabled
+    assert rig.state() is RuntimeState.FINISHED
+    # Nothing starts again until a named operator acknowledges.
+    refused = await rig.start()
+    assert is_err(refused)
+    assert isinstance(refused.error, SafetyStanding)
+    assert max(rig.drive.writes) == 0
+    assert is_ok(rig.runtime.acknowledge(OPERATOR))
+    assert rig.runtime.standing is None
+
+
+async def test_a_shaft_found_coasting_while_idle_is_flagged_but_never_energised() -> None:
+    """Turning with the output stage OFF: the zero is written, the stage is never switched on.
+
+    Only the output stage can brake a coasting shaft, and energising it would be
+    starting a machine nobody asked to start. So the verdict latches and the
+    operator is told; the shaft coasts down on its own.
+    """
+    rig = _rig(state=FakeState.READY, rpm=MotorRpm(400))
+    await rig.step(feed=False, ping=False)
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_DRIVE_PRECOMMANDED
+    assert "found the drive READY at" in standing.detail
+    assert not rig.runtime.output_enabled
+    await rig.run(10.0, feed=False, ping=False)
+    assert rig.drive.commands == []
+    assert rig.drive.state is FakeState.READY
+    assert set(rig.drive.writes) == {0}
+
+
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    rpm=st.integers(min_value=0, max_value=1380),
+    idle=st.floats(min_value=0.0, max_value=5.0),
+)
+async def test_a_drive_seen_enabled_while_idle_always_ends_at_zero_disabled_and_latched(
+    rpm: int, idle: float
+) -> None:
+    """PROPERTY: whatever speed the idle console finds an ENABLED drive at, it ends stopped.
+
+    At zero, with the output stage off, a latched ``drive_precommanded`` and not a
+    single non-zero reference written, however long the console had been idle -
+    including an enabled drive at 0 rpm, which is one word away from turning.
+    """
+    rig = _rig(state=FakeState.OPERATION_ENABLED, rpm=MotorRpm(rpm))
+    rig.drive.advance(Monotonic(rig.now + idle))
+    await rig.run(90.0, feed=False, ping=False)
+    assert abs(rig.drive.shaft_rpm) < 1.0
+    assert not rig.drive.is_enabled()
+    assert not rig.runtime.output_enabled
+    assert set(rig.drive.writes) == {0}
+    floor = rig.runtime.standing
+    assert floor is not None
+    assert floor.rule == RULE_DRIVE_PRECOMMANDED
+    assert floor.latched
+
+
+async def test_an_idle_fault_is_shown_but_ends_nothing_it_never_started() -> None:
+    """The fake's ttO trips on reads-only polling; the raw LFT code reaches the screen.
+
+    The idle observation never reaches the supervisor, so a fault on a drive
+    nobody started cannot end a session, latch a verdict or go silent.
+    """
+    rig = _rig()
+    snapshots = await rig.run(3.0, feed=False, ping=False)
+    last = snapshots[-1]
+    assert last.drive_state is DriveState.FAULT
+    assert last.fault is not None
+    assert last.fault.fault is DriveFault.MODBUS_COMM_LOSS
+    assert rig.state() is RuntimeState.IDLE
+    assert rig.runtime.standing is None
+    assert not rig.runtime.silent
+    assert _writes_in(rig.drive.trace) == []
+
+
+async def test_a_failed_idle_open_is_counted_shown_and_retried_on_the_next_poll() -> None:
+    rig = _rig()
+    rig.drive.break_comms()
+    await rig.step(feed=False, ping=False)
+    link = rig.runtime.idle_link
+    assert not link.open
+    assert link.failures == 1
+    assert link.consecutive_failures == 1
+    assert link.last_error is not None
+    assert rig.runtime.snapshot().drive_state is DriveState.COMM_LOST
+    # Polls at +0.2 (above), then +0.8 and +1.4: one open attempt each.
+    await rig.run(1.2, feed=False, ping=False)
+    assert rig.drive.trace.count("open") == 3
+    assert rig.runtime.idle_link.consecutive_failures == 3
+    # Never counted towards comms_lost: nothing latched, nothing silent.
+    assert rig.runtime.standing is None
+    assert not rig.runtime.silent
+
+
+async def test_a_failed_idle_read_reopens_and_a_later_success_clears_the_run() -> None:
+    rig = _rig()
+    await rig.step(feed=False, ping=False)
+    rig.drive.status_error = CommTimeout(after=Seconds(0.5))
+    await rig.run(0.6, feed=False, ping=False)
+    failed = rig.runtime.idle_link
+    assert failed.failures == 1
+    assert not failed.open
+    rig.drive.status_error = None
+    await rig.run(0.6, feed=False, ping=False)
+    healed = rig.runtime.idle_link
+    assert healed.open
+    assert healed.consecutive_failures == 0
+    assert healed.failures == 1
+    assert rig.drive.trace.count("open") == 2
+
+
+async def test_an_idle_reading_goes_stale_and_is_then_shown_as_unknown() -> None:
+    """Past ``status_stale_after`` the idle reading is a memory: COMM_LOST, no current."""
+    rig = _rig()
+    await rig.step(feed=False, ping=False)
+    rig.drive.status_error = CommTimeout(after=Seconds(0.5))
+    snapshots = await rig.run(3.0, feed=False, ping=False)
+    last = snapshots[-1]
+    assert last.drive_state is DriveState.COMM_LOST
+    assert last.current is None
+    assert last.drive_status_age is not None
+    assert last.drive_status_age > LIMITS.status_stale_after
+
+
+async def test_a_silent_idle_runtime_stops_polling() -> None:
+    """A frame after silence restarts ``ttO``, reads included."""
+    rig = _rig()
+    rig.drive.raise_on_status = True
+    with pytest.raises(RuntimeError):
+        await rig.step(feed=False, ping=False)
+    assert rig.runtime.silent
+    before = len(rig.drive.trace)
+    rig.drive.raise_on_status = False
+    rig.clock.advance(IDLE_POLL_PERIOD)
+    await rig.runtime.tick(rig.now)
+    assert len(rig.drive.trace) == before
+
+
+async def test_a_start_refused_after_opening_leaves_the_idle_poll_to_the_session_path() -> None:
+    """A refused start keeps its link; the idle poll does not open a second one."""
+    rig = _rig()
+    rig.drive.inject_fault(DriveFault.OVERCURRENT)
+    assert is_err(await rig.start())
+    opens = rig.drive.trace.count("open")
+    snapshot = await rig.step(feed=False, ping=False)
+    assert rig.drive.trace.count("open") == opens
+    assert rig.runtime.idle_link == IdleLink()
+    assert snapshot.drive_state is DriveState.FAULT
+
+
+async def test_the_idle_poll_stops_once_a_session_has_started() -> None:
+    rig = await _running_rig()
+    assert rig.runtime.idle_link == IdleLink()
+
+
+async def test_the_heart_rate_trend_is_the_trackers_own() -> None:
+    rig = _rig()
+    before = rig.runtime.heart_rate_trend
+    assert before is None
+    for bpm in (70, 72, 74, 76, 78):
+        rig.clock.advance(Seconds(1.0))
+        rig.feed(Bpm(bpm))
+    after = _trend(rig)
+    assert after is not None
+    assert after > 0.0
+
+
+def _trend(rig: Rig) -> BpmPerMinute | None:
+    """Read through a call, so mypy does not keep the earlier ``None`` narrowing."""
+    return rig.runtime.heart_rate_trend
+
+
+# =========================================================================
+# The vasovagal gate: no rise while the heart rate falls fast
+# =========================================================================
+
+
+def _short_trend(readings: Sequence[tuple[float, int]]) -> float | None:
+    """The gate's own trend, recomputed from the readings fed (instant, bpm): the last five."""
+    tracker = HeartRateTracker()
+    for seq, (at, bpm) in enumerate(readings, start=1):
+        tracker.observe(
+            HeartRateSample(bpm=Bpm(bpm), quality=SignalQuality.GOOD, seq=seq, at=Monotonic(at))
+        )
+    return tracker.recent_rate(LIMITS.trend_samples)
+
+
+async def test_a_falling_heart_rate_holds_the_setpoint_before_any_verdict() -> None:
+    """THE finding: 968 -> 1039 motor rpm while a collapse took the rate 145 -> 121.
+
+    The control law reads a falling rate as "below the zone" and accelerates;
+    hr_drop only trips once the fall reaches 25 bpm. Here the rate falls 9 bpm
+    in six seconds - far below hr_drop - and the setpoint does not rise at all,
+    with no verdict standing: it is the gate, not the supervisor, that holds it.
+    When the fall stops, the controller climbs again.
+    """
+    rig = await _running_rig()
+    rig.fed_bpm = Bpm(70)
+    await rig.run(10.0)
+    start = rig.runtime.applied_rpm
+    held: list[MotorRpm] = []
+    for bpm in (68, 66, 65, 63, 62, 61):
+        rig.fed_bpm = Bpm(bpm)
+        for _ in range(5):
+            await rig.step()
+            held.append(rig.runtime.applied_rpm)
+            assert rig.runtime.standing is None
+    assert all(b <= a for a, b in pairwise([start, *held])), held
+    rig.fed_bpm = Bpm(61)
+    await rig.run(15.0)
+    assert rig.runtime.applied_rpm > held[-1], "the controller never resumed after the fall"
+
+
+async def test_an_unknown_trend_permits_no_rise() -> None:
+    """Too few readings to fit a slope is no licence to accelerate."""
+    rig = _rig(tracker_limits=TrackerLimits(max_jump=Bpm(1), reseed_after=1))
+    rig.fed_bpm = Bpm(82)
+    assert is_ok(await rig.start())
+    await rig.run(11.0)
+    # Every reading now jumps and reseeds the tracker: one accepted reading at a time.
+    for bpm in (60, 40, 60, 40, 60, 40, 60, 40):
+        rig.fed_bpm = Bpm(bpm)
+        await rig.run(1.0)
+    assert rig.runtime.applied_rpm == 0
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(steps=st.lists(st.integers(min_value=-6, max_value=4), min_size=10, max_size=40))
+async def test_the_setpoint_never_rises_while_the_heart_rate_trend_is_falling_fast(
+    steps: list[int],
+) -> None:
+    """PROPERTY: for any heart-rate sequence, no tick with a trend below the gate rises.
+
+    The trend is recomputed here, independently of the runtime, from the
+    readings the rig actually fed (their instants and values), with the tracker
+    the runtime uses; whenever it is below ``falling_trend`` the applied
+    setpoint at the end of the tick is no higher than at its start. The
+    verdicts are free to do what they like - they only ever lower it.
+    """
+    rig = await _running_rig()
+    fed: list[tuple[float, int]] = []
+    bpm = 65
+    for step in steps:
+        bpm = min(160, max(40, bpm + step))
+        rig.fed_bpm = Bpm(bpm)
+        for _ in range(5):
+            before, seq = rig.runtime.applied_rpm, rig.seq
+            await rig.step()
+            if rig.seq > seq:
+                fed.append((rig.last_feed, bpm))
+            trend = _short_trend(fed)
+            if trend is not None and trend < LIMITS.falling_trend:
+                assert rig.runtime.applied_rpm <= before, (fed[-6:], trend)
+
+
+# =========================================================================
+# Programmes walk the anti-nausea motion limits too
+# =========================================================================
+
+LEG_TIP: Final[Metres] = Metres(2.43)
+"""The rider's leg tip on the CAD upper bound: where the g-rate limit must hold."""
+
+
+def _climbing_profile(**overrides: object) -> TrainingProfile:
+    """A programme that asks for the nameplate: a heart far below its zone, a long HOLD."""
+    fields: dict[str, object] = {
+        "total_duration_s": Seconds(220.0),
+        "warmup_max_s": Seconds(20.0),
+        "hold_min_s": Seconds(10.0),
+        "cooldown_s": Seconds(10.0),
+        "recovery_s": Seconds(60.0),
+        "max_rpm": MotorRpm(1380),
+        "hard_max_bpm": Bpm(148),
+        "critical_bpm": Bpm(158),
+    }
+    fields.update(overrides)
+    return _profile(**fields)
+
+
+async def _climbing_rig(
+    *, limit_radius: Metres | None = None, **overrides: object
+) -> tuple[Rig, list[tuple[float, MotorRpm, SafetyAction]]]:
+    rig = _rig(
+        profile=_climbing_profile(**overrides),
+        motion=DEFAULT_MOTION_LIMITS,
+        limit_radius=limit_radius,
+    )
+    rig.fed_bpm = Bpm(82)
+    assert is_ok(await rig.start())
+    await rig.run(10.0)
+    rig.fed_bpm = Bpm(60)
+    trace: list[tuple[float, MotorRpm, SafetyAction]] = []
+    return rig, trace
+
+
+async def _trace(rig: Rig, trace: list[tuple[float, MotorRpm, SafetyAction]], s: float) -> None:
+    for _ in range(round(s / TICK)):
+        await rig.step()
+        trace.append((float(rig.now), rig.runtime.applied_rpm, rig.runtime.standing_action))
+
+
+def _assert_motion_limited(
+    trace: Sequence[tuple[float, MotorRpm, SafetyAction]], geometry: MachineGeometry
+) -> None:
+    """Every change outside a verdict within the motion limits at ``geometry``'s radius.
+
+    Speed: ``rate x window + 1`` (one carried rpm), the rate taken at the faster
+    end, the window capped at the limiter's own accrual cap. Load: the g-rate at
+    that radius, with one rpm of slack. The 0 <-> min_run passage is exempt, as
+    the motion module documents.
+    """
+    motion = DEFAULT_MOTION_LIMITS
+    last_change = trace[0][0]
+    for (_, a, _), (t, b, action) in pairwise(trace):
+        if a == b:
+            continue
+        window = t - last_change
+        last_change = t
+        if action is not SafetyAction.NONE or 0 in (a, b):
+            continue
+        rate = motor_rate_limit(MotorRpm(max(a, b)), motion, geometry)
+        capped = min(window, float(motion.max_interval) + 1.0 / rate)
+        assert abs(b - a) <= rate * capped + 1 + 1e-9, (a, b, window)
+        g_a, g_b = (geometry.view(rpm).g_load for rpm in (a, b))
+        slack = geometry.view(MotorRpm(max(a, b) + 1)).g_load - geometry.view(max(a, b)).g_load
+        assert abs(g_b - g_a) <= float(motion.g_rate) * capped + slack + 1e-9, (a, b, window)
+
+
+async def test_a_programme_climbs_at_the_anti_nausea_limits_not_in_controller_steps() -> None:
+    """THE finding: the control law stepped up to 75 rpm per 5 s period and the drive ran it.
+
+    The measured arm then accelerated at up to 0.54 output rpm/s against a 0.25
+    limit, and the g-dot limit was not applied at all. Now the controller's
+    demand, the warm-up and the cooldown are all walked by the motion profiler.
+    """
+    rig, trace = await _climbing_rig()
+    await _trace(rig, trace, 150.0)
+    assert max(rpm for _, rpm, _ in trace) == 1380, "the rig never reached the nameplate"
+    _assert_motion_limited(trace, GEOMETRY)
+    await _trace(rig, trace, 60.0)
+    _assert_motion_limited(trace, GEOMETRY)
+
+
+async def test_the_g_rate_limit_can_be_judged_at_the_leg_tip() -> None:
+    """``limit_radius``: 0.03 g/s at the reference radius is 0.049 g/s at 2.43 m.
+
+    Judged at the leg tip the climb above ~22 output rpm is slower, and every
+    change stays inside the g-rate limit AT the leg tip.
+    """
+    rig, trace = await _climbing_rig(limit_radius=LEG_TIP)
+    await _trace(rig, trace, 150.0)
+    tip = replace(GEOMETRY, radius=LEG_TIP)
+    _assert_motion_limited(trace, tip)
+    fast, fast_trace = await _climbing_rig()
+    await _trace(fast, fast_trace, 150.0)
+    reached = next(t for t, rpm, _ in trace if rpm == 1380)
+    reached_fast = next(t for t, rpm, _ in fast_trace if rpm == 1380)
+    # Above ~22 output rpm the g-dot at 2.43 m binds (0.20 output rpm/s against 0.25):
+    # the last 5.7 output rpm take ~26 s instead of ~23.
+    assert reached > reached_fast + 2.0, (reached, reached_fast)
+
+
+@pytest.mark.parametrize("radius", [Metres(1.0), Metres(math.nan), Metres(math.inf)])
+def test_a_limit_radius_that_would_loosen_the_limit_is_refused(radius: Metres) -> None:
+    with pytest.raises(ValueError, match="limit_radius"):
+        _rig(limit_radius=radius)
+
+
+def test_the_limit_radius_defaults_to_the_reference_radius() -> None:
+    assert motion_geometry(GEOMETRY, None) is GEOMETRY
+    assert motion_geometry(GEOMETRY, GEOMETRY.radius).radius == GEOMETRY.radius
+    assert motion_geometry(GEOMETRY, LEG_TIP).radius == LEG_TIP
+    assert motion_geometry(GEOMETRY, LEG_TIP).ratio == GEOMETRY.ratio
+
+
+@settings(max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    rates=st.lists(st.integers(min_value=50, max_value=160), min_size=5, max_size=30),
+    radius=st.sampled_from((None, LEG_TIP)),
+)
+async def test_every_programme_setpoint_change_stays_inside_the_motion_limits(
+    rates: list[int], radius: Metres | None
+) -> None:
+    """PROPERTY: for any heart-rate history, outside a verdict, speed and g-dot are bounded.
+
+    At the limit radius when one is given, at the reference radius otherwise.
+    """
+    rig, trace = await _climbing_rig(limit_radius=radius)
+    for bpm in rates:
+        rig.fed_bpm = Bpm(bpm)
+        await _trace(rig, trace, 4.0)
+    geometry = GEOMETRY if radius is None else replace(GEOMETRY, radius=radius)
+    _assert_motion_limited(trace, geometry)
+
+
+# =========================================================================
+# DONE only once the setpoint is zero
+# =========================================================================
+
+
+async def test_the_timeline_ending_before_the_cooldown_keeps_supervising_in_recovery() -> None:
+    """A motion-limited cooldown can outlast the programme's timeline; DONE would stop the rules."""
+    rig, trace = await _climbing_rig()
+    await _trace(rig, trace, 130.0)
+    assert rig.runtime.applied_rpm == 1380
+    # The timeline: HOLD ends at 150 s, COOLDOWN is 10 s, RECOVERY ends at 220 s.
+    await _trace(rig, trace, 85.0)
+    assert rig.runtime.applied_rpm > 0
+    assert rig.phase() is Phase.RECOVERY
+    await _trace(rig, trace, 120.0)
+    assert rig.runtime.applied_rpm == 0
+    assert rig.phase() is Phase.DONE
+
+
+async def test_an_ending_that_outlasts_its_recovery_is_not_done_while_it_turns() -> None:
+    rig, trace = await _climbing_rig(total_duration_s=Seconds(400.0))
+    await _trace(rig, trace, 145.0)
+    rig.runtime.request_stop("stop")
+    await _trace(rig, trace, 75.0)
+    assert rig.runtime.applied_rpm > 0
+    assert rig.phase() is Phase.RECOVERY
+    await _trace(rig, trace, 60.0)
+    assert rig.runtime.applied_rpm == 0
+    assert rig.phase() is Phase.DONE
+    assert rig.runtime.end_reason is EndReason.OPERATOR_STOP
