@@ -70,6 +70,29 @@ Limite historique importante : `develop`, copie du `main` existant, contient enc
 
 Branche de publication : `mohamdimagh1/anh-71-commiter-et-relire-tout-le-travail-en-cours-branche-featpi`, PR **brouillon** vers `develop`. ANH-71 reste ouvert tant que les deux revues independantes de la chaine de securite, les controles requis et la fusion ne sont pas attestes. Les controles locaux ne remplacent ni ces approbations ni la future CI (ANH-72). Les limites physiques et les defauts logiciels deja documentes, dont ANH-101 et ANH-121, restent ouverts ; aucune validation sur equipement ou de seuil medical n'est revendiquee. Le prochain ticket de la file est ANH-82, avec le correctif ANH-121 dans la meme etape de fondations.
 
+### Correction de la preversion Git de la simulation
+
+La [PR brouillon #3](https://github.com/anheartpro-byte/Anheart/pull/3) est ouverte.
+Sur `bac8bd4`, le controle Vercel du site est vert, mais celui de la simulation
+echoue : le projet FastAPI construit depuis la racine du depot sans point
+d'entree a cet endroit. La connexion GitHub active `anheartpro-byte` est verifiee.
+
+Le correctif ajoute `simulation_app:app` dans le `pyproject.toml` racine, un
+point d'entree qui charge l'adaptateur heberge existant et son substitut BITalino,
+un fichier racine de dependances renvoyant au fichier heberge, et Python 3.12.
+Le visualiseur est servi depuis le paquet simulation, aussi bien dans le checkout
+Git que dans l'assemblage autonome. Les reglages distants Vercel restent inchanges.
+
+Verification locale du correctif : 10 tests de l'adaptateur passent ; Ruff,
+format, basedpyright et mypy sont verts. Avant le correctif, les regressions
+reproduisent le visualiseur HTTP 404 et l'import impossible du point d'entree.
+Apres le correctif, deux vrais serveurs HTTP (checkout Git et assemblage temporaire)
+servent exactement le fichier du visualiseur, le catalogue de 60 scenarios,
+300 lignes de simulation jusqu'a `final/end`, et un scenario inconnu `error/end`.
+Le detecteur du SDK Vercel resout `simulation_app:app`. Le site passe de nouveau
+`tsc --noEmit` et son build Next.js (28 pages). Ces controles ne remplacent pas
+le resultat de la prochaine preversion distante ni les deux approbations requises.
+
 ## File logicielle
 
 L'etape reprend l'ordre de la file Linear. Les parents ANH-122 et ANH-88 se cloturent apres leurs sous-tickets ; ils ne dupliquent pas leur implementation. Les dependances precises sont recontrolees avant chaque ticket. La presence dans cette liste ne signifie pas que ses bloqueurs sont resolus.

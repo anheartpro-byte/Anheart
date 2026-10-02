@@ -34,11 +34,12 @@ from typing import Final
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
-from src.result import Err
+from fastapi.staticfiles import StaticFiles
 
-from simulation.live import MAX_SPEED, Message, run_into
+from simulation.live import MAX_SPEED, ROOT, Message, run_into
 from simulation.scenario import EcgMode, load_scenario, scenario_paths
 from simulation.tracefile import JsonValue
+from src.result import Err
 
 MIN_SPEED: Final[float] = 10.0
 """2700 s of scenario at 10x is 270 s of wall clock, under the 300 s limit."""
@@ -46,6 +47,7 @@ MIN_SPEED: Final[float] = 10.0
 DEFAULT_SPEED: Final[float] = 20.0
 
 app = FastAPI(title="Anheart - moteur de simulation", docs_url=None, redoc_url=None)
+app.mount("/viewer", StaticFiles(directory=ROOT / "viewer"), name="viewer")
 
 
 def _catalogue() -> Mapping[str, bool]:

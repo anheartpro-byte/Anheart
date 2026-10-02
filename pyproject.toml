@@ -1,0 +1,73 @@
+# The Git-connected simulation project builds from the repository root.
+# The website keeps its explicit Next.js preset and package.json commands.
+[tool.vercel]
+entrypoint = "simulation_app:app"
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+include = ["simulation_app.py", "deploy/simulation-vercel/app.py", "deploy/simulation-vercel/tests"]
+extraPaths = [".", "raspberry-pi", "deploy/simulation-vercel"]
+stubPath = "raspberry-pi/stubs"
+venvPath = "raspberry-pi"
+venv = ".venv"
+typeCheckingMode = "strict"
+reportAny = "error"
+reportExplicitAny = "error"
+reportUnknownMemberType = "error"
+reportUnknownArgumentType = "error"
+reportUnknownVariableType = "error"
+reportUnknownParameterType = "error"
+reportUnknownLambdaType = "error"
+reportMissingTypeStubs = "error"
+reportUnnecessaryIsInstance = "error"
+reportUnnecessaryComparison = "none"
+reportUnnecessaryContains = "error"
+reportImplicitOverride = "error"
+reportUninitializedInstanceVariable = "error"
+reportMissingParameterType = "error"
+reportPrivateUsage = "error"
+reportIncompatibleMethodOverride = "error"
+reportUnusedCallResult = "none"
+reportImplicitStringConcatenation = "none"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = ".:raspberry-pi:raspberry-pi/stubs:deploy/simulation-vercel"
+files = ["simulation_app.py", "deploy/simulation-vercel/app.py", "deploy/simulation-vercel/tests"]
+explicit_package_bases = true
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_any_unimported = true
+warn_return_any = true
+warn_unreachable = true
+strict_equality = true
+no_implicit_reexport = true
+enable_error_code = ["ignore-without-code", "possibly-undefined", "exhaustive-match"]
+
+[[tool.mypy.overrides]]
+module = ["src", "src.*", "simulation", "simulation.*"]
+follow_imports = "silent"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "ANN", "ASYNC", "S", "B", "A", "C4",
+    "DTZ", "T20", "PT", "RET", "SIM", "ARG", "PTH", "PL", "TRY",
+    "FLY", "PERF", "FURB", "RUF",
+]
+ignore = ["PLR0913", "TRY003", "TRY004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "simulation", "src"]
+
+[tool.ruff.lint.per-file-ignores]
+"deploy/simulation-vercel/tests/**" = ["S101", "PLR2004", "SLF001"]
+
+[tool.pytest.ini_options]
+testpaths = ["deploy/simulation-vercel/tests"]
+pythonpath = [".", "raspberry-pi", "deploy/simulation-vercel"]
+addopts = "-q --strict-markers --strict-config -p no:cacheprovider"

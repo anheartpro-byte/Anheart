@@ -302,16 +302,29 @@ aujourd'hui : passer par `/viewer/index.html?live=...`. C'est corrigé dans
 
 ### 6.3 Les fichiers
 
-Tout est dans `deploy/simulation-vercel/` :
+L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 
 | Fichier | Rôle |
 |---|---|
-| `app.py` | L'application FastAPI : `/`, `/api/scenarios`, `/api/catalogue`, `/stream`. |
+| `app.py` | L'application FastAPI : `/`, `/viewer`, `/api/scenarios`, `/api/catalogue`, `/stream`. |
 | `bitalino.py` | Un substitut du paquet `bitalino` : `src/bitalino_client.py` l'importe au chargement, et le vrai paquet demande une pile Bluetooth. Il refuse toute connexion. |
 | `requirements.txt` | Sous-ensemble de `raspberry-pi/requirements-base.txt` (sans BioSPPy). |
 | `vercel.json` | Durée maximale de la fonction : 300 s. |
 | `build.sh` | Assemble `dist/` : ce dossier, `simulation/` (modules, scénarios, cohorte, géométrie CAO), `raspberry-pi/src` et `raspberry-pi/config`. |
 | `deploy.sh` | `build.sh`, puis `vercel deploy`. |
+
+Le projet Vercel relié à Git construit depuis la racine du dépôt, avec le
+preset **FastAPI** et `pip install -r requirements.txt`. `pyproject.toml`
+déclare `simulation_app:app` comme point d'entrée ; `simulation_app.py`
+charge cette même application, les sources Pi et le substitut BITalino.
+Le `requirements.txt` racine renvoie au fichier ci-dessus, et `.python-version`
+fixe Python 3.12. Le site garde son preset **Next.js** et ses commandes npm.
+Un push sur la branche de la PR crée une préversion ; il ne fusionne pas `main`.
+
+Le visualiseur est monté depuis `simulation/viewer/`. Vercel peut le promouvoir
+sur son CDN, et le même fichier reste accessible en HTTP local. `build.sh`
+l'embarque aussi dans le paquet autonome, en plus de `public/viewer/`.
+Voir la [documentation FastAPI de Vercel](https://vercel.com/docs/frameworks/backend/fastapi).
 
 ### 6.4 Redéployer
 
@@ -323,8 +336,9 @@ deploy/simulation-vercel/deploy.sh --prod    # la production : anheart-simulatio
 Il faut une connexion de la CLI Vercel dans `.vercel-cli/` :
 `npx vercel login --global-config .vercel-cli`.
 
-Le moteur hébergé embarque le code **du disque** au moment de `build.sh`. Il ne
-se met pas à jour quand `raspberry-pi/src` change : il faut redéployer.
+Le déploiement manuel ci-dessus embarque le code **du disque** au moment de
+`build.sh`. Le déploiement Git embarque le commit poussé. Une modification
+locale de `raspberry-pi/src` ne change donc pas une version déjà hébergée.
 
 > Le **tout premier** déploiement d'un projet Vercel est toujours affecté à la
 > production, même sans `--prod`. C'est ce qui s'est passé le 1er octobre 2026.
@@ -339,8 +353,20 @@ python3.12 -m venv /tmp/simvenv && /tmp/simvenv/bin/pip install -r requirements.
 curl -N "http://127.0.0.1:8765/stream?scenario=manual_27_rpm&speed=200"
 ```
 
-(En local la page `/viewer/index.html` n'est pas servie : sur Vercel elle vient
-du dossier `public/`.)
+Depuis la racine, sans assemblage, on peut aussi lancer
+`raspberry-pi/.venv/bin/uvicorn simulation_app:app --port 8765`
+avec les dépendances hébergées installées dans cet environnement. Les deux
+dispositions servent `/viewer/index.html` et le même flux de simulation.
+
+Contrôles de l'adaptateur hébergé, depuis la racine :
+
+```sh
+raspberry-pi/.venv/bin/ruff check simulation_app.py deploy/simulation-vercel/app.py deploy/simulation-vercel/tests
+raspberry-pi/.venv/bin/ruff format --check simulation_app.py deploy/simulation-vercel/app.py deploy/simulation-vercel/tests
+raspberry-pi/.venv/bin/basedpyright --project pyproject.toml
+raspberry-pi/.venv/bin/mypy --config-file pyproject.toml
+raspberry-pi/.venv/bin/pytest deploy/simulation-vercel/tests
+```
 
 ---
 
@@ -483,4 +509,4 @@ instructions sont en tête du fichier.
 | Donner aux préversions Vercel les valeurs de développement | Un réglage dans Vercel (section 5.2). |
 | Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. |
-| Suivre `simulation/` dans git, puis relier le projet Vercel de la simulation au dépôt | `simulation/` et `deploy/` ne sont pas encore commités. |
+| Vérifier chaque préversion Git de la simulation avant fusion | `simulation/` et `deploy/` sont versionnés ; le projet Git construit depuis la racine avec `simulation_app:app`. |

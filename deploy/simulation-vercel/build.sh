@@ -21,7 +21,7 @@ if [ -d "$dist/.vercel" ]; then
 fi
 
 rm -rf "$dist"
-mkdir -p "$dist/simulation/cad" "$dist/public/viewer"
+mkdir -p "$dist/simulation/cad" "$dist/simulation/viewer" "$dist/public/viewer"
 
 cp "$here/app.py" "$here/bitalino.py" "$here/requirements.txt" "$here/vercel.json" \
    "$here/.python-version" "$dist/"
@@ -39,6 +39,7 @@ cp -R "$root/raspberry-pi/config" "$dist/config"
 # Static pages. The battery report is optional: it exists once
 # `python -m simulation.quick --all` has run.
 cp "$root/simulation/viewer/index.html" "$dist/public/viewer/index.html"
+cp "$root/simulation/viewer/index.html" "$dist/simulation/viewer/index.html"
 if [ -f "$root/simulation/out/report.html" ]; then
     cp "$root/simulation/out/report.html" "$dist/public/report.html"
 fi
