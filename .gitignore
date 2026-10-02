@@ -67,3 +67,13 @@ Session_data.txt
 # Env templates must stay tracked despite the `.env*` rule above
 !.env.example
 !raspberry-pi/.env.example
+!raspberry-pi/.env.pi.example
+
+# Vercel CLI login for this project only (client account), never committed
+/.vercel-cli/
+
+# Project-local agent configuration may contain deployment admin credentials.
+/.codex/config.toml
+
+# Local runtime data is not source code.
+/data/

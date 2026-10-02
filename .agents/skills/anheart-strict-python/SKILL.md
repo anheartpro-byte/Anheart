@@ -121,7 +121,7 @@ the hardware exists. A grep-based test fails the build on a direct
 
 ## 5. Isolate untyped libraries in exactly one module each
 
-`bitalino`, `biosppy` and parts of `pymodbus` ship no usable types. Zero-`Any`
+`bitalino`, `biosppy`, `scipy`, `pyftdi`, `pyusb`, pyobjc and parts of `pymodbus` ship no usable types. Zero-`Any`
 therefore requires hand-written stubs under `raspberry-pi/stubs/`, covering only
 the members actually used.
 
@@ -131,7 +131,10 @@ And each untyped library is imported from **one** module:
 |---|---|
 | `bitalino` | `src/bitalino_client.py` |
 | `biosppy` | `src/signal_processing.py` |
+| `scipy` (typed wrappers for every sensor processor) | `src/dsp.py` |
 | `pymodbus`, `serial` | `src/motor/atv320.py` |
+| `pyftdi`, `usb` (pyusb) | `src/motor/ftdi_link.py` |
+| pyobjc: `Foundation`, `IOBluetooth`, `objc` (macOS only, imported lazily) | `src/bitalino_rfcomm_macos.py` |
 
 Everything else sees domain types only. If you need a new member of one of
 these libraries, extend its stub. Do not add an `ignore_missing_imports`
