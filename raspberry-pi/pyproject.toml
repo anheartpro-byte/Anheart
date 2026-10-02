@@ -181,13 +181,11 @@ ignore = [
 #   * main.py RUF006 - handle_shutdown() calls asyncio.create_task from an OS
 #     signal handler without holding the reference, and with no guarantee a
 #     loop is running; on Windows that raises RuntimeError.
-"src/bitalino_client.py" = ["ANN001", "ANN201", "ANN202", "ANN204", "ASYNC109", "ASYNC250", "E501", "F841", "PLC0415", "PLR0911", "PLR0912", "PLR0917", "PLR2004", "PLW1510", "RET504", "RUF005", "S110", "S603", "S607", "SIM105", "TRY300", "TRY301", "TRY400"]
 "src/signal_processing.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR0911", "PLR0912", "PLR2004", "S110", "SIM105", "TRY300", "TRY400"]
 "src/convex_client.py" = ["ANN001", "ANN201", "ANN204", "ASYNC109", "E501", "PLR0917", "PLR2004", "RET504", "TRY300", "TRY301", "TRY400", "TRY401"]
 "src/session_manager.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR2004", "RUF059", "TRY300", "TRY400"]
 "src/data_buffer.py" = ["ANN001", "ANN201", "ANN204", "E501", "PERF401", "PLR2004", "RUF005", "S608", "TRY300"]
 "src/main.py" = ["ANN001", "ANN201", "ANN202", "ARG001", "E501", "F841", "PLC0415", "PLW0602", "PLW0603", "RUF006", "T201", "TRY300", "TRY400", "TRY401"]
-"tests/test_bitalino.py" = ["ANN001", "ANN201", "ANN202"]
 "tests/test_buffer.py" = ["ANN001", "ANN201", "ANN202", "PTH108", "PTH120"]
 "tests/test_convex_client.py" = ["ANN001", "ANN201", "ANN202"]
 "tests/test_config.py" = ["ANN001", "ANN201"]

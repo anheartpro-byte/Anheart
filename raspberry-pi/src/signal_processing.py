@@ -109,6 +109,11 @@ class ChannelProcessor:
         # Rolling raw window (for BioSPPy metrics) and metric throttle.
         self._window: deque[float] = deque(maxlen=int(metric_window_s * fs_in))
         self._last_metrics: dict = {}
+        # Freshness counter: advances ONLY when _compute_metrics produced a new
+        # result. process() re-emits the previous dict otherwise, so "the same
+        # metrics again" must not read as "a new measurement" downstream. Read
+        # through SignalTreatment.metric_seq(); the runtime ignores a repeat.
+        self._metric_seq = 0
 
     def process(self, raw: list[float]) -> tuple[list[float], dict]:
         """Treat a batch of raw ADC samples.
@@ -145,8 +150,14 @@ class ChannelProcessor:
         metrics = self._compute_metrics()
         if metrics is not None:
             self._last_metrics = metrics
+            self._metric_seq += 1
 
         return out, dict(self._last_metrics)
+
+    @property
+    def metric_seq(self) -> int:
+        """How many fresh metric results this channel has produced. 0 = none yet."""
+        return self._metric_seq
 
     def _compute_metrics(self) -> dict | None:
         key = self.spec.metric
@@ -161,7 +172,7 @@ class ChannelProcessor:
             if key == "ecg":
                 quality = self._ecg_quality(sig)
                 metrics: dict = {"quality": quality}
-                # Only report a heart rate on a trustworthy signal — never a
+                # Only report a heart rate on a trustworthy signal, never a
                 # fabricated number from hum, saturation or a flat lead.
                 if quality == "good":
                     out = bio_ecg.ecg(signal=sig, sampling_rate=self.fs_in, show=False)
@@ -231,6 +242,16 @@ class SignalTreatment:
         self.fs_in = fs_in
         self.fs_out = fs_out
         self._processors: dict[str, ChannelProcessor] = {}
+
+    def metric_seq(self, channel: str) -> int:
+        """Freshness counter of ``channel``'s metrics; 0 before any fresh result.
+
+        Advances only when the metrics were recomputed, never when the previous
+        dict is merely re-emitted. The typed boundary (src/ecg_pipeline.py)
+        passes this to the runtime as the heart-rate sample's ``seq``.
+        """
+        proc = self._processors.get(channel)
+        return 0 if proc is None else proc.metric_seq
 
     def treat_batch(self, samples: list[dict]) -> tuple[list[dict], dict]:
         """Treat a batch of raw per-channel samples.

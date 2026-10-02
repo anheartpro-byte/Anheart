@@ -13,9 +13,14 @@ tuned wrong everywhere, and the error would be largest exactly where it matters
 least to notice it and most to get right - at the bottom of the range, where a
 naive tune is twice as aggressive as the plant deserves.
 
-The numbers this produces, with the defaults below (and asserted in
-``tests/test_sim.py`` against hand-derived values, not against these
-functions):
+The geometry is **injected** (:class:`~src.geometry.MachineGeometry`, the one
+record every speed in this system is rendered through), never defaulted: an
+earlier version carried its own 1.0 m radius while the rest of the code quoted
+1.5 m, which is how a simulated g-load comes to disagree with the screen.
+
+The numbers this produces with the cardiac defaults below **at r = 1.0 m**
+(the geometry ``tests/test_sim.py`` chooses explicitly, and asserts against
+hand-derived values, not against these functions):
 
 * 1380 motor rpm -> 27.716 output rpm -> **0.859 g** -> **164 bpm** steady state
 * local gain there: **0.137 bpm per motor-rpm**
@@ -64,12 +69,11 @@ from enum import Enum, unique
 from types import MappingProxyType
 from typing import Final, final
 
+from src.geometry import MachineGeometry
 from src.units import (
     Bpm,
     BpmPerMinute,
-    GearRatio,
     GLoad,
-    Metres,
     Monotonic,
     MotorRpm,
     OutputRpm,
@@ -255,7 +259,8 @@ def active_events(script: Sequence[EventWindow], moment: Seconds) -> frozenset[S
 class PhysiologyConfig:
     """The subject's numbers, all in one frozen record.
 
-    The geometry is from the commissioning notes. The cardiac numbers are
+    Cardiac numbers only: the geometry is injected into :class:`Physiology`
+    rather than defaulted here. The cardiac numbers are
     literature-shaped placeholders, and they are knobs precisely so that
     measuring a real subject is a config change and not a code change - but
     note that the *controller* must not be tuned so finely that it depends on
@@ -277,13 +282,6 @@ class PhysiologyConfig:
     quantity in this module that is not one: the right home for a ``BpmPerG``
     alias is ``src/units.py``, which this agent does not own. Reported rather
     than worked around."""
-
-    radius: Metres = Metres(1.0)
-    """Seat radius. ``g`` is linear in this and quadratic in speed."""
-
-    gear_ratio: GearRatio = GearRatio(49.79)
-    """SEW KA37. Confusing motor and output rpm here would be a 50x error in
-    the stimulus, which is why both are carried as distinct ``NewType``s."""
 
     tau_up: Seconds = Seconds(30.0)
     """Time constant while the heart rate is climbing towards its target."""
@@ -328,8 +326,6 @@ class PhysiologyConfig:
     def __post_init__(self) -> None:
         for name, value in (
             ("k_g", self.k_g),
-            ("radius", float(self.radius)),
-            ("gear_ratio", float(self.gear_ratio)),
             ("tau_up", float(self.tau_up)),
             ("tau_down", float(self.tau_down)),
             ("tau_drift", float(self.tau_drift)),
@@ -377,7 +373,7 @@ class SubjectState:
     """The same speed at the gearbox output: what the seat actually turns at."""
 
     g_load: GLoad
-    """Centripetal load at :attr:`PhysiologyConfig.radius`. Unsigned: load goes
+    """Centripetal load at the injected geometry's radius. Unsigned: load goes
     as speed squared, so turning backwards does not relieve it."""
 
     heart_rate: Bpm
@@ -417,7 +413,7 @@ class Physiology:
     Time is handed in, never read (contract rule 4)::
 
         clock = ManualClock()
-        subject = Physiology(origin=clock.monotonic())
+        subject = Physiology(origin=clock.monotonic(), geometry=arm)
         state = subject.advance(clock.advance(Seconds(0.2)), MotorRpm(900))
 
     One explicit first-order step over the whole ``dt``, so accuracy depends on
@@ -436,12 +432,13 @@ class Physiology:
       integrate for exactly 20 s in 0.2 s steps rather than 19.8 s.
     """
 
-    __slots__ = ("_config", "_drift", "_last_at", "_origin", "_rate", "_script")
+    __slots__ = ("_config", "_drift", "_geometry", "_last_at", "_origin", "_rate", "_script")
 
     def __init__(
         self,
         *,
         origin: Monotonic,
+        geometry: MachineGeometry,
         config: PhysiologyConfig = DEFAULT_PHYSIOLOGY,
         script: Sequence[EventWindow] = (),
     ) -> None:
@@ -450,7 +447,11 @@ class Physiology:
         ``origin`` is the zero of the script's timeline and of nothing else.
         There is no ``Clock`` here on purpose: a plant that could read the time
         could not be replayed.
+
+        ``geometry`` is required, with no default, for the reason
+        :class:`~src.geometry.MachineGeometry` has no default radius.
         """
+        self._geometry: MachineGeometry = geometry
         self._config: PhysiologyConfig = config
         self._script: tuple[EventWindow, ...] = tuple(script)
         self._origin: Monotonic = origin
@@ -490,9 +491,8 @@ class Physiology:
         active = active_events(self._script, elapsed(self._origin, self._last_at))
         self._last_at = now
 
-        config = self._config
-        output_rpm = motor_to_output_rpm(motor_rpm, config.gear_ratio)
-        g_load = output_rpm_to_g(output_rpm, config.radius)
+        output_rpm = motor_to_output_rpm(motor_rpm, self._geometry.ratio)
+        g_load = output_rpm_to_g(output_rpm, self._geometry.radius)
         steady = self._steady_state(g_load, active)
 
         self._step(dt=dt, steady=steady, motor_rpm=motor_rpm, active=active)

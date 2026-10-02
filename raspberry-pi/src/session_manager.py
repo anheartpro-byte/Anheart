@@ -160,8 +160,21 @@ class SessionManager:
         # Resolve requested sensor names to BITalino channel indices using the
         # single authoritative CHANNEL_MAP (shared with the client), so the channel
         # we read is the one we label. Case-insensitive to tolerate "spo2"/"SpO2".
+        # An unknown name is skipped, never defaulted to A1: a silent default
+        # duplicated ECG, which broke the frame size and so every frame.
         name_to_index = {name.upper(): index for name, index in CHANNEL_MAP.items()}
-        channels = [name_to_index.get(ch.upper(), 0) for ch in self.current_session.channels]
+        unknown = [ch for ch in self.current_session.channels if ch.upper() not in name_to_index]
+        if unknown:
+            logger.warning(f"Ignoring unknown sensor names {unknown}; known: {list(CHANNEL_MAP)}")
+        channels = [
+            name_to_index[ch.upper()]
+            for ch in self.current_session.channels
+            if ch.upper() in name_to_index
+        ]
+        if not channels:
+            logger.error("Session requests no known BITalino channel")
+            self.state = SessionState.ERROR
+            return
 
         self.bitalino = BITalinoClient(
             mac_address=self.config.bitalino_mac,

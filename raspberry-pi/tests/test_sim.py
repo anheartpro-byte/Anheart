@@ -16,11 +16,12 @@ That is also why the pipeline is loaded through ``importlib`` and cast to a
 Protocol: it is still outside both type checkers (see the migration banner in
 ``pyproject.toml``), and a plain import from a checked test file drags its ~25
 untyped diagnostics into the gate. The cast is the boundary; past it everything
-is typed again. Same reasoning as in ``src/sim/bitalino.py``, same report.
+is typed again. Same reasoning as in ``src/ecg_pipeline.py``.
 
 **2. The numbers are hand-derived, not recomputed.** The g load, the steady
 state and the local control gain are checked against a closed form written out
-in the test from the nameplate - gear ratio, radius, standard gravity - rather
+in the test from the nameplate - gear ratio, radius (1.0 m, chosen in
+``SIM_ARM`` rather than defaulted in the plant), standard gravity - rather
 than against ``src.units.output_rpm_to_g``. If the conversion helper and this
 plant ever agree on a wrong answer, that agreement must not be able to pass for
 evidence.
@@ -48,13 +49,14 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from src.bitalino_client import SampleBatch
 from src.clock import Clock, ManualClock
+from src.geometry import MachineGeometry
 from src.sim.bitalino import (
     ECG_CHANNEL,
     LEGAL_SAMPLE_RATES,
     MAX_ANALOG_CHANNEL,
     MIN_ANALOG_CHANNEL,
-    SampleBatchLike,
     SimulatedBitalinoClient,
 )
 from src.sim.ecg import (
@@ -150,6 +152,14 @@ NOMINAL_RPM: Final[int] = 1380
 
 GEAR_RATIO: Final[float] = 49.79
 RADIUS_M: Final[float] = 1.0
+
+#: The geometry the plant's documented figures are quoted at: r = 1.0 m, chosen
+#: HERE rather than defaulted in the plant. The real arm is 1.5 m (ARM_RADIUS_M);
+#: these tests are about the plant's arithmetic, and 1.0 m keeps the hand-derived
+#: numbers in this file and in ``src/sim/physiology.py``'s docstring readable.
+SIM_ARM: Final[MachineGeometry] = MachineGeometry(
+    radius=Metres(RADIUS_M), ratio=GearRatio(GEAR_RATIO)
+)
 HR_REST: Final[int] = 70
 HR_MAX: Final[int] = 185
 K_G: Final[float] = 110.0
@@ -216,6 +226,11 @@ on exactly 20.0, so the window's last step is the run's last step and the
 assertion has to earn its result."""
 
 
+def _resting(clock: Clock) -> Physiology:
+    """A default subject at rest from ``clock``'s now, on the test geometry."""
+    return Physiology(geometry=SIM_ARM, origin=clock.monotonic())
+
+
 def _settled_rate(motor_rpm: int, config: PhysiologyConfig = NO_DRIFT) -> float:
     """The plant's exact steady-state rate at ``motor_rpm``, unrounded.
 
@@ -224,7 +239,7 @@ def _settled_rate(motor_rpm: int, config: PhysiologyConfig = NO_DRIFT) -> float:
     survive that. One step past every time constant lands exactly on the target
     - the step fraction is clamped to 1.0 - so this needs no loop.
     """
-    subject = Physiology(origin=Monotonic(0.0), config=config)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=config)
     state = subject.advance(SETTLED, MotorRpm(motor_rpm))
     return SECONDS_PER_MINUTE / state.rr_interval
 
@@ -292,7 +307,7 @@ async def _acquire(
     Eight seconds is the pipeline's metric window.
     """
     clock = ManualClock()
-    subject = Physiology(origin=clock.monotonic(), config=config, script=script)
+    subject = Physiology(geometry=SIM_ARM, origin=clock.monotonic(), config=config, script=script)
     client = SimulatedBitalinoClient(
         clock,
         physiology=subject,
@@ -311,7 +326,7 @@ async def _acquire(
     return raw
 
 
-def _ecg_column(batch: SampleBatchLike) -> Sequence[float]:
+def _ecg_column(batch: SampleBatch) -> Sequence[float]:
     """The ECG channel's values out of a batch, the way the session manager reads them."""
     for channel in batch.channels:
         if channel.channel == ECG_CHANNEL:
@@ -432,11 +447,20 @@ def test_the_pipeline_does_not_care_whether_a_window_arrived_in_one_piece() -> N
 @pytest.mark.parametrize(
     ("module", "expected"),
     [
-        ("physiology.py", frozenset({"src.units"})),
+        ("physiology.py", frozenset({"src.geometry", "src.units"})),
         ("ecg.py", frozenset({"src.sim.physiology", "src.units"})),
         (
             "bitalino.py",
-            frozenset({"src.clock", "src.sim.ecg", "src.sim.physiology", "src.units"}),
+            frozenset(
+                {
+                    "src.bitalino_client",
+                    "src.clock",
+                    "src.sim.ecg",
+                    "src.sim.physiology",
+                    "src.sim.signals.base",
+                    "src.units",
+                }
+            ),
         ),
     ],
 )
@@ -483,16 +507,14 @@ def test_the_plant_and_the_sensor_pull_in_no_heavy_dependency(module: str) -> No
     assert _imported_roots(SIM_DIR / module) <= allowed
 
 
-def test_the_simulated_client_does_not_statically_import_the_real_one() -> None:
-    """It loads it through importlib, and the reason is written down.
+def test_the_simulated_client_imports_the_real_records_directly() -> None:
+    """The real client is inside both checkers now, so no importlib cast is needed.
 
-    A static import makes ``src/bitalino_client.py`` - still outside both type
-    checkers - reachable from a checked module, which fails the gate on a file
-    this package does not own. If someone "tidies" the dynamic import into a
-    static one, that failure appears in a confusing place; this test names it.
+    A static import is what makes a rename in ``src/bitalino_client.py`` fail
+    the type check here instead of at runtime.
     """
-    assert "src.bitalino_client" not in _project_imports(SIM_DIR / "bitalino.py")
-    assert "src.bitalino_client" in (SIM_DIR / "bitalino.py").read_text(encoding="utf-8")
+    assert "src.bitalino_client" in _project_imports(SIM_DIR / "bitalino.py")
+    assert "importlib" not in _imported_roots(SIM_DIR / "bitalino.py")
 
 
 # =========================================================================
@@ -508,7 +530,9 @@ def test_the_plant_reproduces_the_geometry_of_this_machine() -> None:
     make this pass; and the round figure the module's docstring commits to is
     checked separately, so the docstring cannot go stale.
     """
-    state = Physiology(origin=Monotonic(0.0)).advance(SETTLED, MotorRpm(NOMINAL_RPM))
+    state = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0)).advance(
+        SETTLED, MotorRpm(NOMINAL_RPM)
+    )
 
     assert state.output_rpm == pytest.approx(NOMINAL_RPM / GEAR_RATIO, rel=1e-12)
     assert state.output_rpm == pytest.approx(27.716409, abs=5e-7)
@@ -518,7 +542,7 @@ def test_the_plant_reproduces_the_geometry_of_this_machine() -> None:
 
 def test_the_steady_state_at_full_speed_is_the_documented_one_hundred_and_sixty_four() -> None:
     """0.859 g at 110 bpm/g on a 70 bpm resting rate: 164.49, reported as 164."""
-    state = Physiology(origin=Monotonic(0.0), config=NO_DRIFT).advance(
+    state = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT).advance(
         SETTLED, MotorRpm(NOMINAL_RPM)
     )
 
@@ -557,7 +581,7 @@ def test_the_gain_halves_at_half_speed_because_the_load_goes_as_speed_squared() 
 
 def test_a_stopped_machine_leaves_the_subject_at_rest() -> None:
     """Zero g, zero response: the resting rate and nothing else."""
-    state = Physiology(origin=Monotonic(0.0)).advance(SETTLED, MotorRpm(0))
+    state = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0)).advance(SETTLED, MotorRpm(0))
 
     assert state.g_load == 0.0
     assert state.steady_state == Bpm(HR_REST)
@@ -567,8 +591,12 @@ def test_a_stopped_machine_leaves_the_subject_at_rest() -> None:
 
 def test_turning_backwards_does_not_relieve_the_load() -> None:
     """g is unsigned because it goes as speed squared. Reverse is not a rest."""
-    forward = Physiology(origin=Monotonic(0.0)).advance(SETTLED, MotorRpm(NOMINAL_RPM))
-    reverse = Physiology(origin=Monotonic(0.0)).advance(SETTLED, MotorRpm(-NOMINAL_RPM))
+    forward = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0)).advance(
+        SETTLED, MotorRpm(NOMINAL_RPM)
+    )
+    reverse = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0)).advance(
+        SETTLED, MotorRpm(-NOMINAL_RPM)
+    )
 
     assert reverse.g_load == forward.g_load
     assert reverse.output_rpm == -forward.output_rpm
@@ -577,7 +605,7 @@ def test_turning_backwards_does_not_relieve_the_load() -> None:
     # And the subject counts as under load, so cardiac drift accumulates too.
     # The activity test takes the magnitude of the speed; without that a session
     # run in reverse would quietly tire nobody.
-    backwards = Physiology(origin=Monotonic(0.0))
+    backwards = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
     state = _run_at(backwards, motor_rpm=-NOMINAL_RPM, seconds=300.0)
     assert state.drift_bpm > 3.0
 
@@ -646,7 +674,7 @@ def test_the_heart_rate_lags_a_speed_change_by_thirty_seconds_rising() -> None:
     tighter bound would be pinning the integrator's discretisation rather than
     the physiology.
     """
-    subject = Physiology(origin=Monotonic(0.0), config=NO_DRIFT)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT)
     state = _run_at(subject, motor_rpm=NOMINAL_RPM, seconds=30.0)
 
     covered = (SECONDS_PER_MINUTE / state.rr_interval - HR_REST) / (
@@ -661,7 +689,7 @@ def test_the_heart_rate_falls_more_slowly_than_it_rose() -> None:
     Measured behaviourally rather than read off the config: after 30 s of
     recovery only ~42% of the gap has closed, where 30 s of loading closed 63%.
     """
-    subject = Physiology(origin=Monotonic(0.0), config=NO_DRIFT)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT)
     top = subject.advance(SETTLED, MotorRpm(NOMINAL_RPM))
     started_at = SECONDS_PER_MINUTE / top.rr_interval
 
@@ -694,7 +722,7 @@ def test_cardiac_drift_walks_the_heart_rate_up_at_a_constant_speed() -> None:
     immediately and the measurement would be of the clamp rather than of the
     600 s time constant.
     """
-    subject = Physiology(origin=Monotonic(0.0))
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
     state = _run_at(subject, motor_rpm=NOMINAL_RPM, seconds=600.0)
 
     # 1 - 1/e of the 10 bpm ceiling after one drift time constant.
@@ -726,7 +754,7 @@ def test_cardiac_drift_walks_the_heart_rate_up_at_a_constant_speed() -> None:
 
 def test_cardiac_drift_recovers_once_the_machine_stops() -> None:
     """Drift decays towards zero when the subject is no longer under load."""
-    subject = Physiology(origin=Monotonic(0.0))
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
     loaded = _run_at(subject, motor_rpm=NOMINAL_RPM, seconds=600.0)
     assert loaded.drift_bpm > 5.0
 
@@ -736,7 +764,7 @@ def test_cardiac_drift_recovers_once_the_machine_stops() -> None:
 
 def test_a_speed_below_the_active_threshold_accumulates_no_drift() -> None:
     """Drift is a consequence of being under load, not of time passing."""
-    subject = Physiology(origin=Monotonic(0.0))
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
     state = _run_at(subject, motor_rpm=0, seconds=600.0)
 
     assert state.drift_bpm == 0.0
@@ -750,7 +778,7 @@ def test_a_step_larger_than_a_time_constant_lands_on_the_target_not_past_it() ->
     minutes would get heart rates no heart has - from a model whose output the
     safety layer is meant to trust.
     """
-    subject = Physiology(origin=Monotonic(0.0), config=NO_DRIFT)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT)
     state = subject.advance(Monotonic(300.0), MotorRpm(NOMINAL_RPM))
 
     assert SECONDS_PER_MINUTE / state.rr_interval == pytest.approx(
@@ -760,7 +788,7 @@ def test_a_step_larger_than_a_time_constant_lands_on_the_target_not_past_it() ->
 
 def test_advancing_by_nothing_changes_nothing_and_still_reports() -> None:
     """A caller polling faster than the clock moves gets the current state."""
-    subject = Physiology(origin=Monotonic(0.0), config=NO_DRIFT)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT)
     first = subject.advance(Monotonic(5.0), MotorRpm(NOMINAL_RPM))
     again = subject.advance(Monotonic(5.0), MotorRpm(NOMINAL_RPM))
 
@@ -775,7 +803,7 @@ def test_the_subject_refuses_to_be_advanced_backwards() -> None:
     simulation harness rather than the drive path, so it raises - matching
     ``ManualClock.advance`` and ``SimulatedDrive.advance``.
     """
-    subject = Physiology(origin=Monotonic(0.0))
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
     subject.advance(Monotonic(10.0), MotorRpm(0))
 
     with pytest.raises(ValueError, match="backwards"):
@@ -811,6 +839,7 @@ def test_a_vasovagal_drop_is_exactly_thirty_bpm_over_twenty_seconds() -> None:
     whose severity nobody can state is not a test fixture.
     """
     subject = Physiology(
+        geometry=SIM_ARM,
         origin=Monotonic(0.0),
         config=NO_DRIFT,
         script=script_for(ScriptedEvent.VASOVAGAL_DROP),
@@ -838,6 +867,7 @@ def test_a_vasovagal_drop_looks_to_a_controller_exactly_like_being_below_target(
     be tested against.
     """
     subject = Physiology(
+        geometry=SIM_ARM,
         origin=Monotonic(0.0),
         config=NO_DRIFT,
         script=(EventWindow(ScriptedEvent.VASOVAGAL_DROP, Seconds(0.0), Seconds(20.0)),),
@@ -848,6 +878,7 @@ def test_a_vasovagal_drop_looks_to_a_controller_exactly_like_being_below_target(
     # The script's origin is 0.0, so at SETTLED the window is long past; run a
     # fresh subject whose window covers the interval being integrated.
     fainting = Physiology(
+        geometry=SIM_ARM,
         origin=Monotonic(0.0),
         config=NO_DRIFT,
         script=script_for(ScriptedEvent.VASOVAGAL_DROP),
@@ -867,7 +898,10 @@ def test_a_heart_rate_spike_is_exactly_forty_bpm_over_two_seconds() -> None:
     a rate-of-change bound has a case to reject.
     """
     subject = Physiology(
-        origin=Monotonic(0.0), config=NO_DRIFT, script=script_for(ScriptedEvent.HR_SPIKE)
+        geometry=SIM_ARM,
+        origin=Monotonic(0.0),
+        config=NO_DRIFT,
+        script=script_for(ScriptedEvent.HR_SPIKE),
     )
     before = SECONDS_PER_MINUTE / subject.advance(Monotonic(0.0), MotorRpm(0)).rr_interval
     state = _run_at(
@@ -893,7 +927,7 @@ def test_two_cardiac_events_at_once_sum_their_rates() -> None:
         EventWindow(ScriptedEvent.VASOVAGAL_DROP, Seconds(0.0), Seconds(2.0)),
         EventWindow(ScriptedEvent.HR_SPIKE, Seconds(0.0), Seconds(2.0)),
     )
-    subject = Physiology(origin=Monotonic(0.0), config=NO_DRIFT, script=both)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), config=NO_DRIFT, script=both)
     before = SECONDS_PER_MINUTE / subject.advance(Monotonic(0.0), MotorRpm(0)).rr_interval
     state = _run_at(subject, motor_rpm=0, seconds=2.0, step=EXACT_STEP)
 
@@ -904,6 +938,7 @@ def test_two_cardiac_events_at_once_sum_their_rates() -> None:
 def test_the_plant_relaxes_again_the_moment_the_window_closes() -> None:
     """An override suspends the relaxation; it does not switch it off for good."""
     subject = Physiology(
+        geometry=SIM_ARM,
         origin=Monotonic(0.0),
         config=NO_DRIFT,
         script=script_for(ScriptedEvent.VASOVAGAL_DROP),
@@ -924,7 +959,10 @@ def test_a_nonresponder_cannot_be_brought_into_a_zone_this_machine_can_reach() -
     thing stopping the attempt.
     """
     subject = Physiology(
-        origin=Monotonic(0.0), config=NO_DRIFT, script=script_for(ScriptedEvent.NONRESPONDER)
+        geometry=SIM_ARM,
+        origin=Monotonic(0.0),
+        config=NO_DRIFT,
+        script=script_for(ScriptedEvent.NONRESPONDER),
     )
     state = subject.advance(Monotonic(1.0), MotorRpm(NOMINAL_RPM))
 
@@ -943,8 +981,8 @@ def test_a_signal_artifact_cannot_move_a_heart_rate(event: ScriptedEvent) -> Non
     would also be silently changing the physiology, and the two failures would
     be indistinguishable.
     """
-    plain = Physiology(origin=Monotonic(0.0))
-    afflicted = Physiology(origin=Monotonic(0.0), script=script_for(event))
+    plain = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0))
+    afflicted = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), script=script_for(event))
 
     now = Monotonic(0.0)
     for _ in range(50):
@@ -981,7 +1019,10 @@ def test_every_step_of_a_twenty_second_window_is_integrated_with_the_event_on() 
     test says which of them happened.
     """
     subject = Physiology(
-        origin=Monotonic(0.0), config=NO_DRIFT, script=script_for(ScriptedEvent.VASOVAGAL_DROP)
+        geometry=SIM_ARM,
+        origin=Monotonic(0.0),
+        config=NO_DRIFT,
+        script=script_for(ScriptedEvent.VASOVAGAL_DROP),
     )
     steps = round(float(CANONICAL_DURATIONS[ScriptedEvent.VASOVAGAL_DROP]) / EXACT_STEP)
     assert steps == 80
@@ -1013,7 +1054,7 @@ def test_a_script_can_be_placed_anywhere_on_the_timeline() -> None:
     assert len(late) == 1
     assert late[0].start == Seconds(120.0)
     assert late[0].duration == CANONICAL_DURATIONS[ScriptedEvent.MAINS_BURST]
-    assert Physiology(origin=Monotonic(0.0), script=late).script == late
+    assert Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), script=late).script == late
 
 
 # =========================================================================
@@ -1034,10 +1075,6 @@ def test_a_plant_that_cannot_be_integrated_refuses_to_be_built() -> None:
     """
     with pytest.raises(ValueError, match="k_g must be positive"):
         PhysiologyConfig(k_g=0.0)
-    with pytest.raises(ValueError, match="radius must be positive"):
-        PhysiologyConfig(radius=Metres(0.0))
-    with pytest.raises(ValueError, match="gear_ratio must be positive"):
-        PhysiologyConfig(gear_ratio=GearRatio(0.0))
     with pytest.raises(ValueError, match="tau_up must be positive"):
         PhysiologyConfig(tau_up=Seconds(0.0))
     with pytest.raises(ValueError, match="tau_down must be positive"):
@@ -1070,7 +1107,7 @@ def test_a_long_enough_drop_stops_at_the_floor() -> None:
     divides by zero on the way past.
     """
     long_drop = (EventWindow(ScriptedEvent.VASOVAGAL_DROP, Seconds(0.0), Seconds(600.0)),)
-    subject = Physiology(origin=Monotonic(0.0), script=long_drop)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), script=long_drop)
     state = _run_at(subject, motor_rpm=0, seconds=600.0)
 
     assert state.heart_rate == Bpm(30)
@@ -1080,7 +1117,7 @@ def test_a_long_enough_drop_stops_at_the_floor() -> None:
 def test_a_long_enough_spike_stops_at_the_ceiling() -> None:
     """And the same in the other direction."""
     long_spike = (EventWindow(ScriptedEvent.HR_SPIKE, Seconds(0.0), Seconds(60.0)),)
-    subject = Physiology(origin=Monotonic(0.0), script=long_spike)
+    subject = Physiology(geometry=SIM_ARM, origin=Monotonic(0.0), script=long_spike)
     state = _run_at(subject, motor_rpm=0, seconds=60.0)
 
     assert state.heart_rate == Bpm(220)
@@ -1111,7 +1148,9 @@ def test_the_plant_stays_inside_physiology_for_any_schedule(
     would reach the ECG synthesiser and then the real DSP.
     """
     config = PhysiologyConfig()
-    subject = Physiology(origin=Monotonic(0.0), config=config, script=script_for(scripted))
+    subject = Physiology(
+        geometry=SIM_ARM, origin=Monotonic(0.0), config=config, script=script_for(scripted)
+    )
     now = Monotonic(0.0)
 
     for rpm, dt in steps:
@@ -1643,10 +1682,10 @@ def test_the_batches_are_the_pipelines_own_records_and_not_look_alikes() -> None
     assert all(isinstance(value, float) for value in batch.channels[0].values)
 
 
-async def _one_batch(channels: Sequence[int] | None = None) -> SampleBatchLike:
+async def _one_batch(channels: Sequence[int] | None = None) -> SampleBatch:
     """Connect, acquire and read exactly one full second."""
     clock = ManualClock()
-    client = SimulatedBitalinoClient(clock, channels=channels)
+    client = SimulatedBitalinoClient(clock, physiology=_resting(clock), channels=channels)
     assert await client.connect()
     assert await client.start_acquisition()
     clock.advance(Seconds(1.0))
@@ -1673,10 +1712,10 @@ def test_the_client_carries_the_whole_surface_the_session_manager_calls() -> Non
         assert inspect.iscoroutinefunction(method), method
     assert not inspect.iscoroutinefunction(SimulatedBitalinoClient.set_disconnect_callback)
 
-    client = SimulatedBitalinoClient(ManualClock())
+    client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
     assert client.is_connected is False
     assert client.is_acquiring is False
-    assert client.channels == [0]
+    assert client.channels == (0,)
     assert client.sample_rate == 1000
     assert client.mac_address.startswith("/dev/")
 
@@ -1685,7 +1724,7 @@ def test_reading_before_acquiring_gives_nothing() -> None:
     """``None`` means "no data", and a caller must handle it without inventing any."""
 
     async def scenario() -> None:
-        client = SimulatedBitalinoClient(ManualClock())
+        client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
         assert await client.read_samples(10) is None
         assert await client.start_acquisition() is False
 
@@ -1702,7 +1741,7 @@ def test_a_read_returns_nothing_until_enough_simulated_time_has_passed() -> None
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
         await client.connect()
         await client.start_acquisition()
 
@@ -1722,7 +1761,7 @@ def test_samples_are_not_handed_out_twice() -> None:
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
         await client.connect()
         await client.start_acquisition()
         clock.advance(Seconds(2.0))
@@ -1746,7 +1785,7 @@ def test_the_subject_is_integrated_in_step_with_the_samples_handed_out() -> None
 
     async def scenario() -> None:
         clock = ManualClock()
-        subject = Physiology(origin=clock.monotonic(), config=NO_DRIFT)
+        subject = Physiology(geometry=SIM_ARM, origin=clock.monotonic(), config=NO_DRIFT)
         client = SimulatedBitalinoClient(clock, physiology=subject)
         await client.connect()
         await client.start_acquisition()
@@ -1766,31 +1805,65 @@ def test_the_subject_is_integrated_in_step_with_the_samples_handed_out() -> None
     asyncio.run(scenario())
 
 
-def test_a_permuted_channel_request_comes_back_permuted_the_same_way() -> None:
-    """Or the ECG ends up labelled EDA and stored under the wrong column.
+def test_a_permuted_channel_request_comes_back_in_wire_order() -> None:
+    """The device streams channels ascending; the real client labels them so.
 
-    The real client labels the Nth requested channel from the Nth analog
-    column, so request order is meaningful and is mirrored exactly.
+    A simulator that honoured request order would label columns the way the
+    hardware never does, and a caller relying on it would store the ECG under
+    the wrong name the first time it met a real BITalino.
     """
-    batch = asyncio.run(_one_batch([1, 0, 3]))
+    batch = asyncio.run(_one_batch([3, 1, 0, 1]))
 
-    assert [channel.channel for channel in batch.channels] == ["EDA", "ECG", "RESP"]
-    ecg = batch.channels[1]
+    assert [channel.channel for channel in batch.channels] == ["ECG", "EDA", "RESP"]
+    ecg = batch.channels[0]
     assert len(set(ecg.values)) > 50
     # The unmodelled columns are flat, and say so rather than looking plausible.
-    assert set(batch.channels[0].values) == {float(ADC_BASELINE)}
+    assert set(batch.channels[1].values) == {float(ADC_BASELINE)}
     assert set(batch.channels[2].values) == {float(ADC_BASELINE)}
+
+
+def test_the_channels_are_sorted_and_deduplicated_like_the_real_client() -> None:
+    client = SimulatedBitalinoClient(
+        ManualClock(), physiology=_resting(ManualClock()), channels=[3, 0, 3]
+    )
+    assert client.channels == (0, 3)
+
+
+def test_a_batch_is_stamped_with_its_first_sample() -> None:
+    """``SampleBatch.timestamp`` is the FIRST sample's wall-clock time, not "now".
+
+    Two one-second blocks read together at t = 2 s: the first starts at the
+    acquisition start, the second one second later.
+    """
+
+    async def scenario() -> None:
+        clock = ManualClock()
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
+        await client.connect()
+        await client.start_acquisition()
+        started = clock.unix_millis()
+        clock.advance(Seconds(2.0))
+        first = await client.read_samples(1000)
+        second = await client.read_samples(1000)
+        assert first is not None
+        assert second is not None
+        assert first.timestamp == started
+        assert second.timestamp == started + 1000
+
+    asyncio.run(scenario())
 
 
 def test_the_client_refuses_a_configuration_the_hardware_would_refuse() -> None:
     """Mirrored from the real client, because a session manager that can start a
     simulated session at 500 Hz and not a real one was never really tested."""
     with pytest.raises(ValueError, match="sample rate must be one of"):
-        SimulatedBitalinoClient(ManualClock(), sample_rate=500)
+        SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()), sample_rate=500)
     with pytest.raises(ValueError, match="channel must be 0-5"):
-        SimulatedBitalinoClient(ManualClock(), channels=[6])
+        SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()), channels=[6])
     with pytest.raises(ValueError, match="channel must be 0-5"):
-        SimulatedBitalinoClient(ManualClock(), channels=[-1])
+        SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()), channels=[-1])
+    with pytest.raises(ValueError, match="at least one analog channel"):
+        SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()), channels=[])
     assert sorted(LEGAL_SAMPLE_RATES) == [1, 10, 100, 1000]
 
 
@@ -1803,7 +1876,7 @@ def test_reading_a_non_positive_block_is_a_caller_bug() -> None:
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
         await client.connect()
         await client.start_acquisition()
         clock.advance(Seconds(1.0))
@@ -1817,7 +1890,7 @@ def test_a_client_that_will_not_connect_stays_that_way() -> None:
     """An operator resolves this with their hands; a retry loop must not "fix" it."""
 
     async def scenario() -> None:
-        client = SimulatedBitalinoClient(ManualClock())
+        client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
         client.inject_connect_failure()
         assert await client.connect() is False
         assert await client.connect(timeout=1.0) is False
@@ -1835,7 +1908,7 @@ def test_starting_an_already_running_acquisition_does_not_restart_the_clock() ->
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
         await client.connect()
         assert await client.start_acquisition() is True
         clock.advance(Seconds(1.0))
@@ -1853,7 +1926,7 @@ def test_stopping_and_disconnecting_are_both_idempotent() -> None:
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
         await client.stop_acquisition()
         await client.disconnect()
 
@@ -1880,7 +1953,7 @@ def test_an_injected_disconnect_fires_the_callback_after_the_flags_drop() -> Non
 
     async def scenario() -> None:
         clock = ManualClock()
-        client = SimulatedBitalinoClient(clock)
+        client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
 
         async def on_disconnect() -> None:
             seen.append((client.is_connected, client.is_acquiring))
@@ -1904,7 +1977,7 @@ def test_an_injected_disconnect_without_a_callback_is_still_a_disconnect() -> No
     """Nobody listening is not a reason to stay connected."""
 
     async def scenario() -> None:
-        client = SimulatedBitalinoClient(ManualClock())
+        client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
         await client.connect()
         await client.inject_disconnect()
         assert client.is_connected is False
@@ -1915,7 +1988,7 @@ def test_an_injected_disconnect_without_a_callback_is_still_a_disconnect() -> No
 def test_the_client_accepts_the_callback_shape_the_session_manager_passes() -> None:
     """A coroutine function taking nothing and returning nothing."""
     callback: Callable[[], Awaitable[None]] = _noop
-    client = SimulatedBitalinoClient(ManualClock())
+    client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
     client.set_disconnect_callback(callback)
 
 
@@ -1930,7 +2003,7 @@ def test_the_client_builds_its_own_plant_and_sensor_when_given_neither() -> None
     default-built client replayable.
     """
     clock: Clock = ManualClock(start=Monotonic(500.0))
-    client = SimulatedBitalinoClient(clock)
+    client = SimulatedBitalinoClient(clock, physiology=_resting(clock))
 
     state = client.subject.advance(Monotonic(500.0), MotorRpm(0))
     assert state.at == Monotonic(500.0)
@@ -1946,7 +2019,7 @@ def test_the_motor_speed_is_pushed_in_at_the_motor_shaft() -> None:
 
     async def scenario() -> None:
         clock = ManualClock()
-        subject = Physiology(origin=clock.monotonic())
+        subject = Physiology(geometry=SIM_ARM, origin=clock.monotonic())
         client = SimulatedBitalinoClient(clock, physiology=subject)
         await client.connect()
         await client.start_acquisition()
@@ -1966,7 +2039,9 @@ def test_a_supplied_plant_and_sensor_are_the_ones_used() -> None:
     async def scenario() -> None:
         clock = ManualClock()
         subject = Physiology(
-            origin=clock.monotonic(), script=script_for(ScriptedEvent.ELECTRODE_OFF)
+            geometry=SIM_ARM,
+            origin=clock.monotonic(),
+            script=script_for(ScriptedEvent.ELECTRODE_OFF),
         )
         synth = EcgSynthesizer(EcgConfig(seed=99))
         client = SimulatedBitalinoClient(clock, physiology=subject, ecg=synth)

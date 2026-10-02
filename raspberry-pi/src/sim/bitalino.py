@@ -26,32 +26,27 @@ better typed than the thing it replaces would not be a drop-in, and the
 substitution is the entire value - the real client is what should move to
 ``Result``, and then this file follows it. Reported rather than diverged from.
 
-**Why the real client is imported dynamically.** ``src/bitalino_client.py`` is
-still outside both type checkers (see the migration banner in
-``pyproject.toml``). A plain ``from src.bitalino_client import SampleBatch``
-makes that module reachable from a checked file, which pulls its ~25 untyped
-diagnostics into this module's gate - errors in a file this agent does not own
-and may not edit. So the module is loaded through ``importlib`` and cast to
-:class:`_BitalinoClientModule`, a Protocol naming the three members used. The
-cast is the boundary: everything past it is statically typed again, and
-``tests/test_sim.py`` checks at runtime that the objects handed out really are
-the pipeline's own classes, so the Protocol cannot quietly become a lie. The
-right fix is a ``follow_imports`` override in ``pyproject.toml``, which is a
-shared file - see the report.
+**Aligned with the real client, not merely shaped like it.** The real module
+is imported directly (it is inside both type checkers now), the channels are
+sorted and de-duplicated into wire order exactly as the real client does, and
+a batch is stamped with the wall-clock time of its FIRST sample, which is what
+``SampleBatch.timestamp`` means. A simulator that labelled columns in request
+order, or stamped batches with "now", would pass tests the hardware fails.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Final, Protocol, cast, final
+from typing import Final, final
 
+from src.bitalino_client import CHANNEL_NAMES, ChannelData, SampleBatch
 from src.clock import Clock
 from src.sim.ecg import DEFAULT_ECG_CONFIG, EcgSynthesizer
-from src.sim.physiology import DEFAULT_PHYSIOLOGY, Physiology
-from src.units import AdcCount, Monotonic, MotorRpm, elapsed
+from src.sim.physiology import Physiology
+from src.sim.signals.base import SignalContext, SignalGenerator
+from src.units import AdcCount, Monotonic, MotorRpm, UnixMillis, elapsed
 
 ECG_CHANNEL: Final[str] = "ECG"
 """The channel name this simulator actually models. Compared against
@@ -68,58 +63,7 @@ MIN_ANALOG_CHANNEL: Final[int] = 0
 MAX_ANALOG_CHANNEL: Final[int] = 5
 """A1..A6 as the BITalino numbers them."""
 
-
-# =========================================================================
-# The boundary with the untyped client module
-# =========================================================================
-
-
-class ChannelDataLike(Protocol):
-    """One channel's worth of a batch, as consumers read it.
-
-    Read-only: a consumer that mutated ``values`` would be editing the
-    pipeline's input behind the pipeline's back.
-    """
-
-    @property
-    def channel(self) -> str: ...
-
-    @property
-    def values(self) -> Sequence[float]: ...
-
-
-class SampleBatchLike(Protocol):
-    """One acquisition batch, as consumers read it."""
-
-    @property
-    def timestamp(self) -> int: ...
-
-    @property
-    def channels(self) -> Sequence[ChannelDataLike]: ...
-
-
-class _ChannelDataFactory(Protocol):
-    def __call__(self, *, channel: str, values: list[float]) -> ChannelDataLike: ...
-
-
-class _SampleBatchFactory(Protocol):
-    def __call__(self, *, timestamp: int, channels: list[ChannelDataLike]) -> SampleBatchLike: ...
-
-
-class _BitalinoClientModule(Protocol):
-    """The three members of ``src.bitalino_client`` this module uses."""
-
-    ChannelData: _ChannelDataFactory
-    SampleBatch: _SampleBatchFactory
-    CHANNEL_NAMES: Mapping[int, str]
-
-
-_CLIENT: Final[_BitalinoClientModule] = cast(
-    "_BitalinoClientModule", importlib.import_module("src.bitalino_client")
-)
-"""The real client module, loaded at import time so a missing dependency fails
-here rather than in the middle of a session. See this module's docstring for
-why the import is dynamic."""
+MILLIS_PER_SECOND: Final[int] = 1000
 
 
 # =========================================================================
@@ -153,6 +97,7 @@ class SimulatedBitalinoClient:
         "_clock",
         "_ecg",
         "_generated",
+        "_generators",
         "_motor_rpm",
         "_on_disconnect",
         "_physiology",
@@ -170,25 +115,32 @@ class SimulatedBitalinoClient:
         clock: Clock,
         *,
         mac_address: str = "/dev/sim-bitalino",
+        physiology: Physiology,
         channels: Sequence[int] | None = None,
         sample_rate: int = 1000,
-        physiology: Physiology | None = None,
         ecg: EcgSynthesizer | None = None,
+        generators: Mapping[str, SignalGenerator] | None = None,
     ) -> None:
         """Build a disconnected client, validating exactly what the real one does.
+
+        ``physiology`` is required: the subject carries the machine geometry,
+        and a default subject would carry a default radius nobody measured.
 
         ``channels`` defaults to ``[0]`` (A1, the ECG column) and
         ``sample_rate`` to 1000 Hz, matching the real client's defaults. Both
         are validated here and both raise ``ValueError``: this runs at startup
         with nothing spinning, and a channel index the hardware does not have
         is a configuration bug that must not become a silently mislabelled
-        column in a stored session.
+        column in a stored session. The channels are then sorted and
+        de-duplicated, because that is the order the device streams them in.
         """
         if sample_rate not in LEGAL_SAMPLE_RATES:
             raise ValueError(
                 f"sample rate must be one of {sorted(LEGAL_SAMPLE_RATES)}, got {sample_rate}"
             )
         requested = [0] if channels is None else list(channels)
+        if not requested:
+            raise ValueError("at least one analog channel is required")
         for channel in requested:
             if channel < MIN_ANALOG_CHANNEL or channel > MAX_ANALOG_CHANNEL:
                 raise ValueError(
@@ -196,21 +148,21 @@ class SimulatedBitalinoClient:
                 )
 
         self.mac_address: str = mac_address
-        self.channels: list[int] = requested
-        """A ``list`` and public, mirroring the real client, which the session
-        manager reads. Mirrored rather than improved for the reason in this
-        module's docstring."""
+        self.channels: tuple[int, ...] = tuple(sorted(set(requested)))
+        """The acquired channels in wire order (ascending, unique), exactly as
+        the real client exposes them."""
         self.sample_rate: int = sample_rate
         self.is_connected: bool = False
         self.is_acquiring: bool = False
 
         self._clock: Clock = clock
-        self._physiology: Physiology = (
-            Physiology(origin=clock.monotonic(), config=DEFAULT_PHYSIOLOGY)
-            if physiology is None
-            else physiology
-        )
+        self._physiology: Physiology = physiology
         self._ecg: EcgSynthesizer = EcgSynthesizer(DEFAULT_ECG_CONFIG) if ecg is None else ecg
+        # Channel name -> generator for the non-ECG channels that are modelled.
+        # Absent: the channel reads the synthesizer's flat "unmodelled" line.
+        self._generators: Mapping[str, SignalGenerator] = (
+            {} if generators is None else dict(generators)
+        )
         self._motor_rpm: MotorRpm = MotorRpm(0)
         self._on_disconnect: Callable[[], Awaitable[None]] | None = None
         self._started_at: Monotonic = clock.monotonic()
@@ -321,7 +273,7 @@ class SimulatedBitalinoClient:
             return
         self.is_acquiring = False
 
-    async def read_samples(self, count: int = 1000) -> SampleBatchLike | None:
+    async def read_samples(self, count: int = 1000) -> SampleBatch | None:
         """The next ``count`` samples per channel, or ``None`` if not ready yet.
 
         ``None`` has the same two meanings it has on real hardware - not
@@ -342,36 +294,53 @@ class SimulatedBitalinoClient:
         if count <= 0:
             raise ValueError(f"count must be positive, got {count}")
 
-        available = int(elapsed(self._started_at, self._clock.monotonic()) * self.sample_rate)
+        now = self._clock.monotonic()
+        available = int(elapsed(self._started_at, now) * self.sample_rate)
         if available - self._generated < count:
             return None
+        first_at = Monotonic(self._started_at + self._generated / self.sample_rate)
         self._generated += count
 
         block_end = Monotonic(self._started_at + self._generated / self.sample_rate)
         subject = self._physiology.advance(block_end, self._motor_rpm)
         ecg = self._ecg.render(count, subject)
 
-        channels: list[ChannelDataLike] = [
-            _CLIENT.ChannelData(channel=name, values=_as_floats(samples))
-            for name, samples in self._columns(count, ecg)
+        context = SignalContext(start=first_at, fs=self.sample_rate, count=count, subject=subject)
+        channels = [
+            ChannelData(channel=name, values=_as_floats(samples))
+            for name, samples in self._columns(context, ecg)
         ]
-        return _CLIENT.SampleBatch(timestamp=self._clock.unix_millis(), channels=channels)
+        # The FIRST sample's wall-clock time, as SampleBatch.timestamp is
+        # defined: "now" on the wall clock, minus how long ago that sample was.
+        behind = round(elapsed(first_at, now) * MILLIS_PER_SECOND)
+        return SampleBatch(
+            timestamp=UnixMillis(self._clock.unix_millis() - behind), channels=channels
+        )
 
     # -- internals ---------------------------------------------------------
 
     def _columns(
-        self, count: int, ecg: tuple[AdcCount, ...]
+        self, context: SignalContext, ecg: tuple[AdcCount, ...]
     ) -> list[tuple[str, tuple[AdcCount, ...]]]:
-        """One (name, samples) pair per requested channel, in request order.
+        """One (name, samples) pair per acquired channel, in wire order.
 
-        Order matters and is the real client's: it labels the Nth requested
-        channel from the Nth analog column, so a permuted request must come
-        back permuted the same way or the ECG ends up labelled EDA.
+        Order matters and is the real client's: the device streams channels
+        ascending, and the client labels the Nth column with the Nth of its
+        sorted channels, so a permuted request comes back ascending.
+        ``CHANNEL_NAMES`` covers every index the constructor accepts, so the
+        lookup is total (asserted in ``tests/test_sim.py``).
         """
         columns: list[tuple[str, tuple[AdcCount, ...]]] = []
         for index in self.channels:
-            name = _CLIENT.CHANNEL_NAMES.get(index, f"CH{index}")
-            columns.append((name, ecg if name == ECG_CHANNEL else self._ecg.unmodelled(count)))
+            name = CHANNEL_NAMES[index]
+            generator = self._generators.get(name)
+            if name == ECG_CHANNEL:
+                samples = ecg
+            elif generator is not None:
+                samples = generator.render(context)
+            else:
+                samples = self._ecg.unmodelled(context.count)
+            columns.append((name, samples))
         return columns
 
 

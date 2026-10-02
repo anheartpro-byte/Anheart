@@ -43,12 +43,14 @@ load-bearing fact is the COLUMN LAYOUT, which no type can express:
 
     col 0      sequence number (wraps at 15)
     cols 1..4  digital channels I1 I2 O1 O2 (always present)
-    cols 5..   the analog channels, **in the order passed to** :meth:`start` -
-               so the Nth *requested* channel is column ``5 + N``, NOT
-               ``5 + channel_index``.
+    cols 5..   the analog channels in the order the DEVICE sends them, which is
+               ascending channel index (the start command is a bitmask) - so
+               the Nth *acquired* channel is column ``5 + N``, NOT
+               ``5 + channel_index``, and NOT the Nth *requested* one unless
+               the request was already sorted.
 
-Confusing those two is how an ECG trace ends up read from the LUX column, which
-is why ``CHANNEL_MAP`` ordering is asserted on the caller's side.
+Confusing those is how an ECG trace ends up read from another column. The
+client no longer uses :meth:`BITalino.read`; see ``src/bitalino_client.py``.
 
 ``np.int_`` (not a fixed width) because the vendor writes ``dtype=int``, i.e.
 whatever the platform default integer is; under numpy >= 2 that is ``int64`` on
@@ -114,9 +116,10 @@ class BITalino:
         channels are 0..5 (A1..A6), 1 to 6 of them.
 
         ``analogChannels`` is ``Sequence[int]`` because the vendor accepts a
-        list, a tuple or an ``ndarray`` and de-duplicates via ``set()`` - so the
-        *requested* order is not necessarily the *column* order. See
-        :data:`SampleMatrix`.
+        list, a tuple or an ``ndarray``. It is sent as a BITMASK, so the device
+        streams channels in ascending index order whatever order was asked
+        for, and a duplicate index silently breaks the frame size. The caller
+        must pass them sorted and unique.
         """
 
     def stop(self) -> None:
@@ -132,6 +135,17 @@ class BITalino:
         Channels" and omits that the analog columns follow the *request* order;
         :data:`SampleMatrix` documents what the code actually writes.
         """
+
+    socket: object
+    """The open transport: a ``serial.Serial`` for ``COM*``/``/dev/*``, a PyBluez
+    ``BluetoothSocket`` for a MAC, a ``socket.socket`` for ``host:port``. Typed
+    ``object`` because it is one of three unrelated classes; the caller narrows
+    it structurally."""
+
+    def receive(self, nbytes: int) -> bytes:
+        """Block until ``nbytes`` raw bytes arrived. With a ``timeout``, raises
+        ``Exception(CONTACTING_DEVICE)`` after that long without a byte - but on
+        a serial port it busy-waits for it, pinning a CPU core."""
 
     def version(self) -> str:
         """The firmware banner, e.g. ``BITalino_v5.2``. Raises while acquiring."""
