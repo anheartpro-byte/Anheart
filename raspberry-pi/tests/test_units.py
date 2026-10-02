@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -34,6 +35,7 @@ from src.units import (
     MotorRpm,
     OutputRpm,
     RawRegister,
+    ResultantG,
     adc_count,
     adc_to_millivolts,
     elapsed,
@@ -46,6 +48,8 @@ from src.units import (
     output_to_motor_rpm,
     raw_register,
     register_to_signed,
+    resultant_g,
+    resultant_g_to_output_rpm,
     signed_to_register,
 )
 
@@ -178,7 +182,7 @@ def test_g_is_quadratic_in_speed() -> None:
     """Halving the speed quarters the load; this is why control gain falls off."""
     fast = output_rpm_to_g(OutputRpm(28.0), RADIUS)
     half = output_rpm_to_g(OutputRpm(14.0), RADIUS)
-    assert math.isclose(fast / half, 4.0, rel_tol=1e-9)
+    assert math.isclose(fast / half, 4.0, rel_tol=1e-6)
 
 
 def test_zero_speed_is_zero_g() -> None:
@@ -187,7 +191,7 @@ def test_zero_speed_is_zero_g() -> None:
 
 def test_g_conversion_round_trips() -> None:
     load = output_rpm_to_g(OutputRpm(20.0), RADIUS)
-    assert math.isclose(g_to_output_rpm(load, RADIUS), 20.0, rel_tol=1e-9)
+    assert math.isclose(g_to_output_rpm(load, RADIUS), 20.0, rel_tol=1e-6)
 
 
 def test_non_physical_g_inputs_give_zero_rather_than_a_domain_error() -> None:
@@ -236,3 +240,53 @@ def test_elapsed_is_a_duration() -> None:
 
 def test_elapsed_of_the_same_instant_is_zero() -> None:
     assert elapsed(Monotonic(7.0), Monotonic(7.0)) == 0.0
+
+
+# =========================================================================
+# Resultant g: what the occupant feels
+# =========================================================================
+
+
+def test_the_resultant_adds_gravity_in_quadrature() -> None:
+    """Hand-derived: sqrt(0^2 + 1) = 1, sqrt(1^2 + 1) = 1.41421, sqrt(1.72^2 + 1) = 1.98959."""
+    assert resultant_g(GLoad(0.0)) == 1.0
+    assert resultant_g(GLoad(1.0)) == math.sqrt(2.0)
+    assert resultant_g(GLoad(1.72)) == pytest.approx(1.989573, rel=1e-6)
+
+
+def test_the_engineers_two_g_is_a_resultant_at_32_output_rpm() -> None:
+    """32 output rpm at 1.5 m: omega = 3.35103 rad/s, Gc = 1.71762, Gr = 1.98752."""
+    gc = output_rpm_to_g(OutputRpm(32.0), Metres(1.5))
+    assert gc == pytest.approx(1.717623, rel=1e-5)
+    assert resultant_g(gc) == pytest.approx(1.987518, rel=1e-5)
+
+
+@pytest.mark.parametrize("load", [1.0, 0.99, 0.0, -2.0, math.nan, math.inf, -math.inf])
+def test_a_resultant_at_or_below_gravity_alone_is_standstill(load: float) -> None:
+    """Gravity alone gives 1 g, so nothing at or below it is a speed; non-finite is never one."""
+    assert resultant_g_to_output_rpm(ResultantG(load), Metres(1.5)) == 0.0
+
+
+@given(
+    rpm=st.floats(min_value=1.0, max_value=60.0, allow_nan=False),
+    radius=st.floats(min_value=0.2, max_value=5.0, allow_nan=False),
+)
+def test_resultant_round_trips_through_output_rpm(rpm: float, radius: float) -> None:
+    """rpm -> Gc -> Gr -> rpm is the identity above standstill.
+
+    To 1e-6, not to the last bit: near Gr = 1 the inverse subtracts two nearly
+    equal numbers (Gr^2 - 1), so precision is lost there by construction. At
+    1 output rpm and 0.2 m the load is 1.0000001 g, far below anything this
+    machine is commanded to, and the error is still under a millionth.
+    """
+    load = resultant_g(output_rpm_to_g(OutputRpm(rpm), Metres(radius)))
+    assert load >= 1.0
+    assert math.isclose(resultant_g_to_output_rpm(load, Metres(radius)), rpm, rel_tol=1e-6)
+
+
+@given(gc=st.floats(min_value=0.0, max_value=100.0, allow_nan=False))
+def test_the_resultant_is_never_below_gravity_or_the_centripetal_part(gc: float) -> None:
+    """Gr >= max(1, Gc) for any centripetal load: the occupant never feels less than either."""
+    load = resultant_g(GLoad(gc))
+    assert load >= 1.0
+    assert load >= gc

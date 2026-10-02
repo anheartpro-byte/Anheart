@@ -46,6 +46,14 @@ OutputRpm = NewType("OutputRpm", float)
 RpmPerSecond = NewType("RpmPerSecond", float)
 """Slew rate at the motor shaft."""
 
+OutputRpmPerSecond = NewType("OutputRpmPerSecond", float)
+"""Angular acceleration at the GEARBOX OUTPUT, in output rpm per second.
+
+What the anti-nausea limit is written in (0.25 output rpm/s). A distinct type
+from :data:`RpmPerSecond` for the same reason :data:`OutputRpm` is distinct
+from :data:`MotorRpm`: the two differ by the gear ratio, 49.79.
+"""
+
 GearRatio = NewType("GearRatio", float)
 """Gearbox reduction, motor turns per output turn (SEW KA37: 49.79)."""
 
@@ -56,7 +64,24 @@ Hertz = NewType("Hertz", float)
 Metres = NewType("Metres", float)
 
 GLoad = NewType("GLoad", float)
-"""Centripetal acceleration in multiples of standard gravity."""
+"""CENTRIPETAL acceleration in multiples of standard gravity (Gc).
+
+Horizontal, towards the axis. It is NOT what the occupant feels: gravity still
+pulls down at 1 g, so the felt load is :data:`ResultantG`. An engineer's "2 g"
+at 32 output rpm and 1.5 m is the resultant; the centripetal part there is
+1.72 g.
+"""
+
+ResultantG = NewType("ResultantG", float)
+"""RESULTANT load in multiples of standard gravity (Gr): sqrt(Gc^2 + 1).
+
+What the occupant feels, and what motion limits and session steps are written
+in. Always >= 1 on a machine standing on the Earth. A distinct type from
+:data:`GLoad` because swapping the two is an error of up to 1 g at low speed.
+"""
+
+GLoadPerSecond = NewType("GLoadPerSecond", float)
+"""Rate of change of the CENTRIPETAL load, dGc/dt, in g per second (the g-dot limit)."""
 
 # --- Time ----------------------------------------------------------------
 Seconds = NewType("Seconds", float)
@@ -198,6 +223,56 @@ def g_to_output_rpm(load: GLoad, radius: Metres) -> OutputRpm:
         return OutputRpm(0.0)
     omega = math.sqrt(load * STANDARD_GRAVITY / radius)
     return OutputRpm(omega * 60.0 / (2.0 * math.pi))
+
+
+def resultant_g(centripetal: GLoad) -> ResultantG:
+    """Centripetal load to the resultant the occupant feels, sqrt(Gc^2 + 1).
+
+    Gravity is vertical and the centripetal load horizontal, so they add in
+    quadrature. Unsigned: the sign of a centripetal load is meaningless.
+    """
+    return ResultantG(math.hypot(centripetal, 1.0))
+
+
+def resultant_g_to_output_rpm(load: ResultantG, radius: Metres) -> OutputRpm:
+    """Inverse of ``resultant_g(output_rpm_to_g(rpm, radius))`` for rpm >= 0.
+
+    A resultant at or below 1 g (or a non-physical radius, or a non-finite
+    load) is standstill: gravity alone already gives 1 g, and nothing slower
+    than zero exists.
+    """
+    if not math.isfinite(load) or load <= 1.0:
+        return OutputRpm(0.0)
+    return g_to_output_rpm(GLoad(math.sqrt(load * load - 1.0)), radius)
+
+
+def output_to_motor_slew(rate: OutputRpmPerSecond, ratio: GearRatio) -> RpmPerSecond:
+    """An output-shaft angular acceleration as the motor-shaft slew that produces it."""
+    return RpmPerSecond(rate * ratio)
+
+
+def g_rate_to_motor_slew(
+    rate: GLoadPerSecond, speed: OutputRpm, radius: Metres, ratio: GearRatio
+) -> RpmPerSecond:
+    """The fastest motor-shaft slew that keeps ``|dGc/dt| <= rate`` at output speed ``speed``.
+
+    ``Gc = omega^2 * r / g0``, so ``dGc/dt = 2 * omega * r / g0 * domega/dt`` and
+    the angular acceleration allowed at ``omega`` is ``rate * g0 / (2 * omega * r)``:
+    the faster the arm turns, the gentler a change of speed must be for the same
+    change of load. Unbounded (``+inf``) at standstill, where a change of speed
+    changes the load by nothing to first order - the caller combines this with
+    an angular-acceleration limit, which is what bounds it there. A non-physical
+    or non-finite input gives zero, which moves nothing.
+    """
+    if not all(math.isfinite(value) for value in (rate, radius, speed, ratio)):
+        return RpmPerSecond(0.0)
+    if rate <= 0.0 or radius <= 0.0 or ratio <= 0.0:
+        return RpmPerSecond(0.0)
+    omega = 2.0 * math.pi * abs(speed) / 60.0
+    if omega <= 0.0:
+        return RpmPerSecond(math.inf)
+    angular = rate * STANDARD_GRAVITY / (2.0 * omega * radius)
+    return RpmPerSecond(angular * 60.0 / (2.0 * math.pi) * ratio)
 
 
 def adc_to_millivolts(count: AdcCount, mv_per_count: float) -> Millivolts:

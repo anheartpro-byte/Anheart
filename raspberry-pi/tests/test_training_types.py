@@ -683,13 +683,15 @@ def test_a_decision_can_record_a_negative_error_and_no_target() -> None:
 # mistake that function might contain.
 
 
-def test_one_speed_is_derived_into_all_four_units_at_once() -> None:
+def test_one_speed_is_derived_into_every_unit_at_once() -> None:
     """Hand-computed from the nameplate, so the conversions cannot agree with a bug."""
     view = _view(900)
     assert view.motor_rpm == 900
     assert view.output_rpm == pytest.approx(18.075919, abs=1e-6)
     assert view.hertz == pytest.approx(32.608696, abs=1e-6)
     assert view.g_load == pytest.approx(0.548061, abs=1e-6)
+    # sqrt(0.548061^2 + 1): gravity and the centripetal load in quadrature.
+    assert view.resultant_g == pytest.approx(1.140338, abs=1e-6)
 
 
 def test_the_nameplate_point_maps_to_the_nameplate_frequency() -> None:
@@ -705,6 +707,8 @@ def test_a_standstill_is_zero_in_every_unit() -> None:
     assert view.output_rpm == pytest.approx(0.0)
     assert view.hertz == pytest.approx(0.0)
     assert view.g_load == pytest.approx(0.0)
+    # Gravity does not stop when the machine does.
+    assert view.resultant_g == pytest.approx(1.0)
 
 
 def test_reverse_rotation_keeps_its_sign_but_still_loads_the_occupant() -> None:
@@ -922,6 +926,7 @@ EXPECTED_FIELDS: Final[tuple[tuple[type, tuple[tuple[str, str], ...]], ...]] = (
             ("output_rpm", "OutputRpm"),
             ("hertz", "Hertz"),
             ("g_load", "GLoad"),
+            ("resultant_g", "ResultantG"),
         ),
     ),
     (
@@ -952,6 +957,8 @@ EXPECTED_FIELDS: Final[tuple[tuple[type, tuple[tuple[str, str], ...]], ...]] = (
             ("fault", "FaultReport | None"),
             ("safety", "SafetyVerdict | None"),
             ("counters", "ZoneCounters"),
+            ("mode", "RunMode"),
+            ("manual", "ManualView | None"),
         ),
     ),
 )

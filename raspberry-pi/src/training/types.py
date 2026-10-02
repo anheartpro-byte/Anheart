@@ -56,12 +56,14 @@ from src.units import (
     Monotonic,
     MotorRpm,
     OutputRpm,
+    ResultantG,
     Seconds,
     UnixMillis,
     elapsed,
     motor_rpm_to_hertz,
     motor_to_output_rpm,
     output_rpm_to_g,
+    resultant_g,
 )
 
 # =========================================================================
@@ -118,6 +120,52 @@ class Phase(Enum):
 # =========================================================================
 # What the safety supervisor can demand
 # =========================================================================
+
+
+@unique
+class Occupancy(Enum):
+    """Who is on board, declared by the operator BEFORE any rotation.
+
+    Declared once when motion starts and never changed while the machine is
+    turning: a rule set that could be relaxed mid-rotation by a click is a rule
+    set that will be. The values are wire strings, like :class:`Phase`.
+    """
+
+    BENCH = "bench"
+    """Nobody on board. Motor uncoupled, OR arm coupled with the capsule empty.
+
+    The motor-rpm ceiling is the configured ``MOTOR_MAX_RPM`` (default 300,
+    never above the 1380 rpm nameplate), and the heart-rate rules are advisory
+    because the heart rate on screen does not belong to anyone in the machine.
+    """
+
+    OCCUPIED = "occupied"
+    """A person in the capsule. Every rule active, heart-rate limiter mandatory.
+
+    Refused by configuration (``OCCUPANCY_OCCUPIED_ENABLED=false``) until the
+    engineering and medical sign-offs of milestone M6 exist.
+    """
+
+    @property
+    def label(self) -> str:
+        """The operator-facing French label. Never parsed."""
+        return _OCCUPANCY_LABELS[self]
+
+
+@dataclass(frozen=True, slots=True)
+class OccupancyRefused:
+    """Motion refused for the declared occupancy, with the reason in French."""
+
+    occupancy: Occupancy
+    detail: str
+
+
+_OCCUPANCY_LABELS: Final[Mapping[Occupancy, str]] = MappingProxyType(
+    {
+        Occupancy.BENCH: "BANC - personne a bord : NON",
+        Occupancy.OCCUPIED: "PERSONNE A BORD",
+    }
+)
 
 
 @unique
@@ -531,11 +579,12 @@ class ControlDecision:
 
 @dataclass(frozen=True, slots=True)
 class SpeedView:
-    """One speed, in all four units anybody needs to see it in.
+    """One speed, in all the units anybody needs to see it in.
 
-    The same rotation expressed four ways: at the motor shaft, at the gearbox
-    output (the centrifuge itself), as the drive's output frequency, and as the
-    centripetal load on the person inside. They travel together as one object
+    The same rotation expressed five ways: at the motor shaft, at the gearbox
+    output (the centrifuge itself), as the drive's output frequency, as the
+    centripetal load on the person inside, and as the resultant load (that plus
+    gravity) the person actually feels. They travel together as one object
     so a screen cannot end up showing the motor's rpm next to the output's g,
     and so the conversions happen exactly once, in :meth:`from_motor_rpm`,
     through the only module allowed to convert units.
@@ -555,7 +604,14 @@ class SpeedView:
     """The drive's output frequency, via the motor nameplate point."""
 
     g_load: GLoad
-    """Centripetal load at the occupant's radius, in multiples of gravity."""
+    """Centripetal load (Gc) at the occupant's radius, in multiples of gravity."""
+
+    resultant_g: ResultantG
+    """What the occupant feels (Gr): the centripetal load and gravity in quadrature.
+
+    Always >= 1. Motion limits and session steps are written in this, because
+    it is the number a person and a physician reason in.
+    """
 
     @classmethod
     def from_motor_rpm(
@@ -567,7 +623,7 @@ class SpeedView:
         nominal_rpm: MotorRpm,
         base_hz: Hertz,
     ) -> SpeedView:
-        """Derive all four views from the one number the drive deals in.
+        """Derive every view from the one number the drive deals in.
 
         Keyword-only geometry, with no defaults, on purpose: a wrong gear ratio
         or a wrong radius is a silent fifty-fold or quadratic error, and a
@@ -579,12 +635,38 @@ class SpeedView:
         conversion in this system and has the round-trip tests to prove it.
         """
         output = motor_to_output_rpm(rpm, ratio)
+        centripetal = output_rpm_to_g(output, radius)
         return cls(
             motor_rpm=rpm,
             output_rpm=output,
             hertz=motor_rpm_to_hertz(rpm, nominal_rpm, base_hz),
-            g_load=output_rpm_to_g(output, radius),
+            g_load=centripetal,
+            resultant_g=resultant_g(centripetal),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SpeedEnvelope:
+    """Where the measured shaft speed may legitimately be, in MOTOR rpm, this tick.
+
+    The runtime's own statement to ``tracking_error``, replacing the old "the
+    setpoint is ramping, so stop judging" flag: between the setpoint that is
+    commanded and where a drive following it at its own (derated) commissioned
+    ramp could have got to by now. A shaft outside this band is not following
+    the command, ramp or no ramp. ``low <= high`` always; both edges are whole
+    rpm, rounded outwards by whoever builds one.
+    """
+
+    low: MotorRpm
+    high: MotorRpm
+
+    def distance(self, rpm: MotorRpm) -> int:
+        """How far ``rpm`` lies outside the band, in motor rpm; 0 inside it."""
+        if rpm < self.low:
+            return int(self.low - rpm)
+        if rpm > self.high:
+            return int(rpm - self.high)
+        return 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -622,6 +704,50 @@ class ZoneCounters:
 #: refreshed at 1 Hz: a gap this long means at least four refreshes produced
 #: nothing, which is a pipeline that has stopped working rather than jitter.
 HEART_RATE_STALE_AFTER: Final[Seconds] = Seconds(4.0)
+
+
+@unique
+class RunMode(Enum):
+    """What the machine is doing, in the operator's words. Derived, never stored.
+
+    The console's top banner. Wire strings, like :class:`Phase`.
+    """
+
+    REPOS = "repos"
+    """Nothing commanded: no session, or the last one is over and the output stage is off."""
+
+    MANUEL = "manuel"
+    """A manual session: the operator sets the target, the motion profiler walks to it."""
+
+    SEANCE = "seance"
+    """A programmed session is running its timeline."""
+
+    ARRET = "arret"
+    """A session is ending: the setpoint is on its way to zero, or the machine is
+    being brought out of service. Never "stopped" - read the MEASURED speed."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ManualView:
+    """The manual session, as the operator's screen needs it.
+
+    ``target`` is what the operator asked for, ``ceiling`` the highest target
+    this occupancy accepts, ``min_run`` the slowest non-zero one. The setpoint
+    actually in force is the snapshot's own ``setpoint``; the gap between the
+    two is the ramp still to come, and ``ramp_eta`` says how long it will take.
+    """
+
+    occupancy: Occupancy
+    target: SpeedView
+    ceiling: SpeedView
+    min_run: SpeedView
+
+    ramping: bool
+    """Whether the setpoint is still on its way to the target: "do not move your head"."""
+
+    ramp_eta: Seconds | None
+    """Seconds until the setpoint reaches the target at the motion limits; ``None`` unknown."""
+
 
 #: A drive observation older than this is no longer evidence about the machine.
 #: Two seconds is ten ticks of the 5 Hz control loop; by then the link, the
@@ -707,7 +833,7 @@ class TelemetrySnapshot:
     """The speed actually commanded to the drive, after any safety override."""
 
     measured: SpeedView
-    """The speed the drive reports measuring (RFRD), in the same four units.
+    """The speed the drive reports measuring (RFRD), in the same units.
 
     The field that speaks about motion. ``drive_state`` does not: FAULT,
     NOT_READY and COMM_LOST are all compatible with a centrifuge still turning.
@@ -762,6 +888,12 @@ class TelemetrySnapshot:
 
     counters: ZoneCounters
     """Time in, above and below the target zone."""
+
+    mode: RunMode = RunMode.REPOS
+    """What the machine is doing, in the operator's words (the console banner)."""
+
+    manual: ManualView | None = None
+    """The manual session's target and limits, or ``None`` outside a manual session."""
 
     @property
     def safety_action(self) -> SafetyAction:
