@@ -314,11 +314,14 @@ L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 | `deploy.sh` | `build.sh`, puis `vercel deploy`. |
 
 Le projet Vercel relié à Git construit depuis la racine du dépôt, avec le
-preset **FastAPI** et `pip install -r requirements.txt`. `pyproject.toml`
-déclare `simulation_app:app` comme point d'entrée ; `simulation_app.py`
+preset **FastAPI**. Vercel installe avec `uv` les dépendances de la table
+`[project]` du `pyproject.toml` racine. Elles correspondent au sous-ensemble
+hébergé ci-dessus ; garder les deux listes alignées lors d'une mise à jour.
+Ce manifeste déclare `simulation_app:app` comme point d'entrée ; `simulation_app.py`
 charge cette même application, les sources Pi et le substitut BITalino.
-Le `requirements.txt` racine renvoie au fichier ci-dessus, et `.python-version`
-fixe Python 3.12. Le site garde son preset **Next.js** et ses commandes npm.
+Le `requirements.txt` racine renvoie au fichier ci-dessus pour les installations
+pip manuelles ; `.python-version` et le manifeste fixent Python 3.12. Le site
+garde son preset **Next.js** et ses commandes npm.
 Un push sur la branche de la PR crée une préversion ; il ne fusionne pas `main`.
 
 Le visualiseur est monté depuis `simulation/viewer/`. Vercel peut le promouvoir

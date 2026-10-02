@@ -1,5 +1,26 @@
 # The Git-connected simulation project builds from the repository root.
 # The website keeps its explicit Next.js preset and package.json commands.
+[project]
+name = "anheart-simulation"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pyserial>=3.5",
+    "pymodbus>=3.7.4,<3.8",
+    "pyftdi>=0.57,<0.58",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
+]
+
+[tool.uv]
+package = false
+
 [tool.vercel]
 entrypoint = "simulation_app:app"
 

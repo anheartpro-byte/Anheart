@@ -19,3 +19,5 @@ Pour les préversions Git, Vercel construit depuis la racine du dépôt avec
 charge la même application ; le `requirements.txt` racine inclut les
 dépendances de ce dossier. Aucun assemblage préalable de `dist/` n'est requis.
 Le visualiseur est également servi en local, dans les deux dispositions.
+Vercel installe les dépendances Git avec `uv`, depuis `[project]` dans le
+manifeste racine ; conserver cette liste et `requirements.txt` alignés.

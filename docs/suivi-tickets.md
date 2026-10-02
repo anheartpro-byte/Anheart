@@ -93,6 +93,21 @@ Le detecteur du SDK Vercel resout `simulation_app:app`. Le site passe de nouveau
 `tsc --noEmit` et son build Next.js (28 pages). Ces controles ne remplacent pas
 le resultat de la prochaine preversion distante ni les deux approbations requises.
 
+La preversion de `518f146` trouve maintenant le point d'entree, mais son
+installation par defaut echoue : `uv lock` requiert la table `[project]`
+dans le manifeste racine. Le correctif suivant declare cette table avec les
+dependances hebergees existantes et `tool.uv.package = false` : l'application
+reste executee depuis ses sources, sans installer un paquet racine editable.
+Les installations pip manuelles restent possibles avec le fichier de dependances.
+
+Le SDK Vercel, lance sans commande d'installation forcee dans une copie propre,
+resout et installe le projet avec `uv`, puis produit la fonction et l'actif du
+visualiseur (collecte CDN activee uniquement pour ce controle local). Les
+11 tests passent maintenant, dont la comparaison des contraintes des deux
+listes de dependances ; Ruff/format/basedpyright/mypy restent verts. Le paquet
+natif construit sur macOS sert uniquement a la verification, pas a un deploiement
+preconstruit. La preversion distante reste la preuve du build Linux.
+
 ## File logicielle
 
 L'etape reprend l'ordre de la file Linear. Les parents ANH-122 et ANH-88 se cloturent apres leurs sous-tickets ; ils ne dupliquent pas leur implementation. Les dependances precises sont recontrolees avant chaque ticket. La presence dans cette liste ne signifie pas que ses bloqueurs sont resolus.
