@@ -32,7 +32,6 @@ DIRECT_TIME_CALL = re.compile(r"\btime\.(monotonic|time|perf_counter|monotonic_n
 #: can only shrink, and it cannot quietly rot into a permanent exemption.
 PENDING_CLOCK_MIGRATION: frozenset[str] = frozenset(
     {
-        "bitalino_client.py",
         "data_buffer.py",
         "session_manager.py",
     }

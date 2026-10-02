@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import math
 import re
 from collections.abc import AsyncIterator, Callable, MutableMapping
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ from src.control_surface import (
     SessionEvent,
     StartSession,
 )
+from src.geometry import MachineGeometry
 from src.motor.drive import DriveFault, DriveState, FaultReport
 from src.result import Err, Ok
 from src.telemetry import (
@@ -95,7 +97,6 @@ from src.web.app import (
 from src.web.deps import (
     MIN_TOKEN_LENGTH,
     FilesystemPortLister,
-    MachineGeometry,
     SerialPortInfo,
     Services,
     WebConfig,
@@ -828,7 +829,15 @@ async def test_the_snapshot_shows_all_four_speed_renderings(
     assert measured.g_load is not None
     assert measured.g_load > 0.0
     # All four present in the body, so a page cannot render one of them alone.
-    assert sorted(_keys(response, "measured")) == ["g_load", "hertz", "motor_rpm", "output_rpm"]
+    assert measured.resultant_g is not None
+    assert measured.resultant_g == pytest.approx(math.sqrt(measured.g_load**2 + 1.0))
+    assert sorted(_keys(response, "measured")) == [
+        "g_load",
+        "hertz",
+        "motor_rpm",
+        "output_rpm",
+        "resultant_g",
+    ]
 
 
 async def test_the_snapshot_separates_measured_from_setpoint(
@@ -1179,7 +1188,7 @@ async def test_deleting_an_unknown_profile_is_a_404(client: httpx.AsyncClient) -
 async def test_the_page_is_served_with_no_token(client: httpx.AsyncClient) -> None:
     """The shell is inert HTML; every number in it comes from the gated API."""
     for path, fragment in (
-        ("/", "AnHeart operator"),
+        ("/", "Console du banc"),
         ("/app.css", "--bg"),
         ("/app.js", "STALE_FRAME_MS"),
     ):
@@ -1234,7 +1243,19 @@ def test_every_element_the_script_looks_up_exists_in_the_page() -> None:
     assert wanted, "the id extraction found nothing, so this test proves nothing"
     assert wanted <= present, f"the script looks up ids the page does not have: {wanted - present}"
     # The load-bearing ones, named so that deleting one is a failure here.
-    for required in ("banner", "estop", "stop", "hr", "measured-output", "setpoint-output", "ecg"):
+    for required in (
+        "banner",
+        "estop",
+        "stop",
+        "hr",
+        "measured-output",
+        "setpoint-output",
+        "ecg",
+        "console-hr",
+        "console-output",
+        "console-ecg",
+        "console-motion",
+    ):
         assert required in present
 
 

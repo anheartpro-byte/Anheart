@@ -29,19 +29,23 @@ import asyncio
 import hmac
 import ipaddress
 import logging
-import math
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Protocol, final, runtime_checkable
 
 from src.clock import Clock
 from src.control_surface import ControlSurface
+from src.geometry import MachineGeometry
+from src.panel_status import PanelSource
+from src.presence.monitor import PresenceDecision, PresenceMonitor
+from src.result import Result
+from src.sensors.base import SensorKind, SensorReading
 from src.telemetry import TelemetryHub
-from src.training.plan import NAMEPLATE_BASE_HERTZ, NAMEPLATE_MOTOR_RPM, ProfileStore
+from src.training.plan import ProfileStore
 from src.training.safety import SafetySupervisor
-from src.training.types import SpeedView
-from src.units import GearRatio, Hertz, Metres, MotorRpm
+from src.training.types import Occupancy, OccupancyRefused
+from src.units import MotorRpm
 
 _logger: logging.Logger = logging.getLogger(__name__)
 
@@ -331,55 +335,6 @@ def _resolve(link: Path) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class MachineGeometry:
-    """The four numbers every speed on the screen is rendered through.
-
-    ``SpeedView.from_motor_rpm`` deliberately has no default geometry, because
-    a wrong ratio is a fiftyfold error and a wrong radius is a proportional
-    error in the g-load an operator approves a programme on. Somebody has to
-    own these values; until the plan/config layer does, this record does, and
-    it is passed in rather than reached for.
-
-    ``radius`` has **no default**, following the precedent of
-    ``SafetyLimits.hard_max_bpm``: it is a measurement of *this* rig - centre
-    of rotation to the occupant - and a default is how a wrong one gets used
-    without anybody choosing it. The repository currently disagrees with itself
-    about the value (``src/sim/physiology.py`` defaults to 1.0 m, the prose in
-    ``src/training/plan.py`` works an example at 1.5 m), which is exactly why
-    this must be stated rather than assumed.
-
-    The other three are nameplate facts and default to them: SEW KA37
-    i = 49.79, DRS71S4 1380 rpm at 50 Hz.
-    """
-
-    radius: Metres
-    ratio: GearRatio = GearRatio(49.79)
-    nominal_rpm: MotorRpm = NAMEPLATE_MOTOR_RPM
-    base_hz: Hertz = NAMEPLATE_BASE_HERTZ
-
-    def __post_init__(self) -> None:
-        """Refuse geometry that would make every speed on the screen nonsense."""
-        for name, value in (
-            ("radius", float(self.radius)),
-            ("ratio", float(self.ratio)),
-            ("nominal_rpm", float(self.nominal_rpm)),
-            ("base_hz", float(self.base_hz)),
-        ):
-            if not math.isfinite(value) or value <= 0.0:
-                raise ValueError(f"{name} must be positive and finite, got {value}")
-
-    def view(self, rpm: MotorRpm) -> SpeedView:
-        """One motor-shaft speed, rendered four ways through this geometry."""
-        return SpeedView.from_motor_rpm(
-            rpm,
-            ratio=self.ratio,
-            radius=self.radius,
-            nominal_rpm=self.nominal_rpm,
-            base_hz=self.base_hz,
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class Services:
     """Everything the route handlers are allowed to touch, in one frozen record.
 
@@ -400,6 +355,61 @@ class Services:
     store: ProfileStore
     ports: PortLister
     geometry: MachineGeometry
+
+    motion_enabled: bool = True
+    """Whether a route may ask for motion at all.
+
+    ``False`` in the local console's read-only milestone: every route that
+    could put the machine in motion answers **403** before touching the
+    mailbox. Stopping, the emergency stop, acknowledgement, attestation and
+    every read stay available, because a console that could not stop a machine
+    somebody else started would be worse than none.
+    """
+
+    panel: PanelSource | None = None
+    """The console's link report, served at ``/api/panel``; ``None`` = no console."""
+
+    programs_enabled: bool = True
+    """Whether a PROGRAMMED session may be started (``/api/session/start``).
+
+    ``False`` on the local console until milestone M5: manual sessions exist,
+    programmed ones do not yet, and that route answers **403**.
+    """
+
+    ceilings: Callable[[Occupancy], Result[MotorRpm, OccupancyRefused]] | None = None
+    """The motor-rpm ceiling for an occupancy, or why that occupancy is refused.
+
+    ``LocalConfig.ceiling_for`` on the console. ``None``: this build has no
+    manual sessions, and ``/api/manual/start`` answers **403**.
+    """
+
+    sensors: SensorSource | None = None
+    """Every acquired BITalino channel, processed (``GET /api/sensors``); ``None`` = none."""
+
+    presence: PresenceView | None = None
+    """The camera fail-safe (``GET /api/presence``); ``None`` = no camera configured."""
+
+    camera: str = "none"
+    """Which camera feeds it (``PRESENCE_SOURCE``), for the page."""
+
+
+class PresenceView(Protocol):
+    """What ``/api/presence`` reads from the camera fail-safe."""
+
+    @property
+    def last_decision(self) -> PresenceDecision | None: ...
+
+    @property
+    def monitor(self) -> PresenceMonitor: ...
+
+
+class SensorSource(Protocol):
+    """What ``/api/sensors`` reads: the configured channels and their latest readings."""
+
+    @property
+    def kinds(self) -> tuple[SensorKind, ...]: ...
+
+    def latest(self) -> Mapping[SensorKind, SensorReading]: ...
 
 
 type TokenGuard = Callable[[str | None], Awaitable[None]]

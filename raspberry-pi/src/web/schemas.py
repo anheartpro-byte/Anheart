@@ -34,10 +34,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, assert_never
 
 from pydantic import TypeAdapter
 
+from src.bitalino_client import LinkStats
 from src.control_surface import (
     Command,
     EndSession,
@@ -49,18 +50,24 @@ from src.control_surface import (
     StartSession,
 )
 from src.motor.drive import FaultReport
+from src.panel_status import EcgLinkStatus, PanelStatus
+from src.presence.monitor import Clear, EmergencyStop, RampDown, StartBlocked
+from src.sensors.base import Metric, SensorReading, SensorSpec
 from src.telemetry import EcgWindow, Payload, PayloadKind
 from src.training.plan import PhaseSpan, Program, TrainingProfile
+from src.training.runtime import IdleLink
 from src.training.safety import EstopAttestation, SafetyAcknowledgement
 from src.training.types import (
     HeartRateSample,
+    ManualView,
     SafetyVerdict,
+    SignalQuality,
     SpeedView,
     TelemetrySnapshot,
     ZoneCounters,
 )
 from src.units import Monotonic, Seconds
-from src.web.deps import SerialPortInfo, WebConfig
+from src.web.deps import PresenceView, SerialPortInfo, WebConfig
 
 
 def _finite(value: float | None) -> float | None:
@@ -103,6 +110,36 @@ class StartBody:
     profile_id: str
     operator: str
     total_duration_s: float | None = None
+    subject_age: int | None = None
+    """The rider's age in years; a programmed session refuses unknown or under MIN_RIDER_AGE."""
+
+
+@dataclass(frozen=True, slots=True)
+class ManualStartBody:
+    """Start a manual session. ``occupancy`` is declared now and frozen for the rotation.
+
+    ``bench``: nobody on board (motor uncoupled, or arm coupled with the
+    capsule empty). ``occupied``: a person in the capsule - refused by
+    configuration until milestone M6.
+    """
+
+    occupancy: str
+    operator: str
+
+
+@dataclass(frozen=True, slots=True)
+class ManualTargetBody:
+    """A manual target in OUTPUT rpm: 0, or between the minimum running speed and the ceiling."""
+
+    output_rpm: float
+    operator: str
+
+
+@dataclass(frozen=True, slots=True)
+class FaultResetBody:
+    """Reset a drive fault. Always a named, explicit operator action."""
+
+    operator: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +225,7 @@ class PreviewBody:
 
 @dataclass(frozen=True, slots=True)
 class SpeedRow:
-    """One speed, expressed four ways at once.
+    """One speed, expressed five ways at once.
 
     **All four, always, and that is a display requirement rather than a
     convenience.** The gearbox ratio is 49.79, so a motor-shaft figure and an
@@ -202,6 +239,10 @@ class SpeedRow:
     output_rpm: float | None
     hertz: float | None
     g_load: float | None
+    """Centripetal load at the radius (Gc), gravity NOT included."""
+
+    resultant_g: float | None
+    """What the occupant feels (Gr): centripetal and gravity combined, sqrt(Gc^2 + 1)."""
 
     @classmethod
     def of(cls, view: SpeedView) -> SpeedRow:
@@ -211,6 +252,7 @@ class SpeedRow:
             output_rpm=_finite(view.output_rpm),
             hertz=_finite(view.hertz),
             g_load=_finite(view.g_load),
+            resultant_g=_finite(view.resultant_g),
         )
 
 
@@ -242,6 +284,38 @@ class HeartRateRow:
             age_s=_finite(age),
             stale=stale,
             seq=sample.seq,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ManualRow:
+    """The manual session: target, ceiling and the ramp still to come.
+
+    ``ramping`` is what lights the "do not move your head" banner: the
+    setpoint is still on its way to the target.
+    """
+
+    occupancy: str
+    occupancy_label: str
+    target: SpeedRow
+    ceiling: SpeedRow
+    min_run: SpeedRow
+    ramping: bool
+    ramp_eta_s: float | None
+
+    @classmethod
+    def of(cls, view: ManualView | None) -> ManualRow | None:
+        """Render the manual view, or ``None`` outside a manual session."""
+        if view is None:
+            return None
+        return cls(
+            occupancy=view.occupancy.value,
+            occupancy_label=view.occupancy.label,
+            target=SpeedRow.of(view.target),
+            ceiling=SpeedRow.of(view.ceiling),
+            min_run=SpeedRow.of(view.min_run),
+            ramping=view.ramping,
+            ramp_eta_s=_finite(view.ramp_eta),
         )
 
 
@@ -372,6 +446,11 @@ class SnapshotRow:
     safety_rank: int
     counters: CountersRow
 
+    mode: str
+    """REPOS, MANUEL, SEANCE or ARRET: the console's top banner."""
+
+    manual: ManualRow | None
+
     @classmethod
     def of(cls, snapshot: TelemetrySnapshot) -> SnapshotRow:
         """Render a snapshot for the wire."""
@@ -400,7 +479,257 @@ class SnapshotRow:
             safety_action=_enum_name(snapshot.safety_action.name),
             safety_rank=int(snapshot.safety_action),
             counters=CountersRow.of(snapshot.counters),
+            mode=snapshot.mode.value,
+            manual=ManualRow.of(snapshot.manual),
         )
+
+
+# =========================================================================
+# The console's link panel
+# =========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class DriveLinkRow:
+    """The idle, read-only drive polling, as the link panel shows it."""
+
+    description: str | None
+    open: bool
+    reads: int
+    failures: int
+    consecutive_failures: int
+    latency_ms: float | None
+    last_error: str | None
+
+    @classmethod
+    def of(cls, link: IdleLink, description: str | None) -> DriveLinkRow:
+        """Render an :class:`~src.training.runtime.IdleLink`."""
+        latency = link.last_latency
+        return cls(
+            description=description,
+            open=link.open,
+            reads=link.reads,
+            failures=link.failures,
+            consecutive_failures=link.consecutive_failures,
+            latency_ms=None if latency is None else _finite(latency * 1000.0),
+            last_error=link.last_error,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LinkStatsRow:
+    """The BITalino decoder's counters, field for field."""
+
+    frames: int
+    skipped_bytes: int
+    sync_losses: int
+    filled_samples: int
+    dropped_backlog_samples: int
+    reconnects: int
+
+    @classmethod
+    def of(cls, stats: LinkStats | None) -> LinkStatsRow | None:
+        """Render :class:`~src.bitalino_client.LinkStats`, or ``None`` (simulator)."""
+        if stats is None:
+            return None
+        return cls(
+            frames=stats.frames,
+            skipped_bytes=stats.skipped_bytes,
+            sync_losses=stats.sync_losses,
+            filled_samples=stats.filled_samples,
+            dropped_backlog_samples=stats.dropped_backlog_samples,
+            reconnects=stats.reconnects,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EcgLinkRow:
+    """The BITalino link and the DSP bridge behind it."""
+
+    source: str
+    address: str | None
+    connected: bool
+    acquiring: bool
+    connect_attempts: int
+    last_error: str | None
+    link: LinkStatsRow | None
+    batches: int
+    samples: int
+    missing_channel: int
+    last_batch_age_s: float | None
+    dsp_seq: int | None
+    dsp_quality: str | None
+
+    @classmethod
+    def of(cls, status: EcgLinkStatus, now: Monotonic) -> EcgLinkRow:
+        """Render an :class:`~src.panel_status.EcgLinkStatus` at ``now``."""
+        bridge = status.bridge
+        metrics = bridge.last_metrics
+        last = bridge.last_batch_at
+        return cls(
+            source=status.source.value,
+            address=status.address,
+            connected=status.connected,
+            acquiring=status.acquiring,
+            connect_attempts=status.connect_attempts,
+            last_error=status.last_error,
+            link=LinkStatsRow.of(status.link),
+            batches=bridge.batches,
+            samples=bridge.samples,
+            missing_channel=bridge.missing_channel,
+            last_batch_age_s=None if last is None else _finite(max(0.0, now - last)),
+            dsp_seq=None if metrics is None else metrics.seq,
+            dsp_quality=None if metrics is None else metrics.quality.value,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PanelRow:
+    """The local console's link panel. ``GET /api/panel``."""
+
+    motion_enabled: bool
+    programs_enabled: bool
+    motor_backend: str
+    drive: DriveLinkRow
+    ecg: EcgLinkRow
+    heart_rate_trend_bpm_per_min: float | None
+    radius_m: float | None
+    gear_ratio: float | None
+    motor_max_rpm: int
+
+    @classmethod
+    def of(cls, status: PanelStatus) -> PanelRow:
+        """Render a :class:`~src.panel_status.PanelStatus`."""
+        return cls(
+            motion_enabled=status.motion_enabled,
+            programs_enabled=status.programs_enabled,
+            motor_backend=status.motor_backend.value,
+            drive=DriveLinkRow.of(status.drive, status.drive_link),
+            ecg=EcgLinkRow.of(status.ecg, status.at),
+            heart_rate_trend_bpm_per_min=_finite(status.heart_rate_trend),
+            radius_m=_finite(status.radius),
+            gear_ratio=_finite(status.ratio),
+            motor_max_rpm=int(status.motor_max_rpm),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MetricRow:
+    """One derived number of a sensor; ``value`` null when it cannot honestly be computed."""
+
+    key: str
+    label: str
+    value: float | None
+    unit: str
+
+    @classmethod
+    def of(cls, metric: Metric) -> MetricRow:
+        return cls(
+            key=metric.key,
+            label=metric.label,
+            value=None if metric.value is None else _finite(metric.value),
+            unit=metric.unit,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SensorRow:
+    """One BITalino channel: what it is, its latest window, quality and metrics."""
+
+    kind: str
+    channel: int
+    label: str
+    unit: str
+    description: str
+    display_rate: int
+    at: float | None
+    """Monotonic time of the window's last sample; null before the first reading."""
+
+    waveform: tuple[float, ...]
+    quality: str
+    detail: str
+    metrics: tuple[MetricRow, ...]
+
+    @classmethod
+    def of(cls, spec: SensorSpec, reading: SensorReading | None) -> SensorRow:
+        if reading is None:
+            return cls(
+                kind=spec.kind.value,
+                channel=spec.kind.channel,
+                label=spec.label,
+                unit=spec.unit,
+                description=spec.description,
+                display_rate=spec.display_rate,
+                at=None,
+                waveform=(),
+                quality=SignalQuality.NO_SIGNAL.value,
+                detail="pas encore de lecture",
+                metrics=(),
+            )
+        return cls(
+            kind=spec.kind.value,
+            channel=spec.kind.channel,
+            label=spec.label,
+            unit=spec.unit,
+            description=spec.description,
+            display_rate=reading.display_rate,
+            at=float(reading.at),
+            waveform=tuple(v if math.isfinite(v) else 0.0 for v in reading.waveform),
+            quality=reading.quality.value,
+            detail=reading.detail,
+            metrics=tuple(MetricRow.of(m) for m in reading.metrics),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SensorsRow:
+    """``GET /api/sensors``: every configured channel, in configuration order."""
+
+    sensors: tuple[SensorRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CameraRow:
+    """``GET /api/camera``: the camera fail-safe, as the Securite page shows it."""
+
+    configured: bool
+    camera: str
+    state: str
+    """"absent", "waiting" (no frame judged yet), "clear", "start_blocked", "ramp_down",
+    "emergency_stop"."""
+
+    detail: str
+    latched_rule: str | None
+
+    @classmethod
+    def of(cls, view: PresenceView | None, camera: str) -> CameraRow:
+        if view is None:
+            return cls(
+                configured=False,
+                camera=camera,
+                state="absent",
+                detail="aucune camera configuree (PRESENCE_SOURCE=none)",
+                latched_rule=None,
+            )
+        latched = view.monitor.latched
+        rule = None if latched is None else latched.rule
+        decision = view.last_decision
+        state: str
+        detail: str
+        match decision:
+            case None:
+                state, detail = "waiting", "aucune image encore jugee"
+            case Clear():
+                state, detail = "clear", ""
+            case StartBlocked():
+                state, detail = "start_blocked", decision.detail
+            case RampDown(verdict=verdict):
+                state, detail = "ramp_down", verdict.detail
+            case EmergencyStop(verdict=verdict):
+                state, detail = "emergency_stop", verdict.detail
+            case _ as unreachable:
+                assert_never(unreachable)
+        return cls(configured=True, camera=camera, state=state, detail=detail, latched_rule=rule)
 
 
 @dataclass(frozen=True, slots=True)

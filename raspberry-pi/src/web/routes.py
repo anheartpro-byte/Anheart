@@ -27,6 +27,10 @@ Status codes that mean something
 * **409** for "the machine is not in a state for that", **412** for "the
   emergency-stop wiring has not been attested this boot", **422** for a profile
   that is not a usable programme.
+* **403** for any request for motion while motion is disabled in this build
+  (:attr:`~src.web.deps.Services.motion_enabled`, the local console's read-only
+  milestone). Checked before anything else, so a disabled console never even
+  validates a motion request, let alone submits one.
 
 Exceptions are used here, which the contract permits in the web layer (rule 3).
 The motor path below still returns ``Result``; ``HTTPException`` never crosses
@@ -36,6 +40,7 @@ into it.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from http import HTTPStatus
 from pathlib import Path
@@ -45,13 +50,16 @@ from fastapi import Depends, FastAPI, HTTPException, Request, params
 from fastapi.responses import FileResponse
 
 from src.control_surface import (
+    CommandRefusal,
     EndRefusal,
     NothingRunning,
     SafetyHolding,
     StartRefusal,
     SurfaceBusy,
 )
+from src.geometry import MachineGeometry
 from src.result import Err, Ok
+from src.sensors.registry import SPECS
 from src.training.plan import (
     DeleteError,
     Malformed,
@@ -79,20 +87,26 @@ from src.training.safety import (
     NothingLatched,
     Unattributed,
 )
-from src.units import Seconds
-from src.web.deps import TOKEN_HEADER, MachineGeometry, Services, WebConfig
+from src.training.types import Occupancy
+from src.units import OutputRpm, Seconds
+from src.web.deps import TOKEN_HEADER, Services, WebConfig
 from src.web.schemas import (
     AckBody,
     AckRow,
     AttestationRow,
     AttestBody,
     BindRow,
+    CameraRow,
     CommandRow,
     EcgRow,
     EndBody,
     EstopBody,
     EstopRow,
+    FaultResetBody,
     HealthRow,
+    ManualStartBody,
+    ManualTargetBody,
+    PanelRow,
     PlanPreviewRow,
     PortRow,
     PresenceBody,
@@ -101,6 +115,8 @@ from src.web.schemas import (
     ProfileListRow,
     ProfileRow,
     SafetyRow,
+    SensorRow,
+    SensorsRow,
     SnapshotRow,
     StartBody,
     StatusRow,
@@ -235,6 +251,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_reads(app, services=services, config=config, auth=auth)
     _register_profiles(app, services=services, auth=auth)
     _register_session(app, services=services, auth=auth)
+    _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
 
 
@@ -309,6 +326,38 @@ def _register_reads(
         discontinuity draws a vertical stroke that reads as a QRS complex.
         """
         return EcgRow.of(hub.ecg_window(after=after, limit=limit))
+
+    @app.get("/api/panel", dependencies=auth, tags=["system"])
+    async def read_panel() -> PanelRow | None:
+        """The local console's link panel, or ``null`` when no console is wired.
+
+        Drive link (idle reads, failures, latency, last error), BITalino link
+        (decoder counters, DSP bridge), whether motion is enabled, and the
+        geometry every g on the page was computed with.
+        """
+        panel = services.panel
+        return None if panel is None else PanelRow.of(panel.panel_status())
+
+    @app.get("/api/camera", dependencies=auth, tags=["safety"])
+    async def read_camera() -> CameraRow:
+        """The camera fail-safe: configured or not, its last decision, any latched rule."""
+        return CameraRow.of(services.presence, services.camera)
+
+    @app.get("/api/sensors", dependencies=auth, tags=["sensors"])
+    async def read_sensors() -> SensorsRow:
+        """Every acquired BITalino channel: latest window, quality and metrics.
+
+        Monitoring only: none of these numbers commands the motor (the heart
+        rate in control is the one in ``/api/snapshot``). An empty list when
+        this build acquires no channel beyond what the snapshot already shows.
+        """
+        source = services.sensors
+        if source is None:
+            return SensorsRow(sensors=())
+        latest = source.latest()
+        return SensorsRow(
+            sensors=tuple(SensorRow.of(SPECS[kind], latest.get(kind)) for kind in source.kinds)
+        )
 
 
 def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -402,12 +451,15 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         by resolving it, before anything is submitted, so an operator gets a
         404 rather than a session that starts and immediately ends.
         """
+        _require_motion_enabled(services)
+        _require_programs_enabled(services)
         operator = _require_operator(body.operator)
         _require_known_profile(services, body.profile_id, body.total_duration_s)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
             total_duration_s=_optional_seconds(body.total_duration_s),
+            subject_age=body.subject_age,
         )
         match submitted:
             case Ok(command):
@@ -457,6 +509,91 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         in the next snapshot is the only thing that speaks about motion.
         """
         return EstopRow.of(surface.submit_estop(operator=body.operator, reason=body.reason))
+
+
+def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """The manual session: start it, set its target, and the drive's fault reset.
+
+    Every one of them is a request for motion or a write to the drive, so each
+    is behind the 403 of :func:`_require_motion_enabled` first. Each is a 202:
+    the loop has not acted yet, and whether the MACHINE can act is its answer,
+    published as an event (``refused``) and visible in the next snapshot.
+    """
+    surface = services.surface
+
+    @app.post(
+        "/api/manual/start",
+        dependencies=auth,
+        status_code=HTTPStatus.ACCEPTED,
+        tags=["manual"],
+    )
+    async def start_manual(body: ManualStartBody) -> CommandRow:
+        """Start a manual session, target 0. The occupancy is declared here, once.
+
+        403 when motion is disabled or the occupancy is refused by
+        configuration (``occupied`` until milestone M6); 422 for an occupancy
+        this build does not know.
+        """
+        _require_motion_enabled(services)
+        operator = _require_operator(body.operator)
+        occupancy = _require_occupancy(body.occupancy)
+        _require_occupancy_allowed(services, occupancy)
+        submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
+        match submitted:
+            case Ok(command):
+                return CommandRow.of(command)
+            case Err(error):
+                raise _start_failure(error)
+
+    @app.post(
+        "/api/manual/target",
+        dependencies=auth,
+        status_code=HTTPStatus.ACCEPTED,
+        tags=["manual"],
+    )
+    async def manual_target(body: ManualTargetBody) -> CommandRow:
+        """Set the manual target in OUTPUT rpm. The setpoint walks to it at the motion limits.
+
+        Only a target: never a setpoint, never faster than the anti-nausea
+        limits, and every safety verdict still overrides it. A value outside
+        ``0`` or ``[min_run, ceiling]`` is refused by the loop, not clamped.
+        """
+        _require_motion_enabled(services)
+        operator = _require_operator(body.operator)
+        if not math.isfinite(body.output_rpm) or body.output_rpm < 0.0:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail="the target must be a finite, non-negative output speed",
+            )
+        submitted = surface.submit_manual_target(
+            output_rpm=OutputRpm(body.output_rpm), operator=operator
+        )
+        match submitted:
+            case Ok(command):
+                return CommandRow.of(command)
+            case Err(error):
+                raise _command_failure(error)
+
+    @app.post(
+        "/api/drive/fault-reset",
+        dependencies=auth,
+        status_code=HTTPStatus.ACCEPTED,
+        tags=["manual"],
+    )
+    async def fault_reset(body: FaultResetBody) -> CommandRow:
+        """Reset a drive fault: named, explicit, and never automatic.
+
+        The loop refuses it unless the machine is at rest, every verdict has
+        been acknowledged by name, and the drive shows the shaft stopped.
+        """
+        _require_motion_enabled(services)
+        operator = _require_operator(body.operator)
+        submitted = surface.submit_fault_reset(operator=operator)
+        match submitted:
+            case Ok(command):
+                return CommandRow.of(command)
+            case Err(error):
+                raise _command_failure(error)
 
 
 def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -578,6 +715,27 @@ def _end_failure(refusal: EndRefusal) -> HTTPException:
             assert_never(unreachable)
 
 
+def _command_failure(refusal: CommandRefusal) -> HTTPException:
+    """Map a target or fault-reset refusal. See :data:`~src.control_surface.CommandRefusal`."""
+    match refusal:
+        case NothingRunning():
+            return HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"no manual session is running (the machine is {refusal.state.value})",
+            )
+        case SurfaceBusy():
+            return HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=(
+                    f"the machine is {refusal.state.value}"
+                    + (f" (pending: {refusal.pending})" if refusal.pending is not None else "")
+                    + "; try again in a moment"
+                ),
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
     """Map an acknowledgement refusal."""
     match refusal:
@@ -689,6 +847,56 @@ def _delete_failure(error: DeleteError) -> HTTPException:
 # =========================================================================
 # Small helpers
 # =========================================================================
+
+
+MOTION_DISABLED_DETAIL: Final[str] = (
+    "mouvement desactive : cette console est en lecture seule (jalon M1). "
+    "STOP, E-STOP, acquittement et lectures restent disponibles."
+)
+
+
+def _require_motion_enabled(services: Services) -> None:
+    """Refuse any request for motion with a 403 while motion is disabled."""
+    if not services.motion_enabled:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=MOTION_DISABLED_DETAIL)
+
+
+PROGRAMS_DISABLED_DETAIL: Final[str] = (
+    "seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL."
+)
+
+
+def _require_programs_enabled(services: Services) -> None:
+    """Refuse a programmed session with a 403 while this build has none."""
+    if not services.programs_enabled:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=PROGRAMS_DISABLED_DETAIL)
+
+
+def _require_occupancy(value: str) -> Occupancy:
+    """The declared occupancy, or a 422 naming the ones that exist."""
+    for occupancy in Occupancy:
+        if occupancy.value == value:
+            return occupancy
+    known = ", ".join(occupancy.value for occupancy in Occupancy)
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail=f"unknown occupancy {value!r}: expected one of {known}",
+    )
+
+
+def _require_occupancy_allowed(services: Services, occupancy: Occupancy) -> None:
+    """403 unless the configuration gives this occupancy a ceiling."""
+    ceilings = services.ceilings
+    if ceilings is None:
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="this interface has no manual sessions",
+        )
+    match ceilings(occupancy):
+        case Ok():
+            return
+        case Err(refused):
+            raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=refused.detail)
 
 
 def _require_operator(operator: str) -> str:

@@ -10,7 +10,8 @@ import time
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.bitalino_client import BITalinoClient, discover_bitalino_devices
+from scripts.discover_devices import discover_bitalino_devices
+from src.bitalino_client import BITalinoClient
 
 
 async def scan_devices():
@@ -21,7 +22,7 @@ async def scan_devices():
     print("=" * 60)
     print()
 
-    devices = await discover_bitalino_devices(timeout=10.0)
+    devices = await discover_bitalino_devices(scan_seconds=10.0)
 
     if not devices:
         print("\nNo BITalino devices found!")
@@ -39,7 +40,7 @@ async def scan_devices():
     return devices
 
 
-async def test_connection(mac_address: str):
+async def test_connection(mac_address: str, seconds: float):
     """Test connection to a BITalino device."""
     print()
     print("=" * 60)
@@ -63,19 +64,13 @@ async def test_connection(mac_address: str):
 
     print("Connected successfully!")
 
-    # Get device state
-    print("\nGetting device state...")
-    state = await client.get_state()
-    if state:
-        print(f"  Device state: {state}")
-
     # Test data acquisition
-    print("\nStarting data acquisition (5 seconds)...")
+    print(f"\nStarting data acquisition ({seconds:.0f} seconds)...")
     if await client.start_acquisition():
         start_time = time.time()
         total_samples = 0
 
-        while time.time() - start_time < 5.0:
+        while time.time() - start_time < seconds:
             await asyncio.sleep(0.5)
             batch = await client.read_samples(count=100)
 
@@ -95,8 +90,19 @@ async def test_connection(mac_address: str):
                         )
 
         print(f"\nTotal samples collected: {total_samples}")
-        print("Expected samples (5s @ 1000Hz): 5000")
-        print(f"Effective sample rate: {total_samples / 5:.0f} Hz")
+        print(f"Expected samples ({seconds:.0f}s @ 1000Hz): {seconds * 1000:.0f}")
+        print(f"Effective sample rate: {total_samples / seconds:.0f} Hz")
+
+        # Link health: run once with the motor off and once with it on and
+        # compare. Non-zero filled/corrupt/reconnects with the motor on only
+        # points at interference from the drive.
+        stats = client.link_stats()
+        print("\nLink health:")
+        print(f"  frames decoded:           {stats.frames}")
+        print(f"  dropped samples (filled): {stats.filled_samples}")
+        print(f"  corrupt frames:           {stats.sync_losses}")
+        print(f"  bytes skipped (resync):   {stats.skipped_bytes}")
+        print(f"  reconnects:               {stats.reconnects}")
 
         await client.stop_acquisition()
         print("\nStopped acquisition")
@@ -115,7 +121,13 @@ async def main():
     parser.add_argument(
         "--mac",
         type=str,
-        help="MAC address of the BITalino device (e.g., 20:16:07:18:17:02)",
+        help="MAC address, or serial port (COM4 / /dev/rfcomm0) of the BITalino",
+    )
+    parser.add_argument(
+        "--seconds",
+        type=float,
+        default=5.0,
+        help="How long to acquire (use 120+ for a motor off/on comparison)",
     )
     parser.add_argument(
         "--scan-only",
@@ -150,7 +162,7 @@ async def main():
     else:
         mac = args.mac
 
-    await test_connection(mac)
+    await test_connection(mac, args.seconds)
 
 
 if __name__ == "__main__":

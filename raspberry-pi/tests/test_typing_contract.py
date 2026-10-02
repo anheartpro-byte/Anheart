@@ -169,7 +169,6 @@ def test_basedpyright_is_configured_strictly() -> None:
 #: test below.
 EXPECTED_COVERAGE_PENDING: frozenset[str] = frozenset(
     {
-        "src/bitalino_client.py",
         "src/signal_processing.py",
     }
 )
@@ -234,6 +233,12 @@ def test_safety_chain_lists_the_modules_the_heart_rate_flows_through() -> None:
         "src/sim/*",
         "src/bitalino_client.py",
         "src/signal_processing.py",
+        "src/geometry.py",
+        "src/ecg_pipeline.py",
+        "src/local_config.py",
+        "src/bitalino_rfcomm_macos.py",
+        "src/local_panel.py",
+        "src/panel_status.py",
     ):
         assert required in safety_chain, (
             f"{required} dropped out of the declared safety chain; the heart "

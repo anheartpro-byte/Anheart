@@ -15,18 +15,18 @@
 # Strict-check migration
 # =========================================================================
 # The modules below predate this contract and are excluded from BOTH type
-# checkers until they are migrated. They are NOT exempt in spirit: the two in
-# the safety chain (signal_processing.py, bitalino_client.py) carry the heart
-# rate that drives the motor and are the first to be converted, once the
-# hand-written stubs under stubs/ exist -- most of their 500-odd diagnostics
-# are untyped numpy / biosppy / bitalino calls that the stubs resolve.
+# checkers until they are migrated. They are NOT exempt in spirit:
+# signal_processing.py carries the heart rate that drives the motor and is the
+# next to be converted (bitalino_client.py, the other safety-chain module, is
+# done) -- most of its diagnostics are untyped numpy / biosppy calls that the
+# stubs under stubs/ resolve.
 #
 # tests/test_typing_contract.py pins this list exactly, so it can only be
 # changed deliberately and can never quietly grow.
 #
-#   src/signal_processing.py   src/bitalino_client.py   src/convex_client.py
-#   src/data_buffer.py         src/session_manager.py   src/main.py
-#   tests/test_bitalino.py     tests/test_buffer.py     tests/test_convex_client.py
+#   src/signal_processing.py   src/convex_client.py     src/data_buffer.py
+#   src/session_manager.py     src/main.py
+#   tests/test_buffer.py       tests/test_convex_client.py
 #   tests/test_config.py       scripts/*
 #
 # =========================================================================
@@ -50,12 +50,10 @@ exclude = [
     "tests/typing_fixtures",
     # --- pending strict-check migration (see banner above) ---
     "src/signal_processing.py",
-    "src/bitalino_client.py",
     "src/convex_client.py",
     "src/data_buffer.py",
     "src/session_manager.py",
     "src/main.py",
-    "tests/test_bitalino.py",
     "tests/test_buffer.py",
     "tests/test_convex_client.py",
     "tests/test_config.py",
@@ -102,12 +100,10 @@ exclude = [
     "tests/typing_fixtures/",
     # --- pending strict-check migration (see banner above) ---
     "src/signal_processing[.]py$",
-    "src/bitalino_client[.]py$",
     "src/convex_client[.]py$",
     "src/data_buffer[.]py$",
     "src/session_manager[.]py$",
     "src/main[.]py$",
-    "tests/test_bitalino[.]py$",
     "tests/test_buffer[.]py$",
     "tests/test_convex_client[.]py$",
     "tests/test_config[.]py$",
@@ -172,12 +168,8 @@ ignore = [
 # live for every migrated module, and so removing a file from this block is
 # part of migrating it.
 #
-# Two entries here are REAL DEFECTS, not style debt, kept visible so they are
-# not lost when the ignore disappears:
-#   * bitalino_client.py ASYNC250 - pair_bluetooth_device() runs blocking
-#     subprocess.run with 10/15/60 s timeouts from inside async connect(),
-#     which can freeze the event loop for ~2 minutes. With a web UI that also
-#     freezes the page and the emergency-stop endpoint.
+# One entry here is a REAL DEFECT, not style debt, kept visible so it is not
+# lost when the ignore disappears:
 #   * main.py RUF006 - handle_shutdown() calls asyncio.create_task from an OS
 #     signal handler without holding the reference, and with no guarantee a
 #     loop is running; on Windows that raises RuntimeError.
@@ -260,10 +252,34 @@ include = [
     "src/motor/*",
     "src/training/*",
     "src/sim/*",
-    # bitalino_client.py and signal_processing.py belong here and are NOT
-    # exempt: see [tool.anheart] coverage_pending below. They are listed there
-    # instead of here so the gate has real teeth on migrated code today rather
-    # than being switched off entirely while they are converted.
+    "src/bitalino_client.py",
+    # The local console's safety chain: the one geometry every speed and
+    # g-load is rendered through, the typed boundary the heart rate crosses on
+    # its way from the DSP to the runtime, and the configuration that sets the
+    # radius and the motor-rpm ceiling.
+    "src/geometry.py",
+    "src/ecg_pipeline.py",
+    "src/local_config.py",
+    # The macOS BITalino transport: on the Mac every heart rate is computed
+    # from bytes that crossed it, and a silent link must surface as lost.
+    "src/bitalino_rfcomm_macos.py",
+    # The local console's composition root: the one place the runtime, the
+    # shared supervisor, the drive and the BITalino are wired together, and
+    # the exit path that releases the drive. Plus the link report it serves.
+    "src/local_panel.py",
+    "src/panel_status.py",
+    # The dashboard link: it can submit a start and forward a stop, so every
+    # branch that decides either is tested, like the rest of the console.
+    "src/cloud_sync.py",
+    # Every BITalino channel's typed processor, the one scipy boundary they
+    # share, and the camera/presence fail-safe: all under the same gate.
+    "src/dsp.py",
+    "src/sensors/*",
+    "src/presence/*",
+    # signal_processing.py belongs here and is NOT exempt: see [tool.anheart]
+    # coverage_pending below. It is listed there instead of here so the gate
+    # has real teeth on migrated code today rather than being switched off
+    # entirely while it is converted.
 ]
 fail_under = 100
 # `# pragma: no cover` is intentionally NOT an exclusion for the safety chain:
@@ -283,7 +299,6 @@ exclude_also = [
 # up covered; they are pinned here so the debt is explicit and a test fails if
 # this list ever grows or goes stale.
 coverage_pending = [
-    "src/bitalino_client.py",
     "src/signal_processing.py",
 ]
 
@@ -297,4 +312,14 @@ safety_chain = [
     "src/sim/*",
     "src/bitalino_client.py",
     "src/signal_processing.py",
+    "src/geometry.py",
+    "src/ecg_pipeline.py",
+    "src/local_config.py",
+    "src/bitalino_rfcomm_macos.py",
+    "src/local_panel.py",
+    "src/panel_status.py",
+    "src/cloud_sync.py",
+    "src/dsp.py",
+    "src/sensors/*",
+    "src/presence/*",
 ]

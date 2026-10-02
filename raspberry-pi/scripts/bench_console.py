@@ -1,141 +1,155 @@
 """Manual bench console for the ATV320. The OPERATOR drives it, not the software.
 
-    .venv\\Scripts\\python.exe scripts\\bench_console.py
+    python scripts/bench_console.py                    # MOTOR_PORT / MOTOR_SLAVE_ID from .env
+    python scripts/bench_console.py --port ftdi://schneider:rs485/1 --slave 248
     -> http://127.0.0.1:8123
 
-It runs on the HOST: Docker Desktop on Windows cannot pass a COM port into a
-container. It talks to pymodbus directly rather than importing
-src/motor/atv320.py, so a bench tool does not break while application code is
-being rewritten.
+It runs on the HOST: Docker Desktop cannot pass a COM port or a USB device into
+a container.
 
 SCOPE: a BARE, UNCOUPLED motor. Not a loaded centrifuge, and never one with a
 person in it -- that needs the application's safety supervisor.
 
-## Why this file was rewritten
+## The transport is the application's
 
-The first version displayed fabricated values. It polled five registers twice a
-second while a keepalive wrote twice a second, roughly 14 transactions per
-second on a 19200 baud bus. Transactions timed out, and because nothing flushed
-the serial buffer afterwards, each late reply was consumed as the answer to the
-NEXT request. Readings desynchronised by one transaction, which showed up
-unmistakably: 0x0637 = 1591 appeared simultaneously as the status word, as
-1591 rpm and as 159.1 A -- on a motor whose nameplate says 2.15 A.
+The link is opened exactly as the application opens it: ``drive_link.py``
+builds :class:`src.motor.atv320.ATV320Drive` on
+:func:`src.motor.atv320.serial_master`. For the Schneider USB-RS485 cable
+(``ftdi://schneider:rs485/1``, no ``/dev/cu`` on macOS) that is the buffered
+FTDI port whose ``in_waiting`` works, so a register costs ~tens of ms instead
+of the 2 s pyftdi's own port cost. Every read is parsed and range-checked by the
+driver, every speed write is read back, and ``retries`` cannot be set to the
+pymodbus 3.7.4 value (0) that never reads a reply body.
 
-Four rules came out of that, and they are the design of this file:
+## Why this file was rewritten (twice)
 
-1. ONE OWNER. A single dedicated thread owns the serial client. Nothing else
-   touches it, ever. Operator actions are queued and run on that thread. HTTP
-   handlers only read a snapshot from memory, so they cannot contend for the
-   bus, cannot block, and cannot fail.
-2. FLUSH AND RECONNECT ON EVERY FAILURE, so a late reply can never be mistaken
-   for the next answer.
+The first version displayed fabricated values: late replies were consumed as
+the answer to the NEXT request, and 0x0637 = 1591 appeared simultaneously as the
+status word, as 1591 rpm and as 159.1 A on a 2.15 A motor. The rules that came
+out of that still stand:
+
+1. ONE OWNER. A single dedicated thread owns the drive. Operator actions are
+   queued and run on that thread. HTTP handlers only read a snapshot from
+   memory, so they cannot contend for the bus, cannot block, and cannot fail.
+2. NO LATE REPLY LEAKS FORWARD. With a working ``in_waiting`` pymodbus itself
+   discards whatever is waiting before each request (``_send``), and closes the
+   port after a failed exchange.
 3. NEVER SHOW A VALUE FROM A FAILED TRANSACTION. An unread field becomes None
-   and the UI greys it out. A plausible wrong number is far worse than no
-   number on a screen whose whole job is to say what the machine is doing.
-4. REJECT PHYSICALLY IMPOSSIBLE READINGS. The nameplate bounds what the
-   hardware can report, so a value outside them is a transport fault, not a
-   measurement. This is what would have caught the 159 A instantly.
+   and the UI greys it out.
+4. REJECT PHYSICALLY IMPOSSIBLE READINGS against the nameplate.
 
-## Measured facts, not assumptions
-  address 248   Schneider point-to-point access address. Address 1 did not answer.
-  19200 8E1     factory serial format.
-  offset 0      logical addresses used as-is; at -1 reads return 0x8000 garbage.
-  HSP @ 3104    reads 500 = 50.0 Hz, matching the keypad.
+The second rewrite fixed two review findings in the operator actions:
+
+* **enable** writes LFRD = 0 (verified by read-back) BEFORE the start sequence.
+  CMD = 15 with a stale non-zero LFRD from an earlier session would start the
+  motor at that speed the instant the output stage energises.
+* **stop** writes SHUTDOWN (6) only after RFRD has been READ as 0. Writing 6 to a
+  turning shaft is CiA402 transition 8: the output stage drops and the machine
+  freewheels. If standstill cannot be confirmed the run command is left in
+  place (zero reference, the drive keeps ramping, ttO finishes the job) and the
+  action is reported as a FAILURE, never as "ok".
+
+And one safety change in the loop: when the driver latches the link down, the
+console DISARMS. It then reconnects, but the keepalive does not resume until
+the operator arms again -- no automatic resumption of motion, anywhere.
 
 ## If the link is unstable, suspect the physical layer first
-Partial frames ("expected at least 4 bytes, 2 received") are an electrical
-symptom, not a software one. A running drive is a strong EMI source, so check:
-the common/0 V on RJ45 pin 8 actually connected, shielded twisted pair with the
-shield earthed at the drive end, the RS-485 cable kept away from the motor
-cable, and the FTDI latency timer lowered from its 16 ms default.
+Partial frames are an electrical symptom, not a software one. Check the common
+0 V on RJ45 pin 8, shielded twisted pair earthed at the drive end, and the
+RS-485 cable kept away from the motor cable. Measure the link with
+``scripts/bench_comm_latency.py`` (read-only) before blaming this console.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
-import math
+import asyncio
 import os
 import queue
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Literal
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from typing import Annotated, Literal, assert_never, override
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from drive_link import (
+    BuiltDrive,
+    DriveLink,
+    add_link_arguments,
+    arg_int,
+    arg_text,
+    build_drive,
+    describe_error,
+    link_from_args,
+)
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
-from pymodbus.client import ModbusSerialClient
 
-# --- Register map, offset 0 ----------------------------------------------
-CMD = 8501  # W: CiA402 command word
-LFRD = 8602  # W: speed setpoint, SIGNED rpm
-ETA = 3201  # R: status word
-RFRD = 8604  # R: output speed, SIGNED rpm
-LCR = 3204  # R: motor current, 0.1 A per count
-LFT = 7121  # R: last fault
-HSP = 3104  # R: high speed, 0.1 Hz per count
-
-W_SHUTDOWN, W_SWITCH_ON, W_ENABLE, W_FAULT_RESET = 6, 7, 15, 128
-
-FAULT_BIT = 0x08
-STATE_MASK, RUNNING, SWITCHED_ON, READY = 0x6F, 0x27, 0x23, 0x21
-SOD_MASK, SOD = 0x4F, 0x40
+from src.clock import RealClock
+from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
+from src.motor.drive import ControlWord, DriveState, DriveStatus, decode_speed
+from src.result import Err, Ok
+from src.units import Metres, Monotonic, MotorRpm, elapsed
 
 # --- Nameplate: SEW-USOCOME KA37 DRS71S4/AL/DH --------------------------
 # Read off the motor itself, not from a datasheet:
 #   Hz 50            r/min 1380/28        kW 0.37 S1     cos phi 0.70
 #   V 220-242 delta / 380-420 star        A 2.15 / 1.24
 #   i 49.79          Nm 127               Cl.th 155(F)   IP66   IE1 66.6%
-#   Inverter duty VPWM, 20.189 kg, gearbox oil CLP HC-68-NSF-H1 0.50 l
 # The motor is wired in DELTA, so the 230 V / 2.15 A column applies.
 NOMINAL_RPM = 1380
 BASE_HZ = 50.0
-GEAR_RATIO = 49.79
+GEAR_RATIO = CONFIRMED_GEAR_RATIO
 NAMEPLATE_CURRENT_A = 2.15
 OUTPUT_TORQUE_NM = 127.0
-GRAVITY = 9.80665
+
+
+def _geometry_from_env() -> MachineGeometry | None:
+    """The shared machine geometry, if ARM_RADIUS_M is set; else g is shown as unknown.
+
+    Optional here (unlike the local console, where it is required): this is the
+    commissioning tool, often run with the motor uncoupled and no arm fitted,
+    and an unknown g is honest where a g "at 1 m" was not.
+    """
+    text = os.getenv("ARM_RADIUS_M", "").strip()
+    if not text:
+        return None
+    try:
+        return MachineGeometry(radius=Metres(float(text)))
+    except ValueError:
+        print(f"ARM_RADIUS_M={text!r} ignore: g affiche inconnu")
+        return None
+
+
+GEOMETRY = _geometry_from_env()
 
 #: Plausibility bounds derived from the nameplate. A reading outside these did
 #: not come from the drive's sensors, so it is reported as a transport fault
-#: rather than displayed. 5x nameplate current is already well past anything
-#: the 0.37 kW drive can deliver; 1.3x nominal speed allows for field weakening
-#: while still rejecting a desynchronised frame.
+#: rather than displayed.
 MAX_PLAUSIBLE_CURRENT_A = NAMEPLATE_CURRENT_A * 5.0
 MAX_PLAUSIBLE_RPM = int(NOMINAL_RPM * 1.3)
 
 CYCLE_S = 0.5
-#: Bounded retries inside one cycle, so a bad link cannot stall the loop.
-READ_ATTEMPTS = 2
 
+#: How long a stop waits for RFRD to read 0 before reporting failure. The
+#: commissioned dEC is 3.0 s; 25 s is far past any healthy ramp and far short of
+#: a freewheel.
+STOP_WAIT_S = 25.0
+STOP_POLL_S = 0.25
 
-def decode_state(word: int) -> str:
-    """Name the CiA402 state. Fault wins: the drive can report both at once."""
-    if word & FAULT_BIT:
-        return "FAULT"
-    if word & SOD_MASK == SOD:
-        return "SWITCH_ON_DISABLED"
-    masked = word & STATE_MASK
-    if masked == RUNNING:
-        return "OPERATION_ENABLED"
-    if masked == SWITCHED_ON:
-        return "SWITCHED_ON"
-    if masked == READY:
-        return "READY_TO_SWITCH_ON"
-    return "NOT_READY"
-
-
-def signed(raw: int) -> int:
-    return raw - 0x10000 if raw > 0x7FFF else raw
+#: How long the process waits, at exit, for the worker's own stop sequence.
+SHUTDOWN_JOIN_S = STOP_WAIT_S + 10.0
 
 
 @dataclass
 class Snapshot:
-    """What the worker last managed to learn. None means "unknown", never 0."""
+    """What the worker last managed to learn. None means "unknown", never 0.
+
+    Mutable and shared on purpose: the worker thread writes whole fields, the
+    HTTP handlers only read them. Each assignment is atomic under the GIL, and
+    nothing here is read-modify-written from two threads.
+    """
 
     link_ok: bool = False
     armed: bool = False
@@ -145,7 +159,7 @@ class Snapshot:
     enabled: bool | None = None
     output_rpm: int | None = None
     current_a: float | None = None
-    fault_code: int | None = None
+    fault: str | None = None
     hsp_hz: float | None = None
     cycles: int = 0
     read_ok: int = 0
@@ -154,7 +168,7 @@ class Snapshot:
     reconnects: int = 0
     last_error: str | None = None
     last_action: str = "-"
-    updated_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=lambda: RealClock().monotonic())
 
     def error_rate(self) -> float:
         total = self.read_ok + self.read_failed
@@ -163,14 +177,21 @@ class Snapshot:
     def derived(self) -> dict[str, float | None]:
         rpm = self.output_rpm
         if rpm is None:
-            return {"output_shaft_rpm": None, "hz": None, "g_at_1m": None, "torque_pct": None}
+            return {
+                "output_shaft_rpm": None,
+                "hz": None,
+                "gc": None,
+                "gr": None,
+                "torque_pct": None,
+            }
         out = rpm / GEAR_RATIO
-        omega = 2.0 * math.pi * out / 60.0
+        view = None if GEOMETRY is None else GEOMETRY.view(MotorRpm(rpm))
         cur = self.current_a
         return {
             "output_shaft_rpm": round(out, 2),
             "hz": round(rpm / NOMINAL_RPM * BASE_HZ, 2),
-            "g_at_1m": round(omega * omega / GRAVITY, 4),
+            "gc": None if view is None else round(view.g_load, 4),
+            "gr": None if view is None else round(view.resultant_g, 4),
             "torque_pct": round(100.0 * cur / NAMEPLATE_CURRENT_A, 1) if cur is not None else None,
         }
 
@@ -178,208 +199,221 @@ class Snapshot:
 Action = Literal["enable", "speed", "stop", "estop", "fault_reset"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Command:
     action: Action
     rpm: int = 0
 
 
 class BusWorker(threading.Thread):
-    """The ONLY thing in this process allowed to touch the serial port."""
+    """The ONLY thing in this process allowed to touch the drive.
 
-    def __init__(self, port: str, slave: int, baud: int, parity: str, max_rpm: int) -> None:
+    It runs its own asyncio loop, because :class:`ATV320Drive` is asynchronous
+    (it pushes every blocking pymodbus call to its private executor). HTTP
+    handlers run on uvicorn's loop and never see the drive.
+    """
+
+    def __init__(self, link: DriveLink, max_rpm: int) -> None:
         super().__init__(name="modbus-bus", daemon=True)
-        self.port, self.slave, self.max_rpm = port, slave, max_rpm
-        self._baud, self._parity = baud, parity
-        self._client: ModbusSerialClient | None = None
+        self.link = link
+        self.max_rpm = max_rpm
+        self._clock = RealClock()
+        self._built: BuiltDrive = build_drive(link, self._clock)
         self._commands: queue.Queue[Command] = queue.Queue()
-        self._stop = threading.Event()
+        self._stop_requested = threading.Event()
         self.snap = Snapshot()
+        self.exit_report: str = "-"
 
     def submit(self, cmd: Command) -> None:
         self._commands.put(cmd)
 
     def shutdown(self) -> None:
-        self._stop.set()
+        self._stop_requested.set()
 
-    # --- serial plumbing -------------------------------------------------
-    def _open(self) -> bool:
-        self._client = ModbusSerialClient(
-            port=self.port,
-            baudrate=self._baud,
-            bytesize=8,
-            parity=self._parity,
-            stopbits=1,
-            timeout=0.5,
-            retries=0,
-        )
-        return bool(self._client.connect())
+    @override
+    def run(self) -> None:
+        asyncio.run(self._main())
 
-    def _recover(self, why: str) -> None:
-        """Drain the buffers and reopen, so a late reply cannot leak forward.
+    # --- link ------------------------------------------------------------
+    async def _connect(self) -> None:
+        drive = self._built.drive
+        match await drive.open():
+            case Ok():
+                self.snap.link_ok = True
+                self.snap.last_error = None
+            case Err(error):
+                self.snap.link_ok = False
+                self.snap.last_error = f"ouverture: {describe_error(error)}"
+                return
+        # HSP once per connection: it is the drive's own ceiling, and the
+        # operator should see it before sending a speed.
+        match await drive.read_limits():
+            case Ok(limits):
+                self.snap.hsp_hz = limits.high_speed
+            case Err(error):
+                self.snap.hsp_hz = None
+                self.snap.last_error = f"lecture HSP: {describe_error(error)}"
 
-        This is the fix for the desynchronisation that made the first version of
-        this console display invented numbers.
-        """
-        self.snap.last_error = why
+    async def _recover_if_latched(self) -> None:
+        """Reconnect a latched link -- after DISARMING, so nothing resumes by itself."""
+        if not self._built.drive.link_lost:
+            return
+        if self.snap.armed:
+            self.snap.armed = False
+            self.snap.last_action = (
+                "DESARME: liaison perdue. Le keepalive s'est arrete, le ttO du variateur "
+                "arrete le moteur. Reverifiez puis rearmez."
+            )
         self.snap.reconnects += 1
-        self.snap.link_ok = False
-        if self._client is not None:
-            sock = getattr(self._client, "socket", None)
-            if sock is not None:
-                with contextlib.suppress(Exception):
-                    sock.reset_input_buffer()
-                with contextlib.suppress(Exception):
-                    sock.reset_output_buffer()
-            with contextlib.suppress(Exception):
-                self._client.close()
-        time.sleep(0.1)
-        with contextlib.suppress(Exception):
-            self._open()
-
-    def _read(self, addr: int) -> int | None:
-        """One register, or None. Never returns a value from a failed exchange."""
-        for _ in range(READ_ATTEMPTS):
-            if self._client is None:
-                self._recover("client ferme")
-                continue
-            try:
-                rr = self._client.read_holding_registers(address=addr, count=1, slave=self.slave)
-            except Exception as exc:
-                self._recover(f"read {addr}: {type(exc).__name__}")
-                continue
-            if rr.isError():
-                self._recover(f"read {addr}: {rr}"[:120])
-                continue
-            regs = getattr(rr, "registers", None)
-            if not regs:
-                # An error response carries no registers; the first version
-                # indexed it blindly and turned that into an HTTP 500.
-                self._recover(f"read {addr}: reponse sans registre")
-                continue
-            self.snap.read_ok += 1
-            return int(regs[0])
-        self.snap.read_failed += 1
-        return None
-
-    def _write(self, addr: int, value: int) -> bool:
-        if self._client is None:
-            self._recover("client ferme")
-            return False
-        try:
-            rr = self._client.write_register(address=addr, value=value & 0xFFFF, slave=self.slave)
-        except Exception as exc:
-            self._recover(f"write {addr}: {type(exc).__name__}")
-            return False
-        if rr.isError():
-            self._recover(f"write {addr}: rejete")
-            return False
-        return True
+        await self._connect()
 
     # --- operator actions, executed on THIS thread only -----------------
-    def _do_enable(self) -> str:
-        for word, expect in (
-            (W_SHUTDOWN, None),
-            (W_SWITCH_ON, None),
-            (W_ENABLE, "OPERATION_ENABLED"),
-        ):
-            if not self._write(CMD, word):
-                return f"echec CMD={word}"
-            time.sleep(0.15)
-            got = self._read(ETA)
-            if got is None:
-                return f"pas de reponse apres CMD={word}"
-            if got & FAULT_BIT:
-                return f"defaut present (ETA=0x{got:04X}), acquittez d'abord"
-            if expect is not None and decode_state(got) != expect:
-                return f"CMD={word} n'a pas mene a {expect} (ETA=0x{got:04X})"
-        return "ok"
-
-    def _do_speed(self, rpm: int) -> str:
-        rpm = max(0, min(self.max_rpm, rpm))
-        if not self._write(LFRD, rpm):
-            return "echec ecriture LFRD"
-        self.snap.setpoint_rpm = rpm
-        echo = self._read(LFRD)
-        if echo is None:
-            return f"consigne {rpm} envoyee mais relecture impossible"
-        if signed(echo) != rpm:
-            # Guards against a wrong register offset silently writing a speed
-            # into some other live Altivar parameter.
-            return f"relecture {signed(echo)} != {rpm} demande"
-        return "ok"
-
-    def _do_stop(self) -> str:
-        """Zero the reference, let the drive ramp on dEC, THEN drop the stage.
-
-        Writing 6 straight from OPERATION_ENABLED is CiA402 transition 8: it
-        removes torque at speed and freewheels.
-        """
-        self._write(LFRD, 0)
+    async def _zero_setpoint(self) -> str | None:
+        """LFRD = 0, verified by read-back. None on success, else why not."""
         self.snap.setpoint_rpm = 0
-        if not self._write(CMD, W_SWITCH_ON):
-            return "echec CMD=7"
-        deadline = time.time() + 25.0
-        while time.time() < deadline:
-            rfrd = self._read(RFRD)
-            if rfrd is not None and abs(signed(rfrd)) <= 5:
-                break
-            time.sleep(0.25)
-        self._write(CMD, W_SHUTDOWN)
-        return "ok"
+        match await self._built.drive.write_speed(MotorRpm(0)):
+            case Ok():
+                return None
+            case Err(error):
+                return describe_error(error)
 
-    def _do_estop(self) -> str:
+    async def _command(self, word: ControlWord) -> str | None:
+        match await self._built.drive.write_command(word):
+            case Ok():
+                return None
+            case Err(error):
+                return describe_error(error)
+
+    async def _do_enable(self) -> str:
+        # LFRD = 0 FIRST. The start sequence ends with CMD = 15, and 15 with a
+        # stale non-zero LFRD starts the motor at that speed. ATV320Drive.enable
+        # deliberately writes no speed of its own (that is policy), so the
+        # caller - this console - owns it.
+        failed = await self._zero_setpoint()
+        if failed is not None:
+            return f"ECHEC: LFRD=0 non confirme ({failed}); activation NON tentee"
+        match await self._built.drive.enable():
+            case Ok():
+                return "ok (LFRD=0 puis 6 -> 7 -> 15, chaque etape verifiee sur ETA)"
+            case Err(error):
+                return f"ECHEC activation: {describe_error(error)}"
+
+    async def _do_speed(self, rpm: int) -> str:
+        rpm = max(0, min(self.max_rpm, rpm))
+        match await self._built.drive.write_speed(MotorRpm(rpm)):
+            case Ok():
+                self.snap.setpoint_rpm = rpm
+                return "ok (relu sur LFRD)"
+            case Err(error):
+                return f"ECHEC consigne {rpm}: {describe_error(error)}"
+
+    async def _await_standstill(self) -> tuple[bool, str]:
+        """Poll RFRD until it READS 0. (confirmed, what was last seen)."""
+        drive = self._built.drive
+        rfrd = self.link.registers.rfrd
+        started = self._clock.monotonic()
+        last = "RFRD jamais lu"
+        while elapsed(started, self._clock.monotonic()) < STOP_WAIT_S:
+            match await drive.read_register(rfrd):
+                case Ok(raw):
+                    rpm = decode_speed(raw)
+                    if rpm == 0:
+                        return True, "RFRD=0"
+                    last = f"RFRD={rpm} tr/min"
+                case Err(error):
+                    last = f"RFRD illisible ({describe_error(error)})"
+            await asyncio.sleep(STOP_POLL_S)
+        return False, last
+
+    async def _do_stop(self) -> str:
+        """Zero the reference, remove the run command, and ONLY on a read RFRD = 0, write 6.
+
+        SWITCH_ON (7) out of OPERATION_ENABLED is CiA402 transition 5, which on
+        this drive ramps on dEC. SHUTDOWN (6) out of OPERATION_ENABLED is
+        transition 8 and freewheels - so it is written only once the shaft has
+        been MEASURED stopped, never on a timer.
+        """
+        zero_failed = await self._zero_setpoint()
+        run_failed = await self._command(ControlWord.SWITCH_ON)
+        confirmed, last = await self._await_standstill()
+        if not confirmed:
+            return (
+                f"ECHEC: arret NON confirme apres {STOP_WAIT_S:.0f} s ({last}). CMD=6 NON "
+                "envoye (ce serait une roue libre). "
+                + ("LFRD=0 ok" if zero_failed is None else f"LFRD=0 ECHEC: {zero_failed}")
+                + ", "
+                + ("CMD=7 ok" if run_failed is None else f"CMD=7 ECHEC: {run_failed}")
+                + ". Verifiez le variateur."
+            )
+        shutdown_failed = await self._command(ControlWord.SHUTDOWN)
+        if shutdown_failed is not None:
+            return f"arret confirme ({last}) mais CMD=6 ECHEC: {shutdown_failed}"
+        return f"ok ({last}, puis CMD=6)"
+
+    async def _do_estop(self) -> str:
         """Fastest stop actually available: zero the reference, KEEP the ramp.
 
-        Deliberately does not remove the run command: dropping the output stage
-        would coast, and this drive's DC bus absorbs only a few per cent of the
-        rotating energy, so letting its own ramp finish is faster.
+        Deliberately does not write 6: dropping the output stage would coast,
+        and letting the drive's own ramp finish is faster.
         """
-        self._write(LFRD, 0)
-        self.snap.setpoint_rpm = 0
-        self._write(CMD, W_SWITCH_ON)
         self.snap.armed = False
+        zero_failed = await self._zero_setpoint()
+        run_failed = await self._command(ControlWord.SWITCH_ON)
+        if zero_failed is None and run_failed is None:
+            return "ok (LFRD=0 relu, CMD=7: rampe dEC)"
+        return (
+            "ECHEC partiel: "
+            + ("LFRD=0 ok" if zero_failed is None else f"LFRD=0 ECHEC: {zero_failed}")
+            + ", "
+            + ("CMD=7 ok" if run_failed is None else f"CMD=7 ECHEC: {run_failed}")
+        )
+
+    async def _do_fault_reset(self) -> str:
+        reset_failed = await self._command(ControlWord.FAULT_RESET)
+        if reset_failed is not None:
+            return f"ECHEC CMD=128: {reset_failed}"
+        await asyncio.sleep(0.2)
+        shutdown_failed = await self._command(ControlWord.SHUTDOWN)
+        if shutdown_failed is not None:
+            return f"CMD=128 ok, CMD=6 ECHEC: {shutdown_failed}"
         return "ok"
 
-    def _do_fault_reset(self) -> str:
-        if not self._write(CMD, W_FAULT_RESET):
-            return "echec CMD=128"
-        time.sleep(0.2)
-        self._write(CMD, W_SHUTDOWN)
-        return "ok"
-
-    def _execute(self, cmd: Command) -> None:
-        handlers = {
-            "enable": self._do_enable,
-            "stop": self._do_stop,
-            "estop": self._do_estop,
-            "fault_reset": self._do_fault_reset,
-        }
-        result = self._do_speed(cmd.rpm) if cmd.action == "speed" else handlers[cmd.action]()
+    async def _execute(self, cmd: Command) -> None:
+        self.snap.last_action = f"{cmd.action}: en cours..."
+        result = await self._dispatch(cmd)
         label = cmd.action + (f" {cmd.rpm} tr/min" if cmd.action == "speed" else "")
         self.snap.last_action = f"{label}: {result}"
 
-    def _plausible_rpm(self, raw: int | None) -> int | None:
-        if raw is None:
-            return None
-        rpm = signed(raw)
+    async def _dispatch(self, cmd: Command) -> str:
+        match cmd.action:
+            case "enable":
+                return await self._do_enable()
+            case "speed":
+                return await self._do_speed(cmd.rpm)
+            case "stop":
+                return await self._do_stop()
+            case "estop":
+                return await self._do_estop()
+            case "fault_reset":
+                return await self._do_fault_reset()
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    # --- the cycle -------------------------------------------------------
+    def _plausible_rpm(self, rpm: MotorRpm) -> int | None:
         if abs(rpm) > MAX_PLAUSIBLE_RPM:
             self.snap.implausible += 1
-            self._recover(f"vitesse {rpm} tr/min impossible (plaque {NOMINAL_RPM})")
+            self.snap.last_error = f"vitesse {rpm} tr/min impossible (plaque {NOMINAL_RPM})"
             return None
         return rpm
 
-    def _plausible_current(self, raw: int | None) -> float | None:
-        if raw is None:
-            return None
-        amps = raw / 10.0
+    def _plausible_current(self, amps: float) -> float | None:
         if amps > MAX_PLAUSIBLE_CURRENT_A:
             self.snap.implausible += 1
-            self._recover(f"courant {amps} A impossible (plaque {NAMEPLATE_CURRENT_A} A)")
+            self.snap.last_error = f"courant {amps} A impossible (plaque {NAMEPLATE_CURRENT_A} A)"
             return None
         return round(amps, 1)
 
-    # --- the cycle -------------------------------------------------------
     def _clear_live_fields(self) -> None:
         """Everything derived from the status word becomes unknown.
 
@@ -391,49 +425,68 @@ class BusWorker(threading.Thread):
         self.snap.enabled = None
         self.snap.output_rpm = None
         self.snap.current_a = None
+        self.snap.fault = None
 
-    def run(self) -> None:
-        if not self._open():
-            self.snap.last_error = "le port ne s'ouvre pas (SoMove le tient ?)"
-        while not self._stop.is_set():
-            started = time.time()
+    def _show(self, status: DriveStatus) -> None:
+        self.snap.link_ok = True
+        self.snap.last_error = None
+        self.snap.status_word = status.status_word
+        self.snap.drive_state = status.state.name
+        self.snap.enabled = status.state is DriveState.OPERATION_ENABLED
+        self.snap.output_rpm = self._plausible_rpm(status.output_rpm)
+        self.snap.current_a = self._plausible_current(status.current)
+        if not status.fault_present:
+            self.snap.fault = "aucun"
+        elif status.fault is not None:
+            self.snap.fault = status.fault.name
+        else:
+            self.snap.fault = "defaut (LFT non lu)"
 
+    async def _poll(self) -> None:
+        match await self._built.drive.read_status():
+            case Ok(status):
+                self.snap.read_ok += 1
+                self._show(status)
+            case Err(error):
+                self.snap.read_failed += 1
+                self._clear_live_fields()
+                self.snap.last_error = describe_error(error)
+                return
+        # Keepalive: refresh the setpoint so the drive's ttO timer is fed. If
+        # this console dies, writes stop and the drive stops the motor by
+        # itself -- a watchdog outside this process.
+        if self.snap.armed and self.snap.enabled:
+            match await self._built.drive.write_speed(MotorRpm(self.snap.setpoint_rpm)):
+                case Ok():
+                    pass
+                case Err(error):
+                    self.snap.last_error = f"keepalive: {describe_error(error)}"
+
+    async def _main(self) -> None:
+        await self._connect()
+        while not self._stop_requested.is_set():
+            started: Monotonic = self._clock.monotonic()
             while True:
                 try:
-                    self._execute(self._commands.get_nowait())
+                    cmd = self._commands.get_nowait()
                 except queue.Empty:
                     break
-
-            word = self._read(ETA)
-            if word is None:
-                self._clear_live_fields()
-            else:
-                self.snap.link_ok = True
-                self.snap.last_error = None
-                self.snap.status_word = word
-                self.snap.drive_state = decode_state(word)
-                self.snap.enabled = self.snap.drive_state == "OPERATION_ENABLED"
-                self.snap.output_rpm = self._plausible_rpm(self._read(RFRD))
-                self.snap.current_a = self._plausible_current(self._read(LCR))
-                if word & FAULT_BIT or self.snap.fault_code is None:
-                    self.snap.fault_code = self._read(LFT)
-                if self.snap.hsp_hz is None:
-                    hsp = self._read(HSP)
-                    if hsp is not None:
-                        self.snap.hsp_hz = hsp / 10.0
-                # Keepalive: refresh the setpoint so the drive's ttO timer is
-                # fed. If this console dies, writes stop and the drive stops the
-                # motor by itself -- a watchdog outside this process.
-                if self.snap.armed and self.snap.enabled:
-                    self._write(LFRD, self.snap.setpoint_rpm)
-
+                await self._execute(cmd)
+            await self._recover_if_latched()
+            if not self._built.drive.link_lost:
+                await self._poll()
             self.snap.cycles += 1
-            self.snap.updated_at = time.time()
-            time.sleep(max(0.05, CYCLE_S - (time.time() - started)))
-
-        with contextlib.suppress(Exception):
-            if self._client is not None:
-                self._client.close()
+            self.snap.updated_at = self._clock.monotonic()
+            spent = elapsed(started, self._clock.monotonic())
+            await asyncio.sleep(max(0.05, CYCLE_S - spent))
+        # The driver's own stop: LFRD = 0, RFRD polled to standstill, only then
+        # 7 and 6 - and if standstill is not confirmed it leaves the run command
+        # and says so. Then the port is released.
+        match await self._built.drive.close():
+            case Ok():
+                self.exit_report = "arret confirme, port libere"
+            case Err(error):
+                self.exit_report = f"ATTENTION: {describe_error(error)}"
 
 
 worker: BusWorker | None = None
@@ -445,12 +498,10 @@ def need_worker() -> BusWorker:
     return worker
 
 
-class SpeedBody(BaseModel):
-    rpm: int = Field(ge=0, le=1380)
-
-
-class ArmBody(BaseModel):
-    motor_uncoupled: bool
+# Request bodies as annotated scalars rather than pydantic models: a BaseModel
+# subclass drags pydantic's explicit Any into this file under mypy strict.
+SpeedRpm = Annotated[int, Body(embed=True, ge=0, le=NOMINAL_RPM)]
+MotorUncoupled = Annotated[bool, Body(embed=True)]
 
 
 app = FastAPI(title="AnHeart bench console")
@@ -471,7 +522,7 @@ async def api_state() -> JSONResponse:
             "enabled": s.enabled,
             "output_rpm": s.output_rpm,
             "current_a": s.current_a,
-            "fault_code": s.fault_code,
+            "fault": s.fault,
             "hsp_hz": s.hsp_hz,
             "derived": s.derived(),
             "nameplate": {
@@ -490,16 +541,16 @@ async def api_state() -> JSONResponse:
             },
             "last_error": s.last_error,
             "last_action": s.last_action,
-            "age_s": round(time.time() - s.updated_at, 2),
+            "age_s": round(RealClock().monotonic() - s.updated_at, 2),
             "max_rpm": w.max_rpm,
         }
     )
 
 
 @app.post("/api/arm")
-async def api_arm(body: ArmBody) -> JSONResponse:
+async def api_arm(motor_uncoupled: MotorUncoupled) -> JSONResponse:
     w = need_worker()
-    w.snap.armed = bool(body.motor_uncoupled)
+    w.snap.armed = motor_uncoupled
     w.snap.last_action = "arme par l'operateur" if w.snap.armed else "desarme"
     return JSONResponse({"armed": w.snap.armed})
 
@@ -514,12 +565,12 @@ async def api_enable() -> JSONResponse:
 
 
 @app.post("/api/speed")
-async def api_speed(body: SpeedBody) -> JSONResponse:
+async def api_speed(rpm: SpeedRpm) -> JSONResponse:
     w = need_worker()
     if not w.snap.armed:
         raise HTTPException(409, "console non armee")
-    w.submit(Command("speed", body.rpm))
-    return JSONResponse({"queued": "speed", "rpm": body.rpm})
+    w.submit(Command("speed", rpm))
+    return JSONResponse({"queued": "speed", "rpm": rpm})
 
 
 @app.post("/api/stop")
@@ -587,7 +638,7 @@ PAGE = """
  <div class=c><div class=k>Fr&eacute;quence</div><div class=v id=hz>-</div></div>
  <div class=c><div class=k>Courant</div><div class=v id=amp>-</div></div>
  <div class=c><div class=k>Charge</div><div class=v id=tq>-</div></div>
- <div class=c><div class=k>D&eacute;faut LFT</div><div class=v id=flt>-</div></div>
+ <div class=c><div class=k>D&eacute;faut</div><div class=v id=flt>-</div></div>
  <div class=c><div class=k>ETA</div><div class=v id=eta>-</div></div>
  <div class=c><div class=k>Consigne</div><div class=v id=sp>-</div></div>
  <div class=c><div class=k>Qualit&eacute; liaison</div><div class=v id=lq>-</div></div>
@@ -600,7 +651,7 @@ PAGE = """
  <button class=go id=send disabled>Envoyer</button>
 </div>
 <div>
- <button class=go id=en disabled>1. Activer (6&rarr;7&rarr;15)</button>
+ <button class=go id=en disabled>1. Activer (LFRD=0, 6&rarr;7&rarr;15)</button>
  <button class=stop id=stp>2. Arr&ecirc;t en rampe</button>
  <button class=go id=fr>Acquitter d&eacute;faut</button>
 </div>
@@ -642,7 +693,7 @@ async function tick(){
   set('hz',  s.derived.hz===null?null:s.derived.hz+' Hz');
   set('amp', s.current_a===null?null:s.current_a+' A');
   set('tq',  s.derived.torque_pct===null?null:s.derived.torque_pct+'%');
-  set('flt', s.fault_code===null?null:(s.fault_code===0?'aucun':s.fault_code));
+  set('flt', s.fault);
   set('eta', s.status_word===null?null:'0x'+s.status_word.toString(16).padStart(4,'0'));
   set('sp',  s.setpoint_rpm+' tr/min');
   set('lq',  s.link.error_rate_pct+'% err');
@@ -670,18 +721,25 @@ setInterval(tick,500); tick();
 def main() -> int:
     global worker  # noqa: PLW0603
     ap = argparse.ArgumentParser(description="Console manuelle ATV320")
-    ap.add_argument("--port", default=os.getenv("MOTOR_PORT", "COM3"))
-    ap.add_argument("--slave", type=int, default=int(os.getenv("MOTOR_SLAVE_ID", "248")))
-    ap.add_argument("--baud", type=int, default=int(os.getenv("MODBUS_BAUDRATE", "19200")))
-    ap.add_argument("--parity", default=os.getenv("MODBUS_PARITY", "E"))
-    ap.add_argument("--max-rpm", type=int, default=int(os.getenv("MOTOR_MAX_RPM", "300")))
+    add_link_arguments(ap)
+    ap.add_argument("--max-rpm", default=os.getenv("MOTOR_MAX_RPM", "300"))
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--http-port", type=int, default=8123)
+    ap.add_argument("--http-port", default="8123")
     args = ap.parse_args()
+    try:
+        max_rpm = arg_int(args, "max_rpm")
+        host = arg_text(args, "host")
+        http_port = arg_int(args, "http_port")
+        link = link_from_args(args)
+    except ValueError as exc:
+        print(f"configuration refusee: {exc}")
+        return 2
+    if not 0 <= max_rpm <= NOMINAL_RPM:
+        ap.error(f"--max-rpm={max_rpm} doit etre dans 0..{NOMINAL_RPM}")
 
-    worker = BusWorker(args.port, args.slave, args.baud, args.parity, args.max_rpm)
+    worker = BusWorker(link, max_rpm)
     worker.start()
-    print(f"bus: {args.port} @ {args.baud} 8{args.parity}1, esclave {args.slave}")
+    print(f"lien: {link.describe()}")
     print(f"plaque: {NOMINAL_RPM} tr/min a {BASE_HZ} Hz, {NAMEPLATE_CURRENT_A} A, i={GEAR_RATIO}")
     print(f"rejet des lectures > {MAX_PLAUSIBLE_CURRENT_A} A ou > {MAX_PLAUSIBLE_RPM} tr/min")
     time.sleep(1.5)
@@ -691,12 +749,16 @@ def main() -> int:
     else:
         print(f"liaison NON etablie: {s.last_error}")
         print("La console demarre quand meme et affichera l'etat reel de la liaison.")
-    print(f"\n  ->  http://{args.host}:{args.http_port}\n")
+    print(f"\n  ->  http://{host}:{http_port}\n")
     print("Rien ne tourne avant que VOUS armiez et cliquiez.")
     try:
-        uvicorn.run(app, host=args.host, port=args.http_port, log_level="warning")
+        uvicorn.run(app, host=host, port=http_port, log_level="warning")
     finally:
+        # The worker's exit runs the driver's stop sequence; wait for it rather
+        # than letting a daemon thread die mid-stop with the process.
         worker.shutdown()
+        worker.join(timeout=SHUTDOWN_JOIN_S)
+        print(f"sortie: {worker.exit_report}")
     return 0
 
 
