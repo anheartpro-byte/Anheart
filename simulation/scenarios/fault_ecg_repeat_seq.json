@@ -1,0 +1,24 @@
+{
+  "name": "fault_ecg_repeat_seq",
+  "description": "The DSP re-emits its previous metrics (same seq) for 45 s: 'unchanged' must not read as 'still true'.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_repeat_seq",
+      "duration_s": 45
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_stale"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "auto_jog_subject_unfit",
+  "description": "Deconditioned subject: high resting rate, strong response, fatigue.",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject": {
+    "hr_rest": 82,
+    "k_g": 140,
+    "fatigue": 0.2
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

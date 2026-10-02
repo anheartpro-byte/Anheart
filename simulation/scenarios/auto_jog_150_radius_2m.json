@@ -1,0 +1,21 @@
+{
+  "name": "auto_jog_150_radius_2m",
+  "description": "Jog zone with the reference radius at 2.0 m: the same heart response needs less speed.",
+  "tags": [
+    "auto",
+    "nominal",
+    "jog",
+    "geometry"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "geometry": {
+    "reference_radius_m": 2.0
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "min_in_zone_fraction": 0.5
+  }
+}

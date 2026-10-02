@@ -1,0 +1,24 @@
+{
+  "name": "fault_drive_comm_timeout_auto",
+  "description": "Modbus link dies for 40 s mid-HOLD of the jog programme.",
+  "tags": [
+    "auto",
+    "fault",
+    "drive"
+  ],
+  "kind": "auto",
+  "duration_s": 1300,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "comms_loss",
+      "duration_s": 40
+    }
+  ],
+  "expect": {
+    "rules": [
+      "comms_lost"
+    ]
+  }
+}

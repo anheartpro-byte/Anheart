@@ -1,0 +1,29 @@
+{
+  "name": "fault_drive_motor_overload_manual",
+  "description": "The drive latches MOTOR_OVERLOAD at 27 rpm.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 320,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "drive_fault",
+      "fault": "MOTOR_OVERLOAD"
+    }
+  ],
+  "expect": {
+    "rules": [
+      "drive_fault"
+    ]
+  }
+}

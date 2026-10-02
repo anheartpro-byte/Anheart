@@ -1,0 +1,18 @@
+{
+  "name": "shutdown_sigterm_auto",
+  "description": "SIGTERM mid-HOLD of the jog programme.",
+  "tags": [
+    "auto",
+    "stop"
+  ],
+  "kind": "auto",
+  "duration_s": 1000,
+  "teardown_s": 90,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "shutdown"
+    }
+  ]
+}

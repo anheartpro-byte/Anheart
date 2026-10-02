@@ -1,0 +1,25 @@
+{
+  "name": "hr_critical",
+  "description": "The heart rate reads 180 bpm (critical 175): QUICK_STOP, the session ends.",
+  "tags": [
+    "auto",
+    "cardiac"
+  ],
+  "kind": "auto",
+  "duration_s": 1300,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_value",
+      "bpm": 180,
+      "duration_s": 30
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_critical"
+    ],
+    "end_reason": "safety_verdict"
+  }
+}

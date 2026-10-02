@@ -1,0 +1,68 @@
+{
+  "name": "manual_ladder",
+  "description": "Operator ladder 5 -> 10 -> 15 -> 20 -> 25 -> 27 -> 12 -> 0 output rpm.",
+  "tags": [
+    "manual",
+    "nominal"
+  ],
+  "kind": "manual",
+  "duration_s": 700,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 5,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 40,
+      "do": "manual_target",
+      "output_rpm": 10,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 80,
+      "do": "manual_target",
+      "output_rpm": 15,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 130,
+      "do": "manual_target",
+      "output_rpm": 20,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 190,
+      "do": "manual_target",
+      "output_rpm": 25,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 250,
+      "do": "manual_target",
+      "output_rpm": 27,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 330,
+      "do": "manual_target",
+      "output_rpm": 12,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 450,
+      "do": "manual_target",
+      "output_rpm": 0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 560,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 27.0
+  }
+}

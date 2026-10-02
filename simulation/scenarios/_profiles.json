@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "rev": 0,
+  "_comment": "Profiles the scenario battery adds to raspberry-pi/config/profiles.default.json. The shipped profiles cap max_rpm at 276 motor rpm (5.5 output rpm, the uncoupled-bench ceiling), which cannot reach their 118-138 bpm zone on the modelled subject; these reach the nameplate so a ~150 bpm 'jog' zone is attainable. NOT clinically signed off: simulation only.",
+  "profiles": [
+    {
+      "profile_id": "jog_150_30_min",
+      "name": "jog ~150 bpm, 30 min (simulation)",
+      "total_duration_s": 1800.0,
+      "baseline_s": 180.0,
+      "warmup_max_s": 300.0,
+      "hold_min_s": 300.0,
+      "cooldown_s": 240.0,
+      "recovery_s": 300.0,
+      "zone_low_bpm": 145,
+      "zone_high_bpm": 155,
+      "hard_max_bpm": 165,
+      "critical_bpm": 175,
+      "subject_hr_max": 185,
+      "min_run_rpm": 55,
+      "max_rpm": 1380,
+      "warmup_rpm_ceiling_fraction": 0.6,
+      "channels": ["ECG"],
+      "allow_above_nameplate": false
+    },
+    {
+      "profile_id": "jog_150_short",
+      "name": "jog ~150 bpm, 13 min (simulation, for the real-DSP runs)",
+      "total_duration_s": 780.0,
+      "baseline_s": 60.0,
+      "warmup_max_s": 300.0,
+      "hold_min_s": 120.0,
+      "cooldown_s": 60.0,
+      "recovery_s": 60.0,
+      "zone_low_bpm": 145,
+      "zone_high_bpm": 155,
+      "hard_max_bpm": 165,
+      "critical_bpm": 175,
+      "subject_hr_max": 185,
+      "min_run_rpm": 55,
+      "max_rpm": 1380,
+      "warmup_rpm_ceiling_fraction": 0.6,
+      "channels": ["ECG"],
+      "allow_above_nameplate": false
+    }
+  ]
+}

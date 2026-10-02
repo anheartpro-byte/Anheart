@@ -1,0 +1,23 @@
+{
+  "name": "vasovagal_auto_hold",
+  "description": "Vasovagal collapse (-30 bpm in 20 s) mid-HOLD: the falling rate reads 'below zone' but the machine must NOT speed up; hr_drop ends the session.",
+  "tags": [
+    "auto",
+    "cardiac"
+  ],
+  "kind": "auto",
+  "duration_s": 1500,
+  "profile": "jog_150_30_min",
+  "subject_events": [
+    {
+      "event": "vasovagal_drop",
+      "at_s": 915,
+      "duration_s": 20
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_drop"
+    ]
+  }
+}

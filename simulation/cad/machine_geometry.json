@@ -1,0 +1,212 @@
+{
+  "schema": 1,
+  "units": {
+    "length": "m",
+    "source_length_unit": "mm"
+  },
+  "source": {
+    "file": "Gaura_Assy_2907.STEP",
+    "sha256": "033b711170872481f195d82612d23e53b2c35cd61d05c71f88f87a18ff338bf0",
+    "bytes": 16382483,
+    "root_assembly": "Gaura_Assy_2907",
+    "parts_placed": 128,
+    "distinct_products": 30,
+    "extractor": "simulation/cad/extract_geometry.py (OCCT/OCP XCAF reader, world-placed bounding boxes and ray casts)"
+  },
+  "frame": {
+    "vertical_axis": "+Y (the floor plate 'Surface anti derapante' is thinnest along Y)",
+    "arm_direction": "+Z (the 'Profile Polyester' beams are longest along Z); +Z is the capsule/outboard side"
+  },
+  "rotation_axis": {
+    "point_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "direction": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "from_part": "AXE KZBF45-416-P30-LA109-NA10-NB8-KA30-HA60-KB235-HB60_D\u00e9faut",
+    "coaxial_checks": [
+      {
+        "part": "6009-2rs1_c3_D\u00e9faut",
+        "occurrence": "NAUO65",
+        "offset_mm": 0.0
+      },
+      {
+        "part": "6009-2rs1_c3_D\u00e9faut",
+        "occurrence": "NAUO60",
+        "offset_mm": 0.0
+      },
+      {
+        "part": "skf_thrust_bearing_81209_tn_2_D\u00e9faut",
+        "occurrence": "NAUO61",
+        "offset_mm": 0.0
+      },
+      {
+        "part": "Disque de Frein_D\u00e9faut",
+        "occurrence": "NAUO114",
+        "offset_mm": 0.0
+      },
+      {
+        "part": "Entretoise Roulement_D\u00e9faut",
+        "occurrence": "NAUO127",
+        "offset_mm": 0.0
+      }
+    ],
+    "confirmed": true,
+    "note": "shaft bbox [-22.5, -45.0, -22.5, 22.5, 371.0, 22.5] mm; every bearing/brake-disc centre within 0.000 mm of it"
+  },
+  "gearmotor": {
+    "part": "KA37_DRS71S4_AL_DH_20260720_100354__D\u00e9faut",
+    "bbox_mm": [
+      -71.5,
+      -69.5,
+      -100.0,
+      341.01,
+      69.5,
+      110.5
+    ],
+    "note": "SEW KA37 DRS71S4, sits under the hub on the axis"
+  },
+  "arm": {
+    "outboard_tip_radius_m": 1.84,
+    "inboard_tip_radius_m": 1.16,
+    "top_of_beams_height_mm": 480.0,
+    "from_parts": [
+      "Profil\u00e9 Polyester 4000mm_D\u00e9faut"
+    ],
+    "note": "two polyester beams, X = +/-150 mm, span Z -1160..1840 mm. The product is NAMED '4000mm' but the modelled length is 3000 mm: check which is built.",
+    "counterweight_centroid_radius_m": 0.936,
+    "counterweight_part": "Support Poids_D\u00e9faut",
+    "support_wheel_radii_m": [
+      1.115,
+      1.795
+    ],
+    "support_wheel_part": "CGZJ50-N_D\u00e9faut"
+  },
+  "capsule": {
+    "part": "Human_Capsule_v2_A_D\u00e9faut",
+    "bbox_mm": [
+      -453.92,
+      480.0,
+      -377.76,
+      453.92,
+      685.0,
+      2427.76
+    ],
+    "inner_floor_height_mm": 485.0,
+    "inner_half_width_m": 0.4427,
+    "far_wall_profile_mm": [
+      {
+        "height_above_floor_mm": 5.0,
+        "inner_mm": 2378.2,
+        "outer_mm": 2381.4
+      },
+      {
+        "height_above_floor_mm": 25.0,
+        "inner_mm": 2389.7,
+        "outer_mm": 2392.8
+      },
+      {
+        "height_above_floor_mm": 50.0,
+        "inner_mm": 2401.5,
+        "outer_mm": 2404.4
+      },
+      {
+        "height_above_floor_mm": 100.0,
+        "inner_mm": 2417.7,
+        "outer_mm": 2420.5
+      },
+      {
+        "height_above_floor_mm": 150.0,
+        "inner_mm": 2425.4,
+        "outer_mm": 2428.1
+      },
+      {
+        "height_above_floor_mm": 195.0,
+        "inner_mm": 2425.4,
+        "outer_mm": 2428.1
+      }
+    ],
+    "near_wall_profile_mm": [
+      {
+        "height_above_floor_mm": 5.0,
+        "inner_mm": 328.2,
+        "outer_mm": 331.4
+      },
+      {
+        "height_above_floor_mm": 25.0,
+        "inner_mm": 339.7,
+        "outer_mm": 342.8
+      },
+      {
+        "height_above_floor_mm": 50.0,
+        "inner_mm": 351.5,
+        "outer_mm": 354.4
+      },
+      {
+        "height_above_floor_mm": 100.0,
+        "inner_mm": 367.7,
+        "outer_mm": 370.5
+      },
+      {
+        "height_above_floor_mm": 150.0,
+        "inner_mm": 375.4,
+        "outer_mm": 378.1
+      },
+      {
+        "height_above_floor_mm": 195.0,
+        "inner_mm": 375.4,
+        "outer_mm": 378.1
+      }
+    ],
+    "far_wall_inner_radius_at_floor_m": 2.3782,
+    "far_wall_inner_radius_max_m": 2.4254,
+    "far_wall_outer_radius_m": 2.4278,
+    "near_wall_inner_radius_m": 0.3282,
+    "near_wall_is_across_the_axis": true,
+    "canopy_part": "Human_Capsule_Top_Assembly_A_D\u00e9faut",
+    "canopy_span_along_arm_mm": [
+      -380.0,
+      475.0
+    ],
+    "orientation_inference": "The occupant LIES in the capsule along the arm (it is 2.8 m long, 0.9 m wide, 0.2 m deep). The raised canopy covers the inboard end (over the axis), so the head is inferred to be inboard and the feet outboard. Inference from shape only: LOW-MEDIUM confidence."
+  },
+  "rider": {
+    "modelled_in_cad": false,
+    "human_like_products": [],
+    "note": "No person is modelled in this STEP (no product named like a body/mannequin; the only 'Dummy' parts are a brake and a bearing block). Every rider position below is a PARAMETER, not a measurement."
+  },
+  "derived": {
+    "leg_tip_radius_m": {
+      "value": 2.4254,
+      "kind": "upper_bound",
+      "from": "capsule far (outboard) wall, inner surface, max over heights above the floor",
+      "must_be_measured": true,
+      "note": "The farthest any part of a person inside the capsule can be from the axis: the soles/toes pressed against the far wall. Conservative for g: the real toe radius is this or less."
+    },
+    "leg_tip_radius_stature_estimate_m": {
+      "value": 1.4218,
+      "kind": "estimate",
+      "from": "head crown against the inboard (near) wall at 0.328 m on the far side of the axis, plus an ASSUMED stature of 1.75 m",
+      "must_be_measured": true
+    },
+    "reference_radius_m": {
+      "value": 1.5,
+      "kind": "project_parameter",
+      "from": "NOT from the CAD. ARM_RADIUS_M=1.5 is the radius raspberry-pi/ tests and the console use as 'axis to occupant' (where the runtime quotes g and applies the g-dot limit). There is no seat in this CAD: the occupant lies down, so 'seat radius' has no single CAD value.",
+      "must_be_measured": true
+    }
+  },
+  "confidence": {
+    "rotation_axis": "HIGH",
+    "arm_reach": "HIGH (direct part geometry)",
+    "capsule_walls": "HIGH (ray casts on the capsule solid)",
+    "occupant_orientation": "LOW-MEDIUM (inferred from the canopy position)",
+    "leg_tip_radius": "UPPER BOUND ONLY - the rider is not in the CAD",
+    "reference_radius": "NONE from CAD - project parameter"
+  }
+}

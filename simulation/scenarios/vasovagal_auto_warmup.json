@@ -1,0 +1,18 @@
+{
+  "name": "vasovagal_auto_warmup",
+  "description": "Vasovagal collapse during WARMUP, while the controller is still accelerating.",
+  "tags": [
+    "auto",
+    "cardiac"
+  ],
+  "kind": "auto",
+  "duration_s": 1200,
+  "profile": "jog_150_30_min",
+  "subject_events": [
+    {
+      "event": "vasovagal_drop",
+      "at_s": 500,
+      "duration_s": 20
+    }
+  ]
+}
