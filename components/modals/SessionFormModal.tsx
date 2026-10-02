@@ -264,7 +264,7 @@ export function SessionFormModal({
                           <SelectItem key={patient._id} value={patient._id}>
                             {patient.firstName} {patient.lastName} (
                             {patient.email})
-                            {patient.role !== "user" && ` — ${patient.role}`}
+                            {patient.role !== "user" && ` (${patient.role})`}
                           </SelectItem>
                         ))}
                       </SelectContent>

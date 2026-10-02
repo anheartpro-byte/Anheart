@@ -36,6 +36,12 @@ import {
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { ECGWaveform } from "@/components/ECGWaveform";
+import { isTrainingKind } from "@/lib/training";
+import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
+import {
+  SessionKindBadge,
+  SessionOriginBadge,
+} from "@/components/training/TrainingBadges";
 
 export default function SessionDetailPage({
   params,
@@ -49,6 +55,7 @@ export default function SessionDetailPage({
   const sessionId = id as Id<"sessions">;
   const session = useQuery(api.sessions.getSession, { sessionId });
   const stats = useQuery(api.ecgData.getSessionDataStats, { sessionId });
+  const training = useQuery(api.training.getTrainingSession, { sessionId });
 
   // For active sessions, get recent data; for completed/failed, get all data
   const recentEcgData = useQuery(
@@ -84,6 +91,7 @@ export default function SessionDetailPage({
     );
   }
 
+  const isTraining = isTrainingKind(session.kind);
   const riderName = session.patient
     ? `${session.patient.firstName} ${session.patient.lastName}`
     : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
@@ -124,17 +132,18 @@ export default function SessionDetailPage({
         </Link>
         <div className="flex-1">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">
-              {riderName}
-            </h1>
+            <h1 className="text-2xl font-bold">{riderName}</h1>
             <SessionStatusBadge status={session.status} />
+            <SessionKindBadge kind={session.kind} />
+            <SessionOriginBadge origin={training?.origin} />
           </div>
           <p className="text-muted-foreground">
             {session.machine.name} •{" "}
             {format(session.startedAt, "PPP", { locale: dateLocale })}
           </p>
         </div>
-        {session.status === "active" && (
+        {(session.status === "active" ||
+          (isTraining && session.status === "pending")) && (
           <Link href={`/dashboard/sessions/${sessionId}/live`}>
             <Button>
               <Radio className="h-4 w-4 mr-2 animate-pulse" />
@@ -158,6 +167,11 @@ export default function SessionDetailPage({
                   This session encountered an error and was terminated. Any data
                   recorded before the failure is shown below.
                 </p>
+                {training?.endReason && (
+                  <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">
+                    {training.endReason}
+                  </p>
+                )}
                 {session.notes && session.notes.includes("Failure reason:") && (
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">
                     {session.notes.split("Failure reason:")[1]?.trim()}
@@ -180,8 +194,9 @@ export default function SessionDetailPage({
                   Waiting for Device
                 </h3>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  This session is waiting for the recording device to connect
-                  and start capturing data.
+                  {isTraining
+                    ? t("training.session.pending")
+                    : "This session is waiting for the recording device to connect and start capturing data."}
                 </p>
               </div>
             </div>
@@ -245,6 +260,9 @@ export default function SessionDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      {/* Training parameters, end reason and telemetry (auto / manual) */}
+      {isTraining && <TrainingDetailsCard sessionId={sessionId} />}
 
       {/* ECG Data Visualization */}
       {Object.keys(ecgSamples).length > 0 ? (

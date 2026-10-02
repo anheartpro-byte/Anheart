@@ -24,6 +24,7 @@ import { Plus, Activity, Search, Eye, Radio } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { SessionFormModal } from "@/components/modals/SessionFormModal";
+import { SessionKindCell } from "@/components/training/SessionKindCell";
 import {
   useReactTable,
   getCoreRowModel,
@@ -89,6 +90,11 @@ export default function SessionsPage() {
             {row.original.machineName}
           </span>
         ),
+      },
+      {
+        id: "kind",
+        header: t("training.session.kind"),
+        cell: ({ row }) => <SessionKindCell row={row.original} />,
       },
       {
         accessorKey: "status",

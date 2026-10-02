@@ -1,7 +1,7 @@
 /**
  * Shared ECG signal processing utilities (display/analysis only).
  *
- * The raw ADC samples stored in Convex are never modified — these helpers filter
+ * The raw ADC samples stored in Convex are never modified, these helpers filter
  * a copy purely for visualization and heart-rate estimation.
  *
  * The treatment mirrors the BITalino lab guide, which processes ECG with the
@@ -87,7 +87,7 @@ function rmssd(rr: number[]): number | null {
 }
 
 // ============================================
-// Biquad IIR filters (RBJ cookbook) — used for the Hamilton internal Butterworth
+// Biquad IIR filters (RBJ cookbook), used for the Hamilton internal Butterworth
 // stages and the mains-hum quality probe.
 // ============================================
 

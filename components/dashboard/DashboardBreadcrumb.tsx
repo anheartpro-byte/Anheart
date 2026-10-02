@@ -22,7 +22,10 @@ export function DashboardBreadcrumb() {
   // Map segment names to translated labels
   const getLabel = (segment: string): string => {
     // Handle IDs (usually the last segment that isn't a known page)
-    if (segment.length > 10 && !["new", "live", "edit"].includes(segment)) {
+    if (
+      segment.length > 10 &&
+      !["new", "live", "edit", "my-machines"].includes(segment)
+    ) {
       return "Details";
     }
 
@@ -34,6 +37,7 @@ export function DashboardBreadcrumb() {
       patients: t("patients"),
       settings: t("settings"),
       reports: t("reports"),
+      "my-machines": t("myMachines"),
       new: "New",
       live: "Live",
       edit: "Edit",

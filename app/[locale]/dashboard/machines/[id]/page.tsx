@@ -34,10 +34,15 @@ import {
   Trash2,
   Pencil,
   RotateCcw,
+  Play,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
+import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
+import { MachineLiveCard } from "@/components/training/MachineLiveCard";
+import { MachineProgramsCard } from "@/components/training/ProfileList";
+import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
 export default function MachineDetailPage({
   params,
@@ -60,6 +65,7 @@ export default function MachineDetailPage({
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [showLaunchModal, setShowLaunchModal] = useState(false);
 
   const deleteMachine = useMutation(api.machines.deleteMachine);
   const regenerateApiKey = useMutation(api.machines.regenerateApiKey);
@@ -160,10 +166,18 @@ export default function MachineDetailPage({
           <h1 className="text-2xl font-bold">{machine.name}</h1>
           <p className="text-muted-foreground">{machine.location || "-"}</p>
         </div>
-        <MachineStatusBadge
-          status={machine.status}
-          isDeleted={machine.isDeleted}
-        />
+        <div className="flex items-center gap-3">
+          {canManage && !machine.isDeleted && (
+            <Button onClick={() => setShowLaunchModal(true)}>
+              <Play className="h-4 w-4 mr-2" />
+              {t("training.launch.button")}
+            </Button>
+          )}
+          <MachineStatusBadge
+            status={machine.status}
+            isDeleted={machine.isDeleted}
+          />
+        </div>
       </div>
 
       {/* Machine Info - Full width grid layout */}
@@ -269,6 +283,19 @@ export default function MachineDetailPage({
           </Card>
         )}
       </div>
+
+      {/* Training: live state and synced programmes */}
+      {!machine.isDeleted && (
+        <div className="grid lg:grid-cols-2 gap-6">
+          <MachineLiveCard machineId={machineId} />
+          <MachineProgramsCard machineId={machineId} />
+        </div>
+      )}
+
+      {/* Launch rights - admins and gestionnaires of this machine */}
+      {canManage && !machine.isDeleted && (
+        <LaunchRightsCard machineId={machineId} isAdmin={isAdmin} />
+      )}
 
       {/* Danger Zone - Only show if not deleted */}
       {canManage && !machine.isDeleted && (
@@ -420,6 +447,13 @@ export default function MachineDetailPage({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Launch Auto Session Modal */}
+      <LaunchTrainingModal
+        open={showLaunchModal}
+        onOpenChange={setShowLaunchModal}
+        machineId={machineId}
+      />
 
       {/* Edit Machine Modal */}
       <MachineFormModal
