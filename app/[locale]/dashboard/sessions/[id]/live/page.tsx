@@ -142,6 +142,10 @@ export default function LiveSessionPage({
     );
   }
 
+  const riderName = session.patient
+    ? `${session.patient.firstName} ${session.patient.lastName}`
+    : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
+
   if (session.status !== "active") {
     return (
       <div className="text-center py-12 space-y-4">
@@ -165,7 +169,7 @@ export default function LiveSessionPage({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">
-            {session.patient.firstName} {session.patient.lastName}
+            {riderName}
           </h1>
           <p className="text-muted-foreground">
             {session.machine.name} - Started{" "}
@@ -357,7 +361,7 @@ export default function LiveSessionPage({
             <DialogTitle>End Recording Session?</DialogTitle>
             <DialogDescription>
               This will stop recording ECG data for patient{" "}
-              {session.patient.firstName} {session.patient.lastName}. The
+              {riderName}. The
               recorded data will be saved and available for review.
             </DialogDescription>
           </DialogHeader>

@@ -84,6 +84,10 @@ export default function SessionDetailPage({
     );
   }
 
+  const riderName = session.patient
+    ? `${session.patient.firstName} ${session.patient.lastName}`
+    : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
+
   const duration = session.endedAt
     ? formatDuration(session.endedAt - session.startedAt)
     : "In progress";
@@ -121,7 +125,7 @@ export default function SessionDetailPage({
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold">
-              {session.patient.firstName} {session.patient.lastName}
+              {riderName}
             </h1>
             <SessionStatusBadge status={session.status} />
           </div>
@@ -329,14 +333,14 @@ export default function SessionDetailPage({
           <CardContent className="space-y-3">
             <div>
               <p className="text-sm text-muted-foreground">Name</p>
-              <p className="font-medium">
-                {session.patient.firstName} {session.patient.lastName}
-              </p>
+              <p className="font-medium">{riderName}</p>
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Email</p>
-              <p className="font-medium">{session.patient.email}</p>
-            </div>
+            {session.patient && (
+              <div>
+                <p className="text-sm text-muted-foreground">Email</p>
+                <p className="font-medium">{session.patient.email}</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

@@ -1,6 +1,46 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+/**
+ * What the machine is doing right now, as the Pi's local panel reports it with
+ * each heartbeat. Values are copied from the Pi's TelemetrySnapshot; `bpm` is
+ * absent whenever the Pi has no fresh, trustworthy heart rate (never a stale
+ * number shown as live).
+ */
+export const liveStateValidator = v.object({
+  runMode: v.string(), // "repos" | "manuel" | "seance" | "arret"
+  phase: v.string(), // Phase wire value, e.g. "baseline", "warmup", "hold"
+  bpm: v.optional(v.number()),
+  motorRpm: v.number(), // measured, motor shaft
+  outputRpm: v.number(), // measured, arm (motor / 49.79)
+  setpointMotorRpm: v.number(),
+  gLoad: v.number(), // resultant g at the configured radius
+  safetyAction: v.string(), // "none" | "hold" | "reduce" | "ramp_down" | ...
+  driveState: v.optional(v.string()),
+  sessionId: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+
+/** One training preset as synced from the Pi's ProfileStore (read-only here). */
+export const machineProfileFields = {
+  profileId: v.string(),
+  name: v.string(),
+  totalDurationS: v.number(),
+  zoneLowBpm: v.number(),
+  zoneHighBpm: v.number(),
+  hardMaxBpm: v.number(),
+  criticalBpm: v.number(),
+  subjectHrMax: v.number(),
+  minRunRpm: v.number(),
+  maxRpm: v.number(),
+};
+
+export const sessionKindValidator = v.union(
+  v.literal("recording"), // legacy ECG-only session (src/main.py)
+  v.literal("auto"), // pre-saved programme, HR-controlled; remote or local
+  v.literal("manual"), // operator-set speed; ONLY ever started at the machine
+);
+
 export default defineSchema({
   // Users - Extended Clerk user data with roles and relationships
   users: defineTable({
@@ -16,6 +56,10 @@ export default defineSchema({
     lastName: v.string(),
     email: v.string(),
     language: v.union(v.literal("fr"), v.literal("en")),
+    // Physiology used to vet a training zone before a remote launch. A measured
+    // maximum always wins over the age estimate (Tanaka: 208 - 0.7 x age).
+    hrMax: v.optional(v.number()),
+    birthYear: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_clerk_id", ["clerkId"])
@@ -49,6 +93,30 @@ export default defineSchema({
     .index("by_gestionnaire", ["gestionnaireId"])
     .index("by_machine_and_gestionnaire", ["machineId", "gestionnaireId"]),
 
+  // Launch rights: which users may launch AUTO training sessions on which
+  // machine. Granted and revoked only by an admin or a gestionnaire managing
+  // both the machine and the user. Manual sessions are never remote.
+  machine_user_permissions: defineTable({
+    machineId: v.id("machines"),
+    userId: v.id("users"),
+    grantedBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_machine", ["machineId"])
+    .index("by_user", ["userId"])
+    .index("by_machine_and_user", ["machineId", "userId"]),
+
+  // Training presets, mirrored from each Pi. The Pi is the authority; this
+  // table is replaced wholesale on every sync.
+  machine_profiles: defineTable({
+    machineId: v.id("machines"),
+    ...machineProfileFields,
+    storeRev: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_machine", ["machineId"])
+    .index("by_machine_and_profile", ["machineId", "profileId"]),
+
   // Machines - Raspberry Pi devices
   machines: defineTable({
     name: v.string(),
@@ -69,6 +137,9 @@ export default defineSchema({
     isDeleted: v.optional(v.boolean()), // Soft delete flag
     deletedAt: v.optional(v.number()), // When it was deleted
     deletedBy: v.optional(v.id("users")), // Who deleted it
+    // Reported by the Pi: whether this build accepts programmed (auto) sessions.
+    programsEnabled: v.optional(v.boolean()),
+    live: v.optional(liveStateValidator),
   })
     .index("by_api_key", ["apiKey"])
     .index("by_status", ["status"])
@@ -77,7 +148,9 @@ export default defineSchema({
   // Sessions - ECG recording sessions
   sessions: defineTable({
     machineId: v.id("machines"),
-    userId: v.id("users"), // Patient
+    // The rider. Optional only for sessions started at the machine with no
+    // rider chosen from the synced roster; every remote launch sets it.
+    userId: v.optional(v.id("users")),
     startedById: v.optional(v.id("users")), // Who started the session
     status: v.union(
       v.literal("pending"),
@@ -90,8 +163,24 @@ export default defineSchema({
     channels: v.array(v.string()),
     sampleRate: v.optional(v.number()), // Hz - copied from machine config at session start
     notes: v.optional(v.string()),
+    // --- training (absent on legacy recording sessions) ---
+    kind: v.optional(sessionKindValidator),
+    origin: v.optional(v.union(v.literal("remote"), v.literal("local"))),
+    profileId: v.optional(v.string()),
+    profileName: v.optional(v.string()),
+    zoneLowBpm: v.optional(v.number()),
+    zoneHighBpm: v.optional(v.number()),
+    totalDurationS: v.optional(v.number()),
+    subjectHrMax: v.optional(v.number()),
+    subjectAge: v.optional(v.number()),
+    subjectLabel: v.optional(v.string()),
+    operatorName: v.optional(v.string()),
+    localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
+    stopRequestedAt: v.optional(v.number()),
+    endReason: v.optional(v.string()),
   })
     .index("by_user", ["userId"])
+    .index("by_machine_and_local_ref", ["machineId", "localRef"])
     .index("by_machine", ["machineId"])
     .index("by_machine_and_status", ["machineId", "status"])
     .index("by_started_by", ["startedById"]),
@@ -147,6 +236,21 @@ export default defineSchema({
     reportFileId: v.optional(v.id("_storage")), // PDF report
     createdAt: v.number(),
   }).index("by_session", ["sessionId"]),
+
+  // Training telemetry, ~1 Hz, from the Pi's TelemetrySnapshot.
+  training_telemetry: defineTable({
+    sessionId: v.id("sessions"),
+    machineId: v.id("machines"),
+    t: v.number(), // unix ms, Pi clock
+    elapsedS: v.number(),
+    phase: v.string(),
+    bpm: v.optional(v.number()), // absent = no fresh trustworthy HR
+    motorRpm: v.number(),
+    outputRpm: v.number(),
+    setpointMotorRpm: v.number(),
+    gLoad: v.number(),
+    safetyAction: v.string(),
+  }).index("by_session_and_t", ["sessionId", "t"]),
 
   // Machine Heartbeats - For monitoring (can be cleaned up periodically)
   machine_heartbeats: defineTable({

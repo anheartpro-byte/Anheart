@@ -257,7 +257,7 @@ export const getSession = query({
       _id: v.id("sessions"),
       _creationTime: v.number(),
       machineId: v.id("machines"),
-      userId: v.id("users"),
+      userId: v.optional(v.id("users")),
       startedById: v.optional(v.id("users")),
       status: v.string(),
       startedAt: v.number(),
@@ -265,12 +265,18 @@ export const getSession = query({
       channels: v.array(v.string()),
       sampleRate: v.optional(v.number()),
       notes: v.optional(v.string()),
-      patient: v.object({
-        _id: v.id("users"),
-        firstName: v.string(),
-        lastName: v.string(),
-        email: v.string(),
-      }),
+      // null for a session started at the machine with no rider chosen.
+      patient: v.union(
+        v.object({
+          _id: v.id("users"),
+          firstName: v.string(),
+          lastName: v.string(),
+          email: v.string(),
+        }),
+        v.null(),
+      ),
+      kind: v.string(), // "recording" | "auto" | "manual"
+      subjectLabel: v.optional(v.string()),
       machine: v.object({
         _id: v.id("machines"),
         name: v.string(),
@@ -300,7 +306,7 @@ export const getSession = query({
     }
 
     // Fetch related data
-    const patient = await ctx.db.get(session.userId);
+    const patient = session.userId ? await ctx.db.get(session.userId) : null;
     const machine = await ctx.db.get(session.machineId);
     let startedBy = null;
     if (session.startedById) {
@@ -326,12 +332,16 @@ export const getSession = query({
       channels: session.channels,
       sampleRate: session.sampleRate,
       notes: session.notes,
-      patient: {
-        _id: patient!._id,
-        firstName: patient!.firstName,
-        lastName: patient!.lastName,
-        email: patient!.email,
-      },
+      patient: patient
+        ? {
+            _id: patient._id,
+            firstName: patient.firstName,
+            lastName: patient.lastName,
+            email: patient.email,
+          }
+        : null,
+      kind: session.kind ?? "recording",
+      subjectLabel: session.subjectLabel,
       machine: {
         _id: machine!._id,
         name: machine!.name,
@@ -367,6 +377,8 @@ export const listSessions = query({
       channels: v.array(v.string()),
       patientName: v.string(),
       machineName: v.string(),
+      kind: v.string(), // "recording" | "auto" | "manual"
+      origin: v.optional(v.string()), // "remote" | "local"
     }),
   ),
   handler: async (ctx, args) => {
@@ -426,7 +438,7 @@ export const listSessions = query({
     // Enrich with names
     const result = [];
     for (const session of accessibleSessions) {
-      const patient = await ctx.db.get(session.userId);
+      const patient = session.userId ? await ctx.db.get(session.userId) : null;
       const machine = await ctx.db.get(session.machineId);
 
       result.push({
@@ -437,8 +449,10 @@ export const listSessions = query({
         channels: session.channels,
         patientName: patient
           ? `${patient.firstName} ${patient.lastName}`
-          : "Unknown",
+          : (session.subjectLabel ?? "Unknown"),
         machineName: machine?.name ?? "Unknown",
+        kind: session.kind ?? "recording",
+        origin: session.origin,
       });
     }
 
@@ -466,14 +480,20 @@ export const getPendingSessionForMachine = internalQuery({
     v.null(),
   ),
   handler: async (ctx, args) => {
-    const session = await ctx.db
+    // Recording sessions only: an auto (training) session is the local
+    // panel's to pick up, via /api/machine/training/poll, and must never be
+    // mistaken by the ECG-only client for a plain recording.
+    const pending = await ctx.db
       .query("sessions")
       .withIndex("by_machine_and_status", (q) =>
         q.eq("machineId", args.machineId).eq("status", "pending"),
       )
-      .first();
+      .collect();
+    const session = pending.find(
+      (s) => s.kind === undefined || s.kind === "recording",
+    );
 
-    if (!session) return null;
+    if (!session || session.userId === undefined) return null;
 
     // Get machine config
     const machine = await ctx.db.get(args.machineId);
@@ -548,7 +568,7 @@ export const getActiveSessionForMachine = query({
 
     if (!session) return null;
 
-    const patient = await ctx.db.get(session.userId);
+    const patient = session.userId ? await ctx.db.get(session.userId) : null;
 
     return {
       _id: session._id,
@@ -557,7 +577,7 @@ export const getActiveSessionForMachine = query({
       channels: session.channels,
       patientName: patient
         ? `${patient.firstName} ${patient.lastName}`
-        : "Unknown",
+        : (session.subjectLabel ?? "Unknown"),
     };
   },
 });
@@ -613,7 +633,7 @@ export const getCompletedSessionsForUser = query({
     // Enrich with names
     const result = [];
     for (const session of sessions) {
-      const patient = await ctx.db.get(session.userId);
+      const patient = session.userId ? await ctx.db.get(session.userId) : null;
       const machine = await ctx.db.get(session.machineId);
 
       result.push({
@@ -625,7 +645,7 @@ export const getCompletedSessionsForUser = query({
         notes: session.notes,
         patientName: patient
           ? `${patient.firstName} ${patient.lastName}`
-          : "Unknown",
+          : (session.subjectLabel ?? "Unknown"),
         machineName: machine?.name ?? "Unknown",
       });
     }
