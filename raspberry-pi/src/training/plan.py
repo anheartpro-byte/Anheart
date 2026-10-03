@@ -1706,7 +1706,7 @@ class ProfileStore:
         if isinstance(parsed, Err):
             return self._recover_from_corruption(reason=parsed.error.detail, raw=raw.value)
         content = parsed.value
-        self._adopt(content)
+        self.adopt(content)
         detail = f"loaded {len(content.profiles)} profile(s) at rev {content.rev} from {self._path}"
         _LOG.info("%s", detail)
         return Ok(
@@ -1819,7 +1819,7 @@ class ProfileStore:
     def _ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._profiles))
 
-    def _adopt(self, content: StoreContent) -> None:
+    def adopt(self, content: StoreContent) -> None:
         """Replace the cache. Called only with content that has been parsed."""
         self._profiles = {profile.profile_id: profile for profile in content.profiles}
         self._rev = content.rev
@@ -1961,7 +1961,7 @@ class ProfileStore:
         parsed = parse_store(raw.value)
         if isinstance(parsed, Err):
             return Err(DefaultsUnusable(path=str(self._defaults_path), detail=parsed.error.detail))
-        self._adopt(parsed.value)
+        self.adopt(parsed.value)
         if loud:
             _LOG.error("%s", detail)
         else:

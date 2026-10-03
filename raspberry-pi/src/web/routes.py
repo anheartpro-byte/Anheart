@@ -90,6 +90,7 @@ from src.training.safety import (
 from src.training.types import Occupancy
 from src.units import OutputRpm, Seconds
 from src.web.deps import TOKEN_HEADER, Services, WebConfig
+from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
     AckRow,
@@ -364,6 +365,7 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
     """Profile CRUD and the dry-run phase-plan preview."""
     store = services.store
     geometry = services.geometry
+    writer = ProfileWriter(store)
 
     @app.get("/api/profiles", dependencies=auth, tags=["profiles"])
     async def list_profiles() -> ProfileListRow:
@@ -398,14 +400,14 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
         parsed = parse_profile(document, where=f"profile {profile_id!r}")
         match parsed:
             case Ok(profile):
-                return _commit_profile(store, profile, rev)
+                return await _commit_profile(writer, profile, rev)
             case Err(error):
                 raise _parse_failure(error)
 
     @app.delete("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
     async def delete_profile(profile_id: str, rev: int) -> ProfileListRow:
         """Delete one profile. Deleting the last one leaves an empty store."""
-        removed = store.delete(profile_id, expected_rev=StoreRev(rev))
+        removed = await writer.delete(profile_id, StoreRev(rev))
         match removed:
             case Ok(_):
                 return _profile_list(store)
@@ -955,9 +957,9 @@ def _profile_list(store: ProfileStore) -> ProfileListRow:
     )
 
 
-def _commit_profile(store: ProfileStore, profile: TrainingProfile, rev: int) -> ProfileRow:
+async def _commit_profile(writer: ProfileWriter, profile: TrainingProfile, rev: int) -> ProfileRow:
     """Write one validated profile, or raise the mapped failure."""
-    written = store.upsert(profile, expected_rev=StoreRev(rev))
+    written = await writer.upsert(profile, StoreRev(rev))
     match written:
         case Ok(_):
             return ProfileRow.of(profile)

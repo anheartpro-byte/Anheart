@@ -2700,7 +2700,10 @@ def test_latching_the_estop_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.ERROR, logger="src.training.safety"):
         rig.supervisor.latch_estop("subject asked to stop")
 
-    assert "subject asked to stop" in caplog.text
+    assert [(record.name, record.levelno) for record in caplog.records] == [
+        ("src.training.safety", logging.ERROR)
+    ]
+    assert "subject asked to stop" not in caplog.text
 
 
 # =========================================================================

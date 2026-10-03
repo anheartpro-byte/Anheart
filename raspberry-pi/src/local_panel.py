@@ -109,6 +109,7 @@ from src.local_config import (
 from src.motor.atv320 import ATV320Drive, serial_master
 from src.motor.drive import DriveBackend
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.panel_lifecycle import PanelTasks
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.monitor import PresenceMonitor
@@ -739,27 +740,14 @@ class LocalPanel:
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
-        tasks = {
-            asyncio.create_task(self._every(CONTROL_PERIOD, self.control_step, stop)),
+        control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_step, stop))
+        observers = (
             asyncio.create_task(self._every(ECG_PERIOD, self.ecg_step, stop)),
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
-            asyncio.create_task(web.serve()),
-            asyncio.create_task(_until(stop)),
-        }
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        stop.set()
-        web.request_exit()
-        failed = any(not task.cancelled() and task.exception() is not None for task in done)
-        results = await asyncio.gather(*pending, return_exceptions=True)
-        failed = failed or any(isinstance(result, BaseException) for result in results)
-        for task in done:
-            error = None if task.cancelled() else task.exception()
-            if error is not None:
-                _logger.error("console task failed: %r", error)
-        detail = await self.close()
-        _logger.warning("console stopped: %s", detail)
+        )
+        failed = await PanelTasks(stop, web, self.close).run(control, observers)
         return EXIT_FAILED if failed else EXIT_OK
 
     async def _every(
@@ -846,11 +834,6 @@ def build_drive(config: LocalConfig, clock: Clock) -> DriveSide:
             return DriveSide(backend=drive, simulator=None, release=release)
         case _ as unreachable:
             assert_never(unreachable)
-
-
-async def _until(stop: asyncio.Event) -> None:
-    """Wait for ``stop``; a ``None`` coroutine so every console task has one type."""
-    await stop.wait()
 
 
 def _nothing() -> None:

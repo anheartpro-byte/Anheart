@@ -267,6 +267,9 @@ include = [
     # shared supervisor, the drive and the BITalino are wired together, and
     # the exit path that releases the drive. Plus the link report it serves.
     "src/local_panel.py",
+    "src/panel_lifecycle.py",
+    "src/task_completion.py",
+    "src/web/profile_writer.py",
     "src/panel_status.py",
     # The dashboard link: it can submit a start and forward a stop, so every
     # branch that decides either is tested, like the rest of the console.
@@ -317,6 +320,9 @@ safety_chain = [
     "src/local_config.py",
     "src/bitalino_rfcomm_macos.py",
     "src/local_panel.py",
+    "src/panel_lifecycle.py",
+    "src/task_completion.py",
+    "src/web/profile_writer.py",
     "src/panel_status.py",
     "src/cloud_sync.py",
     "src/dsp.py",

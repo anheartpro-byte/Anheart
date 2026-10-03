@@ -117,6 +117,7 @@ from __future__ import annotations
 
 import logging
 import math
+from asyncio import CancelledError, create_task
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
@@ -150,6 +151,7 @@ from src.motor.drive import (
     describe_violation,
 )
 from src.result import Err, Ok, Result
+from src.task_completion import complete_owned
 from src.training.hr_control import (
     ControlInput,
     ControlPlan,
@@ -1533,11 +1535,8 @@ class TrainingRuntime:
         self._controller = self._build_controller(program)
         self._snapshot = self._build_snapshot(now)
         _logger.info(
-            "session started: profile=%s rev=%d subject=%s operator=%s total=%.0f s",
-            program.source_profile_id,
+            "programmed session started: rev=%d total=%.0f s",
             program.source_rev,
-            subject.subject_id,
-            subject.operator,
             program.total_duration_s,
         )
         return Ok(self._snapshot)
@@ -1584,9 +1583,8 @@ class TrainingRuntime:
         self._attendant_last_seen = now
         self._snapshot = self._build_snapshot(now)
         _logger.info(
-            "manual session started: occupancy=%s operator=%s ceiling=%d motor rpm",
+            "manual session started: occupancy=%s ceiling=%d motor rpm",
             occupancy.value,
-            operator,
             ceiling,
         )
         return Ok(self._snapshot)
@@ -1874,7 +1872,12 @@ class TrainingRuntime:
         refused = await self._check_drive_limits()
         if refused is not None:
             return refused
-        return await self._energise(now)
+        try:
+            return await self._energise(now)
+        except CancelledError:
+            self._enabled = True
+            await complete_owned(create_task(self.shutdown("arming cancelled")))
+            raise
 
     async def _check_drive_limits(self) -> StartRefusal | None:
         """Read tFr/HSP/LSP/ACC/dEC back and refuse limits this machine cannot arm on.
@@ -2272,7 +2275,7 @@ class TrainingRuntime:
             reached = self._tracker.usable(now)
             if reached is not None and reached >= program.profile.zone_low_bpm:
                 self._warmup_satisfied = True
-                _logger.info("warmup ended early at %d bpm: the zone was reached", reached)
+                _logger.info("warmup ended early: the zone was reached")
                 return Phase.HOLD
         if phase is Phase.DONE and self._end_reason is None:
             self._end_reason = EndReason.PROGRAMME_COMPLETE
@@ -2412,7 +2415,7 @@ class TrainingRuntime:
         self._latched = SafetyVerdict(
             action=action, rule=rule, detail=detail, latched=True, since=now
         )
-        _logger.error("runtime latched %s by rule %s: %s", action.name, rule, detail)
+        _logger.error("runtime latched %s by rule %s", action.name, rule)
 
     def acknowledge(
         self, operator: str, *, estop_released: bool = False
@@ -2910,7 +2913,7 @@ class TrainingRuntime:
         """
         if self._stop_requested is None:
             self._stop_requested = reason
-            _logger.warning("operator stop requested: %s", reason)
+            _logger.warning("operator stop requested")
 
     def request_estop(self, source: str) -> SafetyVerdict:
         """Latch the emergency stop and zero the reference, synchronously.

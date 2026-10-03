@@ -1312,7 +1312,7 @@ class SafetySupervisor:
             since=self._clock.monotonic(),
         )
         self._estop = verdict
-        _logger.error("operator emergency stop latched: %s", reason)
+        _logger.error("operator emergency stop latched")
         return verdict
 
     def trip_from_thread(self, rule: str, action: SafetyAction, detail: str = "") -> None:
@@ -1585,10 +1585,9 @@ class SafetySupervisor:
             return
         self._floor = verdict
         _logger.error(
-            "safety floor raised to %s by rule %s: %s",
+            "safety floor raised to %s by rule %s",
             verdict.action.name,
             verdict.rule,
-            verdict.detail,
         )
 
     def _drain_thread_trips(self, now: Monotonic) -> None:

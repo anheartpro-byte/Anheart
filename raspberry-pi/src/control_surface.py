@@ -593,7 +593,7 @@ class ControlSurface:
                 detail=receipt.verdict.detail,
             )
         )
-        _logger.error("emergency stop submitted by %r: %s", operator, reason)
+        _logger.error("emergency stop submitted")
         return receipt
 
     def take_estop(self) -> EstopReceipt | None:
@@ -812,7 +812,7 @@ class ControlSurface:
         self._refused += 1
         self._starting = False
         self._publish(EventKind.REFUSED, self._clock.monotonic(), operator, detail)
-        _logger.warning("command refused by the loop: %s", detail)
+        _logger.warning("command refused by the loop")
 
     def note_presence(self, operator: str) -> Monotonic:
         """Record an attendant presence ping. Returns the instant recorded.
@@ -894,17 +894,17 @@ class ControlSurface:
     def _refuse_start(self, refusal: StartRefusal) -> Err[StartRefusal]:
         """Count and log a refused start, then return it."""
         self._refused += 1
-        _logger.warning("start refused: %r", refusal)
+        _logger.warning("start refused: %s", type(refusal).__name__)
         return Err(refusal)
 
     def _refuse_command(self, refusal: CommandRefusal) -> Err[CommandRefusal]:
         """Count and log a refused target or fault reset, then return it."""
         self._refused += 1
-        _logger.warning("command refused: %r", refusal)
+        _logger.warning("command refused: %s", type(refusal).__name__)
         return Err(refusal)
 
     def _refuse_end(self, refusal: EndRefusal) -> Err[EndRefusal]:
         """Count and log a refused end, then return it."""
         self._refused += 1
-        _logger.warning("end refused: %r", refusal)
+        _logger.warning("end refused: %s", type(refusal).__name__)
         return Err(refusal)
