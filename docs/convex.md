@@ -199,7 +199,8 @@ Règles propres aux séances d'entraînement (`convex/training.ts`) :
 
 | Action | Qui |
 |---|---|
-| Voir l'état en direct et les programmes d'une machine | admin, gestionnaire de la machine, ou patient détenant le droit de lancement sur cette machine. |
+| Voir la disponibilité et les programmes d'une machine | admin, gestionnaire de la machine, ou patient détenant le droit de lancement sur cette machine. |
+| Lire ses mesures live | admin, gestionnaire de la machine, ou pratiquant de la séance live sur cette même machine. Un droit de lancement seul ne donne pas accès aux mesures d'un autre pratiquant. |
 | **Accorder / retirer un droit de lancement** | admin, ou gestionnaire de la machine. Pour accorder, le gestionnaire doit **aussi** gérer le patient (`canAccessUser`). Seul un `user` peut recevoir le droit : admins et gestionnaires l'ont déjà. |
 | **Lancer une séance auto** | un `user` pour **lui-même seulement**, s'il a le droit sur la machine ; un admin ou un gestionnaire de la machine, pour lui-même ou pour un patient qu'il gère. |
 | **Arrêter / annuler** | le pratiquant de la séance, ou un admin / gestionnaire de la machine. |
@@ -207,6 +208,16 @@ Règles propres aux séances d'entraînement (`convex/training.ts`) :
 | Lire la télémétrie et le détail d'une séance | le pratiquant, ou admin / gestionnaire de la machine. |
 
 Autres règles notables :
+
+- `listLaunchableMachines` et `getMachineLive` gardent la disponibilité, les
+  programmes et l'indicateur de péremption accessibles aux utilisateurs
+  autorisés à lancer. Leur champ `live` vaut `null` si le demandeur n'a pas le
+  droit de lire cette séance. Un identifiant de séance absent, invalide,
+  supprimé ou appartenant à une autre machine ne débloque jamais ce champ pour
+  un simple utilisateur. Les tests `convex/trainingPrivacy.test.ts` passent par
+  les vrais handlers et les tables Convex en mémoire, avec identités Clerk
+  synthétiques ; ils ne couvrent pas encore la future matrice par organisation
+  d'ANH-132.
 
 - **Créer une machine** : admin seulement. Le rôle d'un compte ne change que par
   un admin (`users.updateUserRole`).

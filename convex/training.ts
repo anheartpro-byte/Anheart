@@ -40,6 +40,7 @@ import {
   getCurrentUserOrThrow,
 } from "./lib/auth";
 import { liveStateValidator, machineProfileFields } from "./schema";
+import { authorizedMachineLive } from "./lib/trainingPrivacy";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -361,7 +362,7 @@ export const listLaunchableMachines = query({
         programsEnabled: machine.programsEnabled ?? false,
         live:
           machine.live && now - machine.live.updatedAt < LIVE_FRESH_MS
-            ? machine.live
+            ? await authorizedMachineLive(ctx, me, machine)
             : null,
         profiles: await profilesFor(ctx, id),
         myHrMax: effectiveHrMax(me, now),
@@ -549,7 +550,7 @@ export const getMachineLive = query({
     if (!(await canSeeMachineTraining(ctx, me, args.machineId))) return null;
     const machine = await ctx.db.get(args.machineId);
     if (!machine) return null;
-    const live = machine.live ?? null;
+    const live = await authorizedMachineLive(ctx, me, machine);
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
