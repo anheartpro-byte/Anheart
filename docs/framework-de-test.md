@@ -26,6 +26,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 12. [Les « xfail strict » et le cas résiduel S07](#12-les--xfail-strict--et-le-cas-résiduel-s07)
 13. [La géométrie extraite de la CAO](#13-la-géométrie-extraite-de-la-cao)
 14. [Pièges connus](#14-pièges-connus)
+15. [CI](#15-ci)
 
 ---
 
@@ -33,8 +34,8 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 
 | Suite | Dossier | Ce qu'elle teste | Nombre de tests (collectés) |
 |---|---|---|---|
-| Tests du Pi | `raspberry-pi/tests/` | chaque module de `raspberry-pi/src` isolément, plus la console complète (`build_panel`) pilotée par son API HTTP | **3187** |
-| Tests de la simulation | `simulation/tests/` | le **vrai** runtime de `raspberry-pi/src` en boucle fermée contre le variateur simulé, la physiologie simulée et l'ECG simulé : scénarios, cohorte, matrice de pannes | **985** |
+| Tests du Pi | `raspberry-pi/tests/` | chaque module de `raspberry-pi/src` isolément, plus la console complète (`build_panel`) pilotée par son API HTTP | **3200** |
+| Tests de la simulation | `simulation/tests/` | le **vrai** runtime de `raspberry-pi/src` en boucle fermée contre le variateur simulé, la physiologie simulée et l'ECG simulé : scénarios, cohorte, matrice de pannes | **987** |
 
 Les nombres viennent de `pytest --co -q` (voir plus bas). Ils changent à chaque
 ajout de test.
@@ -56,9 +57,7 @@ enregistreur de toutes les trames envoyées au variateur, un modèle rapide de
 capteur de fréquence cardiaque, le vérificateur d'invariants et le
 visualiseur. Le détail des modules du Pi est dans [raspberry-pi.md](raspberry-pi.md).
 
-> Note : au moment de la rédaction, le dossier `simulation/` n'est **pas suivi
-> par git** (`git status` le montre en `??`). Il existe sur le disque de
-> développement mais n'a pas encore été commité.
+Le dossier `simulation/` est versionné ; ses sorties (`simulation/out/`) ne le sont pas.
 
 ## 2. Prérequis communs
 
@@ -121,7 +120,7 @@ Autres éléments :
 ```sh
 cd raspberry-pi
 .venv/bin/python -m pytest --co -q | tail -1
-# ======================== 3187 tests collected in 2.08s =========================
+# 3200 tests collected (instantané du 3 octobre 2026)
 ```
 
 ### 3.3 Lancer un seul fichier, un seul test
@@ -159,16 +158,16 @@ bash scripts/check.sh          # macOS / Linux
 # .\scripts\check.ps1          # Windows
 ```
 
-> **Piège :** `raspberry-pi/scripts/check.sh` n'a **pas** le bit exécutable dans
-> le dépôt (mode git `100644`). `./scripts/check.sh` répond donc
-> « permission denied ». Lancez-le avec `bash scripts/check.sh`.
+Le script a le bit exécutable ; `bash scripts/check.sh` reste utilisable sur
+les systèmes qui ne préservent pas ce bit.
 
 **Ce que couvre le 100 % de branches.** Le seuil de 100 % ne s'applique qu'à
 la **chaîne de sécurité**, listée dans `[tool.coverage.report] include` de
 `raspberry-pi/pyproject.toml` : `units`, `result`, `clock`, `motor/*`,
 `training/*`, `sim/*`, `bitalino_client`, `geometry`, `ecg_pipeline`,
 `local_config`, `bitalino_rfcomm_macos`, `local_panel`, `panel_status`,
-`cloud_sync`, `dsp`, `sensors/*`, `presence/*`. Le code web, l'ancien client
+`cloud_sync`, `dsp`, `sensors/*`, `presence/*`, `panel_lifecycle`,
+`task_completion` et `web/profile_writer`. Le reste du code web, l'ancien client
 Convex et le tampon SQLite sont mesurés mais ne bloquent pas.
 
 **Dette déclarée.** `src/signal_processing.py` fait partie de la chaîne de
@@ -977,9 +976,67 @@ vérifie ce refus (`manual_32_rpm_refused`, `manual_27_then_32_refused`).
 | Symptôme | Cause | Solution |
 |---|---|---|
 | `ModuleNotFoundError: simulation` ou `src` | `PYTHONPATH` absent | `export PYTHONPATH=.:raspberry-pi`, depuis la racine |
-| `permission denied: ./scripts/check.sh` | le script du Pi n'est pas exécutable dans git | `bash scripts/check.sh` |
+| `permission denied: ./scripts/check.sh` | le système a perdu le bit exécutable | `bash scripts/check.sh` |
 | cas `SKIPPED` dans `quick --failures` | cas à vrai DSP | ajoutez `--dsp` |
+| scénario à artefact ECG `SKIPPED` dans `quick --all` | le capteur DIRECT ne simule pas une électrode débranchée ou une perturbation du signal électrique | ajoutez `--dsp` ; la gate simulation complète garde les attentes de sécurité sur le vrai traitement du signal |
 | `test_the_committed_cohort_is_exactly_what_the_seed_generates` échoue | `cohort.json` édité à la main | `python -m simulation.cohort.generate` (ou annulez l'édition) |
 | test de reproductibilité CAO « skipped » | `simulation/cad/.venv-cad` ou le STEP absent | normal ; voir section 13 pour recréer le venv |
 | `drive FAULT` en fin de `simulation.run` | fermeture minimale du variateur simulé : SLF via ttO | attendu en simulation |
 | la batterie complète est longue | les scénarios `dsp` dominent | pendant le travail, utilisez `simulation.quick` ou `-k` |
+
+## 15. CI
+
+Le workflow `.github/workflows/ci.yml` s'exécute sur les PR vers `main` et
+`develop`, sur les push de ces branches, chaque nuit à 01:17 UTC, et à la demande
+depuis **Actions → CI → Run workflow**. Les jobs sont parallèles :
+
+| Job | Contrôles et artefacts |
+|---|---|
+| `pi-gate` | gate Pi complète, couverture de branches à 100 % sur la chaîne de sécurité ; `coverage.xml` |
+| `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
+| `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
+| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, build Next.js avec configuration publique de test |
+| `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
+| `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
+
+Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
+artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
+rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
+ANH-131 aura fourni les fichiers autorisés ; leur absence est signalée dans le
+journal, jamais présentée comme un rejeu réussi.
+
+L'audit Python résout d'abord les dépendances transitives pour Python 3.12 avec
+`uv pip compile --generate-hashes`, puis audite cette liste entièrement épinglée
+avec `--disable-pip --require-hashes`. Les dépendances transitives restent donc
+incluses. Cela évite un second environnement pip temporaire non utilisé par les
+gates. La liste d'audit résolue n'est pas un verrou de release.
+
+`.gitleaksignore` contient seulement deux empreintes historiques vérifiées :
+`YOUR_API_KEY` dans un exemple README et `invalid-key` dans un test HTTP refusé.
+Ces faux positifs ne sont pas des clés réelles. Un nouveau secret, un autre
+fichier ou une autre empreinte reste bloquant.
+
+### Lire un échec et relancer
+
+Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
+Les gates continuent après une erreur afin de montrer tous les contrôles cassés.
+Pour la couverture, télécharger l'artefact et lire les lignes/branches manquantes
+avec le rapport terminal ; ne pas baisser le seuil. Pour le rapport simulation,
+ouvrir `report.html` et retrouver le scénario par son identifiant. Une entrée
+`XFAIL` reste une anomalie connue, pas une réussite de sécurité.
+
+Reproduire avec la commande du job, corriger, puis pousser un nouveau commit.
+**Re-run failed jobs** convient seulement à une panne de runner/réseau : il ne
+change pas le code. Le SHA des deux avis indépendants doit être celui que la PR
+va fusionner. `agent-review/R1` et `agent-review/R2` représentent ces deux agents
+sous le même compte GitHub, selon la décision utilisateur du 3 octobre 2026 ;
+ils ne représentent pas deux approbations de personnes distinctes.
+
+### Infrastructure encore dépendante d'autres tickets
+
+Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
+local ne le remplacent pas. La matrice Convex complète par organisation et le
+contrat machine restent ANH-132. L'endurance 24 h reste ANH-164 : aucun job vide
+ne la simule. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
+Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni
+ces tickets dépendants.

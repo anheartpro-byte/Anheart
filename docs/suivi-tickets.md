@@ -108,6 +108,37 @@ listes de dependances ; Ruff/format/basedpyright/mypy restent verts. Le paquet
 natif construit sur macOS sert uniquement a la verification, pas a un deploiement
 preconstruit. La preversion distante reste la preuve du build Linux.
 
+### Revue, corrections et nettoyage autorisés du 3 octobre 2026
+
+L'utilisateur a autorisé la gestion de deux reviewers, les corrections et la
+fusion de la PR quand les preuves sont complètes. Il exige la CI avant fusion
+et accepte deux agents indépendants sous un seul compte GitHub. Leurs avis
+seront deux checks distincts liés au même SHA, pas deux personnes fictives.
+
+La première revue a refusé la gestion de l'annulation, l'accès aux mesures live,
+l'écriture de profils sur la boucle moteur et les détails privés dans les logs.
+La seconde a reproduit l'annulation pendant l'armement et le démarrage manuel
+indisponible après STOP, puis a atteint une limite d'usage avant son verdict.
+Les corrections ajoutent des régressions pour ces six comportements. Aucun de
+ces anciens résultats ne vaut une approbation du nouveau commit.
+
+Le nettoyage explicitement autorisé a remplacé atomiquement, avec leases, les
+cinq historiques de branches `main`, `develop`, `feat/dev`,
+`feat/pi-training-session` et ANH-71. Seul `raspberry-pi/buffer.db` a été retiré
+de leurs arbres historiques ; les 30 arbres ont été comparés, la CAO LFS est
+intacte et une sauvegarde privée permet une récupération. Les dix builds Git
+déclenchés par ce remplacement ont été annulés par le hold Vercel ; ses réglages
+sont restaurés et les huit alias de production n'ont pas changé de déploiement.
+Les anciennes références de PR, non modifiables par push, conservent encore
+l'ancien historique côté GitHub : EX-D n'est pas déclaré terminé.
+
+La CI préalable est décrite dans [framework-de-test.md](framework-de-test.md#15-ci).
+Les mises à jour de sécurité restent sur les majeures Next.js 16 et Clerk 6.
+L'audit Python résolu est vert. L'audit npm reste rouge sur l'unique advisory
+`GHSA-vfj7-8cjw-p6xm` de `braces`, propagé en cinq findings dans les outils lint
+Next.js ; aucun patch publié ni exception approuvée n'est disponible. La PR reste donc
+brouillon et ANH-71 In Progress, sans fusion ni clôture annoncée.
+
 ## File logicielle
 
 L'etape reprend l'ordre de la file Linear. Les parents ANH-122 et ANH-88 se cloturent apres leurs sous-tickets ; ils ne dupliquent pas leur implementation. Les dependances precises sont recontrolees avant chaque ticket. La presence dans cette liste ne signifie pas que ses bloqueurs sont resolus.

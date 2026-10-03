@@ -490,6 +490,8 @@ Badges de statut d'une machine :
 S'il n'y a aucune machine : « Aucune machine trouvée » et, pour
 l'administrateur, un second bouton **Nouvelle machine**.
 
+<a id="45-fenêtre-nouvelle-machine--modifier"></a>
+
 ### 4.5 Fenêtre « Nouvelle machine » / « Modifier »
 
 ![La fenêtre Nouvelle machine](img/site-05-machine-nouvelle.png)
@@ -703,6 +705,8 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
   **Retirer**.
 - Une erreur du serveur s'affiche dans un encadré rouge en haut de la carte.
 
+<a id="carte-danger-zone-titre-en-anglais"></a>
+
 #### Carte « Danger Zone » (titre en anglais)
 
 « Ces actions peuvent impacter le fonctionnement de la machine ».
@@ -775,6 +779,8 @@ Page vide :
 - patient : « Vous n'avez encore aucun droit de lancement. Un gestionnaire doit
   vous accorder le droit de lancer des séances sur une machine. » ;
 - autres : « Aucune machine disponible. ».
+
+<a id="48-fenêtre-lancer-une-séance-auto"></a>
 
 ### 4.8 Fenêtre « Lancer une séance auto »
 
@@ -901,6 +907,8 @@ séances : auto, manuelles, enregistrements.
 
 La liste montre au plus les 100 séances les plus récentes. « Aucune session
 trouvée » si vide.
+
+<a id="410-fenêtre-nouvelle-session-enregistrement-ecg"></a>
 
 ### 4.10 Fenêtre « Nouvelle session » (enregistrement ECG)
 
@@ -1972,6 +1980,8 @@ Une séance **manuelle** porte en plus la mention « Manuel : uniquement depuis 
 console de la machine » ; sa carte **Entraînement** n'a en général ni zone ni
 programme (champs affichés « - »).
 
+<a id="65-pourquoi-programmes-auto-désactivés-sur-cette-machine"></a>
+
 ### 6.5 Pourquoi « Programmes auto désactivés sur cette machine »
 
 C'est la **machine** qui le dit, d'après sa configuration. Avec la
@@ -2188,6 +2198,8 @@ Le patient, les administrateurs, et les gestionnaires des machines où il a
 fait ses séances (pour les séances) ou ses gestionnaires (pour sa fiche).
 
 ---
+
+<a id="9-état-actuel-ce-qui-manque-ce-qui-est-fragile"></a>
 
 ## 9. État actuel : ce qui manque, ce qui est fragile
 
