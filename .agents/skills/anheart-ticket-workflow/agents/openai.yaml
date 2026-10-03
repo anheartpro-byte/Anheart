@@ -1,0 +1,4 @@
+interface:
+  display_name: "Anheart ticket workflow"
+  short_description: "Linear branch names and ticket-linked commits"
+  default_prompt: "Use $anheart-ticket-workflow to start or version this Anheart Linear ticket."

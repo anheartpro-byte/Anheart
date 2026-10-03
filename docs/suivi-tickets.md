@@ -10,6 +10,21 @@ Sources : [file d'execution](https://linear.app/anheart/document/file-dexecution
 
 Un seul ticket est implemente a la fois. Avant de commencer : lire sa description complete avec ses EX-n, verifier ses bloqueurs dans Linear, identifier les fichiers et tests existants. Avant de passer au suivant : satisfaire les criteres, lancer les controles et exercer le comportement reel. **Done** exige la PR fusionnee dans `develop`, la CI verte, deux approbations et le commentaire de cloture. Un resultat local ne vaut pas une cloture Linear.
 
+### Convention Linear des prochaines branches et commits
+
+Décision utilisateur du 3 octobre 2026, enregistrée dans le skill
+[anheart-ticket-workflow](../.agents/skills/anheart-ticket-workflow/SKILL.md) :
+les prochains tickets utilisent le `gitBranchName` généré par Linear, au format
+`feature/<identifiant-en-minuscules>-<slug>`, et les nouveaux commits commencent
+par l'identifiant réel, par exemple `ANH-72: ajouter la gate CI`. `ENG-123` est
+un exemple, pas un préfixe à substituer aux identifiants Anheart.
+
+La PR #3 / ANH-71 garde explicitement son ancien nom de branche. Aucun renommage,
+fermeture ou remplacement de cette PR n'est demandé. Les commits déjà publiés
+ne sont pas réécrits pour cette nouvelle convention. Les prochains commits de
+ce ticket commencent quand même par `ANH-71:`. Le skill est également installé
+dans les skills utilisateur Codex pour être retrouvé lors des sessions futures.
+
 ## Ticket courant : ANH-71
 
 [ANH-71](https://linear.app/anheart/issue/ANH-71/commiter-et-relire-tout-le-travail-en-cours-branche-featpi-training) : versionner et relire le travail existant de `feat/pi-training-session` avant les nouvelles fonctionnalites.

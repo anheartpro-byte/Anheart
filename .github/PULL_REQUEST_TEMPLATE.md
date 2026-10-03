@@ -10,6 +10,8 @@ ANH- : lien Linear et résultat observable.
 
 ## Vérification
 
+- Nom de branche Linear : `feature/<identifiant-ticket-en-minuscules>-<slug>` (ANH-71 / PR #3 conserve son nom historique).
+- Nouveaux sujets de commits : `<IDENTIFIANT-TICKET>: résultat`.
 - SHA complet vérifié :
 - Gates / CI :
 - Usage réel du logiciel, entrées refusées et artefacts :
