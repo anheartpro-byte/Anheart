@@ -64,7 +64,7 @@ PY=raspberry-pi/.venv/bin/python
 
 ```sh
 cd simulation/cad
-uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python cadquery-ocp
+uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python -r requirements.txt
 .venv-cad/bin/python extract_geometry.py ../../CAO/Gaura_Assy_2907.STEP machine_geometry.json
 ```
 

@@ -51,7 +51,7 @@ jobs:
         if: matrix.gate == 'simulation-gate'
         run: |
           uv venv simulation/cad/.venv-cad
-          uv pip install --python simulation/cad/.venv-cad/bin/python cadquery-ocp==7.9.3.1.1
+          uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt
           simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
       - name: Pi gate
         if: matrix.gate == 'pi-gate'

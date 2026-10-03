@@ -4,7 +4,7 @@ Run it in the CAD venv (cadquery-ocp is ~300 MB, so it is kept out of the
 project venv)::
 
     cd simulation/cad
-    uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python cadquery-ocp
+    uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python -r requirements.txt
     .venv-cad/bin/python extract_geometry.py ../../CAO/Gaura_Assy_2907.STEP machine_geometry.json
 
 What it does, and why each step is there
@@ -46,10 +46,10 @@ from pathlib import Path
 from OCP.Bnd import Bnd_Box
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepGProp import BRepGProp
+from OCP.collections import Sequence_TDF_Label
 from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
 from OCP.GProp import GProp_GProps
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
-from OCP.OCP.collections import Sequence_TDF_Label
 from OCP.STEPCAFControl import STEPCAFControl_Reader
 from OCP.TCollection import TCollection_ExtendedString
 from OCP.TDataStd import TDataStd_Name
