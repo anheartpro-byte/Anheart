@@ -43,6 +43,7 @@ from simulation.invariants import check_expectations, check_invariants, measure
 from simulation.scenario import EcgMode, Scenario, load_scenario, resolve, scenario_paths
 from simulation.tracefile import JsonValue
 from src.result import Err
+from src.sim.physiology import SIGNAL_ARTIFACTS
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out"
 MAX_POINTS: Final[int] = 400
@@ -196,6 +197,8 @@ def fast(scenario: Scenario) -> Scenario | None:
     """``scenario`` on the DIRECT sensor model; ``None`` when it needs the real DSP."""
     if scenario.ecg.mode is EcgMode.DIRECT:
         return scenario
+    if any(window.event in SIGNAL_ARTIFACTS for window in scenario.events):
+        return None
     if any(isinstance(action, DSP_ONLY_ACTIONS) for action in scenario.actions):
         return None
     return replace(scenario, ecg=replace(scenario.ecg, mode=EcgMode.DIRECT))

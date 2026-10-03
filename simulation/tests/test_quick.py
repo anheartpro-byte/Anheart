@@ -71,6 +71,16 @@ def test_a_dsp_scenario_runs_on_the_fast_sensor_unless_asked() -> None:
     assert execute(Job(JobKind.SCENARIO, path, dsp=True)).status == "PASS"
 
 
+@pytest.mark.parametrize("name", ["fault_ecg_electrode_off_dsp", "fault_ecg_mains_burst_dsp"])
+def test_waveform_artifacts_need_real_dsp_and_keep_their_safety_expectations(name: str) -> None:
+    path = SCENARIO_DIR / f"{name}.json"
+    assert fast(load(path)) is None
+    assert execute(Job(JobKind.SCENARIO, str(path))).status == "SKIPPED"
+    report = execute(Job(JobKind.SCENARIO, str(path), dsp=True))
+    assert report.status == "PASS"
+    assert "hr_stale" in report.rules
+
+
 def test_a_scenario_that_needs_the_dsp_is_skipped(tmp_path: Path) -> None:
     path = tmp_path / "needs_dsp.json"
     path.write_text(
