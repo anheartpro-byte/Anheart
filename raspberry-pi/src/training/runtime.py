@@ -117,7 +117,7 @@ from __future__ import annotations
 
 import logging
 import math
-from asyncio import CancelledError, create_task
+from asyncio import CancelledError, Task, create_task, shield
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
@@ -1844,6 +1844,28 @@ class TrainingRuntime:
 
     async def _open_and_inspect(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         """Acquire the link and read the drive once. Assumes nothing about either."""
+        return await self._own_inspection(now, create_task(self._inspect_for_start(now)))
+
+    async def _own_inspection[E](
+        self, now: Monotonic, inspection: Task[Result[DriveStatus, E]]
+    ) -> Result[DriveStatus, E]:
+        try:
+            return await shield(inspection)
+        except CancelledError:
+            await complete_owned(create_task(self._finish_cancelled_inspection(now, inspection)))
+            raise
+
+    async def _finish_cancelled_inspection[E](
+        self, now: Monotonic, inspection: Task[Result[DriveStatus, E]]
+    ) -> None:
+        """Own the actual initial reply and stop observed motion before the caller exits."""
+        status = await inspection
+        if isinstance(status, Ok):
+            await self._judge_idle(now, status.value)
+            if self._enabled:
+                await self.shutdown("initial inspection cancelled")
+
+    async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         opened = await self._drive.open()
         if isinstance(opened, Err):
             # An unopened link is no evidence the drive is reachable, so it
@@ -2141,17 +2163,22 @@ class TrainingRuntime:
         if due is not None and now < due:
             return
         self._idle_next_at = Monotonic(now + IDLE_POLL_PERIOD)
+        status = await self._own_inspection(now, create_task(self._read_idle(now)))
+        if isinstance(status, Ok):
+            await self._judge_idle(now, status.value)
+
+    async def _read_idle(self, now: Monotonic) -> Result[DriveStatus, DriveError]:
         if not self._idle_link.open:
             opened = await self._drive.open()
             if isinstance(opened, Err):
                 self._idle_failed(opened.error)
-                return
+                return opened
             self._idle_link = replace(self._idle_link, open=True)
         began = self._clock.monotonic()
         status = await self._drive.read_status()
         if isinstance(status, Err):
             self._idle_failed(status.error)
-            return
+            return status
         link = self._idle_link
         self._idle_link = replace(
             link,
@@ -2161,7 +2188,7 @@ class TrainingRuntime:
         )
         self._idle_status = status.value
         self._idle_status_at = now
-        await self._judge_idle(now, status.value)
+        return status
 
     async def _judge_idle(self, now: Monotonic, status: DriveStatus) -> None:
         """A drive found enabled, or turning, while nothing is commanded: stop it now.
