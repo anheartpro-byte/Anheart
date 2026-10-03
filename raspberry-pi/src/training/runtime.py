@@ -1950,7 +1950,11 @@ class TrainingRuntime:
         here resumes motion.
         """
         self._enabled = status.state is DriveState.OPERATION_ENABLED
-        await self._exchange_write_speed(now, MotorRpm(0))
+        try:
+            await self._exchange_write_speed(now, MotorRpm(0))
+        except CancelledError:
+            await complete_owned(create_task(self.shutdown("startup recovery cancelled")))
+            raise
         self._latch(
             now,
             RULE_DRIVE_PRECOMMANDED,
