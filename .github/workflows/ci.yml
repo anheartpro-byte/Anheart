@@ -47,11 +47,12 @@ jobs:
           uv venv raspberry-pi/.venv
           uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
           uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
-      - name: Install CAD extractor
+      - name: Install and verify CAD extractor
         if: matrix.gate == 'simulation-gate'
         run: |
           uv venv simulation/cad/.venv-cad
           uv pip install --python simulation/cad/.venv-cad/bin/python cadquery-ocp==7.9.3.1.1
+          simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
       - name: Pi gate
         if: matrix.gate == 'pi-gate'
         env:

@@ -130,7 +130,7 @@ def test_the_extraction_is_reproducible(tmp_path: Path) -> None:
     subprocess.run(  # noqa: S603  # fixed interpreter and script, no shell
         [str(CAD_PYTHON), str(CAD_DIR / "extract_geometry.py"), str(STEP), str(out)],
         check=True,
-        capture_output=True,
+        capture_output=False,
         timeout=600,
     )
     assert document(out.read_text(encoding="utf-8")) == document(
