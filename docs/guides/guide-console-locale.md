@@ -138,7 +138,7 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 LEG_TIP_RADIUS_M=2.43 \
 ```
 
 Puis ouvrir dans un navigateur : <http://127.0.0.1:8731/> (ou
-<http://127.0.0.1:8090/> si vous n'avez pas mis `UI_PORT`, 8090 étant le port par
+<http://127.0.0.1:8080/> si vous n'avez pas mis `UI_PORT`, 8080 étant le port par
 défaut).
 
 Pour arrêter la console : **Ctrl C** dans le terminal. L'arrêt est propre : la
@@ -180,7 +180,7 @@ l'emporte sur `.env`.**
 | `MOTOR_MAX_RPM` | non (défaut `300`) | 0 à 1380 tr/min **moteur** | plafond de vitesse sans personne à bord. 300 = environ 6 tr/min au bras |
 | `GEAR_RATIO` | non (défaut `49.79`) | | rapport du réducteur |
 | `UI_HOST` | non (défaut `127.0.0.1`) | | adresse d'écoute de la page |
-| `UI_PORT` | non (défaut `8090`) | jamais `8123` | port de la page |
+| `UI_PORT` | non (défaut `8080`) | jamais `8123` | port de la page |
 | `UI_TOKEN` | obligatoire si `UI_HOST` n'est pas `127.0.0.1` | au moins 16 caractères | mot de passe partagé de la page |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
@@ -234,18 +234,18 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
 **Ouvrir la page :**
 
-* sur l'écran du Pi : <http://127.0.0.1:8090/> ;
+* sur l'écran du Pi : <http://127.0.0.1:8080/> ;
 * depuis un autre ordinateur du réseau : mettre dans `.env`
   `UI_HOST=0.0.0.0` et `UI_TOKEN=` suivi d'au moins 16 caractères, relancer, puis
-  ouvrir `http://<adresse IP du Pi>:8090/` et saisir le jeton dans la page
+  ouvrir `http://<adresse IP du Pi>:8080/` et saisir le jeton dans la page
   **Configuration** (voir §10). Sans jeton assez long, la console refuse de démarrer.
 
 Ne lancez **jamais** en même temps la console et `scripts/bench_console.py` sur le
 même câble : deux programmes parleraient au variateur.
 
 > Le fichier `scripts/anheart.service` (démarrage automatique par systemd) lance
-> `src.main`, **pas** la console `src.local_panel`. Il n'existe pas aujourd'hui de
-> service qui démarre la console tout seul : il faut la lancer à la main.
+> la console `src.local_panel`. Son installation et son activation restent
+> explicites : la présence du fichier ne démarre aucun service sur la machine.
 
 ## 4. Les règles de lecture à connaître avant tout
 
@@ -1203,7 +1203,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | Message | Ce que ça veut dire | Quoi faire |
 |---|---|---|
 | ✔ `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut ...` | rayon non fourni | ajouter `ARM_RADIUS_M=` avec la valeur mesurée |
-| ✔ `configuration: UI_PORT: 8123 est le port de scripts/bench_console.py` | port réservé à l'outil de banc | garder 8090 ou un autre port |
+| ✔ `configuration: UI_PORT: 8123 est le port de scripts/bench_console.py` | port réservé à l'outil de banc | garder 8080 ou un autre port |
 | `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback` | page ouverte au réseau sans jeton assez long | mettre un `UI_TOKEN` d'au moins 16 caractères |
 | `configuration: MOTOR_BACKEND: '' : attendu 'sim' ou 'serial'` | variable absente ou fausse | la renseigner |
 | `configuration: ECG_SOURCE: ... attendu 'sim', 'serial' ou 'rfcomm'` | idem | la renseigner |
@@ -1317,6 +1317,27 @@ ou machine pas au repos. La commande du §13.4 fait la même chose par l'API.
 **J'ai redémarré le Pi, tout est refusé.**
 L'attestation ne survit pas à un redémarrage. Refaites §13.1.
 
+**Puis-je démarrer une nouvelle séance manuelle après STOP ?**
+Oui, quand le mode revient à `REPOS` et que la vitesse mesurée indique l'arrêt.
+La carte manuelle rend alors les contrôles de démarrage, même si le dernier
+enregistrement de séance est encore conservé. Pendant `ARRET`, elle garde les
+informations de la séance qui s'arrête. Un verdict verrouillé doit toujours être
+acquitté avant un nouveau départ.
+
+**Un enregistrement de profil est lent ou l'onglet est fermé pendant l'écriture.**
+L'écriture sur disque s'effectue hors de la boucle moteur. Une écriture déjà
+commencée finit avant qu'un autre éditeur puisse enregistrer. Rechargez les
+profils : un second enregistrement avec une ancienne révision est refusé (409),
+il ne doit pas écraser la première modification.
+
+**Quels détails restent dans les journaux opérationnels ?**
+Les logs de démarrage de séance, de fin de warmup, de refus et d'arrêt gardent
+les événements, règles, actions, durées et révisions utiles au diagnostic sans
+les identifiants du passager/opérateur, les valeurs de fréquence cardiaque ni
+les motifs libres d'arrêt. Les traces nominatives d'attestation et d'acquittement
+du câblage restent distinctes. Le détail autorisé du verdict reste disponible
+dans la console ; les logs ne sont pas un dossier de santé.
+
 **Le bandeau rouge « ARRET D'URGENCE VERROUILLE » n'est pas apparu après E-STOP.**
 C'est un écart connu (§13.5) : il est effacé aussitôt. La pastille **Securite**
 `quick_stop` et **Etat** `stopping` rouge suffisent.
@@ -1366,8 +1387,9 @@ Pour être clair sur ce que ce guide garantit :
 * **Personne à bord** : refusée par configuration (jalon M6). La séance programmée n'a
   été conduite qu'en simulation, avec un passager simulé.
 * **Bouton « Demarrer la seance »** : corrigé après les captures, non rejoué dans la page.
-* **Démarrage sur le Pi** (§3.4) : tiré de la configuration, non rejoué. Aucun service
-  systemd ne lance la console.
+* **Démarrage sur le Pi** (§3.4) : tiré de la configuration et du fichier
+  `scripts/anheart.service`, non rejoué ; le service n'a pas été installé ni activé
+  pour ce guide.
 * **Perte de l'ECG en séance programmée** : non rejouée pour ce guide.
 * **Reconnexion d'un vrai BITalino** : non rejouée (le simulateur utilisé ici reste
   déconnecté).

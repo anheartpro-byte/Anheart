@@ -614,7 +614,7 @@ function loadPanel() {
   draft is dropped, because after any stop the target is 0.
 */
 function renderManual(snapshot) {
-  var manual = snapshot.manual;
+  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
   show(el("manual-idle"), !manual);
   show(el("manual-controls"), Boolean(manual));
   if (!manual) {
