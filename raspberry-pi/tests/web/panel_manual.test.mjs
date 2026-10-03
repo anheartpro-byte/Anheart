@@ -15,6 +15,7 @@ class Element {
     this.textContent = "";
     this.className = "";
     this.innerHTML = "";
+    this.value = "";
     this.classList = {
       toggle: (name, enabled) => {
         if (enabled) this.classes.add(name);
@@ -29,7 +30,7 @@ class Element {
   }
 }
 
-function panel() {
+function panel(storage = new Map()) {
   const nodes = new Map(
     [...html.matchAll(/id="([^"]+)"/g)].map((match) => [match[1], new Element()]),
   );
@@ -38,7 +39,13 @@ function panel() {
       getElementById: (id) => nodes.get(id) ?? null,
       createElement: () => new Element(),
     },
-    window: { addEventListener: () => undefined },
+    window: {
+      addEventListener: () => undefined,
+      sessionStorage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+      },
+    },
   });
   vm.runInContext(source, context, { filename: fileURLToPath(new URL("app.js", assets)) });
   context.state.panel = { radius_m: 1.5 };
@@ -84,4 +91,28 @@ test("a machine without a manual session shows start controls", () => {
   context.renderManual({ mode: "repos", manual: null });
   // Then named start controls are visible.
   assert.equal(nodes.get("manual-idle").classes.has("hidden"), false);
+});
+
+test("a typed operator survives same-tab reload without borrowing another actor", () => {
+  const storage = new Map();
+  const first = panel(storage);
+  first.nodes.get("manual-operator").value = " Synthetic operator ";
+  assert.equal(first.context.operatorName(), "Synthetic operator");
+  const reloaded = panel(storage);
+  assert.equal(reloaded.context.operatorName(), "Synthetic operator");
+  reloaded.nodes.get("attest-operator").value = "Different operator";
+  assert.equal(reloaded.context.operatorName(), "Different operator");
+  assert.equal(panel(storage).context.operatorName(), "Different operator");
+  assert.equal(panel().context.operatorName(), "");
+});
+
+test("unavailable browser storage does not invent an operator", () => {
+  const { context, nodes } = panel();
+  context.window.sessionStorage = {
+    getItem: () => { throw new Error("storage unavailable"); },
+    setItem: () => { throw new Error("storage unavailable"); },
+  };
+  assert.equal(context.operatorName(), "");
+  nodes.get("manual-operator").value = "Synthetic operator";
+  assert.equal(context.operatorName(), "Synthetic operator");
 });

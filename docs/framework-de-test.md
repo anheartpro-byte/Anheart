@@ -34,7 +34,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 
 | Suite | Dossier | Ce qu'elle teste | Nombre de tests (collectés) |
 |---|---|---|---|
-| Tests du Pi | `raspberry-pi/tests/` | chaque module de `raspberry-pi/src` isolément, plus la console complète (`build_panel`) pilotée par son API HTTP | **3200** |
+| Tests du Pi | `raspberry-pi/tests/` | chaque module de `raspberry-pi/src` isolément, plus la console complète (`build_panel`) pilotée par son API HTTP | **3208** |
 | Tests de la simulation | `simulation/tests/` | le **vrai** runtime de `raspberry-pi/src` en boucle fermée contre le variateur simulé, la physiologie simulée et l'ECG simulé : scénarios, cohorte, matrice de pannes | **987** |
 
 Les nombres viennent de `pytest --co -q` (voir plus bas). Ils changent à chaque
@@ -120,7 +120,7 @@ Autres éléments :
 ```sh
 cd raspberry-pi
 .venv/bin/python -m pytest --co -q | tail -1
-# 3200 tests collected (instantané du 3 octobre 2026)
+# 3208 tests collected (instantané du 3 octobre 2026)
 ```
 
 ### 3.3 Lancer un seul fichier, un seul test
@@ -987,8 +987,10 @@ vérifie ce refus (`manual_32_rpm_refused`, `manual_27_then_32_refused`).
 ## 15. CI
 
 Le workflow `.github/workflows/ci.yml` s'exécute sur les PR vers `main` et
-`develop`, sur les push de ces branches, chaque nuit à 01:17 UTC, et à la demande
-depuis **Actions → CI → Run workflow**. Les jobs sont parallèles :
+`develop`, sur les push de ces branches, et à la demande depuis
+**Actions → CI → Run workflow**. Le déclenchement nocturne à 01:17 UTC devient
+actif lorsque le workflow est présent sur la branche par défaut de GitHub.
+Les jobs sont parallèles :
 
 | Job | Contrôles et artefacts |
 |---|---|
@@ -1011,9 +1013,10 @@ avec `--disable-pip --require-hashes`. Les dépendances transitives restent donc
 incluses. Cela évite un second environnement pip temporaire non utilisé par les
 gates. La liste d'audit résolue n'est pas un verrou de release.
 
-`.gitleaksignore` contient seulement deux empreintes historiques vérifiées :
-`YOUR_API_KEY` dans un exemple README et `invalid-key` dans un test HTTP refusé.
-Ces faux positifs ne sont pas des clés réelles. Un nouveau secret, un autre
+`.gitleaksignore` contient seulement trois empreintes historiques vérifiées :
+`YOUR_API_KEY` dans un exemple README, `invalid-key` dans un test HTTP refusé,
+et la clé publiable synthétique du build CI (`ci-fixture.clerk.accounts.dev`).
+Ces faux positifs ne sont pas des secrets réels. Un nouveau secret, un autre
 fichier ou une autre empreinte reste bloquant.
 
 ### Lire un échec et relancer

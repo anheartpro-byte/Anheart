@@ -163,10 +163,19 @@ function operatorName() {
   for (var i = 0; i < ids.length; i += 1) {
     var value = document.getElementById(ids[i]).value.trim();
     if (value) {
+      try {
+        window.sessionStorage.setItem("anheart-operator", value);
+      } catch {
+        // This page can still attribute a command when storage is unavailable.
+      }
       return value;
     }
   }
-  return "";
+  try {
+    return window.sessionStorage.getItem("anheart-operator") || "";
+  } catch {
+    return "";
+  }
 }
 
 /* -------------------------------------------------------------------- api */
@@ -715,7 +724,7 @@ function doManualStart() {
   }
   api("/api/manual/start", {
     method: "POST",
-    body: { occupancy: "bench", operator: el("manual-operator").value },
+    body: { occupancy: "bench", operator: operatorName() },
   })
     .then(function (command) {
       state.manualDraft = null;
@@ -731,7 +740,7 @@ function doManualApply() {
   var note = el("manual-note");
   api("/api/manual/target", {
     method: "POST",
-    body: { output_rpm: state.manualDraft || 0, operator: el("manual-operator").value },
+    body: { output_rpm: state.manualDraft || 0, operator: operatorName() },
   })
     .then(function (command) {
       ok(note, "cible envoyee : " + command.detail + " - la machine y va aux limites de mouvement");
