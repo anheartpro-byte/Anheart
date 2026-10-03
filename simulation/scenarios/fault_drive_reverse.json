@@ -1,0 +1,28 @@
+{
+  "name": "fault_drive_reverse",
+  "description": "Motor phases swapped: a positive setpoint turns the shaft backwards.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 200,
+  "actions": [
+    {
+      "at_s": 0,
+      "do": "drive_reverse"
+    },
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    }
+  ],
+  "expect": {
+    "rules": [
+      "reverse_rotation"
+    ]
+  }
+}

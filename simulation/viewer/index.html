@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anheart 2D Simulator</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5b6573; --line: #d9dee5;
+    --accent: #2f6fdf; --setpoint: #9aa4b2; --hr: #d6336c; --hrlive: #7a1f45; --zone: rgba(47,158,68,.14);
+    --gref: #2f9e44; --gleg: #e8590c; --hz: #7048e8; --warn: #c92a2a; --ok: #2b8a3e;
+    --capsule: #e7ecf3; --arm: #8a94a3; --rider: #334155;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1217; --panel: #171b22; --ink: #e6e9ee; --muted: #9aa4b2; --line: #2a313c;
+      --accent: #6ea8fe; --setpoint: #6b7684; --hr: #f06595; --hrlive: #ffa8c5; --zone: rgba(81,207,102,.14);
+      --gref: #51cf66; --gleg: #ff922b; --hz: #9775fa; --warn: #ff6b6b; --ok: #69db7c;
+      --capsule: #222935; --arm: #6b7684; --rider: #cbd5e1;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1217; --panel: #171b22; --ink: #e6e9ee; --muted: #9aa4b2; --line: #2a313c;
+    --accent: #6ea8fe; --setpoint: #6b7684; --hr: #f06595; --hrlive: #ffa8c5; --zone: rgba(81,207,102,.14);
+    --gref: #51cf66; --gleg: #ff922b; --hz: #9775fa; --warn: #ff6b6b; --ok: #69db7c;
+    --capsule: #222935; --arm: #6b7684; --rider: #cbd5e1;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  header label { color: var(--muted); font-size: 12px; }
+  button, select, input[type=file] { font: inherit; color: var(--ink); background: var(--bg);
+           border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+  button:hover { border-color: var(--accent); }
+  #scrub { flex: 1 1 240px; }
+  main { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(300px, 420px); gap: 16px; padding: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+  #view { width: 100%; aspect-ratio: 1 / 1; display: block; }
+  .readouts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .tile .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile .v { font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tile .u { color: var(--muted); font-size: 12px; margin-left: 4px; font-weight: 400; }
+  .tile.wide { grid-column: span 2; }
+  .tile .v.small { font-size: 15px; }
+  .warn { color: var(--warn); } .ok { color: var(--ok); }
+  .charts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 860px) { .charts { grid-template-columns: 1fr; } }
+  .chart h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+  .chart canvas { width: 100%; height: 170px; display: block; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  #events { grid-column: 1 / -1; max-height: 220px; overflow: auto; font-size: 12px; }
+  #events div { padding: 2px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  #events span.t { display: inline-block; width: 70px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .empty { color: var(--muted); padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Anheart - simulation 2D</h1>
+  <input type="file" id="file" accept=".jsonl,.json" title="Charger une trace JSONL">
+  <label>live <select id="scenario"><option value="">(serveur live)</option></select></label>
+  <label>vitesse <select id="speed">
+    <option>1</option><option>5</option><option selected>20</option><option>60</option><option>120</option>
+  </select> x</label>
+  <button id="play">Lecture</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="position">
+  <span id="clock" style="font-variant-numeric: tabular-nums">t = 0 s</span>
+  <span id="source" class="note"></span>
+</header>
+<main>
+  <section class="panel">
+    <canvas id="view" width="800" height="800" aria-label="vue de dessus du bras"></canvas>
+    <div class="note" id="geomNote"></div>
+  </section>
+  <section class="panel">
+    <div class="readouts">
+      <div class="tile"><div class="k">Sortie</div><div class="v" id="rOut">-<span class="u">tr/min</span></div></div>
+      <div class="tile"><div class="k">Consigne</div><div class="v" id="rSet">-<span class="u">tr/min</span></div></div>
+      <div class="tile"><div class="k">Moteur</div><div class="v" id="rMotor">-<span class="u">tr/min</span></div></div>
+      <div class="tile"><div class="k">Frequence variateur</div><div class="v" id="rHz">-<span class="u">Hz</span></div></div>
+      <div class="tile"><div class="k" id="kGref">g reference</div><div class="v" id="rGref">-<span class="u">g</span></div></div>
+      <div class="tile"><div class="k" id="kGleg">g pointe du pied</div><div class="v" id="rGleg">-<span class="u">g</span></div></div>
+      <div class="tile"><div class="k">FC vraie / mesuree</div><div class="v" id="rHr">-<span class="u">bpm</span></div></div>
+      <div class="tile"><div class="k">Zone / cible</div><div class="v small" id="rZone">-</div></div>
+      <div class="tile"><div class="k">Phase / mode</div><div class="v small" id="rPhase">-</div></div>
+      <div class="tile"><div class="k">Variateur</div><div class="v small" id="rDrive">-</div></div>
+      <div class="tile wide"><div class="k">Securite</div><div class="v small" id="rSafety">-</div></div>
+      <div class="tile wide"><div class="k">Fin</div><div class="v small" id="rFinal">-</div></div>
+    </div>
+  </section>
+  <section class="panel charts">
+    <div class="chart"><h3>Vitesse de sortie (tr/min)</h3><canvas id="cRpm"></canvas>
+      <div class="legend"><span><i style="background:var(--accent)"></i>mesuree</span><span><i style="background:var(--setpoint)"></i>consigne</span></div></div>
+    <div class="chart"><h3>Frequence cardiaque (bpm)</h3><canvas id="cHr"></canvas>
+      <div class="legend"><span><i style="background:var(--hr)"></i>vraie</span><span><i style="background:var(--hrlive)"></i>mesuree</span><span><i style="background:var(--zone);height:8px"></i>zone</span></div></div>
+    <div class="chart"><h3>Charge centripete (g)</h3><canvas id="cG"></canvas>
+      <div class="legend"><span><i style="background:var(--gref)"></i>reference</span><span><i style="background:var(--gleg)"></i>pointe du pied</span></div></div>
+    <div class="chart"><h3>Frequence variateur (Hz)</h3><canvas id="cHz"></canvas>
+      <div class="legend"><span><i style="background:var(--hz)"></i>sortie variateur</span></div></div>
+  </section>
+  <section class="panel" id="events"><div class="empty">Charger une trace (bouton en haut) ou lancer un scenario live.</div></section>
+</main>
+<script>
+"use strict";
+const S = { meta: null, rows: [], angle: [0], events: [], final: null, cursor: 0, playing: false, live: false, es: null };
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "-" : Number(v).toFixed(d);
+
+function reset() {
+  if (S.es) { S.es.close(); S.es = null; }
+  Object.assign(S, { meta: null, rows: [], angle: [0], events: [], final: null, cursor: 0, playing: false, live: false });
+}
+function addRow(row) {
+  const prev = S.rows[S.rows.length - 1];
+  if (prev) {
+    const dt = row.t - prev.t;
+    const signed = (prev.measured_motor_rpm < 0 ? -1 : 1) * prev.output_rpm;
+    S.angle.push(S.angle[S.angle.length - 1] + signed / 60 * 2 * Math.PI * dt);
+  }
+  S.rows.push(row);
+}
+function ingest(obj) {
+  switch (obj.type) {
+    case "meta": S.meta = obj; break;
+    case "row": addRow(obj); break;
+    case "event": S.events.push(obj); break;
+    case "final": S.final = obj; break;
+    default: break;
+  }
+}
+function loadText(text, label) {
+  reset();
+  for (const line of text.split("\n")) { if (line.trim()) ingest(JSON.parse(line)); }
+  $("source").textContent = label;
+  afterLoad();
+}
+function afterLoad() {
+  renderEvents();
+  S.cursor = S.rows.length ? S.rows[0].t : 0;
+  const m = S.meta;
+  if (m) {
+    $("kGref").textContent = `g reference (${fmt(m.reference_radius_m, 2)} m)`;
+    $("kGleg").textContent = `g pointe du pied (${fmt(m.leg_tip_radius_m, 2)} m)`;
+    $("geomNote").textContent = `Axe au centre. Bras ${fmt(m.arm_tip_radius_m, 2)} m, capsule ${fmt(m.capsule_near_radius_m, 2)} m (cote oppose) a ${fmt(m.capsule_far_radius_m, 2)} m, i = ${m.gear_ratio}. ` +
+      (m.leg_tip_measured ? "" : "Rayon de la pointe du pied NON mesure (borne CAO) : a mesurer.");
+  }
+  draw();
+}
+function rowAt(t) {
+  const r = S.rows; if (!r.length) return -1;
+  let lo = 0, hi = r.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (r[mid].t <= t) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+function renderEvents() {
+  const box = $("events"); box.innerHTML = "";
+  if (!S.events.length) { box.innerHTML = '<div class="empty">Aucun evenement.</div>'; return; }
+  for (const e of S.events) {
+    const d = document.createElement("div");
+    d.innerHTML = `<span class="t">${fmt(e.t, 1)} s</span><b>${e.kind}</b> ${e.detail.replace(/</g, "&lt;")}`;
+    d.onclick = () => { S.cursor = e.t; S.playing = false; $("play").textContent = "Lecture"; draw(); };
+    box.appendChild(d);
+  }
+}
+
+// ------------------------------------------------------------------ top view
+function drawView(i) {
+  const cv = $("view"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
+  const m = S.meta; if (!m) return;
+  const R = Math.max(m.capsule_far_radius_m, m.arm_tip_radius_m) + 0.25;
+  const k = (Math.min(W, H) / 2) / R; const cx = W / 2, cy = H / 2;
+  const row = i >= 0 ? S.rows[i] : null; const a = i >= 0 ? S.angle[i] : 0;
+  // fairing (carenage) and reference circles
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, 1.0257 * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.setLineDash([6, 6]); ctx.strokeStyle = css("--gref");
+  ctx.beginPath(); ctx.arc(cx, cy, m.reference_radius_m * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.strokeStyle = css("--gleg");
+  ctx.beginPath(); ctx.arc(cx, cy, m.leg_tip_radius_m * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-a);   // counter-clockwise, seen from above
+  // arm beams, +x is outboard (capsule side)
+  ctx.fillStyle = css("--arm");
+  for (const y of [-0.15, 0.15]) ctx.fillRect(-1.16 * k, (y - 0.025) * k, (1.16 + m.arm_tip_radius_m) * k, 0.05 * k);
+  // counterweight
+  ctx.fillRect(-(m.counterweight_radius_m + 0.19) * k, -0.19 * k, 0.38 * k, 0.38 * k);
+  // capsule
+  const x0 = -m.capsule_near_radius_m * k, x1 = m.capsule_far_radius_m * k, hw = 0.45 * k;
+  ctx.fillStyle = css("--capsule"); ctx.strokeStyle = css("--arm"); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x0, -hw * 0.55); ctx.lineTo(x0 + 0.35 * k, -hw); ctx.lineTo(x1 - 0.45 * k, -hw);
+  ctx.quadraticCurveTo(x1, -hw * 0.3, x1, 0); ctx.quadraticCurveTo(x1, hw * 0.3, x1 - 0.45 * k, hw);
+  ctx.lineTo(x0 + 0.35 * k, hw); ctx.lineTo(x0, hw * 0.55); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // rider silhouette: head inboard, feet at the leg-tip radius
+  const tip = m.leg_tip_radius_m * k, stature = 1.75 * k, head = tip - stature;
+  ctx.fillStyle = css("--rider"); ctx.strokeStyle = css("--rider"); ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(head + 0.11 * k, 0, 0.11 * k, 0, 2 * Math.PI); ctx.fill();
+  ctx.lineWidth = 0.3 * k; ctx.beginPath(); ctx.moveTo(head + 0.3 * k, 0); ctx.lineTo(head + 0.85 * k, 0); ctx.stroke();
+  ctx.lineWidth = 0.11 * k;
+  for (const y of [-0.09, 0.09]) { ctx.beginPath(); ctx.moveTo(head + 0.85 * k, y * 0.6 * k); ctx.lineTo(tip - 0.04 * k, y * k); ctx.stroke(); }
+  for (const y of [-0.24, 0.24]) { ctx.beginPath(); ctx.moveTo(head + 0.3 * k, y * 0.8 * k); ctx.lineTo(head + 0.8 * k, y * k); ctx.stroke(); }
+  // markers
+  ctx.fillStyle = css("--gleg"); ctx.beginPath(); ctx.arc(tip, 0, 7, 0, 2 * Math.PI); ctx.fill();
+  ctx.fillStyle = css("--gref"); ctx.beginPath(); ctx.arc(m.reference_radius_m * k, 0, 6, 0, 2 * Math.PI); ctx.fill();
+  ctx.restore();
+  // axis
+  ctx.fillStyle = css("--ink"); ctx.beginPath(); ctx.arc(cx, cy, 5, 0, 2 * Math.PI); ctx.fill();
+  // labels
+  ctx.font = "600 22px system-ui"; ctx.fillStyle = css("--ink"); ctx.textAlign = "left";
+  ctx.fillText(row ? `${fmt(row.output_rpm, 1)} tr/min` : "-", 16, 34);
+  ctx.font = "16px system-ui"; ctx.fillStyle = css("--gleg");
+  ctx.fillText(row ? `pointe du pied ${fmt(row.g_leg_tip, 2)} g` : "", 16, 60);
+  ctx.fillStyle = css("--gref");
+  ctx.fillText(row ? `reference ${fmt(row.g_reference, 2)} g` : "", 16, 82);
+  ctx.fillStyle = css("--muted"); ctx.textAlign = "right";
+  ctx.fillText(`vue de dessus - rayons: ref ${fmt(m.reference_radius_m, 2)} m, pied ${fmt(m.leg_tip_radius_m, 2)} m`, W - 16, H - 16);
+}
+
+// ------------------------------------------------------------------ charts
+function sizeCanvas(cv) {
+  const r = cv.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(10, Math.round(r.width * dpr)), h = Math.max(10, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return dpr;
+}
+function chart(id, series, opts) {
+  const cv = $(id), ctx = cv.getContext("2d"); const dpr = sizeCanvas(cv);
+  const W = cv.width, H = cv.height; ctx.clearRect(0, 0, W, H);
+  const rows = S.rows; if (!rows.length) return;
+  const pad = { l: 40 * dpr, r: 8 * dpr, t: 6 * dpr, b: 18 * dpr };
+  const t0 = rows[0].t, t1 = rows[rows.length - 1].t || 1;
+  let lo = opts.min ?? Infinity, hi = opts.max ?? -Infinity;
+  if (opts.min === undefined || opts.max === undefined) {
+    for (const s of series) for (const r of rows) { const v = s.get(r); if (v === null || v === undefined) continue; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    for (const band of (opts.bands || [])) { lo = Math.min(lo, band[0]); hi = Math.max(hi, band[1]); }
+  }
+  if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+  if (hi - lo < 1e-6) hi = lo + 1;
+  const span = hi - lo; lo -= span * 0.05; hi += span * 0.08;
+  const X = (t) => pad.l + (t - t0) / Math.max(1e-9, t1 - t0) * (W - pad.l - pad.r);
+  const Y = (v) => H - pad.b - (v - lo) / (hi - lo) * (H - pad.t - pad.b);
+  ctx.fillStyle = css("--zone");
+  for (const band of (opts.bands || [])) ctx.fillRect(pad.l, Y(band[1]), W - pad.l - pad.r, Y(band[0]) - Y(band[1]));
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1; ctx.fillStyle = css("--muted"); ctx.font = `${11 * dpr}px system-ui`;
+  ctx.textAlign = "right";
+  for (let j = 0; j <= 3; j++) { const v = lo + (hi - lo) * j / 3; const y = Y(v); ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke(); ctx.fillText(fmt(v, opts.digits ?? 0), pad.l - 4 * dpr, y + 4 * dpr); }
+  ctx.textAlign = "center";
+  for (let j = 0; j <= 4; j++) { const t = t0 + (t1 - t0) * j / 4; ctx.fillText(`${Math.round(t)} s`, X(t), H - 4 * dpr); }
+  for (const line of (opts.lines || [])) { ctx.strokeStyle = css("--warn"); ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.beginPath(); ctx.moveTo(pad.l, Y(line)); ctx.lineTo(W - pad.r, Y(line)); ctx.stroke(); ctx.setLineDash([]); }
+  const step = Math.max(1, Math.floor(rows.length / (W / 2)));
+  for (const s of series) {
+    ctx.strokeStyle = css(s.color); ctx.lineWidth = (s.width || 2) * dpr; ctx.beginPath(); let pen = false;
+    for (let j = 0; j < rows.length; j += step) { const v = s.get(rows[j]); if (v === null || v === undefined) { pen = false; continue; } const x = X(rows[j].t), y = Y(v); if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; } }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = css("--ink"); ctx.lineWidth = 1 * dpr; const xc = X(S.cursor);
+  ctx.beginPath(); ctx.moveTo(xc, pad.t); ctx.lineTo(xc, H - pad.b); ctx.stroke();
+}
+function drawCharts() {
+  const m = S.meta || {};
+  chart("cRpm", [{ get: (r) => r.setpoint_output_rpm, color: "--setpoint" }, { get: (r) => r.output_rpm, color: "--accent" }], { digits: 1 });
+  const bands = (m.zone_low_bpm && m.zone_high_bpm) ? [[m.zone_low_bpm, m.zone_high_bpm]] : [];
+  const lines = [m.hard_max_bpm, m.critical_bpm].filter((v) => v);
+  chart("cHr", [{ get: (r) => r.hr_true, color: "--hr" }, { get: (r) => r.hr_live, color: "--hrlive", width: 1.5 }], { bands, lines });
+  chart("cG", [{ get: (r) => r.g_reference, color: "--gref" }, { get: (r) => r.g_leg_tip, color: "--gleg" }], { digits: 2 });
+  chart("cHz", [{ get: (r) => r.hertz, color: "--hz" }], { digits: 0 });
+}
+
+// ------------------------------------------------------------------ readouts
+function setV(id, text, cls) { const el = $(id); const unit = el.querySelector(".u"); el.textContent = text; if (unit) el.appendChild(unit); el.className = "v" + (el.classList.contains("small") ? " small" : "") + (cls ? " " + cls : ""); }
+function drawReadouts(i) {
+  const r = i >= 0 ? S.rows[i] : null; const m = S.meta || {};
+  if (!r) return;
+  setV("rOut", fmt(r.output_rpm, 2)); setV("rSet", fmt(r.setpoint_output_rpm, 2)); setV("rMotor", String(r.measured_motor_rpm));
+  setV("rHz", fmt(r.hertz, 1)); setV("rGref", fmt(r.g_reference, 3)); setV("rGleg", fmt(r.g_leg_tip, 3), r.g_leg_tip > 2 ? "warn" : "");
+  setV("rHr", `${r.hr_true ?? "-"} / ${r.hr_live ?? "-"}`);
+  const zone = m.zone_low_bpm ? `${m.zone_low_bpm}-${m.zone_high_bpm}` : "manuel";
+  const inZone = m.zone_low_bpm && r.hr_live !== null && r.hr_live >= m.zone_low_bpm && r.hr_live <= m.zone_high_bpm;
+  setV("rZone", `${zone} / cible ${r.target_bpm ?? "-"}`, inZone ? "ok" : "");
+  setV("rPhase", `${r.phase} / ${r.mode} / ${r.state}`);
+  setV("rDrive", `${r.drive_state}${r.measured_fresh ? "" : " (perimee)"} - ${r.sim_state}`, r.drive_state.includes("FAULT") ? "warn" : "");
+  setV("rSafety", r.safety_rule ? `${r.safety_rule} : ${r.safety_action}` : "aucun verdict", r.safety_rule ? "warn" : "ok");
+  const f = S.final;
+  setV("rFinal", f ? `${f.end_reason ?? "-"} - variateur ${f.sim_state}, arbre ${f.shaft_motor_rpm ?? "?"} tr/min${f.energised ? " (SOUS COUPLE)" : ""}` : (S.live ? "en cours" : "-"), f && f.energised ? "warn" : "");
+  $("clock").textContent = `t = ${fmt(r.t, 1)} s`;
+}
+
+// ------------------------------------------------------------------ loop
+function draw() {
+  const i = rowAt(S.cursor);
+  drawView(i); drawReadouts(i); drawCharts();
+  if (S.rows.length) {
+    const t0 = S.rows[0].t, t1 = S.rows[S.rows.length - 1].t;
+    $("scrub").value = String(Math.round((S.cursor - t0) / Math.max(1e-9, t1 - t0) * 1000));
+  }
+}
+let last = performance.now();
+function frame(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (S.rows.length) {
+    const t1 = S.rows[S.rows.length - 1].t;
+    if (S.live) S.cursor = t1;
+    else if (S.playing) { S.cursor = Math.min(t1, S.cursor + dt * Number($("speed").value)); if (S.cursor >= t1) { S.playing = false; $("play").textContent = "Lecture"; } }
+    draw();
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+$("play").onclick = () => { S.playing = !S.playing; $("play").textContent = S.playing ? "Pause" : "Lecture"; if (S.playing && S.rows.length && S.cursor >= S.rows[S.rows.length - 1].t) S.cursor = S.rows[0].t; };
+$("scrub").oninput = (e) => { if (!S.rows.length) return; const t0 = S.rows[0].t, t1 = S.rows[S.rows.length - 1].t; S.cursor = t0 + (t1 - t0) * Number(e.target.value) / 1000; S.live = false; draw(); };
+$("file").onchange = async (e) => { const f = e.target.files[0]; if (f) loadText(await f.text(), f.name); };
+$("scenario").onchange = (e) => { if (e.target.value) startLive(e.target.value, $("speed").value); };
+
+function startLive(name, speed) {
+  reset(); S.live = true;
+  const clock = new URLSearchParams(location.search).get("clock") === "sim" ? "sim" : "manual";
+  $("source").textContent = `live: ${name} a ${speed}x (horloge ${clock})`;
+  const es = new EventSource(`/stream?scenario=${encodeURIComponent(name)}&speed=${encodeURIComponent(speed)}&clock=${clock}`); S.es = es;
+  es.addEventListener("meta", (e) => { S.meta = JSON.parse(e.data); afterLoad(); });
+  es.addEventListener("row", (e) => addRow(JSON.parse(e.data)));
+  es.addEventListener("event", (e) => { S.events.push(JSON.parse(e.data)); });
+  es.addEventListener("final", (e) => { S.final = JSON.parse(e.data); renderEvents(); });
+  es.addEventListener("error", (e) => { if (e.data) $("source").textContent = "erreur: " + JSON.parse(e.data).detail; });
+  es.addEventListener("end", () => { es.close(); S.es = null; S.live = false; renderEvents(); });
+}
+
+(async function init() {
+  const q = new URLSearchParams(location.search);
+  try {
+    const list = await (await fetch("/api/scenarios")).json();
+    for (const name of list) { const o = document.createElement("option"); o.value = o.textContent = name; $("scenario").appendChild(o); }
+  } catch (_) { $("scenario").disabled = true; $("scenario").title = "python -m simulation.live pour le mode live"; }
+  if (q.get("speed")) $("speed").value = q.get("speed");
+  if (q.get("live")) startLive(q.get("live"), q.get("speed") || "20");
+  else if (q.get("trace")) {
+    const url = q.get("trace").startsWith("/") ? q.get("trace") : "../" + q.get("trace");
+    try { loadText(await (await fetch(url)).text(), q.get("trace")); } catch (err) { $("source").textContent = "trace illisible: " + err; }
+  }
+})();
+</script>
+</body>
+</html>

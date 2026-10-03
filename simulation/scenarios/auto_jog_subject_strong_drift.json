@@ -1,0 +1,23 @@
+{
+  "name": "auto_jog_subject_strong_drift",
+  "description": "Strong cardiac drift (+25 bpm, 5 min): the controller must unload at constant speed.",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject": {
+    "drift_max": 25,
+    "tau_drift": 300
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

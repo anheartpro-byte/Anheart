@@ -1,0 +1,52 @@
+# AnHeart Raspberry Pi client - shared runtime dependencies.
+#
+# Imported by requirements-prod.txt (Docker / Pi) and requirements-dev.txt.
+# Keep this file the single source of truth for what the application needs at
+# run time, so a dev install exercises the same code paths as production.
+
+# --- Acquisition ---------------------------------------------------------
+numpy>=1.26
+pyserial>=3.5          # BITalino over a COM/tty port, and serial port discovery
+# macOS only: the BITalino over IOBluetooth RFCOMM (`BITALINO_ADDRESS=rfcomm:..`).
+# /dev/cu.BITalino-* is intermittent on macOS; RFCOMM channel 1 through
+# IOBluetooth is the verified path. Pulls pyobjc-core and the Cocoa bindings.
+# Only src/bitalino_rfcomm_macos.py imports it (contract rule 5); the marker
+# keeps it off the Pi and out of the Docker image.
+pyobjc-framework-IOBluetooth>=12.2,<13; sys_platform == "darwin"
+
+# --- On-device biosignal treatment (BITalino lab-guide / BioSPPy) ---------
+# scipy + biosppy live HERE rather than in the dev-only file on purpose: when
+# they are missing, signal_processing.py silently degrades to waveform-only via
+# its BIOSPPY_AVAILABLE guard, which means testing a different code path than
+# the one that ships.
+scipy>=1.11
+biosppy>=2.1.0
+peakutils>=1.3.4
+
+# --- Motor drive (Schneider ATV320 over Modbus RTU) ----------------------
+# Pinned to 3.7.x from 3.7.4: the slave-address keyword changed across 3.x
+# releases, and src/motor/atv320.py derives its emergency-stop time budget from
+# 3.7.4's transaction internals (what `retries` really does, and how many
+# serial timeouts one transaction can spend). A new minor means re-reading
+# pymodbus/transaction.py and pymodbus/client/serial.py, not just bumping this.
+pymodbus>=3.7.4,<3.8
+# The Schneider "USB - RS485 SL" cable (TCSMCNAM3M002P, FT232R, VID 0x16de
+# PID 0x0003) gets no /dev/cu.* on macOS, so it is driven from user space
+# through libusb: `ftdi://schneider:rs485/1`. Pulls in pyusb. libusb itself is
+# a system library (macOS: `brew install libusb`; Pi: libusb-1.0-0). Only
+# src/motor/ftdi_link.py imports it (contract rule 5).
+pyftdi>=0.57,<0.58
+
+# --- Local operator UI ---------------------------------------------------
+# Plain `uvicorn`, NOT uvicorn[standard]: [standard] pulls httptools and
+# watchfiles (compiled, no guaranteed wheels on new CPython) plus uvloop
+# (unsupported on Windows). `websockets` below gives full WS support with no
+# build risk.
+fastapi>=0.115
+uvicorn>=0.30
+websockets>=12.0
+
+# --- Backend + config ----------------------------------------------------
+httpx>=0.27
+pydantic>=2.7
+python-dotenv>=1.0

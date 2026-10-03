@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+**/coverage.xml
 
 # next.js
 /.next/
@@ -42,3 +43,38 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# ---------- Python / Raspberry Pi client ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# RPi runtime data (SQLite + exports live in the docker volume)
+raspberry-pi/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Raw capture dumps
+SESSION_*.txt
+Session_data.txt
+
+# Env templates must stay tracked despite the `.env*` rule above
+!.env.example
+!raspberry-pi/.env.example
+!raspberry-pi/.env.pi.example
+
+# Vercel CLI login for this project only (client account), never committed
+/.vercel-cli/
+
+# Project-local agent configuration may contain deployment admin credentials.
+/.codex/config.toml
+
+# Local runtime data is not source code.
+/data/

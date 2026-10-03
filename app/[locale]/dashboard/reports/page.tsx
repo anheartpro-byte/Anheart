@@ -122,11 +122,12 @@ function SessionReportCard({
       // Generate PDF
       generateSessionPdf({
         sessionId: session._id,
-        patientName:
-          sessionDetails.patient.firstName +
-          " " +
-          sessionDetails.patient.lastName,
-        patientEmail: sessionDetails.patient.email,
+        patientName: sessionDetails.patient
+          ? sessionDetails.patient.firstName +
+            " " +
+            sessionDetails.patient.lastName
+          : (sessionDetails.subjectLabel ?? session.patientName),
+        patientEmail: sessionDetails.patient?.email ?? "-",
         machineName: sessionDetails.machine.name,
         startedAt: sessionDetails.startedAt,
         endedAt: sessionDetails.endedAt,

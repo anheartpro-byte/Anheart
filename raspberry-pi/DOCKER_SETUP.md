@@ -1,5 +1,12 @@
 # AnHeart Docker Setup - Complete Guide
 
+> **Deployment of the operator console (October 2026).** The Docker image and
+> `docker-compose.yml` now start the console (`python -m src.local_panel`), not
+> the ECG recorder described below. The up-to-date procedure, in French, is
+> [docs/deploiement.md](../docs/deploiement.md#7-le-raspberry-pi): `.env.pi.example`,
+> `scripts/pi/preflight.sh`, `scripts/pi/deploy.sh`.
+
+
 This is the **production-ready** way to deploy AnHeart on Raspberry Pi.
 
 ---

@@ -1,0 +1,30 @@
+{
+  "name": "fault_drive_latency",
+  "description": "Every exchange takes 1 s (over the 0.5 s response timeout) at 27 rpm: comms lost.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 300,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "drive_latency",
+      "latency_s": 1.0,
+      "duration_s": 20
+    }
+  ],
+  "expect": {
+    "rules": [
+      "comms_lost"
+    ]
+  }
+}

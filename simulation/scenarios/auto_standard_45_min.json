@@ -1,0 +1,21 @@
+{
+  "name": "auto_standard_45_min",
+  "description": "Shipped 45-min profile, nominal subject (same ceiling finding as the 30-min one).",
+  "tags": [
+    "auto",
+    "nominal",
+    "shipped"
+  ],
+  "kind": "auto",
+  "duration_s": 2710,
+  "profile": "standard_45_min",
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "max_output_rpm": 5.55,
+    "forbid_rules": [
+      "hr_critical",
+      "hr_hard_max"
+    ]
+  }
+}

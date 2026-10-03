@@ -1,5 +1,6 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { effectiveHrMax } from "./training";
 import {
   requireAuth,
   requireRole,
@@ -64,6 +65,8 @@ export const getCurrentUser = query({
       email: v.string(),
       language: v.union(v.literal("fr"), v.literal("en")),
       createdAt: v.number(),
+      hrMax: v.optional(v.number()),
+      birthYear: v.optional(v.number()),
     }),
     v.null(),
   ),
@@ -231,11 +234,13 @@ export const createPatient = mutation({
 
     // Check email not already in use
     const existingUsers = await ctx.db.query("users").collect();
-    const emailExists = existingUsers.some(
+    const conflictingUser = existingUsers.find(
       (u) => u.email.toLowerCase() === args.email.toLowerCase(),
     );
-    if (emailExists) {
-      throw new Error("Email already in use");
+    if (conflictingUser) {
+      throw new Error(
+        `Email already in use by an existing ${conflictingUser.role} account (${conflictingUser.firstName} ${conflictingUser.lastName})`,
+      );
     }
 
     const now = Date.now();
@@ -342,6 +347,10 @@ export const getUserById = query({
       language: v.string(),
       gestionnaireId: v.optional(v.id("users")),
       createdAt: v.number(),
+      hrMax: v.optional(v.number()),
+      birthYear: v.optional(v.number()),
+      // Measured maximum, else the Tanaka estimate; null when neither is set.
+      effectiveHrMax: v.union(v.number(), v.null()),
     }),
     v.null(),
   ),
@@ -363,6 +372,9 @@ export const getUserById = query({
       language: user.language,
       gestionnaireId: user.gestionnaireId,
       createdAt: user.createdAt,
+      hrMax: user.hrMax,
+      birthYear: user.birthYear,
+      effectiveHrMax: effectiveHrMax(user, Date.now()),
     };
   },
 });

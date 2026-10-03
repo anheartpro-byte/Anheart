@@ -16,6 +16,7 @@ import type * as lib_crypto from "../lib/crypto.js";
 import type * as machines from "../machines.js";
 import type * as sessionSummaries from "../sessionSummaries.js";
 import type * as sessions from "../sessions.js";
+import type * as training from "../training.js";
 import type * as users from "../users.js";
 
 import type {
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   machines: typeof machines;
   sessionSummaries: typeof sessionSummaries;
   sessions: typeof sessions;
+  training: typeof training;
   users: typeof users;
 }>;
 

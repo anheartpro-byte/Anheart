@@ -1,0 +1,22 @@
+{
+  "name": "auto_jog_150_nominal",
+  "description": "The ~150 bpm 'simulate a jog' zone (145-155), nameplate ceiling, nominal subject: the controller must hold the zone for most of HOLD.",
+  "tags": [
+    "auto",
+    "nominal",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "min_in_zone_fraction": 0.5,
+    "forbid_rules": [
+      "hr_critical",
+      "hr_hard_max",
+      "hr_drop"
+    ]
+  }
+}

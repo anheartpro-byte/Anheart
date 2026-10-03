@@ -1,0 +1,25 @@
+{
+  "name": "fault_ecg_no_signal",
+  "description": "Electrodes off (no_signal) for 120 s mid-HOLD.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_quality",
+      "quality": "no_signal",
+      "duration_s": 120
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_stale"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "tick_exception_manual_27",
+  "description": "An exception inside the tick at 27 rpm: fail closed, the console exits through shutdown.",
+  "tags": [
+    "manual",
+    "fault"
+  ],
+  "kind": "manual",
+  "duration_s": 200,
+  "teardown_s": 90,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "tick_exception"
+    }
+  ]
+}

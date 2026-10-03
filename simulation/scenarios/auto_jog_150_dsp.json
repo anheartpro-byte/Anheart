@@ -1,0 +1,24 @@
+{
+  "name": "auto_jog_150_dsp",
+  "description": "Short jog programme with the REAL ECG path: simulated BITalino -> SignalTreatment (BioSPPy) -> EcgBridge -> runtime.",
+  "tags": [
+    "auto",
+    "nominal",
+    "jog",
+    "dsp"
+  ],
+  "kind": "auto",
+  "duration_s": 790,
+  "profile": "jog_150_short",
+  "ecg": {
+    "mode": "dsp"
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical",
+      "hr_hard_max"
+    ]
+  }
+}

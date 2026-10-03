@@ -1,0 +1,29 @@
+{
+  "name": "estop_manual_27",
+  "description": "E-stop at 27 rpm on the bench.",
+  "tags": [
+    "manual",
+    "stop",
+    "estop"
+  ],
+  "kind": "manual",
+  "duration_s": 260,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "estop"
+    }
+  ],
+  "expect": {
+    "end_reason": "emergency_stop",
+    "rules": [
+      "operator_estop"
+    ]
+  }
+}

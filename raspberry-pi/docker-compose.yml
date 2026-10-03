@@ -1,28 +1,36 @@
-# AnHeart Raspberry Pi - Docker Compose
+# AnHeart Raspberry Pi - Docker Compose (operator console)
 #
-# Usage:
-#   1. Copy .env.example to .env and configure
-#   2. Run: docker-compose up -d
-#   3. View logs: docker-compose logs -f
-#   4. Stop: docker-compose down
+# Usage, on the Pi, from raspberry-pi/:
+#   1. cp .env.pi.example .env   and fill it in (see docs/deploiement-raspberry-pi.md)
+#   2. bash scripts/pi/preflight.sh
+#   3. docker compose up -d --build
+#   4. docker compose logs -f
+#   5. docker compose down        (waits for the controlled ramp-down)
+#
+# The operator page is served on the Pi itself: http://127.0.0.1:${UI_PORT}/
 
 services:
   anheart:
     build: .
     image: anheart-rpi:latest
     container_name: anheart
+    # A restart never resumes motion: the console always comes back at rest,
+    # read-only, and a drive found enabled at startup is zeroed and latched
+    # until an operator acknowledges it.
     restart: unless-stopped
 
-    # Required for Bluetooth access
+    # Bluetooth (BITalino) and the USB-RS485 adapter (ATV320).
     privileged: true
+    # Host network: the page binds to the Pi's own loopback (UI_HOST=127.0.0.1),
+    # and BlueZ is reached through the host's D-Bus.
     network_mode: host
 
-    # Mount Bluetooth socket and D-Bus for Bluetooth access
     volumes:
       - /var/run/dbus:/var/run/dbus
-      - /var/run/bluetooth:/var/run/bluetooth
+      # The whole /dev, so a re-plugged adapter or a re-bound /dev/rfcomm0 is
+      # seen without recreating the container.
+      - /dev:/dev
       - ./data:/app/data
-      - ./.env:/app/.env:ro
 
     # Environment from .env file
     env_file:
@@ -30,12 +38,7 @@ services:
 
     environment:
       - PYTHONUNBUFFERED=1
-      - LOG_LEVEL=INFO
 
-    # Health check
-    healthcheck:
-      test: ["CMD", "python", "-c", "import src.config; print('OK')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+    # `docker stop` sends SIGTERM; the console ramps the motor down before it
+    # exits. The default 10 s would kill it in the middle of the ramp.
+    stop_grace_period: 60s

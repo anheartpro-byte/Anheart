@@ -3,6 +3,7 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Area, AreaChart, XAxis, YAxis, CartesianGrid } from "recharts";
 import { ChartContainer, ChartConfig } from "@/components/ui/chart";
+import { filterEcg } from "@/lib/ecg";
 
 /**
  * ECG Data Explanation:
@@ -33,6 +34,8 @@ interface ECGWaveformProps {
   displaySeconds?: number;
   /** Chart height in pixels */
   height?: number;
+  /** Data is already treated on-device (skip client filtering). */
+  preFiltered?: boolean;
 }
 
 const chartConfig = {
@@ -48,6 +51,7 @@ export function ECGWaveform({
   sampleRate = 100,
   displaySeconds = 5,
   height = 300,
+  preFiltered = false,
 }: ECGWaveformProps) {
   // Calculate how many samples to display
   const maxSamples = sampleRate * displaySeconds;
@@ -56,23 +60,32 @@ export function ECGWaveform({
   // Display ~500 points max (100 points per second is enough for visualization)
   const downsampleFactor = Math.max(1, Math.floor(sampleRate / 100));
 
-  // Prepare chart data - take the last N samples and downsample
+  // Legacy raw ECG/EMG channels are band-pass filtered for display so mains hum
+  // and baseline wander don't hide the QRS. Treated data is already filtered
+  // on-device, so we skip it there.
+  const isEcgLike =
+    !preFiltered &&
+    (channel.toUpperCase() === "ECG" || channel.toUpperCase() === "EMG");
+
+  // Prepare chart data - take the last N samples, filter (if ECG), then downsample
   const chartData = useMemo(() => {
     const samples = data.slice(-maxSamples);
+    const source = isEcgLike ? filterEcg(samples, sampleRate) : samples;
 
     // Downsample: take every Nth sample
     const downsampled: { time: number; value: number }[] = [];
-    for (let i = 0; i < samples.length; i += downsampleFactor) {
+    for (let i = 0; i < source.length; i += downsampleFactor) {
       downsampled.push({
         time: i / sampleRate, // Time in seconds
-        value: samples[i],
+        value: source[i],
       });
     }
 
     return downsampled;
-  }, [data, maxSamples, sampleRate, downsampleFactor]);
+  }, [data, maxSamples, sampleRate, downsampleFactor, isEcgLike]);
 
-  // Calculate Y-axis domain based on actual data
+  // Calculate Y-axis domain from the actual (possibly filtered) data. No clamp to
+  // 0-1023: a filtered ECG is zero-mean and swings negative.
   const yDomain = useMemo((): [number, number] => {
     if (chartData.length === 0) return [0, 1023];
 
@@ -84,10 +97,7 @@ export function ECGWaveform({
     const range = max - min || 100;
     const padding = range * 0.1;
 
-    return [
-      Math.max(0, Math.floor(min - padding)),
-      Math.min(1023, Math.ceil(max + padding)),
-    ];
+    return [Math.floor(min - padding), Math.ceil(max + padding)];
   }, [chartData]);
 
   if (chartData.length === 0) {

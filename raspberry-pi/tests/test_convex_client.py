@@ -1,11 +1,12 @@
 """Test Convex HTTP client."""
 
-import pytest
 from unittest.mock import patch
 
+import pytest
+
 from src.convex_client import (
-    ConvexClient,
     ApiResponse,
+    ConvexClient,
     ResponseStatus,
 )
 

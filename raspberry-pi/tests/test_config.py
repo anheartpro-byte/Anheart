@@ -1,7 +1,9 @@
 """Test configuration loading."""
 
 import os
+
 import pytest
+
 from src.config import Config
 
 

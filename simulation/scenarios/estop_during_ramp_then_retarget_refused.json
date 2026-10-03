@@ -1,0 +1,40 @@
+{
+  "name": "estop_during_ramp_then_retarget_refused",
+  "description": "E-stop mid-climb; a later target is refused (no resumption); the operator acknowledges.",
+  "tags": [
+    "manual",
+    "stop",
+    "estop"
+  ],
+  "kind": "manual",
+  "duration_s": 200,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 40,
+      "do": "estop"
+    },
+    {
+      "at_s": 45,
+      "do": "manual_target",
+      "output_rpm": 5.0,
+      "expect": "refused"
+    },
+    {
+      "at_s": 120,
+      "do": "acknowledge",
+      "estop_released": true
+    }
+  ],
+  "expect": {
+    "end_reason": "emergency_stop",
+    "rules": [
+      "operator_estop"
+    ]
+  }
+}

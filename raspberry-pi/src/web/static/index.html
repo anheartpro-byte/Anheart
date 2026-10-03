@@ -1,0 +1,476 @@
+<!doctype html>
+<!--
+  The operator page. One file, no build step, no CDN.
+
+  Everything it needs is served by the Pi itself, because the machine is
+  expected to work with no internet at all: a dashboard that renders blank
+  because a font or a framework did not load is a dashboard that is not there
+  at the moment somebody needs it.
+
+  Two display rules from the design are structural here rather than stylistic,
+  and both are marked in place below:
+
+  1. the "is it stopped" indicator reads the MEASURED output speed, never the
+     setpoint. A commanded zero on a coasting centrifuge is not a measured
+     zero, and the difference is minutes of rotation;
+  2. motor rpm, output rpm, Hz and g are shown TOGETHER, always. The gearbox
+     ratio is 49.79, so one of those numbers alone makes a fiftyfold confusion
+     invisible. Both g figures are named: Gc is centripetal only, Gr is what
+     the occupant feels (centripetal and gravity combined).
+
+  Layout: a sidebar (brand, machine-state chips, navigation) and one page at a
+  time in <main>. The pages are plain <section class="view"> elements shown
+  and hidden by app.js; nothing is loaded on navigation, so switching page can
+  never be the thing that leaves a number frozen.
+
+  The "Tableau de bord" page is the local bench console (python -m
+  src.local_panel). At rest (REPOS) the drive is read, never written. Milestone
+  M3 adds the supervised MANUAL mode with nobody on board: the operator sets a
+  TARGET in output rpm (+/-1 tr/min, +/- one 0.1 Gr step, then Appliquer -
+  never a live slider), and the machine walks the setpoint to it at the
+  anti-nausea limits. STOP and E-STOP stay in the fixed footer on every page;
+  after any stop the target is 0.
+-->
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Console du banc - AnHeart</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+
+<!--
+  The disconnection banner. Fixed, loud, and at the very top of the document
+  so it is the first thing painted: a frozen dashboard that still looks live is
+  the failure that hurts, so losing the socket has to be impossible to miss.
+-->
+<div id="banner" class="banner hidden" role="alert" aria-live="assertive">
+  <strong>NO LIVE DATA</strong>
+  <span id="banner-detail">la liaison avec la machine est coupee</span>
+</div>
+
+<!-- Narrow screens only: the sidebar folds away behind this bar. -->
+<div class="mobilebar">
+  <button id="nav-toggle" class="navtoggle" type="button" aria-controls="sidebar" aria-expanded="false">&#9776; Menu</button>
+  <span class="brand">AnHeart</span>
+  <span id="mobile-mode" class="pill">&mdash;</span>
+  <span id="mobile-motion" class="pill">&mdash;</span>
+</div>
+
+<div class="shell">
+
+<aside id="sidebar" class="sidebar" aria-label="Navigation">
+  <div class="side-brand">
+    <span class="brand">AnHeart</span>
+    <span class="brand-sub">Console du banc</span>
+  </div>
+
+  <!--
+    The machine at a glance, on every page. The mode comes from the snapshot
+    (REPOS / MANUEL / SEANCE / ARRET), the run state from /api/status, the
+    link chip from the same liveness check that raises the banner.
+  -->
+  <dl class="chips">
+    <dt>Mode</dt><dd><span id="run-mode" class="pill">REPOS</span></dd>
+    <dt>Etat</dt><dd><span id="run-state" class="pill">&mdash;</span></dd>
+    <dt>Liaison</dt><dd><span id="link-state" class="pill pill-bad">hors ligne</span></dd>
+    <dt>Rotation</dt><dd><span id="side-motion" class="pill">&mdash;</span></dd>
+    <dt>Securite</dt><dd><span id="side-safety" class="pill">&mdash;</span></dd>
+    <dt>Console</dt><dd><span id="console-mode" class="pill">&mdash;</span></dd>
+  </dl>
+  <div id="bind" class="bind">&mdash;</div>
+
+  <nav class="nav">
+    <button id="nav-console" class="nav-item" type="button">Tableau de bord</button>
+    <button id="nav-sensors" class="nav-item" type="button">Capteurs</button>
+    <div id="nav-sensor-list" class="nav-sub"></div>
+    <button id="nav-run" class="nav-item" type="button">Seance</button>
+    <button id="nav-setup" class="nav-item" type="button">Configuration</button>
+    <button id="nav-safety" class="nav-item" type="button">Securite</button>
+  </nav>
+</aside>
+
+<main>
+
+  <!-- ================= TABLEAU DE BORD (local bench console) ================= -->
+  <section id="view-console" class="view">
+    <h1 class="page-title">Tableau de bord</h1>
+
+    <div id="console-readonly" class="card mode-banner">
+      <strong>LECTURE SEULE</strong>
+      <span id="console-readonly-detail">
+        le variateur est lu, jamais ecrit ; aucune commande de mouvement n'est acceptee.
+        STOP et E-STOP restent disponibles en bas de page.
+      </span>
+    </div>
+
+    <!--
+      Shown for as long as the setpoint is on its way to the target: a head
+      movement while the speed changes is what provokes nausea (Coriolis).
+    -->
+    <div id="ramp-banner" class="card ramp-banner hidden" role="status">
+      <strong>RAMPE EN COURS : NE PAS BOUGER LA TETE</strong>
+      <span id="ramp-banner-detail">&mdash;</span>
+    </div>
+
+    <!--
+      MANUAL. The occupancy is declared before anything turns and never changes
+      during the rotation. The target is a destination, never a setpoint: the
+      machine walks to it at the motion limits, and every safety verdict still
+      overrides it. Nothing is sent until "Appliquer".
+    -->
+    <div class="card card-manual" id="card-manual">
+      <h2>Mode MANUEL <span id="manual-state" class="pill">&mdash;</span></h2>
+      <div id="manual-idle">
+        <label class="check">
+          <input id="manual-bench" type="checkbox" />
+          BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE)
+        </label>
+        <label>Operateur
+          <input id="manual-operator" type="text" autocomplete="off" placeholder="qui pilote" />
+        </label>
+        <button id="manual-start" class="btn btn-go" type="button">Demarrer MANUEL</button>
+      </div>
+      <div id="manual-controls" class="hidden">
+        <div class="target-row">
+          <button id="manual-step-down" class="btn" type="button">&minus; palier</button>
+          <button id="manual-minus" class="btn" type="button">&minus;1 tr/min</button>
+          <span id="manual-draft" class="bignum target">&mdash;</span>
+          <button id="manual-plus" class="btn" type="button">+1 tr/min</button>
+          <button id="manual-step-up" class="btn" type="button">+ palier</button>
+          <button id="manual-apply" class="btn btn-go" type="button">Appliquer</button>
+        </div>
+        <div class="unit">cible, tr/min de sortie (bras) &middot; un palier = 0,1 Gr</div>
+        <dl class="grid" id="manual-grid"></dl>
+      </div>
+      <p id="manual-note" class="note"></p>
+    </div>
+
+    <div class="row">
+      <!--
+        The heart rate, with its grade and age next to it: an 8 s median that
+        stopped refreshing looks exactly like a current one unless the page says so.
+        This is the heart rate IN CONTROL; the Capteurs pages are monitoring only.
+      -->
+      <div class="card card-hr">
+        <h2>Frequence cardiaque (regulation) <span id="console-hr-quality" class="pill">&mdash;</span></h2>
+        <div id="console-hr" class="bignum">&mdash;</div>
+        <div class="unit">bpm</div>
+        <dl class="grid" id="console-hr-grid"></dl>
+      </div>
+
+      <!--
+        MEASURED speed, never the setpoint: output rpm large, then motor rpm,
+        drive frequency, Gc and Gr together.
+      -->
+      <div class="card card-speed">
+        <h2>Vitesse mesuree <span id="console-motion" class="pill">&mdash;</span></h2>
+        <div id="console-output" class="bignum">&mdash;</div>
+        <div class="unit">tr/min de sortie (bras)</div>
+        <dl class="grid" id="console-speed-grid"></dl>
+      </div>
+    </div>
+
+    <div class="card card-ecg">
+      <h2>ECG <span id="console-ecg-state" class="pill">&mdash;</span></h2>
+      <canvas id="console-ecg" width="1200" height="220"></canvas>
+    </div>
+
+    <div class="row">
+      <div class="card card-drive">
+        <h2>Variateur <span id="console-drive-state" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="console-drive-grid"></dl>
+        <div id="console-fault" class="fault hidden"></div>
+        <!--
+          The fault reset: named, explicit, never automatic. The runtime refuses
+          it unless the machine is at rest, every OTHER verdict is acknowledged,
+          and the drive shows the shaft stopped.
+        -->
+        <button id="fault-reset" class="btn hidden" type="button">Reset defaut variateur</button>
+        <p id="fault-note" class="note"></p>
+      </div>
+
+      <div class="card card-drive">
+        <h2>BITalino <span id="console-ecg-link" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="console-ecg-grid"></dl>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ================= CAPTEURS (overview) ================= -->
+  <section id="view-sensors" class="view hidden">
+    <h1 class="page-title">Capteurs <span id="sensors-state" class="pill">&mdash;</span></h1>
+    <p class="note">
+      Surveillance uniquement : aucune de ces lectures ne commande le moteur.
+      La frequence cardiaque en regulation est celle du Tableau de bord.
+    </p>
+    <div id="sensor-cards" class="sensor-cards"></div>
+    <p id="sensors-empty" class="note hidden">
+      Aucun canal BITalino supplementaire n'est acquis par cette console (variable SENSORS).
+    </p>
+  </section>
+
+  <!-- ================= ONE SENSOR ================= -->
+  <section id="view-sensor" class="view hidden">
+    <h1 class="page-title">
+      <span id="sensor-title">&mdash;</span>
+      <span id="sensor-channel" class="pill">&mdash;</span>
+      <span id="sensor-quality" class="pill">&mdash;</span>
+    </h1>
+    <div class="card monitor-note">
+      <strong>SURVEILLANCE UNIQUEMENT</strong>
+      <span>
+        ces lectures ne commandent pas le moteur. La frequence cardiaque en
+        regulation est celle du Tableau de bord.
+      </span>
+    </div>
+    <div class="card">
+      <h2>Signal <span id="sensor-age" class="pill">&mdash;</span></h2>
+      <canvas id="sensor-wave" class="wave-large" width="1200" height="320"></canvas>
+      <p id="sensor-detail" class="note">&mdash;</p>
+    </div>
+    <div class="card">
+      <h2>Mesures</h2>
+      <div id="sensor-metrics" class="tiles"></div>
+      <p id="sensor-metrics-empty" class="note hidden">Ce capteur ne fournit encore aucune mesure derivee.</p>
+    </div>
+    <div class="card">
+      <h2>Capteur</h2>
+      <p id="sensor-description" class="desc">&mdash;</p>
+      <dl class="grid" id="sensor-info"></dl>
+    </div>
+  </section>
+
+  <!-- ================= SEANCE (programme and run) ================= -->
+  <section id="view-run" class="view hidden">
+    <h1 class="page-title">Seance</h1>
+
+    <div class="row">
+      <div class="card" id="card-profile">
+        <h2>Programme</h2>
+        <label>Profil
+          <select id="profile"></select>
+        </label>
+        <label>Duree totale (minutes, vide = celle du profil)
+          <input id="duration" type="number" min="1" step="1" placeholder="celle du profil" />
+        </label>
+        <label>Operateur
+          <input id="operator" type="text" autocomplete="off" placeholder="qui conduit la seance" />
+        </label>
+        <label>Age du passager (ans, obligatoire)
+          <input id="rider-age" type="number" min="1" max="120" step="1" placeholder="refus si inconnu ou trop jeune" />
+        </label>
+        <button id="preview" class="btn" type="button">Previsualiser</button>
+        <button id="start" class="btn btn-go" type="button">Demarrer la seance</button>
+        <p id="start-note" class="note"></p>
+      </div>
+
+      <div class="card" id="card-plan">
+        <h2>Ce que ce programme ferait</h2>
+        <dl class="grid" id="plan-limits"></dl>
+        <table class="timeline" id="plan-timeline"></table>
+        <p class="note">
+          Les vitesses sont donnees a l'arbre moteur, en sortie de reducteur, en
+          frequence variateur et en charge centripete, ensemble. HSP est la
+          valeur variateur qui correspond au plafond logiciel.
+        </p>
+      </div>
+    </div>
+
+    <div class="row">
+      <!--
+        The heart rate. Large because it is the number the whole machine is
+        regulating on, and struck through and greyed the moment it is stale:
+        the reading is an 8 s median refreshed at 1 Hz, so one that stopped
+        refreshing looks exactly like a current one unless the page says so.
+      -->
+      <div class="card card-hr">
+        <h2>Frequence cardiaque <span id="hr-quality" class="pill">&mdash;</span></h2>
+        <div id="hr" class="bignum">&mdash;</div>
+        <div class="unit">bpm</div>
+        <div class="zoneband" id="zoneband">
+          <div class="zoneband-fill" id="zoneband-fill"></div>
+          <div class="zoneband-marker" id="zoneband-marker"></div>
+        </div>
+        <dl class="grid" id="hr-grid"></dl>
+      </div>
+
+      <div class="card card-phase">
+        <h2>Phase <span id="phase" class="pill">&mdash;</span></h2>
+        <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+        <dl class="grid" id="time-grid"></dl>
+      </div>
+    </div>
+
+    <div class="row">
+      <!--
+        MEASURED first, and it is the indicator that answers "is it stopped".
+        The setpoint is shown beside it, smaller, because a commanded zero and
+        a measured zero are different facts and only one of them is about the
+        shaft.
+      -->
+      <div class="card card-speed">
+        <h2>Mesure <span id="motion" class="pill">&mdash;</span></h2>
+        <div id="measured-output" class="bignum">&mdash;</div>
+        <div class="unit">tr/min de sortie (bras)</div>
+        <dl class="grid" id="measured-grid"></dl>
+      </div>
+
+      <div class="card card-speed">
+        <h2>Consigne <span id="setpoint-confirmed" class="pill">&mdash;</span></h2>
+        <div id="setpoint-output" class="bignum bignum-dim">&mdash;</div>
+        <div class="unit">tr/min de sortie (commande)</div>
+        <dl class="grid" id="setpoint-grid"></dl>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card card-drive">
+        <h2>Variateur <span id="drive-state" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="drive-grid"></dl>
+        <div id="fault" class="fault hidden"></div>
+      </div>
+
+      <div class="card card-safety">
+        <h2>Securite <span id="run-safety-action" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="run-safety-grid"></dl>
+        <button id="run-goto-safety" class="btn" type="button">Verdicts et acquittement</button>
+      </div>
+    </div>
+
+    <div class="card card-ecg">
+      <h2>ECG <span id="ecg-state" class="pill">&mdash;</span></h2>
+      <canvas id="ecg" width="1200" height="220"></canvas>
+    </div>
+
+    <div class="card card-events">
+      <h2>Evenements</h2>
+      <ul id="events" class="events"></ul>
+    </div>
+
+  </section>
+
+  <!-- ================= CONFIGURATION ================= -->
+  <section id="view-setup" class="view hidden">
+    <h1 class="page-title">Configuration</h1>
+
+    <div class="card" id="card-token">
+      <h2>Acces</h2>
+      <p class="note" id="token-note">
+        Cette interface commande un moteur. Hors boucle locale elle refuse de demarrer sans jeton.
+      </p>
+      <label>Jeton partage
+        <input id="token" type="password" autocomplete="off" placeholder="vide en boucle locale" />
+      </label>
+      <button id="save-token" class="btn" type="button">Utiliser ce jeton</button>
+    </div>
+
+    <div class="card" id="card-system">
+      <h2>Systeme</h2>
+      <dl class="grid" id="system-grid"></dl>
+      <h3>Ports serie</h3>
+      <ul id="ports" class="ports"></ul>
+    </div>
+
+  </section>
+
+  <!-- ================= SECURITE ================= -->
+  <section id="view-safety" class="view hidden">
+    <h1 class="page-title">Securite</h1>
+
+    <div class="row">
+      <div class="card card-safety">
+        <h2>Verdict en cours <span id="safety-action" class="pill">&mdash;</span></h2>
+        <dl class="grid" id="safety-grid"></dl>
+        <h3>Verdicts retenus</h3>
+        <dl class="grid" id="verdicts-grid"></dl>
+        <ul id="verdicts-live" class="events"></ul>
+        <!--
+          The acknowledgement: by name, never automatic, and the mushroom
+          release is a separate statement because software cannot see the contact.
+        -->
+        <div class="ackrow">
+          <input id="ack-operator" type="text" autocomplete="off" placeholder="votre nom" />
+          <label class="check">
+            <input id="ack-released" type="checkbox" />
+            le coup de poing a ete deverrouille (tire)
+          </label>
+          <button id="ack" class="btn" type="button">Acquitter</button>
+        </div>
+        <p id="ack-note" class="note"></p>
+      </div>
+
+      <!--
+        The attestation gate. Two checkboxes, not one: the STO jumper being gone
+        and a latching mushroom being wired normally-closed are two separate
+        facts about the machine, and an operator who is sure of only one of them
+        must not be able to pass both with a single click. The server refuses a
+        half-attestation without recording anything.
+      -->
+      <div class="card" id="card-attest">
+        <h2>Cablage de l'arret d'urgence <span id="attest-state" class="pill pill-bad">non atteste</span></h2>
+        <p class="note" id="attest-statement">&mdash;</p>
+        <label class="check">
+          <input id="attest-jumper" type="checkbox" />
+          Le pont STO a ete retire du variateur.
+        </label>
+        <label class="check">
+          <input id="attest-mushroom" type="checkbox" />
+          Un arret d'urgence a accrochage est cable normalement ferme sur P24 &rarr; STO.
+        </label>
+        <label>Votre nom
+          <input id="attest-operator" type="text" autocomplete="off" placeholder="qui atteste" />
+        </label>
+        <button id="attest" class="btn" type="button">Enregistrer l'attestation</button>
+        <p id="attest-note" class="note">
+          Enregistree par demarrage, pas par installation : un Pi qui a redemarre
+          est un Pi dont personne n'a garanti le cablage depuis.
+        </p>
+      </div>
+    </div>
+
+    <!--
+      Filled from GET /api/camera. When no camera is configured it says so in
+      so many words, so nobody reads its absence as "presence checked".
+    -->
+    <div class="card card-camera">
+      <h2>Camera / presence <span id="camera-pill" class="pill pill-warn">non branchee</span></h2>
+      <p id="camera-note" class="note">
+        Aucune camera n'est connectee : rien ne surveille la capsule. Les regles
+        ci-dessous sont prevues, elles ne sont PAS actives.
+      </p>
+      <p id="camera-latched" class="note hidden"></p>
+      <ul class="rules">
+        <li><strong>Intrusion pendant la rotation</strong> &rarr; arret d'urgence</li>
+        <li><strong>Personne dans une capsule declaree vide</strong> &rarr; arret d'urgence</li>
+        <li><strong>Capsule vide, harnais detache, membre dehors</strong> (personne a bord) &rarr; refus du demarrage, ou ralentissement</li>
+        <li><strong>Camera perdue ou figee</strong> &rarr; ralentissement</li>
+        <li><strong>Aucune reprise automatique</strong> : acquittement nomme obligatoire</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+</div>
+
+<!--
+  The footer is fixed and present on EVERY page, because the moment somebody
+  needs to stop the machine is not a moment for finding the right page.
+
+  The E-stop asks for nothing: no confirmation dialog, no name, no reason. One
+  that asks "are you sure?" is not an emergency stop. It is also, and the page
+  says so, a CONVENIENCE stop - it depends on this browser, a network, a web
+  server and the session process, any one of which can be the thing that has
+  failed. The stop that does not depend on software is the wired mushroom.
+-->
+<footer class="footer">
+  <span id="footer-status" class="footer-status">&mdash;</span>
+  <button id="stop" class="btn btn-stop" type="button">STOP<small>rampe controlee</small></button>
+  <button id="estop" class="btn btn-estop" type="button">E-STOP<small>verrouille immediatement</small></button>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "rev": 0,
+  "profiles": [
+    {
+      "profile_id": "standard_30_min",
+      "name": "30 min",
+      "total_duration_s": 1800.0,
+      "baseline_s": 180.0,
+      "warmup_max_s": 300.0,
+      "hold_min_s": 300.0,
+      "cooldown_s": 240.0,
+      "recovery_s": 300.0,
+      "zone_low_bpm": 118,
+      "zone_high_bpm": 138,
+      "hard_max_bpm": 148,
+      "critical_bpm": 158,
+      "subject_hr_max": 162,
+      "min_run_rpm": 55,
+      "max_rpm": 276,
+      "warmup_rpm_ceiling_fraction": 0.6,
+      "channels": ["ECG"],
+      "allow_above_nameplate": false
+    },
+    {
+      "profile_id": "standard_45_min",
+      "name": "45 min",
+      "total_duration_s": 2700.0,
+      "baseline_s": 180.0,
+      "warmup_max_s": 300.0,
+      "hold_min_s": 300.0,
+      "cooldown_s": 240.0,
+      "recovery_s": 300.0,
+      "zone_low_bpm": 118,
+      "zone_high_bpm": 138,
+      "hard_max_bpm": 148,
+      "critical_bpm": 158,
+      "subject_hr_max": 162,
+      "min_run_rpm": 55,
+      "max_rpm": 276,
+      "warmup_rpm_ceiling_fraction": 0.6,
+      "channels": ["ECG"],
+      "allow_above_nameplate": false
+    }
+  ]
+}

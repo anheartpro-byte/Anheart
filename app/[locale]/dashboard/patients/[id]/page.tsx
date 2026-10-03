@@ -46,6 +46,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { PatientFormModal } from "@/components/modals/PatientFormModal";
+import { PhysiologyCard } from "@/components/training/PhysiologyCard";
 
 export default function PatientDetailPage({
   params,
@@ -275,6 +276,13 @@ export default function PatientDetailPage({
             )}
           </CardContent>
         </Card>
+
+        {/* Physiology (max heart rate) - managers of this user and admins */}
+        {canManage && (
+          <div className="lg:col-span-1">
+            <PhysiologyCard userId={patientId} user={patient} />
+          </div>
+        )}
       </div>
 
       {/* Delete Confirmation Dialog */}

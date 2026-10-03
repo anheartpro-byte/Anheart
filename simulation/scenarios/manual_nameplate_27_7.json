@@ -1,0 +1,26 @@
+{
+  "name": "manual_nameplate_27_7",
+  "description": "The nameplate point: 27.716 output rpm = 1380 motor rpm = 50 Hz, the highest target accepted.",
+  "tags": [
+    "manual",
+    "limits"
+  ],
+  "kind": "manual",
+  "duration_s": 420,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.716,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 200,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 27.7
+  }
+}

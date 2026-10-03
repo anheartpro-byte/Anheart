@@ -1,0 +1,33 @@
+{
+  "name": "manual_27_then_32_refused",
+  "description": "At 27 rpm, the operator asks for 32: refused, the machine keeps 27, then stops.",
+  "tags": [
+    "manual",
+    "limits"
+  ],
+  "kind": "manual",
+  "duration_s": 400,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "manual_target",
+      "output_rpm": 32.0,
+      "expect": "refused"
+    },
+    {
+      "at_s": 200,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 27.0,
+    "max_output_rpm": 27.05
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "fault_drive_overload_auto",
+  "description": "The drive latches MOTOR_OVERLOAD mid-HOLD of the jog programme.",
+  "tags": [
+    "auto",
+    "fault",
+    "drive"
+  ],
+  "kind": "auto",
+  "duration_s": 1300,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "drive_fault",
+      "fault": "MOTOR_OVERLOAD"
+    }
+  ],
+  "expect": {
+    "rules": [
+      "drive_fault"
+    ]
+  }
+}

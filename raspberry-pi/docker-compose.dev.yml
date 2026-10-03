@@ -1,0 +1,47 @@
+# Windows development override.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# What this is FOR: validating the image, the DSP stack, the control loop and
+# the local UI in SIMULATION.
+#
+# What it can NOT do, and this is a hard limit rather than a configuration
+# mistake: Docker Desktop on Windows runs containers in a WSL2 VM, so
+#   * there is no COM-port passthrough - the ATV320 on COM3 is unreachable,
+#   * the Bluetooth stack and the BITalino's SPP port do not exist in the VM,
+#   * `network_mode: host` is a SILENT no-op, which is why the port mapping
+#     below is mandatory or nothing is reachable on localhost.
+# Real hardware is driven from the venv on the host; on the Pi the same
+# container sees the devices for real through the `devices:` entry.
+services:
+  anheart:
+    privileged: false
+    network_mode: bridge
+    # 8123 rather than 8080: 8080 is already taken on this machine by another
+    # stack, and compose replaces `ports` wholesale rather than merging it.
+    ports:
+      - "8123:8080"
+    # Compose MERGES `devices` across files instead of replacing, so the Pi's
+    # RS-485 entry has to be cleared explicitly or the container fails to start
+    # on a machine where /dev/ttyUSB0 does not exist.
+    devices: []
+    volumes:
+      - ./data:/app/data
+      - ./.env.docker:/app/.env:ro
+    # The console (python -m src.local_panel) in full simulation. These win
+    # over .env.docker. UI_HOST is not loopback here (the page is reached
+    # through the port mapping), so the console demands a token: send it in the
+    # `x-anheart-token` header, or open the page and type it when asked.
+    environment:
+      MOTOR_BACKEND: "sim"
+      ECG_SOURCE: "sim"
+      ARM_RADIUS_M: "1.5"
+      MACHINE_API_KEY: ""
+      UI_HOST: "0.0.0.0"
+      UI_PORT: "8080"
+      UI_TOKEN: "dev-only-token-change-me"
+      LOG_LEVEL: "DEBUG"
+      PYTHONUNBUFFERED: "1"
+    # The session must be brought to a safe stop before the container dies.
+    # The default 10 s is not enough once a controlled ramp is involved.
+    stop_grace_period: 45s

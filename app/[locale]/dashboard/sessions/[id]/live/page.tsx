@@ -7,13 +7,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -37,6 +31,13 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { LiveSensorDisplay } from "@/components/charts/LiveSensorDisplay";
+import { type SignalQuality } from "@/lib/ecg";
+import { isTrainingKind } from "@/lib/training";
+import { TrainingPanel } from "@/components/training/TrainingPanel";
+import {
+  SessionKindBadge,
+  SessionOriginBadge,
+} from "@/components/training/TrainingBadges";
 
 /**
  * ECG Live Session Page
@@ -66,6 +67,7 @@ export default function LiveSessionPage({
   const sessionId = id as Id<"sessions">;
   const session = useQuery(api.sessions.getSession, { sessionId });
   const user = useQuery(api.users.getCurrentUser);
+  const training = useQuery(api.training.getTrainingSession, { sessionId });
   const endSession = useMutation(api.sessions.endSession);
 
   // Fetch real-time ECG data (updates every time new data arrives)
@@ -82,89 +84,35 @@ export default function LiveSessionPage({
 
   const isDelayed = user?.role === "gestionnaire";
 
-  // Calculate signal quality and heart rate from ECG data (derived state)
+  // Data arrives ALREADY TREATED from the Raspberry Pi: filtered, in mV, at the
+  // transmitted rate (~250 Hz), with heart rate + quality computed on-device.
+  // The UI just reads those; it does not re-filter or re-detect.
+  const sampleRate = useMemo(() => {
+    let rate = session?.sampleRate ?? 250;
+    for (const batch of ecgData ?? []) {
+      if (batch.sampleRate) rate = batch.sampleRate;
+    }
+    return rate;
+  }, [ecgData, session?.sampleRate]);
+
+  // Latest on-device ECG metrics (heart rate, HRV, signal quality).
   const { signalQuality, heartRate } = useMemo(() => {
-    if (!ecgData || ecgData.length === 0) {
-      return { signalQuality: "no_signal" as const, heartRate: null };
-    }
-
-    // Get all ECG values from recent batches
-    const allValues: number[] = [];
-    for (const batch of ecgData) {
-      const ecgChannel = batch.samples.find(
-        (s) => s.channel.toUpperCase() === "ECG",
-      );
-      if (ecgChannel) {
-        allValues.push(...ecgChannel.values);
+    let quality: SignalQuality = "no_signal";
+    let bpm: number | null = null;
+    for (const batch of ecgData ?? []) {
+      const m = batch.metrics?.ECG;
+      if (m) {
+        quality = (m.quality as SignalQuality | undefined) ?? "good";
+        bpm = m.heartRate ?? null;
       }
     }
-
-    // At 100 Hz, we need at least 200 samples (2 seconds) for analysis
-    if (allValues.length < 200) {
-      return { signalQuality: "no_signal" as const, heartRate: null };
-    }
-
-    // Use last 5 seconds for heart rate calculation (500 samples at 100 Hz)
-    const values = allValues.slice(-500);
-
-    // Check signal quality first
-    // Count how many values are clipping (at 0 or >= 1020)
-    const clippingLow = values.filter((v) => v <= 5).length;
-    const clippingHigh = values.filter((v) => v >= 1018).length;
-    const clippingPercent = (clippingLow + clippingHigh) / values.length;
-
-    // Calculate standard deviation
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const variance =
-      values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-    const stdDev = Math.sqrt(variance);
-
-    // Determine signal quality
-    if (clippingPercent > 0.3 || stdDev < 10 || stdDev > 400) {
-      return { signalQuality: "poor" as const, heartRate: null };
-    }
-
-    // Find threshold for peak detection (adaptive)
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const range = max - min;
-
-    // For a good ECG, the R-wave peak is typically the highest point
-    // Use a threshold at 70% of the range above the minimum
-    const threshold = min + range * 0.7;
-
-    // Count peaks (R-waves in ECG)
-    // At 100 Hz: 40 samples = 400ms (max 150 BPM)
-    const minPeakDistance = 40;
-    let peaks = 0;
-    let lastPeakIdx = -minPeakDistance;
-
-    for (let i = 3; i < values.length - 3; i++) {
-      // Peak detection: local maximum above threshold
-      if (
-        values[i] > threshold &&
-        values[i] >= values[i - 1] &&
-        values[i] >= values[i + 1] &&
-        values[i] >= Math.max(...values.slice(Math.max(0, i - 3), i)) &&
-        values[i] >=
-          Math.max(...values.slice(i + 1, Math.min(values.length, i + 4))) &&
-        i - lastPeakIdx > minPeakDistance
-      ) {
-        peaks++;
-        lastPeakIdx = i;
-      }
-    }
-
-    // Convert to BPM: peaks in 5 seconds * 12 = BPM
-    if (peaks >= 2) {
-      const bpm = Math.round(peaks * 12);
-      if (bpm >= 40 && bpm <= 150) {
-        return { signalQuality: "good" as const, heartRate: bpm };
-      }
-    }
-
-    return { signalQuality: "good" as const, heartRate: null };
+    return { signalQuality: quality, heartRate: bpm };
   }, [ecgData]);
+
+  // "Poor" groups the two actionable bad states (hum-dominated / noisy).
+  const isPoorSignal =
+    signalQuality === "mains_dominated" || signalQuality === "noisy";
+  const isGoodSignal = signalQuality === "good";
 
   const handleEndSession = async () => {
     setEnding(true);
@@ -195,6 +143,41 @@ export default function LiveSessionPage({
     );
   }
 
+  const isTraining = isTrainingKind(session.kind);
+  const riderName = session.patient
+    ? `${session.patient.firstName} ${session.patient.lastName}`
+    : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
+  // Recording sessions are ended with endSession (managers only); training
+  // sessions are stopped from the training panel (requestStop).
+  const canEndRecording =
+    !isTraining && (user?.role === "admin" || user?.role === "gestionnaire");
+
+  if (isTraining && session.status !== "active") {
+    // Pending (waiting for the machine to arm), or already over.
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">{riderName}</h1>
+            <p className="text-muted-foreground flex flex-wrap items-center gap-2">
+              {session.machine.name}
+              <SessionKindBadge kind={session.kind} />
+              <SessionOriginBadge origin={training?.origin} />
+            </p>
+          </div>
+          {session.status !== "pending" && (
+            <Link href={`/dashboard/sessions/${sessionId}`}>
+              <Button variant="outline">
+                {t("training.session.viewDetails")}
+              </Button>
+            </Link>
+          )}
+        </div>
+        <TrainingPanel sessionId={sessionId} />
+      </div>
+    );
+  }
+
   if (session.status !== "active") {
     return (
       <div className="text-center py-12 space-y-4">
@@ -210,19 +193,25 @@ export default function LiveSessionPage({
   const hasData = ecgData && ecgData.length > 0;
   const totalBatches = stats?.totalBatches ?? 0;
   const durationSeconds = stats?.durationSeconds ?? 0;
-  const totalSamples = totalBatches * 1000; // ~1000 samples per batch
+  const totalSamples = totalBatches * sampleRate; // ~1 batch per second
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">
-            {session.patient.firstName} {session.patient.lastName}
-          </h1>
-          <p className="text-muted-foreground">
-            {session.machine.name} - Started{" "}
-            {formatDistanceToNow(session.startedAt, { addSuffix: true })}
+          <h1 className="text-2xl font-bold">{riderName}</h1>
+          <p className="text-muted-foreground flex flex-wrap items-center gap-2">
+            <span>
+              {session.machine.name} - Started{" "}
+              {formatDistanceToNow(session.startedAt, { addSuffix: true })}
+            </span>
+            {isTraining && (
+              <>
+                <SessionKindBadge kind={session.kind} />
+                <SessionOriginBadge origin={training?.origin} />
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -245,26 +234,36 @@ export default function LiveSessionPage({
               </>
             )}
           </Badge>
-          <Button variant="destructive" onClick={() => setShowEndDialog(true)}>
-            <StopCircle className="h-4 w-4 mr-2" />
-            End Session
-          </Button>
+          {canEndRecording && (
+            <Button
+              variant="destructive"
+              onClick={() => setShowEndDialog(true)}
+            >
+              <StopCircle className="h-4 w-4 mr-2" />
+              End Session
+            </Button>
+          )}
         </div>
       </div>
 
+      {/* Training panel (auto / manual): readouts, zone chart, stop */}
+      {isTraining && <TrainingPanel sessionId={sessionId} />}
+
       {/* Signal Quality Warning */}
-      {signalQuality === "poor" && (
+      {isPoorSignal && (
         <Card className="border-yellow-500 bg-yellow-50 dark:bg-yellow-950">
           <CardContent className="py-4">
             <div className="flex items-start gap-3">
               <AlertTriangle className="h-6 w-6 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div>
                 <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">
-                  Poor Signal Quality - Check Electrode Connection
+                  {signalQuality === "mains_dominated"
+                    ? "Signal Dominated by Electrical Interference - Check Electrode Contact"
+                    : "Poor Signal Quality - Check Electrode Connection"}
                 </h3>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  The ECG signal appears to be clipping or noisy. This usually
-                  means:
+                  The ECG signal is mostly powerline hum / noise rather than a
+                  heartbeat. This usually means:
                 </p>
                 <ul className="text-sm text-yellow-700 dark:text-yellow-300 mt-2 list-disc list-inside space-y-1">
                   <li>ECG electrodes are not connected to the patient</li>
@@ -286,19 +285,15 @@ export default function LiveSessionPage({
         <Card>
           <CardContent className="pt-4 pb-3">
             <div className="flex items-center gap-2">
-              {signalQuality === "good" ? (
+              {isGoodSignal ? (
                 <CheckCircle2 className="h-5 w-5 text-green-500" />
-              ) : signalQuality === "poor" ? (
+              ) : isPoorSignal ? (
                 <AlertTriangle className="h-5 w-5 text-yellow-500" />
               ) : (
                 <Wifi className="h-5 w-5 text-muted-foreground" />
               )}
               <span className="text-lg font-bold capitalize">
-                {signalQuality === "good"
-                  ? "Good"
-                  : signalQuality === "poor"
-                    ? "Poor"
-                    : "---"}
+                {isGoodSignal ? "Good" : isPoorSignal ? "Poor" : "---"}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">Signal Quality</p>
@@ -355,7 +350,7 @@ export default function LiveSessionPage({
       <LiveSensorDisplay
         sessionId={sessionId}
         ecgData={ecgData ?? []}
-        sampleRate={100}
+        sampleRate={sampleRate}
         channels={session.channels}
       />
 
@@ -411,8 +406,7 @@ export default function LiveSessionPage({
           <DialogHeader>
             <DialogTitle>End Recording Session?</DialogTitle>
             <DialogDescription>
-              This will stop recording ECG data for patient{" "}
-              {session.patient.firstName} {session.patient.lastName}. The
+              This will stop recording ECG data for patient {riderName}. The
               recorded data will be saved and available for review.
             </DialogDescription>
           </DialogHeader>

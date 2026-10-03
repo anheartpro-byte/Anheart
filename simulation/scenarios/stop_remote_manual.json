@@ -1,0 +1,25 @@
+{
+  "name": "stop_remote_manual",
+  "description": "Remote end request at 27 rpm.",
+  "tags": [
+    "manual",
+    "stop"
+  ],
+  "kind": "manual",
+  "duration_s": 320,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "remote_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop"
+  }
+}

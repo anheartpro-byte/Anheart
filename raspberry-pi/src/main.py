@@ -30,9 +30,7 @@ def setup_logging(level: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="AnHeart ECG Monitor - Raspberry Pi Client"
-    )
+    parser = argparse.ArgumentParser(description="AnHeart ECG Monitor - Raspberry Pi Client")
     parser.add_argument(
         "--version",
         action="version",
@@ -86,6 +84,7 @@ def main() -> int:
 
     if args.config:
         from dotenv import load_dotenv
+
         load_dotenv(args.config)
 
     try:

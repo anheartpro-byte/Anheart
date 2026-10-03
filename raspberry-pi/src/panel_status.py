@@ -1,0 +1,85 @@
+"""What the local console reports about its links, beyond the telemetry snapshot.
+
+:class:`~src.training.types.TelemetrySnapshot` is the session's picture: heart
+rate, speeds, drive state, verdict. The console needs a few more facts that are
+not the session's to own, and an operator at a bench needs them first when
+something does not work:
+
+* how the drive link is doing while idle (reads, failures, the last latency,
+  the last error), from :class:`~src.training.runtime.IdleLink`;
+* how the BITalino link is doing (connected, acquiring, the decoder's
+  :class:`~src.bitalino_client.LinkStats`, what the DSP bridge has treated);
+* whether motion is enabled at all in this build, and the geometry every g on
+  the screen was computed with.
+
+These are plain frozen records. The composition root
+(:mod:`src.local_panel`) builds one on request through :class:`PanelSource`;
+the web layer only renders it. Kept out of both so neither imports the other.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
+
+from src.bitalino_client import LinkStats
+from src.ecg_pipeline import EcgBridgeStats
+from src.training.runtime import IdleLink
+from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
+
+if TYPE_CHECKING:
+    # Type-only: local_config imports the web layer, which imports this module.
+    from src.local_config import EcgSource, MotorBackend
+
+
+@dataclass(frozen=True, slots=True)
+class EcgLinkStatus:
+    """The BITalino side: the transport, the decoder counters, the DSP bridge."""
+
+    source: EcgSource
+    address: str | None
+    """``None`` for the simulator."""
+
+    connected: bool
+    acquiring: bool
+
+    connect_attempts: int
+    """Connection attempts made by the console since it started."""
+
+    last_error: str | None
+    """Why the last connection or start attempt failed, in words, or ``None``."""
+
+    link: LinkStats | None
+    """The real client's decoder counters; ``None`` for the simulator, which has none."""
+
+    bridge: EcgBridgeStats
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PanelStatus:
+    """Everything the console's link panel shows, at one instant."""
+
+    at: Monotonic
+    motion_enabled: bool
+    """``False`` in the read-only milestone: every motion route answers 403."""
+
+    programs_enabled: bool
+    """Whether programmed sessions may start. ``False`` until milestone M5."""
+
+    motor_backend: MotorBackend
+    drive_link: str | None
+    """The serial link, described in one line; ``None`` for the simulated drive."""
+
+    drive: IdleLink
+    ecg: EcgLinkStatus
+    heart_rate_trend: BpmPerMinute | None
+
+    radius: Metres
+    ratio: GearRatio
+    motor_max_rpm: MotorRpm
+
+
+class PanelSource(Protocol):
+    """Anything that can report a :class:`PanelStatus` now. Synchronous, no I/O."""
+
+    def panel_status(self) -> PanelStatus: ...

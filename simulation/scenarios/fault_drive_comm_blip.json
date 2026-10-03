@@ -1,0 +1,34 @@
+{
+  "name": "fault_drive_comm_blip",
+  "description": "A 0.3 s comms blip at 27 rpm (one or two failed exchanges): below the comms_lost threshold, the session carries on.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 320,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "comms_loss",
+      "duration_s": 0.3
+    },
+    {
+      "at_s": 200,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "forbid_rules": [
+      "comms_lost"
+    ]
+  }
+}

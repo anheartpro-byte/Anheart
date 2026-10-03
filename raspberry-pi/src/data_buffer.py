@@ -5,7 +5,6 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +12,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BufferedBatch:
     """A buffered data batch."""
+
     id: int
     session_id: str
     timestamp: int
@@ -25,7 +25,7 @@ class DataBuffer:
 
     def __init__(self, db_path: str = "buffer.db"):
         self.db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -116,13 +116,15 @@ class DataBuffer:
 
         batches = []
         for row in cursor.fetchall():
-            batches.append(BufferedBatch(
-                id=row["id"],
-                session_id=row["session_id"],
-                timestamp=row["timestamp"],
-                samples=json.loads(row["samples"]),
-                created_at=row["created_at"],
-            ))
+            batches.append(
+                BufferedBatch(
+                    id=row["id"],
+                    session_id=row["session_id"],
+                    timestamp=row["timestamp"],
+                    samples=json.loads(row["samples"]),
+                    created_at=row["created_at"],
+                )
+            )
 
         return batches
 
@@ -147,9 +149,7 @@ class DataBuffer:
 
     def get_pending_count(self) -> int:
         """Get count of unsynced batches."""
-        cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM buffered_data WHERE synced = 0"
-        )
+        cursor = self._conn.execute("SELECT COUNT(*) FROM buffered_data WHERE synced = 0")
         return cursor.fetchone()[0]
 
     def get_pending_for_session(self, session_id: str) -> int:

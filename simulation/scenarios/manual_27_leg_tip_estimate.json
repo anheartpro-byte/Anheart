@@ -1,0 +1,29 @@
+{
+  "name": "manual_27_leg_tip_estimate",
+  "description": "27 output rpm with the leg tip at the stature estimate (1.42 m): the g at the leg tip is 1.16 instead of 1.98.",
+  "tags": [
+    "manual",
+    "geometry"
+  ],
+  "kind": "manual",
+  "duration_s": 300,
+  "geometry": {
+    "leg_tip_radius_m": 1.4218
+  },
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 27.0
+  }
+}

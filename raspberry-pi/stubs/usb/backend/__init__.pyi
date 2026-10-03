@@ -1,0 +1,3 @@
+"""See ``stubs/usb/__init__.pyi``."""
+
+class IBackend: ...

@@ -1,0 +1,29 @@
+{
+  "name": "fault_drive_comm_timeout_manual",
+  "description": "Modbus link dies for 40 s at 27 rpm: GO_SILENT, no further frame, the drive's ttO (SLF) ramps it down.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 300,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "comms_loss",
+      "duration_s": 40
+    }
+  ],
+  "expect": {
+    "rules": [
+      "comms_lost"
+    ]
+  }
+}
