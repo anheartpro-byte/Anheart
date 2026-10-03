@@ -1180,13 +1180,27 @@ Que faire :
 1. Relancez la console (§3). Lisez la ligne de résumé.
 2. Rechargez la page du navigateur.
 3. Vérifiez **Rotation** `a l'arret`. Si la console trouve le variateur déjà en
-   marche au démarrage d'une séance, elle refuse, le met à zéro et exige un
+   marche lors de l'inspection au repos ou au démarrage d'une séance, elle le
+   met à zéro, refuse le démarrage et exige un
    acquittement (`demarrage refuse : variateur deja en marche (<n> tr/min), arret demande`).
 4. **Refaites l'attestation** (§13.1) : elle a disparu avec l'ancien programme
    (constaté).
 5. Regardez la page **Securite** : acquittez s'il reste un verdict.
 6. Redémarrez la séance voulue. Rien ne reprend tout seul : une séance interrompue
    n'est jamais relancée automatiquement.
+
+Une inspection initiale en cours reste prise en charge si la console est
+interrompue pendant sa réponse. Un échec d'ouverture du lien ne permet aucune
+écriture vers un variateur non vérifié. Si le lien a été acquis mais que l'état
+du variateur est illisible, cet état reste **inconnu**, pas « au repos » : à la
+fermeture, la console demande zéro et attend un arrêt mesuré avant de retirer
+la commande de marche. Une nouvelle tentative de connexion qui échoue
+n'efface pas cette incertitude. Un repos confirmé, lui, reste en lecture seule.
+
+Si la fermeture ne peut pas confirmer l'arrêt, son rapport ne prétend pas que
+la sortie est désactivée. La lecture périodique au repos ne continue pas après
+cette fermeture. Ni une valeur ancienne à l'écran, ni le seul arrêt du
+processus ne prouve alors l'arrêt de l'arbre ; aucune séance ne reprend seule.
 
 **Coupure secteur du variateur** : au retour, le variateur peut afficher `USF`
 (sous tension, réarmable) ; suivez §13.9.

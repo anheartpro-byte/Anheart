@@ -1086,6 +1086,7 @@ class TrainingRuntime:
         "_idle_next_at",
         "_idle_status",
         "_idle_status_at",
+        "_inspection_unconfirmed",
         "_last_failure",
         "_last_sample",
         "_last_status",
@@ -1205,6 +1206,8 @@ class TrainingRuntime:
 
         # --- what is believed about the drive ----------------------------
         self._link_open: bool = False
+        # Loop-owned evidence: acquisition succeeded, but its status did not.
+        self._inspection_unconfirmed: bool = False
         self._enabled: bool = False
         self._silent: bool = False
         # The setpoint believed to be in force. Advanced only when a write was
@@ -1321,6 +1324,11 @@ class TrainingRuntime:
         as "assume the motor can turn".
         """
         return self._enabled
+
+    @property
+    def needs_stop_before_release(self) -> bool:
+        """Unverified acquisition permits no write; an unreadable acquired drive is unknown."""
+        return self.state is not RuntimeState.IDLE or self._inspection_unconfirmed
 
     @property
     def silent(self) -> bool:
@@ -1864,6 +1872,8 @@ class TrainingRuntime:
             await self._judge_idle(now, status.value)
             if self._enabled:
                 await self.shutdown("initial inspection cancelled")
+        elif self._inspection_unconfirmed:
+            await self.shutdown("unreadable initial inspection cancelled")
 
     async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         opened = await self._drive.open()
@@ -1876,8 +1886,10 @@ class TrainingRuntime:
         self._link_open = True
         status = await self._drive.read_status()
         if isinstance(status, Err):
+            self._inspection_unconfirmed = True
             failure = self._note_failure(Exchange.READ, status.error)
             return Err(DriveUnavailable(f"the drive could not be read: {failure.detail}"))
+        self._inspection_unconfirmed = False
         self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
@@ -2157,7 +2169,7 @@ class TrainingRuntime:
         see :class:`IdleLink`.
         """
         armed = self._program is not None or self._manual is not None
-        if armed or self._silent or self._link_open:
+        if armed or self._silent or self._link_open or self._shutdown is not None:
             return
         due = self._idle_next_at
         if due is not None and now < due:
@@ -2177,8 +2189,10 @@ class TrainingRuntime:
         began = self._clock.monotonic()
         status = await self._drive.read_status()
         if isinstance(status, Err):
+            self._inspection_unconfirmed = True
             self._idle_failed(status.error)
             return status
+        self._inspection_unconfirmed = False
         link = self._idle_link
         self._idle_link = replace(
             link,
@@ -3090,6 +3104,9 @@ class TrainingRuntime:
         existing = self._shutdown
         if existing is not None:
             return existing
+        if self._inspection_unconfirmed:
+            self._enabled = True
+            self._link_open = True
         now = self._clock.monotonic()
         if self._end_reason is None:
             self._end_reason = EndReason.SHUTDOWN

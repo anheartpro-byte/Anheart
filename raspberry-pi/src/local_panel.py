@@ -762,15 +762,15 @@ class LocalPanel:
                 await asyncio.wait_for(stop.wait(), remaining)
 
     async def close(self) -> str:
-        """Release the drive, then the BITalino. Read-only while nothing was ever started.
+        """Release the drive, then the BITalino; confirmed idle links remain read-only.
 
-        A runtime that never started has never written to the drive, so its
-        link is released without the stop sequence (``ATV320Drive.close``
-        writes LFRD = 0 and two command words). Any other state goes through
+        A confirmed idle or unverified link is released without the stop
+        sequence (``ATV320Drive.close`` writes LFRD = 0 and two command words).
+        An acquired link with unreadable state remains unknown. It goes through
         :meth:`~src.training.runtime.TrainingRuntime.shutdown`, whose close
         waits for measured standstill before removing the run command.
         """
-        if self._runtime.state is RuntimeState.IDLE:
+        if not self._runtime.needs_stop_before_release:
             self._drive.release()
             detail = "runtime never started: drive link released without a write"
         else:

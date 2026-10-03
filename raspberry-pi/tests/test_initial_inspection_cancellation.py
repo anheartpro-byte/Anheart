@@ -28,12 +28,16 @@ class HeldInspection(HeldCommand):
     def __init__(self, inner: SimulatedDrive) -> None:
         super().__init__(inner)
         self.hold_open = False
+        self.fail_open = False
         self.fail_read = False
         self.writes = 0
+        self.reads = 0
 
     @override
     async def open(self) -> Result[None, DriveError]:
         result = await super().open()
+        if self.fail_open:
+            result = Err(CommTimeout(Seconds(0.05)))
         if self.hold_open and not self.accepted.is_set():
             self.accepted.set()
             await self.release.wait()
@@ -41,6 +45,7 @@ class HeldInspection(HeldCommand):
 
     @override
     async def read_status(self) -> Result[DriveStatus, DriveError]:
+        self.reads += 1
         result = await self.inner.read_status()
         if self.fail_read:
             result = Err(CommTimeout(Seconds(0.05)))
@@ -138,12 +143,18 @@ async def test_cancel_initial_inspection_stops_only_observed_motion(
 
 
 @pytest.mark.parametrize("requested_start", [False, True])
-async def test_cancelled_unavailable_inspection_does_not_invent_motion(
-    tmp_path: Path, requested_start: bool
+@pytest.mark.parametrize("precommanded", [False, True])
+async def test_cancelled_unreadable_acquired_drive_is_stopped_without_resumption(
+    tmp_path: Path, requested_start: bool, precommanded: bool
 ) -> None:
     rig, held = make_rig(tmp_path, wrap=HeldInspection)
     assert isinstance(held, HeldInspection)
     held.fail_read = True
+    if precommanded:
+        assert isinstance(await rig.simulator.open(), Ok)
+        for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
+            assert isinstance(await rig.simulator.write_command(word), Ok)
+        assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)
     async with rig.http() as client:
         if requested_start:
             await attest(client)
@@ -159,8 +170,12 @@ async def test_cancelled_unavailable_inspection_does_not_invent_motion(
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(task, 2)
             await rig.panel.close()
-            assert held.writes == 0
+            assert held.writes > 0
             assert rig.simulator.commanded_setpoint == 0
+            assert rig.simulator.sim_state is not SimState.OPERATION_ENABLED
+            exchanges = (held.reads, held.writes)
+            await rig.panel.control_step()
+            assert (held.reads, held.writes) == exchanges
         finally:
             held.release.set()
             await asyncio.gather(task, return_exceptions=True)
