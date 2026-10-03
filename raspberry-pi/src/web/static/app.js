@@ -41,6 +41,7 @@ var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this l
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
+var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator"];
 
 var state = {
   token: "",
@@ -157,19 +158,21 @@ function speedLine(view) {
     num(view.hertz, 2) + " Hz · Gc " + num(view.g_load, 3) + " · Gr " + num(view.resultant_g, 3);
 }
 
-/** The first operator name typed anywhere on the page, for attribution. */
+function rememberOperator(value) {
+  var name = value.trim();
+  try {
+    window.sessionStorage.setItem("anheart-operator", name);
+  } catch {
+    // This page can still attribute a command when storage is unavailable.
+  }
+  return name;
+}
+
+/** The shared operator name, retained in this tab across a reload. */
 function operatorName() {
-  var ids = ["manual-operator", "operator", "ack-operator", "attest-operator"];
-  for (var i = 0; i < ids.length; i += 1) {
-    var value = document.getElementById(ids[i]).value.trim();
-    if (value) {
-      try {
-        window.sessionStorage.setItem("anheart-operator", value);
-      } catch {
-        // This page can still attribute a command when storage is unavailable.
-      }
-      return value;
-    }
+  for (var i = 0; i < OPERATOR_INPUT_IDS.length; i += 1) {
+    var value = document.getElementById(OPERATOR_INPUT_IDS[i]).value.trim();
+    if (value) return value;
   }
   try {
     return window.sessionStorage.getItem("anheart-operator") || "";
@@ -724,7 +727,7 @@ function doManualStart() {
   }
   api("/api/manual/start", {
     method: "POST",
-    body: { occupancy: "bench", operator: operatorName() },
+    body: { occupancy: "bench", operator: rememberOperator(el("manual-operator").value) },
   })
     .then(function (command) {
       state.manualDraft = null;
@@ -1630,7 +1633,7 @@ function doStart() {
     method: "POST",
     body: {
       profile_id: profile.profile_id,
-      operator: el("operator").value,
+      operator: rememberOperator(el("operator").value),
       total_duration_s: durationSeconds(),
       subject_age: riderAge(),
     },
@@ -1732,6 +1735,17 @@ function ping() {
 /* ----------------------------------------------------------------- wiring */
 
 function start() {
+  var rememberedOperator = operatorName();
+  OPERATOR_INPUT_IDS.forEach(function (id) {
+    el(id).value = rememberedOperator;
+    el(id).addEventListener("input", function () {
+      var value = el(id).value;
+      OPERATOR_INPUT_IDS.forEach(function (other) {
+        if (other !== id) el(other).value = value;
+      });
+      rememberOperator(value);
+    });
+  });
   try {
     state.token = window.sessionStorage.getItem("anheart-token") || "";
   } catch (err) {

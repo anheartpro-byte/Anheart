@@ -1324,8 +1324,11 @@ enregistrement de séance est encore conservé. Pendant `ARRET`, elle garde les
 informations de la séance qui s'arrête. Un verdict verrouillé doit toujours être
 acquitté avant un nouveau départ.
 
-Le nom saisi reste en `sessionStorage` dans cet onglet, pour attribuer STOP et
-les autres commandes après un rechargement pendant la rotation. Aucun nom n'est
+Les champs de nom des formulaires partagent la saisie de l'opérateur courant.
+Le nom déclaré au démarrage, manuel ou programmé, reste immédiatement en
+`sessionStorage` dans cet onglet, sans attendre le signal de présence. Il est
+réaffiché après un rechargement et attribue STOP et les autres commandes pendant
+la rotation. Vider un champ de nom efface cette attribution retenue. Aucun nom n'est
 déduit des événements d'une autre personne. Un nouvel onglet, ou un navigateur
 qui bloque ce stockage, peut demander de saisir à nouveau le nom ; E-STOP ne
 demande toujours aucun nom et reste immédiat. La fermeture de l'onglet efface
