@@ -10,7 +10,6 @@ import {
   getCurrentUserOrThrow,
   canAccessUser,
   canAccessMachine,
-  isGestionnaireOfUser,
 } from "./lib/auth";
 import { internal } from "./_generated/api";
 
@@ -599,7 +598,7 @@ export const getCompletedSessionsForUser = query({
       machineName: v.string(),
     }),
   ),
-  handler: async (ctx, args) => {
+  handler: async (ctx) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
 
     let sessions;
