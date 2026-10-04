@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useEffect, useState, useCallback } from "react";
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -10,15 +10,12 @@ import {
   YAxis,
   CartesianGrid,
   ReferenceLine,
-  Tooltip,
   ResponsiveContainer,
-  Bar,
-  BarChart,
-  Cell,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { computeHeartRate, filterEcg } from "@/lib/ecg";
 
 // ============================================
 // SHARED UTILITIES
@@ -98,6 +95,14 @@ interface ECGChartProps {
   displaySeconds?: number;
   height?: number;
   showMetrics?: boolean;
+  /** Apply the ECG band-pass filter to the displayed waveform (default true). */
+  filter?: boolean;
+  /** Data is already treated on-device (skip client filtering). */
+  preFiltered?: boolean;
+  /** Heart rate from on-device metrics; when provided, used instead of client detection. */
+  heartRate?: number | null;
+  /** HRV (ms) from on-device metrics. */
+  hrv?: number | null;
 }
 
 export function ECGChart({
@@ -106,65 +111,33 @@ export function ECGChart({
   displaySeconds = 5,
   height = 250,
   showMetrics = true,
+  filter = true,
+  preFiltered = false,
+  heartRate,
+  hrv,
 }: ECGChartProps) {
-  // Calculate metrics
+  // Heart-rate metrics. Prefer on-device values (computed by the Pi with BioSPPy);
+  // otherwise fall back to the client detector for legacy raw sessions.
   const metrics = useMemo(() => {
-    if (data.length < sampleRate * 2) {
-      return { heartRate: 0, hrv: 0, rPeaks: [] as number[] };
+    if (heartRate !== undefined) {
+      return { heartRate: heartRate ?? 0, hrv: hrv ?? 0, rPeaks: [] as number[] };
     }
+    const result = computeHeartRate(data, sampleRate);
+    return {
+      heartRate: result.bpm ?? 0,
+      hrv: result.hrv ?? 0,
+      rPeaks: result.rPeaks,
+    };
+  }, [data, sampleRate, heartRate, hrv]);
 
-    // Detect R-peaks (minimum 300ms apart = 200 BPM max)
-    const minDistance = Math.floor((sampleRate * 300) / 1000);
-    const mean = data.reduce((a, b) => a + b, 0) / data.length;
-    const std = Math.sqrt(
-      data.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / data.length,
-    );
-    const threshold = mean + std * 1.5;
-
-    const rPeaks = detectPeaks(data, minDistance, threshold);
-
-    if (rPeaks.length < 2) {
-      return { heartRate: 0, hrv: 0, rPeaks };
-    }
-
-    // Calculate RR intervals in ms
-    const rrIntervals: number[] = [];
-    for (let i = 1; i < rPeaks.length; i++) {
-      const rrSamples = rPeaks[i] - rPeaks[i - 1];
-      const rrMs = (rrSamples / sampleRate) * 1000;
-      if (rrMs >= 300 && rrMs <= 2000) {
-        rrIntervals.push(rrMs);
-      }
-    }
-
-    if (rrIntervals.length === 0) {
-      return { heartRate: 0, hrv: 0, rPeaks };
-    }
-
-    // Heart rate from average RR interval
-    const avgRR = rrIntervals.reduce((a, b) => a + b, 0) / rrIntervals.length;
-    const heartRate = Math.round(60000 / avgRR);
-
-    // HRV using RMSSD
-    let hrv = 0;
-    if (rrIntervals.length >= 2) {
-      let sumSquaredDiff = 0;
-      for (let i = 1; i < rrIntervals.length; i++) {
-        const diff = rrIntervals[i] - rrIntervals[i - 1];
-        sumSquaredDiff += diff * diff;
-      }
-      hrv = Math.round(Math.sqrt(sumSquaredDiff / (rrIntervals.length - 1)));
-    }
-
-    return { heartRate, hrv, rPeaks };
-  }, [data, sampleRate]);
-
-  // Prepare chart data
+  // Prepare chart data. Treated data is already filtered on-device; only filter
+  // here for legacy raw sessions so hum / baseline wander don't hide the QRS.
   const chartData = useMemo(() => {
     const maxSamples = sampleRate * displaySeconds;
     const samples = data.slice(-maxSamples);
-    return downsamplePreservingPeaks(samples, 500, sampleRate);
-  }, [data, sampleRate, displaySeconds]);
+    const display = filter && !preFiltered ? filterEcg(samples, sampleRate) : samples;
+    return downsamplePreservingPeaks(display, 500, sampleRate);
+  }, [data, sampleRate, displaySeconds, filter, preFiltered]);
 
   const yDomain = useMemo((): [number, number] => {
     if (chartData.length === 0) return [0, 1023];

@@ -1,0 +1,26 @@
+{
+  "name": "shutdown_sigterm_manual_27",
+  "description": "The process is told to exit (SIGTERM) at 27 rpm: emergency zero, link closed, the drive's own ramp and ttO stop it.",
+  "tags": [
+    "manual",
+    "stop"
+  ],
+  "kind": "manual",
+  "duration_s": 200,
+  "teardown_s": 90,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "shutdown"
+    }
+  ],
+  "expect": {
+    "reaches_output_rpm": 27.0
+  }
+}

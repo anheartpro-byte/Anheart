@@ -1,0 +1,24 @@
+{
+  "name": "fault_bitalino_disconnect_auto",
+  "description": "The BITalino link drops mid-HOLD and never returns: hr_stale escalates FREEZE -> REDUCE -> RAMP_DOWN.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1500,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "bitalino_disconnect"
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_stale"
+    ],
+    "end_reason": "safety_verdict"
+  }
+}

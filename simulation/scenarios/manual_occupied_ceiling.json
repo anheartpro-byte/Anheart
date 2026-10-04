@@ -1,0 +1,39 @@
+{
+  "name": "manual_occupied_ceiling",
+  "description": "Person on board: the ceiling is the first-trial 1.2 g resultant at the reference radius (~19.9 output rpm at 1.5 m). 27 is refused, 19 accepted.",
+  "tags": [
+    "manual",
+    "limits",
+    "occupied"
+  ],
+  "kind": "manual",
+  "duration_s": 400,
+  "manual": {
+    "occupancy": "occupied"
+  },
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "refused"
+    },
+    {
+      "at_s": 4,
+      "do": "manual_target",
+      "output_rpm": 19.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "max_output_rpm": 20.0,
+    "rules": [
+      "hr_rate"
+    ]
+  }
+}

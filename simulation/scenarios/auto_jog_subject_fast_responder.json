@@ -1,0 +1,23 @@
+{
+  "name": "auto_jog_subject_fast_responder",
+  "description": "Fast cardiac response (tau 12 s up, 25 s down).",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject": {
+    "tau_up": 12,
+    "tau_down": 25
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

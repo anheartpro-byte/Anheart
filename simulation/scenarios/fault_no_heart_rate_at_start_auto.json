@@ -1,0 +1,21 @@
+{
+  "name": "fault_no_heart_rate_at_start_auto",
+  "description": "The ECG never delivers a rate: BASELINE measures no resting rate, so the machine must never leave standstill.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 600,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 0,
+      "do": "bitalino_disconnect"
+    }
+  ],
+  "expect": {
+    "max_output_rpm": 0.0
+  }
+}

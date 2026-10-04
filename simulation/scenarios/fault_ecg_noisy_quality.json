@@ -1,0 +1,25 @@
+{
+  "name": "fault_ecg_noisy_quality",
+  "description": "The DSP grades the signal 'noisy' for 90 s: no usable rate, so stale.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_quality",
+      "quality": "noisy",
+      "duration_s": 90
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_stale"
+    ]
+  }
+}

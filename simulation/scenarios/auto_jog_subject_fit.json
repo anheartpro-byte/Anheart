@@ -1,0 +1,24 @@
+{
+  "name": "auto_jog_subject_fit",
+  "description": "Fit subject: low resting rate, weaker response per g.",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject": {
+    "hr_rest": 55,
+    "k_g": 90,
+    "hr_max": 190
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

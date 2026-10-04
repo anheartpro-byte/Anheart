@@ -1,0 +1,33 @@
+{
+  "name": "manual_below_min_run_refused",
+  "description": "0.5 output rpm = 25 motor rpm is inside the gap (0, min_run=55): refused rather than rounded; 0 is accepted.",
+  "tags": [
+    "manual",
+    "limits"
+  ],
+  "kind": "manual",
+  "duration_s": 40,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 0.5,
+      "expect": "refused"
+    },
+    {
+      "at_s": 4,
+      "do": "manual_target",
+      "output_rpm": 0.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 6,
+      "do": "manual_target",
+      "output_rpm": -1.0,
+      "expect": "refused"
+    }
+  ],
+  "expect": {
+    "max_output_rpm": 0.0
+  }
+}

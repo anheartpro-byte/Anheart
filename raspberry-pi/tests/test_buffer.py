@@ -105,7 +105,7 @@ def test_multiple_sessions(buffer):
     buffer.store("session-1", 3000, [{"channel": "ECG", "values": [7, 8, 9]}])
 
     batches = buffer.get_unsynced()
-    
+
     assert len(batches) == 3
     assert batches[0].timestamp == 1000
     assert batches[1].timestamp == 2000

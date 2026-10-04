@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python:
+    name: ${{ matrix.gate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.gate == 'simulation-gate' && 90 || 60 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [pi-gate, simulation-gate]
+    env:
+      PYTHONPATH: .:raspberry-pi
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          lfs: true
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: ${{ matrix.gate }}
+      - name: Install Python dependencies
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+      - name: Install and verify CAD extractor
+        if: matrix.gate == 'simulation-gate'
+        run: |
+          uv venv simulation/cad/.venv-cad
+          uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt
+          simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
+      - name: Pi gate
+        if: matrix.gate == 'pi-gate'
+        env:
+          PYTEST_ADDOPTS: --cov-report=term-missing --cov-report=xml:coverage.xml
+        run: bash raspberry-pi/scripts/check.sh
+      - name: Simulation gate
+        if: matrix.gate == 'simulation-gate'
+        run: bash simulation/scripts/check.sh --cov-report=term-missing --cov-report=xml:coverage.xml
+      - name: Synthetic simulation report
+        if: ${{ !cancelled() && matrix.gate == 'simulation-gate' }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          args=(--all --workers 2 --out simulation/out/ci)
+          if [[ "$EVENT_NAME" == schedule || "$EVENT_NAME" == workflow_dispatch ]]; then
+            args+=(--dsp)
+          fi
+          raspberry-pi/.venv/bin/python -m simulation.quick "${args[@]}"
+      - name: Replay committed real scenarios
+        if: ${{ github.event_name == 'schedule' && matrix.gate == 'simulation-gate' }}
+        run: |
+          shopt -s nullglob
+          scenarios=(simulation/scenarios/real/*.json)
+          if (( ${#scenarios[@]} == 0 )); then
+            echo 'Real replay fixtures pending ANH-131; no real replay executed.'
+          fi
+          for scenario in "${scenarios[@]}"; do
+            raspberry-pi/.venv/bin/python -m simulation.run "$scenario" --out "$RUNNER_TEMP/real-replay" >/dev/null 2>&1
+          done
+      - name: Publish coverage and synthetic reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ matrix.gate }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            raspberry-pi/coverage.xml
+            simulation/coverage.xml
+            simulation/out/ci/report.json
+            simulation/out/ci/report.html
+
+  convex-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:convex
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NEXT_PUBLIC_CONVEX_URL: https://ci-fixture.convex.cloud
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2ktZml4dHVyZS5jbGVyay5hY2NvdW50cy5kZXYk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: node --test raspberry-pi/tests/web/*.test.mjs
+      - run: npm run test:ecg
+      - run: npm run build
+
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+      - run: npm ci
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+      - name: Verify dependency stack-depth guards
+        if: ${{ !cancelled() }}
+        run: npm run test:dependency-security
+      - name: Audit Python dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          uv pip compile raspberry-pi/requirements-dev.txt requirements.txt --python-version 3.12 --generate-hashes --output-file "$RUNNER_TEMP/audit-requirements.txt"
+          uv tool run pip-audit==2.9.0 --disable-pip --require-hashes -r "$RUNNER_TEMP/audit-requirements.txt"
+      - name: Scan all Git history
+        if: ${{ !cancelled() }}
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          "$(go env GOPATH)/bin/gitleaks" git --redact --log-opts='--all'
+
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Check local Markdown links and anchors
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
+        with:
+          lycheeVersion: v0.23.0
+          args: --offline --include-fragments --no-progress 'README.md' 'docs/**/*.md'
+          token: ''
+      - name: Resolve threat identifiers
+        if: ${{ !cancelled() }}
+        run: |
+          node --test scripts/ci/check-men.test.mjs
+          bash scripts/ci/check-men.sh

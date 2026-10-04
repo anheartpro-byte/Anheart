@@ -1,0 +1,19 @@
+{
+  "name": "fault_drive_already_faulted",
+  "description": "The drive is in fault before the start: the start is refused and nothing is written.",
+  "tags": [
+    "manual",
+    "fault",
+    "drive"
+  ],
+  "kind": "manual",
+  "duration_s": 20,
+  "actions": [],
+  "expect": {
+    "start": "refused",
+    "max_output_rpm": 0.0
+  },
+  "drive": {
+    "initial_fault": "MOTOR_OVERLOAD"
+  }
+}

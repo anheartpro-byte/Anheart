@@ -1,14 +1,27 @@
 "use client";
 
-import { useRef, useEffect, useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { ECGChart, EDAChart, SpO2Chart, RespChart } from "./SensorCharts";
+
+interface ChannelMetrics {
+  heartRate?: number;
+  hrv?: number;
+  respRate?: number;
+  scrCount?: number;
+  activations?: number;
+  pulse?: number;
+  quality?: string;
+}
 
 interface SensorBatch {
   timestamp: number;
+  sampleRate?: number;
   samples: Array<{
     channel: string;
     values: number[];
+    unit?: string;
   }>;
+  metrics?: Record<string, ChannelMetrics>;
 }
 
 interface LiveSensorDisplayProps {
@@ -32,62 +45,78 @@ export function LiveSensorDisplay({
   sampleRate = 100,
   channels,
 }: LiveSensorDisplayProps) {
-  // Separate state for each channel's accumulated data
-  const [channelData, setChannelData] = useState<Record<string, number[]>>({});
-  const lastTimestampRef = useRef<number>(0);
   const maxSamples = sampleRate * 60; // Keep 60 seconds of data
+  const [buffer, setBuffer] = useState<{
+    readonly sessionId: string;
+    readonly batches: SensorBatch[] | null;
+    readonly maxSamples: number;
+    readonly timestamp: number;
+    readonly channels: Record<string, number[]>;
+  }>({ sessionId, batches: null, maxSamples, timestamp: 0, channels: {} });
 
-  // Process incoming batches and extract channel data
-  useEffect(() => {
-    if (!ecgData || ecgData.length === 0) return;
+  // Preserve samples that have left the rolling query, without committing a
+  // stale chart before an effect runs. React retries this render before its children.
+  if (
+    buffer.sessionId !== sessionId ||
+    buffer.batches !== ecgData ||
+    buffer.maxSamples !== maxSamples
+  ) {
+    const sameSession = buffer.sessionId === sessionId;
+    const previousTimestamp = sameSession ? buffer.timestamp : 0;
+    let timestamp = previousTimestamp;
+    // Only this local accumulator is mutable; stored sample arrays are copied.
+    const updated: Record<string, number[]> = sameSession
+      ? { ...buffer.channels }
+      : {};
 
-    // Find new batches
-    const newBatches = ecgData.filter(
-      (batch) => batch.timestamp > lastTimestampRef.current,
-    );
-
-    if (newBatches.length === 0) return;
-
-    // Extract samples for each channel
-    const newChannelData: Record<string, number[]> = {};
-
-    for (const batch of newBatches) {
+    for (const batch of ecgData.filter((b) => b.timestamp > previousTimestamp)) {
       for (const sample of batch.samples) {
         const channelKey = sample.channel.toUpperCase();
-        if (!newChannelData[channelKey]) {
-          newChannelData[channelKey] = [];
-        }
-        newChannelData[channelKey].push(...sample.values);
+        updated[channelKey] = [
+          ...(updated[channelKey] ?? []),
+          ...sample.values,
+        ];
       }
-      lastTimestampRef.current = Math.max(
-        lastTimestampRef.current,
-        batch.timestamp,
-      );
+      timestamp = Math.max(timestamp, batch.timestamp);
     }
-
-    // Update state with new data
-    setChannelData((prev) => {
-      const updated = { ...prev };
-      for (const [channel, values] of Object.entries(newChannelData)) {
-        const existing = updated[channel] || [];
-        const combined = [...existing, ...values];
-        // Keep only last N samples
-        updated[channel] = combined.slice(-maxSamples);
-      }
-      return updated;
+    setBuffer({
+      sessionId,
+      batches: ecgData,
+      maxSamples,
+      timestamp,
+      channels: Object.fromEntries(
+        Object.entries(updated).map(([channel, values]) => [
+          channel,
+          values.slice(-maxSamples),
+        ]),
+      ),
     });
-  }, [ecgData, maxSamples]);
+  }
+  const channelData = buffer.channels;
 
-  // Reset when session changes
-  useEffect(() => {
-    setChannelData({});
-    lastTimestampRef.current = 0;
-  }, [sessionId]);
+  // Latest on-device metrics per channel (from the most recent batch that has them).
+  const latestMetrics = useMemo(() => {
+    const result: Record<string, ChannelMetrics> = {};
+    for (const batch of ecgData) {
+      if (!batch.metrics) continue;
+      for (const [ch, m] of Object.entries(batch.metrics)) {
+        result[ch.toUpperCase()] = m;
+      }
+    }
+    return result;
+  }, [ecgData]);
+
+  // Data from the Pi is already treated (filtered, mV), charts must not re-filter.
+  const isTreated = useMemo(
+    () => ecgData.some((b) => b.samples.some((s) => s.unit)),
+    [ecgData],
+  );
 
   // Render chart for each channel based on type
   const renderChannelChart = (channel: string) => {
     const upperChannel = channel.toUpperCase();
     const data = channelData[upperChannel] || [];
+    const metrics = latestMetrics[upperChannel];
 
     switch (upperChannel) {
       case "ECG":
@@ -99,6 +128,9 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={280}
             showMetrics={true}
+            preFiltered={isTreated}
+            heartRate={metrics ? (metrics.heartRate ?? null) : undefined}
+            hrv={metrics ? (metrics.hrv ?? null) : undefined}
           />
         );
 
@@ -151,12 +183,13 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={200}
             showMetrics={false}
+            preFiltered={isTreated}
           />
         );
 
       case "LUX":
       case "LIGHT":
-        // Light sensor - simple line chart
+        // Light sensor - simple line chart (no ECG band-pass filtering)
         return (
           <ECGChart
             key={channel}
@@ -165,6 +198,7 @@ export function LiveSensorDisplay({
             displaySeconds={30}
             height={150}
             showMetrics={false}
+            filter={false}
           />
         );
 
@@ -178,6 +212,7 @@ export function LiveSensorDisplay({
             displaySeconds={5}
             height={200}
             showMetrics={false}
+            preFiltered={isTreated}
           />
         );
     }

@@ -1,5 +1,12 @@
 # AnHeart Raspberry Pi Client
 
+> **Deployment of the operator console (October 2026).** The Docker image and
+> `docker-compose.yml` now start the console (`python -m src.local_panel`), not
+> the ECG recorder described below. The up-to-date procedure, in French, is
+> [docs/deploiement.md](../docs/deploiement.md#7-le-raspberry-pi): `.env.pi.example`,
+> `scripts/pi/preflight.sh`, `scripts/pi/deploy.sh`.
+
+
 Python application for collecting BITalino ECG data and streaming to the AnHeart cloud platform.
 
 ## Features
@@ -187,7 +194,117 @@ python scripts/test_bitalino.py --mac XX:XX:XX:XX:XX:XX
 python -m src.main --debug
 ```
 
+#### BITalino sur macOS (RFCOMM IOBluetooth)
+
+Sur le Mac, `/dev/cu.BITalino-*` est intermittent. Le transport verifie est le
+canal RFCOMM 1 via IOBluetooth (`src/bitalino_rfcomm_macos.py`), choisi par une
+adresse `rfcomm:` (`BITALINO_ADDRESS=rfcomm:98-d3-91-fe-4e-9f`,
+`ECG_SOURCE=rfcomm`). Appairer une fois dans les reglages Bluetooth de macOS
+(PIN 1234), puis verifier la liaison, en lecture seule (aucun moteur) :
+
+```bash
+.venv/bin/python scripts/test_bitalino_rfcomm.py            # 20 s, A1 a 1000 Hz
+.venv/bin/python scripts/test_bitalino_rfcomm.py --seconds 600
+```
+
+Le script affiche chaque seconde trames/s (attendu ~1000), echecs CRC, octets
+sautes, trous, reconnexions, qualite et BPM, puis un verdict.
+
 ---
+
+## Console locale
+
+Une seule commande, depuis `raspberry-pi/`, en natif (sur macOS, Docker ne voit
+ni le cable FTDI ni le Bluetooth) :
+
+```bash
+.venv/bin/python -m src.local_panel
+```
+
+puis ouvrir `http://127.0.0.1:8090/` (onglet **Console**, page « Console du
+banc »). Ctrl-C arrete proprement.
+
+**Jalon M1 : LECTURE SEULE.** Le variateur est lu (ETA, LFRD, RFRD, LCR a
+2 Hz) et **jamais ecrit** : pas de keepalive, pas de mot de commande, pas de
+consigne. Toute route de mouvement repond 403. STOP, E-STOP, acquittement et
+lectures restent disponibles ; un E-STOP web est la seule ecriture possible
+(consigne mise a zero). A la sortie, la liaison est simplement refermee, sans
+sequence d'arret, puisque rien n'a ete commande.
+
+La page affiche : ECG en direct, BPM (qualite, age, tendance), vitesse
+**mesuree** (tr/min de sortie, tr/min moteur, Hz, Gc centripete, Gr resultant),
+etat du variateur avec le code LFT **brut**, latence et echecs de la liaison
+variateur, compteurs de la liaison BITalino (trames, pertes de synchro, octets
+ignores, echantillons combles, reconnexions).
+
+Configuration dans `.env` (voir `.env.example`, section « Local operator
+console ») ; chaque probleme est signale d'un coup au demarrage :
+
+| Cle | Banc reel (Mac) | Simulation complete |
+|---|---|---|
+| `MOTOR_BACKEND` | `serial` | `sim` |
+| `MOTOR_PORT` | `ftdi://schneider:rs485/1` | (ignore) |
+| `MOTOR_SLAVE_ID` | `248` | (ignore) |
+| `ECG_SOURCE` | `rfcomm` | `sim` |
+| `BITALINO_ADDRESS` | `rfcomm:98-d3-91-fe-4e-9f` | (ignore) |
+| `ARM_RADIUS_M` | `1.5` (obligatoire, sans defaut) | `1.5` |
+| `UI_PORT` | `8090` (pas 8123 : `bench_console.py`) | `8090` |
+
+Optionnels : `GEAR_RATIO` (defaut 49.79, confirme au banc), `MOTOR_MAX_RPM`
+(defaut 300, 0..1380), `UI_HOST`/`UI_TOKEN` (hors loopback, jeton de 16
+caracteres minimum), `OCCUPANCY_OCCUPIED_ENABLED` (reste `false` jusqu'au
+jalon M6).
+
+Pour une repetition a blanc sans aucun materiel, les variables du processus
+priment sur `.env` :
+
+```bash
+MOTOR_BACKEND=sim ECG_SOURCE=sim .venv/bin/python -m src.local_panel
+```
+
+Ne pas lancer la console et `scripts/bench_console.py` en meme temps sur le
+meme cable : un seul programme doit parler au variateur (le verrou fichier
+partage est prevu au jalon M3).
+
+---
+
+## Dashboard link (local console ↔ Convex)
+
+The local console (`python -m src.local_panel`) is the machine's admin: it
+runs every session, and the Convex dashboard mirrors it. Set
+`MACHINE_API_KEY` (and `CONVEX_URL`, the `.convex.site` host) to link it;
+leave the key blank and the console is purely local. The link is
+`src/cloud_sync.py`, and it can never stop the machine by failing: a dead
+network only makes the dashboard's picture stale.
+
+| Direction | What | When |
+|---|---|---|
+| machine → dashboard | heartbeat with live state (mode, phase, bpm, rpm, g, safety) | every 10 s |
+| machine → dashboard | training presets whose cardiac tiers match this machine | when the profile store changes |
+| machine → dashboard | every session run here, AUTO or MANUAL, with telemetry at 1 Hz and its end | while it runs |
+| dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate) | polled every 3 s when idle |
+| dashboard → machine | a stop request, run as an ordinary stop on the commissioned ramp | checked every 3 s |
+
+**Two kinds of training session:**
+
+* **AUTO**: a pre-saved preset. The heart rate drives the turns per minute:
+  the controller holds the rider in the preset's zone. It can be launched at
+  the console or from the dashboard: by an admin, by a manager (gestionnaire)
+  of the machine, or by a user a manager has granted the launch right on
+  that machine. A dashboard launch passes the same gates as a start typed at
+  the console, plus: `PROGRAMS_ENABLED=true`, `OCCUPANCY_OCCUPIED_ENABLED=true`
+  (a programme always has a person on board), the preset under the occupied
+  ceiling, and the preset re-validated against **this rider's** maximum heart
+  rate. Any refusal comes back to the dashboard as a failed session with the
+  console's reason.
+* **MANUAL**: the operator sets the speed. Only ever started at the console.
+  Nothing on the dashboard can start one; it only shows it.
+
+**Cardiac tiers.** The supervisor's `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`
+(default 148 / 158) must equal every preset's `hard_max_bpm` /
+`critical_bpm`. Presets that disagree are refused at start and are not
+offered on the dashboard. A zone around 150 bpm needs higher tiers than the
+defaults, which is a decision for the medical side, made in `.env`.
 
 ## Configuration Reference
 

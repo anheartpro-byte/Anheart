@@ -1,3 +1,5 @@
+> **Documentation complète du projet (en français) : [docs/README.md](docs/README.md).**
+
 # Welcome to your Convex + Next.js + Clerk app
 
 This is a [Convex](https://convex.dev/) project created with [`npm create convex`](https://www.npmjs.com/package/create-convex).

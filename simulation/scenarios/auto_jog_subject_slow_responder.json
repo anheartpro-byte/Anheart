@@ -1,0 +1,23 @@
+{
+  "name": "auto_jog_subject_slow_responder",
+  "description": "Slow cardiac response (tau 60 s up, 110 s down): the overshoot case.",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject": {
+    "tau_up": 60,
+    "tau_down": 110
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

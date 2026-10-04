@@ -1,0 +1,21 @@
+# AnHeart Raspberry Pi - development and CI dependencies.
+-r requirements-base.txt
+
+# --- Tests ---------------------------------------------------------------
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=5.0
+hypothesis>=6.100        # property tests bound the controller; coverage alone does not
+
+# --- Static verification (both are blocking; see pyproject.toml) ---------
+basedpyright>=1.18       # strict mode, reports implicit Any that mypy misses
+mypy>=1.11
+ruff>=0.6
+
+# NOTE: `bitalino` is deliberately absent. Its metadata pins
+# PyBluez-bitalino==0.30, whose wheels stop at cp310 and whose sdist needs
+# MSVC + the Windows Bluetooth SDK. The vendor module itself imports
+# `bluetooth` lazily (inside BITalino.__init__, on the MAC-address branch
+# only), so installing without deps is safe on a COM-port bench:
+#     pip install pyserial
+#     pip install --no-deps bitalino

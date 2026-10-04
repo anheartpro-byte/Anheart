@@ -1,0 +1,21 @@
+{
+  "name": "auto_standard_30_min",
+  "description": "Shipped 30-min profile, nominal subject. Its 276 motor-rpm ceiling (5.5 output rpm) cannot reach the 118-138 bpm zone on the modelled subject: the correct behaviour is to saturate at the ceiling, never exceed it, and complete.",
+  "tags": [
+    "auto",
+    "nominal",
+    "shipped"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "standard_30_min",
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "max_output_rpm": 5.55,
+    "forbid_rules": [
+      "hr_critical",
+      "hr_hard_max"
+    ]
+  }
+}

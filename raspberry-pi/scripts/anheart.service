@@ -1,6 +1,14 @@
+# AnHeart operator console, run NATIVELY from a venv (no Docker).
+#
+# The supported deployment is Docker (docker-compose.yml, restart policy
+# included); use this unit only on a Pi where Docker is not wanted.
+#
+#   sudo cp scripts/anheart.service /etc/systemd/system/anheart.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now anheart
+#
+# Adjust User and the paths if the repository is not in /home/pi/anheart.
 [Unit]
-Description=AnHeart ECG Monitor
-Documentation=https://github.com/yourrepo/anheart
+Description=AnHeart operator console (python -m src.local_panel)
 After=network-online.target bluetooth.target
 Wants=network-online.target
 
@@ -9,9 +17,18 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/anheart/raspberry-pi
-Environment="PATH=/home/pi/anheart/raspberry-pi/venv/bin:/usr/bin"
-ExecStart=/home/pi/anheart/raspberry-pi/venv/bin/python -m src.main
-Restart=always
+# The console reads .env itself (python-dotenv); values here would override it.
+Environment="PATH=/home/pi/anheart/raspberry-pi/.venv/bin:/usr/bin:/bin"
+Environment="MPLBACKEND=Agg"
+ExecStart=/home/pi/anheart/raspberry-pi/.venv/bin/python -m src.local_panel
+# SIGTERM is the console's controlled stop: it zeroes the speed reference and
+# releases the drive link. Give it time before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# A restart never resumes motion: the console comes back at rest, read-only.
+# Exit code 2 is a configuration error: restarting would only loop on it.
+Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
@@ -20,7 +37,7 @@ SyslogIdentifier=anheart
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/pi/anheart/raspberry-pi
+ReadWritePaths=/home/pi/anheart/raspberry-pi/data
 
 [Install]
 WantedBy=multi-user.target

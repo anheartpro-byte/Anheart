@@ -2,12 +2,45 @@
 """Discover BITalino/psychoBIT devices via Bluetooth."""
 
 import asyncio
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.bitalino_client import discover_bitalino_devices
+
+async def discover_bitalino_devices(scan_seconds: float = 10.0) -> list[dict]:
+    """Scan for nearby BITalino/psychoBIT devices over Bluetooth Classic.
+
+    Needs PyBluez (Linux) and may need sudo. Lives here rather than in
+    src/bitalino_client.py because only these operator scripts use it.
+    """
+    try:
+        import bluetooth
+    except ImportError:
+        print("PyBluez not installed; on the Pi use: bluetoothctl scan on")
+        return []
+
+    loop = asyncio.get_running_loop()
+    try:
+        nearby = await loop.run_in_executor(
+            None,
+            lambda: bluetooth.discover_devices(
+                duration=int(scan_seconds), lookup_names=True, lookup_class=False
+            ),
+        )
+    except Exception as e:
+        print(f"Bluetooth scan error: {e}")
+        return []
+
+    devices = []
+    for addr, name in nearby:
+        if any(x in (name or "").lower() for x in ["bitalino", "psychobit", "plux"]):
+            devices.append({"name": name, "address": addr})
+    if not devices:
+        print("No BITalino devices found. All discovered devices:")
+        for addr, name in nearby:
+            print(f"  {name or 'Unknown'} ({addr})")
+    return devices
 
 
 async def main():
@@ -18,9 +51,9 @@ async def main():
     print("Scanning for Bluetooth devices...")
     print("This may take up to 10 seconds.")
     print()
-    
-    devices = await discover_bitalino_devices(timeout=10.0)
-    
+
+    devices = await discover_bitalino_devices(scan_seconds=10.0)
+
     if not devices:
         print("No BITalino/psychoBIT devices found.")
         print()
@@ -37,16 +70,16 @@ async def main():
         print("  > trust XX:XX:XX:XX:XX:XX")
         print("  > quit")
         return
-    
+
     print(f"Found {len(devices)} compatible device(s):")
     print()
     for d in devices:
         print(f"  Name: {d['name']}")
         print(f"  MAC:  {d['address']}")
         print()
-    
+
     print("To test a device, run:")
-    print(f"  python scripts/test_bitalino.py --mac <MAC_ADDRESS>")
+    print("  python scripts/test_bitalino.py --mac <MAC_ADDRESS>")
 
 
 if __name__ == "__main__":

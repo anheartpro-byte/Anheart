@@ -1,0 +1,820 @@
+# La console locale du Raspberry Pi
+
+La console locale est la page web servie par le Pi lui-même (`python -m src.local_panel`).
+C'est **l'admin de la machine** : toute séance, manuelle ou automatique, passe par elle.
+Le tableau de bord distant ([tableau-de-bord.md](tableau-de-bord.md)) ne fait que la refléter
+et lui transmettre des demandes.
+
+Ce document décrit chaque page, chaque bouton, chaque indicateur, les messages d'erreur,
+et la liste complète des routes HTTP. Les termes techniques (E-STOP, STO, LFT, HSP, verdict,
+latch…) sont définis dans le [glossaire](glossaire.md). Le fonctionnement interne
+(superviseur, règles, défauts variateur) est dans [raspberry-pi.md](raspberry-pi.md).
+Les limites de sécurité sont dans [securite.md](securite.md).
+
+> **Ce qui a été vérifié.** Le texte ci-dessous est tiré du code
+> (`raspberry-pi/src/web/`, `src/local_panel.py`, `src/control_surface.py`). Les routes et
+> les messages cités ont été rejoués sur la console lancée **en simulation complète**
+> (variateur simulé, BITalino simulé, caméra simulée, sans tableau de bord).
+> La page n'a pas été vérifiée sur la machine réelle avec une personne à bord :
+> la séance « personne à bord » reste refusée par configuration (jalon M6).
+
+---
+
+## Sommaire
+
+1. [Lancer la console](#1-lancer-la-console)
+2. [Structure de la page](#2-structure-de-la-page)
+3. [Règles d'affichage à connaître](#3-règles-daffichage-à-connaître)
+4. [Barre latérale](#4-barre-latérale)
+5. [Pied de page : STOP et E-STOP](#5-pied-de-page--stop-et-e-stop)
+6. [Page « Tableau de bord »](#6-page--tableau-de-bord-)
+7. [Page « Capteurs »](#7-page--capteurs-)
+8. [Page d'un capteur](#8-page-dun-capteur)
+9. [Page « Seance »](#9-page--seance-)
+10. [Page « Configuration »](#10-page--configuration-)
+11. [Page « Securite »](#11-page--securite-)
+12. [Déroulé type d'une séance manuelle de banc](#12-déroulé-type-dune-séance-manuelle-de-banc)
+13. [Messages d'erreur typiques](#13-messages-derreur-typiques)
+14. [Référence des routes HTTP et WebSocket](#14-référence-des-routes-http-et-websocket)
+15. [Écarts connus entre le code, la page et les README](#15-écarts-connus-entre-le-code-la-page-et-les-readme)
+
+---
+
+## 1. Lancer la console
+
+Depuis `raspberry-pi/`, en natif (sur macOS, Docker ne voit ni le câble FTDI ni le
+Bluetooth). Simulation complète, sans aucun matériel ni tableau de bord :
+
+```bash
+cd raspberry-pi
+MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 UI_PORT=8090 MACHINE_API_KEY= \
+  .venv/bin/python -m src.local_panel
+```
+
+Puis ouvrir `http://127.0.0.1:8090/`. `Ctrl-C` arrête proprement.
+
+Options utiles en simulation :
+
+```bash
+# tous les capteurs BITalino, et une caméra simulée (capsule vide)
+MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 UI_PORT=8090 MACHINE_API_KEY= \
+  SENSORS=ECG,EDA,SpO2,RESP,EMG,LUX PRESENCE_SOURCE=sim_empty \
+  .venv/bin/python -m src.local_panel
+```
+
+Au démarrage, le terminal affiche une ligne de résumé (vérifiée) :
+
+```
+WARNING __main__: Console du banc sur http://127.0.0.1:8090/ - MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun
+INFO src.web.app: operator interface serving 25 routes on 127.0.0.1:8090 (loopback=True, token=none)
+```
+
+Points à savoir :
+
+- Les variables du processus **priment** sur `raspberry-pi/.env`. Si un `.env` existe et
+  contient `MACHINE_API_KEY`, la console se relie au tableau de bord Convex. Forcer
+  `MACHINE_API_KEY=` (vide) pour rester strictement local.
+- `MOTOR_BACKEND`, `ECG_SOURCE` et `ARM_RADIUS_M` sont obligatoires. Une erreur de
+  configuration est signalée d'un coup et le processus sort avec le code 2, par exemple :
+  `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut : rayon mesure de l'axe a l'occupant, en m`.
+- Sans `UI_PORT`, le code écoute sur **8080** (`DEFAULT_PORT`, `src/web/deps.py`) ; `.env.example`
+  propose 8090. On passe donc `UI_PORT=8090` explicitement. **Jamais 8123** : ce port est pris par
+  `scripts/bench_console.py`, et la configuration le refuse.
+  Ne jamais faire tourner les deux programmes sur le même câble variateur.
+- `PYTHONPATH` n'est pas nécessaire ici (on lance depuis `raspberry-pi/`). Il l'est pour la
+  simulation (`simulation/`), voir [demarrage-rapide.md](demarrage-rapide.md).
+- À l'arrêt, le terminal dit comment la machine a été laissée, par exemple
+  `console stopped: runtime never started: drive link released without a write`
+  (rien n'a jamais été commandé) ou
+  `console stopped: emergency zero ACKNOWLEDGED; the drive link closed cleanly`.
+- Le premier enregistrement d'un profil crée `raspberry-pi/data/profiles.local.json`.
+  Tant qu'on n'enregistre rien, la console charge les profils livrés
+  (`standard_30_min`, `standard_45_min`) sans écrire de fichier.
+
+Toutes les clés `.env` sont décrites dans [raspberry-pi.md](raspberry-pi.md).
+
+---
+
+## 2. Structure de la page
+
+Une seule page HTML, sans framework, sans CDN, sans étape de build : le Pi la sert
+hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
+
+| Zone | Contenu |
+|---|---|
+| Bandeau rouge en haut | `NO LIVE DATA`, visible dès que les données ne sont plus fraîches |
+| Barre latérale (à gauche) | la marque, six pastilles d'état de la machine, la navigation |
+| Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
+| Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
+
+Sur un écran étroit, la barre latérale se replie derrière un bouton `☰ Menu`. Une barre
+mobile affiche alors le mode et l'état de rotation.
+
+La page reçoit ses données par un WebSocket (`/ws/telemetry`, environ 5 images par
+seconde) et par des interrogations périodiques :
+
+| Source | Période | Sert à |
+|---|---|---|
+| `/ws/telemetry` | continu | instantanés, événements, tracé ECG |
+| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console |
+| `/api/sensors` | 1 s | pages Capteurs |
+| `/api/camera` | 1 s | carte caméra de la page Securite |
+| `/api/status` | 5 s | état, verdicts, attestation, système |
+| `/api/presence` (POST) | 5 s | signal « l'accompagnant est là » |
+
+Si le WebSocket tombe, la page réessaie toutes les 1,5 s.
+
+---
+
+## 3. Règles d'affichage à connaître
+
+Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
+
+1. **Rien n'est affiché comme « en direct » s'il ne l'est pas.** Si aucune image n'arrive
+   pendant 2 s, la page passe en « données figées » :
+   - le bandeau rouge `NO LIVE DATA` apparaît, avec
+     `la liaison est ouverte mais aucune donnee depuis N s - la machine tourne peut-etre encore`
+     ou `la liaison avec la machine est coupee - la machine tourne peut-etre encore` ;
+   - les grands nombres (fréquence cardiaque, vitesse mesurée, consigne) sont barrés et grisés ;
+   - la pastille **Liaison** passe à `donnees figees` ou `hors ligne`.
+2. **« Est-ce arrêté ? » se lit sur la vitesse MESURÉE, jamais sur la consigne.** Une
+   consigne à zéro sur une masse qui ralentit n'est pas un zéro mesuré.
+3. **Les vitesses sont toujours données ensemble** : tr/min moteur, tr/min de sortie
+   (bras), fréquence variateur (Hz), Gc (g centripète) et Gr (g résultant ressenti).
+   Le rapport de réduction est 49,79 : un seul de ces nombres masquerait une erreur d'un
+   facteur 50. Voir [glossaire](glossaire.md) pour Gc et Gr.
+4. **Une fréquence cardiaque périmée est barrée.** Elle est affichée avec son âge et sa
+   qualité. Un capteur dont la fenêtre n'avance plus depuis 3,5 s est marqué `perime`.
+5. **L'E-STOP ne demande rien** : ni confirmation, ni nom, ni raison.
+
+L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`) vaut :
+
+| Libellé | Signification |
+|---|---|
+| `a l'arret` (vert) | vitesse de sortie mesurée inférieure à 0,05 tr/min, statut variateur frais |
+| `EN ROTATION` (orange) | vitesse mesurée non nulle |
+| `VITESSE INCONNUE` (rouge) | statut variateur périmé ou vitesse absente : ne jamais le lire comme « arrêté » |
+
+---
+
+## 4. Barre latérale
+
+### Pastilles d'état
+
+| Pastille | Valeurs | Source |
+|---|---|---|
+| **Mode** | `REPOS`, `MANUEL`, `SEANCE`, `ARRET` | l'instantané (`mode`) |
+| **Etat** | `idle`, `starting`, `running`, `stopping` (rouge si E-STOP verrouillé) | `/api/status` (`run_state`) |
+| **Liaison** | `en direct`, `donnees figees`, `hors ligne` | la fraîcheur du WebSocket |
+| **Rotation** | `a l'arret`, `EN ROTATION`, `VITESSE INCONNUE` | vitesse mesurée |
+| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge) | l'instantané |
+| **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
+
+Les modes :
+
+| Mode | Signification |
+|---|---|
+| `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. |
+| `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
+| `SEANCE` | une séance programmée (AUTO) déroule son programme |
+| `ARRET` | une séance se termine, la consigne descend vers zéro. **Pas** « arrêté » : lire la vitesse mesurée |
+
+Les états `run_state` (vue « intention » de la surface de commande) :
+
+| État | Signification |
+|---|---|
+| `idle` | rien de demandé. Seul état où un démarrage est accepté |
+| `starting` | un démarrage est accepté, la boucle ne l'a peut-être pas encore pris |
+| `running` | la boucle confirme qu'une séance tourne |
+| `stopping` | une fin ou un E-STOP est accepté ; un E-STOP garde cet état jusqu'à l'acquittement |
+
+Sous les pastilles, une ligne indique l'adresse d'écoute, par exemple
+`127.0.0.1:8090 boucle locale · sans jeton`, ou `… RESEAU · jeton` hors boucle locale.
+
+### Navigation
+
+`Tableau de bord`, `Capteurs` (avec, en dessous, une entrée par capteur acquis : nom,
+canal `A1`…`A6` et une pastille de couleur selon la qualité), `Seance`, `Configuration`,
+`Securite`. Changer de page ne recharge rien : aucune navigation ne peut figer un nombre.
+
+---
+
+## 5. Pied de page : STOP et E-STOP
+
+Présent sur **toutes** les pages. À gauche, un résumé : `liaison ouverte · manuel · hold`
+(mode et phase de l'instantané).
+
+### STOP : « rampe controlee »
+
+- Envoie `POST /api/session/stop` avec le premier nom d'opérateur saisi sur la page
+  et la raison `operator pressed STOP`.
+- Termine la séance **sur la rampe mise en service** (pas plus vite) : une décélération
+  plus rapide que la rampe du variateur déclenche une surtension (ObF) et met la
+  machine en roue libre, ce qui allonge l'arrêt.
+- En manuel, après STOP la cible repasse à 0. Une fois l'étage de sortie coupé à
+  l'arrêt mesuré, le mode revient à `REPOS`. Repartir demande un nouveau démarrage.
+- Refus : une boîte d'alerte `STOP refuse : …` (par exemple
+  `the machine is already stopping` si un arrêt est déjà en cours, ou
+  `there is no session to end (the machine is idle)`).
+
+### E-STOP : « verrouille immediatement »
+
+- Envoie `POST /api/session/estop` **au premier clic**, sans confirmation, sans nom exigé.
+- Le verrou est posé **avant** la réponse (code 200), sans attendre la boucle de
+  contrôle. À la tick suivante, la boucle met la consigne à zéro (`QUICK_STOP`).
+- La page affiche dans le bandeau :
+  `ARRET D'URGENCE VERROUILLE (quick_stop) - surveillez la vitesse MESUREE : la machine decelere, elle n'est pas arretee`.
+- Ce que l'E-STOP web **n'est pas** : un arrêt de sécurité. Il dépend du navigateur,
+  du réseau, du serveur web et du processus. Le STO est ponté sur cette machine : même
+  l'arrêt d'urgence le plus rapide est une rampe (voir [securite.md](securite.md)).
+  L'arrêt de sécurité est le coup de poing câblé.
+- Si la requête échoue : `la demande d'arret d'urgence a echoue : … - UTILISEZ L'ARRET CABLE`.
+- Un E-STOP reste verrouillé jusqu'à un **acquittement nommé** (page Securite), avec la
+  case « coup de poing déverrouillé » cochée.
+
+---
+
+## 6. Page « Tableau de bord »
+
+La console du banc. Elle montre l'essentiel et porte le mode MANUEL.
+
+### Bandeau « LECTURE SEULE »
+
+Affiché seulement si la console refuse tout mouvement (`motion_enabled=false`). La
+console `src.local_panel` actuelle est construite avec `motion_enabled=True` : ce bandeau
+reste caché et la pastille **Console** indique `mouvement actif`.
+
+### Bandeau « RAMPE EN COURS : NE PAS BOUGER LA TETE »
+
+Affiché tant que la consigne marche vers la cible manuelle, avec la destination et le
+temps d'arrivée estimé, par exemple
+`vers 5.00 tr/min de sortie (Gr 1.001), arrivee dans ~0:08`. Un mouvement de tête
+pendant un changement de vitesse provoque la nausée (effet Coriolis).
+
+### Carte « Mode MANUEL »
+
+**Au repos** (pas de séance manuelle) :
+
+| Élément | Rôle |
+|---|---|
+| case `BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE)` | déclaration obligatoire avant tout démarrage ; la page refuse de démarrer si elle n'est pas cochée |
+| champ `Operateur` | nom de la personne qui pilote ; obligatoire (400 sinon) |
+| bouton `Demarrer MANUEL` | `POST /api/manual/start` avec `occupancy: "bench"` ; la cible initiale est 0 |
+
+La page ne propose **que** la déclaration BANC. Une séance manuelle « personne à bord »
+(`occupied`) n'existe que par l'API, et elle est refusée tant que
+`OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6).
+
+Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occupation
+(`BANC - personne a bord : NON`).
+
+**Pendant la séance manuelle** :
+
+| Élément | Rôle |
+|---|---|
+| `− palier` / `+ palier` | baisse ou monte le **brouillon** d'un cran de 0,1 Gr (g résultant) au rayon configuré |
+| `−1 tr/min` / `+1 tr/min` | baisse ou monte le brouillon de 1 tr/min **de sortie** (bras) |
+| grand nombre central | le brouillon, en tr/min de sortie. En **orange** tant qu'il diffère de la cible appliquée |
+| `Appliquer` | envoie le brouillon : `POST /api/manual/target`. Rien n'est envoyé avant ce clic |
+| grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss` ou `cible atteinte`) |
+
+Règles de la cible :
+
+- La cible est une **destination**, jamais une consigne directe. La machine y marche aux
+  limites anti-nausée (accélération angulaire et variation de g, fichier
+  `config/motion_limits.json`). Tout verdict de sécurité reste prioritaire.
+- Domaine accepté : `0`, ou entre le minimum de rotation et le plafond. En simulation
+  avec les valeurs par défaut : minimum 55 tr/min moteur (≈ 1,10 tr/min de sortie),
+  plafond `MOTOR_MAX_RPM` = 300 tr/min moteur (≈ 6,03 tr/min de sortie).
+- Les boutons ± gardent le brouillon dans ce domaine (sous le minimum : vers le
+  minimum en montant, vers 0 en descendant ; au-dessus du plafond : le plafond).
+- Une valeur hors domaine envoyée quand même est **refusée, pas arrondie**. Le refus
+  arrive comme événement :
+  `consigne refusee : 27.00 tr/min de sortie hors de 0 ou [55, 300] tr/min moteur`.
+- Après n'importe quel arrêt (STOP, E-STOP, verdict), le brouillon est effacé et la cible
+  vaut 0.
+
+Messages sous la carte : `accepte : manual_start bench (cible 0)`,
+`cible envoyee : 5.00 output rpm - la machine y va aux limites de mouvement`, ou l'erreur.
+
+### Carte « Frequence cardiaque (regulation) »
+
+La fréquence cardiaque **qui commande** la machine en séance AUTO (celle des pages
+Capteurs n'est que de la surveillance). Grand nombre en bpm, pastille de qualité
+(`good`, `noisy`, `mains_dominated`, `no_signal`, ou `pas de signal`), et :
+`age` (en s, barré si périmé), `brut` (dernière valeur), `seq` (numéro de la mesure).
+Une fréquence périmée (plus de 4 s) est barrée.
+
+### Carte « Vitesse mesuree »
+
+Vitesse de sortie mesurée en grand, pastille de rotation, puis moteur, sortie, variateur
+(Hz), Gc, Gr et le courant moteur (A).
+
+### Carte « ECG »
+
+Tracé des 6 dernières secondes environ (250 Hz). Pastille `250 Hz · seq N` (orange si une
+discontinuité vient d'arriver). Une coupure est dessinée comme une coupure : relier les
+deux bouts ferait un trait vertical qui ressemble à un QRS.
+
+### Carte « Variateur »
+
+Pastille de l'état CiA402 : `not_ready`, `switch_on_disabled`, `ready`, `switched_on`,
+`operation_enabled`, `fault`, `comm_lost` (rouge pour `fault` et `comm_lost`).
+Grille : `age du statut`, `LFT brut` (code défaut brut ou `aucun`), `liaison`
+(`sim` ou `serial · description`), `latence` (ms), `lectures / echecs`,
+`derniere erreur`, `rayon / rapport` (ex. `1.50 m / i = 49.79`), `plafond moteur`.
+
+En cas de défaut, un encadré rouge :
+`DEFAUT <mnémonique> (LFT brut <code>) : <signification>, <message>`.
+La table des 66 codes LFT est dans [raspberry-pi.md](raspberry-pi.md).
+
+Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
+`POST /api/drive/fault-reset`. Nommé, explicite, jamais automatique. La boucle le refuse
+sauf si la machine est au repos, que tout autre verdict est acquitté et que le variateur
+montre l'arbre arrêté. Certains défauts ne sont **pas réarmables** depuis la console
+(`reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter`).
+Message d'accord : `reset demande : fault_reset (le variateur doit le confirmer)`.
+
+### Reprise automatique de la liaison variateur
+
+La console tente d'abord de retrouver automatiquement une observation complète,
+sans relancer de séance ni réarmer un défaut. Ouvrir le port local ne prouve pas
+que le variateur répond ; une acquisition ETA valide confirme l'adressage,
+mais seule la lecture complète du statut rétablit l'observation.
+
+Une panne où aucune requête n'a pu partir continue à être retentée au repos.
+Si une inspection échoue après du trafic possible, la console suit cet épisode
+d'état inconnu séparément : une nouvelle ouverture réussie ne suffit pas à
+l'effacer. Une lecture complète réussie l'efface ; si elle trouve le variateur
+déjà activé ou en rotation, la console arrête et verrouille, sans reprise.
+
+Après le nombre d'échecs configuré par la supervision (`comms_lost_failures`,
+trois par défaut), un épisode inconnu non résolu devient `GO_SILENT`. Ce compte
+n'est pas une garantie de délai physique. Le processus ne transmet ensuite
+plus aucune trame, même de lecture ou de fermeture. Le zéro d'urgence existant
+est tenté une seule fois en entrant dans ce mode, uniquement si l'adressage a
+été prouvé indépendamment ; sans cette preuve, aucune écriture aveugle.
+
+`comm_lost` et `VITESSE INCONNUE` restent inconnus même si une ancienne lecture
+à zéro est récente. Un zéro acquitté ne prouve ni l'arrêt de l'arbre ni la
+désactivation de la sortie. Une annulation attend la vraie inspection et garde
+ses preuves avant de terminer. Après `GO_SILENT`, l'intervention manuelle
+consiste à vérifier l'arrêt réel puis redémarrer le processus ; l'acquittement
+ne lève pas le silence, et une nouvelle séance exige une nouvelle demande.
+
+### Carte « BITalino »
+
+Pastille `acquisition`, `connecte` ou `deconnecte`. Grille : `source` (et adresse),
+`tentatives` de connexion, `lots traites` (et échantillons), `dernier lot` (âge),
+`DSP` (seq et qualité), `tendance` (bpm/min). Avec une vraie liaison série ou RFCOMM
+s'ajoutent : `trames`, `pertes de synchro`, `octets ignores`, `echantillons combles`,
+`reconnexions`, et le cas échéant `lots sans ECG` et `erreur`.
+
+---
+
+## 7. Page « Capteurs »
+
+Vue d'ensemble des canaux BITalino acquis (variable `SENSORS`, par défaut `ECG` seul).
+Mention permanente : **surveillance uniquement**, aucune de ces lectures ne commande le
+moteur.
+
+Pastille du titre : `N / M bon signal`, `aucun canal` ou `hors ligne`. Une carte par
+capteur : nom, pastille de qualité (`bon signal`, `bruite`, `parasite secteur`,
+`pas de signal`, ou `perime`), une mini-courbe, le canal, l'unité, la cadence affichée, et
+jusqu'à quatre mesures. Cliquer une carte ouvre la page du capteur.
+
+Si aucun canal n'est acquis :
+`Aucun canal BITalino supplementaire n'est acquis par cette console (variable SENSORS).`
+
+---
+
+## 8. Page d'un capteur
+
+Titre : `<TYPE> · <libellé>`, pastille du canal (`canal A1`…) et de la qualité.
+Encadré `SURVEILLANCE UNIQUEMENT`. Puis :
+
+- **Signal** : tracé grand format, axe du temps en secondes avant maintenant, unité sur
+  l'axe vertical. Pastille `N ech/s · en direct` ou `fige depuis N s`. Si le canal est figé,
+  le tracé passe en gris avec la mention **`DONNEES FIGEES - NE PAS CROIRE CE TRACE`**.
+- **Mesures** : une tuile par mesure dérivée (valeur grisée si absente ou figée).
+- **Capteur** : description, canal, unité, cadence, fenêtre, qualité, rôle
+  (`surveillance uniquement : ne commande pas le moteur`).
+
+Les six capteurs, tels que la console les expose (libellés vérifiés en simulation) :
+
+| Type | Canal | Libellé | Unité | Fenêtre / cadence affichée | Mesures affichées |
+|---|---|---|---|---|---|
+| ECG | A1 | Electrocardiogramme | mV | 10 s / 250 ech/s | Fréquence cardiaque (affichage), Intervalle RR moyen, RMSSD (variabilité), Battements dans la fenêtre |
+| EDA | A2 | Activite electrodermale | µS | 20 s / 50 ech/s | Niveau tonique (SCL), Fréquence des réponses (SCR), Amplitude moyenne des SCR, Nombre de SCR |
+| SpO2 | A3 | Photoplethysmogramme (pouls au doigt) | u.a. | 10 s / 100 ech/s | Fréquence du pouls, Indice de perfusion relatif, Irrégularité du pouls (CV), **SpO2 : non mesurable (une seule longueur d'onde)** |
+| RESP | A4 | Respiration | % | 30 s / 50 ech/s | Fréquence respiratoire, Amplitude, Régularité, Plus longue pause |
+| EMG | A5 | Electromyogramme | mV | 5 s / 250 ech/s | Amplitude efficace, Activation, Fréquence médiane, Amplitude crête |
+| LUX | A6 | Lumiere | % | 60 s / 10 ech/s | Niveau lumineux, Variation lumineuse, Rotation estimée (scintillement), Changements brusques |
+
+Limites honnêtes :
+
+- **SpO2** : le capteur BITalino n'a qu'une longueur d'onde. La saturation n'est **pas**
+  calculable ; la mesure affiche toujours `-`.
+- **ECG** de cette page : un second calcul de la fréquence pour affichage. La régulation
+  utilise toujours `src/ecg_pipeline.py` (carte « Fréquence cardiaque (régulation) »).
+- **LUX** : l'estimation de rotation suppose une lampe fixe devant laquelle passe la
+  capsule. En simulation, le signal lumineux est synthétique et son estimation ne suit pas
+  la vitesse du simulateur de variateur (observé : 3,9 tr/min affichés à l'arrêt). Ne pas
+  la lire comme une mesure de vitesse.
+
+---
+
+## 9. Page « Seance »
+
+La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse.
+
+### Carte « Programme »
+
+| Élément | Rôle |
+|---|---|
+| `Profil` (liste) | les profils stockés, affichés `nom (id)` |
+| `Duree totale (minutes, vide = celle du profil)` | surcharge optionnelle de la durée |
+| `Operateur` | obligatoire |
+| `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
+| `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
+| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord, la page reste sur Seance |
+
+Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
+attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
+Dans ce dernier cas la note dit :
+`seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL`.
+
+Pour qu'une séance programmée puisse partir, **toutes** ces conditions doivent tenir
+(dans l'ordre où la console les vérifie, `LocalPanel._start_programme`) :
+
+1. `PROGRAMS_ENABLED=true` ;
+2. âge du passager connu et ≥ `MIN_RIDER_AGE` ;
+3. `OCCUPANCY_OCCUPIED_ENABLED=true` (une séance programmée a toujours une personne à bord) ;
+4. le profil existe et se résout (ajusté à la FC max du passager si elle est connue, pour
+   une séance lancée depuis le tableau de bord) ;
+5. le plafond du profil (`max_rpm`) est sous le plafond « personne à bord » ;
+6. la caméra, si configurée, ne bloque pas le démarrage ;
+7. les contrôles du runtime : attestation, aucun verdict en attente, paliers cardiaques du
+   profil égaux à ceux du superviseur (`HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`), variateur
+   disponible, pas en défaut, pas déjà en marche.
+
+Avec la configuration par défaut, les points 1 et 3 sont faux : **aucune séance
+programmée ne démarre** (403). Cela a été vérifié en simulation.
+
+### Carte « Ce que ce programme ferait »
+
+Limites du profil : `zone` (bpm), `max absolu` (palier dur), `critique`, `FC max du sujet`,
+`plafond`, `plafond echauffement`, `minimum de rotation` (tr/min moteur), `HSP variateur`
+(Hz), `total`, `palier` (durée du HOLD). Après prévisualisation s'ajoutent : `charge au
+plafond` (g et tr/min de sortie), `charge echauffement`, `charge minimum`, `duree modifiee`,
+et le tableau des phases (`baseline`, `warmup`, `hold`, `cooldown`, `recovery`, avec début,
+fin, durée).
+
+Exemple vérifié (`standard_30_min`) : zone 118 à 138 bpm, plafond 276 tr/min moteur =
+5,54 tr/min de sortie = 10 Hz = 0,052 g à 1,5 m. Ce plafond est trop bas pour atteindre la
+zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
+
+### Cartes de suivi
+
+| Carte | Contenu |
+|---|---|
+| **Frequence cardiaque** | bpm en grand (barré si périmé), qualité, bande de zone avec un curseur, `cible`, `age`, `brut`, temps `dans la zone`, `au-dessus`, `en dessous` |
+| **Phase** | pastille de phase (`baseline`, `warmup`, `hold`, `cooldown`, `recovery`, `done`), barre de progression, `ecoule`, `restant`, `securite` |
+| **Mesure** | vitesse de sortie **mesurée** en grand, pastille de rotation, les cinq grandeurs et le courant |
+| **Consigne** | la consigne commandée (plus petite, grisée), pastille `confirmee par le variateur` ou `non confirmee` (écho LFRD) |
+| **Variateur** | état, `age du statut`, `courant`, `mesure` (tr/min moteur), encadré de défaut |
+| **Securite** | action en cours, règle, détail, verrouillé ou non, depuis ; bouton `Verdicts et acquittement` (ouvre la page Securite) |
+| **ECG** | même tracé que sur le Tableau de bord |
+| **Evenements** | les 40 derniers événements : heure, type, `[opérateur]`, détail |
+
+Types d'événements : `start_requested`, `fault_reset_requested`, `end_requested`,
+`emergency_stop`, `acknowledged`, `attested`, `session_running`, `session_idle`,
+`refused`. Les refus de la boucle (cible hors domaine, reset refusé, démarrage refusé)
+arrivent **uniquement** comme événements `refused` : la route HTTP a déjà répondu 202.
+
+---
+
+## 10. Page « Configuration »
+
+### Carte « Acces »
+
+Champ `Jeton partage` et bouton `Utiliser ce jeton`. Le jeton est gardé dans le
+`sessionStorage` du navigateur (onglet courant) et envoyé dans l'en-tête
+`X-Anheart-Token` (et en paramètre `?token=` du WebSocket).
+
+- En boucle locale (`UI_HOST=127.0.0.1`), le jeton est facultatif : laisser vide.
+- Hors boucle locale, la console **refuse de démarrer** sans `UI_TOKEN` d'au moins
+  16 caractères (message vérifié :
+  `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback`).
+- Si `UI_TOKEN` est défini, toute route `/api/*` sans le bon jeton répond 401
+  `a valid x-anheart-token header is required`.
+
+La note sous la carte dit `connecte a la machine` quand l'API répond, sinon l'erreur.
+
+### Carte « Systeme »
+
+Grille lue dans `/api/status` : `etat`, `e-stop verrouille`, `verdict retenu`,
+`plancher verrouille`, `regles actives`, `echantillons FC retenus`, `accompagnant vu`
+(`jamais` ou `il y a N s`), `clients telemetrie`, `clients evinces` (écrans déconnectés
+pour retard), `ecg` (fréquence et seq), `profils`, `revision` du stock de profils,
+`commandes acc/ref` (acceptées / refusées), `snapshots` publiés.
+
+**Ports serie** : les ports série trouvés par le Pi (`aucun port serie trouve` sinon).
+
+---
+
+## 11. Page « Securite »
+
+### Carte « Verdict en cours »
+
+- Pastille de l'action de sécurité en cours.
+- Grille : `regle`, `detail`, `verrouille` (oui/non), `depuis` (s) ; ou
+  `aucune demande`.
+- **Verdicts retenus** : `e-stop verrouille`, `verdict retenu` (règle / action),
+  `plancher verrouille` (le verdict verrouillé le plus sévère), `regles actives`,
+  `accompagnant vu`. Puis la liste des règles actives (`action règle détail [verrouille]`).
+
+Les règles elles-mêmes (identifiants, seuils, actions) sont décrites dans
+[raspberry-pi.md](raspberry-pi.md).
+
+### Acquittement
+
+| Élément | Rôle |
+|---|---|
+| champ `votre nom` | obligatoire |
+| case `le coup de poing a ete deverrouille (tire)` | déclaration séparée : le logiciel ne voit pas le contact. Par défaut non cochée, pour échouer du côté sûr |
+| bouton `Acquitter` | `POST /api/safety/acknowledge` : efface les verdicts verrouillés. **Rien d'autre ne le fait**, jamais automatiquement |
+
+Résultats possibles (vérifiés en simulation) :
+
+- `acquitte par doc : operator_estop` ;
+- `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` (case non cochée après un E-STOP) ;
+- `nothing is latched to acknowledge` ;
+- un verdict `GO_SILENT` ne s'acquitte pas : `… demanded GO_SILENT, which is one-way: this process will not command motion again, and recovery is an operator action on a machine that has demonstrably stopped`. Il faut redémarrer la console.
+
+Un refus s'affiche sous le bouton et dans une boîte d'alerte `acquittement refuse : …`.
+
+### Carte « Cablage de l'arret d'urgence » (l'attestation en deux cases)
+
+Avant tout mouvement, à **chaque démarrage du Pi**, une personne nommée doit attester
+deux faits distincts :
+
+- case `Le pont STO a ete retire du variateur.`
+- case `Un arret d'urgence a accrochage est cable normalement ferme sur P24 → STO.`
+- champ `Votre nom`, bouton `Enregistrer l'attestation` (`POST /api/safety/attest`).
+
+Les deux cases sont nécessaires, séparément : une personne sûre d'un seul des deux faits
+ne doit pas pouvoir valider les deux d'un clic. Une demi-attestation est refusée **sans
+rien enregistrer** (400 :
+`both confirmations are required, separately: the STO jumper is removed, AND a latching emergency stop is wired normally-closed into P24 -> STO`).
+
+La phrase attestée est enregistrée mot pour mot dans le journal :
+`a latching mushroom emergency stop is wired normally-closed into P24 -> STO and the STO jumper has been removed`.
+
+L'attestation vit dans le processus et meurt avec lui : après un redémarrage, personne n'a
+garanti le câblage. La pastille passe de `non atteste` à `atteste`, avec
+`atteste par <nom> a <heure> (valable jusqu'au prochain redemarrage du Pi)`.
+
+Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
+`nobody has attested the emergency stop this boot: …`.
+
+> **Important.** L'attestation est une déclaration humaine, pas une mesure. Le logiciel ne
+> vérifie pas que le pont STO est retiré. Voir [securite.md](securite.md).
+
+### Carte « Camera / presence »
+
+Alimentée par `GET /api/camera` (chaque seconde). Pastille selon l'état :
+
+| État | Pastille | Sens |
+|---|---|---|
+| `absent` | `non branchee` | `PRESENCE_SOURCE=none` (défaut). Rien ne surveille la capsule ; les règles listées **ne sont pas actives** |
+| `waiting` | `en attente` | caméra configurée, aucune image encore jugée |
+| `clear` | `zone degagee` | aucune règle ne s'oppose |
+| `start_blocked` | `demarrage bloque` | au repos, une règle refuse le démarrage (détail affiché) |
+| `ramp_down` | `ralentissement` | une règle a demandé l'arrêt contrôlé (verrouillé) |
+| `emergency_stop` | `ARRET D'URGENCE` | une règle a demandé l'arrêt d'urgence (verrouillé) |
+
+Le nom de la source apparaît entre parenthèses (`sim_empty`, `sim_occupied`). Un verdict
+caméra verrouillé est rappelé :
+`Verdict verrouille : <règle> - acquitter dans Securite apres verification.`
+
+Règles prévues (rappelées sur la page) : intrusion pendant la rotation → arrêt d'urgence ;
+personne dans une capsule déclarée vide → arrêt d'urgence ; capsule vide, harnais détaché,
+membre dehors (personne à bord) → refus du démarrage ou ralentissement ; caméra perdue ou
+figée → ralentissement ; aucune reprise automatique.
+
+> **Il n'existe aujourd'hui qu'une caméra simulée** (`sim_empty`, `sim_occupied`). Elle ne
+> regarde jamais la vraie machine. Aucun modèle de vision n'est branché. Détails :
+> `raspberry-pi/src/presence/README.md` et [raspberry-pi.md](raspberry-pi.md).
+
+### Présence de l'accompagnant
+
+Il n'y a pas de bouton : tant qu'un onglet de la console est ouvert, la page envoie
+`POST /api/presence` toutes les 5 s. La règle `attendant_absent` gèle la consigne
+(`FREEZE`) après 60 s sans signal, puis termine la séance (`RAMP_DOWN`) après 120 s.
+Cela prouve qu'un onglet est ouvert et joignable, **pas** qu'un humain regarde.
+
+---
+
+## 12. Déroulé type d'une séance manuelle de banc
+
+Rejoué en simulation, dans cet ordre :
+
+1. **Securite** → cocher les deux cases, saisir un nom, `Enregistrer l'attestation`.
+2. **Tableau de bord** → cocher `BANC - personne a bord : NON`, saisir `Operateur`,
+   `Demarrer MANUEL`. Réponse `accepte : manual_start bench (cible 0)`.
+3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
+   `RAMPE EN COURS` s'affiche jusqu'à l'arrivée.
+4. Surveiller **Vitesse mesuree** (pas la consigne).
+5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`.
+6. En cas d'urgence : `E-STOP`, puis, une fois la machine arrêtée et le coup de poing
+   réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter`.
+
+---
+
+## 13. Messages d'erreur typiques
+
+Les réponses HTTP (codes 4xx) s'affichent sous le bouton concerné. Les refus de la boucle
+arrivent comme événements `refused` dans la liste **Evenements** (page Seance) et, pour le
+manuel, sous la carte.
+
+### Refus immédiats (réponse HTTP)
+
+| Message | Code | Sens |
+|---|---|---|
+| `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
+| `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
+| `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | un verdict verrouillé attend un acquittement |
+| `the machine is starting, not idle (pending: …)` | 409 | double clic : une commande attend déjà dans la boîte aux lettres (une seule place) |
+| `the machine is running, not idle` | 409 | une séance tourne déjà |
+| `no manual session is running (the machine is idle)` | 409 | cible envoyée sans séance manuelle |
+| `the machine is already stopping` | 409 | STOP pendant un arrêt |
+| `there is no session to end (the machine is idle)` | 409 | STOP sans séance |
+| `the target must be a finite, non-negative output speed` | 422 | cible négative ou non finie |
+| `unknown occupancy 'x': expected one of bench, occupied` | 422 | occupation inconnue (API) |
+| `personne a bord refusee : OCCUPANCY_OCCUPIED_ENABLED=false (jalon M6, accords ingenierie et medical requis)` | 403 | séance manuelle `occupied` refusée par configuration |
+| `seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL.` | 403 | `PROGRAMS_ENABLED=false` |
+| `no profile 'x'; known: standard_30_min, standard_45_min` | 404 | profil inconnu |
+| `'…' is not a well-formed profile id` | 400 | identifiant de profil mal formé |
+| `the store moved on: you edited revision N, it is now M. Reload before saving, or an edit is lost silently` | 409 | modification concurrente d'un profil |
+| `both confirmations are required, separately: …` | 400 | attestation à une seule case |
+| `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` | 409 | acquittement sans la case « coup de poing » |
+| `nothing is latched to acknowledge` | 409 | rien à acquitter |
+| `a valid x-anheart-token header is required` | 401 | jeton absent ou faux |
+
+### Refus de la boucle (événement `refused`)
+
+Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_error`) :
+
+| Message | Sens |
+|---|---|
+| `demarrage refuse : la machine est deja <état>` | une séance existe déjà |
+| `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante |
+| `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente |
+| `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` |
+| `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
+| `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent |
+| `demarrage refuse : age du passager requis pour une seance programmee` | âge vide |
+| `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune |
+| `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
+| `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
+| `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord |
+| `demarrage refuse : <règle caméra …>` | la caméra bloque le démarrage |
+| `seances programmees desactivees (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL` | lancement distant d'une séance AUTO sur une console où elles sont désactivées |
+
+Cible manuelle (`describe_target_refusal`) :
+
+| Message | Sens |
+|---|---|
+| `consigne refusee : pas de session manuelle (<état>)` | plus de séance manuelle |
+| `consigne refusee : <détail>` | la séance manuelle se termine |
+| `consigne refusee : <x> tr/min de sortie hors de 0 ou [<min>, <plafond>] tr/min moteur` | hors domaine : ni arrondie ni bornée |
+
+Reset défaut variateur (`describe_reset_refusal`) :
+
+| Message | Sens |
+|---|---|
+| `reset refuse : mouvement encore commande (<état>, <phase>)` | une séance est encore active |
+| `reset refuse : acquitter d'abord le verdict <règle>` | un autre verdict attend |
+| `reset refuse : aucun defaut a acquitter (<état>)` | pas de défaut |
+| `reset refuse : l'arbre tourne encore (<n> tr/min moteur)` | l'arbre n'est pas arrêté |
+| `reset refuse : defaut <mnémonique> non rearmable depuis la console : couper l'alimentation du variateur et inspecter` | défaut non réarmable |
+| `reset refuse : <détail>` | le variateur n'a pas pris le reset |
+
+---
+
+## 14. Référence des routes HTTP et WebSocket
+
+Source : `raspberry-pi/src/web/routes.py` et `src/web/ws.py`. Tous les gestionnaires sont
+asynchrones et « minces » : ils lisent l'état ou déposent une intention dans une boîte aux
+lettres à une place ; aucun ne parle au variateur. La boucle de contrôle (toutes les 0,2 s)
+exécute l'intention.
+
+**Authentification.** Les routes `/api/*` exigent l'en-tête `X-Anheart-Token` quand
+`UI_TOKEN` est défini (comparaison en temps constant), sinon 401. `/healthz`, `/`,
+`/app.css`, `/app.js` sont publics (la page est inerte sans l'API). `/openapi.json` est
+servi ; `/docs` et `/redoc` sont désactivés.
+
+**Codes qui ont un sens.**
+
+| Code | Sens |
+|---|---|
+| 200 | réponse lue, ou E-STOP **déjà** verrouillé |
+| 202 | intention acceptée dans la boîte aux lettres ; la boucle n'a pas encore agi. Un refus de la boucle arrive ensuite comme événement `refused` |
+| 400 | requête mal formée : nom vide, attestation incomplète, profil incohérent |
+| 401 | jeton absent ou faux |
+| 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
+| 404 | profil inconnu, fichier statique absent |
+| 409 | la machine n'est pas dans un état pour ça |
+| 412 | arrêt d'urgence non attesté depuis ce démarrage |
+| 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
+| 500 | stock de profils non inscriptible |
+
+### Public
+
+| Méthode | Chemin | Rôle | Retour |
+|---|---|---|---|
+| GET | `/healthz` | vivacité pour le healthcheck du conteneur ; ne dit rien de la séance | 200 `{"status":"ok","service":"anheart-operator-interface"}` |
+| GET | `/` | la page | 200, 404 si le fichier manque |
+| GET | `/app.css` | feuille de style | 200, 404 |
+| GET | `/app.js` | script | 200, 404 |
+
+### Lectures (jeton si configuré)
+
+| Méthode | Chemin | Rôle | Retour |
+|---|---|---|---|
+| GET | `/api/status` | tout ce que la mise en route demande : `run_state`, `estop_latched`, `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
+| GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
+| GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
+| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `radius_m`, `gear_ratio`, `motor_max_rpm` ; `null` sans console | 200 |
+| GET | `/api/camera` | `configured`, `camera`, `state`, `detail`, `latched_rule` | 200 |
+| GET | `/api/sensors` | chaque canal acquis : fenêtre, qualité, mesures (surveillance seulement) | 200 |
+
+### Profils
+
+| Méthode | Chemin | Corps | Rôle | Retour |
+|---|---|---|---|---|
+| GET | `/api/profiles` | - | profils stockés et révision | 200 |
+| PUT | `/api/profiles/{profile_id}?rev=<n>` | document de profil JSON (son `profile_id` doit égaler l'URL) | crée ou remplace ; validé par `parse_profile` | 200 ; 400 (id incohérent, document mal formé) ; 422 (profil rejeté, toutes les violations listées) ; 409 (révision dépassée) ; 500 (écriture impossible) |
+| DELETE | `/api/profiles/{profile_id}?rev=<n>` | - | supprime un profil | 200 ; 404 ; 409 ; 500 |
+| POST | `/api/plan/preview` | `{"profile_id", "total_duration_s"?}` | résout sans rien démarrer : phases et vitesses exprimées en moteur, sortie, Hz, g | 200 ; 404 ; 422 |
+
+La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles que par l'API.
+
+### Séance
+
+| Méthode | Chemin | Corps | Rôle | Retour |
+|---|---|---|---|---|
+| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 ; 412 |
+| POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 ; 400 ; 409 |
+| POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
+
+### Manuel et variateur
+
+| Méthode | Chemin | Corps | Rôle | Retour |
+|---|---|---|---|---|
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 ; 412 |
+| POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 ; 422 (négatif, non fini) ; 400 ; 409 |
+| POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 ; 400 ; 409 |
+
+### Sécurité
+
+| Méthode | Chemin | Corps | Rôle | Retour |
+|---|---|---|---|---|
+| POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` | attestation du câblage, pour ce démarrage | 200 ; 400 (une case manque, nom vide) |
+| POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
+| POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
+
+### WebSocket `/ws/telemetry`
+
+- Paramètre `?token=<jeton>` si `UI_TOKEN` est défini.
+- La poignée de main est refusée **avant** acceptation (code 1008) si l'en-tête `Origin`
+  n'est pas dans la liste autorisée (l'adresse d'écoute, et `localhost` / `127.0.0.1` en
+  boucle locale, en `http` et `https`), ou si le jeton est faux. Un client sans `Origin`
+  (outil, test) est admis, mais reste soumis au jeton.
+- Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés), `{"kind": "event"}`
+  (chaque événement), `{"kind": "ecg"}` (tranche de l'anneau ECG après chaque instantané,
+  jusqu'à 1500 échantillons à la connexion), `{"kind": "resync"}` quand l'écran a pris du
+  retard ; le serveur ferme alors avec le code 1013
+  (`this screen fell behind and was disconnected; reload to resync`).
+- Observé en simulation sur 14 s : environ 5 instantanés et 5 trames ECG par seconde.
+
+---
+
+## 15. Écarts connus entre le code, la page et les README
+
+- **`raspberry-pi/README.md` décrit encore le jalon M1 « lecture seule »** (« toute route
+  de mouvement répond 403 »). Le code actuel construit la console avec
+  `motion_enabled=True` : le mode MANUEL de banc fonctionne (jalon M3), et les séances
+  programmées sont prêtes derrière `PROGRAMS_ENABLED` (jalon M5). Le README évoque
+  pourtant plus bas la liaison au tableau de bord et les séances AUTO, ce qui le rend
+  contradictoire.
+- Le message 403 de mouvement désactivé (`MOTION_DISABLED_DETAIL`, `routes.py`) cite
+  toujours « jalon M1 », et le bandeau « LECTURE SEULE » de la page existe encore, mais ni
+  l'un ni l'autre ne sont atteignables avec `src.local_panel` tel qu'il est construit.
+- Le titre de l'onglet reste `Console du banc - AnHeart` et le README parle d'un
+  « onglet **Console** » : la barre latérale nomme cette page **Tableau de bord**.
+- La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
+  tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
+- La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).
+- L'estimation de rotation du capteur LUX ne suit pas le variateur simulé en simulation.
