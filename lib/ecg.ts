@@ -304,7 +304,6 @@ function hamiltonSegmenter(signal: number[], fs: number): number[] {
   const length = signal.length;
   const dur = length / fs;
   const v1s = Math.floor(1.0 * fs);
-  const v100ms = Math.floor(0.1 * fs);
   const TH_elapsed = Math.ceil(0.36 * fs);
   const sm_size = Math.floor(0.08 * fs);
   let init_ecg = 8;
