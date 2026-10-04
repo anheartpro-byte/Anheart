@@ -1001,6 +1001,15 @@ Les jobs sont parallèles :
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 
+Les actions de checkout, d'installation de Node et de publication des artefacts
+utilisent le runtime Node.js 24, avec des commits complets épinglés dans le
+workflow. Elles demandent un runner GitHub Actions au moins en version 2.327.1 ;
+les jobs utilisent les runners hébergés `ubuntu-24.04`, pas un runner local.
+Les entrées existantes restent inchangées : aucune persistance des identifiants
+Git, LFS pour la CAO, historique complet pour l'audit et cache npm explicite.
+Les artefacts gardent leurs chemins, leur rétention de 14 jours et l'échec si
+aucun fichier attendu n'est produit ; les fichiers cachés restent exclus.
+
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
 artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
 rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
