@@ -7,15 +7,17 @@ training runtime, the ATV320 (or its simulator), the BITalino (or its
 simulator), the ECG DSP and the operator web page, wired together on ONE
 asyncio loop. ``main.py`` (the Convex recorder) is untouched.
 
-At rest the console is READ-ONLY
---------------------------------
+Confirmed idle is READ-ONLY
+--------------------------
 
-* While nothing is commanded (REPOS) the drive is **read, never written**: the
-  idle runtime polls ``read_status`` at 2 Hz
-  (:data:`~src.training.runtime.IDLE_POLL_PERIOD`) and sends nothing else. A
-  console that never started anything releases the link on exit without the
-  stop sequence.
-* The one write at rest is the operator's own E-STOP: it latches the shared
+* Before the first session, a confirmed idle drive (REPOS) is polled at 2 Hz
+  (:data:`~src.training.runtime.IDLE_POLL_PERIOD`) without writes. That case
+  and an unacquired link are released on exit without the stop sequence.
+* Observed enabled or turning output is stopped and latched, even before the
+  first session. An acquired link with unreadable state remains unknown:
+  inspection cancellation and process exit own a stop attempt, and a failed
+  close never claims the output is disabled.
+* The operator's E-STOP also writes at rest: it latches the shared
   supervisor at once (the web route), and on the next tick the loop forwards
   it to :meth:`~src.training.runtime.TrainingRuntime.request_estop`, which
   zeroes the speed reference. A stop is never refused.
@@ -53,9 +55,10 @@ Three tasks on the one loop: the control tick every 0.2 s
 (:meth:`LocalPanel.control_step`), the ECG bridge every 0.2 s
 (:meth:`LocalPanel.ecg_step`, the DSP itself on a worker thread), and the web
 server. When any of them ends - a signal, a crash, the server failing to bind -
-all of them are stopped and the drive is released: read-only while the runtime
-was never started, :meth:`~src.training.runtime.TrainingRuntime.shutdown`
-otherwise.
+all of them are stopped and the drive is released. Confirmed idle or
+unacquired links are released without writes; acquired unknown state and
+started runtimes go through
+:meth:`~src.training.runtime.TrainingRuntime.shutdown`.
 
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
