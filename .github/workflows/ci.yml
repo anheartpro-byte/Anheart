@@ -151,6 +151,9 @@ jobs:
       - run: npm ci
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
+      - name: Verify dependency stack-depth guards
+        if: ${{ !cancelled() }}
+        run: npm run test:dependency-security
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |

@@ -174,13 +174,49 @@ annulation incluant le contrat original de panne au repos de 20 secondes,
 395 cas types/runtime/sérialisation/API et 323 cas HTTP panel/runtime/manuel.
 Ces nombres correspondent à des suites qui se recouvrent ; ils ne s'additionnent
 pas et ne remplacent pas les gates complètes à 100 % de branches. Les contrôles
-statiques configurés sont verts ; les gates complètes sont en cours.
+statiques configurés sont verts. Les gates complètes sont maintenant vertes :
+3 296 tests Pi, 986 tests simulation et un échec attendu strict préexistant,
+avec 100 % des branches configurées couvertes dans les deux gates. Aucune
+validation sur équipement réel ou de seuil médical n'est revendiquée.
 
 L'envoi à GitHub Support pour les anciennes références a été reporté à la
 demande de l'utilisateur. Aucun message n'a été envoyé et la purge historique
-complète n'est pas revendiquée. L'audit reste obligatoire ; la recherche d'un
-remplacement corrigé ne constitue pas encore une adoption. La PR reste ouverte
+complète n'est pas revendiquée. L'audit reste obligatoire. La PR reste ouverte
 et ANH-71 reste en cours jusqu'aux résultats requis et aux deux revues finales.
+
+### Dépendance de lint : correctif ciblé et audit maintenu
+
+L'advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)
+ne dispose toujours pas de version officielle corrigée de `braces`. Le
+remplacement exact `npm:@dieub/braces-depth-guard@3.0.3-pn.2` est appliqué par
+override à cette dépendance transitive, sans changer les majeures Next.js ou
+Clerk. La chaîne réelle Next → fast-glob → micromatch est celle exercée par le
+nouveau test CI ; le test ne dépend pas d'un emplacement hoisté.
+
+La [publication et sa provenance](https://registry.npmjs.org/-/npm/v1/attestations/@dieub%2fbraces-depth-guard@3.0.3-pn.2)
+correspondent au commit `a7c294b0535aec8b206bd36ba3f8dba2a7d989cb`. Les fichiers
+publiés ont été comparés à cette source ; les signatures du registre et la
+provenance ont été vérifiées. Les 764 fixtures amont inchangées passent sous
+un harness synchrone contrôlé, sans invocation de Bash ; ce n'est pas une
+exécution Mocha standard. Dix-huit cas supplémentaires vérifient les bornes,
+les AST et la compatibilité de découverte de répertoires sur la plateforme
+locale. Les normalisations de chemins Windows sont exercées, pas un système
+de fichiers Windows réel.
+
+Ce fork est récent, avec une journée d'historique de maintenance observée.
+Il corrige la profondeur récursive visée par l'advisory ; il ne borne pas tous
+les produits d'expansion ni tous les AST malformés ou options exécutables.
+Le tag `latest` ne désigne pas ce correctif : la version exacte est verrouillée.
+La suppression du finding par changement de nom ne serait pas une preuve ;
+les douze régressions du guard font partie du job `audit` requis et échouaient
+sur la version amont installée. `npm audit --audit-level=high` reste obligatoire,
+sans exclusion des dépendances de développement ni exception d'advisory.
+
+Dans une exportation propre du même arbre d'index, l'installation Node 24,
+les douze guards, l'audit npm, TypeScript, le lint (zéro erreur, dix avertissements
+préexistants), les 45 tests Convex, les 28 tests ECG, les dix tests de console et
+le build Next.js de 28 pages passent. La CI distante et les deux avis finaux
+liés au dernier commit restent nécessaires avant fusion.
 
 ## File logicielle
 
