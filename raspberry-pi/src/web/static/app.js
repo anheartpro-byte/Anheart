@@ -320,7 +320,7 @@ function connect() {
   if (state.socket) {
     try {
       state.socket.close();
-    } catch (err) {
+    } catch {
       /* already closing; nothing to do */
     }
   }
@@ -338,7 +338,7 @@ function connect() {
     var envelope;
     try {
       envelope = JSON.parse(message.data);
-    } catch (err) {
+    } catch {
       return;
     }
     handleEnvelope(envelope);
@@ -1748,7 +1748,7 @@ function start() {
   });
   try {
     state.token = window.sessionStorage.getItem("anheart-token") || "";
-  } catch (err) {
+  } catch {
     state.token = "";
   }
   el("token").value = state.token;
@@ -1757,7 +1757,7 @@ function start() {
     state.token = el("token").value;
     try {
       window.sessionStorage.setItem("anheart-token", state.token);
-    } catch (err) {
+    } catch {
       /* kept for this page only */
     }
     boot();
