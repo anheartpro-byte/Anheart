@@ -33,6 +33,7 @@ from src.control_surface import EventKind, SessionEvent
 from src.ecg_pipeline import EcgFrame, TreatFunction, Treatment, treat_ecg
 from src.local_config import LocalConfig, load_local_config
 from src.local_panel import CloudTransportFactory, DriveSide, LocalPanel, build_panel
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     ControlWord,
     DriveBackend,
@@ -143,6 +144,10 @@ class Wrapped:
 
     def __init__(self, inner: SimulatedDrive) -> None:
         self.inner: SimulatedDrive = inner
+
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return self.inner.acquisition_evidence
 
     async def open(self) -> Result[None, DriveError]:
         return await self.inner.open()

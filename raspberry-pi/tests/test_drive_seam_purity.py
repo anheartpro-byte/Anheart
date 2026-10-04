@@ -13,6 +13,7 @@ MOTOR_SOURCE: Final[Path] = Path(__file__).resolve().parent.parent / "src" / "mo
 SEAM_SOURCES: Final[tuple[Path, ...]] = (
     MOTOR_SOURCE / "drive.py",
     MOTOR_SOURCE / "backend.py",
+    MOTOR_SOURCE / "acquisition.py",
 )
 
 

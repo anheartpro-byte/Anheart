@@ -54,6 +54,7 @@ from types import MappingProxyType
 from typing import Final, final
 
 from src.clock import Clock
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     LFT_FAULT_CODES,
     BadResponse,
@@ -528,6 +529,7 @@ class SimulatedDrive:
     """
 
     __slots__ = (
+        "_address_proven",
         "_clock",
         "_comms_established",
         "_comms_lost_until",
@@ -539,6 +541,7 @@ class SimulatedDrive:
         "_latency",
         "_link_open",
         "_misaddressed",
+        "_possible_frames",
         "_powered_for",
         "_rate",
         "_reversed",
@@ -602,6 +605,8 @@ class SimulatedDrive:
         # --- link / injected conditions ---
         self._link_open: bool = False
         self._comms_established: bool = False
+        self._possible_frames: int = 0
+        self._address_proven: bool = False
         self._comms_lost_until: Monotonic | None = None
         self._latency: Seconds = Seconds(0.0)
         self._misaddressed: bool = False
@@ -728,6 +733,10 @@ class SimulatedDrive:
 
     # -- DriveBackend ------------------------------------------------------
 
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return AcquisitionEvidence(self._possible_frames, self._address_proven)
+
     async def open(self) -> Result[None, DriveError]:
         """Open the link and read the drive. Does not enable it or command a speed.
 
@@ -742,6 +751,7 @@ class SimulatedDrive:
         if error is not None:
             return Err(error)
         self._note_frame(is_write=False)
+        self._address_proven = True
         return Ok(None)
 
     async def close(self) -> Result[None, DriveError]:
@@ -970,6 +980,7 @@ class SimulatedDrive:
         watchdog, because a drive that has never heard from a master does not
         raise SLF - otherwise every ATV320 on a shelf would show one.
         """
+        self._possible_frames += 1
         if is_write or self._config.reads_reset_watchdog or not self._comms_established:
             self._last_frame_at = self._last_at
         self._comms_established = True

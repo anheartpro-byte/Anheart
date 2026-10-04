@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import final
 
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     BadResponse,
     ControlWord,
@@ -72,6 +73,10 @@ class FaultyDrive:
         self._freeze = True
 
     # -- DriveBackend -------------------------------------------------------
+
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return self._inner.acquisition_evidence
 
     async def open(self) -> Result[None, DriveError]:
         return await self._inner.open()

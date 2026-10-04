@@ -31,6 +31,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     ACC_LOGICAL,
     CMD_LOGICAL,
@@ -674,31 +675,44 @@ class _RecordingBackend:
 
     def __init__(self) -> None:
         self.opened: bool = False
+        self._possible_frames: int = 0
+        self._address_proven: bool = False
         self.closed: bool = False
         self.commands: list[ControlWord] = []
         self.speeds: list[MotorRpm] = []
         self.emergency_timeouts: list[Seconds] = []
 
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return AcquisitionEvidence(self._possible_frames, self._address_proven)
+
     async def open(self) -> Result[None, DriveError]:
         self.opened = True
+        self._possible_frames += 1
+        self._address_proven = True
         return Ok(None)
 
     async def close(self) -> Result[None, DriveError]:
         self.closed = True
+        self._possible_frames += 1
         return Ok(None)
 
     async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
+        self._possible_frames += 1
         self.commands.append(word)
         return Ok(None)
 
     async def write_speed(self, rpm: MotorRpm) -> Result[None, DriveError]:
+        self._possible_frames += 1
         self.speeds.append(rpm)
         return Ok(None)
 
     async def read_status(self) -> Result[DriveStatus, DriveError]:
+        self._possible_frames += 1
         return Ok(_status(DriveState.OPERATION_ENABLED))
 
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
+        self._possible_frames += 1
         return Ok(BENCH_LIMITS)
 
     @property
@@ -706,6 +720,7 @@ class _RecordingBackend:
         return Seconds(1.0)
 
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
+        self._possible_frames += 1
         self.emergency_timeouts.append(timeout)
         return EmergencyStopOutcome.ACKNOWLEDGED
 

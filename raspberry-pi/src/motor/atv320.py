@@ -115,7 +115,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Final, Protocol, final, override, runtime_checkable
+from typing import Final, Protocol, assert_never, final, override, runtime_checkable
 
 from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
@@ -123,6 +123,7 @@ from pymodbus.framer import FramerType
 from pymodbus.pdu import ExceptionResponse, ModbusPDU
 
 from src.clock import Clock
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -773,6 +774,10 @@ class ATV320Drive:
     # --- Observable state ------------------------------------------------
 
     @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return self._health.acquisition_evidence
+
+    @property
     def link_lost(self) -> bool:
         """Whether the link is latched down and this driver has stopped writing.
 
@@ -815,18 +820,21 @@ class ATV320Drive:
         link that dropped is an explicit act.
         """
         async with self._lock:
+            generation = self._health.acquisition_generation
             # A previous close() shut the pool down; a fresh one keeps this
             # object reusable without a branch only production would take.
             self._executor.shutdown(wait=False)
             self._executor = _new_executor()
-            self._health.reset()
             self._closed = False
             self._close_error = None
 
-            connected = await self._transact(self._blocking_connect)
-            if isinstance(connected, Err):
-                return Err(connected.error)
-            return await self._confirm_addressing()
+            match await self._run(self._blocking_connect):
+                case Err(error):
+                    return Err(self._note_failure(error, self._clock.monotonic()))
+                case Ok():
+                    return await self._confirm_addressing(generation)
+                case _ as unreachable:
+                    assert_never(unreachable)
 
     async def close(self) -> Result[None, DriveError]:
         """Ramp the machine to a stop, then release the port. Latches the link down.
@@ -1249,22 +1257,26 @@ class ATV320Drive:
     # Composite operations (the single-flight lock is already held)
     # =====================================================================
 
-    async def _confirm_addressing(self) -> Result[None, DriveError]:
+    async def _confirm_addressing(self, generation: int) -> Result[None, DriveError]:
         """One ETA read, purely as evidence that the link and addressing work."""
-        outcome = await self._read(self._registers.eta)
-        if isinstance(outcome, Err):
-            return Err(outcome.error)
-        # Logged rather than judged: seeing OPERATION_ENABLED here means a
-        # previous process died with the motor turning, and what to do about
-        # that (command zero, disable, latch, require an operator
-        # acknowledgement) is the safety layer's decision, not the transport's.
-        logger.info(
-            "ATV320 link open on %s: ETA=0x%04X -> %s",
-            self._settings.port,
-            outcome.value,
-            decode_status_word(StatusWord(outcome.value)).name,
-        )
-        return Ok(None)
+        match await self._read(self._registers.eta):
+            case Err(error):
+                return Err(error)
+            case Ok(eta):
+                self._health.confirm_acquisition(generation)
+                # Logged rather than judged: seeing OPERATION_ENABLED here means a
+                # previous process died with the motor turning, and what to do about
+                # that (command zero, disable, latch, require an operator
+                # acknowledgement) is the safety layer's decision, not the transport's.
+                logger.info(
+                    "ATV320 link open on %s: ETA=0x%04X -> %s",
+                    self._settings.port,
+                    eta,
+                    decode_status_word(StatusWord(eta)).name,
+                )
+                return Ok(None)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     async def _attempt_stop(self) -> DriveError | None:
         """Ramp to a stop, confirm it, and only then drop the output stage.
@@ -1622,6 +1634,7 @@ class ATV320Drive:
         started = self._clock.monotonic()
         try:
             with self._wire_lock:
+                self._health.note_request()
                 reply: object = self._master.read_holding_registers(
                     address, count=1, slave=self._settings.slave_address
                 )
@@ -1635,6 +1648,7 @@ class ATV320Drive:
         started = self._clock.monotonic()
         try:
             with self._wire_lock:
+                self._health.note_request()
                 reply: object = self._master.write_register(
                     address, value, slave=self._settings.slave_address
                 )
@@ -1687,6 +1701,7 @@ class ATV320Drive:
             )
         started = self._clock.monotonic()
         try:
+            self._health.note_request()
             reply: object = self._master.write_register(
                 address, value, slave=self._settings.slave_address
             )

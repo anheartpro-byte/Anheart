@@ -45,6 +45,7 @@ from hypothesis import strategies as st
 
 from src.clock import ManualClock
 from src.geometry import MachineGeometry
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     LFT_FAULT_CODES,
     UNVERIFIED_PARAMETERS,
@@ -287,6 +288,7 @@ class FakeDrive:
     """
 
     __slots__ = (
+        "_address_proven",
         "_clock",
         "_coast_tau",
         "_comms_down",
@@ -295,6 +297,7 @@ class FakeDrive:
         "_last_at",
         "_last_write_at",
         "_link_open",
+        "_possible_frames",
         "_ramp",
         "_rpm",
         "_setpoint",
@@ -337,6 +340,8 @@ class FakeDrive:
         self._last_write_at: Monotonic = clock.monotonic()
         self._established: bool = False
         self._link_open: bool = False
+        self._possible_frames: int = 0
+        self._address_proven: bool = False
         self._comms_down: bool = False
         self._fault: FaultReport | None = None
 
@@ -437,6 +442,7 @@ class FakeDrive:
         self.inject_fault(DriveFault.MODBUS_COMM_LOSS)
 
     def _note(self, label: str, *, is_write: bool) -> None:
+        self._possible_frames += 1
         self.trace.append(label)
         if is_write or not self._established:
             self._last_write_at = self._last_at
@@ -451,6 +457,10 @@ class FakeDrive:
 
     # -- DriveBackend ------------------------------------------------------
 
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return AcquisitionEvidence(self._possible_frames, self._address_proven)
+
     async def open(self) -> Result[None, DriveError]:
         self.advance(self._clock.monotonic())
         self._link_open = True
@@ -458,6 +468,7 @@ class FakeDrive:
         if self._comms_down:
             return Err(CommTimeout(after=Seconds(0.5)))
         self._note("open:ack", is_write=False)
+        self._address_proven = True
         return Ok(None)
 
     async def close(self) -> Result[None, DriveError]:

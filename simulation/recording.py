@@ -19,6 +19,7 @@ from enum import Enum, unique
 from typing import final
 
 from src.clock import Clock
+from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     ControlWord,
     DriveBackend,
@@ -97,6 +98,10 @@ class RecordingDrive:
         )
 
     # -- DriveBackend -----------------------------------------------------
+
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        return self._inner.acquisition_evidence
 
     async def open(self) -> Result[None, DriveError]:
         result = await self._inner.open()

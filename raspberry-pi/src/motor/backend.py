@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from src.motor.acquisition import AcquisitionEvidence
 from src.result import Result
 from src.units import MotorRpm, Seconds
 
@@ -29,6 +30,11 @@ class DriveBackend(Protocol):
     a fault and how fast to ramp all belong to the safety layer, which is the
     only place they can be tested against a plant model.
     """
+
+    @property
+    def acquisition_evidence(self) -> AcquisitionEvidence:
+        """Independent evidence retained across failed open, close and wrapper errors."""
+        ...
 
     async def open(self) -> Result[None, DriveError]:
         """Acquire the link. Must NOT enable the drive or command a speed.
