@@ -152,6 +152,7 @@ from src.motor.drive import (
 )
 from src.result import Err, Ok, Result
 from src.task_completion import complete_owned
+from src.training.drive_inspection import OpenFailed, StatusFailed, begin_inspection
 from src.training.hr_control import (
     ControlInput,
     ControlPlan,
@@ -164,6 +165,7 @@ from src.training.hr_control import (
     TrackerReading,
     Zone,
 )
+from src.training.idle_recovery import IdleLink as _IdleLink
 from src.training.motion import (
     DEFAULT_MOTION_LIMITS,
     MotionLimits,
@@ -226,6 +228,7 @@ from src.units import (
 )
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
+IdleLink = _IdleLink
 
 
 # =========================================================================
@@ -870,37 +873,6 @@ Fast enough that the operator sees a shaft that somebody else set turning
 within half a second, slow enough to leave the link almost idle (one
 ``read_status`` is four registers, about 140 ms on the bench link).
 """
-
-
-@dataclass(frozen=True, slots=True)
-class IdleLink:
-    """What the idle, read-only polling of the drive has seen. For the operator screen.
-
-    Kept apart from the session's own failure counters on purpose: an idle
-    read that fails is "the drive is not answering", shown as unknown, and
-    must never feed ``comms_lost`` - that rule's answer is ``GO_SILENT``, which
-    is one-way, and a console that went permanently silent because a cable was
-    unplugged while nothing was commanded would have to be restarted to show
-    anything at all.
-    """
-
-    open: bool = False
-    """Whether the link is believed open for polling. A failure re-opens it."""
-
-    reads: int = 0
-    """Successful idle reads since this runtime was built."""
-
-    failures: int = 0
-    """Failed idle exchanges (open or read) since this runtime was built."""
-
-    consecutive_failures: int = 0
-    """The current run of failures; 0 after any success."""
-
-    last_latency: Seconds | None = None
-    """How long the last successful ``read_status`` took, by the injected clock."""
-
-    last_error: str | None = None
-    """The operator-facing description of the last failure, or ``None``."""
 
 
 # =========================================================================
@@ -1876,24 +1848,24 @@ class TrainingRuntime:
             await self.shutdown("unreadable initial inspection cancelled")
 
     async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
-        opened = await self._drive.open()
-        if isinstance(opened, Err):
+        opened = await begin_inspection(self._drive, reopen=True)
+        if isinstance(opened, OpenFailed):
             # An unopened link is no evidence the drive is reachable, so it
             # extends the read run. A successful open does not shorten it:
             # opening the adapter proves nothing about the drive behind it.
             failure = self._note_failure(Exchange.READ, opened.error)
             return Err(DriveUnavailable(f"the drive link could not be opened: {failure.detail}"))
         self._link_open = True
-        status = await self._drive.read_status()
-        if isinstance(status, Err):
+        status = await opened.read_status()
+        if isinstance(status, StatusFailed):
             self._inspection_unconfirmed = True
             failure = self._note_failure(Exchange.READ, status.error)
             return Err(DriveUnavailable(f"the drive could not be read: {failure.detail}"))
         self._inspection_unconfirmed = False
         self._note_success(Exchange.READ)
-        self._last_status = status.value
+        self._last_status = status.status
         self._last_status_at = now
-        return Ok(status.value)
+        return Ok(status.status)
 
     async def _arm(self, now: Monotonic, status: DriveStatus) -> StartRefusal | None:
         """Judge what was read, then energise the output stage with a zero reference."""
@@ -2180,29 +2152,27 @@ class TrainingRuntime:
             await self._judge_idle(now, status.value)
 
     async def _read_idle(self, now: Monotonic) -> Result[DriveStatus, DriveError]:
-        if not self._idle_link.open:
-            opened = await self._drive.open()
-            if isinstance(opened, Err):
-                self._idle_failed(opened.error)
-                return opened
-            self._idle_link = replace(self._idle_link, open=True)
-        began = self._clock.monotonic()
-        status = await self._drive.read_status()
-        if isinstance(status, Err):
+        opened = await begin_inspection(self._drive, reopen=not self._idle_link.open)
+        if isinstance(opened, OpenFailed):
+            self._idle_failed(opened.error)
+            return Err(opened.error)
+        self._idle_link = replace(self._idle_link, open=True)
+        status = await opened.read_status(self._clock)
+        if isinstance(status, StatusFailed):
             self._inspection_unconfirmed = True
             self._idle_failed(status.error)
-            return status
+            return Err(status.error)
         self._inspection_unconfirmed = False
         link = self._idle_link
         self._idle_link = replace(
             link,
             reads=link.reads + 1,
             consecutive_failures=0,
-            last_latency=elapsed(began, self._clock.monotonic()),
+            last_latency=status.latency,
         )
-        self._idle_status = status.value
+        self._idle_status = status.status
         self._idle_status_at = now
-        return status
+        return Ok(status.status)
 
     async def _judge_idle(self, now: Monotonic, status: DriveStatus) -> None:
         """A drive found enabled, or turning, while nothing is commanded: stop it now.
