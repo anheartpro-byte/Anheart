@@ -997,7 +997,7 @@ Les jobs sont parallèles :
 | `pi-gate` | gate Pi complète, couverture de branches à 100 % sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
 | `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
-| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, build Next.js avec configuration publique de test |
+| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 
@@ -1041,6 +1041,31 @@ change pas le code. Le SHA des deux avis indépendants doit être celui que la P
 va fusionner. `agent-review/R1` et `agent-review/R2` représentent ces deux agents
 sous le même compte GitHub, selon la décision utilisateur du 3 octobre 2026 ;
 ils ne représentent pas deux approbations de personnes distinctes.
+
+### Régression ECG du navigateur (ANH-71)
+
+`npm run test:ecg` exerce les fonctions réellement utilisées par le repli du
+graphe ECG pour les anciennes séances en ADC brut. Les fixtures synthétiques
+entièrement numériques couvrent le bruit secteur à 50 Hz, les décalages ADC
+64/512/960 à 250/1000 Hz, une suite d'impulsions de période une seconde et une
+entrée constante. Le bruit secteur doit produire `mains_dominated`, sans BPM,
+HRV ni pics par l'API `computeHeartRate` ; les impulsions restent à 60 BPM.
+
+Le noyau IIR partagé (`lib/ecg/biquad.ts`) initialise chaque passe à l'équilibre
+continu de son propre premier échantillon, au lieu de créer un transitoire à
+partir d'un historique nul. Des tests distincts couvrent les deux cascades du
+détecteur Hamilton, le filtre de qualité, le notch, l'entrée vide et les deux
+extrémités d'un signal non constant. Les coefficients et seuils ne changent
+pas ; le filtre FIR d'affichage reste inchangé. Le principe d'initialisation
+est décrit dans la [documentation SciPy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter_zi.html),
+sans prétendre reproduire tout `scipy.signal.filtfilt` ni son padding.
+
+Le contrôle navigateur du 4 octobre 2026 a monté le vrai `ECGChart` en local :
+les six fixtures de bruit donnent `-- BPM` et zéro pic, les deux suites
+d'impulsions donnent 60 BPM, et les métriques explicites du dispositif gardent
+la priorité. Ce contrôle de composant avec données synthétiques ne prouve ni
+la connexion Clerk/Convex, ni la validité clinique, ni la chaîne de commande du
+Pi, ni le traitement des données en mV privées de leurs métriques.
 
 ### Infrastructure encore dépendante d'autres tickets
 

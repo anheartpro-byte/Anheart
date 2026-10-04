@@ -128,6 +128,7 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run lint
       - run: node --test raspberry-pi/tests/web/*.test.mjs
+      - run: npm run test:ecg
       - run: npm run build
 
   audit:

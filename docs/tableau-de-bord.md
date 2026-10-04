@@ -8,8 +8,10 @@ ne parle **jamais** directement au Raspberry Pi.
 
 > **État réel.**
 > - Le code se compile : `npx tsc --noEmit -p .` ne signale aucune erreur.
-> - Il n'existe **aucun test automatisé du site** (ni unitaire, ni navigateur,
->   ni de bout en bout). Le 2 octobre 2026, toutes les pages du tableau de bord
+> - Les fonctions ECG du site ont des tests numériques synthétiques :
+>   `npm run test:ecg` ([portée et limites](framework-de-test.md#régression-ecg-du-navigateur-anh-71)).
+>   La suite navigateur de bout en bout du tableau de bord reste ANH-83.
+>   Le 2 octobre 2026, toutes les pages du tableau de bord
 >   ont été **ouvertes à la main dans un navigateur**, en local, contre le
 >   Convex de développement, avec trois comptes de démonstration et une machine
 >   simulée : captures et constats dans

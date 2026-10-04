@@ -15,6 +15,14 @@
  * References: Hamilton, "Open Source ECG Analysis", 2002; BioSPPy signals.ecg.
  */
 
+import {
+  butterHighpass4,
+  butterLowpass4,
+  filtfilt,
+  highpassCoeffs,
+  notchCoeffs,
+} from "./ecg/biquad";
+
 export type SignalQuality = "no_signal" | "mains_dominated" | "noisy" | "good";
 
 export const DEFAULT_MAINS_HZ = 50;
@@ -84,98 +92,6 @@ function rmssd(rr: number[]): number | null {
     sumSq += d * d;
   }
   return Math.round(Math.sqrt(sumSq / (rr.length - 1)));
-}
-
-// ============================================
-// Biquad IIR filters (RBJ cookbook), used for the Hamilton internal Butterworth
-// stages and the mains-hum quality probe.
-// ============================================
-
-interface Biquad {
-  b0: number;
-  b1: number;
-  b2: number;
-  a1: number;
-  a2: number;
-}
-
-// Butterworth section Q values for a 4th-order response (two cascaded biquads).
-const BUTTER4_Q = [0.5411961, 1.3065630];
-
-function lowpassCoeffs(f0: number, fs: number, q: number): Biquad {
-  const w0 = (2 * Math.PI * f0) / fs;
-  const cos = Math.cos(w0);
-  const alpha = Math.sin(w0) / (2 * q);
-  const a0 = 1 + alpha;
-  return {
-    b0: ((1 - cos) / 2) / a0,
-    b1: (1 - cos) / a0,
-    b2: ((1 - cos) / 2) / a0,
-    a1: (-2 * cos) / a0,
-    a2: (1 - alpha) / a0,
-  };
-}
-
-function highpassCoeffs(f0: number, fs: number, q: number): Biquad {
-  const w0 = (2 * Math.PI * f0) / fs;
-  const cos = Math.cos(w0);
-  const alpha = Math.sin(w0) / (2 * q);
-  const a0 = 1 + alpha;
-  return {
-    b0: ((1 + cos) / 2) / a0,
-    b1: (-(1 + cos)) / a0,
-    b2: ((1 + cos) / 2) / a0,
-    a1: (-2 * cos) / a0,
-    a2: (1 - alpha) / a0,
-  };
-}
-
-function notchCoeffs(f0: number, fs: number, q = 30): Biquad {
-  const w0 = (2 * Math.PI * f0) / fs;
-  const cos = Math.cos(w0);
-  const alpha = Math.sin(w0) / (2 * q);
-  const a0 = 1 + alpha;
-  return {
-    b0: 1 / a0,
-    b1: (-2 * cos) / a0,
-    b2: 1 / a0,
-    a1: (-2 * cos) / a0,
-    a2: (1 - alpha) / a0,
-  };
-}
-
-function applyBiquad(c: Biquad, x: number[]): number[] {
-  const y = new Array<number>(x.length);
-  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-  for (let i = 0; i < x.length; i++) {
-    const xi = x[i];
-    const yi = c.b0 * xi + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2;
-    x2 = x1; x1 = xi; y2 = y1; y1 = yi;
-    y[i] = yi;
-  }
-  return y;
-}
-
-/** Zero-phase single-biquad filtering (forward + backward). */
-function filtfilt(c: Biquad, x: number[]): number[] {
-  if (x.length === 0) return [];
-  const fwd = applyBiquad(c, x);
-  const back = applyBiquad(c, fwd.slice().reverse());
-  return back.reverse();
-}
-
-/** Zero-phase 4th-order Butterworth low-pass (two cascaded sections). */
-function butterLowpass4(x: number[], f0: number, fs: number): number[] {
-  let out = x;
-  for (const q of BUTTER4_Q) out = filtfilt(lowpassCoeffs(f0, fs, q), out);
-  return out;
-}
-
-/** Zero-phase 4th-order Butterworth high-pass (two cascaded sections). */
-function butterHighpass4(x: number[], f0: number, fs: number): number[] {
-  let out = x;
-  for (const q of BUTTER4_Q) out = filtfilt(highpassCoeffs(f0, fs, q), out);
-  return out;
 }
 
 // ============================================
@@ -290,7 +206,7 @@ function hammingSmoother(x: number[], size: number): number[] {
   return conv.slice(pad, pad + x.length);
 }
 
-function diff(x: number[]): number[] {
+function diff(x: readonly number[]): number[] {
   const d = new Array<number>(Math.max(0, x.length - 1));
   for (let i = 1; i < x.length; i++) d[i - 1] = x[i] - x[i - 1];
   return d;
