@@ -154,6 +154,7 @@ from src.motor.ftdi_link import (
     open_ftdi_port,
     wait_overshoot,
 )
+from src.motor.link_health import LinkHealth
 from src.result import Err, Ok, Result, err_of
 from src.units import (
     Monotonic,
@@ -674,13 +675,10 @@ class ATV320Drive:
         "_clock",
         "_close_error",
         "_closed",
-        "_consecutive_failures",
         "_emergency_budget",
         "_executor",
-        "_failed_since",
-        "_failure_threshold",
+        "_health",
         "_lock",
-        "_lost_since",
         "_master",
         "_registers",
         "_settings",
@@ -741,7 +739,6 @@ class ATV320Drive:
         self._master: ModbusMaster = master
         self._settings: SerialSettings = settings
         self._registers: RegisterMap = registers
-        self._failure_threshold: int = failure_threshold
         self._settle_attempts: int = settle_attempts
         self._settle_delay: Seconds = settle_delay
         self._stop_attempts: int = stop_attempts
@@ -766,13 +763,7 @@ class ATV320Drive:
         self._wire_lock: threading.Lock = threading.Lock()
         self._executor: ThreadPoolExecutor = _new_executor()
 
-        # Failure accounting. `_failed_since` is the first failure of the
-        # current run (None while healthy); `_lost_since` is set when a run
-        # reaches the threshold and is cleared ONLY by open(), because a link
-        # that healed on its own is not permission to command a motor again.
-        self._consecutive_failures: int = 0
-        self._failed_since: Monotonic | None = None
-        self._lost_since: Monotonic | None = None
+        self._health: LinkHealth = LinkHealth(failure_threshold)
 
         # Close accounting, so a second close() repeats the first verdict
         # instead of raising on an executor that is already gone.
@@ -791,7 +782,7 @@ class ATV320Drive:
         Note what it does NOT mean: a latched link still accepts the two
         :data:`STOP_WORDS` and a zero setpoint. See :meth:`_refusal`.
         """
-        return self._lost_since is not None
+        return self._health.lost_since is not None
 
     @property
     def emergency_budget(self) -> Seconds:
@@ -828,9 +819,7 @@ class ATV320Drive:
             # object reusable without a branch only production would take.
             self._executor.shutdown(wait=False)
             self._executor = _new_executor()
-            self._consecutive_failures = 0
-            self._failed_since = None
-            self._lost_since = None
+            self._health.reset()
             self._closed = False
             self._close_error = None
 
@@ -877,7 +866,7 @@ class ATV320Drive:
             self._close_error = await self._attempt_stop()
             await self._run(self._blocking_close)
             self._executor.shutdown(wait=False)
-            self._lost_since = self._clock.monotonic()
+            self._health.latch(self._clock.monotonic())
             return self._closed_result()
 
     def _closed_result(self) -> Result[None, DriveError]:
@@ -1065,7 +1054,7 @@ class ATV320Drive:
         """
         budget = self._emergency_budget_for(timeout)
         outcome = self._blind_write(self._registers.lfrd, RawRegister(0), budget)
-        self._lost_since = self._clock.monotonic()
+        self._health.latch(self._clock.monotonic())
         logger.error(
             "ATV320 emergency disable on %s: LFRD=0 %s; the run command was left in "
             "place so the drive ramps on its own dEC and its ttO timeout stops it for "
@@ -1525,7 +1514,7 @@ class ATV320Drive:
         now = self._clock.monotonic()
         if isinstance(outcome, Err):
             return Err(self._note_failure(outcome.error, now))
-        self._note_success()
+        self._health.note_success()
         return outcome
 
     async def _run[T](self, fn: Callable[[], T]) -> T:
@@ -1562,7 +1551,7 @@ class ATV320Drive:
         :meth:`close` and :meth:`emergency_disable_blocking` are the paths that
         own the sequencing and neither of them writes 6 to a moving shaft.
         """
-        if self._lost_since is None:
+        if self._health.lost_since is None:
             return None
         if stopping:
             logger.warning(
@@ -1571,7 +1560,7 @@ class ATV320Drive:
                 self._settings.port,
             )
             return None
-        return CommTimeout(after=elapsed(self._lost_since, self._clock.monotonic()))
+        return CommTimeout(after=elapsed(self._health.lost_since, self._clock.monotonic()))
 
     def _note_failure(self, error: DriveError, now: Monotonic) -> DriveError:
         """Count a failed transaction; latch the link down at the threshold.
@@ -1582,36 +1571,24 @@ class ATV320Drive:
         measured from the first observed failure of the run, which is the
         number that says how long the drive has been out of contact.
         """
-        self._consecutive_failures += 1
-        first = self._failed_since if self._failed_since is not None else now
-        self._failed_since = first
-        if self._consecutive_failures < self._failure_threshold:
+        timeout = self._health.note_failure(now)
+        if timeout is None:
             logger.warning(
                 "ATV320 transaction failed (%d/%d consecutive): %r",
-                self._consecutive_failures,
-                self._failure_threshold,
+                self._health.consecutive_failures,
+                self._health.failure_threshold,
                 error,
             )
             return error
-        self._lost_since = first
         logger.error(
             "ATV320 link declared LOST after %d consecutive failures over %.3f s; this "
             "driver will send nothing further until open() is called again, so the "
             "drive's own ttO timeout applies. Last error: %r",
-            self._consecutive_failures,
-            elapsed(first, now),
+            self._health.consecutive_failures,
+            timeout.after,
             error,
         )
-        return CommTimeout(after=elapsed(first, now))
-
-    def _note_success(self) -> None:
-        """A completed transaction ends the current failure run.
-
-        It does NOT clear ``_lost_since``. A link that came back on its own is
-        not permission to resume commanding a motor; only :meth:`open` is.
-        """
-        self._consecutive_failures = 0
-        self._failed_since = None
+        return timeout
 
     # =====================================================================
     # The blocking half: everything below runs in the executor thread
