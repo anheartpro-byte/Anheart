@@ -919,10 +919,12 @@ class TelemetrySnapshot:
 
     @property
     def drive_status_is_stale(self) -> bool:
-        """Whether the drive observation is too old to describe the machine.
+        """Whether the drive observation is unavailable or too old for live display.
 
-        A missing age counts as stale, for the same reason as above.
+        Unknown state invalidates a recent historical observation too.
         """
+        if self.drive_state is DriveState.COMM_LOST:
+            return True
         if self.drive_status_age is None:
             return True
         return self.drive_status_age > DRIVE_STATUS_STALE_AFTER

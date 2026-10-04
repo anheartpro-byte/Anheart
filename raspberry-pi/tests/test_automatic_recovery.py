@@ -8,6 +8,7 @@ from src.training.runtime import IDLE_POLL_PERIOD, TrainingRuntime
 from src.training.safety import RULE_COMMS_LOST, GoSilentIsTerminal, SafetyLimits
 from src.training.types import Occupancy, SafetyAction
 from src.units import Bpm, MotorRpm
+from src.web.schemas import SnapshotRow
 from tests import test_atv320
 from tests.test_atv320 import Behave, FakeBus, build_drive, parameter_exception
 from tests.test_runtime import GEOMETRY, LIMITS
@@ -172,3 +173,17 @@ async def test_complete_status_ends_the_previous_unknown_episode(
     clock.advance(IDLE_POLL_PERIOD)
     await runtime.tick(clock.monotonic())
     assert runtime.silent
+
+
+async def test_unknown_state_invalidates_freshness_without_erasing_historical_age(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    runtime = runtime_for(clock, build_drive(clock, bus))
+    await runtime.tick(clock.monotonic())
+    bus.sticky_reads = parameter_exception()
+    clock.advance(IDLE_POLL_PERIOD)
+    snapshot = await runtime.tick(clock.monotonic())
+    assert snapshot.drive_state is DriveState.COMM_LOST
+    assert snapshot.drive_status_age == IDLE_POLL_PERIOD
+    assert snapshot.drive_status_is_stale
+    assert SnapshotRow.of(snapshot).drive_status_stale
