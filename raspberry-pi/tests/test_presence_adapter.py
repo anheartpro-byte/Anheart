@@ -18,6 +18,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.geometry import MachineGeometry
+from src.motor.drive import DriveState
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.presence.adapter import (
     ESTOP_SOURCE_PREFIX,
@@ -122,7 +123,12 @@ def _snapshot(rpm: int, *, fresh: bool = True) -> TelemetrySnapshot:
         nominal_rpm=GEOMETRY.nominal_rpm,
         base_hz=GEOMETRY.base_hz,
     )
-    return replace(BASE, measured=measured, drive_status_age=Seconds(0.0) if fresh else None)
+    return replace(
+        BASE,
+        measured=measured,
+        drive_state=DriveState.SWITCH_ON_DISABLED if fresh else DriveState.COMM_LOST,
+        drive_status_age=Seconds(0.0) if fresh else None,
+    )
 
 
 def _manual(occupancy: Occupancy) -> ManualSession:
@@ -218,6 +224,14 @@ def _rig(runtime: FakeRuntime | None = None) -> Rig:
     [
         (FakeRuntime(picture=_snapshot(0, fresh=False)), MotionState.UNKNOWN),
         (FakeRuntime(picture=_snapshot(400, fresh=False)), MotionState.UNKNOWN),
+        (
+            FakeRuntime(picture=replace(_snapshot(0), drive_state=DriveState.COMM_LOST)),
+            MotionState.UNKNOWN,
+        ),
+        (
+            FakeRuntime(picture=replace(_snapshot(400), drive_state=DriveState.COMM_LOST)),
+            MotionState.UNKNOWN,
+        ),
         (FakeRuntime(picture=_snapshot(120)), MotionState.TURNING),
         (FakeRuntime(picture=_snapshot(-3)), MotionState.TURNING),
         (FakeRuntime(state_now=RuntimeState.RUNNING), MotionState.ARMED),

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from src.clock import ManualClock
@@ -187,3 +189,14 @@ async def test_unknown_state_invalidates_freshness_without_erasing_historical_ag
     assert snapshot.drive_status_age == IDLE_POLL_PERIOD
     assert snapshot.drive_status_is_stale
     assert SnapshotRow.of(snapshot).drive_status_stale
+
+
+async def test_missing_observation_age_is_never_trusted_as_fresh(
+    clock: ManualClock, bus: FakeBus
+) -> None:
+    runtime = runtime_for(clock, build_drive(clock, bus))
+    observed = await runtime.tick(clock.monotonic())
+    without_age = replace(observed, drive_status_age=None)
+    assert without_age.drive_state is DriveState.SWITCH_ON_DISABLED
+    assert without_age.drive_status_is_stale
+    assert SnapshotRow.of(without_age).drive_status_stale
