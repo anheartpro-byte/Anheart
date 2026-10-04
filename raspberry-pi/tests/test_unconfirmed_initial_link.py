@@ -45,7 +45,7 @@ async def test_failed_acquisition_never_authorizes_a_write(
     rig, held = make_rig(tmp_path, wrap=HeldInspection)
     assert isinstance(held, HeldInspection)
     held.hold_open = True
-    held.fail_open = True
+    held.fail_before_open = True
     async with rig.http() as client:
         if requested_start:
             await attest(client)
@@ -56,6 +56,8 @@ async def test_failed_acquisition_never_authorizes_a_write(
         task = asyncio.create_task(rig.panel.control_step())
         try:
             await asyncio.wait_for(held.accepted.wait(), 2)
+            assert not held.acquisition_evidence.address_proven
+            assert held.acquisition_evidence.possible_frames == 0
             task.cancel()
             held.release.set()
             with pytest.raises(asyncio.CancelledError):

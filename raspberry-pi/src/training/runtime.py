@@ -166,6 +166,7 @@ from src.training.hr_control import (
     Zone,
 )
 from src.training.idle_recovery import IdleLink as _IdleLink
+from src.training.idle_recovery import UnknownEpisode
 from src.training.motion import (
     DEFAULT_MOTION_LIMITS,
     MotionLimits,
@@ -179,6 +180,7 @@ from src.training.plan import (
     Program,
 )
 from src.training.safety import (
+    RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
     AcknowledgeRefusal,
     AttestationRefusal,
@@ -1086,6 +1088,7 @@ class TrainingRuntime:
         "_subject",
         "_supervisor",
         "_tracker",
+        "_unknown_episode",
         "_warmup_satisfied",
     )
 
@@ -1215,11 +1218,15 @@ class TrainingRuntime:
         # sees an idle read, so an idle machine is judged exactly as it was
         # before polling existed, and a stale fault on an idle drive cannot
         # end a session that never started.
+        self._initialise_idle_observation()
+        self._snapshot: TelemetrySnapshot = self._build_snapshot(clock.monotonic())
+
+    def _initialise_idle_observation(self) -> None:
         self._idle_link: IdleLink = IdleLink()
         self._idle_status: DriveStatus | None = None
         self._idle_status_at: Monotonic | None = None
         self._idle_next_at: Monotonic | None = None
-        self._snapshot: TelemetrySnapshot = self._build_snapshot(clock.monotonic())
+        self._unknown_episode: UnknownEpisode = UnknownEpisode()
 
     # =====================================================================
     # Reads
@@ -1846,22 +1853,32 @@ class TrainingRuntime:
                 await self.shutdown("initial inspection cancelled")
         elif self._inspection_unconfirmed:
             await self.shutdown("unreadable initial inspection cancelled")
+        elif self._unknown_episode.failures > 0:
+            self._end_unknown_episode(
+                now,
+                "initial inspection cancelled with unknown drive state after possible traffic; "
+                "no further frames will be sent. Verify standstill before an operator restarts "
+                "this process; no session will resume automatically",
+                address_proven=self._drive.acquisition_evidence.address_proven,
+            )
 
     async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         opened = await begin_inspection(self._drive, reopen=True)
         if isinstance(opened, OpenFailed):
-            # An unopened link is no evidence the drive is reachable, so it
-            # extends the read run. A successful open does not shorten it:
-            # opening the adapter proves nothing about the drive behind it.
+            self._link_open = False
             failure = self._note_failure(Exchange.READ, opened.error)
+            self._inspection_failed(now, opened)
             return Err(DriveUnavailable(f"the drive link could not be opened: {failure.detail}"))
         self._link_open = True
         status = await opened.read_status()
         if isinstance(status, StatusFailed):
-            self._inspection_unconfirmed = True
+            self._link_open = False
             failure = self._note_failure(Exchange.READ, status.error)
+            self._inspection_failed(now, status)
             return Err(DriveUnavailable(f"the drive could not be read: {failure.detail}"))
         self._inspection_unconfirmed = False
+        self._unknown_episode = UnknownEpisode()
+        self._enabled = status.status.state is DriveState.OPERATION_ENABLED
         self._note_success(Exchange.READ)
         self._last_status = status.status
         self._last_status_at = now
@@ -2137,8 +2154,9 @@ class TrainingRuntime:
 
         A failure is recorded in :attr:`idle_link` and the link is re-opened on
         the next poll, because the ATV320 driver latches a lost link until
-        ``open`` is called again. It is never counted towards ``comms_lost``:
-        see :class:`IdleLink`.
+        ``open`` is called again. Total no-frame outages remain ordinary
+        retryable idle failures. Possibly traffic-fed unknown episodes are
+        bounded separately by the supervisor's communication-loss count.
         """
         armed = self._program is not None or self._manual is not None
         if armed or self._silent or self._link_open or self._shutdown is not None:
@@ -2155,14 +2173,17 @@ class TrainingRuntime:
         opened = await begin_inspection(self._drive, reopen=not self._idle_link.open)
         if isinstance(opened, OpenFailed):
             self._idle_failed(opened.error)
+            self._inspection_failed(now, opened)
             return Err(opened.error)
         self._idle_link = replace(self._idle_link, open=True)
         status = await opened.read_status(self._clock)
         if isinstance(status, StatusFailed):
-            self._inspection_unconfirmed = True
             self._idle_failed(status.error)
+            self._inspection_failed(now, status)
             return Err(status.error)
         self._inspection_unconfirmed = False
+        self._unknown_episode = UnknownEpisode()
+        self._enabled = status.status.state is DriveState.OPERATION_ENABLED
         link = self._idle_link
         self._idle_link = replace(
             link,
@@ -2173,6 +2194,34 @@ class TrainingRuntime:
         self._idle_status = status.status
         self._idle_status_at = now
         return Ok(status.status)
+
+    def _inspection_failed(self, now: Monotonic, inspection: OpenFailed | StatusFailed) -> None:
+        self._idle_next_at = Monotonic(now + IDLE_POLL_PERIOD)
+        possible_frames = inspection.after.possible_frames > inspection.before.possible_frames
+        self._unknown_episode = self._unknown_episode.failed(possible_frames=possible_frames)
+        if self._unknown_episode.failures == 0:
+            return
+        self._enabled = True
+        self._inspection_unconfirmed = (
+            self._inspection_unconfirmed or inspection.after.address_proven
+        )
+        self._snapshot = self._build_snapshot(now)
+        if self._unknown_episode.failures < self._supervisor.limits.comms_lost_failures:
+            return
+        detail = (
+            f"drive state remains unknown after {self._unknown_episode.failures} automatic "
+            "recovery attempts that may have refreshed its watchdog; recovery exhausted. "
+            "No further frames will be sent. Verify the machine has stopped before an "
+            "operator restarts this process; no session will resume automatically"
+        )
+        self._end_unknown_episode(now, detail, address_proven=inspection.after.address_proven)
+
+    def _end_unknown_episode(self, now: Monotonic, detail: str, *, address_proven: bool) -> None:
+        self._link_open = address_proven
+        self._latch(now, RULE_COMMS_LOST, SafetyAction.GO_SILENT, detail)
+        self._begin_ending(now, EndReason.SAFETY_VERDICT, self._latched)
+        self._go_silent(now, detail)
+        self._snapshot = self._build_snapshot(now)
 
     async def _judge_idle(self, now: Monotonic, status: DriveStatus) -> None:
         """A drive found enabled, or turning, while nothing is commanded: stop it now.
@@ -3337,6 +3386,12 @@ class TrainingRuntime:
         the safety observation reads :meth:`_readable_status` and never this.
         """
         armed = self._program is not None or self._manual is not None
+        if self._unknown_episode.failures > 0:
+            status = self._last_status if self._last_status_at is not None else self._idle_status
+            stamped = (
+                self._last_status_at if self._last_status_at is not None else self._idle_status_at
+            )
+            return status, None, None if stamped is None else elapsed(stamped, now)
         if armed or self._link_open:
             return self._last_status, self._readable_status(now), self._status_age(now)
         stamped = self._idle_status_at

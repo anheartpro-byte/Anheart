@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from src.units import Seconds
@@ -7,12 +9,9 @@ from src.units import Seconds
 class IdleLink:
     """What the idle, read-only polling of the drive has seen. For the operator screen.
 
-    Kept apart from the session's own failure counters on purpose: an idle
-    read that fails is "the drive is not answering", shown as unknown, and
-    must never feed ``comms_lost`` - that rule's answer is ``GO_SILENT``, which
-    is one-way, and a console that went permanently silent because a cable was
-    unplugged while nothing was commanded would have to be restarted to show
-    anything at all.
+    These diagnostic counters remain separate from session failures. A total
+    no-frame outage retries indefinitely. UnknownEpisode separately bounds
+    unresolved inspections that may have refreshed the drive's watchdog.
     """
 
     open: bool = False
@@ -32,3 +31,13 @@ class IdleLink:
 
     last_error: str | None = None
     """The operator-facing description of the last failure, or ``None``."""
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownEpisode:
+    failures: int = 0
+
+    def failed(self, *, possible_frames: bool) -> UnknownEpisode:
+        if self.failures == 0 and not possible_frames:
+            return self
+        return UnknownEpisode(self.failures + 1)

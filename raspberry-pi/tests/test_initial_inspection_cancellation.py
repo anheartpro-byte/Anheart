@@ -29,13 +29,14 @@ class HeldInspection(HeldCommand):
         super().__init__(inner)
         self.hold_open = False
         self.fail_open = False
+        self.fail_before_open = False
         self.fail_read = False
         self.writes = 0
         self.reads = 0
 
     @override
     async def open(self) -> Result[None, DriveError]:
-        result = await super().open()
+        result = Err(CommTimeout(Seconds(0.05))) if self.fail_before_open else await super().open()
         if self.fail_open:
             result = Err(CommTimeout(Seconds(0.05)))
         if self.hold_open and not self.accepted.is_set():
