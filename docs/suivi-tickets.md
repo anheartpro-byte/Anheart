@@ -154,6 +154,34 @@ L'audit Python résolu est vert. L'audit npm reste rouge sur l'unique advisory
 Next.js ; aucun patch publié ni exception approuvée n'est disponible. La PR reste donc
 brouillon et ANH-71 In Progress, sans fusion ni clôture annoncée.
 
+### Reprise automatique de communication : corrections du 4 octobre 2026
+
+La décision utilisateur est de tenter la reprise automatiquement avant de
+demander une intervention manuelle. Les corrections conservent la reprise du
+repos après une panne sans trame, distinguent le trafic possible de la preuve
+d'adressage, et ne réinitialisent plus les échecs natifs sur une simple ouverture
+du port. Les preuves survivent aux erreurs d'un wrapper et à l'annulation.
+
+Un statut complet rétablit l'observation, jamais une séance ou un défaut. Un
+épisode inconnu qui atteint le compte existant de la supervision devient
+terminal : au plus un zéro d'urgence si l'adressage est prouvé, puis aucune
+trame. L'interface ne présente pas une ancienne lecture récente comme fraîche
+quand l'état courant est `comm_lost`. Le guide de la console décrit cette
+distinction et la reprise manuelle après silence.
+
+Les contrôles ciblés passent : 229 cas natifs/typage/FTDI, 357 cas runtime et
+annulation incluant le contrat original de panne au repos de 20 secondes,
+395 cas types/runtime/sérialisation/API et 323 cas HTTP panel/runtime/manuel.
+Ces nombres correspondent à des suites qui se recouvrent ; ils ne s'additionnent
+pas et ne remplacent pas les gates complètes à 100 % de branches. Les contrôles
+statiques configurés sont verts ; les gates complètes sont en cours.
+
+L'envoi à GitHub Support pour les anciennes références a été reporté à la
+demande de l'utilisateur. Aucun message n'a été envoyé et la purge historique
+complète n'est pas revendiquée. L'audit reste obligatoire ; la recherche d'un
+remplacement corrigé ne constitue pas encore une adoption. La PR reste ouverte
+et ANH-71 reste en cours jusqu'aux résultats requis et aux deux revues finales.
+
 ## File logicielle
 
 L'etape reprend l'ordre de la file Linear. Les parents ANH-122 et ANH-88 se cloturent apres leurs sous-tickets ; ils ne dupliquent pas leur implementation. Les dependances precises sont recontrolees avant chaque ticket. La presence dans cette liste ne signifie pas que ses bloqueurs sont resolus.

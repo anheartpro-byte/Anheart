@@ -335,6 +335,33 @@ montre l'arbre arrêté. Certains défauts ne sont **pas réarmables** depuis la
 (`reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter`).
 Message d'accord : `reset demande : fault_reset (le variateur doit le confirmer)`.
 
+### Reprise automatique de la liaison variateur
+
+La console tente d'abord de retrouver automatiquement une observation complète,
+sans relancer de séance ni réarmer un défaut. Ouvrir le port local ne prouve pas
+que le variateur répond ; une acquisition ETA valide confirme l'adressage,
+mais seule la lecture complète du statut rétablit l'observation.
+
+Une panne où aucune requête n'a pu partir continue à être retentée au repos.
+Si une inspection échoue après du trafic possible, la console suit cet épisode
+d'état inconnu séparément : une nouvelle ouverture réussie ne suffit pas à
+l'effacer. Une lecture complète réussie l'efface ; si elle trouve le variateur
+déjà activé ou en rotation, la console arrête et verrouille, sans reprise.
+
+Après le nombre d'échecs configuré par la supervision (`comms_lost_failures`,
+trois par défaut), un épisode inconnu non résolu devient `GO_SILENT`. Ce compte
+n'est pas une garantie de délai physique. Le processus ne transmet ensuite
+plus aucune trame, même de lecture ou de fermeture. Le zéro d'urgence existant
+est tenté une seule fois en entrant dans ce mode, uniquement si l'adressage a
+été prouvé indépendamment ; sans cette preuve, aucune écriture aveugle.
+
+`comm_lost` et `VITESSE INCONNUE` restent inconnus même si une ancienne lecture
+à zéro est récente. Un zéro acquitté ne prouve ni l'arrêt de l'arbre ni la
+désactivation de la sortie. Une annulation attend la vraie inspection et garde
+ses preuves avant de terminer. Après `GO_SILENT`, l'intervention manuelle
+consiste à vérifier l'arrêt réel puis redémarrer le processus ; l'acquittement
+ne lève pas le silence, et une nouvelle séance exige une nouvelle demande.
+
 ### Carte « BITalino »
 
 Pastille `acquisition`, `connecte` ou `deconnecte`. Grille : `source` (et adresse),
