@@ -1007,6 +1007,13 @@ rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
 ANH-131 aura fourni les fichiers autorisés ; leur absence est signalée dans le
 journal, jamais présentée comme un rejeu réussi.
 
+Le budget d'exécution du job `simulation-gate` est de 90 minutes ; celui de
+`pi-gate` reste de 60 minutes. La batterie complète a pris 57 min 32 s sur un
+runner GitHub, avant la génération du rapport : une limite de 60 minutes pour
+l'ensemble annulait ce dernier. Ce budget concerne le job CI, pas les délais
+de sûreté du moteur. Aucun scénario, seuil de couverture ou contrôle n'est
+retiré ; la génération et la publication du rapport restent obligatoires.
+
 L'audit Python résout d'abord les dépendances transitives pour Python 3.12 avec
 `uv pip compile --generate-hashes`, puis audite cette liste entièrement épinglée
 avec `--disable-pip --require-hashes`. Les dépendances transitives restent donc
