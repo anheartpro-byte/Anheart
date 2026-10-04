@@ -63,7 +63,7 @@ export function DashboardBreadcrumb() {
   return (
     <Breadcrumb>
       <BreadcrumbList>
-        {breadcrumbItems.map((item, index) => (
+        {breadcrumbItems.map((item) => (
           <Fragment key={item.href}>
             <BreadcrumbItem>
               {item.isLast ? (

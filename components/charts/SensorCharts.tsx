@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useEffect, useState, useCallback } from "react";
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -10,11 +10,7 @@ import {
   YAxis,
   CartesianGrid,
   ReferenceLine,
-  Tooltip,
   ResponsiveContainer,
-  Bar,
-  BarChart,
-  Cell,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
