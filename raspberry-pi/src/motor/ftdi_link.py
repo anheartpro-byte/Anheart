@@ -75,6 +75,7 @@ from pyftdi.usbtools import UsbTools
 from usb.backend import libusb1
 
 from src.clock import Clock
+from src.motor.drive_process_lock import DriveLease
 from src.units import Monotonic, Seconds
 
 logger = logging.getLogger(__name__)
@@ -362,6 +363,7 @@ class BufferedFtdiPort:
         "_buffer_limit",
         "_clock",
         "_device",
+        "_lease",
         "_lock",
         "_poll_interval",
         "_rx",
@@ -380,12 +382,14 @@ class BufferedFtdiPort:
         sleep: Sleeper = _real_sleep,
         poll_interval: Seconds = POLL_INTERVAL,
         buffer_limit: int = RX_BUFFER_LIMIT,
+        lease: DriveLease | None = None,
     ) -> None:
         if timeout < 0.0:
             raise ValueError(f"read timeout {timeout} s must not be negative")
         if buffer_limit < 1:
             raise ValueError(f"buffer_limit {buffer_limit} must be at least one byte")
         self._device: FtdiDevice = device
+        self._lease: DriveLease | None = lease
         self._timeout: Seconds = timeout
         self._clock: Clock = clock
         self._sleep: Sleeper = sleep
@@ -446,11 +450,15 @@ class BufferedFtdiPort:
         with self._lock:
             if not self.is_open:
                 return
+            self._device.close()
             self.is_open = False
             self._rx.clear()
-            self._device.close()
+            if self._lease is not None:
+                self._lease.close()
 
     def _require_open(self) -> None:
+        if self._lease is not None:
+            self._lease.require_active()
         if not self.is_open:
             # OSError, as pyserial's PortNotOpenError is: pymodbus treats it as
             # a transport failure and closes, rather than crashing the thread.
@@ -494,15 +502,24 @@ def open_ftdi_port(
 
     ``create`` defaults to :func:`open_schneider_device`; a test passes a fake.
     """
-    factory: DeviceFactory = open_schneider_device if create is None else create
-    device = factory(url)
+    lease = DriveLease.claim()
+    transferred = False
     try:
-        configure(device, frame)
-        settle(device, clock=clock, sleep=sleep)
-    except Exception:
-        device.close()
-        raise
-    return BufferedFtdiPort(device, timeout=timeout, clock=clock, sleep=sleep)
+        device = open_schneider_device(url, lease) if create is None else create(url)
+        configured = False
+        try:
+            configure(device, frame)
+            settle(device, clock=clock, sleep=sleep)
+            port = BufferedFtdiPort(device, timeout=timeout, clock=clock, sleep=sleep, lease=lease)
+            configured = True
+        finally:
+            if not configured:
+                device.close()
+        transferred = True
+        return port
+    finally:
+        if not transferred:
+            lease.close()
 
 
 def settle(
@@ -559,7 +576,7 @@ def configure(device: ConfigurableFtdi, frame: UartFrame) -> None:
     device.purge_buffers()
 
 
-def open_schneider_device(url: str) -> Ftdi:
+def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
     """The real opener: vendor ids registered, libusb loaded, chip opened.
 
     The one function in this module that reaches USB hardware.
@@ -572,6 +589,7 @@ def open_schneider_device(url: str) -> Ftdi:
     for good. Opening happens only on (re)connect, never per transaction, so
     the cache is flushed every time: one enumeration, a few milliseconds.
     """
+    lease.require_active()
     register_schneider_cable()
     load_libusb_backend()
     UsbTools.flush_cache()

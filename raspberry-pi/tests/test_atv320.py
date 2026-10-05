@@ -72,6 +72,7 @@ from src.motor.atv320 import (
     ATV320Drive,
     FtdiModbusClient,
     ModbusMaster,
+    OwnedSerialClient,
     SerialSettings,
     emergency_budget_for,
     serial_master,
@@ -577,7 +578,7 @@ def test_serial_master_pins_the_commissioned_line_settings() -> None:
     """19200 8E1, and the port is NOT opened by constructing the client."""
     master = serial_master(SerialSettings(port="COM-NONE"), ManualClock())
     assert isinstance(master, ModbusMaster)
-    assert type(master) is ModbusSerialClient, "an OS device keeps the stock client"
+    assert type(master) is OwnedSerialClient
     params = line_settings(master)
     assert params.host == "COM-NONE"
     assert params.baudrate == DEFAULT_BAUDRATE == 19200
@@ -591,7 +592,7 @@ def test_serial_master_pins_the_commissioned_line_settings() -> None:
 def test_an_os_serial_device_gets_the_stock_pymodbus_client(port: str) -> None:
     """pyserial's own ports have a working in_waiting; only ftdi:// needs the adapter."""
     master = serial_master(SerialSettings(port=port), ManualClock())
-    assert type(master) is ModbusSerialClient
+    assert type(master) is OwnedSerialClient
     assert line_settings(master).host == port
 
 

@@ -45,6 +45,7 @@ from src.motor.atv320 import (
     transaction_worst_case,
 )
 from src.motor.drive import DriveState, RegisterMap
+from src.motor.drive_process_lock import DriveLease
 from src.motor.ftdi_link import (
     LATENCY_TIMER_MS,
     LIBUSB_DIRECTORIES,
@@ -279,7 +280,7 @@ def test_the_fakes_satisfy_the_protocols_the_real_chip_does() -> None:
 def test_the_real_pyftdi_class_satisfies_the_configurable_protocol() -> None:
     """Checked statically, which is the check that matters: the assignment below
     is a type error the moment pyftdi's Ftdi stops being a ConfigurableFtdi."""
-    factory: DeviceFactory = open_schneider_device
+    factory: Callable[[str, DriveLease], ConfigurableFtdi] = open_schneider_device
     assert callable(factory)
 
 
@@ -599,6 +600,7 @@ def test_open_ftdi_port_configures_and_wraps_the_chip(clock: ManualClock) -> Non
     assert chip.calls[-1] == ("purge_buffers", ()), "settle() empties the chip last"
     assert port.timeout == Seconds(0.05)
     assert port.read(2) == b"ok"
+    port.close()
 
 
 def test_a_chip_that_refuses_its_settings_is_released(clock: ManualClock) -> None:
@@ -731,8 +733,13 @@ def no_usb(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_the_real_opener_registers_the_cable_and_loads_libusb_first(no_usb: list[str]) -> None:
-    device: object = open_schneider_device(SCHNEIDER_CABLE_URL)
-    assert isinstance(device, ConfigurableChip)
+    lease = DriveLease.claim()
+    try:
+        device: object = open_schneider_device(SCHNEIDER_CABLE_URL, lease)
+        assert isinstance(device, ConfigurableChip)
+        device.close()
+    finally:
+        lease.close()
     assert no_usb == [
         "vendor:0x16de:schneider",
         "product:0x16de:0x0003:rs485",
@@ -783,6 +790,7 @@ def test_open_ftdi_port_uses_the_real_opener_by_default(
     )
     assert port.is_open
     assert f"open:{SCHNEIDER_CABLE_URL}" in no_usb
+    port.close()
 
 
 def test_registering_the_cable_twice_is_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:

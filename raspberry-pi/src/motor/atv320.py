@@ -145,6 +145,7 @@ from src.motor.drive import (
     decode_status_word,
     describe_fault,
 )
+from src.motor.drive_process_lock import DriveConnection, DriveOwnershipError
 from src.motor.ftdi_link import (
     USB_STALL_BOUND,
     BufferedFtdiPort,
@@ -466,6 +467,30 @@ def emergency_budget_for(settings: SerialSettings) -> Seconds:
 
 
 @final
+class OwnedSerialClient(ModbusSerialClient):
+    def __init__(self, settings: SerialSettings) -> None:
+        self._ownership: DriveConnection = DriveConnection()
+        super().__init__(
+            port=settings.port,
+            framer=FramerType.RTU,
+            baudrate=settings.baudrate,
+            bytesize=settings.bytesize,
+            parity=settings.parity.value,
+            stopbits=settings.stopbits,
+            timeout=settings.timeout,
+            retries=settings.retries,
+        )
+
+    @override
+    def connect(self) -> bool:
+        return self._ownership.connect(super().connect)
+
+    @override
+    def close(self) -> None:
+        self._ownership.close(super().close)
+
+
+@final
 class FtdiModbusClient(ModbusSerialClient):
     """``ModbusSerialClient`` whose port is :class:`~src.motor.ftdi_link.BufferedFtdiPort`.
 
@@ -506,6 +531,8 @@ class FtdiModbusClient(ModbusSerialClient):
             return True
         try:
             port = self._port_opener()
+        except DriveOwnershipError:
+            raise
         except Exception:
             logger.exception("ATV320: could not open %s", self.comm_params.host)
             return False
@@ -528,8 +555,8 @@ def serial_master(
     """Build the real pymodbus RTU master. The ONE place a client is constructed.
 
     An ``ftdi://`` port gets :class:`FtdiModbusClient`; anything else - a tty,
-    a ``/dev/cu.*``, a ``COM`` port - the stock ``ModbusSerialClient``, whose
-    pyserial port has a working ``in_waiting`` of its own.
+    a ``/dev/cu.*``, a ``COM`` port - an ownership-guarded ``ModbusSerialClient``,
+    whose pyserial port has a working ``in_waiting`` of its own.
 
     Constructing does not touch the hardware - both clients open the port in
     ``connect()`` - so this is safe at startup and testable with a port that
@@ -546,16 +573,7 @@ def serial_master(
                 create=open_device,
             ),
         )
-    return ModbusSerialClient(
-        port=settings.port,
-        framer=FramerType.RTU,
-        baudrate=settings.baudrate,
-        bytesize=settings.bytesize,
-        parity=settings.parity.value,
-        stopbits=settings.stopbits,
-        timeout=settings.timeout,
-        retries=settings.retries,
-    )
+    return OwnedSerialClient(settings)
 
 
 # =========================================================================
