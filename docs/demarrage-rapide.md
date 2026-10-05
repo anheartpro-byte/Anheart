@@ -59,7 +59,7 @@ Ce que fait chaque variable :
 | `MOTOR_BACKEND` | `sim` | variateur simulé (`SimulatedDrive`). **Obligatoire.** `serial` = le vrai ATV320 |
 | `ECG_SOURCE` | `sim` | BITalino simulé. **Obligatoire.** `serial` ou `rfcomm` = le vrai boîtier |
 | `ARM_RADIUS_M` | `1.5` | rayon de référence, en mètres. **Obligatoire, sans défaut** : tous les g en dépendent |
-| `UI_PORT` | `8090` | port de la page. Sans cette variable, le code écoute sur **8080** (`.env.example` propose 8090). 8123 est refusé |
+| `UI_PORT` | `8090` | port choisi pour cet exemple. Le défaut du code et `.env.example` sont **8080**. 8123 est refusé |
 | `MACHINE_API_KEY` | vide | aucune liaison au tableau de bord Convex. **Forcez-la vide** si un `.env` contient une vraie clé |
 
 Options utiles pour voir plus de choses :
@@ -171,7 +171,7 @@ Ouvrir `simulation/out/report.html` dans un navigateur pour les courbes.
 
 ```sh
 $PY -m simulation.run --list                 # la liste des scénarios
-$PY -m simulation.run manual_27_rpm --csv    # -> simulation/out/manual_27_rpm.{jsonl,csv}
+$PY -m simulation.run manual_27_rpm --csv    # -> dossier schema 2 + CSV dans simulation/out/
 ```
 
 ### Le visualiseur 2D
@@ -183,7 +183,13 @@ $PY -m simulation.live                       # http://127.0.0.1:8765/  (--port p
 Puis ouvrir :
 
 - en direct : <http://127.0.0.1:8765/?live=manual_27_rpm&speed=20>
-- en relecture d'une trace : <http://127.0.0.1:8765/?trace=out/manual_27_rpm.jsonl>
+- en relecture : `http://127.0.0.1:8765/?trace=out/<UTC>_<local_ref>` (remplacer
+  le nom du dossier par celui créé dans `simulation/out/`).
+
+Le dossier contient notamment `manifest.json`, `events.jsonl` et `ticks.csv`.
+`--csv` ajoute un fichier `<local_ref>.csv`. Les anciennes traces schema 1
+restent lisibles avec `?trace=out/<ancien-fichier>.jsonl` ou le sélecteur de
+fichier du visualiseur. Voir [le format d'enregistrement](enregistrement.md).
 
 Tous les paramètres d'URL et les options sont dans
 [framework-de-test.md](framework-de-test.md).
@@ -191,12 +197,12 @@ Tous les paramètres d'URL et les options sont dans
 ## 6. Vérifier que tout passe (les gates)
 
 ```sh
-cd raspberry-pi && bash scripts/check.sh     # la gate du Pi : ruff, basedpyright, mypy, tests + 100 % de branches
+cd raspberry-pi && ./scripts/check.sh        # la gate du Pi : ruff, basedpyright, mypy, tests + 100 % de branches
 simulation/scripts/check.sh                  # la gate de la simulation (depuis n'importe où)
 ```
 
-`raspberry-pi/scripts/check.sh` n'a pas le bit exécutable : `./scripts/check.sh`
-échoue, il faut `bash scripts/check.sh`. Constaté : `GATE PASSED`, 3187 tests.
+`raspberry-pi/scripts/check.sh` est suivi avec le mode exécutable `100755` ;
+`./scripts/check.sh` et `bash scripts/check.sh` lancent la même gate.
 Durées, nombres de tests et lancement d'un seul test :
 [framework-de-test.md](framework-de-test.md).
 
@@ -214,4 +220,4 @@ Durées, nombres de tests et lancement d'un seul test :
 | `CONVEX_URL` en `.convex.cloud` côté Pi | chaque requête du Pi répond 404 | utiliser l'hôte `.convex.site` |
 | Docker sur Mac | ne voit ni le câble FTDI ni le Bluetooth | lancer la console en natif |
 | Tester l'API à la main dans zsh avec un en-tête `-H` stocké dans une variable | réponses 422 | écrire l'en-tête `Content-Type: application/json` directement dans la commande `curl` |
-| `npm run lint` | des centaines d'erreurs | ESLint parcourt aussi `raspberry-pi/.venv` et `simulation/cad/.venv-cad` ; seules 2 erreurs viennent du site |
+| Environnements Python dans le dépôt | à exclure de l'analyse JavaScript | `eslint.config.mjs` exclut déjà `**/.venv/**`, `**/.venv-*/**` et `**/venv/**` |

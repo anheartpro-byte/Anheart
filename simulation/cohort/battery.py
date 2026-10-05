@@ -88,10 +88,11 @@ VASOVAGAL_ONSET_DEFECT: Final[str] = (
 
 KNOWN_VASOVAGAL_ONSET: Final[Mapping[tuple[str, SessionType], str]] = {
     ("S07", SessionType.AUTO_JOG): (
-        "825 -> 837 motor rpm (+0.24 output rpm) walked over t=679.0-679.8 s, decided at "
-        "t=679.0 s when the scripted collapse starts, true rate still 123 bpm and the sensor "
-        "reading 122; the first fall the sensor shows is at t=681 s (118 bpm), nothing rises "
-        "after it, and hr_drop ends the session at t=698 s. Before the gate: the controller "
+        "Measured 2026-10-05: 887 -> 895 motor rpm (+0.16 output rpm) over t=679.0-679.8 s, "
+        "decided at t=679.0 s when the scripted collapse starts (true rate 133 bpm, sensor "
+        "132); the four rising ticks read true 132 bpm. The next lower sensor reading is "
+        "128 bpm at t=681 s; nothing rises after it, and hr_drop fires at t=701 s. "
+        "Before the gate: the controller "
         "kept raising the setpoint through the collapse until hr_drop"
     ),
 }
