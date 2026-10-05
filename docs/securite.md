@@ -156,10 +156,9 @@ capsule remettre l'électrode, la fréquence cardiaque revient, et le bras repar
 
 **La décision** (option (a) du ticket). Si un avertissement non verrouillé a
 ramené la consigne à 0, la séance se termine et rien ne repart sans un nouveau
-départ. Les coupures
-pendant lesquelles la vitesse a seulement été maintenue (FREEZE) ou baissée sans
-atteindre 0 (REDUCE en cours de descente) reprennent toujours seules, parce que
-le bras ne s'est jamais arrêté.
+départ. Les coupures pendant lesquelles la vitesse a seulement été maintenue
+(FREEZE) ou baissée sans atteindre 0 (REDUCE en cours de descente) reprennent
+toujours seules, parce que le bras ne s'est jamais arrêté.
 
 **Pourquoi.** Un bras à l'arrêt est le signal sur lequel quelqu'un s'approche
 de la capsule : il doit rester à l'arrêt tant que personne n'a décidé de le
@@ -178,7 +177,9 @@ rien à l'opérateur.
 
 - Dans le runtime (`TrainingRuntime._end_at_standstill`), au cycle où le
   dernier pas de la descente REDUCE, acquitté par le variateur, met la consigne
-  à 0. Le superviseur n'est pas modifié : aucun seuil, aucun délai n'a changé.
+  à 0. Aucune règle du superviseur n'est modifiée : aucun seuil, aucun délai
+  n'a changé. Seule la phrase de ses avertissements non verrouillés est
+  complétée (dernier point ci-dessous).
 - La fin est verrouillée, comme la fin déjà verrouillée de `hr_stale` à 60 s :
   verdict `reduced_to_standstill` (RAMP_DOWN), qui nomme l'avertissement en
   cause. Il faut un acquittement nominatif à la console. Tant qu'il n'est pas

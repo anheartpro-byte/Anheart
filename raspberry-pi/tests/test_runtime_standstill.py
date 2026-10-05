@@ -11,8 +11,8 @@ without an acknowledgement by name and a new start.
 The scenario behind it is the detached electrode. Measured on ``develop``, on
 the shipped 30 min programme with the console's own limits: 12 s without a
 heart rate, 164 motor rpm held; 32 s, 122 rpm under REDUCE; 42 s, standstill,
-the mode still SEANCE; the heart rate returns at 50 s with nobody clicking; 65 s
-later the setpoint is 69 rpm and two minutes later 168. The operator saw the
+the mode still SEANCE; the heart rate returns at 50 s with nobody clicking; 45 s
+after that the setpoint is 69 rpm, and two minutes after it 168. The operator saw the
 arm stopped, walked to the capsule to refit the electrode, and it started
 beside them.
 
@@ -243,8 +243,8 @@ async def test_an_arm_stopped_by_a_lost_heart_rate_does_not_restart_when_it_retu
     The heart rate is lost for 50 s and then comes back, and nobody clicks
     anything. The arm is held (FREEZE at 10 s), lowered (REDUCE at 30 s) and
     reaches standstill. From there it must not move again, for as long as
-    anybody cares to wait: on ``develop`` the setpoint was back to 69 motor rpm
-    65 s after the heart rate returned.
+    anybody cares to wait: on ``develop`` the first non-zero setpoint came 40 s
+    after the heart rate returned, and it was back to 69 motor rpm 5 s later.
     """
     rig = await _console_rig()
     running = _applied(rig)
