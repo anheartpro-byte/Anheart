@@ -145,7 +145,11 @@ from src.motor.drive import (
     decode_status_word,
     describe_fault,
 )
-from src.motor.drive_process_lock import DriveConnection, DriveOwnershipError
+from src.motor.drive_process_lock import (
+    DriveConnection,
+    DriveOwnershipError,
+    retry_failed_drive_closes,
+)
 from src.motor.ftdi_link import (
     USB_STALL_BOUND,
     BufferedFtdiPort,
@@ -483,7 +487,7 @@ class OwnedSerialClient(ModbusSerialClient):
 
     @override
     def connect(self) -> bool:
-        return self._ownership.connect(super().connect)
+        return self._ownership.connect(super().connect, super().close)
 
     @override
     def close(self) -> None:
@@ -494,7 +498,7 @@ class OwnedSerialClient(ModbusSerialClient):
 class FtdiModbusClient(ModbusSerialClient):
     """``ModbusSerialClient`` whose port is :class:`~src.motor.ftdi_link.BufferedFtdiPort`.
 
-    Only :meth:`connect` differs. pymodbus 3.7.4 opens ports with
+    Connect and close also manage failed-open cleanup. pymodbus 3.7.4 opens ports with
     ``serial.serial_for_url``, which for ``ftdi://`` would hand back pyftdi's
     own port, the one whose ``in_waiting`` is always 0. Everything after the
     port is open - framing, CRC, inter-frame silence, the transaction lock,
@@ -521,15 +525,17 @@ class FtdiModbusClient(ModbusSerialClient):
 
     @override
     def connect(self) -> bool:
-        """Open the cable if it is not open. ``False``, never an exception, on failure.
+        """Open the cable if it is not open. Ownership refusal raises explicitly.
 
         Mirrors ``ModbusSerialClient.connect``: pymodbus calls this before every
         transaction and after every failure, and turns ``False`` into
         ``ConnectionException``, which the driver maps to ``CommTimeout``.
         """
-        if self.socket is not None:
-            return True
         try:
+            retry_failed_drive_closes()
+            if self.socket is not None and self.socket.is_open:
+                return True
+            self.socket = None
             port = self._port_opener()
         except DriveOwnershipError:
             raise
@@ -544,6 +550,12 @@ class FtdiModbusClient(ModbusSerialClient):
         self.socket = port  # pyright: ignore[reportAttributeAccessIssue]
         self.last_frame_end = None
         return True
+
+    @override
+    def close(self) -> None:
+        close_port: Callable[[], None] = super().close
+        close_port()
+        retry_failed_drive_closes()
 
 
 def serial_master(

@@ -7,7 +7,7 @@ import runpy
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import assert_never
+from typing import Literal, assert_never
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -26,10 +26,31 @@ from tests.test_ftdi_link import FRAME, ConfigurableChip, FakeChip, Sleeps
 
 
 class SyntheticSerial:
-    inter_byte_timeout: float | None = None
+    def __init__(self, *, fail_setup: bool = False, fail_close: bool = False) -> None:
+        self.fail_setup: bool = fail_setup
+        self.fail_close: bool = fail_close
+        self.closed: bool = False
+        self.successful_closes: int = 0
+
+    @property
+    def inter_byte_timeout(self) -> float | None:
+        return None
+
+    @inter_byte_timeout.setter
+    def inter_byte_timeout(self, value: float | None) -> None:
+        del value
+        if self.fail_setup:
+            raise OSError("synthetic configuration failed with a live handle")
 
     def close(self) -> None:
-        return
+        if self.fail_close:
+            raise OSError("synthetic close failed; handle remains live")
+        if not self.closed:
+            self.successful_closes += 1
+        self.closed = True
+
+    def is_closed(self) -> bool:
+        return self.closed
 
 
 class Backend(StrEnum):
@@ -42,6 +63,9 @@ class Backend(StrEnum):
     LATENCY = "latency"
     CONSOLE = "console"
     BENCH = "bench"
+    FAILED_SERIAL = "failed-serial"
+    FAILED_FTDI = "failed-ftdi"
+    FAILED_FTDI_CLOSE = "failed-ftdi-close"
 
 
 class Action(StrEnum):
@@ -87,6 +111,22 @@ def run_ftdi(action: Action, create: DeviceFactory) -> int:
     return 0
 
 
+def run_serial(backend: Literal[Backend.SERIAL, Backend.WRITE, Backend.READ]) -> None:
+    master = serial_master(SerialSettings(port="COM3"), ManualClock())
+    try:
+        match backend:
+            case Backend.WRITE:
+                master.write_register(8501, 0, slave=248)
+            case Backend.READ:
+                master.read_holding_registers(3201, count=1, slave=248)
+            case Backend.SERIAL:
+                master.connect()
+            case _ as unreachable:
+                assert_never(unreachable)
+    finally:
+        master.close()
+
+
 def main() -> int:
     root = Path(sys.argv[1])
     action = Action(sys.argv[2])
@@ -116,6 +156,16 @@ def main() -> int:
 
     patch.setattr("serial.serial_for_url", create_serial)
     match backend:
+        case Backend.FAILED_SERIAL | Backend.FAILED_FTDI | Backend.FAILED_FTDI_CLOSE:
+            from tests.test_drive_process_lock import hold_failed_master  # noqa: PLC0415
+
+            failed_backends: dict[Backend, tuple[Literal["serial", "ftdi"], bool]] = {
+                Backend.FAILED_SERIAL: ("serial", False),
+                Backend.FAILED_FTDI: ("ftdi", False),
+                Backend.FAILED_FTDI_CLOSE: ("ftdi", True),
+            }
+            failed_backend, after_open = failed_backends[backend]
+            return hold_failed_master(failed_backend, patch, after_open)
         case Backend.PROBE | Backend.SCAN | Backend.LATENCY:
             script_names = {
                 "probe": "probe_atv320.py",
@@ -160,19 +210,7 @@ def main() -> int:
             finally:
                 side.release()
         case Backend.SERIAL | Backend.WRITE | Backend.READ:
-            master = serial_master(SerialSettings(port="COM3"), clock)
-            try:
-                match backend:
-                    case Backend.WRITE:
-                        master.write_register(8501, 0, slave=248)
-                    case Backend.READ:
-                        master.read_holding_registers(3201, count=1, slave=248)
-                    case Backend.SERIAL:
-                        master.connect()
-                    case _ as unreachable:
-                        assert_never(unreachable)
-            finally:
-                master.close()
+            run_serial(backend)
             return 0
         case Backend.FTDI:
             return run_ftdi(action, create)

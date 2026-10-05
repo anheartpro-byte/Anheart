@@ -75,7 +75,7 @@ from pyftdi.usbtools import UsbTools
 from usb.backend import libusb1
 
 from src.clock import Clock
-from src.motor.drive_process_lock import DriveLease
+from src.motor.drive_process_lock import DriveConnection, DriveLease, retry_failed_drive_closes
 from src.units import Monotonic, Seconds
 
 logger = logging.getLogger(__name__)
@@ -363,8 +363,8 @@ class BufferedFtdiPort:
         "_buffer_limit",
         "_clock",
         "_device",
-        "_lease",
         "_lock",
+        "_ownership",
         "_poll_interval",
         "_rx",
         "_sleep",
@@ -389,7 +389,9 @@ class BufferedFtdiPort:
         if buffer_limit < 1:
             raise ValueError(f"buffer_limit {buffer_limit} must be at least one byte")
         self._device: FtdiDevice = device
-        self._lease: DriveLease | None = lease
+        self._ownership: DriveConnection | None = (
+            DriveConnection(lease) if lease is not None else None
+        )
         self._timeout: Seconds = timeout
         self._clock: Clock = clock
         self._sleep: Sleeper = sleep
@@ -447,18 +449,22 @@ class BufferedFtdiPort:
 
     def close(self) -> None:
         """Release the chip. Idempotent: pymodbus closes on every failed exchange."""
+        if self._ownership is None:
+            self._close_device()
+        else:
+            self._ownership.close(self._close_device)
+
+    def _close_device(self) -> None:
         with self._lock:
             if not self.is_open:
                 return
             self._device.close()
             self.is_open = False
             self._rx.clear()
-            if self._lease is not None:
-                self._lease.close()
 
     def _require_open(self) -> None:
-        if self._lease is not None:
-            self._lease.require_active()
+        if self._ownership is not None:
+            self._ownership.require_active()
         if not self.is_open:
             # OSError, as pyserial's PortNotOpenError is: pymodbus treats it as
             # a transport failure and closes, rather than crashing the thread.
@@ -497,15 +503,18 @@ def open_ftdi_port(
 ) -> BufferedFtdiPort:
     """Open the chip ``url`` names, configure it for ``frame``, and wrap it.
 
-    The chip is released again if configuring it fails, so a refused baud rate
-    does not leave an interface claimed until the process exits.
+    Configuration failure closes the chip. If closing also fails, the cleanup
+    owner retains the chip and lease until a retry closes it or the process exits.
 
     ``create`` defaults to :func:`open_schneider_device`; a test passes a fake.
     """
+    retry_failed_drive_closes()
     lease = DriveLease.claim()
-    transferred = False
+    created = False
     try:
         device = open_schneider_device(url, lease) if create is None else create(url)
+        cleanup = DriveConnection(lease)
+        created = True
         configured = False
         try:
             configure(device, frame)
@@ -514,11 +523,10 @@ def open_ftdi_port(
             configured = True
         finally:
             if not configured:
-                device.close()
-        transferred = True
+                cleanup.close(device.close)
         return port
     finally:
-        if not transferred:
+        if not created:
             lease.close()
 
 

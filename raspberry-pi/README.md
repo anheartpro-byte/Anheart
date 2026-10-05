@@ -282,9 +282,15 @@ une erreur de droits refuse la liaison, sans repli vers un autre verrou.
 Ne jamais supprimer le fichier pour forcer une prise : son inode doit rester
 stable. Le PID est seulement informatif et peut rester apres fermeture ; le
 noyau libere le verrou a la fermeture du transport ou a la fin du processus,
-y compris un crash. Un echec d'ouverture libere aussi la reservation. Si la
+y compris un crash. Un echec d'ouverture libere la reservation seulement apres
+fermeture du transport partiellement ouvert. Si la
 fermeture du transport echoue, la reservation reste jusqu'a sa fermeture
-effective ou la fin du processus. Chaque reconnexion doit reprendre le verrou ;
+effective ou la fin du processus, meme si l'appelant abandonne l'erreur.
+`close()` retente ce nettoyage ; une nouvelle ouverture FTDI ou une reconnexion
+serie termine d'abord le nettoyage en attente, sans ouvrir par-dessus l'ancien
+handle. Pour un appel direct a `open_ftdi_port`,
+`src.motor.drive_process_lock.retry_failed_drive_closes()` permet aussi de
+retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
 cela n'autorise aucune reprise automatique du mouvement. Cette protection
 concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
 

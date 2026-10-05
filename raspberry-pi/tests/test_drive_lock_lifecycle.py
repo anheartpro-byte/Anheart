@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import gc
 import os
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import BinaryIO
 import pytest
 
 import src.motor.drive_process_lock as ownership
+from src.clock import ManualClock
 from src.motor.drive_process_lock import (
     DriveBusy,
     DriveConnection,
@@ -20,7 +22,11 @@ from src.motor.drive_process_lock import (
     LockError,
     LockUnavailable,
 )
+from src.motor.ftdi_link import open_ftdi_port
 from src.result import Err, Ok
+from src.units import Seconds
+from tests.test_drive_process_lock import run_contender
+from tests.test_ftdi_link import FRAME, ConfigurableChip, FakeChip, Sleeps
 
 
 def test_stale_pid_is_diagnostic_only_and_lock_file_is_retained() -> None:
@@ -138,9 +144,9 @@ def test_closed_or_inherited_lease_cannot_open_hardware(monkeypatch: pytest.Monk
 @pytest.mark.parametrize("opened", [True, False])
 def test_connection_release_on_close_or_failed_open(opened: bool) -> None:
     connection = DriveConnection()
-    assert connection.connect(lambda: opened) is opened
+    assert connection.connect(lambda: opened, lambda: None) is opened
     if opened:
-        assert connection.connect(lambda: True)
+        assert connection.connect(lambda: True, lambda: None)
         assert isinstance(DriveLease.acquire(), Err)
     connection.close(lambda: None)
     lease = DriveLease.claim()
@@ -154,7 +160,7 @@ def test_connection_open_exception_releases_ownership() -> None:
 
     connection = DriveConnection()
     with pytest.raises(OSError, match="synthetic"):
-        connection.connect(fail)
+        connection.connect(fail, lambda: None)
     lease = DriveLease.claim()
     lease.close()
 
@@ -164,7 +170,7 @@ def test_connection_close_failure_retains_ownership_until_closed() -> None:
         raise OSError("synthetic close failure")
 
     connection = DriveConnection()
-    assert connection.connect(lambda: True)
+    assert connection.connect(lambda: True, lambda: None)
     with pytest.raises(OSError, match="synthetic"):
         connection.close(fail)
     assert isinstance(DriveLease.acquire(), Err)
@@ -220,14 +226,14 @@ def test_unknown_acquisition_result_never_opens_transport(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(DriveLease, "acquire", invalid_result)
     with pytest.raises(AssertionError):
-        DriveConnection().connect(open_transport)
+        DriveConnection().connect(open_transport, lambda: None)
     assert opened == []
 
 
 def test_reconnect_failure_releases_existing_reservation() -> None:
     connection = DriveConnection()
-    assert connection.connect(lambda: True)
-    assert not connection.connect(lambda: False)
+    assert connection.connect(lambda: True, lambda: None)
+    assert not connection.connect(lambda: False, lambda: None)
     lease = DriveLease.claim()
     lease.close()
 
@@ -239,6 +245,46 @@ def test_transport_can_close_itself_during_failed_open() -> None:
         connection.close(lambda: None)
         return False
 
-    assert not connection.connect(open_transport)
+    assert not connection.connect(open_transport, lambda: None)
     lease = DriveLease.claim()
     lease.close()
+
+
+def test_ordinary_ftdi_close_failure_survives_dropped_port_until_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw = FakeChip()
+    clock = ManualClock()
+    port = open_ftdi_port(
+        "ftdi://schneider:rs485/1",
+        FRAME,
+        timeout=Seconds(0.1),
+        clock=clock,
+        create=lambda _: ConfigurableChip(raw),
+        sleep=Sleeps(clock),
+    )
+
+    def fail_close() -> None:
+        raise OSError("synthetic close failure")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(raw, "close", fail_close)
+            try:
+                port.close()
+            except OSError:
+                assert raw.close_calls == 0
+            else:
+                pytest.fail("close must fail before the port is discarded")
+            del port
+            gc.collect()
+            contender = run_contender(tmp_path)
+            assert contender.returncode == 3, contender.stdout + contender.stderr
+            assert not (tmp_path / "attempt-opened").exists()
+        ownership.retry_failed_drive_closes()
+        assert raw.close_calls == 1
+        assert run_contender(tmp_path).returncode == 0
+    finally:
+        ownership.retry_failed_drive_closes()
+        if raw.close_calls == 0:
+            raw.close()

@@ -6,6 +6,7 @@ import errno
 import os
 import stat
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -131,26 +132,54 @@ class DriveLease:
 class DriveConnection:
     """Mutable ownership paired with an OS transport's connect/close lifecycle."""
 
-    def __init__(self) -> None:
-        self._lease: DriveLease | None = None
+    def __init__(self, lease: DriveLease | None = None) -> None:
+        self._lease: DriveLease | None = lease
 
-    def connect(self, open_transport: Callable[[], bool]) -> bool:
-        if self._lease is None:
-            self._lease = DriveLease.claim()
-        self._lease.require_active()
-        opened = False
-        try:
-            opened = open_transport()
-            return opened
-        finally:
-            if not opened and self._lease is not None:
+    def require_active(self) -> None:
+        """Called under the port I/O lock; cleanup takes that lock after its own."""
+        lease = self._lease
+        if lease is None or self in _PENDING_CLOSES:
+            raise DriveOwnershipError(LockUnavailable("transport closing or closed"))
+        lease.require_active()
+
+    def connect(
+        self, open_transport: Callable[[], bool], close_transport: Callable[[], None]
+    ) -> bool:
+        with _CLEANUP_LOCK:
+            pending = _PENDING_CLOSES.get(self)
+            if pending is not None:
+                self.close(pending)
+            if self._lease is None:
+                self._lease = DriveLease.claim()
+            self._lease.require_active()
+            opened = False
+            try:
+                opened = open_transport()
+                return opened
+            finally:
+                if not opened:
+                    self.close(close_transport)
+
+    def close(self, close_transport: Callable[[], None]) -> None:
+        with _CLEANUP_LOCK:
+            _PENDING_CLOSES[self] = close_transport
+            close_transport()
+            del _PENDING_CLOSES[self]
+            # Retain ownership if transport.close raises: another master must not
+            # acquire a cable whose old handle may still transmit.
+            if self._lease is not None:
                 self._lease.close()
                 self._lease = None
 
-    def close(self, close_transport: Callable[[], None]) -> None:
-        close_transport()
-        # Retain ownership if transport.close raises: another master must not
-        # acquire a cable whose old handle may still transmit.
-        if self._lease is not None:
-            self._lease.close()
-            self._lease = None
+
+# A failed close must keep both the handle and lease reachable even after an
+# opener raises and its caller drops the exception or client. Success removes it.
+_PENDING_CLOSES: Final[dict[DriveConnection, Callable[[], None]]] = {}
+_CLEANUP_LOCK: Final[threading.RLock] = threading.RLock()
+
+
+def retry_failed_drive_closes() -> None:
+    """Retry failed physical cleanup; failure retains ownership and propagates."""
+    with _CLEANUP_LOCK:
+        for connection, close_transport in tuple(_PENDING_CLOSES.items()):
+            connection.close(close_transport)
