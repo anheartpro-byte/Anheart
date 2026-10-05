@@ -1029,11 +1029,18 @@ avec `--disable-pip --require-hashes`. Les dépendances transitives restent donc
 incluses. Cela évite un second environnement pip temporaire non utilisé par les
 gates. La liste d'audit résolue n'est pas un verrou de release.
 
-`.gitleaksignore` contient seulement trois empreintes historiques vérifiées :
-`YOUR_API_KEY` dans un exemple README, `invalid-key` dans un test HTTP refusé,
-et la clé publiable synthétique du build CI (`ci-fixture.clerk.accounts.dev`).
-Ces faux positifs ne sont pas des secrets réels. Un nouveau secret, un autre
-fichier ou une autre empreinte reste bloquant.
+`.gitleaksignore` conserve deux empreintes historiques vérifiées :
+`YOUR_API_KEY` dans un exemple README et `invalid-key` dans un test HTTP refusé.
+La clé publiable synthétique du build CI (`ci-fixture.clerk.accounts.dev`) est
+traitée dans `.gitleaks.toml`, qui hérite de toutes les règles par défaut.
+Seule sa valeur exacte, au chemin exact `.github/workflows/ci.yml`, est admise
+par la règle `generic-api-key` ; les deux conditions doivent correspondre.
+Cette exception ne dépend pas d'un SHA ou d'un numéro de ligne : elle survit
+à une fusion squash. Le test `scripts/ci/gitleaks-fixture.test.mjs` exerce le
+vrai scanner épinglé avant le scan de tout l'historique. Il couvre la fusion
+squash, le déplacement de ligne et le refus d'une autre valeur, d'un autre
+chemin ou d'un secret voisin ; les autres détecteurs restent actifs.
+Ces faux positifs ne sont pas des secrets réels. Aucun audit n'est désactivé.
 
 ### Lire un échec et relancer
 
@@ -1046,10 +1053,11 @@ ouvrir `report.html` et retrouver le scénario par son identifiant. Une entrée
 
 Reproduire avec la commande du job, corriger, puis pousser un nouveau commit.
 **Re-run failed jobs** convient seulement à une panne de runner/réseau : il ne
-change pas le code. Le SHA des deux avis indépendants doit être celui que la PR
-va fusionner. `agent-review/R1` et `agent-review/R2` représentent ces deux agents
-sous le même compte GitHub, selon la décision utilisateur du 3 octobre 2026 ;
-ils ne représentent pas deux approbations de personnes distinctes.
+change pas le code. Pour les nouvelles PR, un avis indépendant lié au SHA
+courant est requis (`agent-review/R1`), selon la décision utilisateur du
+5 octobre 2026. Les autres checks restent obligatoires, sans contournement
+administrateur. La PR ANH-71 avait deux avis : son historique de revue reste
+inchangé. Un check d'agent n'est pas une approbation humaine fictive.
 
 ### Régression ECG du navigateur (ANH-71)
 

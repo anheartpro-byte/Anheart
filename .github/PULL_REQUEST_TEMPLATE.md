@@ -21,12 +21,11 @@ ANH- : lien Linear et résultat observable.
 ## Revue indépendante
 
 - R1 : SHA, verdict, lien du rapport.
-- R2 : SHA, verdict, lien du rapport.
 - Remarques corrigées ou justifiées par une preuve :
 
 ## Fusion
 
 - Tous les checks requis sont verts sur le commit courant.
-- Deux avis d'agents indépendants existent sur ce même SHA.
+- Un avis d'agent indépendant existe sur ce même SHA (décision utilisateur du 5 octobre 2026).
 - Conversations résolues, branche à jour, aucun contournement administrateur.
 - Squash : `ANH-nnn : résultat` ; le ticket passe Done après la fusion prouvée.

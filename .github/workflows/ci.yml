@@ -163,7 +163,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           go install github.com/zricethezav/gitleaks/v8@v8.24.3
-          "$(go env GOPATH)/bin/gitleaks" git --redact --log-opts='--all'
+          anheart_gitleaks_bin="$(go env GOPATH)/bin/gitleaks"
+          ANHEART_GITLEAKS_BIN="$anheart_gitleaks_bin" node --test scripts/ci/gitleaks-fixture.test.mjs
+          "$anheart_gitleaks_bin" git --redact --log-opts='--all'
 
   docs:
     runs-on: ubuntu-24.04
