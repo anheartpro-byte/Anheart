@@ -290,10 +290,13 @@ Repères de la capture (barre latérale, de haut en bas) :
 5. **Rotation** (`a l'arret`) : lu sur la vitesse **mesurée**.
 6. **Securite** (`none`) : action de sécurité en cours.
 7. **Console** (`mouvement actif`) : cette console peut commander le moteur.
-8. Ligne `127.0.0.1:8731 boucle locale · sans jeton` : adresse d'écoute et protection.
+8. Ligne `127.0.0.1:8124 boucle locale · sans jeton` : adresse d'écoute et protection.
+   Le port est celui de `UI_PORT` : 8731 avec la commande du §3.2, 8124 le jour où
+   cette capture a été reprise (voir l'annexe).
 9. Navigation : **Tableau de bord**, **Capteurs** (avec un point de couleur par
    capteur, et son canal `A1` à `A6`), **Seance**, **Configuration**, **Securite**.
-10. Pied de page, à gauche : `liaison ouverte · repos · done` (liaison, mode, phase).
+10. Pied de page, à gauche : `liaison ouverte · repos` (liaison et mode). Pendant une
+    séance, la phase s'ajoute : par exemple `liaison ouverte · manuel · hold`.
 11. **STOP** (orange, « rampe controlee ») et **E-STOP** (rouge, « verrouille
     immediatement »).
 
@@ -436,7 +439,8 @@ Repères :
 séance programmée. `age` = âge de la mesure en secondes (barré si trop vieille, plus
 de 4 s environ), `brut` = dernière valeur calculée, `seq` = numéro de la mesure.
 Pastille de qualité : `good`, `noisy`, `mains_dominated` (parasite secteur),
-`no_signal`, ou `pas de signal`.
+`no_signal`, ou `pas de signal`. Dès que la mesure est trop vieille, la pastille
+passe à `perime` (rouge), quelle que soit la dernière qualité connue.
 
 **Vitesse mesuree** : la vitesse lue sur le variateur, en cinq unités, plus le courant
 moteur en ampères.
@@ -561,9 +565,11 @@ Repères, carte **Programme** (à gauche) :
 3. **Operateur** : obligatoire.
 4. **Age du passager (ans, obligatoire)** : vide ou inférieur à 18 ans = refus.
 5. **Previsualiser** : calcule le programme **sans rien démarrer**.
-6. **Demarrer la seance** : démarre. Il est actif seulement si `PROGRAMS_ENABLED=true`
-   (sur la capture, prise avant une correction du code, il apparaît grisé).
-7. Note sous les boutons, quand les séances programmées sont désactivées :
+6. **Demarrer la seance** : démarre. Il est actif seulement si `PROGRAMS_ENABLED=true`,
+   une fois l'attestation faite et la machine au repos (c'est le cas sur la capture).
+7. Notes sous les boutons : la réponse au dernier clic (sur la capture,
+   `plan resolu ; rien n'a ete demarre` après **Previsualiser**) et, sur sa propre
+   ligne quand les séances programmées sont désactivées,
    `seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL`.
 
 Repères, carte **Ce que ce programme ferait** (à droite) :
@@ -583,12 +589,12 @@ Repères, carte **Ce que ce programme ferait** (à droite) :
 > **Bouton « Demarrer la seance » grisé.** La page active ce bouton seulement si la
 > console dit que les séances programmées sont autorisées (`PROGRAMS_ENABLED=true`).
 > Un défaut du code le laissait toujours grisé : il est **corrigé** (1er octobre 2026,
-> `src/local_panel.py`), mais les captures de ce guide ont été prises avant.
+> `src/local_panel.py`). Les captures des séances en cours (`console-10`,
+> `console-19`) ont été prises avant : la note « desactivees » y figure encore.
 
-> Attention aussi : le message `plan resolu ; rien n'a ete demarre` affiché après
-> **Previsualiser** est remplacé au bout de quelques secondes par la note
-> « desactivees » (rafraîchie toutes les 5 s). La prévisualisation a bien eu lieu :
-> regardez le tableau des phases.
+> Le message `plan resolu ; rien n'a ete demarre` affiché après **Previsualiser**
+> reste sous les boutons jusqu'au clic suivant : la note « desactivees » ne le
+> remplace plus.
 
 Constat sur ce profil : son plafond (276 tr/min moteur = 5,54 tr/min = 0,052 g) est
 très bas. En simulation, la fréquence cardiaque reste sous la zone visée (compteur
@@ -709,7 +715,7 @@ Repères :
 Repères :
 
 1. Pastille verte `atteste`.
-2. Sous le bouton : `atteste par Mohamed a 12:31:48 AM (valable jusqu'au prochain redemarrage du Pi)`.
+2. Sous le bouton : `atteste par Mohamed a 6:40:07 PM (valable jusqu'au prochain redemarrage du Pi)`.
 3. Sous **Acquitter**, en rouge : `nothing is latched to acknowledge` (un essai
    d'acquittement alors que rien n'était verrouillé : sans conséquence).
 
@@ -721,11 +727,13 @@ Repères :
 
 1. Pastille rouge `quick_stop`.
 2. `regle operator_estop`, `detail operator emergency stop: console web: e-stop`,
-   `verrouille oui`, `depuis 27.4 s`.
+   `verrouille oui`, `depuis 27.5 s`.
 3. `e-stop verrouille OUI` (en rouge), `verdict retenu operator_estop / quick_stop`.
 4. Barre latérale : Etat `stopping` **en rouge** alors que Rotation est `a l'arret` et
    Mode `REPOS` : la machine est arrêtée, mais verrouillée.
 5. Le champ nom est rempli, la case du coup de poing **pas encore cochée**.
+6. En haut, le bandeau rouge **ARRET D'URGENCE VERROUILLE** : il reste tant que le
+   verdict n'est pas acquitté, machine arrêtée ou non (§13.5).
 
 ### Les champs de la carte Verdict
 
@@ -735,7 +743,7 @@ Repères :
 | `detail` | la phrase explicative |
 | `verrouille` | `oui` : ne s'efface que par un acquittement nommé |
 | `depuis` | depuis combien de secondes |
-| `e-stop verrouille` | l'E-STOP de la page (ou d'un autre écran) est verrouillé |
+| `e-stop verrouille` | un arrêt d'urgence est verrouillé : E-STOP de la page ou d'un autre écran, ou arrêt déclenché par la caméra. Quand la ligne dit `OUI`, l'acquittement exige la case du coup de poing |
 | `verdict retenu` | le verdict qui attend un acquittement |
 | `plancher verrouille` | le verdict verrouillé le plus sévère d'une source secondaire (par exemple la caméra) |
 | `regles actives` | nombre de règles qui se déclenchent en ce moment, listées en dessous |
@@ -973,7 +981,7 @@ E-STOP, pas à pas :
 1. En cas de danger : **coup de poing câblé**.
 2. Cliquez **E-STOP** (aucune question ne sera posée).
 3. La pastille **Securite** passe à `quick_stop` (rouge) et **Etat** à `stopping` en
-   rouge.
+   rouge. Un bandeau rouge **ARRET D'URGENCE VERROUILLE** apparaît en haut de la page.
 4. Surveillez **Vitesse mesuree** : la machine décélère, elle n'est pas arrêtée tout
    de suite (constaté : de 25,8 à 12,5 tr/min en environ 4 s, puis arrêt complet
    quelques secondes plus tard, en simulation).
@@ -984,15 +992,18 @@ E-STOP, pas à pas :
 Repères :
 
 1. Securite `quick_stop` et Etat `stopping` en rouge.
-2. Vitesse mesurée `12.53`, `EN ROTATION` : ça ralentit.
+2. Vitesse mesurée `12.71`, `EN ROTATION` : ça ralentit.
 3. La note de la carte manuelle, `no manual session is running (the machine is stopping)`,
    vient d'un clic sur **Appliquer** pendant l'arrêt : plus aucune cible n'est acceptée.
+4. En haut, le bandeau rouge **ARRET D'URGENCE VERROUILLE**.
 
-> Écart constaté : le code prévoit d'afficher dans le bandeau rouge du haut
-> `ARRET D'URGENCE VERROUILLE (quick_stop) - surveillez la vitesse MESUREE : la machine decelere, elle n'est pas arretee`.
-> En pratique ce bandeau est effacé en moins d'une demi seconde par la vérification
-> de fraîcheur des données (il ne reste affiché que si la liaison est coupée). Ne
-> comptez pas sur lui : regardez les pastilles **Securite** et **Etat**.
+> Le bandeau rouge du haut,
+> `ARRET D'URGENCE VERROUILLE surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete`,
+> reste affiché tant que le verdict d'arrêt d'urgence est verrouillé, sur toutes les
+> pages et sur tous les écrans ouverts, que l'arrêt vienne de l'E-STOP ou de la
+> caméra (rejoué en simulation), ou d'une autre règle qui demande `quick_stop`
+> (d'après le code, non rejoué). Il ne dit pas que la machine est arrêtée : seule la
+> vitesse **mesurée** le dit. Il disparaît après l'acquittement (§13.6).
 
 ### 13.6 Acquitter un verdict de sécurité
 
@@ -1011,7 +1022,8 @@ Rien ne l'efface tout seul.
    cette case, le refus est : `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging`.
 7. Cliquez **Acquitter**.
 8. Vérifiez la note : `acquitte par <nom> : operator_estop` (liste des règles
-   effacées) et l'état revenu à `idle`.
+   effacées), l'état revenu à `idle` et, après un arrêt d'urgence, le bandeau rouge
+   disparu.
 
 Cas particulier : un verdict `go_silent` ne s'acquitte pas. Le message dit
 `... demanded GO_SILENT, which is one-way ...`. Il faut vérifier que la machine est
@@ -1032,12 +1044,15 @@ Repères :
 
 1. Securite `quick_stop`, règle `operator_estop`, détail
    `operator emergency stop: camera presence: personne detectee (confiance 0.95, a 0.8 m du bras) dans la zone du bras alors que la machine tourne : arret d'urgence`.
-2. `plancher verrouille presence_intrusion / quick_stop`.
+2. `e-stop verrouille OUI` (en rouge) et
+   `plancher verrouille presence_intrusion / quick_stop`.
 3. Caméra : `demarrage bloque (sim_empty)`, avec
    `demarrage refuse : arret presence verrouille (presence_intrusion), acquittement nomme requis`
    et `Verdict verrouille : presence_intrusion - acquitter dans Securite apres verification.`
 4. Après relance de la page, les deux cases de l'attestation apparaissent décochées,
    mais la pastille dit `atteste` : c'est la pastille qui fait foi.
+5. En haut, le bandeau rouge **ARRET D'URGENCE VERROUILLE**, comme après un E-STOP de
+   la page.
 
 Que faire :
 
@@ -1050,9 +1065,9 @@ Que faire :
 5. La carte caméra doit revenir à `zone degagee`. La console exige que la zone soit
    vue dégagée pendant un moment avant d'accepter un démarrage.
 
-Écart constaté : dans ce cas, la ligne `e-stop verrouille` affiche `non`, alors que
-l'acquittement exige quand même la case du coup de poing. Fiez-vous à la ligne
-`regle`.
+Dans ce cas, la ligne `e-stop verrouille` affiche `OUI` : l'arrêt déclenché par la
+caméra est un arrêt d'urgence comme celui de la page, et son acquittement exige la
+case du coup de poing.
 
 Autres refus de la caméra constatés : avec `PRESENCE_SOURCE=sim_occupied` (passager
 vu dans la capsule), une séance **BANC** est refusée :
@@ -1067,11 +1082,11 @@ vu dans la capsule), une séance **BANC** est refusée :
 Repères :
 
 1. Carte **BITalino** : pastille rouge `deconnecte`, `tentatives` qui monte (la console
-   réessaie toutes les 5 s environ), `dernier lot 13.9 s`, `erreur` :
+   réessaie toutes les 5 s environ), `dernier lot 14.3 s`, `erreur` :
    `connexion au BITalino impossible (sim)`.
-2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,7 s).
-   Attention, la pastille de qualité reste `good` : c'est la **dernière** qualité
-   connue, pas l'état actuel (écart constaté).
+2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,4 s),
+   pastille rouge `perime` : la mesure est trop vieille, quelle qu'ait été sa dernière
+   qualité.
 3. Barre latérale : les points des six capteurs deviennent creux et gris (périmés).
 4. **Vitesse mesuree** `5.00` : en séance manuelle de banc, la perte de l'ECG
    **n'arrête pas** la machine (Securite reste `none`). La vitesse manuelle ne dépend
@@ -1103,8 +1118,7 @@ Repères :
 1. Carte **Variateur**, pastille rouge `fault`.
 2. `LFT brut 18` : le code brut lu sur le variateur.
 3. Encadré rouge : `DEFAUT ObF (LFT brut 18) : surtension du bus continu au freinage : ...`
-   suivi du même texte répété (le message complet contient la signification deux fois,
-   c'est un défaut d'affichage).
+   (le code, puis ce qui s'est passé et quoi faire).
 4. Bouton **Reset defaut variateur**.
 5. Barre latérale : Securite `ramp_down` (règle `drive_fault`, verrouillée).
 
@@ -1163,10 +1177,10 @@ Repères :
 
 1. Bandeau rouge **NO LIVE DATA** : `la liaison avec la machine est coupee - la machine tourne peut-etre encore`.
 2. Liaison `hors ligne`, pastilles Mode, Rotation, Securite **barrées**.
-3. Grands nombres barrés (`87`, `0.00`) : ce sont les dernières valeurs connues, pas
+3. Grands nombres barrés (`71`, `0.00`) : ce sont les dernières valeurs connues, pas
    les valeurs actuelles.
 4. Points des capteurs creux et gris.
-5. Pied de page : `liaison coupee`.
+5. Pied de page : `liaison coupee · repos`.
 
 Que faire :
 
@@ -1362,9 +1376,11 @@ les motifs libres d'arrêt. Les traces nominatives d'attestation et d'acquitteme
 du câblage restent distinctes. Le détail autorisé du verdict reste disponible
 dans la console ; les logs ne sont pas un dossier de santé.
 
-**Le bandeau rouge « ARRET D'URGENCE VERROUILLE » n'est pas apparu après E-STOP.**
-C'est un écart connu (§13.5) : il est effacé aussitôt. La pastille **Securite**
-`quick_stop` et **Etat** `stopping` rouge suffisent.
+**Le bandeau rouge « ARRET D'URGENCE VERROUILLE » reste affiché alors que la machine
+est arrêtée.**
+C'est voulu (§13.5) : il reste tant que le verdict est verrouillé et disparaît après
+l'acquittement (§13.6). Pour savoir si la machine est arrêtée, lisez **Rotation** et
+**Vitesse mesuree**.
 
 **La fréquence cardiaque disparaît quand ça tourne vite (simulation).**
 Constaté à 27 tr/min : le signal ECG simulé devient `noisy`. Sur la vraie machine, le
@@ -1393,9 +1409,10 @@ Jamais en même temps que la console sur le même câble.
 Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous
 demande de **déclarer** qu'il a été tiré.
 
-**L'onglet du navigateur s'appelle « Console du banc - AnHeart » et la page
-« Tableau de bord ».**
-C'est la même chose.
+**L'onglet du navigateur change de nom.**
+Il porte le nom de la page affichée : `Tableau de bord - AnHeart`,
+`Securite - AnHeart`, etc. « Console du banc », dans la barre latérale, est le nom de
+la console.
 
 ## 16. Ce qui n'est pas testé sur la vraie machine
 
@@ -1410,7 +1427,8 @@ Pour être clair sur ce que ce guide garantit :
   une vraie image.
 * **Personne à bord** : refusée par configuration (jalon M6). La séance programmée n'a
   été conduite qu'en simulation, avec un passager simulé.
-* **Bouton « Demarrer la seance »** : corrigé après les captures, non rejoué dans la page.
+* **Bouton « Demarrer la seance »** : corrigé ; il apparaît actif sur la capture
+  `console-18`, reprise depuis, mais le clic n'a pas été rejoué dans la page.
 * **Démarrage sur le Pi** (§3.4) : tiré de la configuration et du fichier
   `scripts/anheart.service`, non rejoué ; le service n'a pas été installé ni activé
   pour ce guide.
@@ -1452,3 +1470,9 @@ Pour être clair sur ce que ce guide garantit :
 Pour les captures, la console a été lancée par un petit script hors dépôt qui appelle
 `src.local_panel.main()` sans rien modifier et permet d'injecter, dans le **simulateur**
 seulement, un défaut variateur, une déconnexion du BITalino ou une intrusion caméra.
+
+Les captures `console-01` à `console-06` et `console-12` à `console-18` ont été
+reprises le 5 octobre 2026, après les corrections d'affichage de la page, en rejouant
+les mêmes procédures en simulation, sur le port 8124 : leur barre latérale affiche
+`127.0.0.1:8124`. Les autres, plus anciennes, affichent `127.0.0.1:8731`, le port de
+la commande du §3.2.
