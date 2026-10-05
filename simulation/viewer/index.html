@@ -138,8 +138,17 @@ function ingest(obj) {
 }
 function loadText(text, label) {
   reset();
-  for (const line of text.split("\n")) { if (line.trim()) ingest(JSON.parse(line)); }
-  $("source").textContent = label;
+  const warnings = [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1].trim()) { lines.pop(); warnings.push("truncated"); }
+  for (const line of lines) {
+    if (line.trim()) {
+      const value = JSON.parse(line);
+      if (value.type === "warning") warnings.push(value.file + ": " + value.code);
+      else ingest(value);
+    }
+  }
+  $("source").textContent = label + (warnings.length ? " — " + warnings.join(", ") : "");
   afterLoad();
 }
 function afterLoad() {
@@ -342,8 +351,13 @@ function startLive(name, speed) {
   if (q.get("speed")) $("speed").value = q.get("speed");
   if (q.get("live")) startLive(q.get("live"), q.get("speed") || "20");
   else if (q.get("trace")) {
-    const url = q.get("trace").startsWith("/") ? q.get("trace") : "../" + q.get("trace");
-    try { loadText(await (await fetch(url)).text(), q.get("trace")); } catch (err) { $("source").textContent = "trace illisible: " + err; }
+    const trace = q.get("trace");
+    const url = trace.endsWith(".jsonl") ? (trace.startsWith("/") ? trace : "../" + trace) : "/api/record?path=" + encodeURIComponent(trace);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      loadText(await response.text(), trace);
+    } catch (err) { $("source").textContent = "trace illisible: " + err; }
   }
 })();
 </script>

@@ -250,3 +250,15 @@ def test_branch_coverage_is_enabled() -> None:
     """Line coverage alone would miss an untested `if` with no else."""
     run = _table(_load_pyproject(), "tool", "coverage", "run")
     assert run.get("branch") is True
+
+
+def test_record_contract_rejects_unknown_events_clock_mixups_and_unhandled_errors(
+    tmp_path: Path,
+) -> None:
+    fixture = PROJECT_ROOT / "tests" / "typing_fixtures" / "record_contract.py"
+    target = tmp_path / "record_contract.py"
+    target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    checked = _run_mypy(target)
+    assert checked.returncode != 0
+    for rejected_type in ("EventKind", "Monotonic", "Err[RecordError]"):
+        assert rejected_type in checked.stdout
