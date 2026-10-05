@@ -149,10 +149,11 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 > arrêt passe par l'opérateur, par la machine elle-même, ou par une demande
 > faite sur le site web.
 
-> **Un arrêt commandé par le logiciel n'est jamais instantané.** Le bras
-> ralentit progressivement, puis s'arrête. Il tourne encore pendant ce
-> ralentissement. Il arrive aussi que la machine garde d'abord sa vitesse un
-> moment avant de ralentir.
+> **Un arrêt commandé par le logiciel n'est jamais instantané.** En
+> fonctionnement normal, le bras ralentit progressivement, puis s'arrête. Il
+> tourne encore pendant ce ralentissement. Il arrive aussi que la machine
+> garde sa vitesse au lieu de ralentir : l'opérateur dispose alors de son
+> arrêt d'urgence.
 
 > **Un bras arrêté peut repartir.** Pendant la séance, la machine peut ralentir
 > jusqu'à l'arrêt, puis repartir d'elle-même, par exemple quand votre
@@ -173,14 +174,14 @@ l'étape « Récupération ».
 il appuie sur son bouton d'arrêt normal. En temps normal, la machine termine
 la séance en douceur : elle passe encore par le retour au calme et la
 récupération. Si la machine est en train de garder sa vitesse pour une raison
-de sécurité, cet arrêt normal ne ralentit pas le bras tout de suite :
-l'opérateur utilise alors son arrêt d'urgence.
+de sécurité, cet arrêt normal ne ralentit pas le bras tant qu'elle la garde :
+l'opérateur dispose alors de son arrêt d'urgence.
 
 **3. Quelqu'un demande l'arrêt depuis le site web.** Le gestionnaire, un
-administrateur, ou vous-même depuis votre compte. La machine prend cette
-demande en compte en quelques secondes, puis réagit comme pour un arrêt
-normal, avec la même limite. Cela ne fonctionne que si la machine est reliée à
-Internet. Ce n'est pas un arrêt d'urgence.
+administrateur, ou vous-même depuis votre compte. En temps normal, la machine
+prend cette demande en compte en quelques secondes, puis réagit comme pour un
+arrêt normal, avec la même limite. Cela ne fonctionne que si la machine est
+reliée à Internet. Ce n'est pas un arrêt d'urgence.
 
 **4. La machine décide seule.** Elle se surveille en permanence. Selon le cas,
 elle garde sa vitesse, elle ralentit (parfois jusqu'à l'arrêt, sans terminer
@@ -197,14 +198,16 @@ arrêt d'urgence. Par exemple :
 
 **5. L'opérateur déclenche un arrêt d'urgence.** Il dispose d'un bouton d'arrêt
 d'urgence sur son écran. La machine doit aussi avoir un arrêt d'urgence
-câblé : le logiciel demande à l'opérateur de l'attester, par son nom, avant
-toute séance. Le logiciel ne voit pas cet arrêt câblé et ne peut pas vérifier
-qu'il existe.
+câblé : le logiciel refuse toute séance tant que quelqu'un n'a pas attesté,
+par son nom, que cet arrêt est câblé. Cette attestation est à refaire chaque
+fois que le logiciel de la machine redémarre. Le logiciel ne voit pas cet
+arrêt câblé et ne peut pas vérifier qu'il existe.
 
-Une fois la séance terminée, rien ne repart tout seul. Après un arrêt
-d'urgence, ou un arrêt de sécurité qui a mis fin à la séance, l'opérateur doit
-comprendre ce qui s'est passé et le confirmer par son nom avant toute nouvelle
-séance.
+Une séance terminée ne reprend pas d'elle-même : il faut un nouveau démarrage,
+à l'écran de l'opérateur ou depuis le site web. Après un arrêt d'urgence, ou
+un arrêt de sécurité qui a mis fin à la séance, le logiciel refuse tout
+nouveau démarrage tant que quelqu'un ne l'a pas confirmé par son nom, à
+l'écran de l'opérateur.
 
 > **À compléter par Anheart avant la semaine pilote :** ce que fait exactement
 > l'arrêt d'urgence câblé de la machine, et ce que vous ressentirez.
@@ -264,7 +267,9 @@ d'essai, machine simulée. Les valeurs des programmes sont des valeurs d'essai.*
 
 > **Ne lancez jamais une séance sans opérateur.** Le site ne voit pas la
 > machine. Avant tout lancement, l'opérateur doit être à côté de la machine et
-> vous devez être installé.
+> vous devez être installé. La machine peut prendre votre demande
+> d'elle-même, sans aucune action de l'opérateur à son écran. Une demande
+> laissée en attente n'expire pas : la machine peut la prendre plus tard.
 
 > **À compléter par Anheart avant la semaine pilote :** si les passagers sont
 > autorisés à lancer eux-mêmes leur séance pendant le pilote, et à quelles

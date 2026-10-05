@@ -246,8 +246,10 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
   ([section 4.2](#42-renseigner-la-physiologie)).
 - **Un opérateur est à côté de la machine, console prête, et le pratiquant est
   installé.** Le site ne voit pas la machine. La machine prend votre demande
-  en quelques secondes, puis met le bras en rotation d'elle-même : dès votre
-  clic, plus personne ne doit s'approcher du bras ni de la capsule.
+  d'elle-même, sans aucune action de l'opérateur à la console : en quelques
+  secondes en temps normal, plus tard si elle n'était pas joignable. Si elle
+  accepte le départ, elle met ensuite le bras en rotation d'elle-même. Dès
+  votre clic, plus personne ne doit s'approcher du bras ni de la capsule.
 
 > **À compléter par Anheart avant la semaine pilote :** les programmes validés
 > pour votre établissement, et pour quels patients. Les valeurs des programmes
@@ -256,7 +258,9 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
 
 > **À compléter par Anheart avant la semaine pilote :** l'organisation prévue
 > entre vous et l'opérateur avant un lancement à distance (qui prévient qui,
-> et à quel moment).
+> et à quel moment), et la façon dont Anheart garantit que personne ne lance
+> une séance depuis le site tant que quelqu'un se trouve près du bras ou de la
+> capsule.
 
 ### Lancer
 
@@ -317,14 +321,17 @@ récentes**.
 
 Le bandeau « En attente que la machine arme la séance… » veut dire que la
 machine n'a pas encore pris votre demande. En temps normal, cela dure quelques
-secondes : la machine interroge le site toutes les 3 secondes environ.
+secondes : au repos, la machine interroge le site toutes les 3 secondes
+environ.
 
-Si le bandeau reste affiché, la machine ne prend pas votre demande. Annulez la
-séance ([section 8](#8-arrêter-ou-annuler-une-séance)), puis voyez avec
-l'opérateur.
+Si le bandeau reste affiché, la machine n'a toujours pas pris votre demande.
+Annulez la séance ([section 8](#8-arrêter-ou-annuler-une-séance)), puis voyez
+avec l'opérateur.
 
-> **Ne laissez jamais une séance en attente.** Elle n'expire pas. Si la machine
-> revient en ligne plus tard, elle la prendra et tentera de démarrer.
+> **Ne laissez jamais une séance en attente.** Elle n'expire pas. Tant qu'elle
+> n'est pas annulée, la machine peut la prendre plus tard, par exemple quand
+> elle redevient joignable, et démarrer sans aucune action à la console,
+> alors que plus personne ne s'y attend.
 
 Il arrive aussi que la machine refuse le départ. La séance passe alors
 **Échouées**, avec un motif qui commence par « refusee par la machine » : voir
@@ -380,7 +387,7 @@ Il reste vide pour une séance d'entraînement. Ignorez-le.
 |---|---|---|
 | Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis ralentit, puis termine la séance. Si la fréquence revient avant, la séance reprend seule. | Prévenez l'opérateur. |
 | « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine ajuste sa vitesse et applique ses règles de sécurité. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
-| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Si la valeur affichée est « freeze », elle garde sa vitesse : une demande d'arrêt envoyée depuis le site ne ralentit pas le bras tant que cette valeur reste affichée. | Prévenez l'opérateur. Lui seul peut déclencher l'arrêt d'urgence. |
+| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Si la valeur affichée est « freeze », elle garde sa vitesse : une demande d'arrêt envoyée depuis le site ne ralentit pas le bras tant que cette valeur reste affichée. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
 | Les nombres remplacés par des tirets, plus de nouveaux points | La machine n'envoie plus rien : liaison Internet coupée, ou machine arrêtée. Le site ne peut plus rien lui demander. | Téléphonez à l'opérateur. |
 
 ## 8. Arrêter ou annuler une séance
@@ -417,7 +424,8 @@ Ensuite :
 
 - le bandeau « Arrêt demandé, décélération en cours… » s'affiche et le bouton
   devient grisé ;
-- **le bras tourne encore** : regardez **Vitesse du bras**, pas le bandeau ;
+- **le bras peut tourner encore** : regardez **Vitesse du bras**, pas le
+  bandeau ;
 - quand la machine confirme l'arrêt, le bandeau devient « Séance terminée ».
 
 > **Ce bouton n'est pas un arrêt d'urgence.** C'est une demande. La machine la
