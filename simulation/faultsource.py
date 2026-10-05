@@ -127,5 +127,5 @@ def _hum(batch: SampleBatch, index: int) -> SampleBatch:
             )
             for i, value in enumerate(data.values)
         ]
-        channels.append(ChannelData(channel=data.channel, values=hummed))
+        channels.append(ChannelData(channel=data.channel, values=[float(round(v)) for v in hummed]))
     return replace(batch, channels=channels)

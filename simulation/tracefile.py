@@ -1,9 +1,8 @@
 """What one scenario run leaves behind: the per-tick trace, the drive frames, the events.
 
-Written as JSON Lines (one ``meta`` line, then one line per ``row``, ``frame``
-and ``event``, then one ``final`` line) so a 45-minute run streams to disk and
-can be tailed, and as a CSV of the rows for a spreadsheet. The 2D viewer reads
-the JSONL directly.
+The primary export is the shared schema-2 directory from ``src.record``.
+JSON Lines (``meta``, ``row``, ``frame``, ``event``, ``final``) remains an
+explicit schema-1 compatibility export; CSV uses the same shared columns.
 
 Every number that leaves this module is finite: :func:`finite` refuses NaN and
 infinity rather than writing ``NaN`` into a file a browser will then parse.
@@ -11,107 +10,52 @@ infinity rather than writing ``NaN`` into a file a browser will then parse.
 
 from __future__ import annotations
 
-import csv
-import json
-import math
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, assert_never, override
 
 from simulation.recording import Frame
+from src.clock import ManualClock
+from src.record.codec import Privacy, encode
+from src.record.ecg import decode_block
+from src.record.rows import JsonScalar, JsonValue, Row, finite
+from src.record.schema import EndObservation, Event, EventKind, Manifest, RecordError
+from src.record.writer import DEFAULT_PRIVACY, FRAME, TICK_COLUMNS, Writer, csv_line, tick_line
+from src.result import Err, Ok, Result
+from src.sensors.base import SensorReading
+from src.units import UnixMillis
 
-type JsonScalar = str | int | float | bool | None
-type JsonValue = JsonScalar | Sequence[JsonValue] | Mapping[str, JsonValue]
-
-SCHEMA: Final[int] = 1
-
-
-def finite(value: float) -> float:
-    """``value`` if it is finite; raises ``ValueError`` otherwise (never written as NaN)."""
-    if not math.isfinite(value):
-        raise ValueError(f"non-finite value {value} in a trace")
-    return value
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Row:
-    """One control tick, as observed. ``t`` is seconds since the session start command."""
-
-    t: float
-    state: str
-    mode: str
-    phase: str
-    drive_state: str
-    sim_state: str
-    setpoint_motor_rpm: int
-    lfrd_motor_rpm: int
-    """The speed reference as the drive holds it (``SimulatedDrive.commanded_setpoint``)."""
-
-    measured_motor_rpm: int
-    measured_fresh: bool
-    output_rpm: float
-    hertz: float
-    g_reference: float
-    g_leg_tip: float
-    setpoint_output_rpm: float
-    setpoint_g_leg_tip: float
-    manual_target_motor_rpm: int
-    hr_true: int | None
-    hr_live: int | None
-    target_bpm: int | None
-    safety_action: str
-    safety_rule: str | None
-    output_enabled: bool
-    silent: bool
-    current_a: float | None
-
-    def to_json(self) -> Mapping[str, JsonValue]:
-        return {
-            "type": "row",
-            "t": round(finite(self.t), 3),
-            "state": self.state,
-            "mode": self.mode,
-            "phase": self.phase,
-            "drive_state": self.drive_state,
-            "sim_state": self.sim_state,
-            "setpoint_motor_rpm": self.setpoint_motor_rpm,
-            "lfrd_motor_rpm": self.lfrd_motor_rpm,
-            "measured_motor_rpm": self.measured_motor_rpm,
-            "measured_fresh": self.measured_fresh,
-            "output_rpm": _num(self.output_rpm),
-            "hertz": _num(self.hertz),
-            "g_reference": _num(self.g_reference),
-            "g_leg_tip": _num(self.g_leg_tip),
-            "setpoint_output_rpm": _num(self.setpoint_output_rpm),
-            "setpoint_g_leg_tip": _num(self.setpoint_g_leg_tip),
-            "manual_target_motor_rpm": self.manual_target_motor_rpm,
-            "hr_true": self.hr_true,
-            "hr_live": self.hr_live,
-            "target_bpm": self.target_bpm,
-            "safety_action": self.safety_action,
-            "safety_rule": self.safety_rule,
-            "output_enabled": self.output_enabled,
-            "silent": self.silent,
-            "current_a": None if self.current_a is None else _num(self.current_a),
-        }
+SCHEMA: Final[int] = 2
+__all__ = [
+    "Event",
+    "FinalState",
+    "JsonScalar",
+    "JsonValue",
+    "Row",
+    "Trace",
+    "finite",
+    "frame_to_json",
+]
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Event:
-    """Something that happened at an instant: an action, a refusal, a verdict, a phase."""
+@dataclass(frozen=True, slots=True)
+class RecordingWriteError(RuntimeError):
+    error: RecordError
 
-    t: float
-    kind: str
-    detail: str
+    @override
+    def __str__(self) -> str:
+        return f"record {self.error.operation}: {self.error.detail}"
 
-    def to_json(self) -> Mapping[str, JsonValue]:
-        return {
-            "type": "event",
-            "t": round(finite(self.t), 3),
-            "kind": self.kind,
-            "detail": self.detail,
-        }
+
+def _required[T](result: Result[T, RecordError]) -> T:
+    match result:
+        case Ok(value):
+            return value
+        case Err(error):
+            raise RecordingWriteError(error)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -149,19 +93,22 @@ class FinalState:
         }
 
 
-def _num(value: float) -> float:
-    return round(finite(value), 4)
-
-
 def frame_to_json(frame: Frame, origin: float) -> Mapping[str, JsonValue]:
     """One drive frame, timed from the session start."""
     return {
         "type": "frame",
         "t": round(finite(frame.at - origin), 3),
         "kind": frame.kind.value,
-        "value": frame.value,
+        "value": tuple(value for _, value in frame.observations)
+        if frame.observations
+        else frame.value,
         "label": frame.label,
         "ok": frame.ok,
+        "register": tuple(register for register, _ in frame.observations)
+        if frame.observations
+        else frame.register,
+        "latency_ms": finite(frame.latency_ms),
+        "raw_hex": frame.raw_hex,
     }
 
 
@@ -174,28 +121,84 @@ class Trace:
     frames: tuple[Mapping[str, JsonValue], ...]
     events: tuple[Event, ...]
     final: FinalState
+    manifest: Manifest
+    ended_at: UnixMillis
+    final_observed_t: float
+    raw: tuple[bytes, ...] = ()
+    sensors: tuple[tuple[float, tuple[SensorReading, ...]], ...] = ()
 
-    def lines(self) -> list[str]:
+    def write_record(self, root: Path, privacy: Privacy) -> Path:
+        writer = _required(Writer.create(root, self.manifest, privacy))
+        for row in self.rows:
+            _required(writer.tick(row))
+        for event in self.events:
+            _required(writer.event(event))
+        for frame in self.frames:
+            payload = {
+                key: frame[key] for key in ("t", "kind", "register", "value", "ok", "latency_ms")
+            }
+            payload["raw_hex"] = frame.get("raw_hex")
+            _required(writer.frame(FRAME.validate_json(encode(payload, privacy))))
+        for block in self.raw:
+            _required(writer.raw(decode_block(block)))
+        for at, readings in self.sensors:
+            _required(writer.sensors(at, readings))
+        _required(
+            writer.event(
+                Event(
+                    t=self.final_observed_t,
+                    kind=EventKind.END,
+                    detail=self.final.end_reason or "simulation_horizon",
+                )
+            )
+        )
+        _required(
+            writer.close(
+                ManualClock(epoch_millis=self.ended_at),
+                self.final.end_reason or "simulation_horizon",
+                EndObservation(
+                    t=self.final_observed_t,
+                    runtime_state=self.final.runtime_state,
+                    drive_state=self.final.sim_state,
+                    runtime_output_enabled=self.final.runtime_output_enabled,
+                    runtime_applied_rpm=self.final.runtime_applied_rpm,
+                    lfrd_motor_rpm=self.final.lfrd_motor_rpm,
+                    shaft_motor_rpm=self.final.shaft_motor_rpm,
+                    energised=self.final.energised,
+                    silent=self.final.silent,
+                    stop_reason=self.final.stop_reason,
+                    shutdown_detail=self.final.shutdown_detail,
+                ),
+            )
+        )
+        return writer.path
+
+    @property
+    def public_meta(self) -> Mapping[str, JsonValue]:
+        return {
+            key: value
+            for key, value in self.meta.items()
+            if key not in {"description", "tags", "profile_id"}
+        }
+
+    def lines(self, privacy: Privacy = DEFAULT_PRIVACY) -> list[str]:
         """The JSONL file, line by line."""
-        out = [json.dumps({"type": "meta", "schema": SCHEMA, **self.meta}, allow_nan=False)]
-        out.extend(json.dumps(row.to_json(), allow_nan=False) for row in self.rows)
-        out.extend(json.dumps(frame, allow_nan=False) for frame in self.frames)
-        out.extend(json.dumps(event.to_json(), allow_nan=False) for event in self.events)
-        out.append(json.dumps(self.final.to_json(), allow_nan=False))
+        out = [encode({"type": "meta", "schema": 1, **self.public_meta}, privacy)]
+        out.extend(encode(row.to_json(), privacy) for row in self.rows)
+        out.extend(encode(frame, privacy) for frame in self.frames)
+        out.extend(encode(event.to_json(), privacy) for event in self.events)
+        out.append(encode(self.final.to_json(), privacy))
         return out
 
-    def write_jsonl(self, path: Path) -> Path:
+    def write_jsonl(self, path: Path, privacy: Privacy = DEFAULT_PRIVACY) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(self.lines()) + "\n", encoding="utf-8")
+        path.write_text("\n".join(self.lines(privacy)) + "\n", encoding="utf-8")
         return path
 
-    def write_csv(self, path: Path) -> Path:
+    def write_csv(self, path: Path, privacy: Privacy = DEFAULT_PRIVACY) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        names = [spec.name for spec in fields(Row)]
         with path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(names)
+            handle.write(csv_line(TICK_COLUMNS))
             for row in self.rows:
-                encoded = row.to_json()
-                writer.writerow(["" if encoded[name] is None else encoded[name] for name in names])
+                handle.write(tick_line(row, privacy))
         return path

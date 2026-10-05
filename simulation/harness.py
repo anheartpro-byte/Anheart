@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, assert_never, final
 
+from simulation.capture import Capture
 from simulation.faultdrive import FaultyDrive
 from simulation.faultsource import FaultySource
 from simulation.recording import RecordingDrive
@@ -72,6 +73,7 @@ from simulation.scenario import (
     TickException,
 )
 from simulation.sensors import DirectSensor
+from simulation.session_record import manifest_for
 from simulation.tracefile import Event, FinalState, Row, Trace, frame_to_json
 from src.bitalino_client import SampleBatch
 from src.clock import Clock, SimClock
@@ -83,7 +85,9 @@ from src.local_panel import (
     describe_target_refusal,
 )
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
+from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
+from src.sensors.base import SensorKind
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.sim.physiology import Physiology, SubjectState
 from src.training.motion import MotionLimits, load_motion_limits
@@ -119,7 +123,7 @@ PREROLL: Final[Seconds] = Seconds(15.0)
 """Idle ticks before the start command: the ECG settles and the idle poll runs,
 as on a console that has been open for a moment before anybody presses start."""
 
-OPERATOR: Final[str] = "sim operator"
+OPERATOR: Final[str] = "sim-operator"
 ORIGIN: Final[Monotonic] = Monotonic(100.0)
 EPOCH: Final[UnixMillis] = UnixMillis(1_700_000_000_000)
 
@@ -420,7 +424,7 @@ class _EcgWiring:
 
 
 def _wire_ecg(
-    scenario: Scenario, rig: RigGeometry, clock: Clock, runtime: TrainingRuntime
+    scenario: Scenario, rig: RigGeometry, clock: Clock, runtime: TrainingRuntime, capture: Capture
 ) -> _EcgWiring:
     """The DIRECT sensor model, or the production path (BITalino sim -> DSP -> bridge)."""
     origin = clock.monotonic()
@@ -447,7 +451,7 @@ def _wire_ecg(
                     config=scenario.subject,
                     script=scenario.events,
                 ),
-                channels=(0,),
+                channels=tuple(kind.channel for kind in capture.hub.kinds),
                 sample_rate=ECG_SAMPLE_RATE,
             )
             if scenario.ecg.connect_fails:
@@ -461,6 +465,7 @@ def _wire_ecg(
                 waveform=_NoWaveform(),
                 sample_rate=ECG_SAMPLE_RATE,
                 treat=_treat_inline,
+                tap=capture.accept,
             )
             return _EcgWiring(sensor=None, bitalino=client, bridge=bridge, source=source)
         case _ as unreachable:
@@ -480,6 +485,7 @@ class Session:
         "_attendant",
         "_bitalino",
         "_bridge",
+        "_capture",
         "_ceiling",
         "_drive",
         "_events",
@@ -491,6 +497,7 @@ class Session:
         "_last_rule",
         "_last_verdict",
         "_latency_until",
+        "_manifest",
         "_messages",
         "_motion",
         "_pending",
@@ -571,7 +578,13 @@ class Session:
         # In DSP mode the client owns a plant of its own; this one is its twin,
         # driven with the same speed at the tick instants, for the truth column.
         self._truth: SubjectState = self._subject.advance(origin, MotorRpm(0))
-        ecg = _wire_ecg(scenario, rig, clock, self._runtime)
+        kinds = (
+            (SensorKind.ECG,)
+            if scenario.profile is None
+            else tuple(SensorKind(channel.value) for channel in scenario.profile.channels)
+        )
+        self._capture: Capture = Capture(clock, kinds)
+        ecg = _wire_ecg(scenario, rig, clock, self._runtime, self._capture)
         self._sensor: DirectSensor | None = ecg.sensor
         self._bitalino: SimulatedBitalinoClient | None = ecg.bitalino
         self._bridge: EcgBridge | None = ecg.bridge
@@ -597,6 +610,7 @@ class Session:
         self._last_phase: str | None = None
         self._last_rule: str | None = None
         self._last_verdict: str | None = None
+        self._manifest: Manifest = manifest_for(scenario, clock, origin, self.meta())
 
     # -- the run ----------------------------------------------------------
 
@@ -608,6 +622,10 @@ class Session:
         for _ in range(round(self._scenario.preroll / TICK)):
             await self._step(await self._ticker.next(), record=False)
         self._start_at = self._ticker.clock.monotonic()
+        self._capture.reset()
+        self._manifest = manifest_for(
+            self._scenario, self._ticker.clock, self._start_at, self.meta()
+        )
         self._preroll_final = abs(int(self._last_measured))
         await self._start()
         alive = True
@@ -621,7 +639,7 @@ class Session:
         if self._shutdown_detail is None and self._runtime.state is not RuntimeState.IDLE:
             report = await self._runtime.shutdown("simulation: console exit at the horizon")
             self._shutdown_detail = report.detail
-            self._event(self._ticker.clock.monotonic(), "shutdown", report.detail)
+            self._event(self._ticker.clock.monotonic(), EventKind.END, report.detail)
             self._message(self._ticker.clock.monotonic(), "shutdown", report.detail)
         await self._teardown()
         return await self._result()
@@ -655,10 +673,10 @@ class Session:
         now = self._ticker.clock.monotonic()
         if isinstance(started, Err):
             self._start_refusal = type(started.error).__name__
-            self._event(now, "start_refused", repr(started.error))
+            self._event(now, EventKind.REFUSAL, repr(started.error))
             self._message(now, "refusal", describe_start_refusal(started.error))
         else:
-            self._event(now, "start", f"{scenario.kind.value} session started")
+            self._event(now, EventKind.OPERATOR_ACTION, f"{scenario.kind.value} session started")
 
     async def _arm(self) -> Result[object, StartRefusal]:
         """The start command, as the console issues it (programme or manual)."""
@@ -689,15 +707,17 @@ class Session:
         if self._attendant:
             self._runtime.note_presence(now)
         await self._feed_ecg(now)
+        if record and self._bridge is not None:
+            await self._capture.refresh()
         self._heal(now)
         self._sim.advance(now)
         try:
             snapshot = await self._runtime.tick(now)
         except Exception as error:  # the console's task failing, recorded
-            self._event(now, "tick_exception", repr(error))
+            self._event(now, EventKind.WARNING, repr(error))
             report = await self._runtime.shutdown("simulation: console task failed")
             self._shutdown_detail = report.detail
-            self._event(now, "shutdown", report.detail)
+            self._event(now, EventKind.END, report.detail)
             self._message(now, "shutdown", report.detail)
             return False
         self._last_measured = snapshot.measured.motor_rpm
@@ -747,6 +767,8 @@ class Session:
         runtime = self._runtime
         sim = self._sim
         detail = type(action).__name__
+        event_kind = EventKind.OPERATOR_ACTION
+        actor = OPERATOR
         match action:
             case ManualTarget(at=at, output_rpm=rpm, expect=expect):
                 result = runtime.set_manual_target(rpm)
@@ -765,11 +787,14 @@ class Session:
             case OperatorStop():
                 runtime.request_stop("operator: stop button")
             case RemoteStop():
+                event_kind = EventKind.REMOTE_COMMAND
+                actor = "remote"
                 runtime.request_stop("remote: end requested off the machine")
             case EmergencyStop():
                 verdict = runtime.request_estop("operator: e-stop")
                 detail = f"e-stop: {verdict.rule} {verdict.action.name}"
             case Acknowledge(estop_released=released):
+                event_kind = EventKind.VERDICT_ACK
                 acknowledged = runtime.acknowledge(OPERATOR, estop_released=released)
                 detail = f"acknowledge: {acknowledged!r}"
             case InjectDriveFault(fault=fault):
@@ -810,8 +835,8 @@ class Session:
             case Shutdown():
                 report = await runtime.shutdown("simulation: SIGTERM")
                 self._shutdown_detail = report.detail
-                self._event(now, "action", detail)
-                self._event(now, "shutdown", report.detail)
+                self._event(now, EventKind.OPERATOR_ACTION, detail)
+                self._event(now, EventKind.END, report.detail)
                 self._message(now, "shutdown", report.detail)
                 return False
             case (
@@ -830,7 +855,7 @@ class Session:
                 detail = await self._apply_injection(now, action)
             case _ as unreachable:
                 assert_never(unreachable)
-        self._event(now, "action", detail)
+        self._event(now, event_kind, detail, actor=actor)
         return True
 
     async def _apply_injection(self, now: Monotonic, action: Injection) -> str:  # noqa: PLR0911, PLR0912  # one arm per action
@@ -924,13 +949,23 @@ class Session:
 
     # -- recording ----------------------------------------------------------
 
-    def _event(self, now: Monotonic, kind: str, detail: str) -> None:
-        self._events.append(Event(t=elapsed(self._start_at, now), kind=kind, detail=detail))
+    def _event(
+        self, now: Monotonic, kind: EventKind, detail: str, *, actor: str = "system"
+    ) -> None:
+        self._events.append(
+            Event(t=elapsed(self._start_at, now), kind=kind, detail=detail, actor=actor)
+        )
 
     def _message(self, now: Monotonic, source: str, text: str) -> None:
         t = elapsed(self._start_at, now)
         self._messages.append(OperatorMessage(t=t, source=source, text=text))
-        self._events.append(Event(t=t, kind="operator", detail=text))
+        kind = {
+            "verdict": EventKind.VERDICT,
+            "fault": EventKind.DRIVE_FAULT,
+            "refusal": EventKind.REFUSAL,
+            "shutdown": EventKind.END,
+        }[source]
+        self._events.append(Event(t=t, kind=kind, detail=text))
 
     def _note_messages(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
         """What the console shows: every new verdict with its sentence, every new drive fault."""
@@ -954,12 +989,12 @@ class Session:
     def _note_changes(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
         phase = snapshot.phase.value
         if phase != self._last_phase:
-            self._event(now, "phase", phase)
+            self._event(now, EventKind.PHASE, phase)
             self._last_phase = phase
         safety = snapshot.safety
         rule = None if safety is None else f"{safety.rule}:{safety.action.name}"
         if rule != self._last_verdict:
-            self._event(now, "verdict", "cleared" if rule is None else rule)
+            self._event(now, EventKind.VERDICT, "cleared" if rule is None else rule)
             self._last_verdict = rule
 
     def _row(self, now: Monotonic, snapshot: TelemetrySnapshot) -> Row:
@@ -996,6 +1031,12 @@ class Session:
             output_enabled=self._runtime.output_enabled,
             silent=self._runtime.silent,
             current_a=None if current is None else float(current),
+            hr_raw=None if snapshot.heart_rate is None else snapshot.heart_rate.bpm,
+            hr_confirmed=snapshot.live_bpm,
+            hr_quality="no_signal"
+            if snapshot.heart_rate is None
+            else snapshot.heart_rate.quality.value,
+            drive_status_word=self._drive.status_word,
         )
 
     # -- the end --------------------------------------------------------------
@@ -1042,6 +1083,11 @@ class Session:
             frames=tuple(frame_to_json(frame, origin) for frame in self._drive.frames),
             events=tuple(self._events),
             final=final,
+            manifest=self._manifest,
+            ended_at=self._ticker.clock.unix_millis(),
+            final_observed_t=elapsed(self._start_at, self._ticker.clock.monotonic()),
+            raw=tuple(self._capture.blocks),
+            sensors=tuple(self._capture.sensors),
         )
         return RunResult(
             scenario=self._scenario,

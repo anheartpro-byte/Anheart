@@ -9,13 +9,15 @@ import urllib.request
 from collections.abc import Iterator
 from http.client import HTTPResponse
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
 import simulation.run as cli
 from simulation import live
 from simulation.scenario import SCENARIO_DIR
-from simulation.tests.conftest import document
+from simulation.tests.conftest import document, run_file
+from src.record.codec import Privacy
 
 FAST = SCENARIO_DIR / "manual_32_rpm_refused.json"
 FAIL = SCENARIO_DIR / "manual_below_min_run_refused.json"
@@ -34,8 +36,8 @@ def test_one_scenario_writes_its_trace_and_passes(
     assert cli.main(["manual_32_rpm_refused", "--csv", "--out", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "all invariants and expectations hold" in out
-    assert (tmp_path / "manual_32_rpm_refused.jsonl").exists()
-    assert (tmp_path / "manual_32_rpm_refused.csv").exists()
+    assert len(list(tmp_path.glob("*/manifest.json"))) == 1
+    assert len(list(tmp_path.glob("*.csv"))) == 1
 
 
 def test_a_failing_scenario_exits_non_zero(
@@ -163,6 +165,25 @@ def test_the_server_lists_the_scenarios(server: str) -> None:
     with _get(server + "/api/scenarios") as response:
         names = json.loads(response.read())  # pyright: ignore[reportAny]
     assert "manual_27_rpm" in names
+
+
+def test_ex11_server_reads_schema2_through_shared_reader(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trace = run_file(FAST).trace
+    directory = trace.write_record(tmp_path, Privacy())
+    monkeypatch.setattr(live, "ROOT", tmp_path)
+    with _get(server + "/api/record?path=" + directory.name) as response:
+        assert response.headers["Content-Type"] == "application/x-ndjson"
+        lines = [document(line) for line in response.read().decode().splitlines()]
+    assert lines[0]["schema"] == 2
+    assert sum(line["type"] == "row" for line in lines) == len(trace.rows)
+
+
+def test_ex11_server_rejects_invalid_record(server: str) -> None:
+    with pytest.raises(HTTPError) as caught:
+        _get(server + "/api/record")
+    assert caught.value.code == 400
 
 
 @pytest.mark.parametrize("query", ["speed=200", "speed=fast", "speed=5&clock=sim"])
