@@ -994,7 +994,7 @@ Les jobs sont parallèles :
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `pi-gate` | gate Pi complète, couverture de branches à 100 % sur la chaîne de sécurité ; `coverage.xml` |
+| `pi-gate` | gate Pi complète, tests répartis sur un processus par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
 | `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
 | `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
@@ -1042,6 +1042,71 @@ squash, le déplacement de ligne et le refus d'une autre valeur, d'un autre
 chemin ou d'un secret voisin ; les autres détecteurs restent actifs.
 Ces faux positifs ne sont pas des secrets réels. Aucun audit n'est désactivé.
 
+### Gate Pi en parallèle (ANH-72)
+
+L'exigence EX-5 d'ANH-72 demande une gate Pi sous 25 minutes en CI. En série,
+le job `pi-gate` prenait 30 min 38 s (run 37330679190 du 5 octobre 2026), dont
+29 min 55 s de pytest : ruff, basedpyright et mypy ne pèsent que 22 s à eux
+trois. Un seul test paramétré,
+`test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic` (67 cas
+d'environ 10 s chacun), représente 39 % de ce temps.
+
+Le job lance toujours `bash raspberry-pi/scripts/check.sh`, et ce script n'a
+pas changé. Seule la variable `PYTEST_ADDOPTS` du job ajoute
+`--numprocesses=logical --dist=worksteal --durations=25` : `pytest-xdist`,
+épinglé dans `raspberry-pi/requirements-dev.txt`, répartit les tests sur un
+processus par CPU logique du runner, soit quatre sur les runners hébergés
+`ubuntu-24.04` (deux cœurs, deux fils chacun). Le journal du job affiche le
+nombre de CPU et le modèle du processeur, puis `created: 4/4 workers`.
+
+Mesuré le 5 octobre 2026 sur le run 37338753428, avec quatre processus :
+13 min 57 s pour `pi-gate`, et de 7 min 19 s à 14 min 06 s sur les exécutions
+de mesure. L'écart vient du processeur attribué au runner, qui change d'un job
+à l'autre : AMD EPYC 9V45 pour la plus rapide, AMD EPYC 7763 pour la plus
+lente. Les 25 tests les plus lents sont listés à la fin de chaque journal
+(`--durations=25`) : c'est là qu'il faut regarder si la durée dérive.
+
+Ce qui reste garanti à l'identique :
+
+* chaque test collecté s'exécute une fois et une seule : 3296 tests collectés,
+  3294 passés et 2 ignorés sous Linux (les deux tests pyobjc réservés à macOS),
+  comme en série ; aucun filtre, marqueur ou désélection n'est ajouté ;
+* chaque processus mesure sa propre couverture, `pytest-cov` combine toutes
+  les mesures, puis applique `--cov-fail-under=100` au total combiné (10675
+  instructions, 2396 branches) ;
+* ruff, basedpyright et mypy tournent avant pytest avec la même configuration,
+  et `check.sh` échoue dès qu'une seule étape échoue ;
+* les réglages Hypothesis ne changent pas : même profil `ci`, même nombre
+  d'exemples par test.
+
+Le vol de travail (`--dist=worksteal`) est nécessaire. Les 67 cas lourds se
+suivent dans l'ordre de collecte : avec la répartition par défaut ils restent
+dans la file d'un ou deux processus pendant que les autres attendent (mesuré
+sur le même run : trois processus sur quatre sans travail pendant 6 min 42 s à
+9 min 29 s, et 15 min 09 s au total). Avec le vol de travail, un processus
+sans travail reprend la moitié de la file du plus chargé.
+
+Trois règles gardent la gate stable ; les enfreindre la fait échouer, jamais
+passer à tort :
+
+* **identifiants stables.** L'identifiant d'un cas paramétré ne doit contenir
+  ni adresse mémoire (`ids=str` sur une lambda) ni ordre dépendant du hachage.
+  Sinon les processus ne collectent pas les mêmes identifiants et `pytest-xdist`
+  refuse de démarrer (`Different tests were collected`) ;
+* **isolement.** Fichiers sous `tmp_path`, aucun chemin ni port fixe partagé
+  entre deux tests, aucun état laissé au test suivant : l'ordre et le
+  regroupement des tests ne sont plus ceux de la série ;
+* **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
+  les CPU du runner sont occupés pendant toute la durée des tests.
+
+En local, `check.sh` et `check.ps1` restent en série par défaut. Pour
+reproduire le job avec ses quatre processus, dans un venv à jour de
+`requirements-dev.txt` :
+
+```sh
+PYTEST_ADDOPTS='--numprocesses=4 --dist=worksteal' bash raspberry-pi/scripts/check.sh
+```
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
@@ -1058,6 +1123,10 @@ courant est requis (`agent-review/R1`), selon la décision utilisateur du
 5 octobre 2026. Les autres checks restent obligatoires, sans contournement
 administrateur. La PR ANH-71 avait deux avis : son historique de revue reste
 inchangé. Un check d'agent n'est pas une approbation humaine fictive.
+
+Un test de la gate Pi qui échoue en parallèle et passe en série révèle un
+défaut d'isolement ou une borne de temps trop serrée : le signaler et le
+corriger, ne pas relancer jusqu'au vert.
 
 ### Régression ECG du navigateur (ANH-71)
 
