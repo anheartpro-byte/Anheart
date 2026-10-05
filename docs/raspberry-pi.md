@@ -42,8 +42,8 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 
 | Commande | Programme | Rôle | État |
 |---|---|---|---|
-| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | code complet et testé en simulation ; lancé à la main |
-| `python -m src.main` | l'**ancien enregistreur ECG** | lit le BITalino et envoie l'ECG à Convex ; ne touche jamais le moteur | c'est lui que lancent le `Dockerfile` (`CMD ["python", "-m", "src.main"]`) et `scripts/anheart.service` |
+| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | entrée du `Dockerfile` et de `scripts/anheart.service`, également lançable à la main |
+| `python -m src.main` | l'**ancien enregistreur ECG** | lit le BITalino et envoie l'ECG à Convex ; ne touche jamais le moteur | entrée distincte, lancée explicitement |
 
 Les deux lisent `raspberry-pi/.env`, mais pas les mêmes clés (voir
 [section 12](#12-la-configuration-env)). La console charge le fichier
@@ -682,7 +682,7 @@ sort avec le code 2.
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
 | `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` obligatoire |
-| `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` met 8090 |
+| `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
 | `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
@@ -694,7 +694,6 @@ sort avec le code 2.
 | `MACHINE_API_KEY` | vide | clé de la machine sur le tableau de bord ; vide = pas de lien | - |
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
 | `MOTION_LIMITS_PATH` | `config/motion_limits.json` | limites anti-nausée (relatif à `raspberry-pi/`) | fichier illisible = la console refuse de démarrer |
-| `SESSIONS_PATH` | `config/sessions.default.json` | **lue mais inutilisée** : aucun code ne s'en sert et le fichier n'existe pas | - |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
 par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale
@@ -708,7 +707,7 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 .venv/bin/python -m src.local_
 ```
 
 Sans fichier `.env`, la page écoute sur `http://127.0.0.1:8080/` (défaut du
-code). Ajouter `UI_PORT=8090` pour retrouver le port de `.env.example`. Si une
+code et `.env.example`). `UI_PORT` permet de choisir un autre port. Si une
 des trois clés manque, la console affiche une ligne `configuration: CLE: raison`
 par clé fautive et sort avec le code 2.
 
@@ -767,7 +766,7 @@ régulation.
 Depuis `raspberry-pi/` :
 
 ```bash
-bash scripts/check.sh
+./scripts/check.sh
 ```
 
 Elle enchaîne, en continuant même après un échec :
@@ -780,9 +779,8 @@ Elle enchaîne, en continuant même après un échec :
 .venv/bin/python -m pytest --cov --cov-branch --cov-fail-under=100
 ```
 
-et affiche `GATE PASSED` ou `GATE FAILED: <étapes>`. Le skill et le script
-disent `./scripts/check.sh`, mais le fichier n'est **pas exécutable** dans le
-dépôt (`permission denied`) : utiliser `bash scripts/check.sh`. Les tests
+et affiche `GATE PASSED` ou `GATE FAILED: <étapes>`. Le script est suivi avec
+le mode exécutable `100755` ; `bash scripts/check.sh` reste possible. Les tests
 marqués `hardware` (BITalino ou ATV320 branché) sont exclus par défaut
 (`-m 'not hardware'`). `pytest --co -q` collecte **3187 tests**.
 
