@@ -18,10 +18,12 @@ both.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 import src.config
+import src.motor.drive_process_lock
 
 #: Every environment variable the client reads. Listed explicitly rather than
 #: pattern-matched, so adding a config knob without adding it here shows up as
@@ -38,6 +40,11 @@ ANHEART_ENV_VARS: tuple[str, ...] = (
     "LOG_LEVEL",
     "BUFFER_DB_PATH",
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_drive_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(src.motor.drive_process_lock, "LOCK_PATH", tmp_path / "drive.lock")
 
 
 @pytest.fixture(autouse=True)

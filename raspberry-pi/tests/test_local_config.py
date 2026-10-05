@@ -18,7 +18,6 @@ from src.local_config import (
     BENCH_CONSOLE_PORT,
     DEFAULT_MOTION_LIMITS_PATH,
     DEFAULT_MOTOR_MAX_RPM,
-    DEFAULT_SESSIONS_PATH,
     DEFAULT_TIERS,
     CardiacTiers,
     CloudConfig,
@@ -110,7 +109,6 @@ def test_the_bench_env_loads_as_documented() -> None:
     assert config.web.host == "127.0.0.1"
     assert config.web.token is None
     assert config.motion_limits_path == DEFAULT_MOTION_LIMITS_PATH
-    assert config.sessions_path == DEFAULT_SESSIONS_PATH
 
 
 def test_the_simulation_env_needs_no_hardware_key() -> None:
@@ -133,13 +131,11 @@ def test_paths_and_a_token_can_be_set() -> None:
         _with(
             SIM_ENV,
             MOTION_LIMITS_PATH="/etc/anheart/motion.json",
-            SESSIONS_PATH="s.json",
             UI_HOST="0.0.0.0",  # noqa: S104  # the refusal path is the next test's
             UI_TOKEN="a-sixteen-char-token",  # noqa: S106  # a test value
         )
     )
     assert config.motion_limits_path == Path("/etc/anheart/motion.json")
-    assert config.sessions_path == Path("s.json")
     assert config.web.token == "a-sixteen-char-token"  # noqa: S105  # a test value
 
 

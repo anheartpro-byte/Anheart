@@ -72,10 +72,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Annotated, Literal, assert_never, override
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import uvicorn
-from drive_link import (
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from scripts.drive_link import (
     BuiltDrive,
-    DriveLink,
     add_link_arguments,
     arg_int,
     arg_text,
@@ -83,11 +87,9 @@ from drive_link import (
     describe_error,
     link_from_args,
 )
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
-
 from src.clock import RealClock
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
+from src.local_config import DriveLink
 from src.motor.drive import ControlWord, DriveState, DriveStatus, decode_speed
 from src.result import Err, Ok
 from src.units import Metres, Monotonic, MotorRpm, elapsed
