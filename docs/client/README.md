@@ -19,15 +19,18 @@ logiciel.
 
 ## Comment lire ces guides
 
-- Les textes en **gras** sont des boutons, des pages ou des cartes, tels qu'ils
-  s'affichent.
+- Les textes en **gras** sont le plus souvent des boutons, des pages ou des
+  cartes, tels qu'ils s'affichent. Le gras sert aussi à signaler un
+  avertissement.
 - Les textes entre « guillemets » sont des messages ou des valeurs affichés à
   l'écran, recopiés sans changement. La console de la machine écrit sans
   accents : les guides la citent telle quelle.
 - Un encadré qui commence par « À compléter par Anheart avant la semaine
   pilote » signale une information dont le lecteur a besoin et qui n'est pas
   encore validée. Les guides ne donnent aucune consigne médicale, aucun numéro
-  de téléphone et aucun délai tant que ces informations ne sont pas fournies.
+  de téléphone et aucun délai de support tant que ces informations ne sont pas
+  fournies. Les seuls nombres cités sont ceux que le logiciel applique
+  lui-même.
 - Les captures d'écran viennent d'essais en simulation. En cas d'écart,
   l'écran fait foi.
 
