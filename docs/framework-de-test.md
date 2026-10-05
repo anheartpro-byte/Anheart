@@ -1053,10 +1053,11 @@ ouvrir `report.html` et retrouver le scénario par son identifiant. Une entrée
 
 Reproduire avec la commande du job, corriger, puis pousser un nouveau commit.
 **Re-run failed jobs** convient seulement à une panne de runner/réseau : il ne
-change pas le code. Le SHA des deux avis indépendants doit être celui que la PR
-va fusionner. `agent-review/R1` et `agent-review/R2` représentent ces deux agents
-sous le même compte GitHub, selon la décision utilisateur du 3 octobre 2026 ;
-ils ne représentent pas deux approbations de personnes distinctes.
+change pas le code. Pour les nouvelles PR, un avis indépendant lié au SHA
+courant est requis (`agent-review/R1`), selon la décision utilisateur du
+5 octobre 2026. Les autres checks restent obligatoires, sans contournement
+administrateur. La PR ANH-71 avait deux avis : son historique de revue reste
+inchangé. Un check d'agent n'est pas une approbation humaine fictive.
 
 ### Régression ECG du navigateur (ANH-71)
 
