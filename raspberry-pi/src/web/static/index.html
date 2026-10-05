@@ -35,7 +35,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Console du banc - AnHeart</title>
+  <!-- The page shown on load; app.js retitles the tab on every navigation. -->
+  <title>Tableau de bord - AnHeart</title>
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
@@ -44,10 +45,22 @@
   The disconnection banner. Fixed, loud, and at the very top of the document
   so it is the first thing painted: a frozen dashboard that still looks live is
   the failure that hurts, so losing the socket has to be impossible to miss.
+
+  The emergency-stop banner under it is a separate element on purpose. Each
+  banner is shown and hidden by one check only: a notice written into the
+  other's element is gone at that one's next refresh. It stays for as long as
+  the stop is latched, so it is kept short, and it says "latched", never
+  "stopped".
 -->
-<div id="banner" class="banner hidden" role="alert" aria-live="assertive">
-  <strong>NO LIVE DATA</strong>
-  <span id="banner-detail">la liaison avec la machine est coupee</span>
+<div id="banners" class="banners">
+  <div id="banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>NO LIVE DATA</strong>
+    <span id="banner-detail">la liaison avec la machine est coupee</span>
+  </div>
+  <div id="estop-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>ARRET D'URGENCE VERROUILLE</strong>
+    <span>surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete</span>
+  </div>
 </div>
 
 <!-- Narrow screens only: the sidebar folds away behind this bar. -->
@@ -264,6 +277,14 @@
         </label>
         <button id="preview" class="btn" type="button">Previsualiser</button>
         <button id="start" class="btn btn-go" type="button">Demarrer la seance</button>
+        <!--
+          Two notes for two facts: what this console allows, and what the last
+          click answered. Sharing one element let the periodic refresh of the
+          first overwrite the second.
+        -->
+        <p id="programs-note" class="note hidden">
+          seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL
+        </p>
         <p id="start-note" class="note"></p>
       </div>
 

@@ -59,6 +59,7 @@ var state = {
   programsEnabled: true, // from /api/panel; false until milestone M5
   panel: null,           // the last /api/panel answer
   status: null,          // the last /api/status answer
+  estopReceipt: null,    // this page's own E-STOP, until a snapshot taken after it arrives
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
@@ -233,6 +234,8 @@ function showView(name, kind) {
   if (name === "sensor") {
     state.sensorKind = kind || state.sensorKind;
   }
+  // The tab is named after the page shown, by the label of its entry in the navigation.
+  document.title = (name === "sensor" ? state.sensorKind : el("nav-" + name).textContent) + " - AnHeart";
   VIEWS.forEach(function (view) {
     show(el("view-" + view), view === name);
   });
@@ -300,12 +303,54 @@ function refreshLiveness() {
   } else {
     pill(el("link-state"), state.connected ? "donnees figees" : "hors ligne", "bad");
   }
+  var phase = state.snapshot ? shownPhase(state.snapshot) : "";
   text(
     el("footer-status"),
     (state.connected ? "liaison ouverte" : "liaison coupee") +
-      (state.snapshot ? " · " + state.snapshot.mode + " · " + state.snapshot.phase : "")
+      (state.snapshot ? " · " + state.snapshot.mode : "") +
+      (phase ? " · " + phase : "")
   );
   refreshSensorStaleness();
+}
+
+/*
+  A latched emergency stop has its own banner, for as long as it is latched.
+  It is decided here and nowhere else, from what the machine reports:
+
+  - the standing verdict of the latest snapshot, five times a second, whoever
+    latched the stop: this page, another screen, the camera or a rule;
+  - /api/status while go_silent stands. It outranks an emergency stop and
+    takes its place as the standing verdict, so the snapshot cannot show one
+    latched behind it;
+  - the receipt of this page's own E-STOP, until a snapshot taken after the
+    latch arrives: the banner neither waits for a frame nor drops on one that
+    was already on its way.
+
+  It says "latched", never "stopped": the measured speed alone speaks about
+  the shaft. When frames stop it keeps the last known answer, under the
+  NO LIVE DATA banner.
+*/
+function renderEstopBanner() {
+  var snapshot = state.snapshot;
+  var standing = snapshot ? snapshot.safety : null;
+  var receipt = state.estopReceipt;
+  if (receipt && snapshot && snapshot.at >= receipt.at) {
+    receipt = state.estopReceipt = null;
+  }
+  var latched = Boolean(standing && standing.latched && standing.action === "quick_stop");
+  var behind = Boolean(
+    standing && standing.action === "go_silent" && state.status && estopLatched(state.status)
+  );
+  show(el("estop-banner"), latched || behind || Boolean(receipt));
+}
+
+/*
+  The banners take room at the top of the page, and the emergency-stop one
+  stays for as long as a stop is latched. The stylesheet starts the sidebar
+  and the mobile bar under them, at --banners-h: this keeps that height current.
+*/
+function fitBanners() {
+  document.documentElement.style.setProperty("--banners-h", el("banners").offsetHeight + "px");
 }
 
 /* ------------------------------------------------------------- websocket  */
@@ -397,22 +442,48 @@ function safetyKind(rank) {
   return rank >= 3 ? "bad" : rank >= 1 ? "warn" : "good";
 }
 
+/*
+  The grade of the heart rate, or "perime" once the reading is stale. The
+  grade belongs to the last sample: when nothing new is measured it would go
+  on saying "good" about a signal that is no longer there.
+*/
+function renderHrQuality(node, hr) {
+  if (!hr) {
+    pill(node, "pas de signal", "bad");
+  } else if (hr.stale) {
+    pill(node, "perime", "bad");
+  } else {
+    pill(node, hr.quality, hr.quality === "good" ? "good" : "bad");
+  }
+}
+
+/*
+  The phase to print, or "" at rest. With no session the runtime reports its
+  idle value, "done": printed as is, it reads as a programme that has just
+  ended, on a machine that may never have run one.
+*/
+function shownPhase(snapshot) {
+  return snapshot.mode === "repos" && snapshot.phase === "done" ? "" : snapshot.phase;
+}
+
+/** One line for a drive fault. `message` is not added: it repeats all three. */
+function faultText(fault) {
+  return "DEFAUT " + fault.mnemonic + " (LFT brut " + fault.raw_code + ") : " + fault.meaning;
+}
+
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
   renderMode(snapshot);
   renderConsole(snapshot);
   renderManual(snapshot);
+  renderEstopBanner();
 
   /* --- heart rate, with its age carried alongside --------------------- */
   var hr = snapshot.heart_rate;
   var bpm = snapshot.live_bpm;
   text(el("hr"), bpm === null || bpm === undefined ? "-" : String(bpm));
   el("hr").classList.toggle("stale", !hr || hr.stale || bpm === null || bpm === undefined);
-  if (hr) {
-    pill(el("hr-quality"), hr.quality, hr.quality === "good" ? "good" : "bad");
-  } else {
-    pill(el("hr-quality"), "pas de signal", "bad");
-  }
+  renderHrQuality(el("hr-quality"), hr);
   grid(el("hr-grid"), [
     ["cible", snapshot.target_bpm === null ? "-" : snapshot.target_bpm + " bpm"],
     ["age", hr ? num(hr.age_s, 1) + " s" : "-", hr && hr.stale ? "stale" : ""],
@@ -424,7 +495,8 @@ function renderSnapshot(snapshot) {
   renderZoneBand(bpm);
 
   /* --- phase and progress --------------------------------------------- */
-  pill(el("phase"), snapshot.phase, snapshot.phase === "done" ? "warn" : "");
+  var phase = shownPhase(snapshot);
+  pill(el("phase"), phase || "-", phase === "done" ? "warn" : "");
   var elapsed = snapshot.elapsed_s || 0;
   var remaining = snapshot.remaining_s || 0;
   var total = elapsed + remaining;
@@ -470,11 +542,7 @@ function renderSnapshot(snapshot) {
   var fault = el("fault");
   show(fault, Boolean(snapshot.fault));
   if (snapshot.fault) {
-    text(
-      fault,
-      "DEFAUT " + snapshot.fault.mnemonic + " (" + snapshot.fault.raw_code + ") : " +
-        snapshot.fault.meaning + " : " + snapshot.fault.message
-    );
+    text(fault, faultText(snapshot.fault));
   }
 
   /* --- safety: on the Securite page, the Seance page and the sidebar --- */
@@ -506,11 +574,7 @@ function renderConsole(snapshot) {
   var bpm = snapshot.live_bpm;
   text(el("console-hr"), bpm === null || bpm === undefined ? "-" : String(bpm));
   el("console-hr").classList.toggle("stale", !hr || hr.stale || bpm === null || bpm === undefined);
-  if (hr) {
-    pill(el("console-hr-quality"), hr.quality, hr.quality === "good" ? "good" : "bad");
-  } else {
-    pill(el("console-hr-quality"), "pas de signal", "bad");
-  }
+  renderHrQuality(el("console-hr-quality"), hr);
   grid(el("console-hr-grid"), [
     ["age", hr ? num(hr.age_s, 1) + " s" : "-", hr && hr.stale ? "stale" : ""],
     ["brut", hr && hr.bpm !== null ? hr.bpm + " bpm" : "-"],
@@ -531,11 +595,7 @@ function renderConsole(snapshot) {
   var fault = el("console-fault");
   show(fault, Boolean(snapshot.fault));
   if (snapshot.fault) {
-    text(
-      fault,
-      "DEFAUT " + snapshot.fault.mnemonic + " (LFT brut " + snapshot.fault.raw_code + ") : " +
-        snapshot.fault.meaning + " : " + snapshot.fault.message
-    );
+    text(fault, faultText(snapshot.fault));
   }
   show(el("fault-reset"), Boolean(snapshot.fault) && state.motionEnabled);
   renderDriveGrid();
@@ -571,6 +631,7 @@ function renderPanel(panel) {
   state.programsEnabled = panel.programs_enabled;
   pill(el("console-mode"), panel.motion_enabled ? "mouvement actif" : "LECTURE SEULE", panel.motion_enabled ? "warn" : "good");
   show(el("console-readonly"), !panel.motion_enabled);
+  show(el("programs-note"), !panel.programs_enabled);
   el("start").disabled = el("start").disabled || !panel.motion_enabled || !panel.programs_enabled;
   el("manual-start").disabled = !panel.motion_enabled;
   el("manual-step-up").disabled = panel.radius_m === null;
@@ -1420,9 +1481,23 @@ function loadCamera() {
     });
 }
 
+/*
+  Whether the emergency-stop latch is set, from /api/status. `estop_latched`
+  is the interface's own flag: it stays false for a stop the camera latched,
+  although that is the same latch and its acknowledgement demands the same
+  "mushroom released" confirmation. The standing verdict names the latch
+  whoever set it.
+*/
+function estopLatched(status) {
+  var standing = status.standing;
+  return status.estop_latched ||
+    Boolean(standing && standing.latched && standing.rule === "operator_estop");
+}
+
 function loadStatus() {
   return api("/api/status").then(function (status) {
     state.status = status;
+    renderEstopBanner();
     pill(
       el("run-state"),
       status.run_state,
@@ -1450,11 +1525,9 @@ function loadStatus() {
     }
     el("start").disabled =
       !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
-    if (!state.programsEnabled) {
-      ok(el("start-note"), "seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL");
-    }
+    var estop = estopLatched(status);
     grid(el("verdicts-grid"), [
-      ["e-stop verrouille", status.estop_latched ? "OUI" : "non", status.estop_latched ? "flag-bad" : ""],
+      ["e-stop verrouille", estop ? "OUI" : "non", estop ? "flag-bad" : ""],
       ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
       ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
       ["regles actives", String(status.live.length)],
@@ -1470,7 +1543,7 @@ function loadStatus() {
     });
     grid(el("system-grid"), [
       ["etat", status.run_state],
-      ["e-stop verrouille", status.estop_latched ? "OUI" : "non"],
+      ["e-stop verrouille", estop ? "OUI" : "non"],
       ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
       ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
       ["regles actives", String(status.live.length)],
@@ -1679,12 +1752,8 @@ function doEstop() {
     body: { operator: operatorName(), reason: "operator pressed E-STOP" },
   })
     .then(function (receipt) {
-      text(
-        el("banner-detail"),
-        "ARRET D'URGENCE VERROUILLE (" + receipt.action + ") - surveillez la vitesse MESUREE : " +
-          "la machine decelere, elle n'est pas arretee"
-      );
-      show(el("banner"), true);
+      state.estopReceipt = receipt;
+      renderEstopBanner();
       loadStatus();
     })
     .catch(function (error) {
@@ -1811,6 +1880,10 @@ function start() {
   el("fault-reset").onclick = doFaultReset;
   window.addEventListener("resize", markAllDirty);
   document.querySelector("main").addEventListener("click", closeNav);
+  if (window.ResizeObserver) {
+    // Fires when a banner is shown, hidden or re-wrapped, and only then.
+    new window.ResizeObserver(fitBanners).observe(el("banners"));
+  }
 
   showView("console");
   boot();
