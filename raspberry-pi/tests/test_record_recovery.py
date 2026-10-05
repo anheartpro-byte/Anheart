@@ -1,3 +1,4 @@
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from src.record.ecg import Header, RawBlock
 from src.record.reader import read
 from src.record.schema import Event, EventKind
 from src.result import Err, Ok
+from tests.record_service_support import private_writer
 from tests.record_support import writer
 
 
@@ -47,13 +49,14 @@ def test_ex9_unknown_event_kind_is_rejected_by_shared_reader(tmp_path: Path) -> 
 def test_ex8_failed_manifest_publish_preserves_the_open_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recording = writer(tmp_path)
+    recording = private_writer(tmp_path)
     original = (recording.path / "manifest.json").read_bytes()
 
-    def failed_replace(_source: Path, _target: Path) -> Path:
+    def failed_replace(_source: str, _target: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+        assert src_dir_fd == dst_dir_fd
         raise OSError("synthetic publish failure")
 
-    monkeypatch.setattr(Path, "replace", failed_replace)
+    monkeypatch.setattr(os, "replace", failed_replace)
     assert isinstance(recording.close(ManualClock(), "done"), Err)
     assert (recording.path / "manifest.json").read_bytes() == original
     assert not (recording.path / "checksums.sha256").exists()
