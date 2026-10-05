@@ -127,26 +127,42 @@ def pump(index: int, stream: TextIO) -> None:
 
 
 def start(index: int, count: int, evidence: Path) -> Running:
+    """Start one pytest process on its share of the suite.
+
+    The tests must see the environment this runner was started with, as they
+    do under the serial gate: whatever is added here is inherited by every
+    process a test starts. (``PYTHONUNBUFFERED``, once set here to get the
+    output sooner, made a worker started by a test write ``OPEN`` and its
+    newline in two system calls, and the test that read them failed.) So the
+    plugin is told its share on the command line, and the two variables pytest
+    cannot be started without are handed to it, with the value they had here,
+    to be put back before the first ``conftest.py`` is imported.
+    """
     coverage_directory = evidence / f"coverage-{index}"
     coverage_directory.mkdir()
     inherited = os.environ.get("PYTHONPATH")
-    search_path = (
-        str(PLUGIN_DIRECTORY) if not inherited else f"{PLUGIN_DIRECTORY}{os.pathsep}{inherited}"
-    )
-    environment = {
-        **os.environ,
-        "PYTHONPATH": search_path,
-        "PYTHONUNBUFFERED": "1",
-        "PI_GATE_SHARE": f"{index}/{count}",
-        "PI_GATE_EVIDENCE": str(evidence),
+    needed_to_start = {
+        # For ``-p pi_gate_shard`` to be importable.
+        "PYTHONPATH": (
+            str(PLUGIN_DIRECTORY) if not inherited else f"{PLUGIN_DIRECTORY}{os.pathsep}{inherited}"
+        ),
+        # Read once by pytest-cov when it starts measuring: this process's own file.
         "COVERAGE_FILE": str(coverage_directory / ".coverage"),
     }
-    # Each share must not judge its own, partial, coverage: the threshold is
-    # applied once, to the combined data, by combined_coverage() below.
+    put_back = [
+        f"--pi-gate-restore={name}={os.environ[name]}"
+        if name in os.environ
+        else f"--pi-gate-restore={name}"
+        for name in needed_to_start
+    ]
     # No cache provider: several processes would overwrite one .pytest_cache,
     # and nothing in the gate reads it (no --lf, no test uses the cache).
     command = [sys.executable, "-m", "pytest", "-p", PLUGIN, "-p", "no:cacheprovider"]
+    command += [f"--pi-gate-share={index}/{count}", f"--pi-gate-evidence={evidence}", *put_back]
+    # Each share must not judge its own, partial, coverage: the threshold is
+    # applied once, to the combined data, by combined_coverage() below.
     command += ["--cov", "--cov-branch", "--cov-fail-under=0", "--cov-report="]
+    environment = {**os.environ, **needed_to_start}
     process = subprocess.Popen(  # noqa: S603  # fixed argv, no shell
         command,
         env=environment,

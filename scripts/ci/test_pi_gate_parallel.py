@@ -11,6 +11,8 @@ real suite. Three kinds of test:
   that dies while the interpreter shuts down, a process that never exits, a
   process that leaves no record or no usable coverage data, and test ids that
   differ between processes;
+* the environment and the import path the tests run with, which must be those
+  of the serial gate;
 * the runner being told to stop.
 
 Several of the throwaway scenarios are built so that ONE check is all that
@@ -21,6 +23,7 @@ has complete coverage and passing tests.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -33,7 +36,14 @@ from typing import Final
 import pytest
 from coverage import CoverageData
 from pi_gate_parallel import check_partition, merge_coverage, read_lines
-from pi_gate_shard import SAME_PROCESS, Share, parse_share
+from pi_gate_shard import (
+    SAME_PROCESS,
+    Share,
+    given,
+    parse_share,
+    restore_environment,
+    restore_import_path,
+)
 
 RUNNER: Final[Path] = Path(__file__).with_name("pi_gate_parallel.py")
 RUN_TIMEOUT_S: Final[float] = 300.0
@@ -68,15 +78,33 @@ PROJECT: Final[Mapping[str, str]] = {
     },
 }
 
-ONLY_IN_PROCESS_ONE: Final[str] = 'import os\n\nif os.environ["PI_GATE_SHARE"].startswith("1/"):\n'
-
-HOOK_IN_PROCESS_ONE: Final[str] = (
-    "import os\nfrom pathlib import Path\n\nimport pytest\n\n\n"
-    "{decorator}def {hook}() -> None:\n"
-    '    if os.environ["PI_GATE_SHARE"].startswith("1/"):\n'
-    "        {body}\n"
+WHICH_PROCESS: Final[str] = (
+    "import os\nimport sys\nfrom pathlib import Path\n\n\n"
+    "def option(name: str) -> str:\n"
+    '    given = [a.partition("=")[2] for a in sys.argv if a.startswith(f"--pi-gate-{name}=")]\n'
+    '    return given[0] if given else ""\n\n\n'
+    'SHARE = option("share")\n'
+    'IN_PROCESS_ONE = SHARE.startswith("1/")\n'
+    'COVERAGE_DATA = Path(option("evidence"), "coverage-1", ".coverage")\n\n'
 )
-"""A conftest whose one hook misbehaves in process 1 only."""
+"""The start of a throwaway conftest: which process it is in, read from the
+command line, since the runner leaves nothing about itself in the environment."""
+
+ONLY_IN_PROCESS_ONE: Final[str] = WHICH_PROCESS + "if IN_PROCESS_ONE:\n"
+
+RECORD_SURROUNDINGS: Final[str] = (
+    "import json\n" + WHICH_PROCESS + "\n"
+    "def surroundings() -> dict[str, object]:\n"
+    '    return {"environment": dict(os.environ), "import path": list(sys.path)}\n\n\n'
+    "AT_IMPORT = surroundings()\n\n\n"
+    "def pytest_collection_finish() -> None:\n"
+    '    seen = {"at conftest import": AT_IMPORT, "before the tests": surroundings()}\n'
+    '    name = SHARE.partition("/")[0] or "serial"\n'
+    '    Path(f"surroundings-{name}.json").write_text(json.dumps(seen))\n'
+)
+"""A conftest that writes down what code sees around it: the environment and
+the import path, when the conftest is imported and when the tests are about to
+start."""
 
 SLOW_TESTS: Final[str] = (
     "import os\nimport time\nfrom pathlib import Path\n\n\n"
@@ -101,13 +129,7 @@ def project(tmp_path: Path) -> Path:
 
 def clean_environment() -> Mapping[str, str]:
     """Our environment without what would leak this run into the throwaway one."""
-    inherited = (
-        "PYTEST_ADDOPTS",
-        "PYTHONPATH",
-        "COVERAGE_FILE",
-        "PI_GATE_SHARE",
-        "PI_GATE_EVIDENCE",
-    )
+    inherited = ("PYTEST_ADDOPTS", "PYTHONPATH", "COVERAGE_FILE")
     return {name: value for name, value in os.environ.items() if name not in inherited}
 
 
@@ -116,12 +138,14 @@ def gate_command(exit_grace: float) -> Sequence[str]:
     return [*command, "--exit-grace", str(exit_grace)]
 
 
-def run_gate(project: Path, *, exit_grace: float = 60.0) -> subprocess.CompletedProcess[str]:
+def run_gate(
+    project: Path, *, exit_grace: float = 60.0, environment: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the real runner, two processes, against the throwaway project."""
     return subprocess.run(  # noqa: S603  # fixed argv, no shell
         gate_command(exit_grace),
         cwd=project,
-        env=clean_environment(),
+        env=clean_environment() if environment is None else environment,
         capture_output=True,
         text=True,
         check=False,
@@ -130,10 +154,14 @@ def run_gate(project: Path, *, exit_grace: float = 60.0) -> subprocess.Completed
 
 
 def misbehave_in_process_one(project: Path, hook: str, body: str, *, first: bool = False) -> None:
+    """Write a conftest whose one hook misbehaves, in process 1 only."""
     decorator = "@pytest.hookimpl(tryfirst=True)\n" if first else ""
-    (project / "tests/conftest.py").write_text(
-        HOOK_IN_PROCESS_ONE.format(decorator=decorator, hook=hook, body=body), encoding="utf-8"
+    conftest = (
+        WHICH_PROCESS
+        + "import pytest\n\n\n"
+        + f"{decorator}def {hook}() -> None:\n    if IN_PROCESS_ONE:\n        {body}\n"
     )
+    (project / "tests/conftest.py").write_text(conftest, encoding="utf-8")
 
 
 def remove_the_only_test_of_the_negative_branch(project: Path) -> None:
@@ -384,6 +412,8 @@ def test_a_process_that_never_exits_is_killed_and_fails_the_gate(project: Path) 
     assert "[gate] process 0 ended: exit code 0" in result.stdout
     assert "[gate] partition proven" in result.stdout
     assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+    summaries = [line for line in result.stdout.splitlines() if line.startswith("[p1] ==")]
+    assert any("2 passed" in line for line in summaries), "the stuck process's summary was lost"
 
 
 def test_a_process_that_leaves_no_record_fails_the_gate(project: Path) -> None:
@@ -399,9 +429,7 @@ def test_a_process_that_leaves_no_record_fails_the_gate(project: Path) -> None:
 
 def test_a_process_whose_coverage_data_is_gone_fails_the_gate(project: Path) -> None:
     """Process 0 covers everything on its own, so the threshold alone would pass."""
-    misbehave_in_process_one(
-        project, "pytest_unconfigure", 'Path(os.environ["COVERAGE_FILE"]).unlink()'
-    )
+    misbehave_in_process_one(project, "pytest_unconfigure", "COVERAGE_DATA.unlink()")
     result = run_gate(project)
     assert result.returncode == 1
     assert "process 1 left no coverage data" in result.stdout
@@ -412,9 +440,7 @@ def test_a_process_whose_coverage_data_is_gone_fails_the_gate(project: Path) -> 
 
 def test_a_process_whose_coverage_data_is_unreadable_fails_the_gate(project: Path) -> None:
     """Same as above, with a file that is there but is not coverage data."""
-    misbehave_in_process_one(
-        project, "pytest_unconfigure", 'Path(os.environ["COVERAGE_FILE"]).write_bytes(b"junk")'
-    )
+    misbehave_in_process_one(project, "pytest_unconfigure", 'COVERAGE_DATA.write_bytes(b"junk")')
     result = run_gate(project)
     assert result.returncode == 1
     assert "process 1 left unusable coverage data" in result.stdout
@@ -441,6 +467,81 @@ def test_a_pinned_test_that_disappeared_fails_the_gate(project: Path) -> None:
     result = run_gate(project)
     assert result.returncode == 1
     assert "no longer collected" in result.stdout
+
+
+# --- The environment the tests run in --------------------------------------
+
+
+def recorded(path: Path) -> object:
+    """What one process wrote down. Untyped JSON, kept as ``object``: only compared."""
+    surroundings: object = json.loads(path.read_text(encoding="utf-8"))  # pyright: ignore[reportAny]
+    return surroundings
+
+
+@pytest.mark.parametrize("already_set", [False, True], ids=["variables-unset", "variables-set"])
+def test_the_tests_run_in_the_surroundings_of_the_serial_gate(
+    project: Path, tmp_path_factory: pytest.TempPathFactory, *, already_set: bool
+) -> None:
+    """Whatever the runner changes around the tests, their children inherit.
+
+    A variable set for the runner's convenience once made a worker started by a
+    test write its ready line in two system calls instead of one, and the test
+    reading it failed. So the claim is exact: in every process, from the first
+    conftest on, the environment and the import path are the ones a plain
+    serial pytest gets, entry for entry. It is checked both when the runner
+    has to add its two variables and when it has to replace values of ours.
+    """
+    (project / "tests/conftest.py").write_text(RECORD_SURROUNDINGS, encoding="utf-8")
+    environment = dict(clean_environment())
+    if already_set:
+        elsewhere = tmp_path_factory.mktemp("elsewhere")
+        environment["PYTHONPATH"] = str(elsewhere)
+        environment["COVERAGE_FILE"] = str(elsewhere / "coverage = of ours")
+    serial = subprocess.run(
+        [sys.executable, "-m", "pytest", "--cov", "--cov-branch", "-p", "no:cacheprovider"],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=RUN_TIMEOUT_S,
+    )
+    assert serial.returncode == 0, serial.stdout + serial.stderr
+
+    result = run_gate(project, environment=environment)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = recorded(project / "surroundings-serial.json")
+    assert recorded(project / "surroundings-0.json") == expected
+    assert recorded(project / "surroundings-1.json") == expected
+
+
+def test_variables_are_put_back_and_only_those(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WAS_SET", "by the runner")
+    monkeypatch.setenv("WAS_ADDED", "by the runner")
+    monkeypatch.setenv("UNTOUCHED", "stays")
+    restore_environment(["WAS_SET=before=with an equals sign", "WAS_ADDED", "NEVER_THERE"])
+    assert os.environ["WAS_SET"] == "before=with an equals sign"
+    assert "WAS_ADDED" not in os.environ
+    assert "NEVER_THERE" not in os.environ
+    assert os.environ["UNTOUCHED"] == "stays"
+
+
+def test_the_plugin_directory_leaves_the_import_path_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    here = str(Path(__file__).resolve().parent)
+    monkeypatch.setattr(sys, "path", ["first", here, "between", here, "last"])
+    restore_import_path()
+    assert sys.path == ["first", "between", here, "last"]
+    monkeypatch.setattr(sys, "path", ["first", "last"])
+    restore_import_path()
+    assert sys.path == ["first", "last"]
+
+
+def test_only_the_options_asked_for_are_read() -> None:
+    arguments = ["-p", "x", "--pi-gate-restore=A=1", "--pi-gate-share=0/2", "--pi-gate-restore=B"]
+    assert given(arguments, "--pi-gate-restore") == ["A=1", "B"]
+    assert given(arguments, "--pi-gate-share") == ["0/2"]
+    assert given(arguments, "--pi-gate-evidence") == []
 
 
 # --- Being told to stop ----------------------------------------------------

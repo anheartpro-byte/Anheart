@@ -1104,7 +1104,9 @@ qu'un test en échec, un trou dans la couverture (avec ou sans mesure périmée
 dans le dossier), un processus tué à l'arrêt de l'interpréteur, un processus
 qui ne s'arrête pas, un processus sans enregistrement ou sans mesure
 utilisable et des identifiants différents d'un processus à l'autre font bien
-échouer la gate. Dans les deux modes, `check.sh` soumet aussi le lanceur, son
+échouer la gate. Ils vérifient aussi que les tests voient le même
+environnement et le même chemin d'import qu'en série (voir plus bas). Dans les
+deux modes, `check.sh` soumet aussi le lanceur, son
 greffon et leurs tests aux quatre vérificateurs statiques du Pi, avec les
 règles de `raspberry-pi/pyproject.toml` (`scripts/ci/pyproject.toml` ne fait
 qu'y renvoyer) ; le fichier de tests reçoit les exemptions de
@@ -1113,9 +1115,35 @@ qu'y renvoyer) ; le fichier de tests reçoit les exemptions de
 Ce qui reste identique à la gate en série : les tests collectés (aucun filtre
 ni marqueur n'est ajouté ; dans le résumé de chaque processus, `deselected`
 compte les tests confiés aux autres processus), la mesure de branches, le
-seuil, ruff, basedpyright et mypy avant les tests, les réglages Hypothesis. Ce
-qui diffère : l'ordre et le voisinage des tests dans chaque processus, et
-l'occupation de tous les CPU pendant les tests.
+seuil, ruff, basedpyright et mypy avant les tests, les réglages Hypothesis,
+les variables d'environnement et le chemin d'import vus par les tests. Ce qui
+diffère : l'ordre et le voisinage des tests dans chaque processus,
+l'occupation de tous les CPU pendant les tests, la ligne de commande de
+pytest, sa sortie (un tube lu par le lanceur, qui préfixe chaque ligne par
+`[p0]` à `[p3]`) et l'absence de `.pytest_cache`, que plusieurs processus
+écraseraient et qu'aucun test ne lit.
+
+**Le lanceur ne laisse rien dans l'environnement des tests.** Une variable
+ajoutée à un processus pytest est héritée par tout processus qu'un test
+démarre, et peut en changer le comportement. La première version exportait
+`PYTHONUNBUFFERED=1` pour afficher la sortie plus tôt. Avec cette variable,
+`print("OPEN", flush=True)` écrit `OPEN` puis le saut de ligne en deux appels
+système au lieu d'un : les tests de verrou du variateur (ANH-74), qui lisent
+la ligne `OPEN` de leur processus auxiliaire en une seule lecture, ont échoué
+6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis,
+le lanceur transmet ses réglages au greffon par des options de ligne de
+commande (`--pi-gate-share`, `--pi-gate-evidence`). Il ne peut pas démarrer
+pytest sans deux variables : `PYTHONPATH`, pour que le greffon soit trouvé, et
+`COVERAGE_FILE`, lu une fois par pytest-cov au démarrage de la mesure. Le
+greffon leur rend la valeur qu'elles avaient, ou les retire, et retire son
+dossier de `sys.path`, avant l'import du premier `conftest.py`. La sortie
+reste lisible au fil de l'eau : pytest la vide lui-même après chaque test.
+Une conséquence à connaître : la couverture n'est mesurée que dans les
+processus pytest, comme aujourd'hui en série. Si la mesure des sous-processus
+était activée un jour (`patch = ["subprocess"]` dans la configuration de
+coverage), leurs mesures ne rejoindraient pas le total du lanceur : la gate
+échouerait par manque de couverture, sans jamais passer à tort, et le lanceur
+serait à adapter.
 
 Deux limites à connaître :
 

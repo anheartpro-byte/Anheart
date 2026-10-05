@@ -13,11 +13,21 @@ selection made here:
 * ``executed-<k>.txt``: every test this process ran to the end, with its
   verdict. It is written when the session finishes, so its presence also says
   "the tests are over, only interpreter exit is left".
+
+The tests must run in the environment the gate was started with, not in one
+the runner altered: a variable added for the runner's convenience is inherited
+by every process a test starts and can change what that process does. So the
+runner talks to this plugin through command-line options, and what it cannot
+avoid changing to start pytest is put back before the first ``conftest.py``
+is imported, so before any test module too: the two variables ``PYTHONPATH``
+(to find this module) and ``COVERAGE_FILE`` (read once by pytest-cov when it
+starts measuring), and the entry ``PYTHONPATH`` added to ``sys.path``.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,11 +35,14 @@ from typing import Final
 
 import pytest
 
-ENV_SHARE: Final[str] = "PI_GATE_SHARE"
+OPTION_SHARE: Final[str] = "--pi-gate-share"
 """``<index>/<count>``, zero-based: which share of the suite this process runs."""
 
-ENV_EVIDENCE: Final[str] = "PI_GATE_EVIDENCE"
+OPTION_EVIDENCE: Final[str] = "--pi-gate-evidence"
 """Directory the two evidence files are written to."""
+
+OPTION_RESTORE: Final[str] = "--pi-gate-restore"
+"""``NAME=value`` or ``NAME``: a variable to put back as the runner found it."""
 
 SAME_PROCESS: Final[frozenset[str]] = frozenset(
     {
@@ -83,11 +96,44 @@ def parse_share(text: str, evidence: str) -> Share:
     """Read ``<index>/<count>``; anything else is a usage error, never a guess."""
     index_text, separator, count_text = text.partition("/")
     if separator != "/" or not index_text.isdecimal() or not count_text.isdecimal():
-        raise pytest.UsageError(f"{ENV_SHARE} must look like 0/4, got {text!r}")
+        raise pytest.UsageError(f"{OPTION_SHARE} must look like 0/4, got {text!r}")
     index, count = int(index_text), int(count_text)
     if count < 1 or index >= count:
-        raise pytest.UsageError(f"{ENV_SHARE}={text!r} names no share of the suite")
+        raise pytest.UsageError(f"{OPTION_SHARE}={text!r} names no share of the suite")
     return Share(index=index, count=count, evidence=Path(evidence))
+
+
+def given(arguments: Sequence[str], option: str) -> Sequence[str]:
+    """Every value passed for ``option``, which the runner writes ``--option=value``."""
+    prefix = f"{option}="
+    return [argument[len(prefix) :] for argument in arguments if argument.startswith(prefix)]
+
+
+def restore_environment(assignments: Sequence[str]) -> None:
+    """Put back the variables the runner had to set to start this process.
+
+    ``NAME=value`` restores a value, ``NAME`` alone removes the variable. From
+    here on the tests, and every process they start, see the environment the
+    gate itself was started with, exactly as under the serial gate.
+    """
+    for assignment in assignments:
+        name, has_value, value = assignment.partition("=")
+        if has_value:
+            os.environ[name] = value
+        else:
+            os.environ.pop(name, None)
+
+
+def restore_import_path() -> None:
+    """Take this module's directory back out of ``sys.path``.
+
+    ``PYTHONPATH`` put it there so that ``-p pi_gate_shard`` could be imported.
+    Now that it is, nothing else may be importable from here by a test that
+    could not import it under the serial gate.
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here in sys.path:
+        sys.path.remove(here)
 
 
 def verdict_of(report: pytest.TestReport) -> str | None:
@@ -153,11 +199,42 @@ class ShareRecorder:
         write_lines(self._share.executed_file(), lines)
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("pi-gate", "one share of the Pi suite (set by pi_gate_parallel.py)")
+    group.addoption(OPTION_SHARE, help="<index>/<count>: the share this process runs")
+    group.addoption(OPTION_EVIDENCE, help="directory for the collected and executed lists")
+    group.addoption(
+        OPTION_RESTORE,
+        action="append",
+        help="NAME=value or NAME: an environment variable to put back before the tests",
+    )
+
+
+def pytest_load_initial_conftests(args: list[str]) -> None:
+    """Put the process back as the serial gate would have started it.
+
+    This runs after pytest-cov has started measuring (its own implementation
+    of this hook asks to go first, and it is where it reads ``COVERAGE_FILE``)
+    and before pytest imports the first ``conftest.py`` (its implementation
+    asks to go last). Were that order ever to change, the coverage data would
+    land outside the place the runner looks for it, and the runner would fail
+    the gate: "left no coverage data".
+    """
+    restore_environment(given(args, OPTION_RESTORE))
+    restore_import_path()
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    share = os.environ.get(ENV_SHARE)
-    evidence = os.environ.get(ENV_EVIDENCE)
-    if share is None or evidence is None:
+    # Read from the command line as given, not through getoption(): that keeps
+    # every value a plain string, with no untyped value to narrow.
+    arguments = config.invocation_params.args
+    shares = given(arguments, OPTION_SHARE)
+    evidence = given(arguments, OPTION_EVIDENCE)
+    if len(shares) != 1 or len(evidence) != 1:
         raise pytest.UsageError(
-            f"pi_gate_shard needs {ENV_SHARE} and {ENV_EVIDENCE}: pi_gate_parallel.py starts it"
+            f"pi_gate_shard needs one {OPTION_SHARE}= and one {OPTION_EVIDENCE}=: "
+            "pi_gate_parallel.py starts it"
         )
-    config.pluginmanager.register(ShareRecorder(parse_share(share, evidence)), "pi-gate-share")
+    config.pluginmanager.register(
+        ShareRecorder(parse_share(shares[0], evidence[0])), "pi-gate-share"
+    )
