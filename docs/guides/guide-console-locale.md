@@ -290,9 +290,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 5. **Rotation** (`a l'arret`) : lu sur la vitesse **mesurée**.
 6. **Securite** (`none`) : action de sécurité en cours.
 7. **Console** (`mouvement actif`) : cette console peut commander le moteur.
-8. Ligne `127.0.0.1:8124 boucle locale · sans jeton` : adresse d'écoute et protection.
-   Le port est celui de `UI_PORT` : 8731 avec la commande du §3.2, 8124 le jour où
-   cette capture a été reprise (voir l'annexe).
+8. Ligne `127.0.0.1:8731 boucle locale · sans jeton` : adresse d'écoute et protection.
 9. Navigation : **Tableau de bord**, **Capteurs** (avec un point de couleur par
    capteur, et son canal `A1` à `A6`), **Seance**, **Configuration**, **Securite**.
 10. Pied de page, à gauche : `liaison ouverte · repos` (liaison et mode). Pendant une
@@ -715,7 +713,7 @@ Repères :
 Repères :
 
 1. Pastille verte `atteste`.
-2. Sous le bouton : `atteste par Mohamed a 6:40:07 PM (valable jusqu'au prochain redemarrage du Pi)`.
+2. Sous le bouton : `atteste par Mohamed a 7:23:00 PM (valable jusqu'au prochain redemarrage du Pi)`.
 3. Sous **Acquitter**, en rouge : `nothing is latched to acknowledge` (un essai
    d'acquittement alors que rien n'était verrouillé : sans conséquence).
 
@@ -727,7 +725,7 @@ Repères :
 
 1. Pastille rouge `quick_stop`.
 2. `regle operator_estop`, `detail operator emergency stop: console web: e-stop`,
-   `verrouille oui`, `depuis 27.5 s`.
+   `verrouille oui`, `depuis 27.4 s`.
 3. `e-stop verrouille OUI` (en rouge), `verdict retenu operator_estop / quick_stop`.
 4. Barre latérale : Etat `stopping` **en rouge** alors que Rotation est `a l'arret` et
    Mode `REPOS` : la machine est arrêtée, mais verrouillée.
@@ -992,7 +990,7 @@ E-STOP, pas à pas :
 Repères :
 
 1. Securite `quick_stop` et Etat `stopping` en rouge.
-2. Vitesse mesurée `12.71`, `EN ROTATION` : ça ralentit.
+2. Vitesse mesurée `12.37`, `EN ROTATION` : ça ralentit.
 3. La note de la carte manuelle, `no manual session is running (the machine is stopping)`,
    vient d'un clic sur **Appliquer** pendant l'arrêt : plus aucune cible n'est acceptée.
 4. En haut, le bandeau rouge **ARRET D'URGENCE VERROUILLE**.
@@ -1082,9 +1080,9 @@ vu dans la capsule), une séance **BANC** est refusée :
 Repères :
 
 1. Carte **BITalino** : pastille rouge `deconnecte`, `tentatives` qui monte (la console
-   réessaie toutes les 5 s environ), `dernier lot 14.3 s`, `erreur` :
+   réessaie toutes les 5 s environ), `dernier lot 14.1 s`, `erreur` :
    `connexion au BITalino impossible (sim)`.
-2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,4 s),
+2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,3 s),
    pastille rouge `perime` : la mesure est trop vieille, quelle qu'ait été sa dernière
    qualité.
 3. Barre latérale : les points des six capteurs deviennent creux et gris (périmés).
@@ -1473,6 +1471,4 @@ seulement, un défaut variateur, une déconnexion du BITalino ou une intrusion c
 
 Les captures `console-01` à `console-06` et `console-12` à `console-18` ont été
 reprises le 5 octobre 2026, après les corrections d'affichage de la page, en rejouant
-les mêmes procédures en simulation, sur le port 8124 : leur barre latérale affiche
-`127.0.0.1:8124`. Les autres, plus anciennes, affichent `127.0.0.1:8731`, le port de
-la commande du §3.2.
+les mêmes procédures en simulation.
