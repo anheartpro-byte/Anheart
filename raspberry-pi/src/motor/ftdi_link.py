@@ -68,11 +68,12 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
 from time import sleep as _real_sleep
-from typing import Final, Protocol, final, runtime_checkable
+from typing import Final, Protocol, final, override, runtime_checkable
 
 from pyftdi.ftdi import Ftdi
 from pyftdi.usbtools import UsbTools
 from usb.backend import libusb1
+from usb.core import Device as UsbDevice
 
 from src.clock import Clock
 from src.motor.drive_process_lock import DriveConnection, DriveLease, retry_failed_drive_closes
@@ -510,11 +511,11 @@ def open_ftdi_port(
     """
     retry_failed_drive_closes()
     lease = DriveLease.claim()
-    created = False
+    cleanup_owned = create is None
     try:
         device = open_schneider_device(url, lease) if create is None else create(url)
         cleanup = DriveConnection(lease)
-        created = True
+        cleanup_owned = True
         configured = False
         try:
             configure(device, frame)
@@ -526,7 +527,7 @@ def open_ftdi_port(
                 cleanup.close(device.close)
         return port
     finally:
-        if not created:
+        if not cleanup_owned:
             lease.close()
 
 
@@ -584,6 +585,27 @@ def configure(device: ConfigurableFtdi, frame: UartFrame) -> None:
     device.purge_buffers()
 
 
+class _OwnedFtdi(Ftdi):
+    """Retain acquired USB ownership when vendor close clears it before disposal."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._acquired_usb: UsbDevice | None = None
+
+    @override
+    def open_from_device(self, device: UsbDevice, interface: int = 1) -> None:
+        self._acquired_usb = device
+        super().open_from_device(device, interface)
+
+    @override
+    def close(self, freeze: bool = False) -> None:
+        if self.usb_dev is not None:
+            super().close(freeze)
+        elif self._acquired_usb is not None:
+            UsbTools.release_device(self._acquired_usb)
+        self._acquired_usb = None
+
+
 def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
     """The real opener: vendor ids registered, libusb loaded, chip opened.
 
@@ -598,10 +620,19 @@ def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
     the cache is flushed every time: one enumeration, a few milliseconds.
     """
     lease.require_active()
-    register_schneider_cable()
-    load_libusb_backend()
-    UsbTools.flush_cache()
-    return Ftdi.create_from_url(url)
+    device = _OwnedFtdi()
+    cleanup = DriveConnection(lease)
+    opened = False
+    try:
+        register_schneider_cable()
+        load_libusb_backend()
+        UsbTools.flush_cache()
+        device.open_from_url(url)
+        opened = True
+        return device
+    finally:
+        if not opened:
+            cleanup.close(device.close)
 
 
 def register_schneider_cable() -> None:

@@ -11,6 +11,8 @@ documentation. ``FtdiError`` derives from ``IOError`` (so ``OSError``) there,
 which is what lets the transport treat every pyftdi failure as an ``OSError``.
 """
 
+from usb.core import Device
+
 class FtdiError(OSError): ...
 
 class Ftdi:
@@ -18,6 +20,10 @@ class Ftdi:
     LATENCY_MAX: int
     @classmethod
     def create_from_url(cls, url: str) -> Ftdi: ...
+    def open_from_url(self, url: str) -> None: ...
+    def open_from_device(self, device: Device, interface: int = 1) -> None: ...
+    @property
+    def usb_dev(self) -> Device | None: ...
     @classmethod
     def add_custom_vendor(cls, vid: int, vidname: str = "") -> None: ...
     @classmethod
