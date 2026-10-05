@@ -5,9 +5,10 @@
     python -m simulation.run --list                     # the battery
     python -m simulation.run --all                      # every scenario + out/summary.md
 
-Traces go to ``simulation/out/<scenario>.jsonl`` (git-ignored); open them in
-``simulation/viewer/index.html``. The exit code is 0 only when every invariant
-and every expectation held.
+Recordings go to ``simulation/out/<UTC>_<local_ref>/`` (git-ignored); open
+them with the live viewer's ``?trace=out/<folder>``. The optional CSV uses
+the opaque local reference as its filename. The exit code is 0 only when
+every invariant and every expectation held.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Final
 from simulation.harness import RunResult, run_scenario
 from simulation.invariants import Metrics, Violation, check_expectations, check_invariants, measure
 from simulation.scenario import load_scenario, resolve, scenario_paths
+from src.record.codec import Privacy
 from src.result import Err
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out"
@@ -69,9 +71,9 @@ def run_one(
         raise ValueError(loaded.error.detail)
     result = asyncio.run(run_scenario(loaded.value))
     violations = (*check_invariants(result), *check_expectations(result))
-    result.trace.write_jsonl(out_dir / f"{loaded.value.name}.jsonl")
+    result.trace.write_record(out_dir, Privacy())
     if csv:
-        result.trace.write_csv(out_dir / f"{loaded.value.name}.csv")
+        result.trace.write_csv(out_dir / f"{result.trace.manifest.local_ref}.csv")
     return result, measure(result), violations
 
 
@@ -146,7 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(describe(result, metrics, violations))
     if result.scenario.known_defect is not None:
         print(f"  known defect: {result.scenario.known_defect}")
-    print(f"  trace: {out_dir / (result.scenario.name + '.jsonl')}")
+    print(f"  records: {out_dir}")
     return 0 if status(result, violations).startswith(("PASS", "KNOWN")) else 1
 
 

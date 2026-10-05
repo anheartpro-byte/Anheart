@@ -145,6 +145,11 @@ from src.motor.drive import (
     decode_status_word,
     describe_fault,
 )
+from src.motor.drive_process_lock import (
+    DriveConnection,
+    DriveOwnershipError,
+    retry_failed_drive_closes,
+)
 from src.motor.ftdi_link import (
     USB_STALL_BOUND,
     BufferedFtdiPort,
@@ -156,6 +161,13 @@ from src.motor.ftdi_link import (
     wait_overshoot,
 )
 from src.motor.link_health import LinkHealth
+from src.motor.observation import (
+    Exchange,
+    ExchangeKind,
+    ExchangeLog,
+    ObservableDrive,
+    RegisterRequest,
+)
 from src.result import Err, Ok, Result, err_of
 from src.units import (
     Monotonic,
@@ -465,11 +477,56 @@ def emergency_budget_for(settings: SerialSettings) -> Seconds:
 # =========================================================================
 
 
+class ObservedModbusClient(ModbusSerialClient):
+    _exchange_log: ExchangeLog | None = None
+
+    def observe_exchanges(self, log: ExchangeLog) -> None:
+        self._exchange_log = log
+
+    @override
+    def send(self, request: bytes) -> int:
+        if self._exchange_log is None:
+            return super().send(request)
+        send = super().send
+        return self._exchange_log.send(request, lambda: send(request))
+
+    @override
+    def recv(self, size: int | None) -> bytes:
+        if self._exchange_log is None:
+            return super().recv(size)
+        recv = super().recv
+        return self._exchange_log.receive(lambda: recv(size))
+
+
 @final
-class FtdiModbusClient(ModbusSerialClient):
+class OwnedSerialClient(ObservedModbusClient):
+    def __init__(self, settings: SerialSettings) -> None:
+        self._ownership: DriveConnection = DriveConnection()
+        super().__init__(
+            port=settings.port,
+            framer=FramerType.RTU,
+            baudrate=settings.baudrate,
+            bytesize=settings.bytesize,
+            parity=settings.parity.value,
+            stopbits=settings.stopbits,
+            timeout=settings.timeout,
+            retries=settings.retries,
+        )
+
+    @override
+    def connect(self) -> bool:
+        return self._ownership.connect(super().connect, super().close)
+
+    @override
+    def close(self) -> None:
+        self._ownership.close(super().close)
+
+
+@final
+class FtdiModbusClient(ObservedModbusClient):
     """``ModbusSerialClient`` whose port is :class:`~src.motor.ftdi_link.BufferedFtdiPort`.
 
-    Only :meth:`connect` differs. pymodbus 3.7.4 opens ports with
+    Connect and close also manage failed-open cleanup. pymodbus 3.7.4 opens ports with
     ``serial.serial_for_url``, which for ``ftdi://`` would hand back pyftdi's
     own port, the one whose ``in_waiting`` is always 0. Everything after the
     port is open - framing, CRC, inter-frame silence, the transaction lock,
@@ -496,16 +553,20 @@ class FtdiModbusClient(ModbusSerialClient):
 
     @override
     def connect(self) -> bool:
-        """Open the cable if it is not open. ``False``, never an exception, on failure.
+        """Open the cable if it is not open. Ownership refusal raises explicitly.
 
         Mirrors ``ModbusSerialClient.connect``: pymodbus calls this before every
         transaction and after every failure, and turns ``False`` into
         ``ConnectionException``, which the driver maps to ``CommTimeout``.
         """
-        if self.socket is not None:
-            return True
         try:
+            retry_failed_drive_closes()
+            if self.socket is not None and self.socket.is_open:
+                return True
+            self.socket = None
             port = self._port_opener()
+        except DriveOwnershipError:
+            raise
         except Exception:
             logger.exception("ATV320: could not open %s", self.comm_params.host)
             return False
@@ -518,25 +579,32 @@ class FtdiModbusClient(ModbusSerialClient):
         self.last_frame_end = None
         return True
 
+    @override
+    def close(self) -> None:
+        close_port: Callable[[], None] = super().close
+        close_port()
+        retry_failed_drive_closes()
+
 
 def serial_master(
     settings: SerialSettings,
     clock: Clock,
     *,
     open_device: DeviceFactory | None = None,
+    exchange_log: ExchangeLog | None = None,
 ) -> ModbusMaster:
     """Build the real pymodbus RTU master. The ONE place a client is constructed.
 
     An ``ftdi://`` port gets :class:`FtdiModbusClient`; anything else - a tty,
-    a ``/dev/cu.*``, a ``COM`` port - the stock ``ModbusSerialClient``, whose
-    pyserial port has a working ``in_waiting`` of its own.
+    a ``/dev/cu.*``, a ``COM`` port - an ownership-guarded ``ModbusSerialClient``,
+    whose pyserial port has a working ``in_waiting`` of its own.
 
     Constructing does not touch the hardware - both clients open the port in
     ``connect()`` - so this is safe at startup and testable with a port that
     does not exist. ``open_device`` replaces the USB opener, for tests.
     """
     if is_ftdi_url(settings.port):
-        return FtdiModbusClient(
+        client = FtdiModbusClient(
             settings,
             lambda: open_ftdi_port(
                 settings.port,
@@ -546,16 +614,13 @@ def serial_master(
                 create=open_device,
             ),
         )
-    return ModbusSerialClient(
-        port=settings.port,
-        framer=FramerType.RTU,
-        baudrate=settings.baudrate,
-        bytesize=settings.bytesize,
-        parity=settings.parity.value,
-        stopbits=settings.stopbits,
-        timeout=settings.timeout,
-        retries=settings.retries,
-    )
+        if exchange_log is not None:
+            client.observe_exchanges(exchange_log)
+        return client
+    serial = OwnedSerialClient(settings)
+    if exchange_log is not None:
+        serial.observe_exchanges(exchange_log)
+    return serial
 
 
 # =========================================================================
@@ -677,6 +742,7 @@ class ATV320Drive:
         "_close_error",
         "_closed",
         "_emergency_budget",
+        "_exchange_log",
         "_executor",
         "_health",
         "_lock",
@@ -737,6 +803,7 @@ class ATV320Drive:
                 "or retries - do not leave the emergency stop with a bound that long."
             )
         self._clock: Clock = clock
+        self._exchange_log: ExchangeLog | None = None
         self._master: ModbusMaster = master
         self._settings: SerialSettings = settings
         self._registers: RegisterMap = registers
@@ -1630,31 +1697,92 @@ class ATV320Drive:
         except Exception:
             logger.exception("ATV320: releasing %s failed", self._settings.port)
 
+    def observe_exchanges(self, log: ExchangeLog) -> None:
+        self._exchange_log = log
+        if isinstance(self._master, ObservableDrive):
+            self._master.observe_exchanges(log)
+
+    def _observe_exchange(
+        self,
+        request: RegisterRequest,
+        result: Result[RawRegister | None, DriveError],
+    ) -> None:
+        if self._exchange_log is not None:
+            match result:
+                case Ok(returned):
+                    self._exchange_log.append(
+                        Exchange(
+                            at=request.at,
+                            kind=request.kind,
+                            register=request.register,
+                            value=request.value if returned is None else returned,
+                            ok=True,
+                            latency_ms=(self._clock.monotonic() - request.at) * 1000,
+                            detail="ok",
+                        )
+                    )
+                case Err(error):
+                    self._exchange_log.append(
+                        Exchange(
+                            at=request.at,
+                            kind=request.kind,
+                            register=request.register,
+                            value=request.value,
+                            ok=False,
+                            latency_ms=(self._clock.monotonic() - request.at) * 1000,
+                            detail=type(error).__name__,
+                        )
+                    )
+                case _ as unreachable:
+                    assert_never(unreachable)
+
     def _blocking_read(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
         started = self._clock.monotonic()
+        observed_started = started
         try:
             with self._wire_lock:
                 self._health.note_request()
+                if self._exchange_log is not None:
+                    observed_started = self._clock.monotonic()
                 reply: object = self._master.read_holding_registers(
                     address, count=1, slave=self._settings.slave_address
                 )
         except Exception as exc:
-            return Err(self._classify(exc, started))
-        return self._interpret_read(reply, address, started)
+            result: Result[RawRegister, DriveError] = Err(self._classify(exc, started))
+        else:
+            result = self._interpret_read(reply, address, started)
+        self._observe_exchange(
+            RegisterRequest(
+                at=observed_started, kind=ExchangeKind.READ, register=address, value=None
+            ),
+            result,
+        )
+        return result
 
     def _blocking_write(
         self, address: RegisterAddress, value: RawRegister
     ) -> Result[None, DriveError]:
         started = self._clock.monotonic()
+        observed_started = started
         try:
             with self._wire_lock:
                 self._health.note_request()
+                if self._exchange_log is not None:
+                    observed_started = self._clock.monotonic()
                 reply: object = self._master.write_register(
                     address, value, slave=self._settings.slave_address
                 )
         except Exception as exc:
-            return Err(self._classify(exc, started))
-        return self._interpret_write(reply, address, started)
+            result: Result[None, DriveError] = Err(self._classify(exc, started))
+        else:
+            result = self._interpret_write(reply, address, started)
+        self._observe_exchange(
+            RegisterRequest(
+                at=observed_started, kind=ExchangeKind.WRITE, register=address, value=value
+            ),
+            result,
+        )
+        return result
 
     def _blind_write(
         self, address: RegisterAddress, value: RawRegister, budget: Seconds
@@ -1705,7 +1833,7 @@ class ATV320Drive:
             reply: object = self._master.write_register(
                 address, value, slave=self._settings.slave_address
             )
-        except ConnectionException:
+        except ConnectionException as exc:
             # pymodbus could not get (or keep) the port, so nothing was
             # transmitted. The one outcome that has to escalate.
             logger.exception(
@@ -1715,8 +1843,15 @@ class ATV320Drive:
                 value,
                 address,
             )
+            if self._exchange_log is not None:
+                self._observe_exchange(
+                    RegisterRequest(
+                        at=started, kind=ExchangeKind.WRITE, register=address, value=value
+                    ),
+                    Err(self._classify(exc, started)),
+                )
             return EmergencyStopOutcome.NOTHING_SENT
-        except Exception:
+        except Exception as exc:
             # Anything else: the library was already in the middle of something,
             # so the frame may or may not have gone out. "I do not know" is the
             # only honest answer and is never a dangerous one.
@@ -1726,11 +1861,23 @@ class ATV320Drive:
                 value,
                 address,
             )
+            if self._exchange_log is not None:
+                self._observe_exchange(
+                    RegisterRequest(
+                        at=started, kind=ExchangeKind.WRITE, register=address, value=value
+                    ),
+                    Err(self._classify(exc, started)),
+                )
             return EmergencyStopOutcome.SENT_UNCONFIRMED
         finally:
             if acquired:
                 self._wire_lock.release()
-        if isinstance(self._interpret_write(reply, address, started), Err):
+        result = self._interpret_write(reply, address, started)
+        self._observe_exchange(
+            RegisterRequest(at=started, kind=ExchangeKind.WRITE, register=address, value=value),
+            result,
+        )
+        if isinstance(result, Err):
             logger.error(
                 "ATV320 emergency disable: no usable acknowledgement for the write of "
                 "0x%04X to register %d; it was transmitted but cannot be confirmed",

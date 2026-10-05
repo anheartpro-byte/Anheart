@@ -33,6 +33,7 @@ from typing import Final, override
 from urllib.parse import parse_qs, urlsplit
 
 from simulation.harness import PacedTicker, Session, SleepingTicker
+from simulation.record_view import view_record
 from simulation.scenario import load_scenario, resolve, scenario_paths
 from simulation.tracefile import JsonValue, Row
 from src.clock import SimClock
@@ -113,6 +114,19 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts.path == "/stream":
             self._stream(parse_qs(parts.query))
+            return
+        if parts.path == "/api/record":
+            requested = (parse_qs(parts.query).get("path") or [""])[0]
+            result = view_record(ROOT, requested)
+            if isinstance(result, Err):
+                self.send_error(HTTPStatus.BAD_REQUEST, result.error.detail)
+                return
+            body = result.value.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         super().do_GET()
 

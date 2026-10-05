@@ -44,6 +44,7 @@ from src.motor.drive import (
     RFRD_LOGICAL,
     TFR_LOGICAL,
 )
+from src.motor.drive_process_lock import DriveOwnershipError
 from src.units import Seconds
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "COM3"
@@ -76,7 +77,12 @@ settings = SerialSettings(port=PORT, slave_address=SLAVE, timeout=Seconds(1.0))
 master = serial_master(settings, RealClock())
 
 print(f"ouverture de {PORT} a 19200 8E1, esclave {SLAVE} ...")
-if not master.connect():
+try:
+    connected = master.connect()
+except DriveOwnershipError as error:
+    print(f"  REFUS: {error}")
+    raise SystemExit(3) from error
+if not connected:
     print("  ECHEC: le port ne s'ouvre pas (occupe par SoMove ? pilote ? libusb ?)")
     raise SystemExit(3)
 print("  port OUVERT")
