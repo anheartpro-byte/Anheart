@@ -8,10 +8,13 @@
 >   pas d'une machine réelle. En cas d'écart, votre écran fait foi.
 > - À cette date, aucune séance avec une personne à bord n'a encore eu lieu
 >   avec ce logiciel.
+> - À cette date, la documentation d'Anheart indique que la machine d'essai n'a
+>   aucune sécurité matérielle indépendante du logiciel. Lisez l'avertissement
+>   de la [section 2](#2-les-huit-règles-à-retenir) avant toute séance.
 > - Certaines informations dont vous avez besoin ne sont pas encore validées.
->   Elles sont signalées par un encadré qui commence par « À compléter par
->   Anheart ». Tant qu'un de ces encadrés vous concerne, demandez la réponse à
->   Anheart avant d'agir.
+>   Elles sont signalées par un encadré qui commence par les mots *À compléter
+>   par Anheart*. Tant qu'un de ces encadrés vous concerne, demandez la réponse
+>   à Anheart avant d'agir.
 
 Les autres guides : [guide gestionnaire](guide-gestionnaire.md) (le site web),
 [guide passager](guide-passager.md) (la personne dans la capsule),
@@ -22,7 +25,7 @@ Les autres guides : [guide gestionnaire](guide-gestionnaire.md) (le site web),
 ## Sommaire
 
 1. [À qui s'adresse ce manuel](#1-à-qui-sadresse-ce-manuel)
-2. [Les sept règles à retenir](#2-les-sept-règles-à-retenir)
+2. [Les huit règles à retenir](#2-les-huit-règles-à-retenir)
 3. [Lire l'écran](#3-lire-lécran)
 4. [Avant toute séance, attester l'arrêt d'urgence](#4-avant-toute-séance-attester-larrêt-durgence)
 5. [Séance manuelle, capsule vide](#5-séance-manuelle-capsule-vide)
@@ -46,7 +49,8 @@ Votre rôle :
 - vous préparez la console avant la séance ;
 - vous démarrez et vous arrêtez la machine ;
 - vous surveillez la vitesse, la fréquence cardiaque et les alertes ;
-- vous gardez l'arrêt d'urgence câblé à portée de main.
+- vous savez à tout moment comment arrêter la machine
+  ([section 8](#8-arrêter-la-machine)).
 
 La console est une page web servie par l'ordinateur de la machine. Elle
 fonctionne sans Internet. Elle affiche le nom « AnHeart » en haut à gauche.
@@ -62,34 +66,58 @@ Si la console vous demande un jeton d'accès : page **Configuration**, carte
 **Acces**, champ **Jeton partage**, puis bouton **Utiliser ce jeton**. Le jeton
 est gardé pour cet onglet seulement.
 
-## 2. Les sept règles à retenir
+## 2. Les huit règles à retenir
 
-1. **En cas de danger, l'arrêt d'urgence câblé d'abord.** Le bouton **E-STOP**
-   de l'écran dépend du navigateur, du réseau et du logiciel. L'un d'eux peut
-   être justement ce qui est en panne. Utilisez-le en plus de l'arrêt câblé,
-   jamais à sa place.
-2. **« Arrêté » se lit sur la vitesse mesurée.** Seules la pastille
-   **Rotation** et la carte **Vitesse mesuree** parlent du bras. Une cible à
-   zéro ne veut pas dire que le bras est arrêté.
+1. **Le bouton E-STOP de l'écran est un arrêt logiciel.** Il dépend du
+   navigateur, du réseau et du logiciel. L'un d'eux peut être justement ce qui
+   est en panne. Il ne remplace pas un arrêt d'urgence câblé sur la machine :
+   lisez l'avertissement placé sous ces règles.
+2. **Le bras n'est arrêté que si la vitesse mesurée le dit.** Seules la
+   pastille **Rotation** et la carte **Vitesse mesuree** parlent du bras. Ni
+   une cible à zéro, ni la pastille **Mode**, ni le nom de la phase ne prouvent
+   que le bras est arrêté.
 3. **Un nombre barré ne se croit pas.** Si l'écran ne reçoit plus de données,
    un bandeau rouge « NO LIVE DATA » apparaît et les grands nombres sont
    barrés. Regardez alors le bras, pas l'écran.
-4. **Un arrêt demandé à l'écran n'est jamais instantané.** STOP, E-STOP et les
-   arrêts décidés par la console font ralentir le bras. Il tourne encore
-   pendant la décélération.
-5. **Rien ne repart tout seul.** Après un arrêt, il faut un nouveau démarrage.
-   Après un arrêt de sécurité verrouillé, il faut d'abord un acquittement à
-   votre nom.
-6. **Restez devant l'écran, page de la console ouverte.** Si plus aucune page
-   de la console n'est ouverte, la console gèle la vitesse au bout de
-   60 secondes, puis termine la séance au bout de 120 secondes.
-7. **Tapez votre nom dès que vous ouvrez la console.** Sans nom d'opérateur,
+4. **Un arrêt n'est jamais instantané, et STOP ne ralentit pas toujours le
+   bras.** Après **E-STOP**, la machine décélère : le bras tourne encore
+   pendant la décélération. Après **STOP**, le bras ralentit progressivement,
+   sauf tant que la pastille **Securite** affiche « freeze » : la console
+   garde alors la vitesse. Si la vitesse mesurée ne baisse pas après un STOP,
+   l'arrêt logiciel à utiliser est **E-STOP**.
+5. **Un bras arrêté peut repartir seul tant que la séance n'est pas
+   terminée.** Tant que **Mode** affiche « SEANCE » ou « MANUEL », la console
+   peut ralentir le bras jusqu'à l'arrêt, puis le relancer d'elle-même quand la
+   cause disparaît. Personne ne s'approche du bras ni de la capsule avant que
+   **Mode** affiche « REPOS » et **Rotation** « a l'arret ».
+6. **Une séance terminée ne repart pas seule.** Après une fin de séance, il
+   faut un nouveau démarrage. Après un arrêt de sécurité verrouillé, il faut
+   d'abord un acquittement à votre nom.
+7. **Restez devant l'écran, page de la console ouverte et affichée.** Si plus
+   aucune page de la console n'est ouverte, la console garde la vitesse au
+   bout de 60 secondes (« freeze »), puis termine la séance au bout de
+   120 secondes.
+8. **Tapez votre nom dès que vous ouvrez la console.** Sans nom d'opérateur,
    le bouton **STOP** est refusé. Le bouton **E-STOP**, lui, ne demande jamais
    rien.
 
-> **À compléter par Anheart avant la semaine pilote :** l'emplacement de
-> l'arrêt d'urgence câblé sur votre machine, la façon de le déclencher et de le
-> réarmer, et ce qu'il fait exactement au moteur.
+> **Arrêt d'urgence câblé : ce que le logiciel ne sait pas.**
+>
+> - Le logiciel ne sait pas si votre machine a un arrêt d'urgence câblé. Il ne
+>   le voit pas : ni quand on l'actionne, ni quand on le réarme.
+> - L'attestation de la [section 4](#4-avant-toute-séance-attester-larrêt-durgence)
+>   est votre propre déclaration. Le logiciel l'enregistre. Il ne la vérifie
+>   pas.
+> - À la date de ce brouillon, la documentation d'Anheart indique que la
+>   machine d'essai n'a aucune sécurité matérielle indépendante du logiciel.
+> - Sans arrêt d'urgence câblé installé et vérifié sur votre machine, vous ne
+>   pouvez pas attester. Aucune séance n'est alors possible, et c'est voulu.
+
+> **À compléter par Anheart avant la semaine pilote :** l'arrêt d'urgence câblé
+> de votre machine : où il se trouve, comment le déclencher et le réarmer, ce
+> qu'il fait exactement au moteur, et dans quel ordre l'utiliser avec le bouton
+> **E-STOP** de l'écran. Tant que ce point n'est pas complété, ce manuel ne
+> fixe aucun ordre entre les deux.
 
 ## 3. Lire l'écran
 
@@ -112,12 +140,12 @@ chose est en cours. Rouge : problème ou arrêt.
 | **Mode** | « REPOS » | Rien n'est commandé. |
 | | « MANUEL » | Une séance manuelle est en cours. |
 | | « SEANCE » | Une séance programmée est en cours. |
-| | « ARRET » | Une séance se termine, le bras ralentit. Ce n'est pas « arrêté » : regardez **Rotation**. |
+| | « ARRET » | Une fin de séance est enregistrée. Cela ne dit pas que le bras est arrêté, ni même qu'il ralentit : regardez **Rotation** et **Vitesse mesuree**. |
 | **Etat** | « idle » | La console est libre. C'est le seul état où un démarrage est accepté. |
 | | « starting », « running », « stopping » | Un démarrage vient d'être accepté, une séance tourne, un arrêt est en cours. Affichée en rouge : un arrêt d'urgence est verrouillé. |
 | **Liaison** | « en direct » | L'écran reçoit des données fraîches. |
 | | « donnees figees », « hors ligne » | L'écran ne reçoit plus rien. Ne croyez plus les nombres. |
-| **Rotation** | « a l'arret » | Le bras ne tourne pas (vitesse mesurée inférieure à 0,05 tr/min). |
+| **Rotation** | « a l'arret » | Le bras ne tourne pas à cet instant (vitesse mesurée inférieure à 0,05 tr/min). Tant que **Mode** n'affiche pas « REPOS », il peut repartir. |
 | | « EN ROTATION » | Le bras tourne. |
 | | « VITESSE INCONNUE » | La vitesse n'a pas pu être lue récemment. Ne concluez jamais que le bras est arrêté. |
 | **Securite** | « none » | La console ne demande aucune action de sécurité. |
@@ -148,10 +176,12 @@ Ils sont décrits à la [section 8](#8-arrêter-la-machine).
 Le grand nombre est la vitesse du bras, en tours par minute (« tr/min de sortie
 (bras) »). Dessous, la console redonne la même vitesse autrement : celle du
 moteur (« moteur »), la fréquence du variateur (« variateur », en Hz), et deux
-charges en g, « Gc » (centripète) et « Gr » (résultante : celle que ressent la
-personne à bord).
+charges en g, « Gc » (centripète) et « Gr » (résultante). Ces charges sont
+calculées au point de référence de la machine. La charge est plus forte vers
+les pieds de la personne à bord, plus éloignés de l'axe.
 
-Dans ce manuel, « tr/min » veut toujours dire tr/min du bras.
+Dans ce manuel, « tr/min » veut dire tr/min du bras, sauf quand le texte
+précise qu'il s'agit du moteur.
 
 ## 4. Avant toute séance, attester l'arrêt d'urgence
 
@@ -176,10 +206,11 @@ refusé.
 *Page Securite après l'attestation : pastille « atteste » dans la carte de
 droite. Capture prise en simulation.*
 
-> **Attention.** Le logiciel ne vérifie pas le câblage. Il enregistre votre
-> déclaration, à votre nom. Ne cochez jamais une case pour « faire marcher » la
-> console. Si vous ne savez pas vérifier l'un des deux faits, n'attestez pas et
-> appelez le support.
+> **Attention.** Le logiciel ne vérifie pas le câblage et ne voit pas l'arrêt
+> d'urgence câblé. Il enregistre votre déclaration, à votre nom. Ne cochez
+> jamais une case dans le seul but de débloquer la console. Si vous ne savez
+> pas vérifier l'un des deux faits, ou si l'un des deux est faux, n'attestez
+> pas et appelez le support.
 
 > **À compléter par Anheart avant la semaine pilote :** la procédure de
 > vérification du câblage de l'arrêt d'urgence sur votre machine : ce que
@@ -215,7 +246,8 @@ En mode manuel, vous choisissez vous-même la vitesse.
 10. Pendant le changement de vitesse, un bandeau orange **RAMPE EN COURS : NE
     PAS BOUGER LA TETE** indique la vitesse visée et le temps restant.
 11. Suivez la carte **Vitesse mesuree**. La ligne « rampe » affiche « cible
-    atteinte » quand la vitesse est stable.
+    atteinte » quand la vitesse commandée a rejoint la cible. Cela ne dit rien
+    de la vitesse mesurée : c'est elle qu'il faut lire.
 12. Pour finir : **STOP** ([section 8](#8-arrêter-la-machine)).
 
 ![Séance manuelle pendant un changement de vitesse](../guides/img/console-08-manuel-rampe.png)
@@ -231,14 +263,20 @@ simulation, capsule vide.*
 - La ligne « cible appliquee » dit ce que la machine vise vraiment. Fiez-vous à
   elle, pas au brouillon orange.
 - Une réponse qui commence par « accepte : » ou « cible envoyee : » sous les
-  boutons veut dire « demande reçue ». La machine vérifie ensuite. Si elle
-  refuse, le refus apparaît dans la liste **Evenements** de la page **Seance**,
-  sur une ligne « refused ».
+  boutons veut seulement dire que la demande est reçue. La machine vérifie
+  ensuite. Si elle refuse, le refus apparaît dans la liste **Evenements** de la
+  page **Seance**, sur une ligne « refused ».
 - Pour changer de vitesse : composez un nouveau brouillon, puis **Appliquer**.
+- Si **Securite** affiche « freeze », la console garde la vitesse : ni
+  **Appliquer**, ni **STOP** ne la font baisser
+  ([section 9.2](#92-la-console-agit-seule)).
+- Si la console a ralenti le bras d'elle-même et que la cause disparaît, elle
+  le ramène seule vers la cible appliquée. Pour l'en empêcher, terminez la
+  séance.
 - Une séance manuelle s'arrête seule au bout de 60 minutes, comme après un
   STOP.
-- Après tout arrêt, la cible revient à 0. Pour repartir, il faut redémarrer
-  une séance.
+- Après toute fin de séance, la cible revient à 0. Pour repartir, il faut
+  redémarrer une séance.
 
 ## 6. Séance programmée, avec un passager
 
@@ -290,14 +328,21 @@ fréquence cardiaque du passager dans la zone du programme.
 9. Cliquez **Previsualiser**. Rien ne démarre. Lisez la carte **Ce que ce
    programme ferait** : « zone » (la zone cardiaque visée), « max absolu » et
    « critique » (les deux seuils cardiaques de sécurité), « plafond » (la
-   vitesse maximale), « total » (la durée) et « charge au plafond ». Si une
-   valeur ne correspond pas à ce qui a été décidé pour ce passager, ne démarrez
-   pas.
-10. Cliquez **Demarrer la seance**.
+   vitesse maximale, donnée ici en tr/min du moteur), « total » (la durée) et
+   « charge au plafond » (la charge à cette vitesse maximale, avec la vitesse
+   du bras correspondante). Si une valeur ne correspond pas à ce qui a été
+   décidé pour ce passager, ne démarrez pas.
+10. Cliquez **Demarrer la seance**. Si le bouton est grisé sans aucun message,
+    c'est que l'attestation n'est pas faite, ou que **Etat** n'affiche pas
+    « idle ».
 11. Regardez la liste **Evenements**, en bas de la page : vous devez voir
     « start_requested », puis « session_running ». Une ligne « refused » veut
     dire que la machine a refusé, avec la raison
     ([section 10](#10-un-démarrage-est-refusé)).
+
+> **Dès que la séance est démarrée, personne ne s'approche du bras ni de la
+> capsule.** La séance commence bras à l'arrêt, puis la console le met en
+> rotation d'elle-même.
 
 ### Suivre
 
@@ -324,11 +369,20 @@ Les phases, telles que la console les nomme :
 | « warmup » | La rotation commence et la vitesse monte progressivement. |
 | « hold » | La console ajuste la vitesse pour tenir la fréquence cardiaque dans la zone. |
 | « cooldown » | La vitesse redescend jusqu'à l'arrêt. |
-| « recovery » | Le bras est arrêté, le passager est toujours à bord. La console surveille encore sa fréquence cardiaque. |
+| « recovery » | En fonctionnement normal, le bras est arrêté et le passager est toujours à bord. La console surveille encore sa fréquence cardiaque. |
 | « done » | Le programme est terminé. |
 
+Ce tableau décrit le déroulement normal. Le nom de la phase ne prouve jamais
+que le bras est arrêté : après un arrêt demandé, la console peut afficher
+« cooldown » puis « recovery » alors que le bras tourne encore. Lisez
+**Rotation** et **Vitesse mesuree**.
+
+Pendant « warmup » et « hold », la console peut aussi ralentir le bras
+d'elle-même, parfois jusqu'à l'arrêt, puis le relancer
+([section 9.2](#92-la-console-agit-seule)).
+
 La séance se termine seule à la fin du programme. Pour l'arrêter avant :
-**STOP**.
+**STOP** ([section 8](#8-arrêter-la-machine)).
 
 ## 7. Séance lancée depuis le site
 
@@ -349,7 +403,7 @@ Ce que cela change pour vous :
   nom, votre bouton **STOP** serait refusé.
 - Le suivi et l'arrêt se font comme à la [section 6](#6-séance-programmée-avec-un-passager).
   Le site peut aussi demander l'arrêt : la console l'exécute comme un STOP
-  ordinaire.
+  ordinaire, avec les mêmes limites ([section 8](#8-arrêter-la-machine)).
 - Si la liaison Internet tombe pendant la séance, la séance continue selon les
   règles de la console. Seul l'affichage du site se fige, et le site ne peut
   plus demander l'arrêt.
@@ -362,15 +416,21 @@ Ce que cela change pour vous :
 
 | Situation | Ce que vous faites |
 |---|---|
-| Fin normale, changement d'avis, le passager demande à s'arrêter sans urgence | **STOP** |
-| Danger immédiat, comportement anormal de la machine, doute sérieux | Arrêt d'urgence câblé, puis **E-STOP** |
-| L'écran ne répond plus, bandeau rouge « NO LIVE DATA » | Arrêt d'urgence câblé |
+| Fin normale, changement d'avis, le passager demande à s'arrêter sans urgence | **STOP**, puis surveillez la vitesse mesurée. |
+| Vous voulez arrêter le bras alors que **Securite** affiche « freeze » | **E-STOP**. Tant que « freeze » est affiché, STOP ne ralentit pas le bras. |
+| Danger immédiat, comportement anormal de la machine, doute sérieux | **E-STOP**, et l'arrêt d'urgence câblé de votre machine. L'ordre entre les deux reste à préciser par Anheart ([section 2](#2-les-huit-règles-à-retenir)). |
+| L'écran ne répond plus, bandeau rouge « NO LIVE DATA » | Regardez le bras, puis suivez la [section 9.3](#93-bandeau-rouge-no-live-data). |
 
 ### STOP, l'arrêt normal
 
 1. Cliquez **STOP**, en bas de n'importe quelle page.
-2. **Mode** passe à « ARRET », **Etat** à « stopping ».
-3. Attendez que **Rotation** affiche « a l'arret » et que **Mode** revienne à
+2. **Mode** passe à « ARRET », **Etat** à « stopping ». Cela veut dire que la
+   fin de séance est enregistrée. Cela ne dit pas que le bras ralentit.
+3. Regardez la carte **Vitesse mesuree** : la vitesse doit baisser dans les
+   secondes qui suivent. Si elle ne baisse pas, regardez **Securite** : tant
+   qu'elle affiche « freeze », STOP ne ralentit pas le bras. Cliquez alors
+   **E-STOP**.
+4. Attendez que **Rotation** affiche « a l'arret » et que **Mode** revienne à
    « REPOS ».
 
 ![Après STOP, le bras ralentit](../guides/img/console-11-stop-rampe-arret.png)
@@ -380,27 +440,38 @@ bras tourne encore. Capture prise en simulation, capsule vide.*
 
 À savoir :
 
-- STOP termine la séance en douceur, sur une décélération progressive. C'est
-  voulu : un freinage plus brutal ferait passer le variateur en défaut, et le
-  bras ralentirait alors sans contrôle, plus longtemps.
+- En temps normal, STOP termine la séance en douceur, sur une décélération
+  progressive. C'est voulu : un freinage plus brutal ferait passer le variateur
+  en défaut, et le bras ralentirait alors sans contrôle, plus longtemps.
+- **Tant que Securite affiche « freeze », STOP ne ralentit pas le bras.** La
+  console enregistre la fin de séance, affiche « ARRET », puis les phases
+  « cooldown » et « recovery », mais elle garde la vitesse. Ne vous fiez pas à
+  **Mode** : lisez **Rotation** et **Vitesse mesuree**. L'arrêt logiciel à
+  utiliser est alors **E-STOP**.
+- Une fois STOP enregistré, la console ne fait plus monter la vitesse : le
+  bras ne repart pas de lui-même.
 - Une séance programmée arrêtée par STOP passe encore par ses phases de fin
   (« cooldown », puis « recovery »). Le retour à « REPOS » n'est donc pas
   immédiat.
 - Si une fenêtre « STOP refuse : » s'ouvre, lisez-la. Soit il n'y a rien à
   arrêter, soit un arrêt est déjà en cours, soit aucun nom d'opérateur n'est
-  saisi. **Si le bras tourne et que STOP est refusé, utilisez E-STOP ou l'arrêt
-  d'urgence câblé.**
+  saisi. **Si le bras tourne et que STOP est refusé, cliquez E-STOP.**
 
 ### E-STOP, l'arrêt d'urgence de l'écran
 
-1. En cas de danger : arrêt d'urgence câblé d'abord.
-2. Cliquez **E-STOP**. Il part au premier clic : aucune confirmation, aucun
-   nom.
-3. **Securite** passe à « quick_stop », **Etat** à « stopping » en rouge.
-4. Surveillez la carte **Vitesse mesuree** : la machine décélère, elle n'est
-   pas arrêtée tout de suite.
-5. Une fois le bras arrêté, la machine reste verrouillée. Il faut acquitter
+1. Cliquez **E-STOP**. Il part au premier clic : aucune confirmation, aucun
+   nom. Il agit aussi quand **Securite** affiche « freeze ».
+2. **Securite** passe à « quick_stop », **Etat** à « stopping » en rouge.
+3. Surveillez la carte **Vitesse mesuree** : la machine décélère, elle n'est
+   pas arrêtée tout de suite. Si la vitesse ne baisse pas, il ne reste que
+   l'arrêt d'urgence câblé de votre machine.
+4. Une fois le bras arrêté, la machine reste verrouillée. Il faut acquitter
    ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
+
+E-STOP est un arrêt logiciel. En cas de danger, utilisez aussi l'arrêt
+d'urgence câblé de votre machine. L'ordre entre les deux dépend de ce que
+l'arrêt câblé fait au moteur : il reste à préciser par Anheart
+([section 2](#2-les-huit-règles-à-retenir)).
 
 ![Après E-STOP, la machine décélère](../guides/img/console-12-estop-verrouille.png)
 
@@ -408,7 +479,20 @@ bras tourne encore. Capture prise en simulation, capsule vide.*
 tourne encore. Capture prise en simulation, capsule vide.*
 
 Si une fenêtre annonce que « la demande d'arret d'urgence a echoue » et se
-termine par « UTILISEZ L'ARRET CABLE » : frappez l'arrêt d'urgence câblé.
+termine par « UTILISEZ L'ARRET CABLE », l'arrêt logiciel n'a pas atteint la
+machine. Il ne reste que l'arrêt d'urgence câblé de votre machine.
+
+### Après un arrêt d'urgence câblé
+
+La console ne voit pas l'arrêt d'urgence câblé. Après son utilisation, elle
+peut encore croire la séance en cours et garder une vitesse commandée.
+
+1. Avant de réarmer l'arrêt câblé, cliquez **E-STOP** sur la console. Si
+   l'écran était figé, faites-le dès qu'il revient.
+2. Vérifiez **Securite** « quick_stop » et **Rotation** « a l'arret ».
+3. Réarmez l'arrêt câblé seulement ensuite, selon la procédure d'Anheart
+   ([section 2](#2-les-huit-règles-à-retenir)).
+4. Acquittez ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 
 ## 9. Quand quelque chose ne va pas
 
@@ -418,16 +502,20 @@ Après un E-STOP, ou quand la console a arrêté la machine elle-même, tout
 nouveau démarrage est refusé. Rien ne se débloque seul : quelqu'un doit
 acquitter, par son nom.
 
-1. Attendez l'arrêt complet : **Rotation** « a l'arret ».
+1. Attendez la fin complète de la séance : **Rotation** « a l'arret » et
+   **Mode** « REPOS ». Après une séance programmée, **Mode** ne revient à
+   « REPOS » qu'une fois la phase « recovery » terminée.
 2. Cliquez **Securite**. Dans la carte **Verdict en cours**, lisez les lignes
    « regle » et « detail » : elles disent pourquoi la machine s'est arrêtée.
 3. Trouvez la cause et supprimez-la. Si vous ne la comprenez pas, n'acquittez
    pas : appelez le support.
-4. Si l'arrêt d'urgence câblé a été frappé, réarmez-le.
+4. Si un arrêt d'urgence câblé a été utilisé, suivez d'abord
+   [Après un arrêt d'urgence câblé](#après-un-arrêt-durgence-câblé).
 5. Tapez votre nom dans le champ « votre nom ».
-6. Si l'alerte est un arrêt d'urgence (règle « operator_estop »), vérifiez que
-   l'arrêt d'urgence câblé est bien réarmé, puis cochez **le coup de poing a
-   ete deverrouille (tire)**. Sans cette case, l'acquittement est refusé.
+6. Si l'alerte est un arrêt d'urgence (règle « operator_estop »), la console
+   exige la case **le coup de poing a ete deverrouille (tire)**. C'est votre
+   déclaration : le logiciel ne voit pas l'arrêt câblé. Ne la cochez que si
+   c'est vrai. Sans cette case, l'acquittement est refusé.
 7. Cliquez **Acquitter**.
 8. Vérifiez : une note qui commence par « acquitte par » s'affiche, et
    **Etat** revient à « idle ».
@@ -447,23 +535,34 @@ la pastille **Securite** change.
 
 | **Securite** affiche | Ce que fait la console | Ce que vous faites |
 |---|---|---|
-| « freeze » | Elle garde la vitesse actuelle et ne monte plus. | Cherchez la cause (page **Securite**, ligne « regle »). Si elle ne disparaît pas vite : **STOP**. |
-| « reduce » | Elle baisse la vitesse. | Même chose. |
-| « ramp_down » | Elle termine la séance en douceur. L'arrêt est verrouillé. | Attendez l'arrêt complet, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
-| « quick_stop » | Arrêt d'urgence logiciel : la machine décélère tout de suite. L'arrêt est verrouillé. | Arrêt câblé s'il y a danger. Attendez l'arrêt complet, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
-| « go_silent » | Elle cesse de commander le moteur. Cet état ne s'acquitte pas : il faut redémarrer la console. | Regardez le bras. S'il ne ralentit pas : arrêt d'urgence câblé. Appelez le support. |
+| « freeze » | Elle garde la vitesse actuelle. Elle ne la monte plus, et ne la baisse pas non plus, même après un STOP. La séance n'est pas terminée. | Cherchez la cause (page **Securite**, ligne « regle »). Pour arrêter le bras pendant que « freeze » est affiché : **E-STOP**. STOP ne le ralentit pas. |
+| « reduce » | Elle baisse la vitesse, au besoin jusqu'à l'arrêt du bras. La séance n'est pas terminée. | Cherchez la cause. Pour terminer la séance : **STOP**, puis surveillez la vitesse mesurée. |
+| « ramp_down » | Elle termine la séance en douceur. L'arrêt est verrouillé. | Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
+| « quick_stop » | Arrêt d'urgence logiciel : la machine décélère tout de suite. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
+| « go_silent » | Elle cesse de commander le moteur. Cet état ne s'acquitte pas : il faut redémarrer la console. | Regardez le bras. S'il ne ralentit pas, il ne reste que l'arrêt d'urgence câblé de votre machine. Appelez le support. |
+
+> **Avec « freeze » et « reduce », le bras peut repartir seul.** Ces deux
+> actions ne terminent pas la séance. Quand leur cause disparaît (une
+> fréquence cardiaque qui revient, la page de la console rouverte), la console
+> reprend la séance d'elle-même : le bras peut accélérer de nouveau, y compris
+> après avoir été ramené à l'arrêt. Tant que **Mode** affiche « SEANCE » ou
+> « MANUEL », personne ne s'approche du bras ni de la capsule, même si
+> **Rotation** affiche « a l'arret ». Avant toute intervention, terminez la
+> séance (**STOP**, ou **E-STOP** si « freeze » est affiché), puis attendez
+> **Mode** « REPOS » et **Rotation** « a l'arret ».
 
 Les règles que vous verrez le plus souvent sur la ligne « regle » :
 
 | Règle affichée | En clair | Ce que fait la console |
 |---|---|---|
 | « operator_estop » | Quelqu'un a cliqué E-STOP. | Arrêt d'urgence logiciel. |
-| « attendant_absent » | Plus aucune page de la console n'est ouverte. | Vitesse gelée après 60 secondes, fin de séance après 120 secondes. |
-| « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | Vitesse gelée après 10 secondes, réduite après 30 secondes, fin de séance après 60 secondes. |
+| « attendant_absent » | Plus aucune page de la console n'est ouverte. | « freeze » après 60 secondes, fin de séance après 120 secondes. Si une page est rouverte avant, la séance reprend seule. |
+| « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | « freeze » après 10 secondes, « reduce » après 30 secondes, fin de séance après 60 secondes. Si la fréquence revient avant, la séance reprend seule. |
 | « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». | Fin de séance en douceur. |
 | « hr_critical » | La fréquence cardiaque atteint le seuil « critique ». | Arrêt d'urgence logiciel. |
 | « hr_drop » | La fréquence cardiaque chute brutalement. | Fin de séance en douceur. |
-| « hr_rate » | La fréquence cardiaque monte trop vite. | Vitesse réduite. |
+| « hr_rate » | La fréquence cardiaque monte trop vite. | « reduce ». Quand la montée cesse, la séance reprend seule. |
+| « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». |
 | « drive_fault » | Le variateur est en défaut. | Fin de séance. Voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
 | « comms_lost » | La console ne parvient plus à parler au variateur. | « go_silent ». |
 
@@ -487,12 +586,17 @@ valeurs reçues, pas les valeurs actuelles. Le bandeau le dit lui-même : « la
 machine tourne peut-etre encore ».
 
 1. Regardez le bras, pas l'écran.
-2. S'il tourne et que l'écran ne revient pas dans les secondes qui suivent :
-   arrêt d'urgence câblé.
+2. S'il tourne et que vous devez l'arrêter, cliquez **E-STOP** : la demande
+   peut passer même quand l'affichage est figé. Si elle ne passe pas, une
+   fenêtre l'annonce et se termine par « UTILISEZ L'ARRET CABLE ». Il ne reste
+   alors que l'arrêt d'urgence câblé de votre machine.
 3. La page essaie de se reconnecter seule. Si la liaison revient, le bandeau
-   disparaît. Lisez alors **Rotation** et **Securite** avant toute autre
-   action.
-4. Si le bandeau reste, appelez le support.
+   disparaît. Lisez alors **Rotation**, **Mode** et **Securite** avant toute
+   autre action.
+4. Si vous avez utilisé l'arrêt d'urgence câblé pendant que l'écran était
+   figé, suivez [Après un arrêt d'urgence câblé](#après-un-arrêt-durgence-câblé)
+   dès que l'écran revient.
+5. Si le bandeau reste, appelez le support.
 
 ### 9.4 La fréquence cardiaque disparaît
 
@@ -515,11 +619,24 @@ Capture prise en simulation.*
 
 Ce que fait la console :
 
-- **Séance avec passager.** Sans fréquence cardiaque fiable, la console gèle
-  la vitesse, puis la réduit, puis termine la séance (règle « hr_stale »,
-  [section 9.2](#92-la-console-agit-seule)). N'attendez pas la console : si la
-  fréquence ne revient pas rapidement, cliquez **STOP**.
+- **Séance avec passager.** Sans fréquence cardiaque fiable, la console garde
+  la vitesse (« freeze », après 10 secondes), puis la réduit, au besoin
+  jusqu'à l'arrêt du bras (« reduce », après 30 secondes), puis termine la
+  séance (« ramp_down », après 60 secondes). C'est la règle « hr_stale » de la
+  [section 9.2](#92-la-console-agit-seule).
 - **Séance manuelle, capsule vide.** La console ne s'arrête pas pour cela.
+
+Deux choses à savoir avant d'agir :
+
+- **Pendant « freeze », STOP ne ralentit pas le bras.** La console réduira
+  d'elle-même la vitesse, puis terminera la séance. Pour arrêter le bras plus
+  tôt : **E-STOP**.
+- **Si la fréquence cardiaque revient avant la fin de séance, la séance
+  reprend seule.** Le bras peut accélérer de nouveau, même s'il était revenu à
+  l'arrêt. Ne vous approchez donc pas de la capsule pour remettre une
+  électrode tant que la séance n'est pas terminée. Terminez-la d'abord
+  (**E-STOP** si « freeze » est affiché, **STOP** sinon), puis attendez
+  **Mode** « REPOS » et **Rotation** « a l'arret ».
 
 La console essaie seule de se reconnecter au capteur.
 
@@ -541,21 +658,30 @@ Le variateur est l'appareil qui alimente le moteur. En cas de défaut :
 *Défaut du variateur : pastille « fault », encadré rouge et bouton de
 réarmement. Capture prise en simulation.*
 
-1. Attendez l'arrêt complet : **Rotation** « a l'arret ».
+1. Attendez la fin complète de la séance : **Rotation** « a l'arret » et
+   **Mode** « REPOS ». Avant cela, le réarmement est refusé.
 2. Lisez la phrase de l'encadré rouge et notez le code.
 3. Appelez le support, sauf si la phrase indique une cause que vous êtes
    habilité à corriger.
 4. Pour réarmer : vérifiez que votre nom est saisi, puis cliquez **Reset
    defaut variateur**. La pastille du variateur doit quitter « fault ».
 5. Ensuite seulement, acquittez l'alerte dans la page **Securite**
-   ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Ici, la case du
-   coup de poing n'est pas nécessaire. Si vous acquittez avant le réarmement,
-   l'alerte revient aussitôt.
+   ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Pour le seul
+   défaut du variateur, la case du coup de poing n'est pas nécessaire. Si vous
+   acquittez avant le réarmement, l'alerte « drive_fault » revient aussitôt.
 
-Si la console refuse le réarmement (une ligne « refused » contenant « reset
-refuse » dans la liste **Evenements**), n'insistez pas. Certains
-défauts ne se réarment pas depuis la console. Arrêtez-vous et appelez le
-support.
+Si la console refuse le réarmement, une ligne « refused » contenant « reset
+refuse » apparaît dans la liste **Evenements**. La suite de la ligne dit
+pourquoi :
+
+| La ligne contient | Ce que cela veut dire | Quoi faire |
+|---|---|---|
+| « mouvement encore commande » | La séance n'est pas complètement terminée. | Attendez **Mode** « REPOS », puis recommencez. |
+| « l'arbre tourne encore » | Le bras n'est pas arrêté. | Attendez **Rotation** « a l'arret ». |
+| « acquitter d'abord le verdict » | Une autre alerte attend, par exemple après un E-STOP. | Acquittez d'abord ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)) : l'autre alerte s'efface, « drive_fault » revient. Réarmez ensuite, puis acquittez de nouveau. |
+| « aucun defaut a acquitter » | Le variateur n'est plus en défaut. | Rien à réarmer. Acquittez l'alerte s'il en reste une. |
+| « non rearmable depuis la console » | Ce défaut ne se réarme pas depuis la console. | N'insistez pas. Arrêtez-vous et appelez le support. |
+| Autre chose | La demande n'a pas atteint le variateur. | Appelez le support. |
 
 > **À compléter par Anheart avant la semaine pilote :** qui est habilité à
 > réarmer un défaut du variateur chez vous, et la conduite à tenir quand la
@@ -567,18 +693,24 @@ Tant qu'une page de la console est ouverte, elle signale sa présence à la
 machine toutes les 5 secondes. Si plus aucune page n'est ouverte pendant une
 séance :
 
-- après 60 secondes, la console gèle la vitesse ;
+- après 60 secondes, la console garde la vitesse (« freeze ») ;
 - après 120 secondes, elle termine la séance et verrouille l'arrêt.
 
 Que faire :
 
 1. Rouvrez la console.
 2. Retapez votre nom : une nouvelle page peut l'avoir oublié.
-3. Lisez **Rotation**, puis **Securite**. Acquittez si un arrêt est verrouillé
+3. Lisez **Rotation**, **Mode** et **Securite**.
+4. Si vous avez rouvert la console avant les 120 secondes, la séance n'est pas
+   terminée : « freeze » disparaît et la séance reprend seule. Le bras peut
+   accélérer de nouveau.
+5. Si la séance a été terminée, acquittez
    ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 
 Ce signal prouve qu'une page est ouverte, pas qu'une personne regarde. Restez
-devant l'écran.
+devant l'écran, page de la console affichée. Ce manuel ne peut pas garantir que
+le signal continue si la page passe en arrière-plan ou si l'écran se met en
+veille.
 
 ### 9.7 La console a redémarré
 
@@ -590,8 +722,8 @@ Après un redémarrage de la console ou une coupure de courant :
    la console l'a oubliée.
 4. Ouvrez la page **Securite**. S'il reste une alerte verrouillée, lisez-la,
    puis acquittez ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
-5. Rien ne reprend seul. Une séance interrompue n'est jamais relancée
-   automatiquement. Redémarrez une séance seulement si tout est normal.
+5. Après un redémarrage de la console, aucune séance ne reprend seule.
+   Redémarrez une séance seulement si tout est normal.
 
 Cas particuliers :
 
@@ -608,7 +740,13 @@ surveille la machine. Si elle affiche « non branchee », rien ne surveille ni l
 zone du bras ni la capsule : c'est à vous de le faire. À la date de ce
 brouillon, le logiciel ne prend en charge aucune caméra réelle.
 
-Si quelqu'un s'approche du bras pendant la rotation : arrêt d'urgence câblé.
+Si quelqu'un s'approche du bras pendant la rotation, arrêtez la machine sans
+attendre : **E-STOP**, et l'arrêt d'urgence câblé de votre machine
+([section 8](#8-arrêter-la-machine)).
+
+Un bras à l'arrêt n'est pas une zone sûre. Tant que **Mode** n'affiche pas
+« REPOS », le bras peut repartir seul
+([section 9.2](#92-la-console-agit-seule)).
 
 > **À compléter par Anheart avant la semaine pilote :** le périmètre de
 > sécurité autour du bras, et les règles pour les personnes présentes dans la
@@ -630,7 +768,8 @@ voyez.
 |---|---|---|
 | « cochez la declaration BANC (personne a bord : NON) avant de demarrer » | La case de la séance manuelle n'est pas cochée. | Vérifiez que la capsule est vide, puis cochez. |
 | Un message en anglais, alors que le champ de nom est vide | Aucun nom d'opérateur. | Tapez votre nom. |
-| « demarrage refuse : cablage de l'arret d'urgence non atteste », ou un message en anglais juste après un redémarrage de la console | L'attestation n'est pas faite. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence). |
+| Le bouton **Demarrer la seance** grisé, sans aucun message | L'attestation n'est pas faite, ou **Etat** n'affiche pas « idle ». Si la page affiche aussi la note sur les séances programmées désactivées, voir plus bas. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence), ou attendez **Etat** « idle ». |
+| En séance manuelle, un message en anglais sous le bouton juste après un redémarrage de la console. Ou, dans **Evenements**, « demarrage refuse : cablage de l'arret d'urgence non atteste » | L'attestation n'est pas faite. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence). |
 | Un message contenant « demarrage refuse : verdict », ou un message en anglais alors que **Securite** n'affiche pas « none » | Un arrêt de sécurité attend un acquittement. | [Section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | Un message en anglais alors que **Etat** n'affiche pas « idle » | Une séance tourne déjà, ou un arrêt est en cours. | Attendez **Etat** « idle ». |
 | « seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL » | Les séances programmées ne sont pas autorisées sur cette machine. | Appelez le support. |
@@ -643,11 +782,13 @@ voyez.
 
 ## 11. Quand arrêter et appeler le support
 
-Ce manuel ne peut pas tout prévoir. Arrêtez la séance (STOP, ou arrêt d'urgence
-s'il y a danger), ne redémarrez pas, et appelez le support si :
+Ce manuel ne peut pas tout prévoir. Arrêtez la séance comme l'indique la
+[section 8](#8-arrêter-la-machine), ne redémarrez pas, et appelez le support
+si :
 
 - le passager se plaint d'un malaise, ou vous semble aller mal ;
-- le bras ne ralentit pas après un arrêt demandé ;
+- le bras ne ralentit pas après un E-STOP ;
+- « freeze » reste affiché et vous ne savez pas pourquoi ;
 - **Rotation** affiche « VITESSE INCONNUE » ;
 - **Securite** affiche « go_silent », ou une règle que ce manuel ne décrit
   pas ;
@@ -665,7 +806,9 @@ En cas d'urgence médicale, appelez d'abord les services d'urgence.
 > pour un incident de sécurité.
 
 > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
-> auprès du passager après un arrêt d'urgence ou un malaise.
+> auprès du passager après un arrêt d'urgence ou un malaise, y compris le
+> moment à partir duquel on peut s'approcher de la capsule pour lui porter
+> secours.
 
 Ce qu'il est utile de noter pour le support :
 
@@ -680,15 +823,15 @@ Ce qu'il est utile de noter pour le support :
 | Mot | Sens |
 |---|---|
 | Acquitter | Confirmer, par son nom, qu'on a pris connaissance d'un arrêt de sécurité et traité sa cause. |
-| Arrêt d'urgence câblé | Le bouton physique d'arrêt d'urgence de la machine. La console l'appelle « coup de poing ». |
+| Arrêt d'urgence câblé | Un arrêt d'urgence physique sur la machine, indépendant de l'écran. La console l'appelle « coup de poing ». Le logiciel ne le voit pas et ne peut pas vérifier qu'il existe. |
 | Attestation | Déclaration, par son nom, que le câblage de l'arrêt d'urgence a été vérifié. |
 | BANC | Séance sans personne à bord. |
 | bpm | Battements par minute. |
 | E-STOP | L'arrêt d'urgence de l'écran. C'est un arrêt logiciel. |
-| Gc, Gr | Deux façons d'exprimer la charge, en g. Gr est celle que ressent la personne à bord. |
+| Gc, Gr | Deux façons d'exprimer la charge, en g, calculées au point de référence de la machine. La charge est plus forte vers les pieds de la personne à bord. |
 | Passager | La personne dans la capsule. Le site web l'appelle « pratiquant ». |
 | Pastille | Petite étiquette colorée qui donne un état. |
-| STOP | L'arrêt normal, en douceur. |
+| STOP | L'arrêt normal, en douceur. Il ne ralentit pas le bras tant que **Securite** affiche « freeze ». |
 | tr/min | Tours par minute. Dans ce manuel : ceux du bras. |
 | Variateur | L'appareil qui alimente et pilote le moteur. |
 | Verdict | Le nom que la console donne à une décision de sécurité. |

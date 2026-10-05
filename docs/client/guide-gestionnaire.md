@@ -13,9 +13,9 @@
 > - Quelques écrans sont encore en anglais. Ce guide décrit alors leur
 >   fonction, sans citer leur texte.
 > - Certaines informations dont vous avez besoin ne sont pas encore validées.
->   Elles sont signalées par un encadré qui commence par « À compléter par
->   Anheart ». Tant qu'un de ces encadrés vous concerne, demandez la réponse à
->   Anheart avant d'agir.
+>   Elles sont signalées par un encadré qui commence par les mots *À compléter
+>   par Anheart*. Tant qu'un de ces encadrés vous concerne, demandez la réponse
+>   à Anheart avant d'agir.
 
 Les autres guides : [manuel opérateur](manuel-operateur.md) (la console de la
 machine), [guide passager](guide-passager.md) (la personne dans la capsule),
@@ -77,7 +77,7 @@ Le site vous permet de :
 | Le site ne peut pas | Ce qu'il faut savoir |
 |---|---|
 | Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : uniquement depuis la console de la machine ». |
-| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ, puis décélère progressivement. L'arrêt d'urgence est sur la machine. |
+| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement. Mais tant qu'elle garde sa vitesse pour une raison de sécurité (action « freeze »), la demande ne ralentit pas le bras. L'arrêt d'urgence se fait à la machine, par l'opérateur. |
 | Voir la machine | Le site ne voit ni la capsule, ni la salle, ni l'opérateur. Il affiche ce que la machine lui envoie, avec quelques secondes de retard. |
 | Forcer un départ | La machine refait tous les contrôles et peut refuser. |
 | Créer ou modifier un programme | Les programmes viennent de la machine. Le site les affiche en lecture seule. |
@@ -246,7 +246,8 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
   ([section 4.2](#42-renseigner-la-physiologie)).
 - **Un opérateur est à côté de la machine, console prête, et le pratiquant est
   installé.** Le site ne voit pas la machine. La machine prend votre demande
-  en quelques secondes.
+  en quelques secondes, puis met le bras en rotation d'elle-même : dès votre
+  clic, plus personne ne doit s'approcher du bras ni de la capsule.
 
 > **À compléter par Anheart avant la semaine pilote :** les programmes validés
 > pour votre établissement, et pour quels patients. Les valeurs des programmes
@@ -316,10 +317,11 @@ récentes**.
 
 Le bandeau « En attente que la machine arme la séance… » veut dire que la
 machine n'a pas encore pris votre demande. En temps normal, cela dure quelques
-secondes.
+secondes : la machine interroge le site toutes les 3 secondes environ.
 
-Si cela dure plus d'une minute, la machine ne répond pas. Annulez la séance
-([section 8](#8-arrêter-ou-annuler-une-séance)), puis voyez avec l'opérateur.
+Si le bandeau reste affiché, la machine ne prend pas votre demande. Annulez la
+séance ([section 8](#8-arrêter-ou-annuler-une-séance)), puis voyez avec
+l'opérateur.
 
 > **Ne laissez jamais une séance en attente.** Elle n'expire pas. Si la machine
 > revient en ligne plus tard, elle la prendra et tentera de démarrer.
@@ -354,7 +356,13 @@ Sous ces blocs, deux courbes :
 
 La séance commence par la phase « Mesure de référence » : le bras ne tourne
 pas, la machine mesure la fréquence cardiaque de repos. La rotation commence
-ensuite.
+ensuite, sans autre action de votre part.
+
+Une vitesse à zéro ne veut pas dire que la séance est finie. Tant que la séance
+est en cours, la machine peut ralentir le bras jusqu'à l'arrêt, puis le
+relancer d'elle-même quand la cause disparaît (par exemple une fréquence
+cardiaque qui redevient lisible). La phase affichée ne prouve pas non plus
+l'arrêt du bras : lisez **Vitesse du bras**.
 
 Les valeurs arrivent par paquets, toutes les 5 secondes environ. L'écran a
 donc toujours plusieurs secondes de retard.
@@ -370,9 +378,9 @@ Il reste vide pour une séance d'entraînement. Ignorez-le.
 
 | Vous voyez | Ce que cela veut dire | Quoi faire |
 |---|---|---|
-| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité. | Prévenez l'opérateur. |
+| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis ralentit, puis termine la séance. Si la fréquence revient avant, la séance reprend seule. | Prévenez l'opérateur. |
 | « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine ajuste sa vitesse et applique ses règles de sécurité. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
-| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. | Prévenez l'opérateur. |
+| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Si la valeur affichée est « freeze », elle garde sa vitesse : une demande d'arrêt envoyée depuis le site ne ralentit pas le bras tant que cette valeur reste affichée. | Prévenez l'opérateur. Lui seul peut déclencher l'arrêt d'urgence. |
 | Les nombres remplacés par des tirets, plus de nouveaux points | La machine n'envoie plus rien : liaison Internet coupée, ou machine arrêtée. Le site ne peut plus rien lui demander. | Téléphonez à l'opérateur. |
 
 ## 8. Arrêter ou annuler une séance
@@ -382,8 +390,11 @@ administrateur.
 
 ### Annuler une séance en attente
 
-1. Ouvrez la séance. Si elle n'est pas affichée, cherchez-la dans
-   **Sessions**, onglet **Tous**.
+1. Ouvrez la vue en direct de la séance. Juste après le lancement, vous y êtes
+   déjà. Sinon : **Sessions**, onglet **Tous**, cliquez la ligne de la séance.
+   Vous arrivez sur sa page de détail, qui n'a pas de bouton d'annulation.
+   Cliquez alors le bouton en haut à droite de cette page (son libellé est
+   encore en anglais) : il ouvre la vue en direct.
 2. Cliquez **Annuler la séance**.
 3. Dans la fenêtre « Annuler la séance ? », cliquez **Annuler la séance**.
 
@@ -406,16 +417,23 @@ Ensuite :
 
 - le bandeau « Arrêt demandé, décélération en cours… » s'affiche et le bouton
   devient grisé ;
-- **le bras tourne encore** pendant la décélération ;
+- **le bras tourne encore** : regardez **Vitesse du bras**, pas le bandeau ;
 - quand la machine confirme l'arrêt, le bandeau devient « Séance terminée ».
 
 > **Ce bouton n'est pas un arrêt d'urgence.** C'est une demande. La machine la
-> lit toutes les 3 secondes environ, puis décélère progressivement. Si la
-> machine n'a plus Internet, la demande ne lui parvient pas. En cas de danger,
-> l'arrêt se fait à la machine, par l'opérateur.
+> lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite
+> progressivement. Deux cas où votre demande ne ralentit pas le bras :
+>
+> - la machine n'a plus Internet : la demande ne lui parvient pas ;
+> - la machine garde sa vitesse pour une raison de sécurité (mention « Action
+>   de sécurité » avec la valeur « freeze ») : elle enregistre la fin de
+>   séance, mais ne ralentit pas tant que cette valeur reste affichée.
+>
+> En cas de danger, l'arrêt se fait à la machine, par l'opérateur.
 
-Si le bandeau « Arrêt demandé, décélération en cours… » reste affiché
-longtemps, la machine ne reçoit pas votre demande. Téléphonez à l'opérateur.
+Si la vitesse du bras ne baisse pas après votre demande, ou si le bandeau
+« Arrêt demandé, décélération en cours… » reste affiché, téléphonez à
+l'opérateur.
 
 Une séance **manuelle**, démarrée à la console, apparaît aussi sur le site.
 Vous pouvez demander son arrêt de la même façon. Vous ne pouvez jamais la
@@ -437,8 +455,8 @@ Cliquez **Sessions**.
 |---|---|
 | **En attente** | Lancée depuis le site, pas encore prise par la machine. |
 | **Actives** | En cours. |
-| **Terminées** | Le programme est allé au bout, ou un arrêt normal a été demandé. |
-| **Échouées** | Refusée par la machine, annulée, ou terminée par un arrêt d'urgence ou une action de sécurité. |
+| **Terminées** | Le programme est allé au bout, ou un arrêt normal a été demandé en premier. Ce statut ne dit pas que la séance s'est passée sans incident : voir le motif de fin. |
+| **Échouées** | Refusée par la machine, annulée, ou terminée d'abord par l'arrêt d'urgence de la console ou par une action de sécurité. |
 
 Cliquez une ligne : une séance en cours s'ouvre en direct, les autres ouvrent
 leur détail.
@@ -466,19 +484,23 @@ pour une séance d'entraînement.
 | **Télémétrie** | Les deux courbes de toute la séance. |
 
 Le motif de fin est écrit par la machine, sans accents. Il commence par un
-mot-clé, parfois suivi de deux-points et d'une précision.
+mot-clé, parfois suivi de deux-points et d'une précision. Il ne garde que la
+première cause de la fin de séance.
 
 | Le motif commence par | Sens | Quoi faire |
 |---|---|---|
 | « programme_complete » | Le programme est allé au bout. | Rien. |
-| « operator_stop » | Un arrêt normal a été demandé, à la console ou depuis le site. | Rien. |
-| « emergency_stop » | Un arrêt d'urgence a été déclenché. | Demandez à l'opérateur ce qui s'est passé. |
+| « operator_stop » | Un arrêt normal a été demandé en premier, à la console ou depuis le site. Si un arrêt d'urgence a suivi, il n'apparaît pas ici. | Rien, sauf si l'opérateur vous signale un incident. |
+| « emergency_stop » | L'arrêt d'urgence de la console a été déclenché en premier. | Demandez à l'opérateur ce qui s'est passé. |
 | « safety_verdict » | La machine s'est arrêtée seule, pour une raison de sécurité. | Demandez à l'opérateur ce qui s'est passé. La raison précise est sur la console. |
 | « refusee par la machine » | La machine a refusé le départ. La suite du texte dit pourquoi. | Voyez avec l'opérateur : le plus souvent, une vérification reste à faire à la console. |
 | « la boucle n'a ni demarre ni refuse » | La machine a pris la demande, mais rien ne s'est passé en 60 secondes. | Voyez avec l'opérateur, puis relancez. |
 | Un texte en anglais, avec un nom | La séance a été annulée depuis le site avant son départ. | Rien. |
 | « tick_exception », « shutdown » | Une erreur du logiciel, ou l'arrêt de la console pendant la séance. | Appelez le support. |
 | Tout autre texte | | Notez le texte exact et appelez le support. |
+
+Un arrêt d'urgence câblé, sur la machine, n'apparaît dans aucun motif : le
+logiciel ne le voit pas. Seul l'opérateur peut vous dire s'il a été utilisé.
 
 Les courbes se lisent comme dans la vue en direct
 ([section 7](#7-suivre-une-séance-en-direct)).

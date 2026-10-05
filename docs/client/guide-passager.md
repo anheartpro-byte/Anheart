@@ -10,7 +10,7 @@
 >   temps) ne sont pas encore arrêtées. Ce guide ne donne donc aucune consigne
 >   médicale.
 > - Les informations qui manquent sont signalées par un encadré qui commence
->   par « À compléter par Anheart ». Tant que ces encadrés ne sont pas
+>   par les mots *À compléter par Anheart*. Tant que ces encadrés ne sont pas
 >   complétés, ce guide ne suffit pas pour préparer une séance.
 
 Les autres guides : [manuel opérateur](manuel-operateur.md) (la console de la
@@ -51,8 +51,9 @@ séance s'arrête.
 - Dans une séance « auto », la machine règle seule sa vitesse de rotation pour
   garder votre fréquence cardiaque dans une plage choisie à l'avance : la
   « zone cible » du programme.
-- La vitesse change donc au fil de la séance. Ces changements sont
-  progressifs : le logiciel limite l'accélération du bras.
+- La vitesse change donc au fil de la séance. En dehors d'un arrêt d'urgence,
+  ces changements sont progressifs : le logiciel limite l'accélération du
+  bras.
 
 D'autres capteurs peuvent être posés sur vous. L'opérateur voit leurs mesures,
 mais ils ne commandent pas la machine.
@@ -119,21 +120,21 @@ Une séance auto suit toujours les mêmes étapes. Le site web les nomme ainsi :
 | « Échauffement » | La rotation commence. La vitesse monte progressivement. |
 | « Maintien » | La machine ajuste sa vitesse pour garder votre fréquence cardiaque dans la zone cible. La vitesse peut monter ou descendre. |
 | « Retour au calme » | La vitesse redescend jusqu'à l'arrêt. |
-| « Récupération » | Le bras est arrêté. Vous restez en place. La machine surveille encore votre fréquence cardiaque. |
+| « Récupération » | En fonctionnement normal, le bras est arrêté. Vous restez en place. La machine surveille encore votre fréquence cardiaque. |
 
-La séance n'est finie qu'après l'étape « Récupération ».
-
-Les consignes complètes pour le passager ne sont pas encore validées. En
-attendant, retenez celle que la console affiche déjà à l'opérateur pendant un
-changement de vitesse en mode manuel : « NE PAS BOUGER LA TETE ». Bouger la
-tête pendant un changement de vitesse peut donner la nausée.
+La séance n'est finie qu'après l'étape « Récupération ». Le nom de l'étape ne
+suffit pas à savoir si le bras tourne : seul l'opérateur, qui lit la vitesse
+mesurée, peut vous le dire.
 
 Si quelque chose ne va pas, ou si vous voulez simplement arrêter, dites-le
 tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 
 > **À compléter par Anheart avant la semaine pilote :** les consignes à suivre
 > pendant la rotation, les sensations normales, et les signes qui doivent vous
-> faire demander l'arrêt.
+> faire demander l'arrêt. Point à trancher : la console affiche à l'opérateur,
+> pendant un changement de vitesse en mode manuel, l'avertissement « NE PAS
+> BOUGER LA TETE ». Ce guide ne peut pas dire si cette consigne vaut pour
+> vous.
 
 > **À compléter par Anheart avant la semaine pilote :** comment vous
 > communiquez avec l'opérateur pendant la séance, et comment vous lui demandez
@@ -150,29 +151,41 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 
 > **Un arrêt commandé par le logiciel n'est jamais instantané.** Le bras
 > ralentit progressivement, puis s'arrête. Il tourne encore pendant ce
-> ralentissement.
+> ralentissement. Il arrive aussi que la machine garde d'abord sa vitesse un
+> moment avant de ralentir.
 
-Tant que l'opérateur ne vous a pas dit que le bras est arrêté, considérez
-qu'il tourne encore. C'est lui qui lit la vitesse mesurée.
+> **Un bras arrêté peut repartir.** Pendant la séance, la machine peut ralentir
+> jusqu'à l'arrêt, puis repartir d'elle-même, par exemple quand votre
+> fréquence cardiaque redevient lisible. Un bras à l'arrêt ne veut donc pas
+> dire que la séance est finie.
+
+Tant que l'opérateur ne vous a pas dit que la séance est terminée, restez
+installé et considérez que le bras peut tourner ou repartir. C'est lui qui lit
+la vitesse mesurée et l'état de la séance.
 
 ### Les cinq façons dont une séance s'arrête
 
-**1. Le programme arrive à son terme.** La machine ralentit seule (« Retour au
-calme »), s'arrête, puis reste à l'arrêt pendant l'étape « Récupération ».
+**1. Le programme arrive à son terme.** En fonctionnement normal, la machine
+ralentit seule (« Retour au calme »), s'arrête, puis reste à l'arrêt pendant
+l'étape « Récupération ».
 
 **2. L'opérateur arrête la séance.** À votre demande ou de sa propre décision,
-il appuie sur son bouton d'arrêt normal. La machine termine la séance en
-douceur : elle passe encore par le retour au calme et la récupération.
+il appuie sur son bouton d'arrêt normal. En temps normal, la machine termine
+la séance en douceur : elle passe encore par le retour au calme et la
+récupération. Si la machine est en train de garder sa vitesse pour une raison
+de sécurité, cet arrêt normal ne ralentit pas le bras tout de suite :
+l'opérateur utilise alors son arrêt d'urgence.
 
 **3. Quelqu'un demande l'arrêt depuis le site web.** Le gestionnaire, un
 administrateur, ou vous-même depuis votre compte. La machine prend cette
-demande en compte en quelques secondes, puis ralentit comme pour un arrêt
-normal. Cela ne fonctionne que si la machine est reliée à Internet. Ce n'est
-pas un arrêt d'urgence.
+demande en compte en quelques secondes, puis réagit comme pour un arrêt
+normal, avec la même limite. Cela ne fonctionne que si la machine est reliée à
+Internet. Ce n'est pas un arrêt d'urgence.
 
 **4. La machine décide seule.** Elle se surveille en permanence. Selon le cas,
-elle garde sa vitesse sans plus monter, elle ralentit, elle termine la séance
-en douceur, ou elle déclenche elle-même un arrêt d'urgence. Par exemple :
+elle garde sa vitesse, elle ralentit (parfois jusqu'à l'arrêt, sans terminer
+la séance), elle termine la séance en douceur, ou elle déclenche elle-même un
+arrêt d'urgence. Par exemple :
 
 - votre fréquence cardiaque dépasse le seuil de sécurité du programme ;
 - votre fréquence cardiaque chute brutalement ;
@@ -185,11 +198,13 @@ en douceur, ou elle déclenche elle-même un arrêt d'urgence. Par exemple :
 **5. L'opérateur déclenche un arrêt d'urgence.** Il dispose d'un bouton d'arrêt
 d'urgence sur son écran. La machine doit aussi avoir un arrêt d'urgence
 câblé : le logiciel demande à l'opérateur de l'attester, par son nom, avant
-toute séance.
+toute séance. Le logiciel ne voit pas cet arrêt câblé et ne peut pas vérifier
+qu'il existe.
 
-Après un arrêt de sécurité ou un arrêt d'urgence, rien ne repart tout seul.
-L'opérateur doit comprendre ce qui s'est passé et le confirmer par son nom
-avant toute nouvelle séance.
+Une fois la séance terminée, rien ne repart tout seul. Après un arrêt
+d'urgence, ou un arrêt de sécurité qui a mis fin à la séance, l'opérateur doit
+comprendre ce qui s'est passé et le confirmer par son nom avant toute nouvelle
+séance.
 
 > **À compléter par Anheart avant la semaine pilote :** ce que fait exactement
 > l'arrêt d'urgence câblé de la machine, et ce que vous ressentirez.
