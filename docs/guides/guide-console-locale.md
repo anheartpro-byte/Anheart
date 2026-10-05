@@ -283,7 +283,8 @@ les pages**. On le voit sur la capture du Tableau de bord au repos :
 
 Repères de la capture (barre latérale, de haut en bas) :
 
-1. **AnHeart, Console du banc** : le nom de la page.
+1. **AnHeart, Console du banc** : le nom de la console (chaque page a le sien, repris
+   dans le titre de l'onglet).
 2. **Mode** (`REPOS`) : ce que fait la machine.
 3. **Etat** (`idle`) : ce que la console a accepté de faire.
 4. **Liaison** (`en direct`) : la page reçoit des données fraîches.
@@ -438,7 +439,8 @@ séance programmée. `age` = âge de la mesure en secondes (barré si trop vieil
 de 4 s environ), `brut` = dernière valeur calculée, `seq` = numéro de la mesure.
 Pastille de qualité : `good`, `noisy`, `mains_dominated` (parasite secteur),
 `no_signal`, ou `pas de signal`. Dès que la mesure est trop vieille, la pastille
-passe à `perime` (rouge), quelle que soit la dernière qualité connue.
+passe à `perime` (grise, comme sur les cartes de la page Capteurs), quelle que soit la
+dernière qualité connue.
 
 **Vitesse mesuree** : la vitesse lue sur le variateur, en cinq unités, plus le courant
 moteur en ampères.
@@ -997,11 +999,32 @@ Repères :
 
 > Le bandeau rouge du haut,
 > `ARRET D'URGENCE VERROUILLE surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete`,
-> reste affiché tant que le verdict d'arrêt d'urgence est verrouillé, sur toutes les
-> pages et sur tous les écrans ouverts, que l'arrêt vienne de l'E-STOP ou de la
-> caméra (rejoué en simulation), ou d'une autre règle qui demande `quick_stop`
-> (d'après le code, non rejoué). Il ne dit pas que la machine est arrêtée : seule la
-> vitesse **mesurée** le dit. Il disparaît après l'acquittement (§13.6).
+> apparaît sur un écran dès que cet écran apprend qu'un arrêt d'urgence est
+> verrouillé : par son propre clic sur E-STOP, par les données qu'il reçoit en continu,
+> ou par l'état qu'il relit toutes les 5 s. Il s'affiche donc aussi sur un écran qui
+> n'a pas cliqué, et après un arrêt déclenché par la caméra. Il reste, sur toutes les
+> pages de cet écran, tant qu'une donnée plus récente n'a pas montré le verdict levé ;
+> dans le doute, il reste. Il disparaît après l'acquittement (§13.6).
+>
+> Il ne dit pas que la machine est arrêtée : seule la vitesse **mesurée** le dit.
+>
+> À savoir :
+>
+> * Il s'affiche pour tout verdict `quick_stop` verrouillé, y compris celui d'une
+>   règle de sécurité (par exemple `reverse_rotation`). Dans ce cas la ligne
+>   `e-stop verrouille` dit `non` et l'acquittement ne demande pas la case du coup de
+>   poing : lisez la ligne `regle`.
+> * Quand `go_silent` devient le verdict en cours (liaison perdue avec le variateur,
+>   par exemple), plus rien ne s'acquitte : un bandeau déjà affiché le reste jusqu'au
+>   redémarrage de la console.
+> * Limite : un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict en
+>   cours ne peut pas savoir qu'un arrêt déclenché par la caméra est verrouillé
+>   derrière lui, car la console ne le lui dit pas. Il affiche `go_silent`, sans le
+>   bandeau.
+>
+> Rejoué en simulation : E-STOP de la page, second écran, arrêt caméra, et perte de la
+> liaison au variateur au moment du clic (deux écrans). Le cas d'une règle
+> (`reverse_rotation`) a été rejoué lors de la revue de cette correction.
 
 ### 13.6 Acquitter un verdict de sécurité
 
@@ -1080,11 +1103,11 @@ vu dans la capsule), une séance **BANC** est refusée :
 Repères :
 
 1. Carte **BITalino** : pastille rouge `deconnecte`, `tentatives` qui monte (la console
-   réessaie toutes les 5 s environ), `dernier lot 14.1 s`, `erreur` :
+   réessaie toutes les 5 s environ), `dernier lot 14.4 s`, `erreur` :
    `connexion au BITalino impossible (sim)`.
-2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,3 s),
-   pastille rouge `perime` : la mesure est trop vieille, quelle qu'ait été sa dernière
-   qualité.
+2. Carte **Frequence cardiaque (regulation)** : valeur absente, `age` barré (14,5 s),
+   pastille grise `perime` : la mesure est trop vieille, quelle qu'ait été sa dernière
+   qualité. Ne la lisez plus.
 3. Barre latérale : les points des six capteurs deviennent creux et gris (périmés).
 4. **Vitesse mesuree** `5.00` : en séance manuelle de banc, la perte de l'ECG
    **n'arrête pas** la machine (Securite reste `none`). La vitesse manuelle ne dépend

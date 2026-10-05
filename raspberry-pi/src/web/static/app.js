@@ -59,7 +59,12 @@ var state = {
   programsEnabled: true, // from /api/panel; false until milestone M5
   panel: null,           // the last /api/panel answer
   status: null,          // the last /api/status answer
-  estopReceipt: null,    // this page's own E-STOP, until a snapshot taken after it arrives
+  statusSent: 0,         // /api/status requests sent so far
+  statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
+  estopReceipt: null,    // this page's own E-STOP, until a frame or a status taken after it takes over
+  estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
+  estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
+  estopFrame: null,      // what the last frame said about it: "latched", "clear" or "silent"
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
@@ -280,8 +285,7 @@ function closeNav() {
 */
 function refreshLiveness() {
   var fresh = state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
-  var banner = el("banner");
-  show(banner, !fresh);
+  showBanner(el("banner"), !fresh);
   if (!fresh) {
     text(
       el("banner-detail"),
@@ -314,34 +318,73 @@ function refreshLiveness() {
 }
 
 /*
+  What one report, a frame or a /api/status answer, says about a latched
+  emergency stop: "latched", "clear", or "silent" when it cannot say.
+
+  go_silent outranks an emergency stop and takes its place as the standing
+  verdict, so a report whose standing verdict is go_silent hides any stop
+  latched behind it. It also refuses every acknowledgement: a stop that was
+  latched when go_silent took over is still latched, and no report can say
+  otherwise for as long as go_silent stands. Only the interface's own flag,
+  in /api/status, still shows through it.
+*/
+function estopOpinion(standing, flagged) {
+  if (flagged || (standing && standing.latched && standing.action === "quick_stop")) {
+    return "latched";
+  }
+  return standing && standing.action === "go_silent" ? "silent" : "clear";
+}
+
+/*
   A latched emergency stop has its own banner, for as long as it is latched.
-  It is decided here and nowhere else, from what the machine reports:
+  It is decided here and nowhere else, from three sources: the standing
+  verdict of the latest frame, the latest /api/status answer, and the receipt
+  of this page's own E-STOP.
 
-  - the standing verdict of the latest snapshot, five times a second, whoever
-    latched the stop: this page, another screen, the camera or a rule;
-  - /api/status while go_silent stands. It outranks an emergency stop and
-    takes its place as the standing verdict, so the snapshot cannot show one
-    latched behind it;
-  - the receipt of this page's own E-STOP, until a snapshot taken after the
-    latch arrives: the banner neither waits for a frame nor drops on one that
-    was already on its way.
+  - It is RAISED by any of them reporting a latched stop, whoever latched it
+    (this page, another screen, the camera, a rule), frames or no frames.
+  - It is LOWERED only by a report that can say the stop is released: a frame
+    that says so and is not older than the receipt, with no status answer
+    saying otherwise, or a status answer alone when no frame has ever come.
+  - In every other case it KEEPS what it shows. Under go_silent nothing can
+    say "released", so a banner that was up stays up; unknown is never read
+    as released.
 
-  It says "latched", never "stopped": the measured speed alone speaks about
-  the shaft. When frames stop it keeps the last known answer, under the
-  NO LIVE DATA banner.
+  The receipt holds the banner from the click until a frame taken after the
+  latch can speak, or a status asked after it answers: the banner neither
+  waits for a frame nor drops on one that was already on its way.
+
+  When the frames change their mind in a way they cannot settle alone, the
+  status is asked at once rather than at its next 5 s turn: go_silent may hide
+  a stop this page never saw latched, and a frame saying "released" against a
+  status saying "latched" may simply be the older of the two.
+
+  The banner says "latched", never "stopped": the measured speed alone speaks
+  about the shaft.
 */
 function renderEstopBanner() {
   var snapshot = state.snapshot;
-  var standing = snapshot ? snapshot.safety : null;
-  var receipt = state.estopReceipt;
-  if (receipt && snapshot && snapshot.at >= receipt.at) {
-    receipt = state.estopReceipt = null;
+  var status = state.status;
+  var frame = snapshot ? estopOpinion(snapshot.safety, false) : null;
+  var polled = status ? estopOpinion(status.standing, status.estop_latched) : null;
+  if (state.estopReceipt && snapshot && frame !== "silent" && snapshot.at >= state.estopReceipt.at) {
+    state.estopReceipt = null;
   }
-  var latched = Boolean(standing && standing.latched && standing.action === "quick_stop");
-  var behind = Boolean(
-    standing && standing.action === "go_silent" && state.status && estopLatched(state.status)
-  );
-  show(el("estop-banner"), latched || behind || Boolean(receipt));
+  if (frame === "latched" || polled === "latched" || state.estopReceipt) {
+    state.estopShown = true;
+  } else if (polled !== "silent" && (frame === "clear" || (frame === null && polled === "clear"))) {
+    state.estopShown = false;
+  }
+  showBanner(el("estop-banner"), state.estopShown);
+
+  if (frame !== state.estopFrame) {
+    state.estopFrame = frame;
+    if (frame === "silent" || (frame === "clear" && polled !== null && polled !== "clear")) {
+      loadStatus().catch(function () {
+        /* the banner keeps its state; the periodic refresh asks again */
+      });
+    }
+  }
 }
 
 /*
@@ -351,6 +394,19 @@ function renderEstopBanner() {
 */
 function fitBanners() {
   document.documentElement.style.setProperty("--banners-h", el("banners").offsetHeight + "px");
+}
+
+/*
+  Show or hide one banner, and measure the stack when that changes it. The
+  ResizeObserver set up in start() does the same and also sees a banner
+  re-wrap; this is what a browser without one still gets.
+*/
+function showBanner(node, visible) {
+  var changes = node.classList.contains("hidden") === visible;
+  show(node, visible);
+  if (changes) {
+    fitBanners();
+  }
 }
 
 /* ------------------------------------------------------------- websocket  */
@@ -445,13 +501,14 @@ function safetyKind(rank) {
 /*
   The grade of the heart rate, or "perime" once the reading is stale. The
   grade belongs to the last sample: when nothing new is measured it would go
-  on saying "good" about a signal that is no longer there.
+  on saying "good" about a signal that is no longer there. "perime" is grey
+  here as on a stale sensor card: one word, one look.
 */
 function renderHrQuality(node, hr) {
   if (!hr) {
     pill(node, "pas de signal", "bad");
   } else if (hr.stale) {
-    pill(node, "perime", "bad");
+    pill(node, "perime", "");
   } else {
     pill(node, hr.quality, hr.quality === "good" ? "good" : "bad");
   }
@@ -466,8 +523,16 @@ function shownPhase(snapshot) {
   return snapshot.mode === "repos" && snapshot.phase === "done" ? "" : snapshot.phase;
 }
 
-/** One line for a drive fault. `message` is not added: it repeats all three. */
+/*
+  One line for a drive fault. For a code the table knows, `message` is the
+  mnemonic, the code and the meaning over again, so it is not added. For an
+  unknown code it has another form: it is the one place that gives the code in
+  hexadecimal, and it already ends with the meaning. It is shown as it is.
+*/
 function faultText(fault) {
+  if (fault.name === "unknown") {
+    return "DEFAUT " + fault.message;
+  }
   return "DEFAUT " + fault.mnemonic + " (LFT brut " + fault.raw_code + ") : " + fault.meaning;
 }
 
@@ -1495,8 +1560,18 @@ function estopLatched(status) {
 }
 
 function loadStatus() {
+  var sent = (state.statusSent += 1);
   return api("/api/status").then(function (status) {
+    if (sent < state.statusShown) {
+      // Asked before the answer already on screen: it can only say something older.
+      return status;
+    }
+    state.statusShown = sent;
     state.status = status;
+    if (state.estopReceipt && sent > state.estopReceiptSent) {
+      // Asked after the E-STOP was latched: this answer carries it from here on.
+      state.estopReceipt = null;
+    }
     renderEstopBanner();
     pill(
       el("run-state"),
@@ -1753,8 +1828,11 @@ function doEstop() {
   })
     .then(function (receipt) {
       state.estopReceipt = receipt;
+      state.estopReceiptSent = state.statusSent;
       renderEstopBanner();
-      loadStatus();
+      loadStatus().catch(function () {
+        /* the receipt keeps the banner up; the periodic refresh asks again */
+      });
     })
     .catch(function (error) {
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
@@ -1883,6 +1961,9 @@ function start() {
   if (window.ResizeObserver) {
     // Fires when a banner is shown, hidden or re-wrapped, and only then.
     new window.ResizeObserver(fitBanners).observe(el("banners"));
+  } else {
+    // showBanner() already measures on show and hide; a resize can re-wrap the text.
+    window.addEventListener("resize", fitBanners);
   }
 
   showView("console");

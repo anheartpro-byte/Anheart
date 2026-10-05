@@ -16,6 +16,7 @@ class Element {
     this.style = {};
     this.value = "";
     this.text = text;
+    this.offsetHeight = 0;
     this.classList = {
       toggle: (name, enabled) => {
         if (enabled) this.classes.add(name);
@@ -47,6 +48,11 @@ class Element {
   addEventListener() {}
 }
 
+// Every banner of the markup, found by its class: its id and what it contains.
+const banners = [...html.matchAll(/<div id="([^"]+)" class="banner(?: [^"]*)?"[^>]*>([\s\S]*?)<\/div>/g)].map(
+  (banner) => ({ id: banner[1], inner: banner[2] }),
+);
+
 // The shipped page and script, with every element carrying the classes and the text the markup gives it.
 function panel() {
   const nodes = new Map(
@@ -56,9 +62,11 @@ function panel() {
     ]),
   );
   const clock = { now: 1000 };
+  const published = new Map();
   const context = vm.createContext({
     document: {
       title: /<title>([^<]*)<\/title>/.exec(html)[1],
+      documentElement: { style: { setProperty: (name, value) => published.set(name, value) } },
       getElementById: (id) => nodes.get(id) ?? null,
       createElement: () => new Element(),
     },
@@ -69,6 +77,8 @@ function panel() {
     performance: { now: () => clock.now },
   });
   vm.runInContext(source, context, { filename: fileURLToPath(new URL("app.js", assets)) });
+  // A machine that answers nothing until the test says what it answers.
+  context.api = () => new Promise(() => undefined);
   // A page whose socket is open and delivering frames.
   context.state.connected = true;
   context.state.lastFrameAt = clock.now;
@@ -76,11 +86,20 @@ function panel() {
     assert.ok(nodes.has(id), `the page has no #${id}`);
     return nodes.get(id);
   };
+  // What a banner reads on screen: its markup, with the parts the script rewrites as they are now.
+  const said = (banner) =>
+    banner.inner
+      .replace(/<[a-z]+ id="([^"]+)"[^>]*>[^<]*<\/[a-z]+>/g, (whole, id) => nodes.get(id).textContent)
+      .replace(/<[^>]+>/g, " ");
   return {
     context,
     clock,
     node,
+    published,
     shown: (id) => !node(id).classes.has("hidden"),
+    // Whether a banner saying `phrase` is on screen, whichever element carries it.
+    announced: (phrase) =>
+      banners.some((banner) => !nodes.get(banner.id).classes.has("hidden") && said(banner).includes(phrase)),
     // One frame from the machine, as the socket handler renders it.
     frame: (snapshot) => {
       clock.now += 200;
@@ -89,6 +108,12 @@ function panel() {
       context.refreshLiveness();
     },
   };
+}
+
+function deferred() {
+  const answer = {};
+  answer.promise = new Promise((resolve, reject) => Object.assign(answer, { resolve, reject }));
+  return answer;
 }
 
 function rows(grid) {
@@ -194,17 +219,39 @@ function panelRow(overrides = {}) {
 
 const receipt = { operator: "", reason: "", at: 60, wall_clock: 0, action: "quick_stop", rule: "operator_estop", detail: "" };
 
+const silent = () => verdict("go_silent", "comms_lost");
+
+// The operator presses E-STOP and the machine latches it. The status the page then asks for is
+// answered with `statusAnswer`, or not at all.
+async function pressEstop(context, statusAnswer = new Promise(() => undefined)) {
+  context.api = (path) => (path === "/api/session/estop" ? Promise.resolve(receipt) : statusAnswer);
+  context.doEstop();
+  await settle();
+}
+
 /* ----------------------------------------- the emergency-stop banner (1) */
+
+test("the notice of a latched stop is still on screen after the liveness check has run", async () => {
+  // Given a live page whose operator presses E-STOP, and a machine that latches it.
+  const { context, frame, announced } = panel();
+  frame(snapshot({ at: 59.9 }));
+  await pressEstop(context);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  // When the next frames arrive, each followed by the liveness check that used to hide the notice.
+  for (let tick = 1; tick <= 5; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+    // Then a banner still says so, whichever element carries it.
+    assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true, `gone after ${tick} frames`);
+    assert.equal(announced("NO LIVE DATA"), false);
+  }
+});
 
 test("the emergency-stop banner outlives the liveness refresh for as long as the verdict is latched", async () => {
   // Given a live page whose operator presses E-STOP, and a machine that latches it.
   const { context, frame, shown } = panel();
   frame(snapshot({ at: 59.9 }));
   assert.equal(shown("estop-banner"), false);
-  context.api = () => Promise.resolve(receipt);
-  context.loadStatus = () => Promise.resolve();
-  context.doEstop();
-  await settle();
+  await pressEstop(context);
   assert.equal(shown("estop-banner"), true);
   // When frames keep arriving and the liveness check keeps running, well past half a second.
   for (let tick = 1; tick <= 50; tick += 1) {
@@ -221,10 +268,7 @@ test("the emergency-stop banner outlives the liveness refresh for as long as the
 test("a frame taken before the latch does not drop the banner the receipt raised", async () => {
   // Given an accepted E-STOP whose receipt overtook a frame already on its way.
   const { context, frame, shown } = panel();
-  context.api = () => Promise.resolve(receipt);
-  context.loadStatus = () => Promise.resolve();
-  context.doEstop();
-  await settle();
+  await pressEstop(context);
   // When that older frame, taken before the latch, is rendered.
   frame(snapshot({ at: 59.9 }));
   // Then the banner still stands on the receipt.
@@ -256,14 +300,191 @@ test("the banner is kept for an emergency stop, not for every latched verdict", 
 test("go_silent standing in front of a latched e-stop does not hide it", async () => {
   // Given go_silent, which outranks an emergency stop and replaces it as the standing verdict.
   const { context, frame, shown } = panel();
-  frame(snapshot({ ...verdict("go_silent", "comms_lost") }));
+  frame(snapshot({ ...silent() }));
   assert.equal(shown("estop-banner"), false);
   // When /api/status reports the e-stop latched behind it.
+  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true, standing: silent().safety }));
+  await context.loadStatus();
+  // Then the banner is shown as soon as that answer is in, and the next frame does not take it down.
+  assert.equal(shown("estop-banner"), true);
+  frame(snapshot({ at: 51, ...silent() }));
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a screen that showed a latched stop keeps it when go_silent takes over before its next status poll", async () => {
+  // Given a screen that did not press the button, whose last status poll predates the stop.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent becomes the standing verdict: nothing can have acknowledged the stop since.
+  context.api = () => new Promise(() => undefined);
+  for (let tick = 1; tick <= 25; tick += 1) {
+    frame(snapshot({ at: 61 + tick * 0.2, mode: "arret", ...silent() }));
+    // Then the banner stays, on the old status and on no status answer at all.
+    assert.equal(shown("estop-banner"), true, `hidden after ${tick} go_silent frames`);
+  }
+});
+
+test("a frame that turns to go_silent asks for the status at once, and only once", () => {
+  // Given a live page, and a count of what it asks the machine.
+  const { context, frame } = panel();
+  const asked = [];
+  context.api = (path) => {
+    asked.push(path);
+    return new Promise(() => undefined);
+  };
+  frame(snapshot());
+  assert.deepEqual(asked, []);
+  // When go_silent becomes the standing verdict.
+  frame(snapshot({ at: 51, ...silent() }));
+  // Then the status is asked now, not at its next 5 s turn, and not again on every frame.
+  assert.deepEqual(asked, ["/api/status"]);
+  frame(snapshot({ at: 51.2, ...silent() }));
+  frame(snapshot({ at: 51.4, ...silent() }));
+  assert.deepEqual(asked, ["/api/status"]);
+});
+
+for (const outcome of ["slow", "failed"]) {
+  test(`the clicking screen keeps its banner through go_silent when the status answer is ${outcome}`, async () => {
+    // Given an E-STOP pressed as the link to the drive is lost: the status asked next has not answered.
+    const { context, frame, shown } = panel();
+    frame(snapshot({ at: 59.9, mode: "manuel", phase: "hold" }));
+    const answer = deferred();
+    await pressEstop(context, answer.promise);
+    assert.equal(shown("estop-banner"), true);
+    // When the first frames after the latch already carry go_silent, not the stop.
+    for (let tick = 1; tick <= 10; tick += 1) {
+      frame(snapshot({ at: 60 + tick * 0.2, mode: "arret", ...silent() }));
+      assert.equal(shown("estop-banner"), true, `hidden after ${tick} go_silent frames`);
+      // The receipt is not given up on a frame that cannot speak about the stop.
+      assert.notEqual(context.state.estopReceipt, null);
+    }
+    // Then the answer, when it comes or fails, does not take the banner down either.
+    if (outcome === "slow") {
+      answer.resolve(status({ run_state: "stopping", estop_latched: true, standing: silent().safety }));
+    } else {
+      answer.reject(new Error("unreachable"));
+    }
+    await settle();
+    assert.equal(shown("estop-banner"), true);
+    // A status asked after the click takes over from the receipt; a failed one leaves it in place.
+    assert.equal(context.state.estopReceipt === null, outcome === "slow");
+    frame(snapshot({ at: 63, mode: "arret", ...silent() }));
+    assert.equal(shown("estop-banner"), true);
+  });
+}
+
+test("a stop latched by the camera stays announced once go_silent stands, whatever the status then says", async () => {
+  // Given a stop latched by the camera: the frames show it, the interface's own flag stays false.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent takes over, and a fresh status can only repeat go_silent with the flag still false.
+  context.api = () => Promise.resolve(status({ estop_latched: false, standing: silent().safety }));
+  frame(snapshot({ at: 61, mode: "arret", ...silent() }));
+  await settle();
+  await context.loadStatus();
+  // Then the banner stays: go_silent refuses every acknowledgement, so the stop is still latched.
+  for (let tick = 1; tick <= 5; tick += 1) {
+    frame(snapshot({ at: 61 + tick * 0.2, mode: "arret", ...silent() }));
+    assert.equal(shown("estop-banner"), true, `hidden after ${tick} frames`);
+  }
+});
+
+test("a latched e-stop reported by the status alone raises the banner, and a later answer lowers it", async () => {
+  // Given a page that has not received a single frame yet.
+  const { context, shown } = panel();
+  // When the status says an emergency stop is latched.
   context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
   await context.loadStatus();
-  frame(snapshot({ at: 51, ...verdict("go_silent", "comms_lost") }));
-  // Then the banner is shown.
+  // Then the banner does not wait for a frame.
   assert.equal(shown("estop-banner"), true);
+  // And with still no frame, only a later status saying it is released takes it down.
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("with the socket down, a status that reports a latched e-stop raises the banner", async () => {
+  // Given a last frame that showed no stop, then frames that stop coming.
+  const { context, clock, frame, shown } = panel();
+  frame(snapshot());
+  context.state.connected = false;
+  clock.now += 5000;
+  context.refreshLiveness();
+  assert.equal(shown("banner"), true);
+  assert.equal(shown("estop-banner"), false);
+  // When HTTP still answers, and says a stop latched by the camera is the standing verdict.
+  context.api = () => Promise.resolve(status({ standing: verdict("quick_stop", "operator_estop").safety }));
+  await context.loadStatus();
+  // Then the banner is raised under NO LIVE DATA.
+  assert.equal(shown("estop-banner"), true);
+  // And a later answer where go_silent has taken over cannot say it was released: the banner stays.
+  context.api = () => Promise.resolve(status({ standing: silent().safety }));
+  await context.loadStatus();
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("with no frame to say so, a status asked after the click speaks for the receipt", async () => {
+  // Given frames that stopped just before an E-STOP the machine still took over HTTP.
+  const { context, clock, frame, shown } = panel();
+  frame(snapshot({ at: 59.9 }));
+  context.state.connected = false;
+  clock.now += 5000;
+  context.refreshLiveness();
+  const answer = deferred();
+  await pressEstop(context, answer.promise);
+  assert.equal(shown("estop-banner"), true);
+  // When the status asked after the click says the latch is gone: acknowledged from another screen.
+  answer.resolve(status());
+  await settle();
+  // Then that answer is newer than the receipt, and the banner follows it.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a frame saying released against a status saying latched asks again instead of deciding", async () => {
+  // Given a latched stop known from the frames and from the status.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  await context.loadStatus();
+  frame(snapshot({ at: 60.2, ...verdict("quick_stop", "operator_estop") }));
+  // When a frame shows it released: acknowledged elsewhere, or a frame older than that status.
+  const answer = deferred();
+  const asked = [];
+  context.api = (path) => {
+    asked.push(path);
+    return answer.promise;
+  };
+  frame(snapshot({ at: 61 }));
+  // Then the banner stays while the two disagree, and the status is asked at once.
+  assert.equal(shown("estop-banner"), true);
+  assert.deepEqual(asked, ["/api/status"]);
+  // And it goes when the status agrees.
+  answer.resolve(status());
+  await settle();
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a status answer older than the one on screen is not applied", async () => {
+  // Given two status requests in flight: one sent before a stop was latched, one after.
+  const { context, node, shown } = panel();
+  const before = deferred();
+  const after = deferred();
+  const answers = [before.promise, after.promise];
+  context.api = () => answers.shift();
+  const first = context.loadStatus();
+  const second = context.loadStatus();
+  // When the later one answers first.
+  after.resolve(status({ run_state: "stopping", estop_latched: true }));
+  await second;
+  assert.equal(shown("estop-banner"), true);
+  // Then the earlier one, arriving late, changes nothing.
+  before.resolve(status());
+  await first;
+  assert.equal(shown("estop-banner"), true);
+  assert.equal(node("run-state").textContent, "stopping");
 });
 
 test("losing the machine keeps the last latched stop on screen, next to NO LIVE DATA", () => {
@@ -280,10 +501,8 @@ test("losing the machine keeps the last latched stop on screen, next to NO LIVE 
 
 test("what sticks below the banners is told the room they take", () => {
   // Given the page wired as on load, in a browser that reports element resizes.
-  const { context, node } = panel();
-  const published = new Map();
+  const { context, node, published } = panel();
   const observers = [];
-  context.document.documentElement = { style: { setProperty: (name, value) => published.set(name, value) } };
   context.document.querySelector = () => new Element();
   context.window.ResizeObserver = class {
     constructor(callback) {
@@ -307,6 +526,20 @@ test("what sticks below the banners is told the room they take", () => {
   assert.equal(published.get("--banners-h"), "54px");
 });
 
+test("without ResizeObserver the banner stack is still measured when a banner appears or goes", () => {
+  // Given a browser with no ResizeObserver, and a stack that is 54 px tall with one banner in it.
+  const { frame, node, published } = panel();
+  node("banners").offsetHeight = 54;
+  // When the emergency-stop banner appears.
+  frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
+  // Then the height is published for the sidebar and the mobile bar.
+  assert.equal(published.get("--banners-h"), "54px");
+  // And again when it goes.
+  node("banners").offsetHeight = 0;
+  frame(snapshot({ at: 51 }));
+  assert.equal(published.get("--banners-h"), "0px");
+});
+
 /* -------------------------------------------- the heart-rate grade (2) */
 
 for (const id of ["console-hr-quality", "hr-quality"]) {
@@ -321,7 +554,21 @@ for (const id of ["console-hr-quality", "hr-quality"]) {
     // Then the badge no longer vouches for it.
     assert.equal(node(id).textContent, "perime");
     assert.equal(node(id).classes.has("pill-good"), false);
-    assert.ok(node(id).classes.has("pill-bad"));
+  });
+
+  test(`#${id} shows "perime" the way a stale sensor card does`, () => {
+    // Given a sensor channel that has never delivered a window: its card says "perime".
+    const { context, frame, node } = panel();
+    context.renderSensors([
+      { kind: "ECG", channel: 0, label: "Electrocardiogramme", unit: "mV", description: "", display_rate: 250, at: null, waveform: [], quality: "good", detail: "", metrics: [] },
+    ]);
+    const card = context.state.sensors.ECG.card.badge;
+    assert.equal(card.textContent, "perime");
+    // When the heart rate in control is stale too.
+    frame(snapshot({ heart_rate: { bpm: 72, quality: "good", age_s: 14.7, stale: true, seq: 423 }, live_bpm: null }));
+    // Then the same word has the same look in both places.
+    assert.equal(node(id).textContent, card.textContent);
+    assert.equal(node(id).className, card.className);
   });
 
   test(`#${id} keeps the grade of a fresh reading and names a missing one`, () => {
@@ -384,6 +631,20 @@ for (const id of ["console-fault", "fault"]) {
     assert.ok(shownText.includes("18"));
     assert.equal(shownText.split(meaning).length - 1, 1, shownText);
     assert.equal(shownText.split("ObF").length - 1, 1, shownText);
+  });
+
+  test(`#${id} keeps the hexadecimal form of a code the table does not know`, () => {
+    // Given an unknown code: its `message` is the only field that carries the hexadecimal form.
+    const meaning = "code de defaut non reconnu : lire le code affiche sur le variateur.";
+    const fault = { name: "unknown", mnemonic: "?", meaning, raw_code: 27, message: "code de defaut inconnu 27 (0x001B) : " + meaning };
+    const { frame, node } = panel();
+    // When it is rendered.
+    frame(snapshot({ drive_state: "fault", fault }));
+    // Then the code is there both ways, and the meaning still one time.
+    const shownText = node(id).textContent;
+    assert.ok(shownText.includes("27"));
+    assert.ok(shownText.includes("0x001B"), shownText);
+    assert.equal(shownText.split(meaning).length - 1, 1, shownText);
   });
 }
 
