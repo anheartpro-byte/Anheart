@@ -120,7 +120,9 @@ export default defineSchema({
   // Machines - Raspberry Pi devices
   machines: defineTable({
     name: v.string(),
-    apiKey: v.string(), // Hashed API key
+    apiKey: v.string(), // Versioned salted digest; legacy values require replacement.
+    apiKeySelector: v.optional(v.string()),
+    authenticationEnabled: v.optional(v.boolean()),
     status: v.union(
       v.literal("online"),
       v.literal("offline"),
@@ -142,6 +144,7 @@ export default defineSchema({
     live: v.optional(liveStateValidator),
   })
     .index("by_api_key", ["apiKey"])
+    .index("by_apiKeySelector", ["apiKeySelector"])
     .index("by_status", ["status"])
     .index("by_is_deleted", ["isDeleted"]),
 

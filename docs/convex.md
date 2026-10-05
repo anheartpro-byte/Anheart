@@ -16,7 +16,8 @@ machines, les séances et la télémétrie. Il sert deux clients :
 > une console de Pi en simulation : voir
 > [deploiement.md](deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026).
 > Il n'est **pas** en production (ticket ANH-82), et n'a jamais été appelé par
-> un vrai Pi. Il n'existe **aucun test automatisé** côté Convex. Les fichiers `convex/training.ts`, `lib/training.ts`,
+> un vrai Pi. Cet état de déploiement est historique ; les tests locaux Convex
+> sont désormais exécutables avec `npm run test:convex`. Les fichiers `convex/training.ts`, `lib/training.ts`,
 > `components/training/` et la page `my-machines` ne sont pas encore commités
 > (état `git status` au moment de la rédaction).
 
@@ -119,7 +120,9 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | Champ | Rôle |
 |---|---|
 | `name`, `location` | Nom, lieu. |
-| `apiKey` | Clé API **transformée** (voir [§9](#9-défauts-connus-et-reste-à-faire) : ce n'est pas un vrai hachage). |
+| `apiKey` | Vérificateur salé versionné `hmac-sha256:1:<sel hex>:<digest hex>` pour les clés créées/régénérées. Les anciennes valeurs réversibles doivent être remplacées lors de la migration ANH-82. |
+| `apiKeySelector` | Sélecteur public aléatoire de 128 bits, optionnel pour accepter le schéma historique. Ne permet jamais de s'authentifier seul. |
+| `authenticationEnabled` | `false` refuse l'authentification ; absent ou `true` l'autorise sous réserve d'une clé valide et d'une machine non supprimée. Distinct de `status` et de `programsEnabled`. Aucun nouveau contrôle public/UI de ce champ. |
 | `status` | `"online"` \| `"offline"` \| `"in_session"`. |
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
 | `config` | `{ sampleRate, channels, batchInterval }` (défaut `1000`, `["ECG"]`, `1000`). Hérité du mode enregistrement. |
@@ -127,7 +130,7 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | `programsEnabled` | Rapporté par le Pi : accepte-t-il les séances auto ? |
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
 
-Index : `by_api_key`, `by_status`, `by_is_deleted`.
+Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelector`, `by_status`, `by_is_deleted`.
 
 **`live`** (validateur `liveStateValidator`) :
 
@@ -336,7 +339,7 @@ Résumé des fonctions les plus utilisées par le site.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `createMachine` | admin | Crée la machine, statut `offline`. Retourne `{machineId, apiKey}` : la clé en clair (64 caractères hexadécimaux) **n'est visible qu'à ce moment**. |
+| `createMachine` | admin | Crée la machine, statut `offline`. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
 | `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu, config. |
@@ -376,6 +379,34 @@ HTTP n'y existent pas).
 `Authorization: Bearer <clé API de la machine>`. Sans en-tête : **401**
 `{"error": "Missing Authorization header"}`. Clé inconnue : **401**
 `{"error": "Invalid API key"}`.
+
+La suppression (`isDeleted`) ou la désactivation explicite
+(`authenticationEnabled: false`) produit aussi **401**, sur les 14 routes et
+les deux queries internes d'authentification. Une machine simplement `offline`
+peut envoyer son heartbeat avec une clé valide.
+
+La clé contient un sélecteur public aléatoire de 16 octets et un secret
+aléatoire de 32 octets, encodés en hexadécimal. `crypto.getRandomValues` génère
+ces valeurs ainsi qu'un sel indépendant de 16 octets. Le vérificateur est
+exactement `HMAC-SHA-256(key = sel, message = UTF-8(clé complète))` : une
+construction SHA-256 salée, et non un simple encodage ni `SHA-256(clé)`.
+Le sel est public ; la résistance à la recherche exhaustive vient du secret
+aléatoire de 256 bits. Ce mécanisme n'est pas destiné à des mots de passe humains.
+
+L'index `by_apiKeySelector` sélectionne une seule machine, puis WebCrypto
+`subtle.verify("HMAC", …)` vérifie le digest ; aucune comparaison JavaScript
+de secrets n'est effectuée. Le [runtime Convex](https://docs.convex.dev/functions/runtimes)
+prend en charge WebCrypto ; son [vérificateur HMAC natif](https://github.com/get-convex/convex-backend/blob/588c89b23f669e9ab158848d1ecd53707dac09b8/crates/webcrypto/src/hmac.rs)
+appelle `aws_lc_rs::hmac::verify`, dont la [comparaison est à temps constant](https://docs.rs/aws-lc-rs/1.16.3/aws_lc_rs/hmac/fn.verify.html).
+La recherche du sélecteur et les rejets de format/état ne promettent pas un
+temps constant pour la requête entière. Les tests locaux vérifient le résultat
+et un vecteur indépendant, pas les temps d'exécution du service hébergé.
+
+La création renvoie `{machineId, apiKey}` et la régénération `{apiKey}` une seule
+fois. Les lectures sélectionnent leurs champs sans credential ; aucun journal
+applicatif n'enregistre la clé. Une régénération remplace atomiquement sélecteur,
+sel et digest : l'ancienne clé cesse de fonctionner immédiatement. Les champs
+de suppression/désactivation restent inchangés.
 
 **Erreurs** : les routes d'entraînement renvoient **400** `{"error": "<message>"}`
 pour un corps mal formé **et** pour toute exception interne (par exemple
@@ -477,12 +508,52 @@ celles d'un projet **neuf**.
 
 ## 9. Défauts connus et reste à faire
 
-Trouvés à la lecture du code. Aucun n'a été vérifié à l'exécution.
+### Migration des credentials avec ANH-82 — opération à réaliser
+
+Le correctif logiciel refuse les credentials historiques dès son déploiement.
+Il ne transforme pas les clés existantes et ne les accepte jamais en secours.
+Les nouvelles colonnes sont optionnelles pour permettre le chargement des
+anciens documents ; cela ne leur accorde aucun droit d'authentification.
+
+1. Le responsable ANH-82 valide une fenêtre d'interruption et les machines à
+   reprovisionner. Préparer un environnement de recette synthétique et une
+   version de repli conservant le nouveau vérificateur. Ne pas exporter les
+   anciennes clés, ni les placer dans des tickets, logs, captures ou rapports.
+2. Valider le schéma additif et l'index avant la bascule. Sur une grande table,
+   préparer d'abord l'index avec `staged: true`, attendre son remplissage puis
+   l'activer avant de déployer les queries qui l'utilisent. Le correctif livré
+   utilise un index actif ; cette étape préparatoire dépend du volume réel.
+3. Après confirmation humaine de l'opération de production, déployer le
+   correctif et régénérer chaque clé via l'écran existant, avec un compte autorisé.
+   Transmettre le résultat unique au responsable de la machine par le canal de
+   provisionnement approuvé, puis mettre à jour sa configuration locale. En cas
+   de perte du résultat, régénérer à nouveau ; aucune récupération n'est possible.
+4. Vérifier un heartbeat avec la nouvelle clé et **401** avec l'ancienne.
+   Traiter aussi les machines supprimées/désactivées : remplacer leur valeur
+   historique pour éliminer le stockage réversible, sans les réactiver ni
+   distribuer leur credential. Le responsable contrôle l'absence de valeurs
+   historiques via des comptes agrégés, sans exporter les champs de clés.
+5. En cas d'échec, laisser la synchronisation interrompue ou revenir uniquement
+   à une version qui conserve ce schéma et ce vérificateur. Ne jamais restaurer
+   la base64 réversible, les anciennes clés ou l'ancien code d'authentification.
+   Reprendre le provisionnement/régénérer si nécessaire. Les sauvegardes
+   historiques restent sensibles et suivent la politique de rétention du
+   responsable ; le correctif ne prétend pas les purger.
+
+Les suites `convex/machineAuth.test.ts` et `convex/machineCredential.test.ts`
+exercent ces comportements sur fixtures synthétiques avec les fonctions et
+routes enregistrées (`npm run test:convex`). Elles ne prouvent ni une migration
+réelle ni un déploiement. ANH-121 reste incomplet jusqu'à l'opération ANH-82.
+
+### Constats historiques et suivi
+
+Constats initiaux relevés à la lecture ; les lignes 1 et 2 ont désormais des
+régressions locales exécutables.
 
 | # | Constat | Conséquence |
 |---|---|---|
-| 1 | **Clé API non hachée.** `hashApiKey` fait `base64` puis inverse la chaîne (`convex/lib/crypto.ts`). C'est réversible. | Qui lit la table `machines` retrouve toutes les clés. Le commentaire du code recommande lui-même SHA-256. |
-| 2 | **Machine supprimée toujours authentifiée.** `getMachineByApiKey` ne regarde pas `isDeleted`. | Un Pi dont la machine est supprimée peut encore envoyer heartbeats, programmes et télémétrie. Il ne peut plus recevoir de lancement (`launchAutoSession` refuse une machine supprimée). |
+| 1 | **Correctif logiciel ANH-121 : digest HMAC-SHA-256 salé.** | Les anciennes valeurs doivent encore être régénérées lors de l'opération ANH-82 ; aucune migration réelle n'est attestée ici. |
+| 2 | **Correctif logiciel ANH-121 : suppression/désactivation refusée.** | Les routes renvoient 401 ; le déploiement reste à effectuer avec ANH-82. |
 | 3 | ~~`users.getCurrentUser` : validateur de retour incomplet.~~ **Corrigé.** Le validateur déclare `hrMax` et `birthYear`. | Vérifié sur le déploiement de développement le 1er octobre 2026 : la query répond après réglage de la FC max du compte. |
 | 4 | **Séances locales sans pratiquant.** Le Pi n'envoie ni `userId` ni `subjectLabel` à `/training/local` (le champ existe côté Convex). | Une séance démarrée à la machine apparaît sans pratiquant (« Unknown » dans les listes). Le patient ne la voit pas dans ses séances. |
 | 5 | **`/api/machine/roster` inutilisé.** | La liste des pratiquants autorisés n'arrive pas sur la console locale. |
@@ -490,7 +561,7 @@ Trouvés à la lecture du code. Aucun n'a été vérifié à l'exécution.
 | 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG ni de résumé (`session_summaries`) ni de rapport PDF utile pour une séance auto/manuelle. |
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
 | 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
-| 10 | **Aucun test automatisé** Convex ; nouveau code pas encore en production (ANH-82). | Le contrat HTTP a été exercé une fois à la main contre le déploiement de développement ([deploiement.md](deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026)) ; rien ne le rejoue automatiquement. |
+| 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
 | 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end`, et ne le rattrape pas au redémarrage. Trouvé à l'essai du 1er octobre 2026. | La séance reste `active` dans Convex indéfiniment. La machine repasse `online` au redémarrage. |
 
 Fait le 1er octobre 2026 : déploiement sur l'environnement de développement,
