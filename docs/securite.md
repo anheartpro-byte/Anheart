@@ -8,6 +8,14 @@ vérifié). Les termes sont définis dans le [glossaire](glossaire.md).
 
 [Retour au sommaire](README.md)
 
+Le [modèle de menaces logiciel](menaces.md) complète cette synthèse avec les
+attaques STRIDE, leurs limites de protection et les tickets de traitement.
+Il distingue explicitement le source inspecté d'une protection déployée.
+Sa revue datée, attribuée et indépendante est exigée à chaque jalon et avant le
+pilote par la [check-list de revue de release](release-threat-review.md).
+Les tickets de sécurité citent les identifiants MEN qu'ils contribuent à fermer ;
+une fermeture exige des preuves, et une acceptation une justification signée.
+
 ---
 
 ## 1. En une phrase
