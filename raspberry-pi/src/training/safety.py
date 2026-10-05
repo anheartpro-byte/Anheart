@@ -44,11 +44,23 @@ outlives its evidence:
   :meth:`SafetySupervisor.acknowledge` is called by a human. Every rule at or
   above ``RAMP_DOWN`` latches, as do ``comms_lost``, ``operator_estop``,
   ``loop_stall`` and every trip arriving from a thread. There is no automatic
-  fault reset and no automatic resumption of motion anywhere in this system, so
-  a latched verdict has taken the machine out of service.
+  fault reset in this system and no automatic resumption of motion after a
+  latched verdict: only a named operator clears one, so a latched verdict has
+  taken the machine out of service.
 * **unlatched**: an advisory (``FREEZE``/``REDUCE``) that is re-evaluated every
   tick and disappears when its evidence does - a heart rate that comes back, a
-  current that settles, an attendant who returns.
+  current that settles, an attendant who returns. **When it disappears, motion
+  resumes by itself**: the runtime follows the controller, or the operator's
+  manual target, again at once, with nobody clicking. That is deliberate, and
+  every unlatched verdict says so in its ``detail`` for as long as it stands
+  (:data:`SELF_CLEARING`). Where it stops is not decided in this module: when a
+  ``REDUCE`` has walked the setpoint all the way to zero with a person on
+  board, the runtime ends the session there and latches that ending itself
+  (``src.training.runtime.RULE_REDUCED_TO_STANDSTILL``; product decision of
+  2026-10-05, ``docs/securite.md``), so the arm does not leave by itself a
+  standstill that a warning produced. Two cases are not covered and are listed
+  as open in that document: a warning that appears while the setpoint is
+  already zero, and a BENCH manual session.
 
 Both levels exist on purpose, and the reason is a real failure mode rather than
 convenience. If a ten-second electrode dropout required an operator click, the
@@ -85,7 +97,7 @@ import itertools
 import logging
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from statistics import fmean, median
 from typing import Final, final
 
@@ -196,6 +208,21 @@ THREAD_TRIP_DETAIL: Final[str] = (
 
 A verdict with an empty ``detail`` would reach the operator screen as a blank
 line, which reads as a display bug rather than as a safety demand.
+"""
+
+SELF_CLEARING: Final[str] = (
+    "; NOT LATCHED: it lifts by itself when its cause ends, and a session that is still "
+    "running may then speed up again with nobody clicking"
+)
+"""What every unlatched verdict appends to its ``detail``, for as long as it stands.
+
+The operator's screen shows a verdict's ``detail`` verbatim, and a speed that is
+"held" or "lowered" reads as "stopped for good" to somebody about to walk up to
+the arm. It is not: an unlatched advisory disappears with its evidence and the
+runtime then follows the controller again (see the module docstring, and
+``docs/securite.md`` for the decision of 2026-10-05 that stops this at
+standstill). Appended in one place, :func:`_announced`, so that a rule added
+later cannot forget it.
 """
 
 ESTOP_ATTESTATION: Final[str] = (
@@ -1095,6 +1122,17 @@ def _severity(verdict: SafetyVerdict) -> SafetyAction:
     return verdict.action
 
 
+def _announced(verdict: SafetyVerdict) -> SafetyVerdict:
+    """Make an unlatched verdict say that it is one, in the sentence the operator reads.
+
+    A latched verdict is returned untouched: it stands until a named operator
+    clears it, and nothing resumes behind it. See :data:`SELF_CLEARING`.
+    """
+    if verdict.latched:
+        return verdict
+    return replace(verdict, detail=verdict.detail + SELF_CLEARING)
+
+
 def _fault_detail(report: FaultReport | None) -> str:
     """One operator-facing sentence about a drive fault, naming the LFT code.
 
@@ -1614,6 +1652,10 @@ class SafetySupervisor:
         severity, in :attr:`standing`. ``operator_estop`` is absent from this
         list because it is not a function of an observation: it is latched
         synchronously by :meth:`latch_estop`.
+
+        Every unlatched verdict leaves here saying that it is one
+        (:func:`_announced`): that sentence is what the operator reads while a
+        speed is held or lowered.
         """
         candidates = (
             self._rule_drive_fault(observation),
@@ -1633,7 +1675,7 @@ class SafetySupervisor:
             self._rule_attendant_absent(observation),
             self._rule_setpoint_unconfirmed(observation),
         )
-        return tuple(verdict for verdict in candidates if verdict is not None)
+        return tuple(_announced(verdict) for verdict in candidates if verdict is not None)
 
     # =====================================================================
     # Shared evidence helpers

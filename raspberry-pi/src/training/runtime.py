@@ -73,7 +73,9 @@ WHAT THIS MODULE REFUSES TO ASSUME
   leave. If ETA reports ``OPERATION_ENABLED``, a previous process died with the
   motor commanded: zero the reference, ramp-stop, latch, refuse to start, and
   require a named operator acknowledgement. There is no automatic fault reset
-  and no automatic resumption of motion anywhere in this file.
+  anywhere in this file, and nothing resumes by itself behind a latched
+  verdict; what does resume by itself, and where that stops, is in the next
+  section.
 * **That an unchanged heart rate is a measured one.**
   ``src/signal_processing.py`` re-emits its previous metrics dict when
   extraction fails, so :meth:`TrainingRuntime.observe_ecg` carries the sample
@@ -105,6 +107,20 @@ control law: the verdict decides first, always. A programme's setpoint walks the
 same profiler - the controller only chooses where to - and may not rise at all
 while the heart rate is falling fast (the vasovagal gate,
 ``RuntimeLimits.falling_trend``).
+
+A warning that is not latched (FREEZE, REDUCE) does not end the session: when
+its cause clears, the setpoint follows the controller, or the operator's
+target, again with nobody clicking. That is the supervisor's design (see
+``src.training.safety`` on alarm fatigue) and it is kept for a speed that was
+only HELD, or lowered PART WAY: the arm never stopped. It stops at standstill.
+When a REDUCE has walked the setpoint all the way to zero with a person on
+board, the session ends there and the ending latches
+(:meth:`TrainingRuntime._end_at_standstill`; product decision of 2026-10-05,
+``docs/securite.md``), because an operator who sees the arm stopped and walks
+to the capsule to refit an electrode must not have it start again beside them
+when the heart rate comes back. Two cases are left as they were and are listed
+as open in that document: a warning that appears while the setpoint is already
+zero, and a BENCH manual session.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -258,6 +274,13 @@ RULE_DISABLE_REFUSED: Final[str] = "disable_refused"
 
 See :meth:`TrainingRuntime._settle`: bounded retries, then SHUTDOWN at confirmed
 standstill, then silence.
+"""
+
+RULE_REDUCED_TO_STANDSTILL: Final[str] = "reduced_to_standstill"
+"""A warning's own descent walked the setpoint to zero with a person on board.
+
+See :meth:`TrainingRuntime._end_at_standstill`: the session ends there, latched,
+so the arm cannot leave that standstill by itself when the warning clears.
 """
 
 
@@ -2597,7 +2620,13 @@ class TrainingRuntime:
                 # Step down, and keep regulating within that cap: a heart rate
                 # above its zone is still a control problem, it is just no longer
                 # allowed to end in an increase.
+                before = self._applied_rpm
                 await self._follow_controller(now, allow_increase=False, cap=self._descend(now))
+                # `standing` IS the REDUCE verdict in this arm; the test only
+                # tells the type checker so. The other two say that this tick's
+                # step, acknowledged by the drive, took the setpoint to zero.
+                if standing is not None and before != 0 and self._applied_rpm == 0:
+                    self._end_at_standstill(now, standing)
             case SafetyAction.RAMP_DOWN:
                 self._begin_ending(now, EndReason.SAFETY_VERDICT, standing)
                 self._decision = None
@@ -2638,6 +2667,58 @@ class TrainingRuntime:
         controller = self._controller
         if controller is not None:
             controller.rebase(now, self._applied_rpm)
+
+    def _end_at_standstill(self, now: Monotonic, warning: SafetyVerdict) -> None:
+        """A REDUCE has just walked the setpoint to zero: end the session there, latched.
+
+        Product decision of 2026-10-05 (``docs/securite.md``). A warning that is
+        not latched lifts when its cause clears, and the setpoint then follows
+        the controller again with nobody clicking. That is wanted while the
+        speed was only held or lowered part way, because the arm never stopped.
+        From ZERO it is a restart: on the shipped profile a heart rate lost for
+        50 s brought the arm to standstill at 42 s, and 45 s after it came back
+        the setpoint was 69 motor rpm, the mode still SEANCE. That is the
+        detached electrode: the operator sees the arm stopped, walks to the
+        capsule, refits it, and the arm starts beside them.
+
+        So this standstill is an ENDING, and it latches: a ``RAMP_DOWN`` of this
+        module's own, the same demand as the latched end the heart-rate rule
+        itself reaches at 60 s, cleared the same way - by name, at the console.
+        Until then no start is accepted (:meth:`_refuse_arming`), a launch from
+        the dashboard included. It is latched HERE rather than by a rule
+        because only the caller knows that it was the verdict's own descent
+        that reached zero: a rule sees a commanded speed of zero, never why.
+
+        Reached only on the tick the descent's last step was ACKNOWLEDGED by the
+        drive (``_applied_rpm`` advances on an acknowledged write and on nothing
+        else), so a zero that never landed ends nothing and the next tick tries
+        again. Two cases are left exactly as they were:
+
+        * a phase after which no motion is asked for (:func:`motion_is_over`):
+          the session is already ending - an operator stop, the programme's own
+          cooldown - and that ending keeps its own cause. Nothing restarts from
+          there, so there is nothing to latch;
+        * nobody on board (a BENCH manual session), which the decision does not
+          cover.
+
+        A warning that APPEARS while the setpoint is already zero never reaches
+        this method: the caller requires the step to have started above zero.
+        That case is outside the decision too.
+        """
+        if motion_is_over(self._phase) or not self._occupied():
+            return
+        self._latch(
+            now,
+            RULE_REDUCED_TO_STANDSTILL,
+            SafetyAction.RAMP_DOWN,
+            (
+                f"the warning {warning.rule} lowered the setpoint all the way to zero: the "
+                "session has ended at standstill and does not restart by itself when the "
+                "warning clears. A named operator must acknowledge this, and moving again "
+                "takes a new start"
+            ),
+        )
+        self._begin_ending(now, EndReason.SAFETY_VERDICT, self._latched)
 
     async def _follow_controller(
         self, now: Monotonic, *, allow_increase: bool, cap: MotorRpm | None
