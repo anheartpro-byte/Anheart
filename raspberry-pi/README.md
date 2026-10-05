@@ -134,7 +134,17 @@ network only makes the dashboard's picture stale.
 | machine → dashboard | training presets whose cardiac tiers match this machine | when the profile store changes |
 | machine → dashboard | every session run here, AUTO or MANUAL, with telemetry at 1 Hz and its end | while it runs |
 | dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate) | polled every 3 s when idle |
-| dashboard → machine | a stop request, run as an ordinary stop on the commissioned ramp | checked every 3 s |
+| dashboard → machine | a stop request forwarded to the ordinary STOP path, subject to the FREEZE limitation below | checked every 3 s |
+
+**Current limitations:** while FREEZE is active, the runtime keeps its last
+setpoint even after STOP or a manual target of zero; FREEZE can also hold a
+descent already in progress ([ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la)).
+Accepting a stop request or displaying ARRET/COOLDOWN proves neither a falling
+setpoint nor measured standstill. Separately, an ongoing session can resume
+regulation automatically when an unlatched FREEZE/REDUCE warning disappears,
+including after REDUCE brought the setpoint to zero
+([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).
+These are current implementation limits, not a statement of a future resume policy.
 
 **Two kinds of training session:**
 
