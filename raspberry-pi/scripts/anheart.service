@@ -25,7 +25,7 @@ ExecStart=/home/pi/anheart/raspberry-pi/.venv/bin/python -m src.local_panel
 # releases the drive link. Give it time before systemd escalates to SIGKILL.
 KillSignal=SIGTERM
 TimeoutStopSec=60
-# A restart never resumes motion: the console comes back at rest, read-only.
+# A restart never resumes a session: motion requires a new explicit start.
 # Exit code 2 is a configuration error: restarting would only loop on it.
 Restart=on-failure
 RestartPreventExitStatus=2

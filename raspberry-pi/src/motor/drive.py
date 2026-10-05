@@ -29,7 +29,7 @@ decoding helper where nobody looks.
 Hardware, from the commissioning notes: ATV320U04M2C (0.37 kW, 200-240 V single
 phase in) driving a SEW KA37 DRS71S4 (0.37 kW, 1380 rpm at 50 Hz, 2.15 A,
 delta 230 V) through i = 49.79, so ~27.7 output rpm at full motor speed. Modbus
-RTU on the drive's embedded RJ45: address 1, 19200 baud, 8E1.
+RTU on the drive's embedded RJ45: point-to-point address 248, 19200 baud, 8E1.
 
 Two facts from those notes shape every docstring below:
 

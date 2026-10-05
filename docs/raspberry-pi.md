@@ -42,8 +42,8 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 
 | Commande | Programme | Rôle | État |
 |---|---|---|---|
-| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | code complet et testé en simulation ; lancé à la main |
-| `python -m src.main` | l'**ancien enregistreur ECG** | lit le BITalino et envoie l'ECG à Convex ; ne touche jamais le moteur | c'est lui que lancent le `Dockerfile` (`CMD ["python", "-m", "src.main"]`) et `scripts/anheart.service` |
+| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | entrée du `Dockerfile` et de `scripts/anheart.service`, également lançable à la main |
+| `python -m src.main` | l'**ancien enregistreur ECG** | lit le BITalino et envoie l'ECG à Convex ; ne touche jamais le moteur | entrée distincte, lancée explicitement |
 
 Les deux lisent `raspberry-pi/.env`, mais pas les mêmes clés (voir
 [section 12](#12-la-configuration-env)). La console charge le fichier
@@ -100,13 +100,13 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
 | `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 17 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Aucun chemin ne laisse le moteur commandé ; aucune reprise après un verdict verrouillé, ni depuis un arrêt provoqué par un avertissement avec une personne à bord (voir [5.1](#51-principes)) ; aucun réarmement automatique. Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé, ni depuis un arrêt provoqué par un avertissement avec une personne à bord (voir [5.1](#51-principes)). Limite actuelle : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
 | Module | Rôle | Garanties |
 |---|---|---|
-| `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, relâche le variateur sans écrire si rien n'a jamais été démarré, sinon passe par `shutdown()`. Porte 100 %. |
+| `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle. Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
@@ -257,11 +257,15 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   convertie en tr/min moteur, être dans `[55, plafond]`. Hors de ce domaine elle
   est **refusée**, jamais arrondie (ex. 0,5 tr/min de sortie = 25 tr/min moteur,
   refusé).
-* La consigne marche vers la cible au rythme du profileur (0,25 tr/min de
-  sortie/s = 12,4 tr/min moteur/s, et 0,03 g/s), montée comme descente.
+* Sans verdict imposant une autre consigne, celle-ci marche vers la cible au
+  rythme du profileur (0,25 tr/min de sortie/s = 12,4 tr/min moteur/s,
+  et 0,03 g/s), montée comme descente.
 * Phase HOLD pendant toute la séance ; au bout de 3600 s
-  (`MANUAL_SESSION_LIMIT`), elle s'arrête seule comme un STOP.
-* Après tout arrêt la cible vaut 0 : bouger à nouveau exige un nouveau départ.
+  (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP,
+  avec la limite actuelle sous FREEZE décrite en [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt).
+* Après une fin de séance, la cible vaut 0 : une nouvelle séance exige un
+  nouveau départ. Une consigne temporairement ramenée à 0 par un avertissement
+  non verrouillé n'est pas nécessairement une fin de séance (voir section 5).
 
 ### 4.4 Séance programmée (AUTO)
 
@@ -349,14 +353,17 @@ scénarios de simulation. La console copie les profils livrés dans
   * **non verrouillé** : FREEZE ou REDUCE réévalué à chaque tic, qui disparaît
     quand sa cause disparaît (ex. une électrode qui revient). Raison écrite dans
     le code : si chaque coupure de 10 s exigeait un clic, l'opérateur cliquerait
-    par réflexe, y compris sur un défaut variateur. **Quand il disparaît, la
-    régulation reprend seule**, sans clic : c'est voulu tant que la vitesse a
-    seulement été maintenue ou baissée, et la phrase du verdict le dit à
-    l'écran tant qu'il dure (`SELF_CLEARING` : « NOT LATCHED: it lifts by
-    itself… »). La limite est dans le runtime : si un REDUCE a ramené la
-    consigne à 0 avec une personne à bord, la séance se termine sur un verrou
-    (`reduced_to_standstill`, section 5.3 ; décision du 5 octobre 2026,
-    [securite.md](securite.md#7-décision-du-5-octobre-2026-sur-les-reprises-automatiques)).
+    par réflexe, y compris sur un défaut variateur. **Quand il disparaît, si
+    la séance est encore active, la régulation reprend seule**, sans geste de
+    l'opérateur : c'est voulu tant que la vitesse a seulement été maintenue ou
+    baissée, et la phrase du verdict le dit à l'écran tant qu'il dure
+    (`SELF_CLEARING` : « NOT LATCHED: it lifts by itself… »). La limite est
+    dans le runtime : si un REDUCE a ramené la consigne à 0 avec une personne à
+    bord, la séance se termine sur un verrou (`reduced_to_standstill`, section
+    5.3). C'est la décision du 5 octobre 2026
+    ([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement),
+    [securite.md](securite.md#7-décision-du-5-octobre-2026-sur-les-reprises-automatiques)),
+    qui liste aussi les deux cas qu'elle ne couvre pas.
 * **Acquittement** (`acknowledge`) : exige un nom ; refusé si rien n'est
   verrouillé ; **refusé pour GO_SILENT** (définitif) ; refusé tant que
   l'opérateur n'a pas déclaré le champignon d'arrêt d'urgence relâché
@@ -556,10 +563,23 @@ Conséquences :
 | Arrêt demandé plus vite que la rampe du variateur | défaut **ObF** (surtension du bus, LFT 18) : le variateur passe en **roue libre**, le bras ralentit sans contrôle, plus longtemps. Aucun « arrêt rapide » n'existe donc dans le code. |
 | `SHUTDOWN` (6) envoyé sur un arbre qui tourne | transition CiA402 8 : l'étage de sortie tombe, **roue libre**. Mesuré sur le modèle du dépôt : arrêt à t = 144,6 s avec 6, contre t = 10,0 s en gardant la commande de marche. D'où l'ordre `SWITCH_ON` (7) puis `SHUTDOWN` (6), et seulement à l'arrêt confirmé par RFRD. |
 | QUICK_STOP, E-STOP, arrêt de sortie du processus | LFRD = 0, commande de marche **gardée** : le variateur suit sa rampe dEC. |
-| STOP opérateur, RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel 12,4 tr/min moteur/s et 0,03 g/s). |
+| STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; sans verdict prioritaire, le chemin ordinaire descend la consigne sur la rampe logicielle. Sous FREEZE, elle reste tenue dans le code actuel (limite ANH-175 ci-dessous). |
+| Verdict RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel aux limites de mouvement). |
 | GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. |
 | Sortie normale du processus (`shutdown`) | LFRD = 0 synchrone, puis `close()` qui attend l'arrêt mesuré avant de retirer la marche. Si l'arrêt n'est pas confirmé, la marche reste et le ttO finit l'arrêt. |
-| Console jamais démarrée | le port est simplement fermé, sans aucune écriture. |
+| Console sans séance, au repos confirmé ou liaison non acquise | libération du transport sans écriture ; l'absence de séance ne prouve pas l'arrêt physique. |
+| Console sans séance, liaison acquise mais état non confirmé | `needs_stop_before_release` impose le passage par `shutdown()` ; un état inconnu n'est pas assimilé à un arbre arrêté. |
+
+**Limite actuelle — [ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la).**
+La branche FREEZE de `TrainingRuntime._command` réapplique la dernière consigne,
+même après STOP ou une cible manuelle à 0 ; elle peut aussi figer une descente
+déjà commencée. Le mode « ARRET », la phase COOLDOWN ou l'acceptation de la
+demande ne prouvent donc ni une baisse de consigne ni l'arrêt mesuré de l'arbre.
+Ce comportement est celui du code décrit ici, pas celui d'une correction non intégrée.
+
+Les distinctions de libération du transport sont exercées par `tests/test_initial_inspection_cancellation.py`
+et `tests/test_acquisition_evidence.py`, notamment le cas acquis mais illisible
+`test_cancelled_unreadable_acquired_drive_is_stopped_without_resumption`.
 
 HSP (vitesse haute du variateur) est la limite qui tient quand le logiciel se
 trompe. Le code accepte HSP ≤ 50,0 Hz parce que le moteur est **désaccouplé** au
@@ -584,7 +604,7 @@ tableau de bord.
 | Pi → Convex | télémétrie échantillonnée à 1 Hz, envoyée par lots | `POST /api/machine/training/telemetry` | toutes les 5 s (lots de 300 points max) |
 | Pi → Convex | fin de séance avec la raison du runtime | `POST /api/machine/training/end` | à la fin |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance) | `GET /api/machine/training/poll` | toutes les 3 s au repos |
-| Convex → Pi | une demande d'arrêt, exécutée comme un STOP ordinaire | `GET /api/machine/training/status` | toutes les 3 s en séance |
+| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire, avec la limite sous FREEZE décrite en section 7 | `GET /api/machine/training/status` | toutes les 3 s en séance |
 
 Règles :
 
@@ -704,7 +724,7 @@ sort avec le code 2.
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
 | `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` obligatoire |
-| `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` met 8090 |
+| `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
 | `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
@@ -716,7 +736,6 @@ sort avec le code 2.
 | `MACHINE_API_KEY` | vide | clé de la machine sur le tableau de bord ; vide = pas de lien | - |
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
 | `MOTION_LIMITS_PATH` | `config/motion_limits.json` | limites anti-nausée (relatif à `raspberry-pi/`) | fichier illisible = la console refuse de démarrer |
-| `SESSIONS_PATH` | `config/sessions.default.json` | **lue mais inutilisée** : aucun code ne s'en sert et le fichier n'existe pas | - |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
 par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale
@@ -730,7 +749,7 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 .venv/bin/python -m src.local_
 ```
 
 Sans fichier `.env`, la page écoute sur `http://127.0.0.1:8080/` (défaut du
-code). Ajouter `UI_PORT=8090` pour retrouver le port de `.env.example`. Si une
+code et `.env.example`). `UI_PORT` permet de choisir un autre port. Si une
 des trois clés manque, la console affiche une ligne `configuration: CLE: raison`
 par clé fautive et sort avec le code 2.
 
@@ -774,8 +793,11 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    garanties.
 8. **Invariants de sécurité** : la sécurité l'emporte toujours sur la loi de
    commande ; mesures fraîches seulement ; keepalive en premier ; ne jamais
-   supposer l'état du variateur au démarrage ; aucun réarmement automatique,
-   aucune reprise après un verdict verrouillé ; rien ne bloque la boucle.
+   supposer l'état du variateur au démarrage ; aucun réarmement automatique de
+   défaut ; les verdicts verrouillés exigent un acquittement. Les avertissements
+   non verrouillés laissent la régulation reprendre seule, sauf, avec une
+   personne à bord, depuis un arrêt qu'ils ont provoqué (section 5) ; rien ne
+   bloque la boucle.
 
 Exceptions en cours (dans `pyproject.toml`, liste figée par
 `tests/test_typing_contract.py`) : `signal_processing.py`, `convex_client.py`,
@@ -789,7 +811,7 @@ régulation.
 Depuis `raspberry-pi/` :
 
 ```bash
-bash scripts/check.sh
+./scripts/check.sh
 ```
 
 Elle enchaîne, en continuant même après un échec :
@@ -802,13 +824,13 @@ Elle enchaîne, en continuant même après un échec :
 .venv/bin/python -m pytest --cov --cov-branch --cov-fail-under=100
 ```
 
-et affiche `GATE PASSED` ou `GATE FAILED: <étapes>`. Le skill et le script
-disent `./scripts/check.sh`, mais le fichier n'est **pas exécutable** dans le
-dépôt (`permission denied`) : utiliser `bash scripts/check.sh`. Les tests
+et affiche `GATE PASSED` ou `GATE FAILED: <étapes>`. Le script est suivi avec
+le mode exécutable `100755` ; `bash scripts/check.sh` reste possible. Les tests
 marqués `hardware` (BITalino ou ATV320 branché) sont exclus par défaut
-(`-m 'not hardware'`). `pytest --co -q` collecte **3187 tests**.
+(`-m 'not hardware'`). Pour le nombre de tests du checkout courant :
+`.venv/bin/python -m pytest --collect-only -q`.
 
-Vérifié le 2026-10-01 sur macOS (Apple silicon, Python 3.12.13), sans
+Résultat historique du 2026-10-01 sur macOS (Apple silicon, Python 3.12.13), sans
 matériel : ruff et le format passent, basedpyright « 0 errors, 0 warnings »,
 mypy « Success: no issues found in 129 source files », **3187 tests passés**,
 couverture de branches **100,00 %** sur le périmètre de la gate, `GATE PASSED`,
