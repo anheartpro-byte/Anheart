@@ -425,9 +425,9 @@ acquitter, par son nom.
    pas : appelez le support.
 4. Si l'arrêt d'urgence câblé a été frappé, réarmez-le.
 5. Tapez votre nom dans le champ « votre nom ».
-6. Si l'arrêt venait d'un arrêt d'urgence (E-STOP de l'écran ou arrêt câblé),
-   cochez **le coup de poing a ete deverrouille (tire)**. Sans cette case,
-   l'acquittement est refusé.
+6. Si l'alerte est un arrêt d'urgence (règle « operator_estop »), vérifiez que
+   l'arrêt d'urgence câblé est bien réarmé, puis cochez **le coup de poing a
+   ete deverrouille (tire)**. Sans cette case, l'acquittement est refusé.
 7. Cliquez **Acquitter**.
 8. Vérifiez : une note qui commence par « acquitte par » s'affiche, et
    **Etat** revient à « idle ».

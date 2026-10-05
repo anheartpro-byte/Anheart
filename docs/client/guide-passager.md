@@ -180,10 +180,12 @@ en douceur, ou elle déclenche elle-même un arrêt d'urgence. Par exemple :
 - la machine ne reçoit plus de fréquence cardiaque fiable (une électrode qui
   se décolle, par exemple) ;
 - l'écran de l'opérateur n'est plus ouvert ;
-- le moteur ou son alimentation signale un défaut.
+- le moteur, ou l'appareil qui l'alimente, signale un défaut.
 
 **5. L'opérateur déclenche un arrêt d'urgence.** Il dispose d'un bouton d'arrêt
-d'urgence sur son écran, et d'un arrêt d'urgence câblé sur la machine.
+d'urgence sur son écran. La machine doit aussi avoir un arrêt d'urgence
+câblé : le logiciel demande à l'opérateur de l'attester, par son nom, avant
+toute séance.
 
 Après un arrêt de sécurité ou un arrêt d'urgence, rien ne repart tout seul.
 L'opérateur doit comprendre ce qui s'est passé et le confirmer par son nom
