@@ -100,7 +100,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
 | `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 17 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Aucun chemin ne laisse le moteur commandé ; aucune reprise automatique ; aucun réarmement automatique. Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Aucun chemin ne laisse le moteur commandé ; aucune reprise après un verdict verrouillé, ni depuis un arrêt provoqué par un avertissement avec une personne à bord (voir [5.1](#51-principes)) ; aucun réarmement automatique. Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
@@ -203,6 +203,12 @@ L'action la plus sévère l'emporte (`max` sur `SafetyAction`).
 | `RAMP_DOWN` | 3 | Fin de séance : phase COOLDOWN, consigne vers 0 par la rampe logicielle (programme 15 tr/min/s, manuel aux limites de mouvement). |
 | `QUICK_STOP` | 4 | Consigne à 0 **tout de suite**, commande de marche **gardée** : le variateur décélère sur sa propre rampe mise en service (3-4 s). Ce n'est pas un arrêt « immédiat ». |
 | `GO_SILENT` | 5 | Consigne à 0 une dernière fois (synchrone), puis **plus aucune trame**, lectures comprises. Le ttO du variateur prend l'arrêt en charge. Sans retour : ni acquittement, ni nouvel armement ; il faut redémarrer le processus. |
+
+Un `FREEZE` ou un `REDUCE` qui n'est pas verrouillé se lève seul, et le runtime
+suit de nouveau la loi de commande ou la cible, sans clic (voir
+[5.1](#51-principes)). Une exception : un `REDUCE` dont la descente atteint 0
+avec une personne à bord termine la séance sur le verrou
+`reduced_to_standstill` (voir [5.3](#53-les-5-règles-ajoutées-par-le-runtime)).
 
 ---
 
@@ -343,7 +349,14 @@ scénarios de simulation. La console copie les profils livrés dans
   * **non verrouillé** : FREEZE ou REDUCE réévalué à chaque tic, qui disparaît
     quand sa cause disparaît (ex. une électrode qui revient). Raison écrite dans
     le code : si chaque coupure de 10 s exigeait un clic, l'opérateur cliquerait
-    par réflexe, y compris sur un défaut variateur.
+    par réflexe, y compris sur un défaut variateur. **Quand il disparaît, la
+    régulation reprend seule**, sans clic : c'est voulu tant que la vitesse a
+    seulement été maintenue ou baissée, et la phrase du verdict le dit à
+    l'écran tant qu'il dure (`SELF_CLEARING` : « NOT LATCHED: it lifts by
+    itself… »). La limite est dans le runtime : si un REDUCE a ramené la
+    consigne à 0 avec une personne à bord, la séance se termine sur un verrou
+    (`reduced_to_standstill`, section 5.3 ; décision du 5 octobre 2026,
+    [securite.md](securite.md#7-décision-du-5-octobre-2026-sur-les-reprises-automatiques)).
 * **Acquittement** (`acknowledge`) : exige un nom ; refusé si rien n'est
   verrouillé ; **refusé pour GO_SILENT** (définitif) ; refusé tant que
   l'opérateur n'a pas déclaré le champignon d'arrêt d'urgence relâché
@@ -393,14 +406,23 @@ numéro de séquence a avancé et dont la qualité est `good` comptent.
 Sans baisse de charge (HOLD, φ = 1) c'est la règle des 25 bpm en 30 s ; charge
 retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 
-### 5.3 Les 4 règles ajoutées par le runtime
+### 5.3 Les 5 règles ajoutées par le runtime
 
 | Id | Condition | Action | Verrou |
 |---|---|---|---|
 | `drive_precommanded` | variateur trouvé en `OPERATION_ENABLED` (au départ) ou en marche/rotation au repos, sans séance | QUICK_STOP (consigne 0, marche gardée) | oui |
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
+| `reduced_to_standstill` | un REDUCE (`hr_stale`, `hr_rate`, `hr_unresponsive`, `current_high` au niveau d'alerte) vient de ramener la consigne à 0, écriture acquittée par le variateur, avec une personne à bord (séance programmée ou manuelle `occupied`) et dans une phase où le mouvement pouvait encore reprendre | RAMP_DOWN : la séance se termine à l'arrêt, le détail nomme l'avertissement | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
+
+`reduced_to_standstill` ne se déclenche pas : si la consigne était déjà à 0
+quand l'avertissement est apparu (BASELINE) ; en séance `bench` ; si la séance
+se terminait déjà (STOP, COOLDOWN du programme). Comme les autres verrous du
+runtime, il apparaît dans l'instantané de télémétrie (verdict en cours) mais
+pas dans `standing` ni `floor` de `/api/status`, qui ne lisent que le
+superviseur ; un départ demandé avant l'acquittement est pris par la boîte aux
+lettres puis refusé par la boucle, avec la raison.
 
 Les règles `presence_*` de la caméra sont décrites en [section 10](#10-la-caméra-présence).
 
@@ -752,8 +774,8 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    garanties.
 8. **Invariants de sécurité** : la sécurité l'emporte toujours sur la loi de
    commande ; mesures fraîches seulement ; keepalive en premier ; ne jamais
-   supposer l'état du variateur au démarrage ; aucun réarmement ni reprise
-   automatique ; rien ne bloque la boucle.
+   supposer l'état du variateur au démarrage ; aucun réarmement automatique,
+   aucune reprise après un verdict verrouillé ; rien ne bloque la boucle.
 
 Exceptions en cours (dans `pyproject.toml`, liste figée par
 `tests/test_typing_contract.py`) : `signal_processing.py`, `convex_client.py`,

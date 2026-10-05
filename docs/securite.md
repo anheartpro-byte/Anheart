@@ -29,14 +29,14 @@ indépendante** du logiciel et du variateur.
 
 « Garanti » veut dire ici : écrit dans le code, couvert par des tests (100 % des
 branches sur la chaîne de sécurité, tests de propriétés `hypothesis`) et vérifié
-dans la simulation (60 scénarios, 199 pannes injectées, cohorte de 30
+dans la simulation (61 scénarios, 199 pannes injectées, cohorte de 30
 personnes). Pas sur la vraie machine avec une personne à bord.
 
 | Garantie | Où |
 |---|---|
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
-| **Rien ne redémarre seul.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut, aucune reprise automatique. GO_SILENT ne s'acquitte jamais dans le même processus. | `safety.py` |
+| **Rien ne redémarre seul après un verdict verrouillé, ni depuis un arrêt provoqué par un avertissement.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul et la régulation reprend alors sans clic, sauf s'il a ramené la consigne à 0 avec une personne à bord : la séance se termine alors sur un verrou ([décision du 5 octobre 2026](#7-décision-du-5-octobre-2026-sur-les-reprises-automatiques), qui liste aussi les deux cas non couverts). | `safety.py`, `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -125,3 +125,96 @@ préalables :
 4. Faire signer toutes les valeurs [MED] par l'équipe médicale.
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
+
+## 7. Décision du 5 octobre 2026 sur les reprises automatiques
+
+Ticket ANH-176. Décision prise par le propriétaire du produit le 5 octobre 2026.
+
+**Le constat.** Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul
+quand sa cause disparaît, et la consigne suit alors de nouveau le régulateur,
+sans aucun clic. C'est voulu : si chaque coupure de dix secondes exigeait un
+clic, l'opérateur cliquerait par réflexe. Mais REDUCE descend la consigne
+jusqu'à 0, et depuis 0 cette reprise est un redémarrage.
+
+Mesuré sur le banc d'essai logiciel (variateur factice, horloge manuelle,
+jamais sur le matériel), avec le profil livré `standard_30_min` et les limites
+de la console, pour une fréquence cardiaque perdue pendant 50 s puis revenue :
+
+| Temps depuis la perte de la FC | Avant, en tr/min moteur | Depuis la décision |
+|---|---|---|
+| 0 s | 164, séance en cours | 164, séance en cours |
+| 12 s | 164, FREEZE `hr_stale` | 164, FREEZE `hr_stale` |
+| 32 s | 122, REDUCE `hr_stale` | 122, REDUCE `hr_stale` |
+| 42 s | 0, mode toujours « SEANCE » | 0, séance terminée, verrou `reduced_to_standstill`, mode « ARRET » |
+| 50 s | la FC revient, personne ne clique | la FC revient, personne ne clique |
+| 95 s | 69 | 0 |
+| 170 s | 168 | 0 |
+
+C'est le cas de l'électrode décollée : l'opérateur voit le bras arrêté, va à la
+capsule remettre l'électrode, la fréquence cardiaque revient, et le bras repart
+à côté de lui.
+
+**La décision** (option (a) du ticket). Si un avertissement non verrouillé a
+ramené la consigne à 0, la séance se termine et rien ne repart sans un nouveau
+départ. Les coupures
+pendant lesquelles la vitesse a seulement été maintenue (FREEZE) ou baissée sans
+atteindre 0 (REDUCE en cours de descente) reprennent toujours seules, parce que
+le bras ne s'est jamais arrêté.
+
+**Pourquoi.** Un bras à l'arrêt est le signal sur lequel quelqu'un s'approche
+de la capsule : il doit rester à l'arrêt tant que personne n'a décidé de le
+relancer. La règle n'ajoute ni seuil, ni commande, ni bouton, et elle laisse
+intact ce qui évite les clics réflexes : une coupure courte ne demande toujours
+rien à l'opérateur.
+
+**Options écartées.**
+
+- *(b) Reprise seulement sur un geste explicite de l'opérateur à la console.*
+  Écartée : elle demande une nouvelle commande et un nouveau bouton.
+- *(c) Reprise automatique bornée.* Écartée : ses seuils seraient à décider
+  avec les décisions médicales, encore en attente [MED] (ANH-98).
+
+**Comment c'est appliqué.**
+
+- Dans le runtime (`TrainingRuntime._end_at_standstill`), au cycle où le
+  dernier pas de la descente REDUCE, acquitté par le variateur, met la consigne
+  à 0. Le superviseur n'est pas modifié : aucun seuil, aucun délai n'a changé.
+- La fin est verrouillée, comme la fin déjà verrouillée de `hr_stale` à 60 s :
+  verdict `reduced_to_standstill` (RAMP_DOWN), qui nomme l'avertissement en
+  cause. Il faut un acquittement nominatif à la console. Tant qu'il n'est pas
+  fait, aucun départ n'est accepté, ni depuis la console ni depuis le tableau de
+  bord (le lancement lui est renvoyé comme séance échouée, avec la raison).
+- Avertissements concernés, c'est-à-dire tous ceux qui baissent la consigne
+  sans verrouiller : `hr_stale` (niveau REDUCE, entre 30 et 60 s), `hr_rate`,
+  `hr_unresponsive` et `current_high` (niveau d'alerte). En séance programmée
+  comme en séance manuelle avec une personne déclarée à bord.
+- Une séance déjà en train de se terminer (STOP de l'opérateur, retour au calme
+  du programme) garde sa propre raison de fin : l'avertissement ne fait
+  qu'accélérer une descente qui allait à 0, et rien n'est verrouillé en plus.
+- Tant que la reprise automatique reste possible (vitesse maintenue ou
+  baissée), la phrase du verdict affichée par la console le dit, pendant toute
+  la durée de l'avertissement : « NOT LATCHED: it lifts by itself when its cause
+  ends, and a session that is still running may then speed up again with nobody
+  clicking ». Elle est en anglais, comme toutes les phrases de verdict, et
+  n'apparaît que sur les pages Séance et Sécurité : un bandeau en français,
+  visible partout, reste à faire dans la page web.
+
+**Ce que la décision ne couvre pas.** Le comportement de ces deux cas est
+inchangé. Ils sont mesurés et laissés au propriétaire du produit. Dans les
+deux, le bras peut encore partir seul depuis l'arrêt, et la phrase ci-dessus
+reste affichée tant que l'avertissement dure, bras arrêté compris.
+
+1. *Un avertissement qui apparaît alors que la consigne est déjà à 0.* Mesuré :
+   aucune fréquence cardiaque pendant les 45 premières secondes de BASELINE
+   (électrodes pas encore posées) donne FREEZE à 10 s puis REDUCE à 30 s, la
+   consigne étant à 0 depuis le départ. La FC arrive, l'avertissement se lève,
+   le programme continue, et le bras fait son premier mouvement pendant WARMUP
+   (81 tr/min moteur à 285 s), sans clic. L'arrêt n'est pas ici l'effet de
+   l'avertissement.
+2. *Une séance manuelle sur banc, sans personne déclarée à bord.* Les règles de
+   FC y sont désactivées ; seul `current_high` peut y ramener la consigne à 0,
+   et il se lève forcément à l'arrêt, puisque le courant retombe avec la
+   vitesse. Mesuré avec un seuil d'alerte abaissé pour le banc d'essai (le
+   variateur factice ne dépasse jamais 2,4 A) : cible 300 tr/min moteur, REDUCE,
+   arrêt, puis le bras remonte seul vers sa cible, et le cycle recommence toutes
+   les 40 s environ.
