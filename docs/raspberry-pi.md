@@ -106,7 +106,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 
 | Module | Rôle | Garanties |
 |---|---|---|
-| `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, relâche le variateur sans écrire si rien n'a jamais été démarré, sinon passe par `shutdown()`. Porte 100 %. |
+| `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle. Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
@@ -537,7 +537,12 @@ Conséquences :
 | STOP opérateur, RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel 12,4 tr/min moteur/s et 0,03 g/s). |
 | GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. |
 | Sortie normale du processus (`shutdown`) | LFRD = 0 synchrone, puis `close()` qui attend l'arrêt mesuré avant de retirer la marche. Si l'arrêt n'est pas confirmé, la marche reste et le ttO finit l'arrêt. |
-| Console jamais démarrée | le port est simplement fermé, sans aucune écriture. |
+| Console sans séance, au repos confirmé ou liaison non acquise | libération du transport sans écriture ; l'absence de séance ne prouve pas l'arrêt physique. |
+| Console sans séance, liaison acquise mais état non confirmé | `needs_stop_before_release` impose le passage par `shutdown()` ; un état inconnu n'est pas assimilé à un arbre arrêté. |
+
+Ces distinctions sont exercées par `tests/test_initial_inspection_cancellation.py`
+et `tests/test_acquisition_evidence.py`, notamment le cas acquis mais illisible
+`test_cancelled_unreadable_acquired_drive_is_stopped_without_resumption`.
 
 HSP (vitesse haute du variateur) est la limite qui tient quand le logiciel se
 trompe. Le code accepte HSP ≤ 50,0 Hz parce que le moteur est **désaccouplé** au
@@ -782,9 +787,10 @@ Elle enchaîne, en continuant même après un échec :
 et affiche `GATE PASSED` ou `GATE FAILED: <étapes>`. Le script est suivi avec
 le mode exécutable `100755` ; `bash scripts/check.sh` reste possible. Les tests
 marqués `hardware` (BITalino ou ATV320 branché) sont exclus par défaut
-(`-m 'not hardware'`). `pytest --co -q` collecte **3187 tests**.
+(`-m 'not hardware'`). Pour le nombre de tests du checkout courant :
+`.venv/bin/python -m pytest --collect-only -q`.
 
-Vérifié le 2026-10-01 sur macOS (Apple silicon, Python 3.12.13), sans
+Résultat historique du 2026-10-01 sur macOS (Apple silicon, Python 3.12.13), sans
 matériel : ruff et le format passent, basedpyright « 0 errors, 0 warnings »,
 mypy « Success: no issues found in 129 source files », **3187 tests passés**,
 couverture de branches **100,00 %** sur le périmètre de la gate, `GATE PASSED`,

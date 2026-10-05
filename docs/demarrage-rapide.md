@@ -171,7 +171,7 @@ Ouvrir `simulation/out/report.html` dans un navigateur pour les courbes.
 
 ```sh
 $PY -m simulation.run --list                 # la liste des scénarios
-$PY -m simulation.run manual_27_rpm --csv    # -> simulation/out/manual_27_rpm.{jsonl,csv}
+$PY -m simulation.run manual_27_rpm --csv    # -> dossier schema 2 + CSV dans simulation/out/
 ```
 
 ### Le visualiseur 2D
@@ -183,7 +183,13 @@ $PY -m simulation.live                       # http://127.0.0.1:8765/  (--port p
 Puis ouvrir :
 
 - en direct : <http://127.0.0.1:8765/?live=manual_27_rpm&speed=20>
-- en relecture d'une trace : <http://127.0.0.1:8765/?trace=out/manual_27_rpm.jsonl>
+- en relecture : `http://127.0.0.1:8765/?trace=out/<UTC>_<local_ref>` (remplacer
+  le nom du dossier par celui créé dans `simulation/out/`).
+
+Le dossier contient notamment `manifest.json`, `events.jsonl` et `ticks.csv`.
+`--csv` ajoute un fichier `<local_ref>.csv`. Les anciennes traces schema 1
+restent lisibles avec `?trace=out/<ancien-fichier>.jsonl` ou le sélecteur de
+fichier du visualiseur. Voir [le format d'enregistrement](enregistrement.md).
 
 Tous les paramètres d'URL et les options sont dans
 [framework-de-test.md](framework-de-test.md).
