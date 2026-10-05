@@ -36,8 +36,8 @@ which is:
     pytest --cov --cov-branch --cov-fail-under=100
 
 All configuration lives in `raspberry-pi/pyproject.toml` (tool sections only;
-there is deliberately no `[project]` table, the app is still
-`python -m src.main`).
+there is deliberately no `[project]` table). The operator console runs with
+`python -m src.local_panel`; `python -m src.main` is the legacy ECG recorder.
 
 ## 1. Use domain units, never bare numbers
 
@@ -153,16 +153,19 @@ structurally blind.
 
 ## 7. Coverage: 100% of branches on the safety chain
 
-The blocking gate (configured in `[tool.coverage.report]`) covers:
+The authoritative blocking scope is `[tool.coverage.report].include` in
+`raspberry-pi/pyproject.toml`, with `fail_under = 100` and branch coverage
+enabled. It includes the motor/training chain, console composition and
+lifecycle, dashboard link, sensor processing and presence fail-safe. Consult
+that list directly rather than maintaining a second module inventory here.
 
-    src/units.py   src/result.py   src/clock.py
-    src/motor/*    src/training/*  src/sim/*
-    src/bitalino_client.py         src/signal_processing.py
-
-`bitalino_client.py` and `signal_processing.py` are in scope because **the
-heart rate that drives the motor comes out of them**: a mis-parsed analog
-column or a mis-classified signal quality makes the machine accelerate on
-noise. Web, Convex and buffer code are reported but not gate-blocking.
+`[tool.anheart].safety_chain` records the full required scope;
+`coverage_pending` records the explicit migration debt. Currently
+`src/signal_processing.py` is pending, not part of the blocking include list.
+It remains safety-critical: **the heart rate that drives the motor comes out
+of it**, so a mis-parsed analog column or a mis-classified signal quality can
+make the machine accelerate on noise. `tests/test_typing_contract.py` checks
+the relationship between these lists; do not weaken them to pass the gate.
 
 `# pragma: no cover` is **not** an accepted waiver inside that scope. An
 unreachable branch in the safety chain is a design smell: delete the branch or
@@ -185,11 +188,12 @@ Plus the plant sweep: `K in [0.05, 0.20]` x `tau in [20, 70]` x
 `theta in [4, 12]`, asserting no overshoot above the zone ceiling and no
 sustained oscillation.
 
-**The single most valuable test in the suite** is
-`tests/test_session_manager_motor.py`, parametrized over every exit path
-(normal end, remote end, BITalino disconnect, tick exception, SIGTERM, comms
-loss) asserting `applied_rpm == 0` and `enabled is False`. *No path leaves the
-motor running.*
+Exit-path regressions live in `tests/test_failure_process.py` (tick exceptions,
+loop stalls, SIGTERM and web-server failure) and `tests/test_panel_lifecycle.py`
+(cancellation, stop and web failure while an observer is hung). These exercise
+the real console with a simulated drive: the reference is zeroed, and shutdown
+is checked against the drive's ramp and watchdog. Preserve the distinction
+between a commanded stop and a shaft observed stopped.
 
 ## 8. Safety invariants that are code, not comments
 
@@ -211,7 +215,12 @@ motor running.*
 - Never assume the drive's state at startup. If `ETA` reports
   `OPERATION_ENABLED`, a previous crashed process left the motor spinning:
   command zero, disable, latch, and require an operator acknowledgement.
-- No automatic fault reset, and no automatic resumption of motion, anywhere.
+- No automatic fault reset. Latched safety verdicts require a named
+  acknowledgement; a completed session requires a new start, not resumption.
+  Unlatched warnings behave differently in the current runtime: an ongoing
+  session can resume regulation automatically when FREEZE/REDUCE clears,
+  including after REDUCE brought the setpoint to zero (known ANH-176
+  limitation). A future recovery policy must not be described as implemented.
 - Nothing blocks the event loop. All FastAPI handlers are `async def` (asserted
   at startup); blocking calls (`pymodbus`, `subprocess`, `serial.tools`) go
   through `run_in_executor`.

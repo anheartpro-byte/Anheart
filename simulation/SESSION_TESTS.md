@@ -1,43 +1,50 @@
-# Session acceptance tests (proposal)
+# Session acceptance-test map
 
-Proposed acceptance tests per session type, what each one proves, and where it is
-implemented today. "sim" = `simulation/` (the real `raspberry-pi/src` runtime,
+Acceptance checks per session type, their software assertions and implementation.
+Rows explicitly marked proposed remain unimplemented here. "sim" = `simulation/` (the real `raspberry-pi/src` runtime,
 drive simulator and physiology on the deterministic clock); "panel" = the real
 composition root `src.local_panel.build_panel` driven through its HTTP API in
 `raspberry-pi/tests/test_failure_*.py` / `test_local_panel_e2e.py` /
 `test_cloud_sync.py`. **XFAIL** means implemented as a strict xfail: the test
 states correct behaviour that `raspberry-pi/src` does not deliver today.
 
-Every test, whatever its type, also asserts the common exit contract: after the
-session (and a teardown window with nobody ticking) the shaft reads 0 rpm, the
-drive produces no torque, LFRD is 0 wherever a frame could still be written, no
-number is NaN, and no exception escaped.
+The scenario/failure/cohort trace judges check the common exit contract after a
+teardown window: shaft at 0 rpm, no torque, LFRD at 0 wherever a frame could be delivered,
+and finite numbers. Dedicated tests also exercise expected exceptions and
+refused starts; those are not evidence that every individual unit test runs a
+complete session. These are software checks, not physical acceptance.
+
+Current matrix/cohort results and exact --dsp semantics are in the
+[simulation README](README.md#instant-results-python--m-simulationquick).
+PASS rows below refer to the 2026-10-05 reconciliation; rerun the named checks
+for a new revision. The remaining cohort XFAIL is S07 AUTO jog; proposals are
+not counted as passing tests.
 
 ## 1. AUTO (heart-rate driven programme)
 
 | # | test | what it proves | status |
 |---|---|---|---|
 | A1 | Nominal jog 145-155 bpm, 30 min, nominal subject | the control law reaches and holds the zone (>= 50 % of HOLD) and completes | sim `auto_jog_150_nominal` |
-| A2 | Every cohort subject x jog, eligible only if zone <= 90 % HRmax | the real gate (`ProfileStore.resolve` with the rider's HRmax) refuses exactly the riders it must; every trace holds every invariant | sim `test_cohort.py` (29 accepted / 1 refused; 10 XFAIL, see README) |
-| A3 | Every cohort subject x shipped `standard_30_min` | shipped profile saturates at its 276 rpm ceiling, never exceeds it, completes | sim `test_cohort.py` |
-| A4 | Rider under 16 | refused, or capped below the adult ceiling | sim `test_a_rider_under_16_is_refused_or_capped` **XFAIL** |
-| A5 | Vasovagal collapse in WARMUP / HOLD | the setpoint never rises while the heart rate collapses; `hr_drop` ends the session | sim `vasovagal_auto_*`, cohort S04/S07 **XFAIL** |
+| A2 | Every cohort subject x jog | the age gate and ProfileStore.resolve refuse underage riders or zones above 90% HRmax; eligible traces are judged | sim test_cohort.py; eight riders below18 plus S08 refused; only S07 jog remains XFAIL |
+| A3 | Every cohort subject x shipped standard_30_min | eligible nominal subjects saturate within276 motor rpm and complete; underage subjects are refused; a vasovagal event ends on safety | sim test_cohort.py |
+| A4 | Rider below MIN_RIDER_AGE (default18), or unknown age | programmed start refused before motion | sim test_the_real_gate_refuses_exactly_the_riders_the_brief_says and test_a_rider_under_16_is_refused_or_capped; panel age-gate tests |
+| A5 | Vasovagal collapse in WARMUP / HOLD | trend gate prevents increases after a measurable fall; hr_drop ends the session | sim vasovagal_auto_* pass; S07 jog onset remains XFAIL (README finding1); S04 refused by age gate |
 | A6 | Non-responder | saturates at the ceiling, never above it (windup) | sim `auto_jog_subject_nonresponder`, cohort S18 |
-| A7 | Fast / slow responder, drift, unfit, fit | no overshoot above the hard max, completes | sim `auto_jog_subject_*` (fast responder **XFAIL**) |
-| A8 | Cooldown of a nominal subject | a heart rate falling as the load comes off is not presyncope (no `hr_drop`) | sim cohort (10 subjects **XFAIL**) |
-| A9 | Heart rate above hard max / critical | REDUCE / QUICK_STOP, end `safety_verdict` | sim `hr_above_hard_max`, `hr_critical`, `hr_spike_artifact` |
-| A10 | ECG lost at every phase (disconnect, silent stop, electrodes off, connect failure) | `hr_stale` FREEZE -> REDUCE -> RAMP_DOWN; nothing moves without a first rate | sim `ecg_*` (8 cases), panel `test_failure_ecg.py` |
+| A7 | Fast / slow responder, drift, unfit, fit | nominal programme completes under the hard-max tier | sim auto_jog_subject_*; fast-responder case is an ordinary regression |
+| A8 | Cooldown of a nominal subject | falling rate as load comes off is not classified as presyncope | sim non-vasovagal cohort pairs; ordinary regressions |
+| A9 | Heart rate above hard max / critical | RAMP_DOWN after hard-max dwell / immediate QUICK_STOP at critical, end safety_verdict | sim hr_above_hard_max, hr_critical, hr_spike_artifact |
+| A10 | ECG lost at every phase (disconnect, silent stop, electrodes off, connect failure) | hr_stale escalates; nothing moves without a first rate; RECOVERY may complete with the shaft already stopped | sim ecg_*; panel test_failure_ecg.py |
 | A11 | Real DSP: flat, saturated, 50 Hz hum, frames stopped | no false rate graded usable; the rate goes stale | sim `ecg_dsp_*`, panel |
-| A12 | Real DSP: corrupted samples, lost batches | no false rate graded usable | sim `ecg_dsp_corrupted`, `ecg_dsp_gaps` **XFAIL**; panel corrupted **XFAIL** |
+| A12 | Real DSP: corrupted samples, lost batches | independent veto and continuity checks withhold unusable heart rates | sim ecg_dsp_corrupted, ecg_dsp_gaps PASS with --dsp; panel corrupt/gapped regressions pass |
 | A13 | Drive comm loss at every phase | `comms_lost` GO_SILENT, not one frame after, the drive's ttO (SLF) stops it | sim `drive_comm_timeout_auto_*` (5), panel |
-| A14 | Every drive fault in HOLD (USF OPF OCF OLF SCF SLF nOF InF ObF unknown) | `drive_fault`, mnemonic + LFT code shown, never auto-reset | sim `drive_fault_*_auto` (10), panel |
+| A14 | Every named drive fault and an unknown code in HOLD | drive_fault, mnemonic + LFT code shown, no auto-reset | sim drive_fault_*_auto covers66 named faults plus unknown; nOF is not a fault |
 | A15 | SIGTERM at every phase | emergency zero, link closed, end `shutdown` | sim `process_sigterm_auto_*` (5), panel `LocalPanel.run` |
 | A16 | Tick raises in WARMUP / HOLD | fail closed: silent, end `tick_exception`, ttO backstop | sim `process_tick_raises_auto_*` |
 | A17 | Loop stall 2 s / 5 s in HOLD | FREEZE under ttO; over ttO GO_SILENT and SLF | sim `process_loop_stall_auto_*` |
 | A18 | Wall clock +/- 1 h | nothing changes (monotonic time rules) | sim `process_wall_clock_jump_*`, panel |
-| A19 | Frozen drive status in HOLD | caught within seconds of the cooldown asking for less speed | sim `drive_status_frozen_auto_hold` **XFAIL** (63 s late) |
+| A19 | Frozen drive status in HOLD | tracking/echo discrepancy is detected when the demanded speed changes, within the case deadline | sim drive_status_frozen_auto_hold PASS |
 | A20 | Attendant absent | FREEZE then RAMP_DOWN | sim `attendant_absent_auto` |
-| A21 | Anti-nausea limits in a programme | measured arm within 0.25 rpm/s and 0.03 g/s | not asserted (README finding 2: programmes bypass them) - proposed as XFAIL |
+| A21 | Anti-nausea limits in a programme and at the leg tip | motion limits hold on the measured arm, with the checker's register-quantization slack | sim test_programmed_sessions_hold_the_anti_nausea_limits and test_the_g_rate_limit_holds_at_the_leg_tip_too PASS |
 | A22 | Occupied programme through the panel with `max_rpm` above the 1.2 g occupied ceiling | refused before anything turns | panel `test_cloud_sync.py` |
 
 ## 2. MANUAL (operator target, at the machine only)
@@ -50,14 +57,14 @@ number is NaN, and no exception escaped.
 | M4 | Occupied ceiling (1.2 g resultant) | 27 refused, 19 accepted | sim `manual_occupied_ceiling`, panel (refused by config until M6) |
 | M5 | E-stop at speed / during a ramp, then a target | reference zeroed at once, nothing resumes, acknowledge returns to REPOS | sim `estop_*`, panel e2e |
 | M6 | Comm loss climbing / cruising / stopping | GO_SILENT, ttO stops it | sim `drive_comm_timeout_manual_*` (3), panel |
-| M7 | Every drive fault at speed | `drive_fault` RAMP_DOWN, mnemonic shown | sim `drive_fault_*_manual` (10), panel |
-| M8 | Drive found enabled and turning when the console starts | zeroed, disabled, latched **without waiting for START** | sim `drive_stuck_enabled_idle_console` **XFAIL**, panel **XFAIL**; with START: sim/panel PASS |
+| M7 | Every named drive fault and an unknown code at speed | drive_fault RAMP_DOWN, mnemonic shown | sim drive_fault_*_manual covers66 named faults plus unknown; panel |
+| M8 | Drive found enabled and turning at startup | zeroed and latched without waiting for START; output disabled after standstill | sim drive_stuck_enabled_idle_console PASS; panel test_a_drive_found_turning_at_startup_is_stopped_without_a_start PASS |
 | M9 | Drive refuses ENABLE_OPERATION / SWITCH_ON at start | start refused with the reason, nothing energised | sim `drive_refuses_*_at_start`, panel |
-| M10 | Drive refuses SWITCH_ON at the stop | the operator is told; the output stage does not stay enabled silently | sim `drive_refuses_switch_on_at_stop` **XFAIL**, panel **XFAIL** |
-| M11 | LFRD echo stops following | a verdict, the operator told | sim `drive_setpoint_echo_mismatch` **XFAIL**, panel **XFAIL** |
-| M12 | Writes acked but misaddressed at speed | the stop handed to ttO (GO_SILENT) when writes do not land | sim `drive_register_offset_at_speed` **XFAIL**, panel **XFAIL** |
-| M13 | Measured speed stops following during a climb | `tracking_error` within seconds | sim `drive_speed_not_following_ramp` **XFAIL** (52 s late); at speed: panel PASS |
-| M14 | Frozen status, then STOP | caught during the descent; run command kept | sim `drive_status_frozen_during_stop` **XFAIL** (late); panel PASS (run command kept) |
+| M10 | Drive refuses SWITCH_ON at stop | bounded retries, visible disable_refused verdict, output disabled or silence/watchdog fallback | sim drive_refuses_switch_on_at_stop PASS; panel refused-disable regression PASS |
+| M11 | LFRD echo stops following | setpoint_unconfirmed verdict and operator message | sim drive_setpoint_echo_mismatch PASS; panel echo regression PASS |
+| M12 | Writes acked but misaddressed at speed | GO_SILENT hands stopping to ttO once tracking and echo discrepancies show writes do not land | sim drive_register_offset_at_speed PASS; panel misaddressed-write regression PASS |
+| M13 | Measured speed stops following during a climb | tracking_error within the case deadline | sim drive_speed_not_following_ramp PASS; panel tracking regression PASS |
+| M14 | Frozen status, then STOP | tracking/echo discrepancy detected during descent; no unverified torque removal | sim drive_status_frozen_during_stop PASS; panel frozen-status regression PASS |
 | M15 | Tick raises / loop stall 1.4 s / 5 s / SIGTERM at each stage | fail closed / FREEZE / GO_SILENT+SLF / shutdown | sim `process_*_manual*`, panel |
 | M16 | Double START, STOP while idle, E-STOP after the end | refused with words / harmless | sim `operator_*`, panel |
 | M17 | FAULT RESET while running / while turning / after standstill + acknowledge | refused, refused, accepted (and nothing moves) | sim `operator_fault_reset_*` |
@@ -74,7 +81,7 @@ number is NaN, and no exception escaped.
 | R4 | Remote end mid-HOLD (auto) and at 27 rpm (manual) | ends as `operator_stop`, cooldown ramp | sim `stop_remote_auto`, `stop_remote_manual` |
 | R5 | Dashboard unreachable / its step raising during a session | the session is unaffected, the error logged | panel `test_failure_process.py`, `test_cloud_sync.py` |
 | R6 | Remote launch while a local session runs | refused ("busy"), no poll while busy | panel `test_cloud_sync.py` |
-| R7 | Remote launch for a rider under 16 | refused or capped (the launch carries no age today) | proposed; the cohort's A4 **XFAIL** is the same defect |
+| R7 | Remote launch below MIN_RIDER_AGE (default18), or without age | refused before anything turns; subjectAge travels with the launch | panel test_a_launch_for_a_child_is_refused and test_a_launch_without_the_rider_s_age_is_refused PASS |
 | R8 | Remote stop while the drive link is dead | the stop is still honoured by ttO; the dashboard learns the real end reason | proposed |
 | R9 | Launch lost in transit (no confirmation) | the machine does not start a session nobody confirmed; timeout reported | panel `test_a_launch_nobody_answers_times_out` |
 
@@ -83,6 +90,6 @@ number is NaN, and no exception escaped.
 ```sh
 export PYTHONPATH=.:raspberry-pi; PY=raspberry-pi/.venv/bin/python
 $PY -m simulation.quick --all --dsp           # everything in sim, with the real DSP, report.html
-$PY -m pytest simulation/tests -q              # the sim battery (gate: simulation/scripts/check.sh)
+$PY -m pytest -c simulation/pyproject.toml simulation/tests -q              # the sim battery (gate: simulation/scripts/check.sh)
 cd raspberry-pi && .venv/bin/pytest tests/test_failure_*.py tests/test_local_panel_e2e.py tests/test_cloud_sync.py -q
 ```

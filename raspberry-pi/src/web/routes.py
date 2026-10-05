@@ -852,7 +852,7 @@ def _delete_failure(error: DeleteError) -> HTTPException:
 
 
 MOTION_DISABLED_DETAIL: Final[str] = (
-    "mouvement desactive : cette console est en lecture seule (jalon M1). "
+    "mouvement desactive : cette console est en lecture seule. "
     "STOP, E-STOP, acquittement et lectures restent disponibles."
 )
 

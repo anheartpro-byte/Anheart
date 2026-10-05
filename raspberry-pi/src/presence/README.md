@@ -140,53 +140,25 @@ the case where no such frame has ever arrived since the monitor was built.
    ages the camera toward `presence_camera_lost`.
 4. `SimulatedCamera` stays the source for tests and `MOTOR_BACKEND=sim`.
 
-## Wiring into the console (not done here: `local_panel.py` is being edited)
+## Wiring into the console
 
-```python
-# src/local_panel.py - imports
-from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
-from src.presence.monitor import PresenceMonitor
-from src.presence.simulated import SimulatedCamera
+The integration lives in [`src/local_panel.py`](../local_panel.py):
 
-# build_panel(), after the runtime is built:
-presence = PresenceGuard(
-    runtime=runtime,
-    source=SimulatedCamera(clock),  # the detector link on hardware
-    monitor=PresenceMonitor(clock=clock),
-)
-surface = ControlSurface(
-    clock=clock,
-    supervisor=runtime.supervisor,
-    sink=hub,
-    acknowledger=PresenceAcknowledger(runtime, presence),  # was: acknowledger=runtime
-)
-# ... and pass presence=presence to LocalPanel(...)
+- `build_presence` selects no guard for `PRESENCE_SOURCE=none` (the default),
+  or a `SimulatedCamera` for `sim_empty` / `sim_occupied`.
+- `build_panel` passes the guard to `LocalPanel` and wraps the runtime in
+  `PresenceAcknowledger` so an accepted acknowledgement clears both latches.
+- `LocalPanel.run` schedules `presence_step` every `PRESENCE_PERIOD` (0.05 s,
+  20 Hz), independently of the control tick.
+- `_start_manual` and `_start_programme` call `_presence_refusal` before
+  starting; it asks the guard's `start_gate` about the declared occupancy.
 
-
-# LocalPanel: a new optional field, a step, and a task at 20 Hz
-async def presence_step(self) -> None:
-    """The camera, at 20 Hz: never the 5 Hz control tick, which would add up to 200 ms."""
-    if self._presence is not None:
-        self._presence.step(self._clock.monotonic())
-
-
-# in run():
-(asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),)
-
-# in _start_manual(), before self._runtime.start_manual(...):
-if self._presence is not None:
-    gate = self._presence.start_gate(self._clock.monotonic(), occupancy)
-    if isinstance(gate, Err):
-        self._surface.note_refused(operator, gate.error.detail)
-        return
-
-# in _start_programme(), before self._runtime.start(...):
-if self._presence is not None:
-    gate = self._presence.start_gate(self._clock.monotonic(), Occupancy.OCCUPIED)
-    if isinstance(gate, Err):
-        self._refuse_programme(command, gate.error.detail)
-        return
-```
+[`tests/test_panel_presence.py`](../../tests/test_panel_presence.py) exercises
+this wiring through the real composition root. The adapter's rules and
+acknowledgement behavior are covered in
+[`tests/test_presence_adapter.py`](../../tests/test_presence_adapter.py).
+Only simulated camera sources are implemented; the real detector link described
+above remains to be written.
 
 ## What the existing supervisor covers, and what it does not
 

@@ -91,7 +91,6 @@ KEY_UI_PORT: Final[str] = "UI_PORT"
 KEY_UI_TOKEN: Final[str] = "UI_TOKEN"  # noqa: S105  # a key NAME, not a secret
 KEY_OCCUPIED_ENABLED: Final[str] = "OCCUPANCY_OCCUPIED_ENABLED"
 KEY_MOTION_LIMITS_PATH: Final[str] = "MOTION_LIMITS_PATH"
-KEY_SESSIONS_PATH: Final[str] = "SESSIONS_PATH"
 KEY_PROGRAMS_ENABLED: Final[str] = "PROGRAMS_ENABLED"
 KEY_HR_HARD_MAX_BPM: Final[str] = "HR_HARD_MAX_BPM"
 KEY_HR_CRITICAL_BPM: Final[str] = "HR_CRITICAL_BPM"
@@ -113,7 +112,6 @@ BENCH_CONSOLE_PORT: Final[int] = 8123
 """``scripts/bench_console.py`` listens here; the console must not collide with it."""
 
 DEFAULT_MOTION_LIMITS_PATH: Final[Path] = Path("config/motion_limits.json")
-DEFAULT_SESSIONS_PATH: Final[Path] = Path("config/sessions.default.json")
 
 OCCUPIED_INITIAL_RESULTANT_G: Final[ResultantG] = ResultantG(1.2)
 """First-trial ceiling with a person on board, about 990 motor rpm at 1.5 m.
@@ -249,7 +247,6 @@ class LocalConfig:
     occupied_enabled: bool
     web: WebConfig
     motion_limits_path: Path
-    sessions_path: Path
     programs_enabled: bool = False
     """Programmed (heart-rate-driven) sessions. See the module docstring."""
 
@@ -696,7 +693,6 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
             motion_limits_path=Path(
                 _text(env, KEY_MOTION_LIMITS_PATH, str(DEFAULT_MOTION_LIMITS_PATH))
             ),
-            sessions_path=Path(_text(env, KEY_SESSIONS_PATH, str(DEFAULT_SESSIONS_PATH))),
             programs_enabled=programs.value,
             tiers=tiers.value,
             cloud=cloud.value,

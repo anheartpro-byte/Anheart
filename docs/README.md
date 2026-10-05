@@ -55,7 +55,7 @@ Il existe deux sortes de séance :
 flowchart LR
     subgraph Machine["Machine (sur place)"]
         OP([Opérateur])
-        UI["Console web locale<br/>127.0.0.1:8090"]
+        UI["Console web locale<br/>127.0.0.1:8080"]
         PI["Raspberry Pi<br/>src.local_panel<br/>superviseur de sécurité"]
         VFD["Variateur ATV320<br/>(ttO : chien de garde)"]
         MOT["Moteur SEW<br/>i = 49,79 - bras"]
