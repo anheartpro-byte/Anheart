@@ -1,0 +1,14 @@
+title = "Anheart secret scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact public build fixture for ci-fixture.clerk.accounts.dev"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^pk_test_Y2ktZml4dHVyZS5jbGVyay5hY2NvdW50cy5kZXYk$''']
+paths = ['''^\.github/workflows/ci\.yml$''']
