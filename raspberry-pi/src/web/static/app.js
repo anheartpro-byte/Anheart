@@ -640,11 +640,19 @@ function renderManual(snapshot) {
     state.manualDraft = manual.target.output_rpm || 0;
   }
   renderDraft();
+  var targetRpm = manual.target.motor_rpm;
+  var setpointRpm = snapshot.setpoint && snapshot.setpoint.motor_rpm;
+  var rampState = "etat de la rampe inconnu";
+  if (manual.ramping === true) {
+    rampState = "en cours, arrivee ~" + secs(manual.ramp_eta_s);
+  } else if (manual.ramping === false && Number.isFinite(targetRpm) && Number.isFinite(setpointRpm)) {
+    rampState = targetRpm === setpointRpm ? "cible atteinte" : "consigne maintenue, cible non atteinte";
+  }
   grid(el("manual-grid"), [
     ["cible appliquee", speedLine(manual.target)],
     ["plafond", speedLine(manual.ceiling)],
     ["minimum de rotation", speedLine(manual.min_run)],
-    ["rampe", manual.ramping ? "en cours, arrivee ~" + secs(manual.ramp_eta_s) : "cible atteinte"],
+    ["rampe", rampState],
   ]);
   show(el("ramp-banner"), manual.ramping);
   if (manual.ramping) {

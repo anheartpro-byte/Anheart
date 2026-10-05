@@ -84,6 +84,110 @@ const manual = {
   ramp_eta_s: 0,
 };
 
+function manualReadout(overrides = {}) {
+  const { context, nodes } = panel();
+  const snapshot = {
+    mode: "manuel",
+    safety_action: "freeze",
+    setpoint: { ...speed, motor_rpm: 500 },
+    measured: { ...speed, motor_rpm: 400 },
+    manual: { ...manual, target: { ...speed, motor_rpm: 500 }, ramp_eta_s: null },
+    ...overrides,
+  };
+  context.state.snapshot = snapshot;
+  context.renderManual(snapshot);
+  return {
+    status: nodes.get("manual-grid").children.at(-1).textContent,
+    bannerVisible: !nodes.get("ramp-banner").classes.has("hidden"),
+    bannerDetail: nodes.get("ramp-banner-detail").textContent,
+    controlsVisible: !nodes.get("manual-controls").classes.has("hidden"),
+  };
+}
+
+test("FREEZE holding an unmet target is distinct from command attainment without an ETA", () => {
+  const reached = manualReadout();
+  const held = manualReadout({ setpoint: { ...speed, motor_rpm: 300 } });
+  assert.notEqual(held.status, reached.status);
+  assert.equal(held.bannerVisible, false);
+  assert.equal(held.bannerDetail, "");
+  assert.doesNotMatch(held.status, /\d+:\d+/);
+  assert.equal(held.controlsVisible, true);
+});
+
+test("attainment follows the exact commanded motor RPM even while measured speed lags", () => {
+  const reached = manualReadout();
+  assert.equal(manualReadout({ measured: { ...speed, motor_rpm: 0 } }).status, reached.status);
+  assert.equal(manualReadout({ measured: { ...speed, motor_rpm: 900 } }).status, reached.status);
+  assert.notEqual(manualReadout({ setpoint: { ...speed, motor_rpm: 499 } }).status, reached.status);
+  assert.equal(reached.bannerVisible, false);
+});
+
+for (const [name, setpoint] of [
+  ["missing view", undefined],
+  ["null view", null],
+  ["missing RPM", {}],
+  ["null RPM", { motor_rpm: null }],
+  ["string RPM", { motor_rpm: "500" }],
+  ["NaN RPM", { motor_rpm: NaN }],
+  ["infinite RPM", { motor_rpm: Infinity }],
+]) {
+  test(`unknown command (${name}) cannot indicate attainment or ramping`, () => {
+    const unknown = manualReadout({ setpoint });
+    assert.notEqual(unknown.status, manualReadout().status);
+    assert.notEqual(unknown.status, manualReadout({ setpoint: { ...speed, motor_rpm: 300 } }).status);
+    assert.equal(unknown.bannerVisible, false);
+    assert.doesNotMatch(unknown.status, /\d+:\d+/);
+  });
+}
+
+test("unknown target or ramp state cannot indicate attainment", () => {
+  const reached = manualReadout();
+  for (const target of [{ ...speed, motor_rpm: null }, { ...speed, motor_rpm: undefined }]) {
+    assert.notEqual(manualReadout({ manual: { ...manual, target } }).status, reached.status);
+  }
+  assert.notEqual(manualReadout({ manual: { ...manual, target: { ...speed, motor_rpm: 500 }, ramping: undefined } }).status, reached.status);
+});
+
+for (const mode of ["manuel", "arret"]) {
+  test(`zero target under FREEZE keeps descent ETA/banner in ${mode} until command zero`, () => {
+    const descending = manualReadout({ mode, manual: { ...manual, ramping: true, ramp_eta_s: 65 } });
+    assert.equal(descending.bannerVisible, true);
+    assert.match(descending.status, /1:05/);
+    assert.match(descending.bannerDetail, /1:05/);
+    assert.equal(descending.controlsVisible, true);
+    const commandZero = manualReadout({ mode, setpoint: speed, manual });
+    assert.equal(commandZero.status, manualReadout().status);
+    assert.equal(commandZero.bannerVisible, false);
+  });
+}
+
+test("an ordinary nonzero ramp retains its ETA and banner", () => {
+  const ramping = manualReadout({
+    safety_action: "none",
+    manual: { ...manual, target: { ...speed, motor_rpm: 800 }, ramping: true, ramp_eta_s: 30 },
+  });
+  assert.equal(ramping.bannerVisible, true);
+  assert.match(ramping.status, /0:30/);
+  assert.match(ramping.bannerDetail, /0:30/);
+});
+
+test("STOP remains wired under FREEZE and sends the attributed stop request", async () => {
+  const { context, nodes } = wiredPanel();
+  context.state.snapshot = { mode: "manuel", safety_action: "freeze", manual };
+  context.state.manualDraft = 12;
+  nodes.get("manual-operator").value = "Synthetic stop operator";
+  const requests = [];
+  context.api = (path, options) => {
+    requests.push({ path, method: options.method, operator: options.body.operator });
+    return Promise.resolve();
+  };
+  context.loadStatus = () => undefined;
+  nodes.get("stop").onclick();
+  assert.deepEqual(requests, [{ path: "/api/session/stop", method: "POST", operator: "Synthetic stop operator" }]);
+  assert.equal(context.state.manualDraft, null);
+  await Promise.resolve();
+});
+
 for (const mode of ["repos", "manuel", "arret"]) {
   test(`manual controls follow ${mode}, not retained session data`, () => {
     // Given the shipped markup and renderer with a retained manual record.

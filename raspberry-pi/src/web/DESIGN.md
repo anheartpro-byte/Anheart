@@ -50,6 +50,10 @@ and `560px`. This extraction does not rename the existing raw spacing values.
   `#manual-controls` contains the draft/target controls. A snapshot in `repos`
   returns to idle even when its last manual-session record remains available.
   A manual ramp in `arret` remains displayed until the machine returns to rest.
+  The ramp readout distinguishes an active ramp, a held unmet target, an attained
+  command and unknown state. Attainment compares finite `manual.target.motor_rpm`
+  with `setpoint.motor_rpm`, never measured shaft speed. A held target has no
+  arrival estimate or ramp banner; command attainment never proves standstill.
 
 ## 6. Motion and interaction
 

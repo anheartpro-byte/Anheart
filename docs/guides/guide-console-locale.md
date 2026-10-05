@@ -304,7 +304,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 | **Mode** | `REPOS` | rien n'est commandé ; le variateur est seulement lu |
 | | `MANUEL` (orange) | séance manuelle en cours |
 | | `SEANCE` (orange) | séance programmée en cours |
-| | `ARRET` (rouge) | une séance se termine, la consigne descend. **Pas** « arrêté » : regardez Rotation |
+| | `ARRET` (rouge) | un arrêt est enregistré et reste en cours. Cela ne prouve ni une baisse de consigne ni l'arrêt du bras : regardez Rotation et Vitesse mesuree |
 | **Etat** | `idle` | rien de demandé. Seul état où l'on peut démarrer |
 | | `starting` | un démarrage vient d'être accepté |
 | | `running` (orange) | une séance tourne |
@@ -328,6 +328,9 @@ Repères de la capture (barre latérale, de haut en bas) :
   bras partirait en roue libre, ce qui est plus long.
 * Après STOP, la cible manuelle repasse à 0. Le mode passe à `ARRET`, puis à `REPOS`
   une fois l'arbre arrêté. Pour repartir, il faut redémarrer une séance.
+* Sous `freeze`, STOP fait descendre la consigne dès le tic suivant ; un
+  `freeze` apparu pendant cette descente ne la fige pas. Les verdicts plus forts
+  restent prioritaires. L'acceptation de STOP n'est pas une preuve d'arrêt mesuré.
 * S'il n'y a rien à arrêter, ou si un arrêt est déjà en cours, une fenêtre d'alerte
   s'ouvre : `STOP refuse : ...` (voir §14).
 
@@ -387,7 +390,10 @@ Repères :
    50 Hz, Gr 1,631).
 8. `minimum de rotation` : la plus petite vitesse non nulle (1,10 tr/min = 55 tr/min
    moteur). Entre 0 et ce minimum, rien n'est accepté.
-9. `rampe` : `cible atteinte`, ou `en cours, arrivee ~m:ss`.
+9. `rampe` : `cible atteinte` quand la **consigne** égale la cible, ou
+   `en cours, arrivee ~m:ss` pendant une rampe. Sous `freeze`, une cible non nulle
+   encore différente de la consigne affiche `consigne maintenue, cible non atteinte`,
+   sans estimation d'arrivée. Si les données manquent : `etat de la rampe inconnu`.
 10. La note sous la grille : dernier message (ici `accepte : manual_start bench (cible 0)`).
 11. Barre latérale : Mode `MANUEL`, Etat `running`.
 
@@ -398,7 +404,11 @@ Règles de la cible :
   `config/motion_limits.json`). Toute règle de sécurité reste prioritaire.
 * Les boutons gardent le brouillon dans le domaine permis : ils ne dépassent jamais le
   plafond, et sautent directement au minimum de rotation en montant depuis 0.
-* Après n'importe quel arrêt (STOP, E-STOP, règle de sécurité), la cible vaut 0.
+* Appliquer une cible à 0 fait descendre la consigne même sous `freeze`, mais
+  laisse la séance manuelle active. STOP demande la fin de séance.
+* Après une fin de séance (STOP, E-STOP ou règle de sécurité qui la termine),
+  la cible vaut 0. Un avertissement `freeze` ou `reduce` ne termine pas à lui
+  seul la séance ; la commande peut reprendre vers la cible quand il disparaît.
 * Une séance manuelle dure au plus 60 minutes (compteur `restant` visible sur la page
   Seance).
 
@@ -416,7 +426,11 @@ Repères :
 4. **Vitesse mesuree** : `6.49` et pastille `EN ROTATION` : le bras accélère.
 5. Barre latérale : Rotation `EN ROTATION`.
 
-Une fois la cible atteinte, le bandeau disparaît et `rampe` affiche `cible atteinte` :
+Une fois la **consigne** arrivée à la cible, le bandeau disparaît et `rampe`
+affiche `cible atteinte`. La vitesse mesurée peut encore être différente : cet
+affichage ne prouve pas l'arrêt du bras. Le bandeau disparaît aussi sous `freeze`
+si une cible non nulle reste non atteinte ; la ligne `rampe` indique alors la
+consigne maintenue, sans estimation d'arrivée.
 
 ![27 tr/min atteints](img/console-09-manuel-27-atteint.png)
 
@@ -954,7 +968,9 @@ STOP, pas à pas :
 
 1. Cliquez **STOP** (pied de page, n'importe quelle page).
 2. Le mode passe à `ARRET` (rouge), l'état à `stopping`, le bandeau
-   **RAMPE EN COURS** indique `vers 0.00 tr/min`.
+   **RAMPE EN COURS** indique `vers 0.00 tr/min` pendant la descente manuelle
+   de consigne, y compris sous `freeze`. `ARRET` indique une demande enregistrée,
+   pas une preuve de ralentissement ou d'arrêt physique.
 3. Attendez que **Rotation** affiche `a l'arret` et que le mode revienne à `REPOS`.
 
 ![STOP : rampe d'arrêt depuis 27 tr/min](img/console-11-stop-rampe-arret.png)
