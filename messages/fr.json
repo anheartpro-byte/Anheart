@@ -96,7 +96,7 @@
   "home": {
     "badge": "La gravité pour une vie meilleure",
     "title": "Entraînez Votre Cœur Avec la Gravité Artificielle",
-    "description": "La machine Gaura recrée une force centrifuge pour simuler une gravité artificielle, offrant un entraînement cardiovasculaire personnalisé ainsi qu'une aide au maintien de la masse musculaire et osseuse. L'intensité se règle par la vitesse de rotation ; le logiciel de la machine la plafonne à environ 2 g au niveau des pieds, soit environ deux fois la pesanteur terrestre. La machine initialement conçue pour les athlètes et la rééducation médicale permettra également à toute personne, valide ou invalide, de maintenir son activité physique indéfiniment",
+    "description": "La machine Gaura recrée une force centrifuge pour simuler une gravité artificielle, offrant un entraînement cardiovasculaire personnalisé ainsi qu'une aide au maintien de la masse musculaire et osseuse. L'intensité se règle par la vitesse de rotation, dans les limites fixées par le logiciel de la machine. La machine initialement conçue pour les athlètes et la rééducation médicale permettra également à toute personne, valide ou invalide, de maintenir son activité physique indéfiniment",
     "getStarted": "Commencer",
     "signIn": "Se connecter",
     "goToDashboard": "Accéder au tableau de bord",
@@ -164,7 +164,7 @@
     "benefits": {
       "badge": "Bénéfice de la solution",
       "title": "Entraînement personnalisé, efficace et rapide",
-      "description": "30 à 40 minutes par jour suffisent pour obtenir des bénéfices cardiovasculaires et musculaires significatifs, tout en favorisant la récupération et l'entretien physique. L'intensité est réglée pour chaque personne par la vitesse de rotation, dans la limite du plafond logiciel de la machine (environ 2 g au niveau des pieds).",
+      "description": "30 à 40 minutes par jour suffisent pour obtenir des bénéfices cardiovasculaires et musculaires significatifs, tout en favorisant la récupération et l'entretien physique. L'intensité est réglée pour chaque personne par la vitesse de rotation, dans les limites fixées par le logiciel de la machine.",
       "heartTraining": "Entraînement cardiovasculaire ciblé",
       "heartTrainingDesc": "Renforcez votre système cardiovasculaire grâce à une stimulation adaptée et un programme d'entraînement personnalisé, conçu pour améliorer l'endurance et la circulation sanguine.",
       "recovery": "Amélioration de la Récupération",
@@ -376,10 +376,11 @@
   },
   "recording": {
     "dataBatches": "Lots de données",
-    "samples": "Échantillons enregistrés",
-    "samplesPartial": "Échantillons ({loaded, number} lots chargés sur {total, number})",
+    "samples": "{channels, plural, =0 {Échantillons enregistrés} =1 {Échantillons enregistrés} other {Échantillons enregistrés, tous canaux confondus}}",
+    "samplesPartial": "{channels, plural, =0 {Échantillons} =1 {Échantillons} other {Échantillons, tous canaux confondus}} ({loaded, number} lots chargés sur {total, number})",
     "partialNote": "Comptés sur les {loaded, number} lots chargés, sur {total, number} au total.",
     "sampleRateHz": "Échantillonnage (Hz)",
+    "sampleRateHzPartial": "Échantillonnage (Hz, lots chargés)",
     "acquisitionRate": "Fréquence d'acquisition configurée : {rate} Hz"
   },
   "sessionDetail": {
@@ -539,8 +540,8 @@
     "view": "Voir",
     "batches": "{count, plural, one {# lot de données} other {# lots de données}}",
     "recordingSeconds": "{seconds, number} s d'enregistrement",
-    "samples": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}}",
-    "samplesPartial": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}} sur les {loaded, number} lots chargés ({total, number} au total)",
+    "samples": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}}{channels, plural, =0 {} =1 {} other {, tous canaux confondus}}",
+    "samplesPartial": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}}{channels, plural, =0 {} =1 {} other {, tous canaux confondus,}} sur les {loaded, number} lots chargés ({total, number} au total)",
     "durationMinutes": "{minutes, number} min",
     "pdf": {
       "title": "Rapport de session ECG",
@@ -562,9 +563,11 @@
       "recordingDurationValue": "{seconds} s",
       "sampleRate": "Fréquence d'échantillonnage",
       "sampleRateValue": "{rate} Hz",
+      "sampleRateValuePartial": "{rate} Hz (d'après les lots chargés)",
       "sampleRateUnknown": "Non renseignée dans les données",
       "samples": "Échantillons enregistrés",
-      "samplesPartial": "{count} (comptés sur {loaded} lots chargés, {total} au total)",
+      "samplesValue": "{count}{channels, plural, =0 {} =1 {} other { (tous canaux confondus)}}",
+      "samplesPartial": "{count} ({channels, plural, =0 {} =1 {} other {tous canaux confondus, }}comptés sur {loaded} lots chargés, {total} au total)",
       "waveformPreview": "Aperçu du tracé ECG",
       "channelPreview": "Canal {channel} ({count} premiers échantillons)",
       "notes": "Notes",

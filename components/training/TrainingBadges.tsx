@@ -1,19 +1,22 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useMessages, useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Gauge, Hand, Activity, Monitor, Cpu } from "lucide-react";
+import { hasOwnMessage } from "@/components/dashboard/statusLabels";
 
 /** Translate an enumerated wire value (phase, run mode, safety action, drive state), falling back to the raw value. */
 export function useTrainingLabel() {
+  const messages = useMessages();
   const t = useTranslations("training");
   return (
     group: "phase" | "runMode" | "safety" | "driveState",
     value: string,
-  ) => {
-    const key = `${group}.${value}`;
-    return t.has(key) ? t(key) : value;
-  };
+  ) =>
+    // Own keys only: "constructor" or "toString" must come back as received.
+    hasOwnMessage(messages, ["training", group, value])
+      ? t(`${group}.${value}`)
+      : value;
 }
 
 export function SessionKindBadge({ kind }: { kind: string | undefined }) {

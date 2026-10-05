@@ -96,7 +96,7 @@
   "home": {
     "badge": "Gravity for Life",
     "title": "Train Your Heart With Artificial Gravity",
-    "description": "The Gaura machine recreates centrifugal force to simulate artificial gravity, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. Intensity is set by the rotation speed; the machine's software caps it at about 2 g at the feet, roughly twice Earth's gravity. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
+    "description": "The Gaura machine recreates centrifugal force to simulate artificial gravity, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. Intensity is set by the rotation speed, within the limits set by the machine's software. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
     "getStarted": "Get Started",
     "signIn": "Sign In",
     "goToDashboard": "Go to Dashboard",
@@ -164,7 +164,7 @@
     "benefits": {
       "badge": "Solution Benefits",
       "title": "Personalized, efficient, and fast training",
-      "description": "30 to 40 minutes per day are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance. Intensity is set for each person by the rotation speed, within the machine's software ceiling (about 2 g at the feet).",
+      "description": "30 to 40 minutes per day are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance. Intensity is set for each person by the rotation speed, within the limits set by the machine's software.",
       "heartTraining": "Targeted Cardiovascular Training",
       "heartTrainingDesc": "Strengthen your cardiovascular system through adapted stimulation and a personalized training program, designed to improve endurance and blood circulation.",
       "recovery": "Recovery Improvement",
@@ -376,10 +376,11 @@
   },
   "recording": {
     "dataBatches": "Data Batches",
-    "samples": "Samples recorded",
-    "samplesPartial": "Samples ({loaded, number} of {total, number} batches loaded)",
+    "samples": "{channels, plural, =0 {Samples recorded} =1 {Samples recorded} other {Samples recorded, all channels combined}}",
+    "samplesPartial": "{channels, plural, =0 {Samples} =1 {Samples} other {Samples, all channels combined}} ({loaded, number} of {total, number} batches loaded)",
     "partialNote": "Counted over the {loaded, number} loaded batches, out of {total, number} in total.",
     "sampleRateHz": "Sample Rate (Hz)",
+    "sampleRateHzPartial": "Sample Rate (Hz, loaded batches)",
     "acquisitionRate": "Configured acquisition rate: {rate} Hz"
   },
   "sessionDetail": {
@@ -539,8 +540,8 @@
     "view": "View",
     "batches": "{count, plural, one {# data batch} other {# data batches}}",
     "recordingSeconds": "{seconds, number}s of recording",
-    "samples": "{count, plural, =0 {no samples} one {# sample} other {# samples}}",
-    "samplesPartial": "{count, plural, =0 {no samples} one {# sample} other {# samples}} over the {loaded, number} loaded batches ({total, number} in total)",
+    "samples": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined}}",
+    "samplesPartial": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined,}} over the {loaded, number} loaded batches ({total, number} in total)",
     "durationMinutes": "{minutes, number} min",
     "pdf": {
       "title": "ECG Session Report",
@@ -562,9 +563,11 @@
       "recordingDurationValue": "{seconds} s",
       "sampleRate": "Sample Rate",
       "sampleRateValue": "{rate} Hz",
+      "sampleRateValuePartial": "{rate} Hz (from the loaded batches)",
       "sampleRateUnknown": "Not recorded in the data",
       "samples": "Samples recorded",
-      "samplesPartial": "{count} (counted over {loaded} loaded batches, {total} in total)",
+      "samplesValue": "{count}{channels, plural, =0 {} =1 {} other { (all channels combined)}}",
+      "samplesPartial": "{count} ({channels, plural, =0 {} =1 {} other {all channels combined, }}counted over {loaded} loaded batches, {total} in total)",
       "waveformPreview": "ECG Waveform Preview",
       "channelPreview": "{channel} Channel (first {count} samples)",
       "notes": "Notes",

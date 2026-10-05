@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { recordingCoverage } from "./ecg/stats";
 
 interface SessionReportData {
   sessionId: string;
@@ -16,9 +17,10 @@ interface SessionReportData {
     channels: string[];
     /** Rates (Hz) read from the loaded batches; empty when they carry none. */
     sampleRates: number[];
-    /** Samples counted on the loaded batches, and how many batches that was. */
+    /** Samples counted on the loaded batches, over how many batches and channels. */
     countedSamples: number;
     countedBatches: number;
+    countedChannels: number;
   };
   ecgSamples?: Record<string, number[]>;
 }
@@ -165,20 +167,32 @@ export function buildSessionPdf(
 
     // Rate and sample count come from the recorded batches. Only part of a
     // long recording is loaded for the report, so a partial count says so.
-    const { sampleRates, countedSamples, countedBatches, totalBatches } =
-      data.ecgStats;
+    const {
+      sampleRates,
+      countedSamples,
+      countedBatches,
+      countedChannels,
+      totalBatches,
+    } = data.ecgStats;
+    const isPartial =
+      recordingCoverage(countedBatches, totalBatches) === "partial";
     const sampleRate =
       sampleRates.length > 0
-        ? label("sampleRateValue", { rate: sampleRates.join(" / ") })
-        : label("sampleRateUnknown");
-    const samples =
-      totalBatches > countedBatches
-        ? label("samplesPartial", {
-            count: formatNumber(countedSamples),
-            loaded: formatNumber(countedBatches),
-            total: formatNumber(totalBatches),
+        ? label(isPartial ? "sampleRateValuePartial" : "sampleRateValue", {
+            rate: sampleRates.join(" / "),
           })
-        : formatNumber(countedSamples);
+        : label("sampleRateUnknown");
+    const samples = isPartial
+      ? label("samplesPartial", {
+          count: formatNumber(countedSamples),
+          channels: countedChannels,
+          loaded: formatNumber(countedBatches),
+          total: formatNumber(totalBatches),
+        })
+      : label("samplesValue", {
+          count: formatNumber(countedSamples),
+          channels: countedChannels,
+        });
 
     autoTable(doc, {
       startY: yPos,

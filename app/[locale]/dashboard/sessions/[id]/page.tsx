@@ -36,9 +36,10 @@ import {
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { ECGWaveform } from "@/components/ECGWaveform";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import {
   formatSampleRates,
-  isPartialRecording,
+  recordingCoverage,
   summarizeRecording,
 } from "@/lib/ecg/stats";
 import { isTrainingKind } from "@/lib/training";
@@ -131,11 +132,13 @@ export default function SessionDetailPage({
   // Only part of a long recording is loaded here, so the count says when it is partial.
   const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
   const recordedRates = formatSampleRates(recording.sampleRates);
-  const isPartial = isPartialRecording(
-    recording.batchCount,
-    stats?.totalBatches,
-  );
-  const partialValues = {
+  const coverage = recordingCoverage(recording.batchCount, stats?.totalBatches);
+  const isPartial = coverage === "partial";
+  // Until the batches and the server's batch count are both in, a count over
+  // the loaded batches cannot be labelled total or partial: show a placeholder.
+  const countsReady = ecgData !== undefined && coverage !== "unknown";
+  const countValues = {
+    channels: recording.channelCount,
     loaded: recording.batchCount,
     total: stats?.totalBatches ?? recording.batchCount,
   };
@@ -253,15 +256,13 @@ export default function SessionDetailPage({
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-purple-500" />
               <span className="text-xl font-bold">
-                {ecgData === undefined
-                  ? "-"
-                  : intl.number(recording.totalSamples)}
+                {countsReady ? intl.number(recording.totalSamples) : "-"}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               {isPartial
-                ? t("recording.samplesPartial", partialValues)
-                : t("recording.samples")}
+                ? t("recording.samplesPartial", countValues)
+                : t("recording.samples", countValues)}
             </p>
           </CardContent>
         </Card>
@@ -282,10 +283,14 @@ export default function SessionDetailPage({
           <CardContent className="pt-4 pb-3">
             <div className="flex items-center gap-2">
               <Heart className="h-5 w-5 text-red-500" />
-              <span className="text-xl font-bold">{recordedRates ?? "-"}</span>
+              <span className="text-xl font-bold">
+                {countsReady ? (recordedRates ?? "-") : "-"}
+              </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {t("recording.sampleRateHz")}
+              {isPartial
+                ? t("recording.sampleRateHzPartial")
+                : t("recording.sampleRateHz")}
             </p>
           </CardContent>
         </Card>
@@ -304,7 +309,7 @@ export default function SessionDetailPage({
             </h2>
             {isPartial && (
               <p className="text-sm text-muted-foreground">
-                {t("recording.partialNote", partialValues)}
+                {t("recording.partialNote", countValues)}
               </p>
             )}
           </div>
@@ -525,16 +530,14 @@ export default function SessionDetailPage({
               </div>
               <div>
                 <p className="text-muted-foreground">
-                  {t("recording.samples")}
+                  {t("recording.samples", countValues)}
                 </p>
                 <p className="font-medium">
-                  {ecgData === undefined
-                    ? "-"
-                    : intl.number(recording.totalSamples)}
+                  {countsReady ? intl.number(recording.totalSamples) : "-"}
                 </p>
                 {isPartial && (
                   <p className="text-xs text-muted-foreground">
-                    {t("recording.partialNote", partialValues)}
+                    {t("recording.partialNote", countValues)}
                   </p>
                 )}
               </div>
@@ -573,7 +576,7 @@ export default function SessionDetailPage({
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions.status");
+  const statusLabel = useSessionStatusLabel();
   const variants: Record<
     string,
     "default" | "secondary" | "destructive" | "outline"
@@ -587,7 +590,7 @@ function SessionStatusBadge({ status }: { status: string }) {
   // Unknown statuses are shown as received rather than hidden.
   return (
     <Badge variant={variants[status] || "outline"} className="text-sm">
-      {t.has(status) ? t(status) : status}
+      {statusLabel(status)}
     </Badge>
   );
 }

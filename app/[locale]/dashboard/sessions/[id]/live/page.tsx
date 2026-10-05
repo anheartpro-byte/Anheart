@@ -35,7 +35,7 @@ import { LiveSensorDisplay } from "@/components/charts/LiveSensorDisplay";
 import { type SignalQuality } from "@/lib/ecg";
 import {
   formatSampleRates,
-  isPartialRecording,
+  recordingCoverage,
   summarizeRecording,
 } from "@/lib/ecg/stats";
 import { isTrainingKind } from "@/lib/training";
@@ -218,10 +218,14 @@ export default function LiveSessionPage({
   // so the count is flagged as partial instead of being extrapolated.
   const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
   const recordedRates = formatSampleRates(recording.sampleRates);
-  const isPartial = isPartialRecording(
-    recording.batchCount,
-    stats?.totalBatches,
-  );
+  const coverage = recordingCoverage(recording.batchCount, stats?.totalBatches);
+  // No figure until the server's batch count is known: it decides the label.
+  const countsReady = ecgData !== undefined && coverage !== "unknown";
+  const countValues = {
+    channels: recording.channelCount,
+    loaded: recording.batchCount,
+    total: totalBatches,
+  };
 
   return (
     <div className="space-y-6">
@@ -380,18 +384,13 @@ export default function LiveSessionPage({
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-purple-500" />
               <span className="text-2xl font-bold">
-                {ecgData === undefined
-                  ? "-"
-                  : intl.number(recording.totalSamples)}
+                {countsReady ? intl.number(recording.totalSamples) : "-"}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {isPartial
-                ? t("recording.samplesPartial", {
-                    loaded: recording.batchCount,
-                    total: totalBatches,
-                  })
-                : t("recording.samples")}
+              {coverage === "partial"
+                ? t("recording.samplesPartial", countValues)
+                : t("recording.samples", countValues)}
             </p>
           </CardContent>
         </Card>

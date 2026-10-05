@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSampleRates,
-  isPartialRecording,
+  recordingCoverage,
   summarizeRecording,
   type RecordedBatch,
 } from "./stats";
@@ -61,6 +61,7 @@ describe("ANH-123 recording statistics come from the recorded data", () => {
     // Then every stored value counts once, with no rounding to a batch size.
     expect(stats.totalSamples).toBe(637);
     expect(stats.samplesByChannel).toEqual({ ECG: 637 });
+    expect(stats.channelCount).toBe(1);
   });
 
   it("counts each channel separately and sums them", () => {
@@ -74,10 +75,29 @@ describe("ANH-123 recording statistics come from the recorded data", () => {
     };
     // When three such batches are summarized.
     const stats = summarizeRecording([batch, batch, batch]);
-    // Then the per-channel counts and their sum are both exact.
+    // Then the per-channel counts and their sum are both exact,
+    // and the total is known to add up two series.
     expect(stats.samplesByChannel).toEqual({ ECG: 750, RESP: 75 });
     expect(stats.totalSamples).toBe(825);
+    expect(stats.channelCount).toBe(2);
   });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "counts a channel named %s like any other",
+    (channel) => {
+      // Given a channel whose name is also an inherited object property.
+      const batch: RecordedBatch = {
+        sampleRate: 250,
+        samples: [{ channel, values: [0.1, 0.2, 0.3], unit: "mV" }],
+      };
+      // When two such batches are summarized.
+      const stats = summarizeRecording([batch, batch]);
+      // Then its values are counted as numbers under its own name.
+      expect(Object.entries(stats.samplesByChannel)).toEqual([[channel, 6]]);
+      expect(stats.totalSamples).toBe(6);
+      expect(stats.channelCount).toBe(1);
+    },
+  );
 
   it("uses the session rate only for raw batches that carry none", () => {
     // Given legacy raw ADC batches stored without a rate.
@@ -91,7 +111,7 @@ describe("ANH-123 recording statistics come from the recorded data", () => {
   });
 
   it("reports no rate for treated batches that carry none", () => {
-    // Given treated batches re-sent from the offline buffer without their rate.
+    // Given treated batches stored without a rate (the field is optional).
     const batches = [treatedBatch(250, null), treatedBatch(250, null)];
     // When the acquisition rate is the only other rate known.
     const stats = summarizeRecording(batches, 1000);
@@ -140,6 +160,7 @@ describe("ANH-123 recording statistics come from the recorded data", () => {
     expect(stats.totalSamples).toBe(0);
     expect(stats.sampleRates).toEqual([]);
     expect(stats.samplesByChannel).toEqual({ ECG: 0 });
+    expect(stats.channelCount).toBe(0);
   });
 
   it("returns zeros for a recording without batches", () => {
@@ -149,6 +170,7 @@ describe("ANH-123 recording statistics come from the recorded data", () => {
     expect(stats).toEqual({
       batchCount: 0,
       samplesByChannel: {},
+      channelCount: 0,
       totalSamples: 0,
       sampleRates: [],
       treated: false,
@@ -170,22 +192,32 @@ describe("ANH-123 partial recordings are flagged, not passed off as totals", () 
   it("flags a count over fewer batches than the server holds", () => {
     // Given 200 loaded batches out of the 540 the server counted.
     // Then the count over them is not the session total.
-    expect(isPartialRecording(200, 540)).toBe(true);
+    expect(recordingCoverage(200, 540)).toBe("partial");
   });
 
   it("accepts a count over every batch", () => {
     // Given as many loaded batches as the server counted.
-    expect(isPartialRecording(126, 126)).toBe(false);
+    expect(recordingCoverage(126, 126)).toBe("complete");
   });
 
-  it("does not flag when the server total is not known yet", () => {
-    // Given statistics still loading.
-    expect(isPartialRecording(126, undefined)).toBe(false);
+  it.each([undefined, null])(
+    "does not call a count complete while the server total is %s",
+    (totalBatches) => {
+      // Given 200 batches already loaded and statistics still loading (or refused).
+      // Then the count is neither a total nor a labelled partial: the screen waits.
+      expect(recordingCoverage(200, totalBatches)).toBe("unknown");
+      expect(recordingCoverage(0, totalBatches)).toBe("unknown");
+    },
+  );
+
+  it("accepts a recording that stored no batch at all", () => {
+    // Given a session the server counted zero batches for.
+    expect(recordingCoverage(0, 0)).toBe("complete");
   });
 
   it("does not flag when more batches arrived than the earlier server count", () => {
     // Given a live session whose batch list is fresher than its statistics.
-    expect(isPartialRecording(12, 10)).toBe(false);
+    expect(recordingCoverage(12, 10)).toBe("complete");
   });
 });
 

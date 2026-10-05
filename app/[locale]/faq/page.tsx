@@ -48,7 +48,7 @@ const faqData = {
         {
           question: "What is the recommended training duration?",
           answer:
-            "The recommended training protocol is 30-40 minutes per day. Intensity is set by the rotation speed; the machine's software caps it at about 2 g at the feet, roughly twice Earth's gravity. This cap is a technical limit, not a medical recommendation. The exact duration and intensity are personalized based on individual health conditions and training goals.",
+            "The recommended training protocol is 30-40 minutes per day. Intensity is set by the rotation speed, within the limits set by the machine's software. These limits are technical, not medical recommendations. The exact duration and intensity are personalized based on individual health conditions and training goals.",
         },
         {
           question: "What heart rate can be achieved during training?",
@@ -116,7 +116,7 @@ const faqData = {
         {
           question: "Quelle est la durée d'entraînement ?",
           answer:
-            "Le protocole d'entraînement recommandé est de 30 à 40 minutes par jour. L'intensité se règle par la vitesse de rotation ; le logiciel de la machine la plafonne à environ 2 g au niveau des pieds, soit environ deux fois la pesanteur terrestre. Ce plafond est une limite technique, pas une recommandation médicale. La durée et l'intensité exactes sont personnalisées en fonction des conditions de santé individuelles et des objectifs d'entraînement.",
+            "Le protocole d'entraînement recommandé est de 30 à 40 minutes par jour. L'intensité se règle par la vitesse de rotation, dans les limites fixées par le logiciel de la machine. Ces limites sont techniques, ce ne sont pas des recommandations médicales. La durée et l'intensité exactes sont personnalisées en fonction des conditions de santé individuelles et des objectifs d'entraînement.",
         },
         {
           question:

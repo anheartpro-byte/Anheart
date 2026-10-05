@@ -20,7 +20,7 @@ import {
   Eye,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
-import { isPartialRecording, summarizeRecording } from "@/lib/ecg/stats";
+import { recordingCoverage, summarizeRecording } from "@/lib/ecg/stats";
 import { generateSessionPdf } from "@/lib/generatePdf";
 
 export default function ReportsPage() {
@@ -109,10 +109,9 @@ function SessionReportCard({
     ecgData ?? [],
     sessionDetails?.sampleRate,
   );
-  const isPartial = isPartialRecording(
-    recording.batchCount,
-    ecgStats?.totalBatches,
-  );
+  const isPartial =
+    recordingCoverage(recording.batchCount, ecgStats?.totalBatches) ===
+    "partial";
 
   const handleDownload = async () => {
     if (!sessionDetails || ecgData === undefined || ecgStats === undefined) {
@@ -156,6 +155,7 @@ function SessionReportCard({
                 sampleRates: recording.sampleRates,
                 countedSamples: recording.totalSamples,
                 countedBatches: recording.batchCount,
+                countedChannels: recording.channelCount,
               }
             : undefined,
           ecgSamples,
@@ -252,10 +252,14 @@ function SessionReportCard({
                 {isPartial
                   ? t("samplesPartial", {
                       count: recording.totalSamples,
+                      channels: recording.channelCount,
                       loaded: recording.batchCount,
                       total: ecgStats.totalBatches,
                     })
-                  : t("samples", { count: recording.totalSamples })}
+                  : t("samples", {
+                      count: recording.totalSamples,
+                      channels: recording.channelCount,
+                    })}
               </>
             )}
           </div>

@@ -22,6 +22,8 @@ export interface RecordingStats {
   batchCount: number;
   /** Values stored per channel, in first-seen order. */
   samplesByChannel: Record<string, number>;
+  /** Channels that actually hold values: how many series `totalSamples` sums. */
+  channelCount: number;
   /** Values stored across every channel. */
   totalSamples: number;
   /** Distinct rates (Hz) of the stored values, ascending; empty when the data does not say. */
@@ -46,7 +48,8 @@ export function summarizeRecording(
   batches: ReadonlyArray<RecordedBatch>,
   sessionSampleRate?: number,
 ): RecordingStats {
-  const samplesByChannel: Record<string, number> = {};
+  // A Map, not an object: a channel named "constructor" must count like any other.
+  const samplesByChannel = new Map<string, number>();
   const rates = new Set<number>();
   let totalSamples = 0;
   let treated = false;
@@ -57,8 +60,10 @@ export function summarizeRecording(
     for (const sample of batch.samples) {
       if (sample.unit) batchTreated = true;
       if (sample.values.length > 0) batchHasValues = true;
-      samplesByChannel[sample.channel] =
-        (samplesByChannel[sample.channel] ?? 0) + sample.values.length;
+      samplesByChannel.set(
+        sample.channel,
+        (samplesByChannel.get(sample.channel) ?? 0) + sample.values.length,
+      );
       totalSamples += sample.values.length;
     }
     if (batchTreated) treated = true;
@@ -72,7 +77,10 @@ export function summarizeRecording(
 
   return {
     batchCount: batches.length,
-    samplesByChannel,
+    samplesByChannel: Object.fromEntries(samplesByChannel),
+    channelCount: Array.from(samplesByChannel.values()).filter(
+      (count) => count > 0,
+    ).length,
     totalSamples,
     sampleRates: Array.from(rates).sort((a, b) => a - b),
     treated,
@@ -80,14 +88,21 @@ export function summarizeRecording(
 }
 
 /**
- * True when the batches at hand are only part of the recording: the server
- * holds more than were loaded, so a count over them is not the session total.
+ * How much of the recording the batches at hand cover.
+ *
+ * - `unknown`: the server has not said how many batches exist, so a count over
+ *   the loaded ones cannot be called the session total yet;
+ * - `partial`: the server holds more batches than were loaded;
+ * - `complete`: every batch the server counted was loaded.
  */
-export function isPartialRecording(
+export type RecordingCoverage = "unknown" | "partial" | "complete";
+
+export function recordingCoverage(
   loadedBatches: number,
-  totalBatches: number | undefined,
-): boolean {
-  return totalBatches !== undefined && totalBatches > loadedBatches;
+  totalBatches: number | undefined | null,
+): RecordingCoverage {
+  if (totalBatches === undefined || totalBatches === null) return "unknown";
+  return totalBatches > loadedBatches ? "partial" : "complete";
 }
 
 /** "250" or "250 / 1000" for display; null when the data records no rate. */
