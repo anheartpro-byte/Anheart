@@ -59,6 +59,7 @@ import httpx
 from src.clock import Clock
 from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
 from src.local_config import CardiacTiers, CloudConfig
+from src.record.config import LocalReference
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState
@@ -209,6 +210,7 @@ class StartedSession:
     """A session the runtime has just armed, as the dashboard records it."""
 
     kind: SessionKind
+    local_ref: LocalReference
     operator: str
     started_at: UnixMillis
     subject_id: str
@@ -360,7 +362,7 @@ class _Tracked:
     """
 
     started: StartedSession
-    local_ref: str
+    local_ref: LocalReference
     cloud_id: str | None
     start_confirmed: bool
     points: deque[Mapping[str, JsonValue]] = field(
@@ -464,7 +466,7 @@ class CloudSync:
         remote = started.cloud_session_id
         self._current = _Tracked(
             started=started,
-            local_ref=uuid.uuid4().hex,
+            local_ref=started.local_ref,
             cloud_id=remote,
             start_confirmed=remote is None,
         )
@@ -521,6 +523,7 @@ class CloudSync:
     def _owe_refusal(self, cloud_session_id: str, detail: str) -> None:
         refused = StartedSession(
             kind=SessionKind.AUTO,
+            local_ref=LocalReference(uuid.uuid4().hex),
             operator=DASHBOARD_OPERATOR,
             started_at=self._clock.unix_millis(),
             subject_id="",
@@ -528,7 +531,7 @@ class CloudSync:
         )
         tracked = _Tracked(
             started=refused,
-            local_ref=uuid.uuid4().hex,
+            local_ref=refused.local_ref,
             cloud_id=cloud_session_id,
             start_confirmed=True,
             ended=(True, f"refusee par la machine : {detail}", self._clock.unix_millis()),

@@ -60,6 +60,7 @@ from src.motor.atv320 import (
 )
 from src.motor.drive import RegisterMap
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
+from src.record.config import DEFAULT_RECORDING, RecordingConfig, load_recording_config
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind, parse_kind
 from src.training.plan import (
@@ -253,6 +254,7 @@ class LocalConfig:
     tiers: CardiacTiers = DEFAULT_TIERS
     cloud: CloudConfig | None = None
     """``None``: no dashboard link, the console is purely local."""
+    recording: RecordingConfig = DEFAULT_RECORDING
 
     sensors: tuple[SensorKind, ...] = (SensorKind.ECG,)
     """The BITalino channels acquired and shown (``SENSORS``). Always contains ECG."""
@@ -637,8 +639,19 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
     presence = _presence(env)
     min_age = _min_rider_age(env)
     leg_tip = _leg_tip(env, radius.value if isinstance(radius, Ok) else None)
+    recording: RecordingConfig | None = None
+    recording_problems: tuple[ConfigProblem, ...] = ()
+    match load_recording_config(env):
+        case Ok(loaded_recording):
+            recording = loaded_recording
+        case Err(recording_errors):
+            recording_problems = tuple(
+                ConfigProblem(item.key.value, item.code.value) for item in recording_errors
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
-    problems = tuple(
+    problems = recording_problems + tuple(
         result.error
         for result in (
             backend,
@@ -662,6 +675,7 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
     )
     if (
         problems
+        or recording is None
         or isinstance(backend, Err)
         or isinstance(link, Err)
         or isinstance(source, Err)
@@ -700,5 +714,6 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
             camera=presence.value,
             min_rider_age=min_age.value,
             leg_tip_radius=leg_tip.value,
+            recording=recording,
         )
     )

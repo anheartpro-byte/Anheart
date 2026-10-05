@@ -118,6 +118,14 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.context import (
+    ContextSource,
+    Parameters,
+    SessionContext,
+    SessionRequest,
+    context_source,
+    session_context,
+)
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -163,7 +171,7 @@ from src.training.runtime import (
 )
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, TelemetrySnapshot
-from src.units import Bpm, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
+from src.units import Bpm, Hertz, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
 
@@ -430,6 +438,8 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_presence",
+        "_recording_context",
+        "_recording_source",
         "_reporter",
         "_runtime",
         "_sensors",
@@ -459,6 +469,7 @@ class LocalPanel:
         listener: SessionListener | None = None,
         cloud: CloudSync | None = None,
         transport: HttpxTransport | None = None,
+        recording_source: ContextSource | None = None,
     ) -> None:
         self._clock: Clock = clock
         self._config: LocalConfig = config
@@ -477,6 +488,12 @@ class LocalPanel:
         self._cloud: CloudSync | None = cloud
         self._transport: HttpxTransport | None = transport
         self._last_measured: MotorRpm = MotorRpm(0)
+        self._recording_source = recording_source
+        self._recording_context: SessionContext | None = None
+
+    @property
+    def recording_context(self) -> SessionContext | None:
+        return self._recording_context
 
     # --- read access, for the tests and the entry point ------------------
 
@@ -602,14 +619,17 @@ class LocalPanel:
         if blocked is not None:
             self._surface.note_refused(operator, blocked)
             return
+        context = session_context(self._recording_source, SessionRequest(occupancy), self._clock)
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
             self._surface.note_refused(operator, describe_start_refusal(started.error))
             return
+        self._recording_context = context
         if self._listener is not None:
             self._listener.session_started(
                 StartedSession(
                     kind=SessionKind.MANUAL,
+                    local_ref=context.local_ref,
                     operator=operator,
                     started_at=self._clock.unix_millis(),
                     subject_id=LOCAL_SUBJECT,
@@ -641,14 +661,26 @@ class LocalPanel:
             return
         program = prepared.value
         subject = Subject(subject_id=command.subject_id, operator=operator)
+        context = session_context(
+            self._recording_source,
+            SessionRequest(
+                Occupancy.OCCUPIED,
+                program,
+                None if command.subject_id == LOCAL_SUBJECT else command.subject_id,
+                command.cloud_session_id,
+            ),
+            self._clock,
+        )
         started = await self._runtime.start(program, subject)
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
             return
+        self._recording_context = context
         if self._listener is not None:
             self._listener.session_started(
                 StartedSession(
                     kind=SessionKind.AUTO,
+                    local_ref=context.local_ref,
                     operator=operator,
                     started_at=self._clock.unix_millis(),
                     subject_id=command.subject_id,
@@ -1057,6 +1089,15 @@ def build_panel(
         listener=cloud,
         cloud=cloud,
         transport=owned,
+        recording_source=context_source(
+            config,
+            Parameters(
+                RUNTIME_LIMITS, safety, motion, Hertz(ECG_SAMPLE_RATE), Hertz(DSP_OUTPUT_RATE)
+            ),
+            config.motion_limits_path
+            if config.motion_limits_path.is_absolute()
+            else PROJECT_ROOT / config.motion_limits_path,
+        ),
     )
 
 

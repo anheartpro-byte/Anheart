@@ -53,6 +53,7 @@ from src.cloud_sync import (
 from src.control_surface import LOCAL_SUBJECT, StartRefusal, StartSession
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
 from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.record.config import LocalReference
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
@@ -192,6 +193,7 @@ def rig(tmp_path: Path, *, programs: bool = True, tiers: CardiacTiers | None = N
 def manual(clock: ManualClock, *, remote: str | None = None) -> StartedSession:
     return StartedSession(
         kind=SessionKind.MANUAL,
+        local_ref=LocalReference(f"test-start-{remote or clock.unix_millis()}"),
         operator=OPERATOR,
         started_at=clock.unix_millis(),
         subject_id=LOCAL_SUBJECT,
@@ -581,6 +583,7 @@ async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:
     r.sync.session_started(
         StartedSession(
             kind=SessionKind.AUTO,
+            local_ref=LocalReference("test-auto-reference"),
             operator=OPERATOR,
             started_at=r.clock.unix_millis(),
             subject_id=LOCAL_SUBJECT,
