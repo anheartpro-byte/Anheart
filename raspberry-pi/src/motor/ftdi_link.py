@@ -74,6 +74,7 @@ from pyftdi.ftdi import Ftdi
 from pyftdi.usbtools import UsbTools
 from usb.backend import libusb1
 from usb.core import Device as UsbDevice
+from usb.util import dispose_resources
 
 from src.clock import Clock
 from src.motor.drive_process_lock import DriveConnection, DriveLease, retry_failed_drive_closes
@@ -591,6 +592,25 @@ class _OwnedFtdi(Ftdi):
     def __init__(self) -> None:
         super().__init__()
         self._acquired_usb: UsbDevice | None = None
+        self._enumerated_usb: list[UsbDevice] = []
+
+    @override
+    def open_from_url(self, url: str) -> None:
+        with UsbTools.Lock:
+            UsbTools.flush_cache()
+            try:
+                super().open_from_url(url)
+            finally:
+                # URL string reads open handles before get_device registers them.
+                self._enumerated_usb = list(
+                    {
+                        device
+                        for devices in UsbTools.UsbDevices.values()
+                        for device in devices
+                        if device is not self._acquired_usb
+                    }
+                )
+        self._dispose_enumerated()
 
     @override
     def open_from_device(self, device: UsbDevice, interface: int = 1) -> None:
@@ -599,11 +619,17 @@ class _OwnedFtdi(Ftdi):
 
     @override
     def close(self, freeze: bool = False) -> None:
-        if self.usb_dev is not None:
+        if self.usb_dev is not None and self.port_index is not None:
             super().close(freeze)
         elif self._acquired_usb is not None:
             UsbTools.release_device(self._acquired_usb)
         self._acquired_usb = None
+        self._dispose_enumerated()
+
+    def _dispose_enumerated(self) -> None:
+        while self._enumerated_usb:
+            dispose_resources(self._enumerated_usb[-1])
+            self._enumerated_usb.pop()
 
 
 def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
@@ -626,7 +652,6 @@ def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
     try:
         register_schneider_cable()
         load_libusb_backend()
-        UsbTools.flush_cache()
         device.open_from_url(url)
         opened = True
         return device

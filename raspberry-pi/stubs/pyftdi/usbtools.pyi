@@ -7,7 +7,12 @@ per-vendor/product enumeration cache that ``Ftdi.create_from_url`` otherwise
 reuses forever.
 """
 
+from threading import RLock
+from typing import ClassVar
+
 from usb.core import Device
+
+class UsbToolsError(Exception): ...
 
 class UsbDeviceDescriptor:
     def __init__(
@@ -22,6 +27,8 @@ class UsbDeviceDescriptor:
     ) -> None: ...
 
 class UsbTools:
+    Lock: ClassVar[RLock]
+    UsbDevices: ClassVar[dict[tuple[int, int], set[Device]]]
     @classmethod
     def flush_cache(cls) -> None: ...
     @classmethod
