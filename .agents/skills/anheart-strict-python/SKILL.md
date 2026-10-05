@@ -215,7 +215,12 @@ between a commanded stop and a shaft observed stopped.
 - Never assume the drive's state at startup. If `ETA` reports
   `OPERATION_ENABLED`, a previous crashed process left the motor spinning:
   command zero, disable, latch, and require an operator acknowledgement.
-- No automatic fault reset, and no automatic resumption of motion, anywhere.
+- No automatic fault reset. Latched safety verdicts require a named
+  acknowledgement; a completed session requires a new start, not resumption.
+  Unlatched warnings behave differently in the current runtime: an ongoing
+  session can resume regulation automatically when FREEZE/REDUCE clears,
+  including after REDUCE brought the setpoint to zero (known ANH-176
+  limitation). A future recovery policy must not be described as implemented.
 - Nothing blocks the event loop. All FastAPI handlers are `async def` (asserted
   at startup); blocking calls (`pymodbus`, `subprocess`, `serial.tools`) go
   through `run_in_executor`.
