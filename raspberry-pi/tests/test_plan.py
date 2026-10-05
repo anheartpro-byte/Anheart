@@ -361,8 +361,8 @@ REFUSALS: Final[tuple[tuple[Violation, Callable[[], TrainingProfile]], ...]] = (
 
 
 # The id is the violation alone: ``str`` of a lambda carries its memory address,
-# which differs in every process, and pytest-xdist refuses to run unless each
-# worker collects identical ids.
+# which differs in every process, and the gate, when it spreads the suite over
+# several processes, refuses to pass unless they all collect identical ids.
 @pytest.mark.parametrize(
     ("violation", "build"), REFUSALS, ids=[str(violation) for violation, _ in REFUSALS]
 )

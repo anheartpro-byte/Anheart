@@ -994,7 +994,7 @@ Les jobs sont parallèles :
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `pi-gate` | gate Pi complète, tests répartis sur un processus par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
+| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
 | `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
 | `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
@@ -1051,61 +1051,99 @@ trois. Un seul test paramétré,
 `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic` (67 cas
 d'environ 10 s chacun), représente 39 % de ce temps.
 
-Le job lance toujours `bash raspberry-pi/scripts/check.sh`, et ce script n'a
-pas changé. Seule la variable `PYTEST_ADDOPTS` du job ajoute
-`--numprocesses=logical --dist=worksteal --durations=25` : `pytest-xdist`,
-épinglé dans `raspberry-pi/requirements-dev.txt`, répartit les tests sur un
-processus par CPU logique du runner, soit quatre sur les runners hébergés
-`ubuntu-24.04` (deux cœurs, deux fils chacun). Le journal du job affiche le
-nombre de CPU et le modèle du processeur, puis `created: 4/4 workers`.
+Le job lance toujours `bash raspberry-pi/scripts/check.sh`, qui reste la seule
+définition de la gate. Il lui passe `PI_GATE_PROCESSES`, égal au nombre de CPU
+du runner : quatre sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux
+fils chacun). Avec cette variable, l'étape de tests de `check.sh` n'est plus un
+seul pytest : `scripts/ci/pi_gate_parallel.py` lance autant de processus
+`python -m pytest` indépendants, sans aucune dépendance supplémentaire. Sans
+la variable, `check.sh` se comporte exactement comme avant.
 
-Mesuré le 5 octobre 2026 sur le run 37338753428, avec quatre processus :
-13 min 57 s pour `pi-gate`, et de 7 min 19 s à 14 min 06 s sur les exécutions
-de mesure. L'écart vient du processeur attribué au runner, qui change d'un job
-à l'autre : AMD EPYC 9V45 pour la plus rapide, AMD EPYC 7763 pour la plus
-lente. Les 25 tests les plus lents sont listés à la fin de chaque journal
-(`--durations=25`) : c'est là qu'il faut regarder si la durée dérive.
+Chaque processus collecte toute la suite, comme en série, puis ne garde que
+les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
+avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 67 cas lourds, qui
+se suivent, sont ainsi distribués à tour de rôle entre tous les processus.
+Chaque processus mesure sa propre couverture.
 
-Ce qui reste garanti à l'identique :
+La gate ne passe que si ces trois vérifications réussissent :
 
-* chaque test collecté s'exécute une fois et une seule : 3296 tests collectés,
-  3294 passés et 2 ignorés sous Linux (les deux tests pyobjc réservés à macOS),
-  comme en série ; aucun filtre, marqueur ou désélection n'est ajouté ;
-* chaque processus mesure sa propre couverture, `pytest-cov` combine toutes
-  les mesures, puis applique `--cov-fail-under=100` au total combiné (10675
-  instructions, 2396 branches) ;
-* ruff, basedpyright et mypy tournent avant pytest avec la même configuration,
-  et `check.sh` échoue dès qu'une seule étape échoue ;
-* les réglages Hypothesis ne changent pas : même profil `ci`, même nombre
-  d'exemples par test.
+* **chaque processus se termine de lui-même avec le code 0.** Un test en
+  échec, une erreur de collecte, un processus tué en plein test ou un plantage
+  pendant l'arrêt de l'interpréteur, après le dernier test, font échouer la
+  gate. Un processus qui a fini ses tests mais ne s'arrête pas (fil non démon
+  resté bloqué, bibliothèque native) est tué au bout de 300 s et fait échouer
+  la gate avec un message. En série, pytest ne rendrait jamais la main et le
+  job mourrait à sa limite de 60 minutes. Ces 300 s ne commencent qu'après le
+  dernier test et l'enregistrement de la couverture : il ne reste alors que
+  l'arrêt de l'interpréteur, qui prend moins d'une seconde quand rien n'est
+  bloqué. Un processus bloqué avant la fin de ses tests n'est pas chronométré :
+  comme en série, le job attend sa propre limite ;
+* **la preuve de partition.** Chaque processus écrit la liste des tests qu'il
+  a collectés et celle des tests qu'il a exécutés. La gate exige que toutes
+  les collectes soient identiques, identifiant par identifiant, et que chaque
+  test collecté ait été exécuté par un processus et un seul. Cette
+  vérification ignore la règle de partage : elle ne compare que les listes. Le
+  journal l'affiche (`[gate] partition proven`), avec le nombre de tests de
+  chaque processus et le total des verdicts ;
+* **le seuil de couverture, une seule fois.** `coverage combine` réunit les
+  mesures de tous les processus, puis `coverage report --fail-under=100`
+  s'applique au total combiné, avec la même liste `include` de
+  `pyproject.toml` et la même fonction de décision que
+  `pytest --cov-fail-under=100`.
 
-Le vol de travail (`--dist=worksteal`) est nécessaire. Les 67 cas lourds se
-suivent dans l'ordre de collecte : avec la répartition par défaut ils restent
-dans la file d'un ou deux processus pendant que les autres attendent (mesuré
-sur le même run : trois processus sur quatre sans travail pendant 6 min 42 s à
-9 min 29 s, et 15 min 09 s au total). Avec le vol de travail, un processus
-sans travail reprend la moitié de la file du plus chargé.
+`check.sh` exécute d'abord les tests du lanceur lui-même
+(`scripts/ci/test_pi_gate_parallel.py`). Sur un projet jetable, ils vérifient
+qu'un test en échec, un trou dans la couverture combinée, un processus tué à
+l'arrêt de l'interpréteur, un processus qui ne s'arrête pas et des
+identifiants différents d'un processus à l'autre font bien échouer la gate.
 
-Trois règles gardent la gate stable ; les enfreindre la fait échouer, jamais
-passer à tort :
+Ce qui reste identique à la gate en série : les tests collectés (aucun filtre
+ni marqueur n'est ajouté ; dans le résumé de chaque processus, `deselected`
+compte les tests confiés aux autres processus), la mesure de branches, le
+seuil, ruff, basedpyright et mypy avant les tests, les réglages Hypothesis. Ce
+qui diffère : l'ordre et le voisinage des tests dans chaque processus, et
+l'occupation de tous les CPU pendant les tests.
+
+La durée se lit dans chaque journal : la ligne `Runner:` donne le nombre de
+CPU et le modèle du processeur, chaque processus affiche son résumé
+(`[p0] ... passed ... in ...s`) et ses 25 tests les plus lents
+(`--durations=25`). Elle dépend d'abord du processeur attribué au runner, qui
+change d'un job à l'autre. Les mesures de référence sont consignées dans la
+PR #7.
+
+Trois règles gardent la gate stable. Les enfreindre fait le plus souvent
+échouer un test sans raison. Un état partagé entre deux tests peut aussi
+satisfaire une assertion à tort, en série comme en parallèle : la gate ne le
+détecte pas, d'où la deuxième règle.
 
 * **identifiants stables.** L'identifiant d'un cas paramétré ne doit contenir
   ni adresse mémoire (`ids=str` sur une lambda) ni ordre dépendant du hachage.
-  Sinon les processus ne collectent pas les mêmes identifiants et `pytest-xdist`
-  refuse de démarrer (`Different tests were collected`) ;
+  Sinon les processus ne collectent pas les mêmes identifiants et la gate
+  échoue (`did not collect the same tests`) ;
 * **isolement.** Fichiers sous `tmp_path`, aucun chemin ni port fixe partagé
   entre deux tests, aucun état laissé au test suivant : l'ordre et le
-  regroupement des tests ne sont plus ceux de la série ;
+  voisinage des tests ne sont plus ceux de la série. Exception connue : deux
+  tests ouvrent réellement le port fixe 8099,
+  `tests/test_web_api.py::test_the_server_serves_and_stops_without_touching_the_signal_handlers`
+  et `tests/test_local_panel.py::test_the_production_web_runner_binds_and_exits`.
+  Ils sont nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`) et vont
+  toujours dans le même processus, qui les exécute l'un après l'autre. Si
+  l'un d'eux est renommé, la gate échoue jusqu'à la mise à jour de cette
+  liste. Deux gates lancées en même temps sur une même machine peuvent
+  toujours se disputer ce port ;
 * **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
   les CPU du runner sont occupés pendant toute la durée des tests.
 
-En local, `check.sh` et `check.ps1` restent en série par défaut. Pour
-reproduire le job avec ses quatre processus, dans un venv à jour de
-`requirements-dev.txt` :
+En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ce
+mode. Pour reproduire le job avec ses quatre processus :
 
 ```sh
-PYTEST_ADDOPTS='--numprocesses=4 --dist=worksteal' bash raspberry-pi/scripts/check.sh
+PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
 ```
+
+Hors CI, Hypothesis garde son profil par défaut et sa limite de 200 ms par
+exemple : sous cette charge, un test par propriétés sans `deadline=None` peut
+échouer. La CI utilise le profil `ci`, sans limite de temps.
 
 ### Lire un échec et relancer
 
