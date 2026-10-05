@@ -252,7 +252,7 @@ fréquence cardiaque du passager dans la zone du programme.
 >   console (jalon M5) : utiliser le mode MANUEL » et le bouton **Demarrer la
 >   seance** reste grisé ;
 > - ou bien le démarrage est refusé, avec dans la liste **Evenements** un
->   message qui commence par « personne a bord refusee ».
+>   message contenant « personne a bord refusee ».
 >
 > Vous ne pouvez pas changer ce réglage depuis la console. Appelez le support.
 
@@ -333,9 +333,9 @@ La séance se termine seule à la fin du programme. Pour l'arrêter avant :
 ## 7. Séance lancée depuis le site
 
 Un administrateur, un gestionnaire, ou un patient qui en a reçu le droit, peut
-lancer une séance programmée depuis le site web. La machine va chercher cette demande elle-même,
-toutes les 3 secondes environ quand elle est au repos. La demande passe par les
-mêmes contrôles qu'un démarrage fait à la console.
+lancer une séance programmée depuis le site web. La machine va chercher cette
+demande elle-même, toutes les 3 secondes environ quand elle est au repos. La
+demande passe par les mêmes contrôles qu'un démarrage fait à la console.
 
 Ce que cela change pour vous :
 
@@ -552,8 +552,8 @@ réarmement. Capture prise en simulation.*
    coup de poing n'est pas nécessaire. Si vous acquittez avant le réarmement,
    l'alerte revient aussitôt.
 
-Si la console refuse le réarmement (une ligne « refused » qui commence par
-« reset refuse » dans la liste **Evenements**), n'insistez pas. Certains
+Si la console refuse le réarmement (une ligne « refused » contenant « reset
+refuse » dans la liste **Evenements**), n'insistez pas. Certains
 défauts ne se réarment pas depuis la console. Arrêtez-vous et appelez le
 support.
 
@@ -631,14 +631,14 @@ voyez.
 | « cochez la declaration BANC (personne a bord : NON) avant de demarrer » | La case de la séance manuelle n'est pas cochée. | Vérifiez que la capsule est vide, puis cochez. |
 | Un message en anglais, alors que le champ de nom est vide | Aucun nom d'opérateur. | Tapez votre nom. |
 | « demarrage refuse : cablage de l'arret d'urgence non atteste », ou un message en anglais juste après un redémarrage de la console | L'attestation n'est pas faite. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence). |
-| Un message qui commence par « demarrage refuse : verdict », ou un message en anglais alors que **Securite** n'affiche pas « none » | Un arrêt de sécurité attend un acquittement. | [Section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
+| Un message contenant « demarrage refuse : verdict », ou un message en anglais alors que **Securite** n'affiche pas « none » | Un arrêt de sécurité attend un acquittement. | [Section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | Un message en anglais alors que **Etat** n'affiche pas « idle » | Une séance tourne déjà, ou un arrêt est en cours. | Attendez **Etat** « idle ». |
 | « seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL » | Les séances programmées ne sont pas autorisées sur cette machine. | Appelez le support. |
-| Un message qui commence par « personne a bord refusee » | La machine n'est pas autorisée à tourner avec une personne à bord. | Ne cherchez pas à contourner. Appelez le support. |
+| Un message contenant « personne a bord refusee » | La machine n'est pas autorisée à tourner avec une personne à bord. | Ne cherchez pas à contourner. Appelez le support. |
 | « demarrage refuse : age du passager requis pour une seance programmee » | L'âge n'est pas saisi. | Saisissez l'âge du passager. |
-| Un message qui commence par « demarrage refuse : passager de » | Le passager est plus jeune que l'âge minimum réglé sur la machine. | Pas de séance. |
-| Un message qui commence par « demarrage refuse : programme inadapte a ce passager » | Le programme ne convient pas à ce passager, d'après les contrôles du logiciel. | Pas de séance avec ce programme. Voyez avec le gestionnaire. |
-| Un message qui commence par « demarrage refuse : variateur en defaut » | Le variateur est en défaut. | [Section 9.5](#95-le-variateur-passe-en-défaut). |
+| Un message contenant « demarrage refuse : passager de » | Le passager est plus jeune que l'âge minimum réglé sur la machine. | Pas de séance. |
+| Un message contenant « demarrage refuse : programme inadapte a ce passager » | Le programme ne convient pas à ce passager, d'après les contrôles du logiciel. | Pas de séance avec ce programme. Voyez avec le gestionnaire. |
+| Un message contenant « demarrage refuse : variateur en defaut » | Le variateur est en défaut. | [Section 9.5](#95-le-variateur-passe-en-défaut). |
 | Tout autre message | | Notez le texte exact. N'insistez pas. Appelez le support. |
 
 ## 11. Quand arrêter et appeler le support
@@ -646,7 +646,7 @@ voyez.
 Ce manuel ne peut pas tout prévoir. Arrêtez la séance (STOP, ou arrêt d'urgence
 s'il y a danger), ne redémarrez pas, et appelez le support si :
 
-- le passager demande l'arrêt, se plaint, ou vous semble aller mal ;
+- le passager se plaint d'un malaise, ou vous semble aller mal ;
 - le bras ne ralentit pas après un arrêt demandé ;
 - **Rotation** affiche « VITESSE INCONNUE » ;
 - **Securite** affiche « go_silent », ou une règle que ce manuel ne décrit

@@ -465,18 +465,20 @@ pour une séance d'entraînement.
 | **Motif de fin** | Pourquoi la séance s'est terminée. Voir ci-dessous. |
 | **Télémétrie** | Les deux courbes de toute la séance. |
 
-Le motif de fin est écrit par la machine, sans accents.
+Le motif de fin est écrit par la machine, sans accents. Il commence par un
+mot-clé, parfois suivi de deux-points et d'une précision.
 
-| Motif de fin | Sens | Quoi faire |
+| Le motif commence par | Sens | Quoi faire |
 |---|---|---|
 | « programme_complete » | Le programme est allé au bout. | Rien. |
-| Commence par « operator_stop » | Un arrêt normal a été demandé, à la console ou depuis le site. | Rien. |
+| « operator_stop » | Un arrêt normal a été demandé, à la console ou depuis le site. | Rien. |
 | « emergency_stop » | Un arrêt d'urgence a été déclenché. | Demandez à l'opérateur ce qui s'est passé. |
-| Commence par « safety_verdict » | La machine s'est arrêtée seule, pour une raison de sécurité. | Demandez à l'opérateur ce qui s'est passé. La raison précise est sur la console. |
-| Commence par « refusee par la machine » | La machine a refusé le départ. La suite du texte dit pourquoi. | Voyez avec l'opérateur : le plus souvent, une vérification reste à faire à la console. |
+| « safety_verdict » | La machine s'est arrêtée seule, pour une raison de sécurité. | Demandez à l'opérateur ce qui s'est passé. La raison précise est sur la console. |
+| « refusee par la machine » | La machine a refusé le départ. La suite du texte dit pourquoi. | Voyez avec l'opérateur : le plus souvent, une vérification reste à faire à la console. |
 | « la boucle n'a ni demarre ni refuse » | La machine a pris la demande, mais rien ne s'est passé en 60 secondes. | Voyez avec l'opérateur, puis relancez. |
 | Un texte en anglais, avec un nom | La séance a été annulée depuis le site avant son départ. | Rien. |
 | « tick_exception », « shutdown » | Une erreur du logiciel, ou l'arrêt de la console pendant la séance. | Appelez le support. |
+| Tout autre texte | | Notez le texte exact et appelez le support. |
 
 Les courbes se lisent comme dans la vue en direct
 ([section 7](#7-suivre-une-séance-en-direct)).
