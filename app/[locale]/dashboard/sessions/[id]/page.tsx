@@ -4,7 +4,7 @@ import { use } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { useTranslations, useLocale } from "next-intl";
+import { useTranslations, useLocale, useFormatter } from "next-intl";
 import { Link } from "@/i18n/navigation";
 
 import {
@@ -36,6 +36,11 @@ import {
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { ECGWaveform } from "@/components/ECGWaveform";
+import {
+  formatSampleRates,
+  isPartialRecording,
+  summarizeRecording,
+} from "@/lib/ecg/stats";
 import { isTrainingKind } from "@/lib/training";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
 import {
@@ -51,6 +56,7 @@ export default function SessionDetailPage({
   const { id } = use(params);
   const t = useTranslations();
   const locale = useLocale();
+  const intl = useFormatter();
 
   const sessionId = id as Id<"sessions">;
   const session = useQuery(api.sessions.getSession, { sessionId });
@@ -80,7 +86,7 @@ export default function SessionDetailPage({
   if (session === null) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Session not found</p>
+        <p className="text-muted-foreground">{t("sessions.notFound")}</p>
         <Link
           href="/dashboard/sessions"
           className="text-primary hover:underline mt-2 inline-block"
@@ -98,7 +104,7 @@ export default function SessionDetailPage({
 
   const duration = session.endedAt
     ? formatDuration(session.endedAt - session.startedAt)
-    : "In progress";
+    : t("sessions.inProgress");
 
   // Process ECG data for display
   const ecgSamples: Record<string, number[]> = {};
@@ -120,6 +126,19 @@ export default function SessionDetailPage({
   const displayRate = isTreated
     ? (transmitRate ?? 250)
     : (session.sampleRate ?? 1000);
+
+  // Sample counts and rates are read from the loaded batches, never assumed.
+  // Only part of a long recording is loaded here, so the count says when it is partial.
+  const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
+  const recordedRates = formatSampleRates(recording.sampleRates);
+  const isPartial = isPartialRecording(
+    recording.batchCount,
+    stats?.totalBatches,
+  );
+  const partialValues = {
+    loaded: recording.batchCount,
+    total: stats?.totalBatches ?? recording.batchCount,
+  };
 
   return (
     <div className="space-y-6">
@@ -147,7 +166,7 @@ export default function SessionDetailPage({
           <Link href={`/dashboard/sessions/${sessionId}/live`}>
             <Button>
               <Radio className="h-4 w-4 mr-2 animate-pulse" />
-              View Live
+              {t("sessions.viewLive")}
             </Button>
           </Link>
         )}
@@ -161,11 +180,10 @@ export default function SessionDetailPage({
               <AlertCircle className="h-6 w-6 text-red-600 flex-shrink-0 mt-0.5" />
               <div>
                 <h3 className="font-semibold text-red-800 dark:text-red-200">
-                  Session Failed
+                  {t("sessionDetail.failedTitle")}
                 </h3>
                 <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-                  This session encountered an error and was terminated. Any data
-                  recorded before the failure is shown below.
+                  {t("sessionDetail.failedDescription")}
                 </p>
                 {training?.endReason && (
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">
@@ -191,12 +209,12 @@ export default function SessionDetailPage({
               <Clock className="h-6 w-6 text-yellow-600 flex-shrink-0 mt-0.5" />
               <div>
                 <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">
-                  Waiting for Device
+                  {t("sessionDetail.pendingTitle")}
                 </h3>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
                   {isTraining
                     ? t("training.session.pending")
-                    : "This session is waiting for the recording device to connect and start capturing data."}
+                    : t("sessionDetail.pendingDescription")}
                 </p>
               </div>
             </div>
@@ -212,7 +230,9 @@ export default function SessionDetailPage({
               <Timer className="h-5 w-5 text-blue-500" />
               <span className="text-xl font-bold">{duration}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Duration</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("sessions.duration")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -223,7 +243,9 @@ export default function SessionDetailPage({
                 {stats?.totalBatches ?? 0}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Data Batches</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("recording.dataBatches")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -231,10 +253,16 @@ export default function SessionDetailPage({
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-purple-500" />
               <span className="text-xl font-bold">
-                {(((stats?.totalBatches ?? 0) * 1000) / 1000).toFixed(0)}K
+                {ecgData === undefined
+                  ? "-"
+                  : intl.number(recording.totalSamples)}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Total Samples</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {isPartial
+                ? t("recording.samplesPartial", partialValues)
+                : t("recording.samples")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -245,17 +273,19 @@ export default function SessionDetailPage({
                 {session.channels.length}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Channels</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("machines.channels")}
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 pb-3">
             <div className="flex items-center gap-2">
               <Heart className="h-5 w-5 text-red-500" />
-              <span className="text-xl font-bold">1000</span>
+              <span className="text-xl font-bold">{recordedRates ?? "-"}</span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Sample Rate (Hz)
+              {t("recording.sampleRateHz")}
             </p>
           </CardContent>
         </Card>
@@ -267,19 +297,28 @@ export default function SessionDetailPage({
       {/* ECG Data Visualization */}
       {Object.keys(ecgSamples).length > 0 ? (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Activity className="h-5 w-5" />
-            ECG Recording
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              {t("sessionDetail.ecgRecording")}
+            </h2>
+            {isPartial && (
+              <p className="text-sm text-muted-foreground">
+                {t("recording.partialNote", partialValues)}
+              </p>
+            )}
+          </div>
           {session.channels.map((channel) => (
             <Card key={channel}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="h-4 w-4 text-green-500" />
-                  {channel} Channel
+                  {t("sessionDetail.channelTitle", { channel })}
                 </CardTitle>
                 <CardDescription>
-                  {ecgSamples[channel]?.length ?? 0} samples recorded
+                  {t("sessionDetail.samplesRecorded", {
+                    count: ecgSamples[channel]?.length ?? 0,
+                  })}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -295,7 +334,7 @@ export default function SessionDetailPage({
                 ) : (
                   <div className="h-[250px] flex items-center justify-center bg-muted/20 rounded-lg border border-dashed">
                     <p className="text-muted-foreground">
-                      No data for {channel}
+                      {t("sessionDetail.noChannelData", { channel })}
                     </p>
                   </div>
                 )}
@@ -308,30 +347,30 @@ export default function SessionDetailPage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-5 w-5" />
-              ECG Recording
+              {t("sessionDetail.ecgRecording")}
             </CardTitle>
           </CardHeader>
           <CardContent className="h-48 flex items-center justify-center text-muted-foreground">
             {session.status === "active" ? (
               <div className="text-center">
                 <Activity className="h-12 w-12 mx-auto mb-3 animate-pulse" />
-                <p>Session is active</p>
+                <p>{t("sessionDetail.sessionActive")}</p>
                 <Link href={`/dashboard/sessions/${sessionId}/live`}>
                   <Button variant="link" className="mt-2">
                     <Play className="h-4 w-4 mr-2" />
-                    View Live Recording
+                    {t("sessionDetail.viewLiveRecording")}
                   </Button>
                 </Link>
               </div>
             ) : session.status === "pending" ? (
               <div className="text-center">
                 <Clock className="h-12 w-12 mx-auto mb-3" />
-                <p>Waiting for device to start recording...</p>
+                <p>{t("sessionDetail.waitingForDevice")}</p>
               </div>
             ) : (
               <div className="text-center">
                 <Database className="h-12 w-12 mx-auto mb-3" />
-                <p>No ECG data recorded for this session</p>
+                <p>{t("sessionDetail.noEcgData")}</p>
               </div>
             )}
           </CardContent>
@@ -345,17 +384,21 @@ export default function SessionDetailPage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <User className="h-4 w-4" />
-              Patient Information
+              {t("reports.patientInfo")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div>
-              <p className="text-sm text-muted-foreground">Name</p>
+              <p className="text-sm text-muted-foreground">
+                {t("common.name")}
+              </p>
               <p className="font-medium">{riderName}</p>
             </div>
             {session.patient && (
               <div>
-                <p className="text-sm text-muted-foreground">Email</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("users.email")}
+                </p>
                 <p className="font-medium">{session.patient.email}</p>
               </div>
             )}
@@ -367,25 +410,31 @@ export default function SessionDetailPage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Calendar className="h-4 w-4" />
-              Session Timing
+              {t("sessionDetail.timing")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-muted-foreground">Started</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("sessionDetail.started")}
+                </p>
                 <p className="font-medium">
                   {format(session.startedAt, "PPp", { locale: dateLocale })}
                 </p>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Duration</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("sessions.duration")}
+                </p>
                 <p className="font-medium">{duration}</p>
               </div>
             </div>
             {session.endedAt && (
               <div>
-                <p className="text-sm text-muted-foreground">Ended</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("sessionDetail.ended")}
+                </p>
                 <p className="font-medium">
                   {format(session.endedAt, "PPp", { locale: dateLocale })}
                 </p>
@@ -393,7 +442,9 @@ export default function SessionDetailPage({
             )}
             {session.startedBy && (
               <div>
-                <p className="text-sm text-muted-foreground">Started By</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("sessions.startedBy")}
+                </p>
                 <p className="font-medium">
                   {session.startedBy.firstName} {session.startedBy.lastName}
                 </p>
@@ -408,22 +459,26 @@ export default function SessionDetailPage({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Cpu className="h-4 w-4" />
-            Recording Device
+            {t("sessionDetail.recordingDevice")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex justify-between items-center">
             <div>
               <p className="font-medium text-lg">{session.machine.name}</p>
-              <p className="text-sm text-muted-foreground">
-                Sample Rate: 1000 Hz • Resolution: 10-bit
-              </p>
+              {session.sampleRate !== undefined && (
+                <p className="text-sm text-muted-foreground">
+                  {t("recording.acquisitionRate", {
+                    rate: String(session.sampleRate),
+                  })}
+                </p>
+              )}
             </div>
           </div>
           <Separator />
           <div>
             <p className="text-sm text-muted-foreground mb-2">
-              Recorded Channels
+              {t("sessionDetail.recordedChannels")}
             </p>
             <div className="flex gap-2 flex-wrap">
               {session.channels.map((ch) => (
@@ -443,7 +498,7 @@ export default function SessionDetailPage({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-4 w-4" />
-              Session Notes
+              {t("sessionDetail.notes")}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -456,34 +511,57 @@ export default function SessionDetailPage({
       {stats && stats.totalBatches > 0 && (
         <Card className="bg-muted/30">
           <CardHeader>
-            <CardTitle className="text-sm">Recording Summary</CardTitle>
+            <CardTitle className="text-sm">
+              {t("sessionDetail.summary")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-sm space-y-2">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <p className="text-muted-foreground">Total Batches</p>
+                <p className="text-muted-foreground">
+                  {t("recording.dataBatches")}
+                </p>
                 <p className="font-medium">{stats.totalBatches}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Total Samples</p>
+                <p className="text-muted-foreground">
+                  {t("recording.samples")}
+                </p>
                 <p className="font-medium">
-                  {(stats.totalBatches * 1000).toLocaleString()}
+                  {ecgData === undefined
+                    ? "-"
+                    : intl.number(recording.totalSamples)}
+                </p>
+                {isPartial && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("recording.partialNote", partialValues)}
+                  </p>
+                )}
+              </div>
+              <div>
+                <p className="text-muted-foreground">
+                  {t("sessionDetail.dataDuration")}
+                </p>
+                <p className="font-medium">
+                  {t("sessionDetail.seconds", {
+                    seconds: stats.durationSeconds,
+                  })}
                 </p>
               </div>
               <div>
-                <p className="text-muted-foreground">Data Duration</p>
-                <p className="font-medium">{stats.durationSeconds}s</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Channels</p>
+                <p className="text-muted-foreground">
+                  {t("machines.channels")}
+                </p>
                 <p className="font-medium">{stats.channels.join(", ")}</p>
               </div>
             </div>
             {stats.firstTimestamp && stats.lastTimestamp && (
               <div className="pt-2 border-t">
                 <p className="text-muted-foreground">
-                  Data recorded from {format(stats.firstTimestamp, "HH:mm:ss")}{" "}
-                  to {format(stats.lastTimestamp, "HH:mm:ss")}
+                  {t("sessionDetail.recordedRange", {
+                    start: format(stats.firstTimestamp, "HH:mm:ss"),
+                    end: format(stats.lastTimestamp, "HH:mm:ss"),
+                  })}
                 </p>
               </div>
             )}
@@ -495,6 +573,7 @@ export default function SessionDetailPage({
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
+  const t = useTranslations("sessions.status");
   const variants: Record<
     string,
     "default" | "secondary" | "destructive" | "outline"
@@ -505,16 +584,10 @@ function SessionStatusBadge({ status }: { status: string }) {
     failed: "destructive",
   };
 
-  const labels: Record<string, string> = {
-    active: "Active",
-    completed: "Completed",
-    pending: "Pending",
-    failed: "Failed",
-  };
-
+  // Unknown statuses are shown as received rather than hidden.
   return (
     <Badge variant={variants[status] || "outline"} className="text-sm">
-      {labels[status] || status}
+      {t.has(status) ? t(status) : status}
     </Badge>
   );
 }

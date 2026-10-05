@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -20,6 +20,7 @@ import {
   Eye,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
+import { isPartialRecording, summarizeRecording } from "@/lib/ecg/stats";
 import { generateSessionPdf } from "@/lib/generatePdf";
 
 export default function ReportsPage() {
@@ -87,6 +88,8 @@ function SessionReportCard({
   onDownloadComplete,
 }: SessionReportCardProps) {
   const t = useTranslations("reports");
+  const tPdf = useTranslations("reports.pdf");
+  const locale = useLocale();
 
   // Fetch session details and ECG data for PDF
   const sessionDetails = useQuery(api.sessions.getSession, {
@@ -100,48 +103,65 @@ function SessionReportCard({
     maxBatches: 50, // Limit for PDF preview
   });
 
+  // Counted from the loaded batches (at most 50 here), never from a constant:
+  // when the recording is longer, the figure is labelled as partial.
+  const recording = summarizeRecording(
+    ecgData ?? [],
+    sessionDetails?.sampleRate,
+  );
+  const isPartial = isPartialRecording(
+    recording.batchCount,
+    ecgStats?.totalBatches,
+  );
+
   const handleDownload = async () => {
-    if (!sessionDetails) return;
+    if (!sessionDetails || ecgData === undefined || ecgStats === undefined) {
+      return;
+    }
 
     onDownload();
 
     try {
       // Process ECG data for PDF
       const ecgSamples: Record<string, number[]> = {};
-      if (ecgData) {
-        for (const batch of ecgData) {
-          for (const sample of batch.samples) {
-            if (!ecgSamples[sample.channel]) {
-              ecgSamples[sample.channel] = [];
-            }
-            ecgSamples[sample.channel].push(...sample.values);
+      for (const batch of ecgData) {
+        for (const sample of batch.samples) {
+          if (!ecgSamples[sample.channel]) {
+            ecgSamples[sample.channel] = [];
           }
+          ecgSamples[sample.channel].push(...sample.values);
         }
       }
 
       // Generate PDF
-      generateSessionPdf({
-        sessionId: session._id,
-        patientName: sessionDetails.patient
-          ? sessionDetails.patient.firstName +
-            " " +
-            sessionDetails.patient.lastName
-          : (sessionDetails.subjectLabel ?? session.patientName),
-        patientEmail: sessionDetails.patient?.email ?? "-",
-        machineName: sessionDetails.machine.name,
-        startedAt: sessionDetails.startedAt,
-        endedAt: sessionDetails.endedAt,
-        channels: sessionDetails.channels,
-        notes: sessionDetails.notes,
-        ecgStats: ecgStats
-          ? {
-              totalBatches: ecgStats.totalBatches,
-              durationSeconds: ecgStats.durationSeconds,
-              channels: ecgStats.channels,
-            }
-          : undefined,
-        ecgSamples,
-      });
+      generateSessionPdf(
+        {
+          sessionId: session._id,
+          patientName: sessionDetails.patient
+            ? sessionDetails.patient.firstName +
+              " " +
+              sessionDetails.patient.lastName
+            : (sessionDetails.subjectLabel ?? session.patientName),
+          patientEmail: sessionDetails.patient?.email ?? "-",
+          machineName: sessionDetails.machine.name,
+          startedAt: sessionDetails.startedAt,
+          endedAt: sessionDetails.endedAt,
+          channels: sessionDetails.channels,
+          notes: sessionDetails.notes,
+          ecgStats: ecgStats
+            ? {
+                totalBatches: ecgStats.totalBatches,
+                durationSeconds: ecgStats.durationSeconds,
+                channels: ecgStats.channels,
+                sampleRates: recording.sampleRates,
+                countedSamples: recording.totalSamples,
+                countedBatches: recording.batchCount,
+              }
+            : undefined,
+          ecgSamples,
+        },
+        { t: (key, values) => tPdf(key, values), locale },
+      );
     } catch (error) {
       console.error("Error generating PDF:", error);
     } finally {
@@ -172,7 +192,12 @@ function SessionReportCard({
               variant="outline"
               size="sm"
               onClick={handleDownload}
-              disabled={isDownloading || !sessionDetails}
+              disabled={
+                isDownloading ||
+                !sessionDetails ||
+                ecgData === undefined ||
+                ecgStats === undefined
+              }
             >
               {isDownloading ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -198,11 +223,15 @@ function SessionReportCard({
           </div>
           <div className="flex items-center gap-2 text-muted-foreground">
             <Calendar className="h-4 w-4" />
-            <span>{new Date(session.startedAt).toLocaleDateString()}</span>
+            <span>
+              {new Date(session.startedAt).toLocaleDateString(locale)}
+            </span>
           </div>
           <div className="flex items-center gap-2 text-muted-foreground">
             <Clock className="h-4 w-4" />
-            <span>{duration > 0 ? `${duration} min` : "-"}</span>
+            <span>
+              {duration > 0 ? t("durationMinutes", { minutes: duration }) : "-"}
+            </span>
           </div>
           <div className="flex gap-1">
             {session.channels.map((ch) => (
@@ -214,8 +243,21 @@ function SessionReportCard({
         </div>
         {ecgStats && ecgStats.totalBatches > 0 && (
           <div className="mt-3 pt-3 border-t text-xs text-muted-foreground">
-            {ecgStats.totalBatches} data batches • {ecgStats.durationSeconds}s
-            of recording • ~{ecgStats.totalBatches * 100} samples
+            {t("batches", { count: ecgStats.totalBatches })} •{" "}
+            {t("recordingSeconds", { seconds: ecgStats.durationSeconds })}
+            {ecgData !== undefined && (
+              <>
+                {" "}
+                •{" "}
+                {isPartial
+                  ? t("samplesPartial", {
+                      count: recording.totalSamples,
+                      loaded: recording.batchCount,
+                      total: ecgStats.totalBatches,
+                    })
+                  : t("samples", { count: recording.totalSamples })}
+              </>
+            )}
           </div>
         )}
       </CardContent>

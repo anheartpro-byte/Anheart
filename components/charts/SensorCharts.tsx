@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useTranslations } from "next-intl";
 import {
   Area,
   AreaChart,
@@ -116,6 +117,8 @@ export function ECGChart({
   heartRate,
   hrv,
 }: ECGChartProps) {
+  const t = useTranslations("sensors");
+
   // Heart-rate metrics. Prefer on-device values (computed by the Pi with BioSPPy);
   // otherwise fall back to the client detector for legacy raw sessions.
   const metrics = useMemo(() => {
@@ -157,11 +160,11 @@ export function ECGChart({
   };
 
   const getHeartRateStatus = (hr: number) => {
-    if (hr === 0) return "No signal";
-    if (hr < 60) return "Bradycardia";
-    if (hr <= 100) return "Normal";
-    if (hr <= 120) return "Elevated";
-    return "Tachycardia";
+    if (hr === 0) return t("noSignal");
+    if (hr < 60) return t("ecg.bradycardia");
+    if (hr <= 100) return t("normal");
+    if (hr <= 120) return t("ecg.elevated");
+    return t("ecg.tachycardia");
   };
 
   return (
@@ -169,7 +172,7 @@ export function ECGChart({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <span className="text-2xl">❤️</span> ECG - Heart Activity
+            <span className="text-2xl">❤️</span> {t("ecg.title")}
           </CardTitle>
           {showMetrics && (
             <div className="flex items-center gap-4">
@@ -181,7 +184,7 @@ export function ECGChart({
                   )}
                 >
                   {metrics.heartRate || "--"}{" "}
-                  <span className="text-sm font-normal">BPM</span>
+                  <span className="text-sm font-normal">{t("bpm")}</span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {getHeartRateStatus(metrics.heartRate)}
@@ -192,7 +195,9 @@ export function ECGChart({
                   {metrics.hrv || "--"}{" "}
                   <span className="text-sm font-normal">ms</span>
                 </div>
-                <div className="text-xs text-muted-foreground">HRV (RMSSD)</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("ecg.hrv")}
+                </div>
               </div>
             </div>
           )}
@@ -201,7 +206,7 @@ export function ECGChart({
       <CardContent>
         {chartData.length === 0 ? (
           <div className="flex items-center justify-center h-[200px] text-muted-foreground">
-            Waiting for ECG data...
+            {t("ecg.waiting")}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
@@ -241,8 +246,8 @@ export function ECGChart({
           </ResponsiveContainer>
         )}
         <div className="flex justify-between text-xs text-muted-foreground mt-2">
-          <span>Grid: 0.2s × auto-scaled mV</span>
-          <span>R-peaks detected: {metrics.rPeaks.length}</span>
+          <span>{t("ecg.scale")}</span>
+          <span>{t("ecg.rPeaks", { count: metrics.rPeaks.length })}</span>
         </div>
       </CardContent>
     </Card>
@@ -268,6 +273,8 @@ export function EDAChart({
   height = 200,
   showMetrics = true,
 }: EDAChartProps) {
+  const t = useTranslations("sensors");
+
   // EDA metrics
   const metrics = useMemo(() => {
     if (data.length < sampleRate) {
@@ -328,7 +335,7 @@ export function EDAChart({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <span className="text-2xl">😰</span> EDA - Stress Response
+            <span className="text-2xl">😰</span> {t("eda.title")}
           </CardTitle>
           {showMetrics && (
             <div className="flex items-center gap-4">
@@ -338,20 +345,24 @@ export function EDAChart({
                   <span className="text-sm font-normal">µS</span>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Skin Conductance
+                  {t("eda.skinConductance")}
                 </div>
               </div>
               <div className="text-right border-l pl-4">
                 <div className="text-lg font-semibold">
                   {metrics.scrCount}{" "}
-                  <span className="text-sm font-normal">SCRs</span>
+                  <span className="text-sm font-normal">
+                    {t("eda.scrUnit")}
+                  </span>
                 </div>
-                <div className="text-xs text-muted-foreground">Responses</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("eda.responses")}
+                </div>
               </div>
               <Badge
                 className={cn("ml-2", getStressColor(metrics.stressLevel))}
               >
-                {metrics.stressLevel.toUpperCase()}
+                {t(`eda.stress.${metrics.stressLevel}`)}
               </Badge>
             </div>
           )}
@@ -360,7 +371,7 @@ export function EDAChart({
       <CardContent>
         {chartData.length === 0 ? (
           <div className="flex items-center justify-center h-[150px] text-muted-foreground">
-            Waiting for EDA data...
+            {t("eda.waiting")}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
@@ -405,7 +416,7 @@ export function EDAChart({
           </ResponsiveContainer>
         )}
         <div className="text-xs text-muted-foreground mt-2">
-          SCR = Skin Conductance Response (emotional arousal indicator)
+          {t("eda.legend")}
         </div>
       </CardContent>
     </Card>
@@ -431,6 +442,8 @@ export function SpO2Chart({
   height = 200,
   showMetrics = true,
 }: SpO2ChartProps) {
+  const t = useTranslations("sensors");
+
   // SpO2 metrics - convert ADC to approximate percentage
   const metrics = useMemo(() => {
     if (data.length < sampleRate) {
@@ -502,10 +515,10 @@ export function SpO2Chart({
   };
 
   const getSpO2Status = (spo2: number) => {
-    if (spo2 === 0) return "No signal";
-    if (spo2 >= 95) return "Normal";
-    if (spo2 >= 90) return "Low";
-    return "Critical";
+    if (spo2 === 0) return t("noSignal");
+    if (spo2 >= 95) return t("normal");
+    if (spo2 >= 90) return t("spo2.low");
+    return t("spo2.critical");
   };
 
   return (
@@ -513,7 +526,7 @@ export function SpO2Chart({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <span className="text-2xl">🩸</span> SpO2 - Blood Oxygen
+            <span className="text-2xl">🩸</span> {t("spo2.title")}
           </CardTitle>
           {showMetrics && (
             <div className="flex items-center gap-4">
@@ -534,16 +547,20 @@ export function SpO2Chart({
               <div className="text-right border-l pl-4">
                 <div className="text-lg font-semibold text-rose-500">
                   {metrics.pulse || "--"}{" "}
-                  <span className="text-sm font-normal">BPM</span>
+                  <span className="text-sm font-normal">{t("bpm")}</span>
                 </div>
-                <div className="text-xs text-muted-foreground">Pulse</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("spo2.pulse")}
+                </div>
               </div>
               <div className="text-right border-l pl-4">
                 <div className="text-lg font-semibold text-amber-500">
                   {metrics.perfusionIndex || "--"}
                   <span className="text-sm font-normal">%</span>
                 </div>
-                <div className="text-xs text-muted-foreground">PI</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("spo2.perfusionIndex")}
+                </div>
               </div>
             </div>
           )}
@@ -552,7 +569,7 @@ export function SpO2Chart({
       <CardContent>
         {chartData.length === 0 ? (
           <div className="flex items-center justify-center h-[150px] text-muted-foreground">
-            Waiting for SpO2 data...
+            {t("spo2.waiting")}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
@@ -592,7 +609,7 @@ export function SpO2Chart({
           </ResponsiveContainer>
         )}
         <div className="text-xs text-muted-foreground mt-2">
-          PPG waveform • PI = Perfusion Index (signal quality)
+          {t("spo2.legend")}
         </div>
       </CardContent>
     </Card>
@@ -618,6 +635,8 @@ export function RespChart({
   height = 200,
   showMetrics = true,
 }: RespChartProps) {
+  const t = useTranslations("sensors");
+
   // Respiration metrics
   const metrics = useMemo(() => {
     if (data.length < sampleRate * 5) {
@@ -675,11 +694,11 @@ export function RespChart({
 
   const getBreathRateStatus = (rate: number) => {
     if (rate === 0)
-      return { text: "No signal", color: "text-muted-foreground" };
-    if (rate < 12) return { text: "Slow", color: "text-blue-500" };
-    if (rate <= 20) return { text: "Normal", color: "text-green-500" };
-    if (rate <= 25) return { text: "Fast", color: "text-yellow-500" };
-    return { text: "Rapid", color: "text-red-500" };
+      return { text: t("noSignal"), color: "text-muted-foreground" };
+    if (rate < 12) return { text: t("resp.slow"), color: "text-blue-500" };
+    if (rate <= 20) return { text: t("normal"), color: "text-green-500" };
+    if (rate <= 25) return { text: t("resp.fast"), color: "text-yellow-500" };
+    return { text: t("resp.rapid"), color: "text-red-500" };
   };
 
   const status = getBreathRateStatus(metrics.breathRate);
@@ -689,14 +708,17 @@ export function RespChart({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <span className="text-2xl">🫁</span> Respiration - Breathing
+            <span className="text-2xl">🫁</span> {t("resp.title")}
           </CardTitle>
           {showMetrics && (
             <div className="flex items-center gap-4">
               <div className="text-right">
                 <div className={cn("text-2xl font-bold", status.color)}>
                   {metrics.breathRate || "--"}
-                  <span className="text-sm font-normal"> /min</span>
+                  <span className="text-sm font-normal">
+                    {" "}
+                    {t("resp.perMinute")}
+                  </span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {status.text}
@@ -707,7 +729,9 @@ export function RespChart({
                   {metrics.regularity || "--"}
                   <span className="text-sm font-normal">%</span>
                 </div>
-                <div className="text-xs text-muted-foreground">Regularity</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("resp.regularity")}
+                </div>
               </div>
             </div>
           )}
@@ -716,7 +740,7 @@ export function RespChart({
       <CardContent>
         {chartData.length === 0 ? (
           <div className="flex items-center justify-center h-[150px] text-muted-foreground">
-            Waiting for respiration data...
+            {t("resp.waiting")}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
@@ -756,7 +780,7 @@ export function RespChart({
           </ResponsiveContainer>
         )}
         <div className="text-xs text-muted-foreground mt-2">
-          Normal: 12-20 breaths/min • Deep breathing improves HRV
+          {t("resp.legend")}
         </div>
       </CardContent>
     </Card>

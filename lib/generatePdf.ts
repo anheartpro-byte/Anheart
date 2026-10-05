@@ -14,11 +14,43 @@ interface SessionReportData {
     totalBatches: number;
     durationSeconds: number;
     channels: string[];
+    /** Rates (Hz) read from the loaded batches; empty when they carry none. */
+    sampleRates: number[];
+    /** Samples counted on the loaded batches, and how many batches that was. */
+    countedSamples: number;
+    countedBatches: number;
   };
   ecgSamples?: Record<string, number[]>;
 }
 
-export function generateSessionPdf(data: SessionReportData): void {
+interface SessionReportOptions {
+  /** Translator bound to the `reports.pdf` messages. */
+  t: (key: string, values?: Record<string, string | number>) => string;
+  /** UI locale, used for dates and numbers. */
+  locale: string;
+}
+
+/**
+ * jsPDF's built-in fonts only cover Latin-1, and one character outside it
+ * garbles the whole string. Locale formatting inserts narrow no-break spaces
+ * (French thousands separator), so they are replaced by plain spaces.
+ */
+function pdfText(text: string): string {
+  return text.replace(/[  ]/g, " ").replace(/’/g, "'");
+}
+
+export function buildSessionPdf(
+  data: SessionReportData,
+  { t, locale }: SessionReportOptions,
+): jsPDF {
+  const label = (key: string, values?: Record<string, string | number>) =>
+    pdfText(t(key, values));
+  const formatNumber = (value: number) =>
+    pdfText(new Intl.NumberFormat(locale).format(value));
+  const formatDateTime = (value: number | Date) =>
+    pdfText(new Date(value).toLocaleString(locale));
+  const reportId = data.sessionId.slice(-8).toUpperCase();
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -33,14 +65,19 @@ export function generateSessionPdf(data: SessionReportData): void {
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(24);
   doc.setFont("helvetica", "bold");
-  doc.text("ECG Session Report", 14, 22);
+  doc.text(label("title"), 14, 22);
 
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.text(`Report ID: ${data.sessionId.slice(-8).toUpperCase()}`, 14, 30);
-  doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth - 14, 30, {
-    align: "right",
-  });
+  doc.text(label("reportId", { id: reportId }), 14, 30);
+  doc.text(
+    label("generatedAt", { date: formatDateTime(new Date()) }),
+    pageWidth - 14,
+    30,
+    {
+      align: "right",
+    },
+  );
 
   // Reset text color
   doc.setTextColor(...textColor);
@@ -50,7 +87,7 @@ export function generateSessionPdf(data: SessionReportData): void {
   // Patient Information Section
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.text("Patient Information", 14, yPos);
+  doc.text(label("patientInfo"), 14, yPos);
   yPos += 8;
 
   doc.setFontSize(10);
@@ -60,8 +97,8 @@ export function generateSessionPdf(data: SessionReportData): void {
     startY: yPos,
     head: [],
     body: [
-      ["Name", data.patientName],
-      ["Email", data.patientEmail],
+      [label("name"), data.patientName],
+      [label("email"), data.patientEmail],
     ],
     theme: "plain",
     styles: { fontSize: 10, cellPadding: 3 },
@@ -79,26 +116,32 @@ export function generateSessionPdf(data: SessionReportData): void {
   // Session Information Section
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
-  doc.text("Session Details", 14, yPos);
+  doc.text(label("sessionDetails"), 14, yPos);
   yPos += 8;
 
-  const startDate = new Date(data.startedAt);
-  const endDate = data.endedAt ? new Date(data.endedAt) : null;
   const duration = data.endedAt
     ? Math.round((data.endedAt - data.startedAt) / 1000)
     : 0;
   const durationStr =
-    duration > 0 ? `${Math.floor(duration / 60)}m ${duration % 60}s` : "N/A";
+    duration > 0
+      ? label("durationValue", {
+          minutes: Math.floor(duration / 60),
+          seconds: duration % 60,
+        })
+      : label("notAvailable");
 
   autoTable(doc, {
     startY: yPos,
     head: [],
     body: [
-      ["Machine", data.machineName],
-      ["Started", startDate.toLocaleString()],
-      ["Ended", endDate ? endDate.toLocaleString() : "N/A"],
-      ["Duration", durationStr],
-      ["Channels", data.channels.join(", ")],
+      [label("machine"), data.machineName],
+      [label("started"), formatDateTime(data.startedAt)],
+      [
+        label("ended"),
+        data.endedAt ? formatDateTime(data.endedAt) : label("notAvailable"),
+      ],
+      [label("duration"), durationStr],
+      [label("channels"), data.channels.join(", ")],
     ],
     theme: "plain",
     styles: { fontSize: 10, cellPadding: 3 },
@@ -117,23 +160,45 @@ export function generateSessionPdf(data: SessionReportData): void {
   if (data.ecgStats) {
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("Recording Statistics", 14, yPos);
+    doc.text(label("statistics"), 14, yPos);
     yPos += 8;
+
+    // Rate and sample count come from the recorded batches. Only part of a
+    // long recording is loaded for the report, so a partial count says so.
+    const { sampleRates, countedSamples, countedBatches, totalBatches } =
+      data.ecgStats;
+    const sampleRate =
+      sampleRates.length > 0
+        ? label("sampleRateValue", { rate: sampleRates.join(" / ") })
+        : label("sampleRateUnknown");
+    const samples =
+      totalBatches > countedBatches
+        ? label("samplesPartial", {
+            count: formatNumber(countedSamples),
+            loaded: formatNumber(countedBatches),
+            total: formatNumber(totalBatches),
+          })
+        : formatNumber(countedSamples);
 
     autoTable(doc, {
       startY: yPos,
       head: [],
       body: [
-        ["Total Data Batches", data.ecgStats.totalBatches.toString()],
-        ["Recording Duration", `${data.ecgStats.durationSeconds} seconds`],
-        ["Sample Rate", "100 Hz"],
-        ["Total Samples", `~${data.ecgStats.totalBatches * 100}`],
+        [label("totalBatches"), formatNumber(totalBatches)],
+        [
+          label("recordingDuration"),
+          label("recordingDurationValue", {
+            seconds: formatNumber(data.ecgStats.durationSeconds),
+          }),
+        ],
+        [label("sampleRate"), sampleRate],
+        [label("samples"), samples],
       ],
       theme: "plain",
       styles: { fontSize: 10, cellPadding: 3 },
       columnStyles: {
-        0: { fontStyle: "bold", cellWidth: 50 },
-        1: { cellWidth: 80 },
+        0: { fontStyle: "bold", cellWidth: 60 },
+        1: { cellWidth: 110 },
       },
       margin: { left: 14 },
     });
@@ -153,21 +218,29 @@ export function generateSessionPdf(data: SessionReportData): void {
 
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("ECG Waveform Preview", 14, yPos);
+    doc.text(label("waveformPreview"), 14, yPos);
     yPos += 10;
 
     for (const [channel, samples] of Object.entries(data.ecgSamples)) {
       if (samples.length === 0) continue;
 
+      const displaySamples = samples.slice(0, 500);
+
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
-      doc.text(`${channel} Channel (first 500 samples)`, 14, yPos);
+      doc.text(
+        label("channelPreview", {
+          channel,
+          count: formatNumber(displaySamples.length),
+        }),
+        14,
+        yPos,
+      );
       yPos += 5;
 
       // Draw a simple waveform
       const graphWidth = pageWidth - 28;
       const graphHeight = 30;
-      const displaySamples = samples.slice(0, 500);
 
       // Draw border
       doc.setDrawColor(200, 200, 200);
@@ -237,7 +310,7 @@ export function generateSessionPdf(data: SessionReportData): void {
 
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("Notes", 14, yPos);
+    doc.text(label("notes"), 14, yPos);
     yPos += 8;
 
     doc.setFontSize(10);
@@ -255,14 +328,26 @@ export function generateSessionPdf(data: SessionReportData): void {
     doc.setFontSize(8);
     doc.setTextColor(150, 150, 150);
     doc.text(
-      `Gaura ECG Monitoring System - Page ${i} of ${pageCount}`,
+      label("footer", { page: i, total: pageCount }),
       pageWidth / 2,
       doc.internal.pageSize.getHeight() - 10,
       { align: "center" },
     );
   }
 
+  return doc;
+}
+
+export function generateSessionPdf(
+  data: SessionReportData,
+  options: SessionReportOptions,
+): void {
+  const doc = buildSessionPdf(data, options);
+
   // Save the PDF
-  const filename = `ECG_Report_${data.sessionId.slice(-8).toUpperCase()}_${new Date().toISOString().split("T")[0]}.pdf`;
+  const filename = options.t("fileName", {
+    id: data.sessionId.slice(-8).toUpperCase(),
+    date: new Date().toISOString().split("T")[0],
+  });
   doc.save(filename);
 }

@@ -78,7 +78,7 @@ export function LiveReadouts({
           </span>
           {live.driveState && (
             <span className="block text-xs text-muted-foreground font-normal">
-              {t("live.driveState")} : {live.driveState}
+              {t("live.driveState")} : {label("driveState", live.driveState)}
             </span>
           )}
         </Readout>

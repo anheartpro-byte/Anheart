@@ -4,10 +4,13 @@ import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Gauge, Hand, Activity, Monitor, Cpu } from "lucide-react";
 
-/** Translate an enumerated wire value (phase, run mode, safety action), falling back to the raw value. */
+/** Translate an enumerated wire value (phase, run mode, safety action, drive state), falling back to the raw value. */
 export function useTrainingLabel() {
   const t = useTranslations("training");
-  return (group: "phase" | "runMode" | "safety", value: string) => {
+  return (
+    group: "phase" | "runMode" | "safety" | "driveState",
+    value: string,
+  ) => {
     const key = `${group}.${value}`;
     return t.has(key) ? t(key) : value;
   };

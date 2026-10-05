@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -36,44 +36,24 @@ import {
 import { Loader2, AlertCircle } from "lucide-react";
 
 // Available BITalino sensor channels
-// Mapped to analog inputs A1-A6
-const AVAILABLE_CHANNELS = [
-  {
-    id: "ECG",
-    name: "ECG (Heart)",
-    description: "Electrocardiography - 3 electrodes on chest",
-  },
-  {
-    id: "EDA",
-    name: "EDA (Stress)",
-    description: "Electrodermal Activity - 2 finger bands",
-  },
-  {
-    id: "SpO2",
-    name: "SpO2 (Oxygen)",
-    description: "Pulse Oximetry - finger clip sensor",
-  },
-  {
-    id: "RESP",
-    name: "Respiration",
-    description: "Breathing - chest band sensor",
-  },
-  {
-    id: "EMG",
-    name: "EMG (Muscle)",
-    description: "Electromyography - muscle sensor",
-  },
-  { id: "LUX", name: "Light", description: "Ambient light sensor" },
-];
+// Mapped to analog inputs A1-A6; names and descriptions live in the
+// message catalog under sessions.channelOptions.<id>
+const AVAILABLE_CHANNELS = ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"];
 
-const sessionSchema = z.object({
-  machineId: z.string().min(1, "Please select a machine"),
-  userId: z.string().min(1, "Please select a patient"),
-  channels: z.array(z.string()).min(1, "Select at least one channel"),
-  notes: z.string().optional(),
-});
+// Validation messages are passed in so they follow the active locale.
+const createSessionSchema = (messages: {
+  machineRequired: string;
+  patientRequired: string;
+  channelRequired: string;
+}) =>
+  z.object({
+    machineId: z.string().min(1, messages.machineRequired),
+    userId: z.string().min(1, messages.patientRequired),
+    channels: z.array(z.string()).min(1, messages.channelRequired),
+    notes: z.string().optional(),
+  });
 
-type SessionFormValues = z.infer<typeof sessionSchema>;
+type SessionFormValues = z.infer<ReturnType<typeof createSessionSchema>>;
 
 interface SessionFormModalProps {
   open: boolean;
@@ -94,6 +74,16 @@ export function SessionFormModal({
   const patients = useQuery(api.users.listUsers, {});
 
   const createSession = useMutation(api.sessions.createSession);
+
+  const sessionSchema = useMemo(
+    () =>
+      createSessionSchema({
+        machineRequired: t("sessions.form.machineRequired"),
+        patientRequired: t("sessions.form.patientRequired"),
+        channelRequired: t("sessions.form.channelRequired"),
+      }),
+    [t],
+  );
 
   const form = useForm<SessionFormValues>({
     resolver: zodResolver(sessionSchema),
@@ -136,7 +126,7 @@ export function SessionFormModal({
       }
     } catch (error) {
       form.setError("root", {
-        message: error instanceof Error ? error.message : "An error occurred",
+        message: error instanceof Error ? error.message : t("common.error"),
       });
     }
   };
@@ -283,21 +273,25 @@ export function SessionFormModal({
                     <div className="grid grid-cols-2 gap-2">
                       {AVAILABLE_CHANNELS.map((channel) => (
                         <Button
-                          key={channel.id}
+                          key={channel}
                           type="button"
                           variant={
-                            form.watch("channels").includes(channel.id)
+                            form.watch("channels").includes(channel)
                               ? "default"
                               : "outline"
                           }
                           size="sm"
                           className="justify-start h-auto py-2"
-                          onClick={() => toggleChannel(channel.id)}
+                          onClick={() => toggleChannel(channel)}
                         >
                           <div className="text-left">
-                            <div className="font-medium">{channel.name}</div>
+                            <div className="font-medium">
+                              {t(`sessions.channelOptions.${channel}.name`)}
+                            </div>
                             <div className="text-xs opacity-70">
-                              {channel.description}
+                              {t(
+                                `sessions.channelOptions.${channel}.description`,
+                              )}
                             </div>
                           </div>
                         </Button>

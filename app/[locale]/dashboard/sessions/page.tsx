@@ -293,7 +293,7 @@ export default function SessionsPage() {
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const t = useTranslations("sessions.status");
 
   const variants: Record<
     string,
@@ -305,9 +305,10 @@ function SessionStatusBadge({ status }: { status: string }) {
     failed: "destructive",
   };
 
+  // Unknown statuses are shown as received rather than hidden.
   return (
     <Badge variant={variants[status] || "outline"}>
-      {t(status as "active" | "completed" | "pending" | "failed")}
+      {t.has(status) ? t(status) : status}
     </Badge>
   );
 }
