@@ -1,0 +1,14 @@
+{
+  "name": "stop_during_hr_freeze",
+  "description": "Occupied manual motion: remote STOP during stale-ECG FREEZE continues the software descent.",
+  "tags": ["manual", "stop", "occupied"],
+  "kind": "manual",
+  "duration_s": 90,
+  "manual": {"occupancy": "occupied"},
+  "actions": [
+    {"at_s": 2, "do": "manual_target", "output_rpm": 6, "expect": "accepted"},
+    {"at_s": 30, "do": "ecg_dropout", "duration_s": 25},
+    {"at_s": 42, "do": "remote_stop"}
+  ],
+  "expect": {"end_reason": "operator_stop", "rules": ["hr_stale"]}
+}

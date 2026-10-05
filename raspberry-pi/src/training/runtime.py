@@ -2571,6 +2571,15 @@ class TrainingRuntime:
             case SafetyAction.NONE:
                 self._descent_from = None
                 await self._follow_controller(now, allow_increase=True, cap=None)
+            case SafetyAction.FREEZE if self._stop_requested is not None or (
+                self._manual is not None and self._manual_target == 0
+            ):
+                self._descent_from = None
+                self._decision = None
+                moved = self._motion_step(now, MotorRpm(0))
+                if self._manual is None and self._passage_too_soon(now, moved):
+                    moved = self._applied_rpm
+                await self._apply_setpoint(now, moved)
             case SafetyAction.FREEZE:
                 # Hold the last commanded speed and do not consult the controller
                 # at all. That is what makes the resume bumpless in the sense
@@ -2590,7 +2599,7 @@ class TrainingRuntime:
                 # and the test that names this asserts the property that is true
                 # rather than the one that sounds better.
                 self._descent_from = None
-                self._motion_from = None
+                self._motion_from = now
                 self._decision = None
                 await self._apply_setpoint(now, self._applied_rpm)
             case SafetyAction.REDUCE:
@@ -3450,11 +3459,16 @@ class TrainingRuntime:
             return None
         applied = self._applied_rpm
         target = MotorRpm(0) if self._ending is not None else self._manual_target
+        held = self.standing_action is SafetyAction.FREEZE and target != 0
         return ManualView(
             occupancy=manual.occupancy,
             target=self._speed_view(target),
             ceiling=self._speed_view(manual.ceiling),
             min_run=self._speed_view(self._motion.min_run),
-            ramping=applied != target,
-            ramp_eta=ramp_duration(applied, target, self._motion, self._motion_geometry),
+            ramping=applied != target and not held,
+            ramp_eta=(
+                None
+                if held
+                else ramp_duration(applied, target, self._motion, self._motion_geometry)
+            ),
         )
