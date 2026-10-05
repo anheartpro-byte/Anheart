@@ -124,9 +124,10 @@ async def test_the_recording_drive_logs_every_frame_it_passes_on() -> None:
     failed = await drive.read_status()
     assert isinstance(failed, Err)
     kinds = [frame.kind for frame in drive.frames]
-    assert kinds[:6] == [
+    assert kinds[:7] == [
         FrameKind.OPEN,
         FrameKind.READ_LIMITS,
+        FrameKind.READ,
         FrameKind.COMMAND,
         FrameKind.SPEED,
         FrameKind.EMERGENCY_ZERO,

@@ -279,6 +279,7 @@ include = [
     "src/dsp.py",
     "src/sensors/*",
     "src/presence/*",
+    "src/record/*",
     # signal_processing.py belongs here and is NOT exempt: see [tool.anheart]
     # coverage_pending below. It is listed there instead of here so the gate
     # has real teeth on migrated code today rather than being switched off
@@ -328,4 +329,5 @@ safety_chain = [
     "src/dsp.py",
     "src/sensors/*",
     "src/presence/*",
+    "src/record/*",
 ]

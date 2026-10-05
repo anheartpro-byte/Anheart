@@ -221,6 +221,7 @@ async def test_the_source_corrupts_only_while_armed() -> None:
     hummed = await _read(SignalFault.MAINS)
     assert hummed is not None
     assert max(hummed.channels[0].values) > 500.0
+    assert all(value.is_integer() for column in hummed.channels for value in column.values)
     assert await _read(SignalFault.STOPPED, remaining=3) is None
     gapped = await _read(SignalFault.GAPS, remaining=8)
     assert gapped is not None  # the fourth batch survives
