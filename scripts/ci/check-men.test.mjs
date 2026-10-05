@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -44,8 +44,11 @@ const scenarios = [
 for (const scenario of scenarios) {
   test(scenario.name, () => {
     // Given: isolated documents and the actual verified issue snapshot.
-    const directory = mkdtempSync(join(tmpdir(), "anheart-men-test-"));
+    const sandbox = mkdtempSync(join(tmpdir(), "anheart-men-test-"));
+    const directory = join(sandbox, "docs");
     try {
+      mkdirSync(directory);
+      writeFileSync(join(sandbox, "proof.md"), "Synthetic sibling evidence\n");
       for (const [path, content] of Object.entries(scenario.files)) {
         writeFileSync(join(directory, path), content);
       }
@@ -57,7 +60,7 @@ for (const scenario of scenarios) {
       assert.ifError(result.error);
       assert.equal(result.status, scenario.status, result.stderr || result.stdout);
     } finally {
-      rmSync(directory, { recursive: true });
+      rmSync(sandbox, { recursive: true });
     }
   });
 }

@@ -1,73 +1,12 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { hashApiKey } from "./lib/crypto";
+import { validateMachineAuth } from "./lib/machineHttpAuth";
 import type { Id } from "./_generated/dataModel";
 import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
 
 const http = httpRouter();
-
-/**
- * Helper to validate machine API key from request
- */
-async function validateMachineAuth(
-  ctx: Parameters<Parameters<typeof httpAction>[0]>[0],
-  req: Request,
-): Promise<
-  | {
-      machine: {
-        _id: string;
-        name: string;
-        status: string;
-        config: {
-          sampleRate: number;
-          channels: string[];
-          batchInterval: number;
-        };
-      };
-    }
-  | { error: Response }
-> {
-  const authHeader = req.headers.get("Authorization");
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return {
-      error: new Response(
-        JSON.stringify({ error: "Missing Authorization header" }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    };
-  }
-
-  const apiKey = authHeader.substring(7); // Remove "Bearer "
-  const apiKeyHash = hashApiKey(apiKey);
-
-  const machine = await ctx.runQuery(internal.machines.getMachineByApiKey, {
-    apiKeyHash,
-  });
-
-  if (!machine) {
-    return {
-      error: new Response(JSON.stringify({ error: "Invalid API key" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    };
-  }
-
-  return {
-    machine: machine as {
-      _id: string;
-      name: string;
-      status: string;
-      config: { sampleRate: number; channels: string[]; batchInterval: number };
-    },
-  };
-}
 
 /**
  * POST /api/machine/heartbeat

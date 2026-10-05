@@ -12,7 +12,8 @@ import {
   canManageMachine,
   isGestionnaireOfMachine,
 } from "./lib/auth";
-import { generateApiKey, hashApiKey } from "./lib/crypto";
+import { generateApiKey } from "./lib/crypto";
+import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 
 /**
  * Create a new machine (Raspberry Pi) - Admin only
@@ -38,12 +39,13 @@ export const createMachine = mutation({
   handler: async (ctx, args) => {
     const currentUser = await requireRole(ctx, ["admin"]);
 
-    const { plain, hashed } = generateApiKey();
+    const { plain, hashed, selector } = await generateApiKey();
     const now = Date.now();
 
     const machineId = await ctx.db.insert("machines", {
       name: args.name,
       apiKey: hashed,
+      apiKeySelector: selector,
       status: "offline",
       lastHeartbeat: 0,
       location: args.location,
@@ -151,11 +153,12 @@ export const regenerateApiKey = mutation({
     }
 
     // Generate new API key
-    const { plain, hashed } = generateApiKey();
+    const { plain, hashed, selector } = await generateApiKey();
 
     // Update machine with new hashed key
     await ctx.db.patch(args.machineId, {
       apiKey: hashed,
+      apiKeySelector: selector,
     });
 
     // Return plain key (shown only this once!)
@@ -489,78 +492,22 @@ export const getMachineById = internalQuery({
  */
 export const getMachineByApiKey = internalQuery({
   args: {
-    apiKeyHash: v.string(),
+    apiKey: v.string(),
   },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    const machine = await ctx.db
-      .query("machines")
-      .withIndex("by_api_key", (q) => q.eq("apiKey", args.apiKeyHash))
-      .unique();
-
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
-  },
+  returns: authenticatedMachine,
+  handler: (ctx, args) => authenticateMachine(ctx, args.apiKey),
 });
 
 /**
  * Validate machine API key from HTTP request
- * Takes plain API key, hashes it internally, and returns machine if valid
+ * Takes the complete credential and returns a machine only after verification.
  */
 export const validateMachineApiKey = internalQuery({
   args: {
     apiKey: v.string(),
   },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    // Hash the plain API key
-    const hashed = hashApiKey(args.apiKey);
-
-    // Look up machine by hashed key
-    const machine = await ctx.db
-      .query("machines")
-      .withIndex("by_api_key", (q) => q.eq("apiKey", hashed))
-      .unique();
-
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
-  },
+  returns: authenticatedMachine,
+  handler: (ctx, args) => authenticateMachine(ctx, args.apiKey),
 });
 
 /**

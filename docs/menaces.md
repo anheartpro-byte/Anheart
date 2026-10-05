@@ -2,14 +2,24 @@
 
 | Date | Auteur / signature technique | Périmètre | État |
 |---|---|---|---|
-| 2026-10-05 | Codex, agent `/root/anh136_threat_model` — attribution technique de cette rédaction | Source `68e4dcf1bda9217329b7d3976519f74c65eb24bd`, ANH-136 | Rédaction logicielle ; revue indépendante à effectuer sur le SHA final |
-| À renseigner après revue | Nom/identité et lien du reviewer indépendant | SHA relu, jalon, menaces ajoutées et décisions | En attente ; aucune signature humaine ou acceptation de risque revendiquée |
+| 2026-10-05 | Codex, agent `/root/anh136_threat_model` — attribution technique de cette rédaction | Base source courante `4e6720b10a2aefb73f6e1c42e51b4434d00042f7`, ANH-136 | Auteur du modèle et des ajouts MEN-14 à MEN-17 ; actualisation après intégration du source ANH-121 |
+| 2026-10-05 | Codex, agent `/root/anh136_aa01af2_gate` — reviewer technique indépendant | Commit `aa01af2030d9a38d67d1f6ec070f678018f096a7`, arbre `fd7883a4cddbac2f7dc76baedd4fb6799ec6f360` | REJECT, confiance HIGH : seul blocage B1, absence de cette inscription de revue (EX-5). Recherche d'omissions effectuée : aucune menace ajoutée. [Compte rendu daté](reviews/anh-136-2026-10-05.md) |
+
+Ce registre nomme le commit effectivement relu. Le verdict REJECT n'est pas une
+approbation du candidat corrigé : celui-ci exige une nouvelle revue indépendante
+liée à son SHA exact dans le rapport/check de PR. Inscrire ici le SHA du commit
+qui contient sa propre inscription serait autoréférentiel. Le registre daté et
+la validation du candidat courant restent tous deux obligatoires ; aucune
+signature humaine ni acceptation de risque n'est revendiquée.
 
 [Sommaire](README.md) · [Sécurité machine et limites](securite.md) · [Check-list de revue de release](release-threat-review.md)
 
 Cette analyse STRIDE décrit le code de cette base, pas l'état vérifié d'une machine
-ou d'un service en production. Les correctifs parallèles ANH-121 et ANH-74 ne sont
-pas crédités avant intégration, revue et preuve de déploiement. Tous les risques
+ou d'un service en production. ANH-121 est intégré au source courant ; sa migration
+des clés existantes et son déploiement réel restent non vérifiés et non réalisés
+dans ce travail (ANH-82). ANH-74 n'est pas intégré à cette base. La revue historique
+ci-dessus portait sur la base `68e4dcf1bda9217329b7d3976519f74c65eb24bd`, avant
+ANH-121 ; elle ne vaut pas approbation de cette actualisation. Tous les risques
 ci-dessous sont **OPEN** ; aucune décision clinique, réglementaire ou
 d'acceptation de risque n'est prise ici. Les analyses ANH-103/104, décisions
 médicales ANH-98 et avis ANH-105/172 restent distincts.
@@ -95,11 +105,11 @@ Couche build/livraison : MEN-06, MEN-10, MEN-13, MEN-16.
 
 F4 · Convex/Pi · S, I, E · Critique, personne indirectement (identité machine), confidentialité et disponibilité.
 
-**Scénario.** Une lecture de la base ou du secret sur le Pi permet d'imiter une machine, lire son roster et injecter son état.
+**Scénario.** Le vol d'une clé encore valide en clair sur le Pi ou dans son environnement permet d'imiter une machine, lire son roster et injecter son état. Les anciennes valeurs réversibles éventuellement conservées dans une base non migrée restent exposées ; leur état réel n'a pas été inspecté.
 
-**Existant vérifié dans le source.** [`validateMachineAuth`](../convex/http.ts) exige un Bearer ; [`getMachineByApiKey`](../convex/machines.ts) cherche une machine. À la base étudiée, [`hashApiKey`](../convex/lib/crypto.ts) est un base64 inversé et la query ne refuse pas `isDeleted` : ce ne sont pas des protections contre le vol de base ou la révocation. Un hachage protège le stockage, pas le rejeu d'un Bearer volé.
+**Existant vérifié dans le source.** [`generateApiKey`, `hashApiKey`, `verifyApiKey`](../convex/lib/crypto.ts) émettent un credential avec sélecteur aléatoire de 128 bits et secret de 256 bits ; le stockage est un HMAC-SHA256 versionné avec sel aléatoire de 128 bits, vérifié par `crypto.subtle.verify`. [`createMachine` et `regenerateApiKey`](../convex/machines.ts) stockent le sélecteur et le digest, et ne renvoient la clé en clair que dans le résultat d'émission. La nouvelle clé n'est pas reconstructible depuis ces champs. [`authenticateMachine`](../convex/lib/machineAuth.ts) refuse une machine supprimée ou `authenticationEnabled === false`, puis vérifie le credential complet ; hors ligne seul n'est pas une révocation. `getMachineByApiKey` et `validateMachineApiKey` partagent cette garde. [`validateMachineAuth`](../convex/lib/machineHttpAuth.ts), utilisé par les routes de [`http.ts`](../convex/http.ts), exige le Bearer et renvoie 401 en cas de refus. Les formats hérités sont refusés par ce nouveau chemin ; cela ne supprime ni ne migre les anciennes valeurs déjà stockées. Ces protections existent dans le source intégré, sans preuve de leur déploiement réel. Le digest ne protège pas contre le rejeu d'une clé valide volée.
 
-**Manquant.** [ANH-121](https://linear.app/anheart/issue/ANH-121/cle-machine-reversible-et-machine-supprimee-encore-authentifiee) porte le stockage salé non réversible et le refus supprimé/désactivé ; [ANH-165](https://linear.app/anheart/issue/ANH-165/convex-rotation-revocation-et-expiration-des-cles-machine-avec) la rotation, révocation et expiration ; [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en) la migration et le déploiement. Le correctif parallèle ANH-121 est local, non publié et non déployé ; il n'est pas compté comme protection active.
+**Manquant.** [ANH-121](https://linear.app/anheart/issue/ANH-121/cle-machine-reversible-et-machine-supprimee-encore-authentifiee) reste incomplet au sens de son acceptation finale tant que [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en) n'a pas assuré la migration coordonnée des anciennes clés et le déploiement vérifié. [ANH-165](https://linear.app/anheart/issue/ANH-165/convex-rotation-revocation-et-expiration-des-cles-machine-avec) porte rotation, révocation et expiration ; le vol/rejeu d'un Bearer valide reste possible. La limitation de débit reste MEN-12 / ANH-166. La fusion du correctif n'est ni une migration des enregistrements hérités, ni une preuve de protection en production, ni une fermeture de MEN-01.
 
 **Preuve de fermeture attendue.** Clé ancienne/révoquée/supprimée refusée sur toutes les routes ; rotation synthétique avant migration coordonnée.
 
@@ -399,8 +409,10 @@ applicable et une revue.
    en tête après son avis réel. Une attribution d'agent est signalée comme telle.
 3. La PR contient explicitement « Menaces ajoutées en revue » avec identifiants
    et scénario ; si aucune n'est ajoutée, le reviewer doit avoir confirmé ce
-   résultat. À cette rédaction, la revue est **en attente** : aucune liste vide
-   ne doit être présentée comme résultat d'une revue.
+   résultat. La [revue du 5 octobre 2026](reviews/anh-136-2026-10-05.md) a conclu
+   « Menaces ajoutées en revue indépendante : aucune ». MEN-14 à MEN-17 sont des
+   ajouts de l'auteur. Le verdict de cette revue reste REJECT pour B1/EX-5 ;
+   l'avis sur le nouveau candidat corrigé doit être obtenu sur son SHA exact.
 4. Une acceptation nécessite une justification signée par la personne habilitée,
    un périmètre et une échéance/revue. Faute de cette preuve, garder OPEN et son
    ticket. Une signature technique d'agent ne vaut pas acceptation humaine.
