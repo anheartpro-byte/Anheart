@@ -5,6 +5,11 @@
 pytest>=8.0
 pytest-asyncio>=0.23
 pytest-cov>=5.0
+# Pinned exactly. The CI Pi gate spreads the suite over several processes with
+# it (PYTEST_ADDOPTS in .github/workflows/ci.yml); pytest-cov combines every
+# worker's data before the 100% threshold is applied. Inert unless a run asks
+# for workers, so scripts/check.sh stays serial by default.
+pytest-xdist==3.8.0
 hypothesis>=6.100        # property tests bound the controller; coverage alone does not
 
 # --- Static verification (both are blocking; see pyproject.toml) ---------

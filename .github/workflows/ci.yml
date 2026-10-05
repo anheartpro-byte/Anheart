@@ -56,8 +56,10 @@ jobs:
       - name: Pi gate
         if: matrix.gate == 'pi-gate'
         env:
-          PYTEST_ADDOPTS: --cov-report=term-missing --cov-report=xml:coverage.xml
-        run: bash raspberry-pi/scripts/check.sh
+          PYTEST_ADDOPTS: --cov-report=term-missing --cov-report=xml:coverage.xml --numprocesses=4 --dist=worksteal --durations=25
+        run: |
+          echo "Runner CPUs: $(nproc)"
+          bash raspberry-pi/scripts/check.sh
       - name: Simulation gate
         if: matrix.gate == 'simulation-gate'
         run: bash simulation/scripts/check.sh --cov-report=term-missing --cov-report=xml:coverage.xml
