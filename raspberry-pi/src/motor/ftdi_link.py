@@ -68,13 +68,16 @@ from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
 from time import sleep as _real_sleep
-from typing import Final, Protocol, final, runtime_checkable
+from typing import Final, Protocol, final, override, runtime_checkable
 
 from pyftdi.ftdi import Ftdi
 from pyftdi.usbtools import UsbTools
 from usb.backend import libusb1
+from usb.core import Device as UsbDevice
+from usb.util import dispose_resources
 
 from src.clock import Clock
+from src.motor.drive_process_lock import DriveConnection, DriveLease, retry_failed_drive_closes
 from src.units import Monotonic, Seconds
 
 logger = logging.getLogger(__name__)
@@ -363,6 +366,7 @@ class BufferedFtdiPort:
         "_clock",
         "_device",
         "_lock",
+        "_ownership",
         "_poll_interval",
         "_rx",
         "_sleep",
@@ -380,12 +384,16 @@ class BufferedFtdiPort:
         sleep: Sleeper = _real_sleep,
         poll_interval: Seconds = POLL_INTERVAL,
         buffer_limit: int = RX_BUFFER_LIMIT,
+        lease: DriveLease | None = None,
     ) -> None:
         if timeout < 0.0:
             raise ValueError(f"read timeout {timeout} s must not be negative")
         if buffer_limit < 1:
             raise ValueError(f"buffer_limit {buffer_limit} must be at least one byte")
         self._device: FtdiDevice = device
+        self._ownership: DriveConnection | None = (
+            DriveConnection(lease) if lease is not None else None
+        )
         self._timeout: Seconds = timeout
         self._clock: Clock = clock
         self._sleep: Sleeper = sleep
@@ -443,14 +451,22 @@ class BufferedFtdiPort:
 
     def close(self) -> None:
         """Release the chip. Idempotent: pymodbus closes on every failed exchange."""
+        if self._ownership is None:
+            self._close_device()
+        else:
+            self._ownership.close(self._close_device)
+
+    def _close_device(self) -> None:
         with self._lock:
             if not self.is_open:
                 return
+            self._device.close()
             self.is_open = False
             self._rx.clear()
-            self._device.close()
 
     def _require_open(self) -> None:
+        if self._ownership is not None:
+            self._ownership.require_active()
         if not self.is_open:
             # OSError, as pyserial's PortNotOpenError is: pymodbus treats it as
             # a transport failure and closes, rather than crashing the thread.
@@ -489,20 +505,31 @@ def open_ftdi_port(
 ) -> BufferedFtdiPort:
     """Open the chip ``url`` names, configure it for ``frame``, and wrap it.
 
-    The chip is released again if configuring it fails, so a refused baud rate
-    does not leave an interface claimed until the process exits.
+    Configuration failure closes the chip. If closing also fails, the cleanup
+    owner retains the chip and lease until a retry closes it or the process exits.
 
     ``create`` defaults to :func:`open_schneider_device`; a test passes a fake.
     """
-    factory: DeviceFactory = open_schneider_device if create is None else create
-    device = factory(url)
+    retry_failed_drive_closes()
+    lease = DriveLease.claim()
+    cleanup_owned = create is None
     try:
-        configure(device, frame)
-        settle(device, clock=clock, sleep=sleep)
-    except Exception:
-        device.close()
-        raise
-    return BufferedFtdiPort(device, timeout=timeout, clock=clock, sleep=sleep)
+        device = open_schneider_device(url, lease) if create is None else create(url)
+        cleanup = DriveConnection(lease)
+        cleanup_owned = True
+        configured = False
+        try:
+            configure(device, frame)
+            settle(device, clock=clock, sleep=sleep)
+            port = BufferedFtdiPort(device, timeout=timeout, clock=clock, sleep=sleep, lease=lease)
+            configured = True
+        finally:
+            if not configured:
+                cleanup.close(device.close)
+        return port
+    finally:
+        if not cleanup_owned:
+            lease.close()
 
 
 def settle(
@@ -559,7 +586,53 @@ def configure(device: ConfigurableFtdi, frame: UartFrame) -> None:
     device.purge_buffers()
 
 
-def open_schneider_device(url: str) -> Ftdi:
+class _OwnedFtdi(Ftdi):
+    """Retain acquired USB ownership when vendor close clears it before disposal."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._acquired_usb: UsbDevice | None = None
+        self._enumerated_usb: list[UsbDevice] = []
+
+    @override
+    def open_from_url(self, url: str) -> None:
+        with UsbTools.Lock:
+            UsbTools.flush_cache()
+            try:
+                super().open_from_url(url)
+            finally:
+                # URL string reads open handles before get_device registers them.
+                self._enumerated_usb = list(
+                    {
+                        device
+                        for devices in UsbTools.UsbDevices.values()
+                        for device in devices
+                        if device is not self._acquired_usb
+                    }
+                )
+        self._dispose_enumerated()
+
+    @override
+    def open_from_device(self, device: UsbDevice, interface: int = 1) -> None:
+        self._acquired_usb = device
+        super().open_from_device(device, interface)
+
+    @override
+    def close(self, freeze: bool = False) -> None:
+        if self.usb_dev is not None and self.port_index is not None:
+            super().close(freeze)
+        elif self._acquired_usb is not None:
+            UsbTools.release_device(self._acquired_usb)
+        self._acquired_usb = None
+        self._dispose_enumerated()
+
+    def _dispose_enumerated(self) -> None:
+        while self._enumerated_usb:
+            dispose_resources(self._enumerated_usb[-1])
+            self._enumerated_usb.pop()
+
+
+def open_schneider_device(url: str, lease: DriveLease) -> Ftdi:
     """The real opener: vendor ids registered, libusb loaded, chip opened.
 
     The one function in this module that reaches USB hardware.
@@ -572,10 +645,19 @@ def open_schneider_device(url: str) -> Ftdi:
     for good. Opening happens only on (re)connect, never per transaction, so
     the cache is flushed every time: one enumeration, a few milliseconds.
     """
-    register_schneider_cable()
-    load_libusb_backend()
-    UsbTools.flush_cache()
-    return Ftdi.create_from_url(url)
+    lease.require_active()
+    device = _OwnedFtdi()
+    cleanup = DriveConnection(lease)
+    opened = False
+    try:
+        register_schneider_cable()
+        load_libusb_backend()
+        device.open_from_url(url)
+        opened = True
+        return device
+    finally:
+        if not opened:
+            cleanup.close(device.close)
 
 
 def register_schneider_cable() -> None:

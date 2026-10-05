@@ -16,7 +16,7 @@ Two layers of evidence:
 
 Hard rule for this file: nothing opens a real port, USB device or libusb. The
 one function that would (``open_schneider_device``) is exercised with pyftdi's
-``create_from_url`` and pyusb's ``get_backend`` monkeypatched out.
+``open_from_url`` and pyusb's ``get_backend`` monkeypatched out.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from src.motor.atv320 import (
     transaction_worst_case,
 )
 from src.motor.drive import DriveState, RegisterMap
+from src.motor.drive_process_lock import DriveLease
 from src.motor.ftdi_link import (
     LATENCY_TIMER_MS,
     LIBUSB_DIRECTORIES,
@@ -279,7 +280,7 @@ def test_the_fakes_satisfy_the_protocols_the_real_chip_does() -> None:
 def test_the_real_pyftdi_class_satisfies_the_configurable_protocol() -> None:
     """Checked statically, which is the check that matters: the assignment below
     is a type error the moment pyftdi's Ftdi stops being a ConfigurableFtdi."""
-    factory: DeviceFactory = open_schneider_device
+    factory: Callable[[str, DriveLease], ConfigurableFtdi] = open_schneider_device
     assert callable(factory)
 
 
@@ -599,6 +600,7 @@ def test_open_ftdi_port_configures_and_wraps_the_chip(clock: ManualClock) -> Non
     assert chip.calls[-1] == ("purge_buffers", ()), "settle() empties the chip last"
     assert port.timeout == Seconds(0.05)
     assert port.read(2) == b"ok"
+    port.close()
 
 
 def test_a_chip_that_refuses_its_settings_is_released(clock: ManualClock) -> None:
@@ -715,9 +717,8 @@ def no_usb(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     def add_custom_product(vid: int, pid: int, pidname: str = "") -> None:
         log.append(f"product:{vid:#06x}:{pid:#06x}:{pidname}")
 
-    def create_from_url(url: str) -> ConfigurableChip:
+    def open_from_url(_self: Ftdi, url: str) -> None:
         log.append(f"open:{url}")
-        return ConfigurableChip()
 
     def flush_cache() -> None:
         log.append("flush")
@@ -726,13 +727,26 @@ def no_usb(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(UsbTools, "flush_cache", flush_cache)
     monkeypatch.setattr(Ftdi, "add_custom_vendor", add_custom_vendor)
     monkeypatch.setattr(Ftdi, "add_custom_product", add_custom_product)
-    monkeypatch.setattr(Ftdi, "create_from_url", create_from_url)
+    monkeypatch.setattr(Ftdi, "open_from_url", open_from_url)
+    chip = ConfigurableChip()
+    monkeypatch.setattr(Ftdi, "set_baudrate", staticmethod(chip.set_baudrate))
+    monkeypatch.setattr(Ftdi, "set_line_property", staticmethod(chip.set_line_property))
+    monkeypatch.setattr(Ftdi, "set_flowctrl", staticmethod(chip.set_flowctrl))
+    monkeypatch.setattr(Ftdi, "set_latency_timer", staticmethod(chip.set_latency_timer))
+    monkeypatch.setattr(Ftdi, "purge_buffers", staticmethod(chip.purge_buffers))
+    monkeypatch.setattr(Ftdi, "read_data", staticmethod(chip.read_data))
+    monkeypatch.setattr(Ftdi, "write_data", staticmethod(chip.write_data))
     return log
 
 
 def test_the_real_opener_registers_the_cable_and_loads_libusb_first(no_usb: list[str]) -> None:
-    device: object = open_schneider_device(SCHNEIDER_CABLE_URL)
-    assert isinstance(device, ConfigurableChip)
+    lease = DriveLease.claim()
+    try:
+        device: object = open_schneider_device(SCHNEIDER_CABLE_URL, lease)
+        assert isinstance(device, Ftdi)
+        device.close()
+    finally:
+        lease.close()
     assert no_usb == [
         "vendor:0x16de:schneider",
         "product:0x16de:0x0003:rs485",
@@ -754,13 +768,12 @@ def test_every_open_re_enumerates_so_a_replugged_cable_is_found_again(
     """
     plugged = False
 
-    def create_from_url(url: str) -> ConfigurableChip:
+    def open_from_url(_self: Ftdi, url: str) -> None:
         no_usb.append(f"open:{url}")
         if not plugged or no_usb[-2] != "flush":
             raise OSError("UsbError: [Errno 19] No such device (it may have been disconnected)")
-        return ConfigurableChip(FakeChip())
 
-    monkeypatch.setattr(Ftdi, "create_from_url", create_from_url)
+    monkeypatch.setattr(Ftdi, "open_from_url", open_from_url)
     master = serial_master(SerialSettings(port=SCHNEIDER_CABLE_URL), RealClock())
 
     assert master.connect() is False
@@ -783,6 +796,7 @@ def test_open_ftdi_port_uses_the_real_opener_by_default(
     )
     assert port.is_open
     assert f"open:{SCHNEIDER_CABLE_URL}" in no_usb
+    port.close()
 
 
 def test_registering_the_cable_twice_is_not_an_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -222,11 +222,11 @@ SDK imbriqués de l'opération qui les contient.
 
 Pour un port système tty/COM, construire le maître avec
 `serial_master(settings, clock, exchange_log=ExchangeLog(clock))` active le
-client instrumenté avant de l'envelopper. Sans cette option, le client système
-reste le client SDK d'origine et seules les opérations du pilote sont
-observables. Le client FTDI possède déjà ce point d'observation et l'active
-quand le pilote reçoit le journal. Le journal peut aussi être fourni directement
-au pilote par `observe_exchanges(log)` : aucune importation de simulation
+client instrumenté avant de l'envelopper. Le client système conserve toujours
+le verrou exclusif du câble, avec ou sans journal. Sans journal, aucune capture
+des échanges SDK n'est activée. Les clients système et FTDI activent aussi ce
+point d'observation quand le pilote reçoit le journal. Le journal peut être
+fourni directement au pilote par `observe_exchanges(log)` : aucune importation de simulation
 n'est nécessaire. Le consommateur remet les champs des `Exchange` au writer
 partagé ; le branchement console, la file bornée et l'écriture disque restent
 ANH-128. Ce journal en mémoire n'est pas une garantie de capture physique ni

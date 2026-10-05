@@ -15,10 +15,23 @@ bench time. This turns the question into evidence:
 
 import os
 import sys
+from typing import Protocol, runtime_checkable
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pymodbus.client import ModbusSerialClient
+from src.clock import RealClock
+from src.motor.atv320 import SerialSettings, serial_master
+from src.motor.drive_process_lock import DriveOwnershipError
+from src.motor.ftdi_link import Parity
+from src.units import Seconds
+
+
+@runtime_checkable
+class RegisterReply(Protocol):
+    registers: list[int]
+
+    def isError(self) -> bool: ...  # noqa: N802 - vendor response protocol
+
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "COM3"
 ETA = 3201
@@ -38,25 +51,35 @@ FORMATS = [
 
 def try_one(baud: int, parity: str, stop: int, slaves: range, timeout: float) -> list[int]:
     hits: list[int] = []
-    client = ModbusSerialClient(
-        port=PORT,
-        baudrate=baud,
-        bytesize=8,
-        parity=parity,
-        stopbits=stop,
-        timeout=timeout,
-        retries=1,
+    client = serial_master(
+        SerialSettings(
+            port=PORT,
+            baudrate=baud,
+            bytesize=8,
+            parity=Parity(parity),
+            stopbits=stop,
+            timeout=Seconds(timeout),
+            retries=1,
+        ),
+        RealClock(),
     )
-    if not client.connect():
+    try:
+        connected = client.connect()
+    except DriveOwnershipError as error:
+        print(f"  REFUS: {error}")
+        raise SystemExit(3) from error
+    if not connected:
         print(f"  {baud} 8{parity}{stop}: port refuse de s'ouvrir")
         return hits
     try:
         for slave in slaves:
             try:
                 rr = client.read_holding_registers(address=ETA, count=1, slave=slave)
+            except DriveOwnershipError:
+                raise
             except Exception:  # noqa: S112  # a silent slave is the expected case here
                 continue
-            if not rr.isError():
+            if isinstance(rr, RegisterReply) and not rr.isError() and rr.registers:
                 print(
                     f"  >>> REPONSE  baud={baud} 8{parity}{stop} addr={slave} "
                     f"ETA={rr.registers[0]} (0x{rr.registers[0]:04X})"
