@@ -1,0 +1,31 @@
+# Tool configuration for the Pi gate's own helpers in this directory:
+# pi_gate_parallel.py, pi_gate_shard.py and their tests. Deliberately no
+# [project] table: nothing here is a package.
+#
+# raspberry-pi/scripts/check.sh runs these tools on these three files. The
+# rules are NOT restated here: they are the ones of raspberry-pi/pyproject.toml,
+# pulled in below, so the code that decides the gate is held to the contract of
+# the code the gate protects. See .claude/skills/anheart-strict-python/SKILL.md.
+
+[tool.ruff]
+extend = "../../raspberry-pi/pyproject.toml"
+
+[tool.ruff.lint.extend-per-file-ignores]
+# Exactly what raspberry-pi/tests/** is allowed, for the same reasons.
+"test_pi_gate_parallel.py" = ["S101", "PLR2004", "ANN401", "SLF001", "PLR0915"]
+
+[tool.basedpyright]
+extends = "../../raspberry-pi/pyproject.toml"
+include = ["pi_gate_parallel.py", "pi_gate_shard.py", "test_pi_gate_parallel.py"]
+exclude = ["**/__pycache__"]
+extraPaths = ["."]
+venvPath = "../../raspberry-pi"
+venv = ".venv"
+
+# mypy has no way to extend another file: check.sh hands it
+# raspberry-pi/pyproject.toml directly.
+
+[tool.pytest.ini_options]
+# The runner's tests must not inherit the options of any other suite: without
+# this table pytest would pick up the repository root's configuration.
+addopts = "-p no:cacheprovider"

@@ -1,42 +1,59 @@
 """The parallel runner is part of the gate, so it is tested like the gate.
 
 Run by ``raspberry-pi/scripts/check.sh`` before it trusts the runner with the
-real suite. Two kinds of test:
+real suite. Three kinds of test:
 
-* the partition proof and the dealing of tests, as plain functions;
+* the partition proof, the dealing of tests and the merge of coverage data, as
+  plain functions;
 * the whole runner against a throwaway project, once green and then once for
   each way a run must NOT be able to pass: a failing test, a hole in the
-  combined coverage, a process that dies while the interpreter shuts down, a
-  process that never exits, and test ids that differ between processes.
+  combined coverage (with and without stale data lying around), a process
+  that dies while the interpreter shuts down, a process that never exits, a
+  process that leaves no record or no usable coverage data, and test ids that
+  differ between processes;
+* the runner being told to stop.
+
+Several of the throwaway scenarios are built so that ONE check is all that
+stands between them and a pass: process 0 alone covers the whole of the
+project, so a run where process 1 loses its coverage data or its record still
+has complete coverage and passing tests.
 """
 
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
 import pytest
-from pi_gate_parallel import check_partition, read_lines
+from coverage import CoverageData
+from pi_gate_parallel import check_partition, merge_coverage, read_lines
 from pi_gate_shard import SAME_PROCESS, Share, parse_share
 
 RUNNER: Final[Path] = Path(__file__).with_name("pi_gate_parallel.py")
 RUN_TIMEOUT_S: Final[float] = 300.0
+STARTUP_TIMEOUT_S: Final[float] = 120.0
 
 PROJECT: Final[Mapping[str, str]] = {
+    # fail_under is set like in the real project: a share judged on its own,
+    # partial, coverage would fail here exactly as it would there.
     "pyproject.toml": (
         '[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "-v"\n\n'
         '[tool.coverage.run]\nbranch = true\nsource = ["src"]\nrelative_files = true\n\n'
-        "[tool.coverage.report]\nshow_missing = true\n"
+        "[tool.coverage.report]\nshow_missing = true\nfail_under = 100\n"
     ),
     "src/__init__.py": "",
     "src/lib.py": (
         "def sign(value: int) -> int:\n    if value < 0:\n        return -1\n    return 1\n"
     ),
     "tests/__init__.py": "",
+    # With two processes, process 0 runs test_negative and test_zero, which
+    # together cover every line and branch; process 1 runs the other two.
     "tests/test_lib.py": (
         "from src.lib import sign\n\n\n"
         "def test_negative() -> None:\n    assert sign(-3) == -1\n\n\n"
@@ -53,6 +70,25 @@ PROJECT: Final[Mapping[str, str]] = {
 
 ONLY_IN_PROCESS_ONE: Final[str] = 'import os\n\nif os.environ["PI_GATE_SHARE"].startswith("1/"):\n'
 
+HOOK_IN_PROCESS_ONE: Final[str] = (
+    "import os\nfrom pathlib import Path\n\nimport pytest\n\n\n"
+    "{decorator}def {hook}() -> None:\n"
+    '    if os.environ["PI_GATE_SHARE"].startswith("1/"):\n'
+    "        {body}\n"
+)
+"""A conftest whose one hook misbehaves in process 1 only."""
+
+SLOW_TESTS: Final[str] = (
+    "import os\nimport time\nfrom pathlib import Path\n\n\n"
+    "def announce_then_wait() -> None:\n"
+    '    Path("pids").mkdir(exist_ok=True)\n'
+    '    Path("pids", str(os.getpid())).touch()\n'
+    "    time.sleep(600)\n\n\n"
+    "def test_slow_one() -> None:\n    announce_then_wait()\n\n\n"
+    "def test_slow_two() -> None:\n    announce_then_wait()\n"
+)
+"""Two tests, one for each process, that say who they are and then stay."""
+
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
@@ -63,8 +99,8 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def run_gate(project: Path, *, exit_grace: float = 60.0) -> subprocess.CompletedProcess[str]:
-    """Run the real runner, two processes, against the throwaway project."""
+def clean_environment() -> Mapping[str, str]:
+    """Our environment without what would leak this run into the throwaway one."""
     inherited = (
         "PYTEST_ADDOPTS",
         "PYTHONPATH",
@@ -72,18 +108,58 @@ def run_gate(project: Path, *, exit_grace: float = 60.0) -> subprocess.Completed
         "PI_GATE_SHARE",
         "PI_GATE_EVIDENCE",
     )
-    environment = {name: value for name, value in os.environ.items() if name not in inherited}
+    return {name: value for name, value in os.environ.items() if name not in inherited}
+
+
+def gate_command(exit_grace: float) -> Sequence[str]:
     command = [sys.executable, str(RUNNER), "--processes", "2", "--fail-under", "100"]
-    command += ["--exit-grace", str(exit_grace)]
+    return [*command, "--exit-grace", str(exit_grace)]
+
+
+def run_gate(project: Path, *, exit_grace: float = 60.0) -> subprocess.CompletedProcess[str]:
+    """Run the real runner, two processes, against the throwaway project."""
     return subprocess.run(  # noqa: S603  # fixed argv, no shell
-        command,
+        gate_command(exit_grace),
         cwd=project,
-        env=environment,
+        env=clean_environment(),
         capture_output=True,
         text=True,
         check=False,
         timeout=RUN_TIMEOUT_S,
     )
+
+
+def misbehave_in_process_one(project: Path, hook: str, body: str, *, first: bool = False) -> None:
+    decorator = "@pytest.hookimpl(tryfirst=True)\n" if first else ""
+    (project / "tests/conftest.py").write_text(
+        HOOK_IN_PROCESS_ONE.format(decorator=decorator, hook=hook, body=body), encoding="utf-8"
+    )
+
+
+def remove_the_only_test_of_the_negative_branch(project: Path) -> None:
+    tests = project / "tests/test_lib.py"
+    kept = tests.read_text(encoding="utf-8").replace(
+        "def test_negative() -> None:\n    assert sign(-3) == -1\n", ""
+    )
+    tests.write_text(kept, encoding="utf-8")
+
+
+def eventually(condition: Callable[[], bool], within: float) -> bool:
+    """Poll in real time: these tests watch real processes come and go."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return condition()
+
+
+def is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 # --- The partition proof ---------------------------------------------------
@@ -168,6 +244,48 @@ def test_a_share_that_names_nothing_is_refused(text: str, tmp_path: Path) -> Non
         parse_share(text, str(tmp_path))
 
 
+# --- Merging the coverage data ---------------------------------------------
+
+
+def coverage_file(path: Path, arcs: Mapping[str, Collection[tuple[int, int]]]) -> Path:
+    data = CoverageData(basename=str(path))
+    data.add_arcs(arcs)
+    data.write()
+    return path
+
+
+def test_the_coverage_of_every_process_ends_up_in_the_merged_data(tmp_path: Path) -> None:
+    first = coverage_file(tmp_path / "first", {"src/lib.py": [(-1, 1), (1, 2)]})
+    second = coverage_file(tmp_path / "second", {"src/lib.py": [(1, 3)], "src/more.py": [(-1, 1)]})
+    assert merge_coverage([first, second], tmp_path / "merged") == []
+    merged = CoverageData(basename=str(tmp_path / "merged"))
+    merged.read()
+    assert merged.measured_files() == {"src/lib.py", "src/more.py"}
+    assert set(merged.arcs("src/lib.py") or ()) == {(-1, 1), (1, 2), (1, 3)}
+
+
+def test_a_process_without_coverage_data_is_an_error(tmp_path: Path) -> None:
+    first = coverage_file(tmp_path / "first", {"src/lib.py": [(-1, 1)]})
+    problems = merge_coverage([first, tmp_path / "absent"], tmp_path / "merged")
+    assert problems == ["process 1 left no coverage data"]
+
+
+def test_coverage_data_that_cannot_be_read_is_an_error(tmp_path: Path) -> None:
+    """``coverage combine`` would warn, count the file as errored, and exit 0."""
+    first = coverage_file(tmp_path / "first", {"src/lib.py": [(-1, 1)]})
+    (tmp_path / "second").write_bytes(b"this is not a coverage database")
+    problems = merge_coverage([first, tmp_path / "second"], tmp_path / "merged")
+    assert len(problems) == 1
+    assert problems[0].startswith("process 1 left unusable coverage data: ")
+
+
+def test_coverage_data_that_measured_nothing_is_an_error(tmp_path: Path) -> None:
+    first = coverage_file(tmp_path / "first", {"src/lib.py": [(-1, 1)]})
+    second = coverage_file(tmp_path / "second", {})
+    problems = merge_coverage([first, second], tmp_path / "merged")
+    assert problems == ["process 1 left coverage data that measured nothing"]
+
+
 # --- The whole runner, against a throwaway project -------------------------
 
 
@@ -178,6 +296,7 @@ def test_a_green_project_passes_and_pinned_tests_share_a_process(project: Path) 
     assert "[gate] tests run by each process: 4 + 2" in result.stdout
     assert "[gate] partition proven" in result.stdout
     assert "[gate] verdicts over all processes: 6 passed" in result.stdout
+    assert "[gate] coverage data merged from 2 of 2 processes" in result.stdout
     assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
     assert (project / "coverage.xml").is_file()
     for pinned in SAME_PROCESS:
@@ -196,16 +315,43 @@ def test_a_failing_test_fails_the_gate(project: Path) -> None:
 
 
 def test_a_hole_in_the_combined_coverage_fails_the_gate(project: Path) -> None:
-    tests = project / "tests/test_lib.py"
-    kept = tests.read_text(encoding="utf-8").replace(
-        "def test_negative() -> None:\n    assert sign(-3) == -1\n", ""
-    )
-    tests.write_text(kept, encoding="utf-8")
+    remove_the_only_test_of_the_negative_branch(project)
     result = run_gate(project)
     assert result.returncode == 1
     assert "[gate] verdicts over all processes: 5 passed" in result.stdout
     assert "combined coverage is below the required 100%" in result.stdout
-    assert "did not end cleanly" not in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+    assert (project / "coverage.xml").is_file()
+
+
+def test_stale_coverage_data_in_the_directory_cannot_fill_a_hole(project: Path) -> None:
+    """Complete data from an earlier run lies next to where coverage would look.
+
+    ``coverage report`` combines every ``.coverage.*`` file it finds beside its
+    data file before it reports. Reporting from the working directory would
+    count this stale file and call the hole below covered.
+    """
+    earlier = subprocess.run(
+        [sys.executable, "-m", "pytest", "--cov", "--cov-branch", "-p", "no:cacheprovider"],
+        cwd=project,
+        env=clean_environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=RUN_TIMEOUT_S,
+    )
+    assert earlier.returncode == 0, earlier.stdout + earlier.stderr
+    stale = project / ".coverage.stalehost.99999.Xstale"
+    (project / ".coverage").rename(stale)
+    remove_the_only_test_of_the_negative_branch(project)
+
+    result = run_gate(project)
+
+    assert result.returncode == 1, result.stdout
+    assert "combined coverage is below the required 100%" in result.stdout
+    assert "[gate] coverage data merged from 2 of 2 processes" in result.stdout
+    assert "Combined" not in result.stdout, "something other than this run's data was read"
+    assert stale.is_file(), "the runner has no business touching the working directory"
 
 
 def test_a_process_killed_while_the_interpreter_shuts_down_fails_the_gate(project: Path) -> None:
@@ -221,6 +367,7 @@ def test_a_process_killed_while_the_interpreter_shuts_down_fails_the_gate(projec
     assert "process 1 did not end cleanly: killed by SIGKILL" in result.stdout
     assert "[gate] partition proven" in result.stdout
     assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
 
 
 def test_a_process_that_never_exits_is_killed_and_fails_the_gate(project: Path) -> None:
@@ -236,6 +383,44 @@ def test_a_process_that_never_exits_is_killed_and_fails_the_gate(project: Path) 
     assert "process 1 finished its tests but had not exited 1 s later" in result.stdout
     assert "[gate] process 0 ended: exit code 0" in result.stdout
     assert "[gate] partition proven" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_process_that_leaves_no_record_fails_the_gate(project: Path) -> None:
+    """It ran its tests, saved its coverage and exited 0, but never said what it ran."""
+    misbehave_in_process_one(project, "pytest_sessionfinish", "os._exit(0)", first=True)
+    result = run_gate(project)
+    assert result.returncode == 1
+    assert "[gate] process 1 ended: exit code 0" in result.stdout
+    assert "process 1 left no record of what it collected and ran" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_process_whose_coverage_data_is_gone_fails_the_gate(project: Path) -> None:
+    """Process 0 covers everything on its own, so the threshold alone would pass."""
+    misbehave_in_process_one(
+        project, "pytest_unconfigure", 'Path(os.environ["COVERAGE_FILE"]).unlink()'
+    )
+    result = run_gate(project)
+    assert result.returncode == 1
+    assert "process 1 left no coverage data" in result.stdout
+    assert "[gate] coverage data merged from 1 of 2 processes" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_process_whose_coverage_data_is_unreadable_fails_the_gate(project: Path) -> None:
+    """Same as above, with a file that is there but is not coverage data."""
+    misbehave_in_process_one(
+        project, "pytest_unconfigure", 'Path(os.environ["COVERAGE_FILE"]).write_bytes(b"junk")'
+    )
+    result = run_gate(project)
+    assert result.returncode == 1
+    assert "process 1 left unusable coverage data" in result.stdout
+    assert "[gate] coverage data merged from 1 of 2 processes" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
 
 
 def test_ids_that_differ_between_processes_fail_the_gate(project: Path) -> None:
@@ -256,3 +441,37 @@ def test_a_pinned_test_that_disappeared_fails_the_gate(project: Path) -> None:
     result = run_gate(project)
     assert result.returncode == 1
     assert "no longer collected" in result.stdout
+
+
+# --- Being told to stop ----------------------------------------------------
+
+
+def test_sigterm_stops_the_runner_and_every_process_it_started(project: Path) -> None:
+    """A terminated runner must not leave its pytest processes running behind it."""
+    (project / "tests/test_slow.py").write_text(SLOW_TESTS, encoding="utf-8")
+    announced = project / "pids"
+    runner = subprocess.Popen(  # noqa: S603  # fixed argv, no shell
+        gate_command(60.0),
+        cwd=project,
+        env=clean_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    started: list[int] = []
+    try:
+        both_waiting = eventually(
+            lambda: announced.is_dir() and len(list(announced.iterdir())) == 2, STARTUP_TIMEOUT_S
+        )
+        started = [int(entry.name) for entry in announced.iterdir()] if announced.is_dir() else []
+        assert both_waiting, f"only {started} reached their slow test"
+
+        runner.send_signal(signal.SIGTERM)
+
+        assert runner.wait(timeout=60) == 128 + signal.SIGTERM
+        assert eventually(lambda: not any(is_alive(pid) for pid in started), 10.0)
+    finally:
+        runner.kill()
+        runner.wait()
+        for pid in started:
+            if is_alive(pid):
+                os.kill(pid, signal.SIGKILL)

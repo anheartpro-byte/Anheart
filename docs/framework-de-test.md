@@ -1085,17 +1085,30 @@ La gate ne passe que si ces trois vérifications réussissent :
   vérification ignore la règle de partage : elle ne compare que les listes. Le
   journal l'affiche (`[gate] partition proven`), avec le nombre de tests de
   chaque processus et le total des verdicts ;
-* **le seuil de couverture, une seule fois.** `coverage combine` réunit les
-  mesures de tous les processus, puis `coverage report --fail-under=100`
-  s'applique au total combiné, avec la même liste `include` de
-  `pyproject.toml` et la même fonction de décision que
-  `pytest --cov-fail-under=100`.
+* **le seuil de couverture, une seule fois, sur les seules mesures de cette
+  exécution.** Le lanceur réunit lui-même la mesure de chaque processus, une
+  par processus : une mesure absente, illisible ou vide fait échouer la gate,
+  là où `coverage combine` se contenterait d'un avertissement. Le total est
+  écrit dans un fichier privé, seul dans un dossier créé pour l'exécution, et
+  le journal affiche `[gate] coverage data merged from 4 of 4 processes`.
+  `coverage report --fail-under=100` s'applique ensuite à ce fichier, avec la
+  même liste `include` de `pyproject.toml` et la même fonction de décision
+  que `pytest --cov-fail-under=100`. Ce fichier privé compte : `coverage
+  report` fusionne d'abord tout fichier `.coverage.*` voisin de son fichier de
+  données, si bien qu'un fichier resté dans `raspberry-pi/` après une
+  exécution interrompue aurait pu combler un vrai trou. Il n'est plus lu.
 
 `check.sh` exécute d'abord les tests du lanceur lui-même
 (`scripts/ci/test_pi_gate_parallel.py`). Sur un projet jetable, ils vérifient
-qu'un test en échec, un trou dans la couverture combinée, un processus tué à
-l'arrêt de l'interpréteur, un processus qui ne s'arrête pas et des
-identifiants différents d'un processus à l'autre font bien échouer la gate.
+qu'un test en échec, un trou dans la couverture (avec ou sans mesure périmée
+dans le dossier), un processus tué à l'arrêt de l'interpréteur, un processus
+qui ne s'arrête pas, un processus sans enregistrement ou sans mesure
+utilisable et des identifiants différents d'un processus à l'autre font bien
+échouer la gate. Dans les deux modes, `check.sh` soumet aussi le lanceur, son
+greffon et leurs tests aux quatre vérificateurs statiques du Pi, avec les
+règles de `raspberry-pi/pyproject.toml` (`scripts/ci/pyproject.toml` ne fait
+qu'y renvoyer) ; le fichier de tests reçoit les exemptions de
+`raspberry-pi/tests/**`.
 
 Ce qui reste identique à la gate en série : les tests collectés (aucun filtre
 ni marqueur n'est ajouté ; dans le résumé de chaque processus, `deselected`
@@ -1103,6 +1116,19 @@ compte les tests confiés aux autres processus), la mesure de branches, le
 seuil, ruff, basedpyright et mypy avant les tests, les réglages Hypothesis. Ce
 qui diffère : l'ordre et le voisinage des tests dans chaque processus, et
 l'occupation de tous les CPU pendant les tests.
+
+Deux limites à connaître :
+
+* **la preuve de partition est relative.** Elle compare les processus entre
+  eux, pas avec une collecte en série. Un test que tous les processus écartent
+  de la même façon (un `-k` ou un `-m` dans `PYTEST_ADDOPTS`, un test marqué
+  `hardware`) passe inaperçu, exactement comme en série : rien ne fixe le
+  nombre de tests, seul le seuil de couverture rattrape un test manquant ;
+* **le voisinage des tests dépend du nombre de CPU.** Avec N processus,
+  chacun exécute un test sur N. Un test qui n'échoue qu'à côté de certains
+  voisins peut échouer avec quatre processus et passer avec deux ou en série.
+  Pour reproduire un échec de CI, reprendre le nombre affiché par la ligne
+  `Runner:` du journal.
 
 La durée se lit dans chaque journal : la ligne `Runner:` donne le nombre de
 CPU et le modèle du processeur, chaque processus affiche son résumé

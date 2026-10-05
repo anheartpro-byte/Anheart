@@ -12,10 +12,18 @@ from the ``raspberry-pi/`` directory. It replaces the single
    ``EXIT_GRACE_S`` and fails the gate too;
 3. a proof, from what each process wrote down, that all of them collected the
    same tests and that every collected test ran in exactly one of them;
-4. ``coverage combine`` of every share, then ``coverage report
-   --fail-under=<n>`` once, on the combined data.
+4. a merge of the coverage data of every process, each of which must be
+   present and readable, into a private file nothing else can add to, then
+   ``coverage report --fail-under=<n>`` once, on that merged data.
 
 Any of these going wrong makes the exit code 1. Nothing is retried.
+
+Two limits, stated rather than hidden. The proof in 3 compares the processes
+with each other, not with a serial run: a test that every process leaves out
+in the same way (a filter in ``PYTEST_ADDOPTS``, say) is not noticed here, any
+more than the serial gate notices it. And the way tests are grouped depends on
+``<processes>``, hence on the machine: a test that only fails next to certain
+neighbours may fail with one count and pass with another.
 """
 
 from __future__ import annotations
@@ -32,7 +40,11 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import Final, TextIO
+
+from coverage import CoverageData
+from coverage.exceptions import CoverageException
 
 PLUGIN: Final[str] = "pi_gate_shard"
 PLUGIN_DIRECTORY: Final[Path] = Path(__file__).resolve().parent
@@ -302,37 +314,79 @@ def partition_evidence(running: Sequence[Running]) -> Sequence[str]:
     return problems
 
 
-def run_coverage(*arguments: str) -> int:
-    command = [sys.executable, "-m", "coverage", *arguments]
-    return subprocess.run(command, check=False).returncode  # noqa: S603  # fixed argv, no shell
+def merge_coverage(coverage_files: Sequence[Path], merged_file: Path) -> Sequence[str]:
+    """Merge the coverage data of every process into one private file.
+
+    ``coverage_files`` holds one path per process, in process order. Done
+    here, file by file, rather than by ``coverage combine``: exactly the files
+    of THIS run are read, and a file that is missing, unreadable or empty is
+    an error, where ``coverage combine`` only warns and exits 0.
+    ``CoverageData.update`` is the call ``coverage combine`` makes for each
+    file it reads. No path mapping is needed: every process ran in this same
+    directory, so a source file has the same name in every share.
+    """
+    problems: list[str] = []
+    merged = CoverageData(basename=str(merged_file))
+    used = 0
+    for index, coverage_file in enumerate(coverage_files):
+        if not coverage_file.is_file():
+            problems.append(f"process {index} left no coverage data")
+            continue
+        try:
+            part = CoverageData(basename=str(coverage_file))
+            part.read()
+            measured = len(part.measured_files())
+            merged.update(part)
+        except CoverageException as error:
+            problems.append(f"process {index} left unusable coverage data: {error}")
+            continue
+        if measured == 0:
+            problems.append(f"process {index} left coverage data that measured nothing")
+            continue
+        used += 1
+    say(f"[gate] coverage data merged from {used} of {len(coverage_files)} processes")
+    return problems
 
 
-def combined_coverage(running: Sequence[Running], fail_under: str) -> Sequence[str]:
-    """Combine every share's data, then apply the threshold once to the total."""
-    problems = [
-        f"process {share.index} left no coverage data"
-        for share in running
-        if not share.coverage_file.is_file()
-    ]
-    present = [str(share.coverage_file) for share in running if share.coverage_file.is_file()]
-    if not present:
-        return [*problems, "no coverage data at all: nothing to combine"]
+def run_coverage(merged_file: Path, *arguments: str) -> int:
+    """Run one coverage report command on the merged data, and on nothing else.
+
+    ``coverage report`` and ``coverage xml`` first combine any ``.coverage.*``
+    file lying next to their data file. The data file is therefore a private
+    one, alone in a directory this run created: a stale file left in the
+    working directory can no longer be counted in the total.
+    """
+    command = [sys.executable, "-m", "coverage", *arguments, f"--data-file={merged_file}"]
+    environment = {**os.environ, "COVERAGE_FILE": str(merged_file)}
     sys.stdout.flush()
-    if run_coverage("combine", *present) != 0:
-        return [*problems, "coverage combine failed"]
-    if run_coverage("report", f"--fail-under={fail_under}") != 0:
+    return subprocess.run(command, env=environment, check=False).returncode  # noqa: S603  # fixed argv
+
+
+def combined_coverage(running: Sequence[Running], fail_under: str, private: Path) -> Sequence[str]:
+    """Merge every share's data, then apply the threshold once to the total."""
+    private.mkdir()
+    merged_file = private / ".coverage"
+    problems = list(merge_coverage([share.coverage_file for share in running], merged_file))
+    if run_coverage(merged_file, "report", f"--fail-under={fail_under}") != 0:
         problems.append(
             f"combined coverage is below the required {fail_under}% (or could not be reported)"
         )
     else:
         say(f"[gate] required coverage of {fail_under}% reached on the combined data")
-    if run_coverage("xml", "-o", "coverage.xml") != 0:
-        problems.append("coverage xml failed")
+    # The threshold was applied just above; here only a failure to write counts.
+    if run_coverage(merged_file, "xml", "--fail-under=0", "-o", "coverage.xml") != 0:
+        problems.append("coverage.xml could not be written")
     return problems
+
+
+def stop_on_sigterm(signum: int, _frame: FrameType | None) -> None:
+    """Make SIGTERM unwind like Ctrl-C, so the processes started here are stopped."""
+    raise SystemExit(128 + signum)
 
 
 def main(arguments: Sequence[str]) -> int:
     settings = parse_arguments(arguments)
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     running: list[Running] = []
     with tempfile.TemporaryDirectory(prefix="pi-gate-") as scratch:
         evidence = Path(scratch)
@@ -343,11 +397,13 @@ def main(arguments: Sequence[str]) -> int:
             say(f"[gate] {settings.processes} pytest processes started, one share each")
             problems = list(wait_for_exit(running, settings.exit_grace))
         finally:
+            # Interrupted or not, nothing started here may outlive this run.
             for share in running:
                 if share.process.poll() is None:
                     share.process.kill()
+                    share.process.wait()
         problems.extend(partition_evidence(running))
-        problems.extend(combined_coverage(running, settings.fail_under))
+        problems.extend(combined_coverage(running, settings.fail_under, evidence / "combined"))
     if problems:
         say(f"[gate] TESTS FAILED, {len(problems)} reason(s):")
         for problem in problems:
