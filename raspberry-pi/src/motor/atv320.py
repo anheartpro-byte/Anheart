@@ -145,6 +145,11 @@ from src.motor.drive import (
     decode_status_word,
     describe_fault,
 )
+from src.motor.drive_process_lock import (
+    DriveConnection,
+    DriveOwnershipError,
+    retry_failed_drive_closes,
+)
 from src.motor.ftdi_link import (
     USB_STALL_BOUND,
     BufferedFtdiPort,
@@ -494,10 +499,34 @@ class ObservedModbusClient(ModbusSerialClient):
 
 
 @final
+class OwnedSerialClient(ObservedModbusClient):
+    def __init__(self, settings: SerialSettings) -> None:
+        self._ownership: DriveConnection = DriveConnection()
+        super().__init__(
+            port=settings.port,
+            framer=FramerType.RTU,
+            baudrate=settings.baudrate,
+            bytesize=settings.bytesize,
+            parity=settings.parity.value,
+            stopbits=settings.stopbits,
+            timeout=settings.timeout,
+            retries=settings.retries,
+        )
+
+    @override
+    def connect(self) -> bool:
+        return self._ownership.connect(super().connect, super().close)
+
+    @override
+    def close(self) -> None:
+        self._ownership.close(super().close)
+
+
+@final
 class FtdiModbusClient(ObservedModbusClient):
     """``ModbusSerialClient`` whose port is :class:`~src.motor.ftdi_link.BufferedFtdiPort`.
 
-    Only :meth:`connect` differs. pymodbus 3.7.4 opens ports with
+    Connect and close also manage failed-open cleanup. pymodbus 3.7.4 opens ports with
     ``serial.serial_for_url``, which for ``ftdi://`` would hand back pyftdi's
     own port, the one whose ``in_waiting`` is always 0. Everything after the
     port is open - framing, CRC, inter-frame silence, the transaction lock,
@@ -524,16 +553,20 @@ class FtdiModbusClient(ObservedModbusClient):
 
     @override
     def connect(self) -> bool:
-        """Open the cable if it is not open. ``False``, never an exception, on failure.
+        """Open the cable if it is not open. Ownership refusal raises explicitly.
 
         Mirrors ``ModbusSerialClient.connect``: pymodbus calls this before every
         transaction and after every failure, and turns ``False`` into
         ``ConnectionException``, which the driver maps to ``CommTimeout``.
         """
-        if self.socket is not None:
-            return True
         try:
+            retry_failed_drive_closes()
+            if self.socket is not None and self.socket.is_open:
+                return True
+            self.socket = None
             port = self._port_opener()
+        except DriveOwnershipError:
+            raise
         except Exception:
             logger.exception("ATV320: could not open %s", self.comm_params.host)
             return False
@@ -546,6 +579,12 @@ class FtdiModbusClient(ObservedModbusClient):
         self.last_frame_end = None
         return True
 
+    @override
+    def close(self) -> None:
+        close_port: Callable[[], None] = super().close
+        close_port()
+        retry_failed_drive_closes()
+
 
 def serial_master(
     settings: SerialSettings,
@@ -557,8 +596,8 @@ def serial_master(
     """Build the real pymodbus RTU master. The ONE place a client is constructed.
 
     An ``ftdi://`` port gets :class:`FtdiModbusClient`; anything else - a tty,
-    a ``/dev/cu.*``, a ``COM`` port - the stock ``ModbusSerialClient``, whose
-    pyserial port has a working ``in_waiting`` of its own.
+    a ``/dev/cu.*``, a ``COM`` port - an ownership-guarded ``ModbusSerialClient``,
+    whose pyserial port has a working ``in_waiting`` of its own.
 
     Constructing does not touch the hardware - both clients open the port in
     ``connect()`` - so this is safe at startup and testable with a port that
@@ -578,18 +617,8 @@ def serial_master(
         if exchange_log is not None:
             client.observe_exchanges(exchange_log)
         return client
-    client_type = ModbusSerialClient if exchange_log is None else ObservedModbusClient
-    serial = client_type(
-        port=settings.port,
-        framer=FramerType.RTU,
-        baudrate=settings.baudrate,
-        bytesize=settings.bytesize,
-        parity=settings.parity.value,
-        stopbits=settings.stopbits,
-        timeout=settings.timeout,
-        retries=settings.retries,
-    )
-    if isinstance(serial, ObservedModbusClient) and exchange_log is not None:
+    serial = OwnedSerialClient(settings)
+    if exchange_log is not None:
         serial.observe_exchanges(exchange_log)
     return serial
 

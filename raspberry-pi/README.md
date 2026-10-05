@@ -262,9 +262,37 @@ priment sur `.env` :
 MOTOR_BACKEND=sim ECG_SOURCE=sim .venv/bin/python -m src.local_panel
 ```
 
-Ne pas lancer la console et `scripts/bench_console.py` en meme temps sur le
-meme cable : un seul programme doit parler au variateur (le verrou fichier
-partage est prevu au jalon M3).
+Un seul programme possede la liaison variateur par hote. La console, le banc,
+la mesure de latence, `probe_atv320.py` et `scan_modbus.py` prennent le meme
+verrou noyau avant toute ouverture du transport. Un concurrent refuse avec
+`drive cable already owned` et le PID du proprietaire ; aucune commande ni
+ouverture physique ne precede cette acquisition. Fermer le programme proprietaire
+avant de reprendre la liaison.
+
+La configuration contient un seul `drive_link` et cette protection reserve
+volontairement **tous les cables variateur de l'hote**, meme si deux ports
+semblent distincts : un nom FTDI et un alias serie peuvent designer le meme
+cable. Commander plusieurs variateurs depuis un hote n'est pas pris en charge.
+Le fichier partage est `/tmp/anheart-drive.lock` sous Linux/macOS et
+`%PROGRAMDATA%/anheart-drive.lock` sous Windows (`C:/ProgramData` par defaut).
+Il ne depend ni du repertoire de lancement, ni du checkout, ni de `TMPDIR`.
+Les comptes service et operateur doivent pouvoir ouvrir ce meme fichier ;
+une erreur de droits refuse la liaison, sans repli vers un autre verrou.
+
+Ne jamais supprimer le fichier pour forcer une prise : son inode doit rester
+stable. Le PID est seulement informatif et peut rester apres fermeture ; le
+noyau libere le verrou a la fermeture du transport ou a la fin du processus,
+y compris un crash. Un echec d'ouverture libere la reservation seulement apres
+fermeture du transport partiellement ouvert. Si la
+fermeture du transport echoue, la reservation reste jusqu'a sa fermeture
+effective ou la fin du processus, meme si l'appelant abandonne l'erreur.
+`close()` retente ce nettoyage ; une nouvelle ouverture FTDI ou une reconnexion
+serie termine d'abord le nettoyage en attente, sans ouvrir par-dessus l'ancien
+handle. Pour un appel direct a `open_ftdi_port`,
+`src.motor.drive_process_lock.retry_failed_drive_closes()` permet aussi de
+retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
+cela n'autorise aucune reprise automatique du mouvement. Cette protection
+concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
 
 ---
 
