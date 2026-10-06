@@ -367,6 +367,7 @@ class PanelReporter:
             drive=self._runtime.idle_link,
             ecg=self._ecg.status(),
             heart_rate_trend=self._runtime.heart_rate_trend,
+            manual_rise_hold=self._runtime.manual_rise_hold(),
             radius=config.geometry.radius,
             ratio=config.geometry.ratio,
             motor_max_rpm=config.motor_max_rpm,

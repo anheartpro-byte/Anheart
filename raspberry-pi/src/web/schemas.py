@@ -592,6 +592,9 @@ class PanelRow:
     drive: DriveLinkRow
     ecg: EcgLinkRow
     heart_rate_trend_bpm_per_min: float | None
+    manual_rise_hold: str | None
+    """The ``RiseHold`` that holds a manual rise now, by its wire value, or ``None``."""
+
     radius_m: float | None
     gear_ratio: float | None
     motor_max_rpm: int
@@ -599,6 +602,7 @@ class PanelRow:
     @classmethod
     def of(cls, status: PanelStatus) -> PanelRow:
         """Render a :class:`~src.panel_status.PanelStatus`."""
+        hold = status.manual_rise_hold
         return cls(
             motion_enabled=status.motion_enabled,
             programs_enabled=status.programs_enabled,
@@ -606,6 +610,7 @@ class PanelRow:
             drive=DriveLinkRow.of(status.drive, status.drive_link),
             ecg=EcgLinkRow.of(status.ecg, status.at),
             heart_rate_trend_bpm_per_min=_finite(status.heart_rate_trend),
+            manual_rise_hold=None if hold is None else hold.value,
             radius_m=_finite(status.radius),
             gear_ratio=_finite(status.ratio),
             motor_max_rpm=int(status.motor_max_rpm),

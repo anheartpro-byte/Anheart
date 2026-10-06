@@ -226,6 +226,7 @@ function panelRow(overrides = {}) {
       dsp_quality: "good",
     },
     heart_rate_trend_bpm_per_min: 0,
+    manual_rise_hold: null,
     radius_m: 1.5,
     gear_ratio: 49.79,
     motor_max_rpm: 300,
@@ -979,4 +980,99 @@ test("an Appliquer the console refuses outright shows that answer and awaits not
   assert.equal(node("manual-note").textContent, "the machine is already stopping");
   frame(manualFrame(60.2, 249));
   assert.equal(node("manual-note").textContent, "the machine is already stopping");
+});
+
+/* ================== what the heart rate holds, before a target is typed ================== */
+
+// A manual session with a person declared on board, which the page itself cannot start yet.
+const riderFrame = (at, target = 0, overrides = {}) =>
+  manualFrame(at, target, {
+    manual: manualRow(target, { occupancy: "occupied", occupancy_label: "PERSONNE A BORD" }),
+    ...overrides,
+  });
+
+const HOLD_WORDS = {
+  no_heart_rate: "pas de frequence cardiaque utilisable",
+  trend_unknown: "tendance de la frequence cardiaque pas encore connue",
+  heart_rate_falling: "la frequence cardiaque baisse trop vite",
+};
+
+for (const [hold, words] of Object.entries(HOLD_WORDS)) {
+  test(`a rise held by the heart rate (${hold}) is shown on the manual card before any target is typed`, () => {
+    // Given a person on board, an arm at standstill, no verdict, and nothing typed or sent.
+    const { context, frame, node, shown } = panel();
+    const asked = [];
+    context.api = (path) => {
+      asked.push(path);
+      return new Promise(() => undefined);
+    };
+    frame(riderFrame(60));
+    context.renderPanel(panelRow());
+    assert.equal(shown("manual-hold"), false);
+    // When the console reports that the heart rate holds a rise.
+    context.renderPanel(panelRow({ manual_rise_hold: hold }));
+    // Then the card says so, in French, with what it means for a target.
+    assert.equal(shown("manual-hold"), true);
+    assert.equal(node("manual-hold-title").textContent, "MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE");
+    assert.ok(node("manual-hold-detail").textContent.startsWith(words + "."), node("manual-hold-detail").textContent);
+    assert.ok(node("manual-hold-detail").textContent.includes("une cible non nulle est refusee"));
+    assert.ok(node("manual-hold-detail").textContent.includes("remonte seule"));
+    assert.deepEqual(asked, [], "the hold was learnt from a request, not shown before one");
+    // And it stays over the frames that follow, then goes when the console says nothing holds.
+    frame(riderFrame(60.2));
+    assert.equal(shown("manual-hold"), true);
+    context.renderPanel(panelRow());
+    assert.equal(shown("manual-hold"), false);
+  });
+}
+
+test("a hold the page has no words for is shown by its name rather than hidden", () => {
+  const { context, frame, node, shown } = panel();
+  frame(riderFrame(60));
+  context.renderPanel(panelRow({ manual_rise_hold: "a_hold_added_later" }));
+  assert.equal(shown("manual-hold"), true);
+  assert.ok(node("manual-hold-detail").textContent.startsWith("a_hold_added_later."));
+});
+
+test("the hold is shown only while a manual session can take a target", () => {
+  const { context, frame, shown } = panel();
+  context.renderPanel(panelRow({ manual_rise_hold: "no_heart_rate" }));
+  // At rest there is no target to type, whatever the last session left behind.
+  frame(snapshot({ at: 60, manual: manualRow(0, { occupancy: "occupied" }) }));
+  assert.equal(shown("manual-hold"), false);
+  // In a session it is shown.
+  frame(riderFrame(60.2));
+  assert.equal(shown("manual-hold"), true);
+  // Once the session is ending every target is refused anyway: the card stops announcing a hold.
+  frame(riderFrame(60.4, 0, { mode: "arret" }));
+  assert.equal(shown("manual-hold"), false);
+});
+
+test("with a person on board, a console that stops answering is shown as an unknown hold", () => {
+  // Given a session with a person on board, and a console that reports no hold.
+  const { context, clock, frame, node, shown } = panel();
+  frame(riderFrame(60));
+  context.renderPanel(panelRow());
+  assert.equal(shown("manual-hold"), false);
+  // When /api/panel has not answered for longer than its answers stay current, frames still coming.
+  for (let tick = 1; tick <= 20; tick += 1) {
+    frame(riderFrame(60 + tick * 0.2));
+  }
+  assert.ok(clock.now - context.state.panelAt > 3500);
+  // Then the card does not go on showing "nothing holds": it says it no longer knows.
+  assert.equal(shown("manual-hold"), true);
+  assert.equal(node("manual-hold-title").textContent, "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
+  // And the next answer puts the indicator back to what the console says.
+  context.renderPanel(panelRow());
+  assert.equal(shown("manual-hold"), false);
+});
+
+test("with nobody on board the heart rate holds nothing, answered or not", () => {
+  const { context, frame, shown } = panel();
+  frame(manualFrame(60));
+  context.renderPanel(panelRow());
+  for (let tick = 1; tick <= 20; tick += 1) {
+    frame(manualFrame(60 + tick * 0.2));
+  }
+  assert.equal(shown("manual-hold"), false);
 });

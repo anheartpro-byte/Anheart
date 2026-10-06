@@ -36,6 +36,7 @@ var RECONNECT_MS = 1500;        // socket retry interval
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
 var PANEL_MS = 1000;            // console link panel refresh
+var PANEL_STALE_MS = 3500;      // no /api/panel answer for this long: what it last said is not the present
 var SENSORS_MS = 1000;          // /api/sensors poll
 var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this long is stale
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
@@ -59,6 +60,7 @@ var state = {
   motionEnabled: true,   // from /api/panel; false on the read-only console
   programsEnabled: true, // from /api/panel; false until milestone M5
   panel: null,           // the last /api/panel answer
+  panelAt: 0,            // performance.now() when it came
   status: null,          // the last /api/status answer
   statusSent: 0,         // /api/status requests sent so far
   statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
@@ -549,6 +551,7 @@ function renderSnapshot(snapshot) {
   renderConsole(snapshot);
   renderManual(snapshot);
   settleManualTarget(snapshot);
+  renderManualHold();
   renderEstopBanner();
 
   /* --- heart rate, with its age carried alongside --------------------- */
@@ -696,6 +699,8 @@ function renderDriveGrid() {
 
 function renderPanel(panel) {
   state.panel = panel;
+  state.panelAt = performance.now();
+  renderManualHold();
   if (!panel) {
     pill(el("console-mode"), "pas de console", "");
     return;
@@ -804,6 +809,51 @@ function renderManual(snapshot) {
       el("ramp-banner-detail"),
       "vers " + num(manual.target.output_rpm, 2) + " tr/min de sortie (Gr " +
         num(manual.target.resultant_g, 3) + "), arrivee dans ~" + secs(manual.ramp_eta_s)
+    );
+  }
+}
+
+/*
+  What the heart rate of a person on board holds, said BEFORE a target is
+  typed. With nobody on board there is no such gate. With a person on board
+  no setpoint rises without a usable heart rate, nor while its short trend is
+  unknown or falling fast: over a stopped arm a target is then refused, and
+  over a turning one the speed waits, and climbs again by itself when the hold
+  goes. None of that is a verdict, so nothing else on the page shows it, and
+  the reason used to be learnt from the refusal.
+
+  The console states the hold itself, in /api/panel (`manual_rise_hold`), from
+  the very test the loop applies: this page does not work it out again from
+  the numbers it shows, which are not the ones the gate reads. It is asked
+  once a second. When no answer has come for PANEL_STALE_MS the page no longer
+  knows, and with a person on board it says that rather than showing nothing:
+  an indicator that is off must mean "nothing holds".
+*/
+var RISE_HOLDS = {
+  no_heart_rate: "pas de frequence cardiaque utilisable",
+  trend_unknown: "tendance de la frequence cardiaque pas encore connue",
+  heart_rate_falling: "la frequence cardiaque baisse trop vite",
+};
+
+function renderManualHold() {
+  var snapshot = state.snapshot;
+  var manual = snapshot && snapshot.mode === "manuel" ? snapshot.manual : null;
+  var known = Boolean(state.panel) && performance.now() - state.panelAt < PANEL_STALE_MS;
+  var hold = known ? state.panel.manual_rise_hold : null;
+  var unknown = Boolean(manual) && manual.occupancy !== "bench" && !known;
+  show(el("manual-hold"), Boolean(manual) && (Boolean(hold) || unknown));
+  if (unknown) {
+    text(el("manual-hold-title"), "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
+    text(
+      el("manual-hold-detail"),
+      "pas de reponse recente de la console : rien ne dit ici si la frequence cardiaque retient une montee"
+    );
+  } else if (hold) {
+    text(el("manual-hold-title"), "MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE");
+    text(
+      el("manual-hold-detail"),
+      (RISE_HOLDS[hold] || hold) + ". Bras a l'arret : une cible non nulle est refusee. " +
+        "Bras en rotation : la vitesse ne monte pas, puis remonte seule vers la cible quand la retenue cesse."
     );
   }
 }

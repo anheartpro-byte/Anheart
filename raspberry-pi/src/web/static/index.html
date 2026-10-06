@@ -146,6 +146,15 @@
         <button id="manual-start" class="btn btn-go" type="button">Demarrer MANUEL</button>
       </div>
       <div id="manual-controls" class="hidden">
+        <!--
+          What the heart rate of a person on board holds, said before a target
+          is typed rather than learnt from its refusal. It is not a verdict, so
+          no other place on the page shows it. Filled from /api/panel.
+        -->
+        <div id="manual-hold" class="hold-banner hidden" role="status">
+          <strong id="manual-hold-title">MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE</strong>
+          <span id="manual-hold-detail">&mdash;</span>
+        </div>
         <div class="target-row">
           <button id="manual-step-down" class="btn" type="button">&minus; palier</button>
           <button id="manual-minus" class="btn" type="button">&minus;1 tr/min</button>

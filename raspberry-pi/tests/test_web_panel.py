@@ -20,7 +20,7 @@ from src.geometry import MachineGeometry
 from src.local_config import EcgSource, MotorBackend
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.result import Err, Ok, Result
-from src.training.runtime import IdleLink
+from src.training.runtime import IdleLink, RiseHold
 from src.training.types import Occupancy, OccupancyRefused, SignalQuality
 from src.units import Bpm, BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm, Seconds
 from src.web.app import create_app
@@ -73,6 +73,7 @@ def _status(*, link: LinkStats | None, metrics: EcgMetrics | None) -> PanelStatu
             ),
         ),
         heart_rate_trend=BpmPerMinute(3.5),
+        manual_rise_hold=RiseHold.HEART_RATE_FALLING,
         radius=Metres(1.5),
         ratio=GearRatio(49.79),
         motor_max_rpm=MotorRpm(300),
@@ -169,6 +170,7 @@ async def test_the_panel_reports_both_links_and_the_geometry(console: httpx.Asyn
     assert row.ecg.dsp_seq == 4
     assert row.ecg.dsp_quality == "good"
     assert row.heart_rate_trend_bpm_per_min == pytest.approx(3.5)
+    assert row.manual_rise_hold == "heart_rate_falling"
     assert row.radius_m == pytest.approx(1.5)
     assert row.gear_ratio == pytest.approx(49.79)
     assert row.motor_max_rpm == 300
@@ -181,6 +183,7 @@ async def test_the_panel_renders_a_simulator_and_a_link_never_measured(rig: Rig)
         drive=IdleLink(),
         ecg=replace(status.ecg, bridge=EcgBridgeStats()),
         heart_rate_trend=None,
+        manual_rise_hold=None,
     )
     async with _console_app(rig, status) as session:
         row = parse(PanelRow, await session.get("/api/panel", headers=auth()))
@@ -190,6 +193,7 @@ async def test_the_panel_renders_a_simulator_and_a_link_never_measured(rig: Rig)
     assert row.ecg.last_batch_age_s is None
     assert row.drive.latency_ms is None
     assert row.heart_rate_trend_bpm_per_min is None
+    assert row.manual_rise_hold is None, "no hold must travel as null, never as a word"
 
 
 async def test_the_panel_is_null_without_a_console_and_needs_the_token(rig: Rig) -> None:

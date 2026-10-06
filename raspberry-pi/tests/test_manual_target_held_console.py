@@ -324,6 +324,69 @@ async def test_with_a_rider_the_console_follows_a_first_target_and_refuses_one_w
     assert await rig.left_stopped() == ""
 
 
+async def _announced(session: httpx.AsyncClient) -> str | None:
+    """The hold the link panel announces, as the page polls it once a second."""
+    panel = await session.get("/api/panel")
+    assert panel.status_code == httpx.codes.OK, panel.text
+    hold = cast("dict[str, object]", panel.json())["manual_rise_hold"]
+    assert hold is None or isinstance(hold, str)
+    return hold
+
+
+async def test_with_a_rider_the_console_announces_a_hold_before_a_target_is_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the heart rate holds is on the link panel BEFORE the operator types (ANH-182).
+
+    Until now the reason was learnt from the refusal: type a target, be
+    refused, read why. A person on board, an ordinary start: nothing is
+    announced, at rest or once the session runs. An electrode comes off for
+    six seconds, which is not yet a warning: the panel says there is no usable
+    heart rate, with nothing typed. A target typed then is refused in those
+    very words. Refitted, the announcement goes, and it is not carried over
+    to the machine at rest once the session is over.
+    """
+    rig, electrodes = _with_a_rider(tmp_path, monkeypatch)
+    runtime = rig.panel.runtime
+    async with rig.http() as session:
+        await rig.tick(10.0)
+        assert await _announced(session) is None, "announced at rest, where no target is typed"
+        await attest(session)
+        started = await session.post(
+            "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+        )
+        assert started.status_code == httpx.codes.ACCEPTED, started.text
+        await rig.tick(1.0)
+        assert _state(rig) is RuntimeState.RUNNING
+        assert await _announced(session) is None, "an ordinary start announces a hold"
+
+        electrodes.off = True
+        await rig.tick(6.0)
+        assert runtime.standing is None, "a warning stands: this is not the case under test"
+        assert await _announced(session) == RiseHold.NO_HEART_RATE.value
+        assert rig.refusals() == [], "the reason was learnt from a refusal, not before it"
+
+        assert (await _type(session, TYPED)).status_code == httpx.codes.ACCEPTED
+        await rig.tick(1.0)
+        said = f"consigne refusee : {WORDS[RiseHold.NO_HEART_RATE]}, puis redonner la cible"
+        assert _refusals(rig, "consigne refusee") == [said]
+
+        electrodes.off = False
+        await rig.tick(60.0)
+        assert runtime.standing is None
+        assert await _announced(session) is None, "still announced over a heart rate that is back"
+
+        electrodes.off = True
+        await rig.tick(6.0)
+        assert await _announced(session) == RiseHold.NO_HEART_RATE.value
+        await session.post("/api/session/stop", json={"operator": OPERATOR})
+        await rig.tick(120.0)
+        assert _state(rig) is not RuntimeState.RUNNING
+        assert await _announced(session) is None, "a session that is over still announces a hold"
+    await rig.panel.close()
+    assert await rig.left_stopped() == ""
+
+
 class DeafToARise(Wrapped):
     """A drive that confirms every frame but a non-zero reference, while ``deaf``.
 

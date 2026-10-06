@@ -465,6 +465,21 @@ canvas {
   letter-spacing: 0.04em;
 }
 
+/* What holds a manual rise with no verdict standing: amber, above the target it concerns. */
+.hold-banner {
+  margin-bottom: 0.8rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--warn);
+  border-left: 6px solid var(--warn);
+  border-radius: 6px;
+  background: rgba(245, 165, 36, 0.12);
+}
+.hold-banner strong {
+  margin-right: 0.75em;
+  color: #f7c778;
+  letter-spacing: 0.04em;
+}
+
 /* Manual target controls: steps and "Appliquer", never a live slider. */
 .card-manual .target-row {
   display: flex;
