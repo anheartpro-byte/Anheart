@@ -20,10 +20,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Activity, Search, Eye, Radio } from "lucide-react";
+import { Activity, Search, Eye, Radio } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
-import { SessionFormModal } from "@/components/modals/SessionFormModal";
 import { SessionKindCell } from "@/components/training/SessionKindCell";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import {
@@ -55,13 +54,11 @@ export default function SessionsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Fetch all sessions once and filter client-side to avoid skeleton on tab change
   const allSessions = useQuery(api.sessions.listSessions, {
     limit: 100,
   });
-  const user = useQuery(api.users.getCurrentUser);
 
   // Filter sessions client-side based on selected tab
   const sessions = useMemo(() => {
@@ -71,8 +68,6 @@ export default function SessionsPage() {
   }, [allSessions, statusFilter]);
 
   const dateLocale = locale === "fr" ? fr : enUS;
-
-  const canCreate = user?.role === "admin" || user?.role === "gestionnaire";
 
   const columns = useMemo<ColumnDef<Session>[]>(
     () => [
@@ -174,19 +169,11 @@ export default function SessionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold">{t("sessions.title")}</h1>
-          <p className="text-muted-foreground">
-            {sessions?.length ?? 0} {t("nav.sessions").toLowerCase()}
-          </p>
-        </div>
-        {canCreate && (
-          <Button onClick={() => setShowCreateModal(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            {t("sessions.create")}
-          </Button>
-        )}
+      <div>
+        <h1 className="text-2xl font-bold">{t("sessions.title")}</h1>
+        <p className="text-muted-foreground">
+          {sessions?.length ?? 0} {t("nav.sessions").toLowerCase()}
+        </p>
       </div>
 
       {/* Filters */}
@@ -220,16 +207,6 @@ export default function SessionsPage() {
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Activity className="h-12 w-12 text-muted-foreground mb-4" />
             <p className="text-muted-foreground">{t("sessions.noSessions")}</p>
-            {canCreate && (
-              <Button
-                variant="outline"
-                className="mt-4"
-                onClick={() => setShowCreateModal(true)}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                {t("sessions.create")}
-              </Button>
-            )}
           </CardContent>
         </Card>
       ) : (
@@ -283,12 +260,6 @@ export default function SessionsPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Create Session Modal */}
-      <SessionFormModal
-        open={showCreateModal}
-        onOpenChange={setShowCreateModal}
-      />
     </div>
   );
 }
@@ -329,12 +300,9 @@ function formatDuration(ms: number): string {
 function SessionsSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <Skeleton className="h-8 w-48" />
-          <Skeleton className="h-4 w-24 mt-2" />
-        </div>
-        <Skeleton className="h-10 w-40" />
+      <div>
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-4 w-24 mt-2" />
       </div>
       <div className="flex gap-4">
         <Skeleton className="h-10 w-96" />

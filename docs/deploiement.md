@@ -505,7 +505,7 @@ instructions sont en tête du fichier.
 
 | Quoi | Bloqué par |
 |---|---|
-| Relire [guides/guide-tableau-de-bord.md](guides/guide-tableau-de-bord.md) ligne à ligne contre les vrais écrans, et corriger les défauts du §9.4 (textes en anglais, bloc ECG vide…) | Rien. |
+| Relire [guides/guide-tableau-de-bord.md](guides/guide-tableau-de-bord.md) ligne à ligne contre les vrais écrans, et corriger les défauts du §9.4 (textes en anglais…) | Rien. |
 | Soumettre les formulaires depuis le navigateur, dans les trois rôles ; en faire des tests automatiques (ANH-83) | Rien. |
 | Comprendre pourquoi l'ECG simulé de la console perd la confirmation quand le bras tourne (section 4) | Rien. |
 | Déployer Convex en production, puis fusionner la branche | Une décision (section 3.3). |

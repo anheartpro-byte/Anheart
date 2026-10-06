@@ -233,31 +233,6 @@ export default function MachineDetailPage({
                     : "-"}
                 </p>
               </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  {t("machines.sampleRate")}
-                </p>
-                <p className="font-medium">{machine.config.sampleRate} Hz</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  {t("machines.batchInterval")}
-                </p>
-                <p className="font-medium">{machine.config.batchInterval} ms</p>
-              </div>
-            </div>
-            <Separator />
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t("machines.channels")}
-              </p>
-              <div className="flex gap-1 flex-wrap mt-1">
-                {machine.config.channels.map((ch) => (
-                  <Badge key={ch} variant="secondary">
-                    {ch}
-                  </Badge>
-                ))}
-              </div>
             </div>
             <Separator />
             <div>
