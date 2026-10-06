@@ -138,6 +138,7 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.export import RecordExporter
 from src.record.journal import Journal
 from src.record.session import SessionRecorder, SessionRequest, stamp_for, storage_gate
 from src.result import Err, Ok, Result
@@ -1178,6 +1179,7 @@ def build_panel(
         sensors=sensor_hub,
         presence=presence,
         camera=config.camera.value,
+        records=None if journal is None else RecordExporter(journal.root, clock),
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None

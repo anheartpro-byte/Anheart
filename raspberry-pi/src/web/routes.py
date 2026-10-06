@@ -48,16 +48,19 @@ from typing import Final, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Request, params
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from src.control_surface import (
     CommandRefusal,
     EndRefusal,
     NothingRunning,
+    RunState,
     SafetyHolding,
     StartRefusal,
     SurfaceBusy,
 )
 from src.geometry import MachineGeometry
+from src.record.export import UNKNOWN_RECORD, discard
 from src.result import Err, Ok
 from src.sensors.registry import SPECS
 from src.training.plan import (
@@ -115,6 +118,8 @@ from src.web.schemas import (
     PreviewBody,
     ProfileListRow,
     ProfileRow,
+    RecordRow,
+    RecordsRow,
     SafetyRow,
     SensorRow,
     SensorsRow,
@@ -254,6 +259,65 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_session(app, services=services, auth=auth)
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
+    _register_records(app, services=services, auth=auth)
+
+
+def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """The session records on disk: their list, and one of them as an archive.
+
+    Both read the disk on a worker thread (:class:`~src.record.export.RecordExporter`):
+    no handler here blocks the loop the control tick runs on.
+    """
+    surface = services.surface
+
+    @app.get("/api/records", dependencies=auth, tags=["records"])
+    async def list_records() -> RecordsRow:
+        """Every session record on this machine, newest first."""
+        exporter = services.records
+        if exporter is None:
+            return RecordsRow(recording=False, records=())
+        return RecordsRow(
+            recording=True,
+            records=tuple(
+                RecordRow(name=entry.name, closed=entry.closed)
+                for entry in await exporter.listing()
+            ),
+        )
+
+    @app.get("/api/records/{name}/archive", dependencies=auth, tags=["records"])
+    async def export_record(name: str) -> FileResponse:
+        """One record as ``<name>.tar.gz``. 409 while a session is in progress.
+
+        Refused during a session on purpose: compressing tens of megabytes is
+        work this machine should not be doing with somebody on board, and the
+        record of the session in progress is not complete yet. The archive is
+        a temporary file, removed once the response has been sent.
+        """
+        exporter = services.records
+        if exporter is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail="cette console n'enregistre pas"
+            )
+        if surface.run_state is not RunState.IDLE:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="export refuse pendant une seance : attendre le retour au repos",
+            )
+        built = await exporter.archive(name)
+        if isinstance(built, Err):
+            unknown = built.error.detail == UNKNOWN_RECORD
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND if unknown else HTTPStatus.INTERNAL_SERVER_ERROR,
+                detail="enregistrement inconnu sur cette machine"
+                if unknown
+                else f"archive impossible ({built.error.detail})",
+            )
+        return FileResponse(
+            path=built.value,
+            media_type="application/gzip",
+            filename=f"{name}.tar.gz",
+            background=BackgroundTask(discard, built.value),
+        )
 
 
 def _register_reads(
