@@ -100,7 +100,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
 | `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 18 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). Limites actuelles : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)) ; une cible manuelle demandée pendant qu'un avertissement tient le bras à l'arrêt est suivie dès qu'il se lève ([5.1](#51-principes)). Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). En séance manuelle, une cible non nulle est refusée, et celle déjà saisie remise à 0, tant qu'un verdict tient un bras à l'arrêt ([4.3](#43-séance-manuelle)). Limites actuelles : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)) ; avec une personne à bord, une cible manuelle acceptée peut attendre la fréquence cardiaque sans qu'aucun verdict ne tienne, puis être suivie ([4.3](#43-séance-manuelle)). Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
@@ -262,6 +262,26 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
 * Sans verdict imposant une autre consigne, celle-ci marche vers la cible au
   rythme du profileur (0,25 tr/min de sortie/s = 12,4 tr/min moteur/s,
   et 0,03 g/s), montée comme descente.
+* **Aucune cible n'attend derrière un verdict sur un bras à l'arrêt**
+  (ANH-178). Tant qu'un verdict tient, verrouillé ou non, et que la consigne
+  appliquée vaut 0, une cible non nulle est refusée
+  (`set_manual_target` rend `HeldAtStandstill` ; message `consigne refusee : le
+  verdict <règle> tient le bras a l'arret…`). Une cible déjà saisie est remise
+  à 0 au tic où un verdict tient le bras à l'arrêt
+  (`_withdraw_waiting_target`), et la console le dit une fois (`cible de <n>
+  tr/min moteur remise a 0 : …`), sauf au tic où un avertissement vient
+  lui-même d'amener la consigne à 0 : la séance se termine au tic suivant et
+  cette fin le dit. L'opérateur retape sa cible quand plus rien
+  ne tient : ni un avertissement qui se lève ni un acquittement ne mettent
+  donc le bras en mouvement. Une cible de 0 est toujours acceptée, et rien ne
+  change pour un bras qui tourne : la cible tapée sous FREEZE ou REDUCE y est
+  gardée, puis suivie.
+* Avec une personne à bord, la consigne ne monte pas sans FC utilisable, ni
+  tant que la FC baisse de plus de 20 bpm/min (garde vasovagale). Ce ne sont
+  pas des verdicts : une cible tapée à ce moment est acceptée et elle attend,
+  puis elle est suivie quand la garde se lève, sans clic à cet instant
+  (jusqu'à 91 s mesurées sur une FC qui redescend à 30 bpm/min). Limite
+  connue, décrite dans [securite.md](securite.md#76-aucune-cible-manuelle-nattend-derrière-un-verdict-anh-178).
 * Phase HOLD pendant toute la séance ; au bout de 3600 s
   (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP,
   avec la limite actuelle sous FREEZE décrite en [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt).
@@ -374,14 +394,21 @@ scénarios de simulation. La console copie les profils livrés dans
     ([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement),
     [securite.md](securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques)).
     Ce que la règle ne couvre pas y est listé : le premier mouvement d'une
-    séance programmée, même après un avertissement pendant la BASELINE, et
-    une cible manuelle que l'opérateur a demandée pendant qu'un avertissement
-    tenait le bras à l'arrêt, suivie dès qu'il se lève.
+    séance programmée, même après un avertissement pendant la BASELINE. En
+    séance manuelle, rien n'attend derrière l'avertissement sur un bras à
+    l'arrêt : la cible y est refusée ou remise à 0 (voir
+    [4.3](#43-séance-manuelle)), donc la cible « suivie de nouveau » y vaut 0.
 * **Acquittement** (`acknowledge`) : exige un nom ; refusé si rien n'est
   verrouillé ; **refusé pour GO_SILENT** (définitif) ; refusé tant que
   l'opérateur n'a pas déclaré le champignon d'arrêt d'urgence relâché
   (`estop_released=True`) si un E-STOP est verrouillé. Acquitter pendant que la
   cause est encore là est permis : la règle se redéclenche au tic suivant.
+  En séance manuelle, acquitter un verdict qui tenait un bras à l'arrêt ne met
+  rien en mouvement : aucune cible n'a pu y rester en attente
+  ([4.3](#43-séance-manuelle)). Deux cas où le mouvement suit un acquittement
+  restent, comme avant : sur un bras qui tourne, acquitter un FREEZE verrouillé
+  laisse la consigne suivre de nouveau la régulation ou la cible ; et un
+  programme tenu avant son premier mouvement fait ensuite son départ normal.
 * Les règles de FC (`hr_*`) ne jugent pas en phase `DONE` ni en occupation
   `bench`.
 

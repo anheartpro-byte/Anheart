@@ -36,7 +36,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 |---|---|
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
-| **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). Restent possibles sans clic à cet instant : le premier mouvement d'une séance, et l'exécution d'une cible que l'opérateur a lui-même demandée ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec la liste exacte de ce que la règle ne couvre pas). | `safety.py`, `runtime.py` |
+| **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend derrière un verdict : tant qu'un verdict, verrouillé ou non, tient un bras à l'arrêt, une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève ni un acquittement ne mettent le bras en mouvement. Restent possibles sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE, et, avec une personne à bord, une cible manuelle acceptée qui attendait la fréquence cardiaque sans qu'aucun verdict ne tienne ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 et 7.6 la liste exacte de ce que les règles ne couvrent pas). | `safety.py`, `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -274,7 +274,10 @@ cohorte de 30 personnes : 350 courses) a été rejouée avant et après.
   again, upwards too, with nobody clicking ». Elle n'est pas ajoutée sur une
   séance qui se termine ou qui est finie, ni reprise dans un refus de départ.
   Elle est en anglais, comme toutes les phrases de verdict, et n'apparaît que
-  sur les pages Séance et Sécurité.
+  sur les pages Séance et Sécurité. Elle reste affichée, telle quelle, sur un
+  bras tenu à l'arrêt en séance manuelle : la cible qu'elle dit « suivie de
+  nouveau » y vaut alors 0 (voir 7.6), donc rien n'y remonte sans une nouvelle
+  cible. Elle en dit là plus qu'il n'y a à craindre, jamais moins.
 
 ### 7.4 Ce que la règle ne couvre pas
 
@@ -287,13 +290,13 @@ Dans ces cas le bras peut encore quitter l'arrêt sans clic à cet instant.
    se lève, le programme continue, et le bras fait son premier mouvement
    pendant WARMUP (81 tr/min moteur à 285 s). La phrase ci-dessus reste
    affichée tant que l'avertissement dure.
-2. **Une cible que l'opérateur a demandée et qui a dû attendre.** En séance
-   manuelle, l'opérateur ramène lui-même le bras à 0 (la séance continue),
-   puis un avertissement tient la consigne où elle est, donc à 0. S'il tape une
-   cible pendant ce temps, rien ne bouge tant que l'avertissement tient ; quand
-   il se lève, la consigne monte vers cette cible. Le mouvement a été demandé
-   par l'opérateur, mais il commence sans clic à cet instant. Comportement
-   inchangé, figé par un test, laissé au propriétaire du produit.
+2. **Une cible manuelle acceptée qui attend la fréquence cardiaque, sans aucun
+   verdict.** Avec une personne déclarée à bord, la consigne ne monte pas tant
+   qu'aucune FC n'est utilisable, ni tant que la FC baisse de plus de
+   20 bpm/min (garde vasovagale). Ce ne sont pas des verdicts. Une cible tapée
+   à ce moment est acceptée, n'est pas suivie, puis l'est quand la garde se
+   lève. Voir 7.6 pour les mesures : c'est ce qui reste de l'ancien point 2,
+   la cible qui attendait derrière un verdict, fermé par ANH-178.
 
 **Le bandeau à l'écran reste à faire.** Dire clairement et en permanence, en
 français et sur toutes les pages, qu'une reprise automatique reste possible
@@ -312,3 +315,99 @@ anglaise ci-dessus est un palliatif.
   séances sont simulées : la fréquence réelle de ce cas reste à observer.
 - Chaque fin de ce type demande un acquittement nominatif avant le départ
   suivant.
+
+### 7.6 Aucune cible manuelle n'attend derrière un verdict (ANH-178)
+
+**La décision.** Le propriétaire du produit a retenu la recommandation de la
+revue indépendante d'ANH-176 : refuser une cible manuelle tant qu'un verdict
+tient un bras à l'arrêt. Le reste de cette section (mesures, application,
+limites) est de l'auteur du changement.
+
+**Ce qui se passait** (mesures de la revue indépendante, sur le banc d'essai
+logiciel, séance manuelle). Une cible est une destination ; sous un verdict
+elle n'est pas suivie vers le haut. Tapée sur un bras à l'arrêt, elle
+attendait :
+
+| Séquence | Avant | Maintenant |
+|---|---|---|
+| L'opérateur met la cible à 0, le bras s'arrête, la séance continue. La FC est perdue (FREEZE `hr_stale`). Il tape 200 tr/min moteur. | Cible acceptée. Trente secondes sans mouvement, la FC revient : première consigne non nulle 0,2 s plus tard, sans clic à cet instant. | Cible refusée, le refus nomme `hr_stale`. La FC revient : rien ne bouge. |
+| Séance manuelle qui n'a pas encore bougé, même avertissement, même cible. | Acceptée ; premier mouvement 3,2 s après le retour de la FC. | Refusée ; rien ne bouge. |
+| FREEZE verrouillé (`loop_stall`) sur un bras que l'opérateur a arrêté ; une cible est tapée, puis le verdict est acquitté. | Acceptée ; le bras part 0,4 s après l'acquittement : acquitter relançait. | Refusée ; l'acquittement ne met rien en mouvement. |
+
+Dans les trois cas, une cible tapée ensuite, quand plus aucun verdict ne
+tient, est acceptée et suivie.
+
+**La règle**, en deux moitiés :
+
+- **Refus.** Tant qu'un verdict tient, verrouillé ou non, et que la consigne
+  appliquée vaut 0, une cible non nulle est refusée. Le message nomme le
+  verdict et dit quoi attendre : « consigne refusee : le verdict hr_stale
+  tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible »
+  (pour un verdict verrouillé : « L'acquitter une fois sa cause levee »). Une
+  cible de 0 est toujours acceptée.
+- **Retrait.** Une cible non nulle déjà saisie est remise à 0 au cycle où un
+  verdict tient le bras à l'arrêt. Elle n'est donc pas suivie quand le verdict
+  se lève ou est acquitté ; l'opérateur la retape. La console le dit une
+  fois : « cible de 200 tr/min moteur remise a 0 : le verdict … ».
+
+Un bras à l'arrêt ne reçoit donc de vitesse que d'une cible saisie alors
+qu'aucun verdict ne tient.
+
+**Comment c'est appliqué.**
+
+- Dans le runtime, parce que c'est le seul point par où une cible manuelle
+  arrive : `TrainingRuntime.set_manual_target`. La page l'envoie, la boîte aux
+  lettres de la console la prend (202), la boucle la remet au runtime au cycle
+  suivant ; la simulation appelle la même méthode. Le tableau de bord ne sait
+  pas envoyer de cible. Un refus revient à la page comme un événement
+  `refused`, comme pour une cible hors domaine.
+- Le refus juge sur ce que le dernier cycle a laissé en vigueur, seule chose
+  connue entre deux cycles : un verdict sur le point de se lever refuse encore.
+  Un verdict sur le point d'apparaître est l'affaire du retrait, fait à la fin
+  de l'étape de commande de chaque cycle, quel que soit le verdict et quel que
+  soit le bras (`_withdraw_waiting_target`). Aucun chemin ne passe entre les
+  deux : pour qu'un cycle sans verdict suive une cible depuis l'arrêt, il faut
+  qu'elle ait été saisie alors que rien ne tenait.
+- **Rien ne change pour un bras qui tourne** : une cible tapée pendant qu'un
+  FREEZE ou un REDUCE tient un bras en mouvement est acceptée, gardée, et
+  suivie quand le verdict se lève ou est acquitté.
+- Au cycle où un avertissement vient lui-même d'amener la consigne à 0, la
+  cible est remise à 0 sans message : la séance se termine au cycle suivant
+  (`session_standstill`) et cette fin dit tout. Entre les deux, une cible est
+  refusée au nom de l'avertissement.
+- Un départ manuel ne porte jamais de cible : la séance qu'il arme a une cible
+  de 0, et il est refusé tant qu'un verdict tient.
+- Aucun seuil, aucun délai, aucune règle du superviseur n'est modifié.
+
+**Ce que l'opérateur voit.** La page existante affiche déjà les événements
+`refused` avec leur texte (en orange, dans la liste des événements) et la
+« cible appliquee » lue dans l'instantané : elle montre donc le refus, et la
+cible revenue à 0 avec le brouillon resté en orange. Deux défauts restent,
+à corriger dans la page : après « Appliquer », la note dit encore « cible
+envoyee … la machine y va » parce que la boîte aux lettres a répondu 202
+avant que la boucle refuse ; et rien de plus visible qu'une ligne d'événement
+ne signale le retrait.
+
+**Ce que la règle ne couvre pas : l'attente sans verdict.** Avec une personne
+déclarée à bord, deux gardes retiennent une montée sans lever de verdict. Une
+cible saisie à ce moment est acceptée (aucun verdict ne tient) et elle attend.
+Mesuré, limites de la console, aucun verdict à aucun moment :
+
+- *Pas de FC utilisable.* Six secondes sans lecture fraîche, cible tapée,
+  lecture revenue deux secondes après : le bras part. L'attente est bornée :
+  à 10 s `hr_stale` tient le bras, et la cible est retirée.
+- *FC en baisse rapide* (garde vasovagale, 20 bpm/min). L'opérateur arrête le
+  bras, la FC redescend de 130 à 80 à 30 bpm/min, comme après un effort. Une
+  cible tapée dix secondes après le début de la baisse attend 91 s, puis le
+  bras part quand la baisse s'arrête, sans clic à cet instant. À 40 bpm/min
+  (de 140 à 90) : 66 s. Rien ne borne cette attente, sinon la fin de la baisse.
+
+Ces deux cas sont figés par des tests et laissés au propriétaire du produit :
+c'est le même danger que celui du ticket, par une route où aucun verdict ne
+parle.
+
+**Ce que cela coûte.** Après un avertissement passager sur un bras à l'arrêt,
+l'opérateur doit retaper sa cible une fois l'avertissement levé. Une cible
+tapée dans le cycle (0,2 s) où un verdict se lève peut être refusée : il la
+retape. Aucune séance simulée n'est concernée : les 350 courses de la batterie
+donnent le même résultat avant et après.
