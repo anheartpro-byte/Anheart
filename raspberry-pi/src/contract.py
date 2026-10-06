@@ -14,6 +14,11 @@ and everything it accepts back. The two sides must share the **major**:
 A different **minor** is fine in both directions: within one major each side
 relies only on what every minor of it provides.
 
+One exchange is outside this rule on purpose: **a stop request**. It means the
+same under every contract, so the dashboard answers it whatever major the
+console announces, and the console honours it whatever major the answer is of
+(:mod:`src.cloud_sync`). Nothing else is taken from an answer of another major.
+
 Why the version is a constant and not read from a file at run time
 ------------------------------------------------------------------
 The single source is ``contracts/machine-api.json`` at the repository root,

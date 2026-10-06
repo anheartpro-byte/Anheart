@@ -1,7 +1,10 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { validateMachineAuth } from "./lib/machineHttpAuth";
+import {
+  authenticateMachineRequest,
+  validateMachineAuth,
+} from "./lib/machineHttpAuth";
 import type { Id } from "./_generated/dataModel";
 import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
@@ -155,8 +158,9 @@ function validLive(live: unknown): live is Infer<typeof liveStateValidator> {
 type Machine = { _id: string };
 
 /**
- * Authenticate and check the contract, then run `handle`; any thrown error
- * becomes a 400 carrying its stable code (`request_failed` when it has none).
+ * Pass the gate (by default the key, then the contract), then run `handle`;
+ * any thrown error becomes a 400 carrying its stable code (`request_failed`
+ * when it has none). Only the stop request's route passes another gate.
  */
 function machineRoute(
   handle: (
@@ -164,9 +168,10 @@ function machineRoute(
     req: Request,
     machineId: Id<"machines">,
   ) => Promise<Response>,
+  gate: typeof authenticateMachineRequest = validateMachineAuth,
 ) {
   return httpAction(async (ctx, req) => {
-    const auth = await validateMachineAuth(ctx, req);
+    const auth = await gate(ctx, req);
     if ("error" in auth) return auth.error;
     const machine: Machine = auth.machine;
     try {
@@ -362,7 +367,16 @@ http.route({
   }),
 });
 
-/** GET /api/machine/training/status?sessionId= -> {status, active, stopRequested} */
+/**
+ * GET /api/machine/training/status?sessionId=
+ * -> {status, active, stopRequested, server_contract_version}
+ *
+ * The one machine route that answers whatever contract the machine announces
+ * (the key is still required): it carries the stop request, and "stop" means
+ * the same thing under every contract. A console of another major honours
+ * `stopRequested` from this answer and trusts nothing else in it. The route
+ * only reads.
+ */
 http.route({
   path: "/api/machine/training/status",
   method: "GET",
@@ -377,9 +391,9 @@ http.route({
       sessionId,
     });
     return status
-      ? json(200, status)
+      ? json(200, { ...status, server_contract_version: CONTRACT_VERSION })
       : refuse(404, "session_not_found", "Session not found");
-  }),
+  }, authenticateMachineRequest),
 });
 
 /** POST /api/machine/training/telemetry {sessionId, points[]} */

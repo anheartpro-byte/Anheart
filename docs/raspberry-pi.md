@@ -801,7 +801,8 @@ Règles :
   du tableau de bord périmée. Nouvel essai après 15 s. Jusqu'à 3600 points de
   télémétrie (une heure) sont gardés, les plus vieux sont jetés d'abord ; 20
   fins de séance au plus restent en attente.
-* Un arrêt venu du tableau de bord est attribué à « tableau de bord ».
+* Un arrêt venu du tableau de bord est attribué à « tableau de bord ». Il est
+  honoré **quelle que soit la version de contrat** du serveur (section 14).
 * Un lancement venu d'un serveur d'une autre majeure de contrat, ou qui
   n'annonce pas sa version, n'est **jamais armé** : voir
   [Versions et compatibilité](#14-versions-et-compatibilité).
@@ -1056,6 +1057,14 @@ Ce que fait la console :
   lettres. La console affiche `serveur incompatible (contrat X vs Y)` (Y vaut
   `inconnu` sans version lisible) et renvoie le lancement comme séance échouée,
   raison `refusee par la machine : serveur incompatible (contrat X vs Y)`.
+* **Un arrêt traverse toutes les versions.** La route
+  `/api/machine/training/status` répond quel que soit le contrat annoncé, et
+  une réponse qui porte `stopRequested: true` arrête la séance en cours quelle
+  que soit la majeure qu'elle annonce, version absente comprise : un arrêt a
+  le même sens partout, et le refuser ne serait jamais le côté sûr. C'est la
+  **seule** chose retenue d'une réponse d'une autre majeure : `active: false`,
+  qui termine aussi la séance quand le serveur est de la majeure de la
+  console, est alors ignoré, comme tout le reste de la réponse.
 * **Les refus du serveur** arrivent sous la forme
   `{error: <code stable>, message: <texte>}`. Le code est ce que le journal de
   la console porte (`session_not_found (HTTP 400): Session not found`) ; un
@@ -1088,3 +1097,7 @@ Non fait par ce logiciel :
   flux d'événements de la console, celui que cet enregistrement consignera.
 * Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
   utilisent un transport factice des deux côtés.
+* Sous un 426, les lots de télémétrie et la fin de séance sont abandonnés
+  comme tout refus : une séance en cours pendant un changement de majeure du
+  serveur resterait `active` côté Convex. D'où l'ordre de mise à jour de
+  [deploiement.md](deploiement.md#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite).

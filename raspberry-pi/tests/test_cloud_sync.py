@@ -145,6 +145,13 @@ def launch_answer(
     return ok({"session": session, SERVER_VERSION_FIELD: version})
 
 
+def status_answer(
+    *, active: bool = True, stop: bool = False, version: object = CONTRACT_VERSION
+) -> Reply:
+    """A status answer for a running session, from a dashboard announcing ``version``."""
+    return ok({"active": active, "stopRequested": stop, SERVER_VERSION_FIELD: version})
+
+
 def count(value: object) -> int:
     """The length of a JSON array the fake dashboard received."""
     assert isinstance(value, Sequence)
@@ -555,7 +562,7 @@ async def test_polls_are_spaced(tmp_path: Path) -> None:
 async def test_a_local_session_is_registered_then_reported_then_ended(tmp_path: Path) -> None:
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
-    r.dashboard.answer("/api/machine/training/status", ok({"active": True}))
+    r.dashboard.answer("/api/machine/training/status", status_answer())
     r.runtime.state = RuntimeState.RUNNING
     r.sync.session_started(manual(r.clock))
     assert r.sync.owed == 1
@@ -646,7 +653,7 @@ async def test_a_start_the_dashboard_refuses_stops_the_machine(tmp_path: Path) -
 
 @pytest.mark.parametrize(
     "status",
-    [ok({"active": True, "stopRequested": True}), ok({"active": False, "status": "completed"})],
+    [status_answer(stop=True), status_answer(active=False)],
 )
 async def test_a_stop_from_the_dashboard_is_forwarded_once(tmp_path: Path, status: Reply) -> None:
     r = rig(tmp_path)
@@ -658,7 +665,7 @@ async def test_a_stop_from_the_dashboard_is_forwarded_once(tmp_path: Path, statu
     assert len(r.dashboard.to("/api/machine/training/status")) == 1
 
 
-@pytest.mark.parametrize("status", [DOWN, ok({"active": True, "stopRequested": False})])
+@pytest.mark.parametrize("status", [DOWN, status_answer()])
 async def test_no_stop_is_forwarded_without_a_request(tmp_path: Path, status: Reply) -> None:
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/status", status)
@@ -810,9 +817,7 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Pa
     assert rig_.panel.cloud is not None
     assert rig_.panel.cloud.current_session_id == "remote-1"
 
-    rig_.dashboard.answer(
-        "/api/machine/training/status", ok({"active": True, "stopRequested": True})
-    )
+    rig_.dashboard.answer("/api/machine/training/status", status_answer(stop=True))
     await rig_.run(5.0)
     assert state_of(rig_.panel) is RuntimeState.ENDING
     assert rig_.panel.runtime.stop_reason == "arret demande depuis le tableau de bord"

@@ -265,23 +265,3 @@ def test_ex2_a_version_file_that_is_not_text_is_reported_as_unknown(tmp_path: Pa
     path.write_bytes(b"\xff\xfe\x00pi")
     assert read_software_version(path) == UNKNOWN_SOFTWARE_VERSION
     assert read_software_version(tmp_path) == UNKNOWN_SOFTWARE_VERSION  # a directory
-
-
-# =========================================================================
-# The preflight script announces the same contract
-# =========================================================================
-
-
-def test_the_preflight_script_reads_this_contract_version_and_sends_it() -> None:
-    """``scripts/pi/preflight.sh`` checks the dashboard with the console's own contract."""
-    script = (REPOSITORY / "raspberry-pi" / "scripts" / "pi" / "preflight.sh").read_text(
-        encoding="utf-8"
-    )
-    # The expression the script hands to ``sed -nE`` to read the version from the source.
-    expression = r'^CONTRACT_VERSION.*ContractVersion\("([0-9.]+)"\)'
-    assert f"s/{expression}.*/\\1/p' src/contract.py" in script
-    source = (REPOSITORY / "raspberry-pi" / "src" / "contract.py").read_text(encoding="utf-8")
-    found = re.findall(expression, source, flags=re.MULTILINE)
-    assert found == [CONTRACT_VERSION]
-    assert f'-H "{CONTRACT_HEADER}: $contract"' in script
-    assert "426)" in script

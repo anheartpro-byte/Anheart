@@ -100,20 +100,38 @@ else
     case "$url" in
         *.convex.cloud*) fail "CONVEX_URL must be the .convex.site host, not .convex.cloud" ;;
         https://*)
-            # A wrong key answers 401; a right one answers 400 to this empty body
-            # without recording anything, or 426 when the dashboard does not serve
-            # the contract this console speaks. Either way the machine state is untouched.
+            # One read-only request, the one an idle console sends itself: it
+            # records nothing and changes no session. A wrong key answers 401. A
+            # dashboard that does not serve this console's contract answers 426.
+            # A 200 proves the key and nothing more: the contract is served only
+            # if the answer itself announces a version of the same major, which
+            # a dashboard older than the contract does not. The answer may name
+            # a rider, so it is read and never printed.
             contract="$(sed -nE 's/^CONTRACT_VERSION.*ContractVersion\("([0-9.]+)"\).*/\1/p' src/contract.py)"
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$url/api/machine/training/start" \
-                -H "Authorization: Bearer $key" -H "X-Anheart-Contract: $contract" \
-                -H 'Content-Type: application/json' -d '{}')"
-            case "$code" in
-                400) ok "$url reachable, key accepted, contract $contract served" ;;
-                401) fail "$url reachable, but the key is refused (regenerate it on the site)" ;;
-                426) fail "$url reachable, key accepted, but it does not serve contract $contract (update the console or the dashboard)" ;;
-                000) fail "$url unreachable (network?)" ;;
-                *)   warn "$url answered HTTP $code" ;;
-            esac ;;
+            if [ -z "$contract" ]; then
+                fail "src/contract.py: this console's contract version could not be read"
+            else
+                answer="$(curl -s --max-time 10 -w '\n%{http_code}' "$url/api/machine/training/poll" \
+                    -H "Authorization: Bearer $key" -H "X-Anheart-Contract: $contract")"
+                code="${answer##*$'\n'}"
+                server="$(printf '%s' "${answer%$'\n'*}" \
+                    | sed -nE 's/.*"server_contract_version"[[:space:]]*:[[:space:]]*"([0-9]+\.[0-9]+)".*/\1/p' | head -n 1)"
+                case "$code" in
+                    200)
+                        ok "$url reachable, key accepted"
+                        if [ -z "$server" ]; then
+                            warn "the dashboard does not announce a contract version, as one older than the contract does: this console will refuse every remote launch until the dashboard is updated"
+                        elif [ "${server%%.*}" = "${contract%%.*}" ]; then
+                            ok "contract $contract served (the dashboard announces $server)"
+                        else
+                            warn "the dashboard announces contract $server, this console speaks $contract: it will refuse every remote launch"
+                        fi ;;
+                    401) fail "$url reachable, but the key is refused (regenerate it on the site)" ;;
+                    426) fail "$url reachable, key accepted, but it does not serve contract $contract (update the console or the dashboard)" ;;
+                    000) fail "$url unreachable (network?)" ;;
+                    *)   warn "$url answered HTTP $code" ;;
+                esac
+            fi ;;
         *) fail "CONVEX_URL must start with https://" ;;
     esac
 fi

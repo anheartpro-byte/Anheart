@@ -50,6 +50,12 @@ nothing, whatever launch it carries. Either way the operator reads
 ``serveur incompatible (contrat X vs Y)`` in the console's event list, and the
 machine goes on exactly as it would with no dashboard.
 
+One thing crosses every contract: **a stop**. "Stop" means the same under any
+version, and refusing one is never the safe side. The status route answers
+whatever contract the console announces, and a stop request in its answer is
+forwarded whatever major that answer is of. Nothing else in an answer of
+another major is acted on.
+
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
 
@@ -807,7 +813,15 @@ class CloudSync:
         if isinstance(sent, Err):
             return
         document = sent.value
-        if document.get("stopRequested") is True or document.get("active") is False:
+        # A stop request is honoured whatever contract the answer is of. That
+        # the session is no longer active is believed only from this
+        # console's own major: nothing else is trusted across majors.
+        asked = document.get("stopRequested") is True
+        ended = (
+            document.get("active") is False
+            and server_refusal(document.get(SERVER_VERSION_FIELD)) is None
+        )
+        if asked or ended:
             self._forward_stop(tracked, "arret demande depuis le tableau de bord")
 
     def _forward_stop(self, tracked: _Tracked, reason: str) -> None:

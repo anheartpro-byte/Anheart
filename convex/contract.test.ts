@@ -5,8 +5,10 @@
  * - EX-1: the version, the header and the error codes come from the shared file
  *   `contracts/machine-api.json` (that the value is READ from it, and not a
  *   copy that happens to agree, is proven in `contractSource.test.ts`);
- * - EX-3: a request without a served major is answered 426 on every route,
- *   after the key and before anything is read or written;
+ * - EX-3: a request without a served major is answered 426 on every route
+ *   but the one that carries the stop request, after the key and before
+ *   anything is read or written;
+ * - the stop request's route answers whatever the contract, with the key;
  * - EX-4 (server half): the poll answer names the server's contract version;
  * - EX-5: every refusal is `{error: <stable code>, message: <words>}`;
  * - EX-6: each heartbeat stores what the machine announced.
@@ -32,8 +34,16 @@ const shared = JSON.parse(sharedText) as {
   contract_version: string;
   header: string;
   server_version_field: string;
+  contract_exempt_routes: Record<string, string>;
   error_codes: Record<string, { statuses: number[]; meaning: string }>;
 };
+
+/** The routes that answer whatever the contract, as the shared file lists them. */
+const exempt = Object.keys(shared.contract_exempt_routes);
+/** Every other machine route: a request without a served major stops at 426. */
+const enforced = machineRoutes.filter(
+  ([method, path]) => !exempt.includes(`${method} ${path}`),
+);
 
 const world = () => seedMachineWorld(modules);
 type MachineWorld = Awaited<ReturnType<typeof world>>;
@@ -126,7 +136,7 @@ describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () 
 });
 
 describe("ANH-133 EX-3 a request without a served major is refused with 426", () => {
-  it.each(machineRoutes)(
+  it.each(enforced)(
     "refuses %s %s without the contract header, and names what is served",
     async (method, path) => {
       const w = await world();
@@ -139,7 +149,7 @@ describe("ANH-133 EX-3 a request without a served major is refused with 426", ()
     },
   );
 
-  it.each(machineRoutes)(
+  it.each(enforced)(
     "refuses %s %s from a machine speaking another major",
     async (method, path) => {
       const w = await world();
@@ -216,6 +226,105 @@ describe("ANH-133 EX-3 a request without a served major is refused with 426", ()
       error: "unauthorized",
       message: "Missing Authorization header",
     });
+  });
+});
+
+describe("ANH-133 the stop request gets through whatever the contract", () => {
+  const STATUS = "/api/machine/training/status";
+
+  /** An active session of the first machine that the dashboard asked to stop. */
+  async function seedStopRequested(w: MachineWorld) {
+    const sessionId = await seedSession(w, w.machine, "active");
+    await w.t.run((ctx) => ctx.db.patch(sessionId, { stopRequestedAt: NOW }));
+    return sessionId;
+  }
+
+  it("is the only route exempt from the contract, and the shared file says so", () => {
+    expect(exempt).toEqual([`GET ${STATUS}`]);
+    expect(enforced).toHaveLength(machineRoutes.length - 1);
+    expect(
+      machineRoutes.map(([method, path]) => `${method} ${path}`),
+    ).toContain(`GET ${STATUS}`);
+  });
+
+  it.each([null, "2.0", "0.9", "one", "1.0.0", CONTRACT_VERSION])(
+    "hands the stop request to a machine announcing the contract %j",
+    async (contract) => {
+      const w = await world();
+      const sessionId = await seedStopRequested(w);
+      const response = await call(
+        w,
+        "GET",
+        `${STATUS}?sessionId=${sessionId}`,
+        contract,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        status: "active",
+        active: true,
+        stopRequested: true,
+        [shared.server_version_field]: CONTRACT_VERSION,
+      });
+    },
+  );
+
+  it("reads only: the session and its machine are as they were", async () => {
+    const w = await world();
+    const sessionId = await seedStopRequested(w);
+    const before = await w.t.run(async (ctx) => ({
+      session: await ctx.db.get(sessionId),
+      machine: await ctx.db.get(w.machine),
+    }));
+    await call(w, "GET", `${STATUS}?sessionId=${sessionId}`, "2.0");
+    const after = await w.t.run(async (ctx) => ({
+      session: await ctx.db.get(sessionId),
+      machine: await ctx.db.get(w.machine),
+      beats: await ctx.db.query("machine_heartbeats").collect(),
+    }));
+    expect(after.session).toEqual(before.session);
+    expect(after.machine).toEqual(before.machine);
+    expect(after.beats).toEqual([]);
+  });
+
+  it.each([
+    { label: "no key", authorization: undefined },
+    {
+      label: "an unknown key",
+      authorization: `Bearer anh1.${"ab".repeat(16)}.${"cd".repeat(32)}`,
+    },
+  ])("still requires the machine key ($label)", async ({ authorization }) => {
+    const w = await world();
+    const sessionId = await seedStopRequested(w);
+    const response = await w.t.fetch(`${STATUS}?sessionId=${sessionId}`, {
+      method: "GET",
+      headers: authorization ? { Authorization: authorization } : {},
+    });
+    expect(response.status).toBe(401);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      "unauthorized",
+    );
+  });
+
+  it("still answers only for a session of the machine that asks", async () => {
+    const w = await world();
+    const foreign = await seedSession(w, w.otherMachine, "active");
+    await w.t.run((ctx) => ctx.db.patch(foreign, { stopRequestedAt: NOW }));
+    const response = await call(
+      w,
+      "GET",
+      `${STATUS}?sessionId=${foreign}`,
+      "2.0",
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      error: "session_not_found",
+      message: "Session not found",
+    });
+    const missing = await call(w, "GET", STATUS, null);
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toBe(
+      "invalid_request",
+    );
   });
 });
 
