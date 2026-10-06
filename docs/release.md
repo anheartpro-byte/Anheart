@@ -36,7 +36,7 @@ Les trois avancent séparément : une release peut ne publier qu'un composant.
 
 | Composant | Tag | Écrit par le script dans | Lu par |
 |---|---|---|---|
-| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | le heartbeat (`software_version`, ANH-133). L'affichage sur la console locale reste à faire ([section 8](#8-limites-et-reste-à-faire)). |
+| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | **rien encore.** Le heartbeat l'enverra (`software_version`, ANH-133) ; l'affichage sur la console locale n'a pas encore de ticket ([section 8](#8-limites-et-reste-à-faire)). |
 | Convex | `cloud-X.Y.Z` | `convex/VERSION` et la constante `CLOUD_VERSION` de `convex/cloudVersion.ts` | le code déployé : `npx convex run softwareReleases:deployedCloudVersion` répond la version du déploiement visé. |
 | Site | `web-X.Y.Z` | `package.json` et `package-lock.json` (champ `version`) | `next.config.ts`, qui la fige à la construction ; le pied de page de l'accueil et de la FAQ l'affiche. |
 
@@ -156,6 +156,40 @@ Si une étape échoue, rien n'est à défaire à la main sauf à l'étape 2 : qu
 branche `release/…` a été créée mais pas poussée, la supprimer avant de
 relancer.
 
+### Si `develop` a bougé pendant la release
+
+Les sections du changelog sont calculées à l'étape 2, sur `develop` tel qu'il
+est à cet instant. Or la PR de release part de la branche `develop` : toute PR
+de ticket fusionnée ensuite, jusqu'à la fusion dans `main`, est livrée avec la
+version. **Le plus simple est de ne rien fusionner d'autre dans `develop` entre
+l'étape 2 et l'étape 6.**
+
+Si une PR de ticket est quand même fusionnée, rien n'est perdu : `pr` et `tag`
+refusent de continuer tant que le commit à publier contient une PR de ticket
+d'un composant que la section de sa version ne cite pas, et ils nomment les
+titres manquants. Dans ce cas :
+
+1. **Relancer `prepare` avec les mêmes versions.** Le script voit que ces
+   versions sont déjà écrites dans `develop` et attendent leur tag : il ne
+   touche pas aux fichiers de version, il réécrit seulement les sections
+   concernées de `CHANGELOG.md` (elles gardent leur date) et ouvre une PR vers
+   `develop` intitulée `Release : … (changelog complété)`. S'il n'y a rien à
+   compléter, il le dit et ne fait rien.
+2. **Fusionner cette PR** dans `develop` (squash, titre gardé).
+3. **Reprendre où le refus est arrivé :**
+   - le refus venait de `pr` : relancer `scripts/release.sh pr` ;
+   - une PR de release était déjà ouverte : son corps cite l'ancien candidat et
+     l'ancien changelog. La fermer, relancer `scripts/release.sh pr`, et refaire
+     la check-list sur le nouveau candidat (les preuves valaient pour l'ancien
+     SHA) ;
+   - le refus venait de `tag` (la PR de release était déjà fusionnée) : `main`
+     porte le code mais pas la ligne. Relancer `scripts/release.sh pr`, fusionner
+     cette seconde PR par commit de fusion, puis `scripts/release.sh tag`. Tant
+     que `main` n'a pas reçu le changelog complété, `tag` refuse.
+
+Avant la fusion de la PR de préparation, le cas est plus simple : fermer cette
+PR, supprimer sa branche `release/…` et relancer `prepare`.
+
 ---
 
 ## 4. Ce que fait le script
@@ -163,20 +197,35 @@ relancer.
 | Étape | Lit | Écrit | Refuse si |
 |---|---|---|---|
 | `prepare` | `origin/develop` et sa CI | une branche `release/…` (fichiers de version, `CHANGELOG.md`), une PR vers `develop` | `develop` n'est pas vert ; une version n'est pas `X.Y.Z` ou n'est pas supérieure à la version courante ; son tag existe déjà ; la version courante n'a pas son tag ; `--pi` sans `--pi-validation` ; l'arbre de travail a des modifications |
-| `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` |
-| `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash) |
+| `prepare`, relancé avec des versions déjà écrites dans `develop` et sans tag | `origin/develop` et sa CI | une branche `release/…-changelog-<sha>` (`CHANGELOG.md` seul), une PR vers `develop` | `develop` n'est pas vert ; les sections citent déjà chaque PR de ticket (rien à changer) |
+| `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; **`develop` contient une PR de ticket d'un composant que la section de sa version ne cite pas** |
+| `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le dernier commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash, ou changelog complété pas encore dans `main`) ; **`main` contient une PR de ticket d'un composant que la section de sa version ne cite pas** |
+
+Les deux refus en gras tiennent la règle suivante : **aucun tag n'est posé sur
+un commit qui contient une PR de ticket d'un composant absente de la section de
+sa version.** Le script relit pour cela les titres de `develop` depuis le tag
+précédent du composant jusqu'au commit qu'il s'apprête à publier (pour `tag` :
+le commit de `develop` le plus récent que `main` contient), et les compare aux
+lignes de la section. Quoi faire quand il refuse est dit à la
+[section 3](#si-develop-a-bougé-pendant-la-release).
 
 « Vert » veut dire deux choses à la fois :
 
 - chacune des six gates de la CI (`pi-gate`, `simulation-gate`, `convex-tests`,
   `web`, `audit`, `docs`) est présente sur le commit, terminée et réussie ;
-- aucune autre vérification GitHub du commit n'a échoué, n'a été annulée ou
-  n'est encore en cours.
+- aucun autre *check run* du commit n'a échoué, n'a été annulé ou n'est encore
+  en cours.
 
-Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si une
-vérification tierce y a réussi (l'aperçu Vercel, par exemple, répond avant que
-les gates ne démarrent). Une gate ignorée (`skipped`) ne compte pas comme
-réussie.
+Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si un check
+run tiers y a réussi (les commentaires d'aperçu de Vercel, par exemple,
+répondent avant que les gates ne démarrent). Une gate ignorée (`skipped`) ne
+compte pas comme réussie.
+
+Le script ne lit que les check runs. Il **ne lit pas les statuts de commit** :
+les deux déploiements Vercel (celui du site et celui de la simulation) sont des
+statuts, et un déploiement en échec ne bloque donc pas le script. Le
+responsable de release regarde les statuts dans la PR de release avant de
+fusionner.
 
 La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Si un job
 de `.github/workflows/ci.yml` est renommé, cette liste doit suivre dans la même
@@ -189,9 +238,11 @@ fichiers de la branche, et publient celles qui n'ont pas encore de tag.
 ### Comment le changelog est construit
 
 Le script lit les titres des commits de `develop` (premier parent) depuis le tag
-précédent du composant, ou depuis le début pour une première version. Il ne
-garde que les titres de la forme `ANH-123 : …`, donc les fusions squash des PR
-de ticket.
+précédent du composant (son tag le plus récent), ou depuis le début pour une
+première version. Il ne garde que les titres de la forme `ANH-123 : …`, donc
+les fusions squash des PR de ticket. `prepare`, `pr` et `tag` font ce même
+calcul : c'est ce qui permet aux deux derniers de voir qu'une section est en
+retard.
 
 Une PR est rangée sous chaque composant dont elle modifie un fichier :
 
@@ -315,7 +366,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Quoi | Qui ou quel ticket |
 |---|---|
 | Faire la première release réelle (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) | le responsable du produit, [section 3](#3-le-déroulé) |
-| Afficher la version sur la console locale | à faire après ANH-133, qui lit `raspberry-pi/VERSION` côté Pi |
+| Afficher la version sur la console locale | ticket à créer ; après ANH-133, qui lit `raspberry-pi/VERSION` côté Pi |
 | Envoyer la version dans le heartbeat | ANH-133 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |

@@ -8,6 +8,11 @@
 #   pr       ouvre la PR develop -> main avec le modèle de release rempli ;
 #   tag      pose les tags annotés sur main et les pousse.
 #
+# Règle tenue par pr et tag : aucun tag n'est posé sur un commit qui contient
+# une PR de ticket d'un composant absente de la section de sa version. Si
+# develop a bougé depuis prepare, ils refusent, et prepare relancé avec les
+# mêmes versions complète les sections.
+#
 # Compatible bash 3.2 (macOS) : ni tableau associatif, ni mapfile.
 set -euo pipefail
 
@@ -43,8 +48,12 @@ Usage :
   scripts/release.sh tag [--dry-run]
 
 prepare  depuis origin/develop vert : fichiers de version, CHANGELOG.md, PR vers develop.
+         Relancé avec les mêmes versions quand develop a bougé, il complète les sections.
 pr       après fusion de la préparation : PR develop -> main (modèle de release).
 tag      après fusion dans main : tags annotés pi-X.Y.Z, cloud-X.Y.Z, web-X.Y.Z.
+
+pr et tag refusent si le commit à publier contient une PR de ticket d'un
+composant que la section de sa version ne cite pas.
 
 --dry-run affiche exactement ce qui serait fait, sans rien écrire, pousser ni créer.
 Voir docs/release.md.
@@ -107,6 +116,35 @@ sha_of() {
   git rev-parse -q --verify "$1^{commit}" || die "référence introuvable : $1"
 }
 
+# Le tag de la version précédente d'un composant dont $2 est la version à
+# publier : son tag le plus récent, qui doit lui être inférieur. Vide pour une
+# première version. C'est de là que part le changelog de la version.
+base_tag() { # composant version
+  local t last=""
+  for t in $(git tag -l "$1-[0-9]*" --sort=-v:refname); do
+    if matches "$t" "^$1-$SEMVER\$"; then
+      last="$t"
+      break
+    fi
+  done
+  if [ -n "$last" ] && ! version_gt "$2" "${last#$1-}"; then
+    die "le tag $last existe et n'est pas inférieur à $1-$2"
+  fi
+  printf '%s' "$last"
+}
+
+# Le commit le plus récent de la chaîne de develop que contient le commit $1.
+develop_tip_in() { # commit
+  local h
+  for h in $(git rev-list --first-parent "$REMOTE/$DEVELOP"); do
+    if git merge-base --is-ancestor "$h" "$1"; then
+      printf '%s' "$h"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Vrai si la chaîne entière $1 correspond à l'expression régulière étendue $2.
 matches() {
   [[ "$1" =~ $2 ]]
@@ -118,10 +156,14 @@ is_level() {
 }
 
 # Refuse si le commit n'est pas vert : chaque gate de REQUIRED_CHECKS doit être
-# présente, terminée et réussie, et aucune autre vérification ne doit avoir
-# échoué ni être en cours. Une vérification tierce réussie (aperçu Vercel, par
-# exemple) ne remplace jamais une gate : un commit sur lequel la CI n'a pas
-# tourné n'est pas vert.
+# présente, terminée et réussie, et aucun autre check run ne doit avoir échoué
+# ni être en cours. Un check run tiers réussi (les commentaires d'aperçu de
+# Vercel, par exemple) ne remplace jamais une gate : un commit sur lequel la CI
+# n'a pas tourné n'est pas vert.
+#
+# Seuls les check runs du commit sont lus. Les statuts de commit (les
+# déploiements Vercel, par exemple) ne le sont pas : le responsable de release
+# les regarde dans la PR.
 require_green() { # sha branche
   local runs bad missing name total
   runs="$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" --paginate \
@@ -199,11 +241,30 @@ level_of_section() {
   sed -n 's/^Niveau de validation : `\([a-z_]*\)`\.$/\1/p' | head -n 1
 }
 
+# Retire d'un CHANGELOG.md (entrée standard) les sections des tags donnés.
+remove_sections() { # tags séparés par des espaces
+  awk -v tags="$1" '
+    BEGIN { n = split(tags, tag, " ") }
+    /^## / {
+      skip = 0
+      for (i = 1; i <= n; i++) if (index($0, "## " tag[i] " (") == 1) skip = 1
+    }
+    !skip { print }'
+}
+
+# Insère les sections sous la ligne repère, une ligne vide avant les sections
+# plus anciennes.
 insert_sections() { # fichier_des_sections ; CHANGELOG.md sur l'entrée standard
   awk -v marker="$MARKER" -v file="$1" '
+    after == 1 {
+      if ($0 == "") next
+      print ""
+      after = 2
+    }
     { print }
-    $0 == marker {
+    $0 == marker && !found {
       found = 1
+      after = 1
       print ""
       while ((getline line < file) > 0) print line
     }
@@ -328,6 +389,30 @@ collect_pending() { # référence
   done <"$TMP/pending"
 }
 
+# Refuse si le commit $1, que l'étape s'apprête à publier, contient sur la
+# chaîne de develop une PR de ticket d'un composant que la section de sa version
+# ne cite pas. C'est le cas dès qu'une PR est fusionnée dans develop après le
+# calcul des sections par prepare : sans ce refus, elle serait livrée et taguée
+# sans figurer dans aucun changelog, celui de la version suivante partant du tag.
+require_complete_sections() { # commit suite_à_donner
+  local c v base list line missing=""
+  while read -r c v _; do
+    base="$(base_tag "$c" "$v")" || exit 1
+    list="$(entries "$c" "${base:+$base..}$1")" ||
+      die "lecture de l'historique impossible jusqu'à $1"
+    [ -n "$list" ] || continue
+    while IFS= read -r line; do
+      grep -Fxq -e "$line" "$TMP/section-$c.md" || missing="$missing
+  $c-$v : ${line#- }"
+    done <<EOF
+$list
+EOF
+  done <"$TMP/released"
+  [ -z "$missing" ] ||
+    die "le commit à publier ($1) contient des PR de ticket que CHANGELOG.md ne cite pas :$missing
+$DEVELOP a bougé depuis prepare. Relancer scripts/release.sh prepare avec les mêmes versions (il complète les sections), fusionner sa PR dans $DEVELOP, $2"
+}
+
 tags_of() { # fichier "composant version ..." ; séparateur
   awk -v sep="$2" '{ printf "%s%s-%s", (NR > 1 ? sep : ""), $1, $2 }' "$1"
 }
@@ -346,7 +431,8 @@ tag_message() { # composant version
 }
 
 cmd_prepare() {
-  local c new cur ref sha base range branch title files
+  local c new cur ref sha base since range branch title files
+  local today when was resumed changed tags
   [ -n "$NEW_pi$NEW_cloud$NEW_web" ] ||
     die "indiquer au moins une version : --pi, --cloud ou --web"
   for c in $COMPONENTS; do
@@ -361,71 +447,108 @@ cmd_prepare() {
   elif [ -n "$PI_LEVEL" ]; then
     die "--pi-validation ne s'applique qu'avec --pi"
   fi
-  [ -n "$RELEASE_DATE" ] || RELEASE_DATE="$(date -u +%Y-%m-%d)"
-  matches "$RELEASE_DATE" '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ||
+  [ -z "$RELEASE_DATE" ] || matches "$RELEASE_DATE" '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ||
     die "date invalide : '$RELEASE_DATE' (attendu AAAA-MM-JJ)"
+  today="$(date -u +%Y-%m-%d)"
 
   start prepare
   ref="$REMOTE/$DEVELOP"
   sha="$(sha_of "$ref")"
+  git show "$ref:CHANGELOG.md" >"$TMP/changelog.md" 2>/dev/null ||
+    die "CHANGELOG.md absent de $ref"
 
   : >"$TMP/sections.md"
   : >"$TMP/released"
   : >"$TMP/files"
   files=""
+  changed=0
   for c in $COMPONENTS; do
     eval "new=\$NEW_$c"
     [ -n "$new" ] || continue
     cur="$(current_version "$c" "$ref")"
     matches "$cur" "^$SEMVER(-dev)?\$" ||
       die "version courante de $c illisible dans $ref : '$cur'"
-    version_gt "$new" "$cur" ||
-      die "$c-$new n'est pas supérieure à la version courante $c-$cur"
-    ! tag_exists "$c-$new" || die "le tag $c-$new existe déjà"
-    if [ "${cur%-dev}" != "$cur" ]; then
-      base="la première version"
-      range="$ref"
+    when="${RELEASE_DATE:-$today}"
+    resumed=0
+    if [ "$new" = "$cur" ] && ! tag_exists "$c-$new"; then
+      # Reprise : la version est déjà écrite dans develop et attend son tag
+      # (develop a bougé depuis le premier prepare). Seule sa section est
+      # recalculée ; elle garde sa date, sauf --date.
+      resumed=1
+      was="$(sed -n "s/^## $c-$new (\\([0-9-]*\\))\$/\\1/p" "$TMP/changelog.md" | head -n 1)"
+      when="${RELEASE_DATE:-${was:-$today}}"
+      printf '%s-%s : déjà écrite dans %s, seule sa section de CHANGELOG.md est recalculée\n' "$c" "$new" "$ref" >>"$TMP/files"
     else
-      tag_exists "$c-$cur" ||
-        die "$c-$cur n'a pas de tag : terminer la release précédente (scripts/release.sh tag)"
-      base="\`$c-$cur\`"
-      range="$c-$cur..$ref"
+      version_gt "$new" "$cur" ||
+        die "$c-$new n'est pas supérieure à la version courante $c-$cur"
+      ! tag_exists "$c-$new" || die "le tag $c-$new existe déjà"
+      if [ "${cur%-dev}" = "$cur" ]; then
+        tag_exists "$c-$cur" ||
+          die "$c-$cur n'a pas de tag : terminer la release précédente (scripts/release.sh tag)"
+      fi
+      changed=1
+      case "$c" in
+        pi)
+          printf 'raspberry-pi/VERSION : pi-%s -> pi-%s\n' "$cur" "$new" >>"$TMP/files"
+          files="$files raspberry-pi/VERSION"
+          ;;
+        cloud)
+          printf 'convex/VERSION : cloud-%s -> cloud-%s\n' "$cur" "$new" >>"$TMP/files"
+          printf 'convex/cloudVersion.ts : CLOUD_VERSION = "cloud-%s"\n' "$new" >>"$TMP/files"
+          files="$files convex/VERSION convex/cloudVersion.ts"
+          ;;
+        web)
+          printf 'package.json, package-lock.json : version %s -> %s\n' "$cur" "$new" >>"$TMP/files"
+          files="$files package.json package-lock.json"
+          ;;
+      esac
+    fi
+    base="$(base_tag "$c" "$new")" || exit 1
+    if [ -n "$base" ]; then
+      since="\`$base\`"
+      range="$base..$ref"
+    else
+      since="la première version"
+      range="$ref"
     fi
     [ ! -s "$TMP/sections.md" ] || printf '\n' >>"$TMP/sections.md"
-    section "$c" "$new" "$RELEASE_DATE" "$PI_LEVEL" "$base" "$range" >"$TMP/section-$c.md" ||
+    section "$c" "$new" "$when" "$PI_LEVEL" "$since" "$range" >"$TMP/section-$c.md" ||
       die "lecture de l'historique impossible pour $range"
+    if [ "$resumed" -eq 1 ] &&
+      [ "$(cat "$TMP/section-$c.md")" != "$(extract_section "$c-$new" <"$TMP/changelog.md")" ]; then
+      changed=1
+    fi
     cat "$TMP/section-$c.md" >>"$TMP/sections.md"
     printf '%s %s %s\n' "$c" "$new" "${PI_LEVEL:--}" >>"$TMP/released"
-    case "$c" in
-      pi)
-        printf 'raspberry-pi/VERSION : pi-%s -> pi-%s\n' "$cur" "$new" >>"$TMP/files"
-        files="$files raspberry-pi/VERSION"
-        ;;
-      cloud)
-        printf 'convex/VERSION : cloud-%s -> cloud-%s\n' "$cur" "$new" >>"$TMP/files"
-        printf 'convex/cloudVersion.ts : CLOUD_VERSION = "cloud-%s"\n' "$new" >>"$TMP/files"
-        files="$files convex/VERSION convex/cloudVersion.ts"
-        ;;
-      web)
-        printf 'package.json, package-lock.json : version %s -> %s\n' "$cur" "$new" >>"$TMP/files"
-        files="$files package.json package-lock.json"
-        ;;
-    esac
   done
+  [ "$changed" -eq 1 ] ||
+    die "rien à changer : les sections de $ref citent déjà chaque PR de ticket de ces versions"
 
-  git show "$ref:CHANGELOG.md" >"$TMP/changelog.md" 2>/dev/null ||
-    die "CHANGELOG.md absent de $ref"
-  insert_sections "$TMP/sections.md" <"$TMP/changelog.md" >"$TMP/changelog.new" ||
+  remove_sections "$(tags_of "$TMP/released" ' ')" <"$TMP/changelog.md" |
+    insert_sections "$TMP/sections.md" >"$TMP/changelog.new" ||
     die "CHANGELOG.md de $ref n'a plus sa ligne repère : $MARKER"
 
   require_green "$sha" "$DEVELOP"
 
-  branch="release/$(tags_of "$TMP/released" _)"
-  title="Release : $(tags_of "$TMP/released" ', ')"
+  tags="$(tags_of "$TMP/released" ', ')"
+  if [ -n "$files" ]; then
+    branch="release/$(tags_of "$TMP/released" _)"
+    title="Release : $tags"
+  else
+    branch="release/$(tags_of "$TMP/released" _)-changelog-$(git rev-parse --short "$sha")"
+    title="Release : $tags (changelog complété)"
+  fi
   {
-    printf 'Prépare la release %s.\n\n' "$(tags_of "$TMP/released" ', ')"
-    printf 'Écrit par `scripts/release.sh prepare` depuis `%s` (%s), CI %s.\n' "$DEVELOP" "$sha" "$CI_SUMMARY"
-    printf 'Cette PR ne change que les fichiers de version et `CHANGELOG.md`.\n'
+    if [ -n "$files" ]; then
+      printf 'Prépare la release %s.\n\n' "$tags"
+      printf 'Écrit par `scripts/release.sh prepare` depuis `%s` (%s), CI %s.\n' "$DEVELOP" "$sha" "$CI_SUMMARY"
+      printf 'Cette PR ne change que les fichiers de version et `CHANGELOG.md`.\n'
+    else
+      printf 'Complète le changelog de la release %s : `%s` a reçu des PR de ticket depuis sa préparation.\n\n' "$tags" "$DEVELOP"
+      printf 'Écrit par `scripts/release.sh prepare` depuis `%s` (%s), CI %s.\n' "$DEVELOP" "$sha" "$CI_SUMMARY"
+      printf 'Cette PR ne change que `CHANGELOG.md`.\n'
+    fi
+    printf "Ne rien fusionner d'autre dans \`%s\` avant la fusion de la release dans \`%s\`.\n" "$DEVELOP" "$MAIN"
     printf 'Après sa fusion : `scripts/release.sh pr`, puis la check-list de `docs/release.md`.\n\n'
     cat "$TMP/sections.md"
   } >"$TMP/pr-prepare.md"
@@ -434,7 +557,7 @@ cmd_prepare() {
   printf 'Candidat : %s @ %s\nCI : %s\n' "$ref" "$sha" "$CI_SUMMARY"
   heading "Fichiers de version"
   cat "$TMP/files"
-  heading "CHANGELOG.md : sections insérées sous la ligne repère"
+  heading "CHANGELOG.md : sections écrites sous la ligne repère"
   cat "$TMP/sections.md"
   heading "Commit et PR de préparation"
   printf 'git switch -c %s %s\n' "$branch" "$ref"
@@ -461,12 +584,19 @@ cmd_prepare() {
   ! git rev-parse -q --verify "refs/heads/$branch" >/dev/null ||
     die "la branche $branch existe déjà"
   git switch --quiet --no-track -c "$branch" "$ref"
-  [ -z "$NEW_pi" ] || printf 'pi-%s\n' "$NEW_pi" >raspberry-pi/VERSION
-  if [ -n "$NEW_cloud" ]; then
+  case " $files " in *" raspberry-pi/VERSION "*)
+    printf 'pi-%s\n' "$NEW_pi" >raspberry-pi/VERSION
+    ;;
+  esac
+  case " $files " in *" convex/VERSION "*)
     printf 'cloud-%s\n' "$NEW_cloud" >convex/VERSION
     cloud_constant "$NEW_cloud" >convex/cloudVersion.ts
-  fi
-  [ -z "$NEW_web" ] || set_package_version "$NEW_web"
+    ;;
+  esac
+  case " $files " in *" package.json "*)
+    set_package_version "$NEW_web"
+    ;;
+  esac
   cp "$TMP/changelog.new" CHANGELOG.md
   # shellcheck disable=SC2086
   git add -- CHANGELOG.md $files
@@ -484,6 +614,7 @@ cmd_pr() {
   collect_pending "$ref"
   [ "$(git rev-list --count "$REMOTE/$MAIN..$ref")" -gt 0 ] ||
     die "$ref n'a aucun commit de plus que $REMOTE/$MAIN"
+  require_complete_sections "$sha" "puis relancer scripts/release.sh pr."
   require_green "$sha" "$DEVELOP"
   title="Release : $(tags_of "$TMP/released" ', ')"
   release_pr_body "$sha, CI $CI_SUMMARY"
@@ -507,7 +638,7 @@ drop_local_tags() {
 }
 
 cmd_tag() {
-  local ref sha c v level refs now prepared
+  local ref sha c v level refs now prepared tip
   start tag
   ref="$REMOTE/$MAIN"
   sha="$(sha_of "$ref")"
@@ -516,7 +647,10 @@ cmd_tag() {
   # changelog suivant, calculé depuis ces tags, reprendrait tout depuis le début.
   prepared="$(git log -1 --first-parent --format=%H "$REMOTE/$DEVELOP" -- CHANGELOG.md)"
   { [ -n "$prepared" ] && git merge-base --is-ancestor "$prepared" "$ref"; } ||
-    die "$ref ne contient pas le commit de $REMOTE/$DEVELOP qui a écrit CHANGELOG.md (${prepared:-introuvable}) : la PR de release doit être fusionnée par commit de fusion, pas en squash"
+    die "$ref ne contient pas le commit de $REMOTE/$DEVELOP qui a écrit CHANGELOG.md en dernier (${prepared:-introuvable}). Soit la PR de release a été fusionnée en squash (elle doit l'être par commit de fusion), soit $DEVELOP porte une préparation plus récente : ouvrir et fusionner une PR vers $MAIN (scripts/release.sh pr)"
+  tip="$(develop_tip_in "$sha")" ||
+    die "$ref ne contient aucun commit de $REMOTE/$DEVELOP"
+  require_complete_sections "$tip" "ouvrir et fusionner une nouvelle PR vers $MAIN (scripts/release.sh pr), puis relancer scripts/release.sh tag."
   require_green "$sha" "$MAIN"
 
   printf 'Cible : %s @ %s\nCI : %s\n' "$ref" "$sha" "$CI_SUMMARY"

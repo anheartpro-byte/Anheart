@@ -181,6 +181,12 @@ function fixture(t, history = HISTORY) {
         git(work, "rev-parse", "--abbrev-ref", "HEAD"),
       ].join("\n--\n");
     },
+    /** What merging a ticket PR by squash leaves on `develop`. */
+    mergeTicket(subject, files) {
+      git(work, "switch", "--quiet", "develop");
+      commit(work, subject, files);
+      git(work, "push", "--quiet", "origin", "develop");
+    },
     /** What merging the preparation PR by squash leaves on `develop`. */
     squashIntoDevelop(branch, subject) {
       git(work, "switch", "--quiet", "develop");
@@ -208,6 +214,7 @@ function released(t) {
   assert.equal(fx.run(["pr"]).status, 0);
   fx.mergeIntoMain();
   assert.equal(fx.run(["tag"]).status, 0);
+  assertTagsComplete(fx);
   return fx;
 }
 
@@ -216,6 +223,55 @@ function sectionOf(text, tag) {
   assert.notEqual(start, -1, `no section ${tag}`);
   const next = text.indexOf("\n## ", start + 1);
   return text.slice(start, next === -1 ? undefined : next).trim();
+}
+
+/** True when a git command that answers by its exit status says yes. */
+function gitSays(cwd, ...args) {
+  return spawnSync("git", args, { cwd, env: GIT_ENV }).status === 0;
+}
+
+const WEB_ROOT_FILES = ["proxy.ts", "next.config.ts", "package.json", "package-lock.json", "postcss.config.mjs", "components.json", "tsconfig.json"];
+const TOUCHES = {
+  pi: (path) => path.startsWith("raspberry-pi/"),
+  cloud: (path) => path.startsWith("convex/"),
+  web: (path) => /^(app|components|hooks|i18n|lib|messages|public)\//.test(path) || WEB_ROOT_FILES.includes(path),
+};
+const versionOf = (tag) => tag.split("-")[1].split(".").map(Number);
+const isOlder = (a, b) => {
+  const [x, y] = [versionOf(a), versionOf(b)];
+  const at = x.findIndex((part, index) => part !== y[index]);
+  return at !== -1 && x[at] < y[at];
+};
+
+/**
+ * The invariant of a release, computed here without release.sh: every ticket
+ * of `develop` that a tag contains, that touches the tag's component and that
+ * no older tag of the component contains, is cited by the tag message and by
+ * the section of CHANGELOG.md at the tagged commit.
+ */
+function assertTagsComplete(fx) {
+  const tags = git(fx.origin, "tag", "-l").split("\n").filter(Boolean);
+  assert.notEqual(tags.length, 0, "no tag to check");
+  const chain = git(fx.origin, "log", "--first-parent", "--format=%H%x09%s", "refs/heads/develop")
+    .split("\n")
+    .map((line) => line.split("\t"));
+  for (const tag of tags) {
+    const component = tag.split("-")[0];
+    const older = tags.filter((other) => other.startsWith(`${component}-`) && isOlder(other, tag));
+    const message = git(fx.origin, "tag", "-l", "--format=%(contents)", tag).split("\n");
+    const section = sectionOf(git(fx.origin, "show", `${tag}:CHANGELOG.md`), tag).split("\n");
+    for (const [hash, subject] of chain) {
+      const ticket = /^(ANH-\d+) ?: *(.*)$/.exec(subject);
+      if (!ticket) continue;
+      if (!gitSays(fx.origin, "merge-base", "--is-ancestor", hash, `${tag}^{commit}`)) continue;
+      if (older.some((other) => gitSays(fx.origin, "merge-base", "--is-ancestor", hash, `${other}^{commit}`))) continue;
+      const files = git(fx.origin, "show", "--name-only", "--format=", hash).split("\n");
+      if (!files.some(TOUCHES[component])) continue;
+      const line = `- ${ticket[1]} : ${ticket[2]}`;
+      assert.ok(message.includes(line), `${tag} is on a commit that contains "${subject}", absent from the tag message`);
+      assert.ok(section.includes(line), `${tag} is on a commit that contains "${subject}", absent from its section`);
+    }
+  }
 }
 
 function refuses(result, message) {
@@ -299,7 +355,7 @@ test("EX-1 tag refuses a main that was squashed instead of merged", (t) => {
   git(fx.work, "push", "--quiet", "origin", "main");
   git(fx.work, "switch", "--quiet", "develop");
 
-  refuses(fx.run(["tag"]), /fusionnée par commit de fusion, pas en squash/);
+  refuses(fx.run(["tag"]), /fusionnée en squash \(elle doit l'être par commit de fusion\)/);
   assert.equal(git(fx.origin, "tag", "-l"), "");
   assert.equal(git(fx.work, "tag", "-l"), "");
 });
@@ -398,6 +454,115 @@ test("EX-2 a later release lists only what merged since the component's last tag
   assert.match(sectionOf(changelog, "web-0.1.1"), /- Aucune PR de ticket ne touche ce composant depuis `web-0\.1\.0`\./);
   assert.ok(changelog.indexOf("## pi-0.2.0") < changelog.indexOf("## pi-0.1.0"));
   assert.equal(git(fx.work, "show", "origin/release/pi-0.2.0_web-0.1.1:convex/VERSION"), "cloud-0.1.0");
+});
+
+test("EX-2 no tag lands on a commit that carries a component ticket missing from its section, when develop moves during the release", (t) => {
+  const fx = fixture(t);
+  const title = "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0";
+  const completed = (result) => {
+    assert.equal(result.status, 0, result.stderr);
+    const create = result.gh.filter((call) => call.startsWith("pr create"));
+    assert.equal(create.length, 1);
+    const head = /^pr create --base develop --head (release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0-changelog-[0-9a-f]+) --title Release : pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0 \(changelog complété\) --body-file /.exec(create[0]);
+    assert.ok(head, create[0]);
+    assert.deepEqual(git(fx.work, "diff", "--name-only", "origin/develop", `origin/${head[1]}`).split("\n"), ["CHANGELOG.md"]);
+    return head[1];
+  };
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+
+  // First interleaving: a ticket is merged after prepare read develop and
+  // before the preparation PR is merged.
+  fx.mergeTicket("ANH-40 : nouvelle rampe d'arrêt (#40)", { "raspberry-pi/src/stop.py": "stop = 1\n" });
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", `${title} (#5)`);
+  for (const args of [["pr"], ["pr", "--dry-run"]]) {
+    const blocked = fx.run(args);
+    refuses(blocked, /contient des PR de ticket que CHANGELOG\.md ne cite pas :\n {2}pi-0\.1\.0 : ANH-40 : nouvelle rampe d'arrêt \(#40\)\n/);
+    assert.match(blocked.stderr, /Relancer scripts\/release\.sh prepare avec les mêmes versions/);
+    assert.deepEqual(blocked.gh.filter((call) => call.startsWith("pr ")), []);
+  }
+
+  // The operator runs prepare again with the same versions (and no date): only
+  // the changelog changes, the stale section is rewritten in place.
+  const first = completed(fx.run(["prepare", ...ALL.slice(0, -2)]));
+  const rewritten = git(fx.work, "show", `origin/${first}:CHANGELOG.md`);
+  assert.equal(
+    sectionOf(rewritten, "pi-0.1.0"),
+    [
+      `## pi-0.1.0 (${DATE})`,
+      "",
+      "Composant : Raspberry Pi. Changements depuis : la première version.",
+      "Niveau de validation : `bench`.",
+      "",
+      "- ANH-10 : régler la rampe du bras (#1)",
+      "- ANH-40 : nouvelle rampe d'arrêt (#40)",
+    ].join("\n"),
+  );
+  assert.deepEqual(rewritten.match(/^## \S+/gm), ["## pi-0.1.0", "## cloud-0.1.0", "## web-0.1.0"]);
+  assert.doesNotMatch(rewritten, /\n\n\n/);
+  fx.squashIntoDevelop(first, `${title} (changelog complété) (#6)`);
+  const opened = fx.run(["pr"]);
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.match(opened.body, /- ANH-40 : nouvelle rampe d'arrêt \(#40\)/);
+
+  // Second interleaving: a ticket is merged after pr and before the release PR
+  // is merged, so main receives it without its line.
+  fx.mergeTicket("ANH-41 : nouvelle table des versions (#41)", { "convex/versions.ts": "export {};\n" });
+  fx.mergeIntoMain();
+  for (const args of [["tag"], ["tag", "--dry-run"]]) {
+    refuses(fx.run(args), /ne cite pas :\n {2}cloud-0\.1\.0 : ANH-41 : nouvelle table des versions \(#41\)\n/);
+    assert.equal(git(fx.origin, "tag", "-l"), "");
+    assert.equal(git(fx.work, "tag", "-l"), "");
+  }
+
+  // Completing it: prepare again, merge, a new PR to main, merge, then tag.
+  const second = completed(fx.run(["prepare", ...ALL]));
+  assert.notEqual(second, first);
+  fx.squashIntoDevelop(second, `${title} (changelog complété) (#7)`);
+  refuses(fx.run(["tag"]), /porte une préparation plus récente/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(fx.run(["pr"]).status, 0);
+  fx.mergeIntoMain();
+  const tagged = fx.run(["tag"]);
+  assert.equal(tagged.status, 0, tagged.stderr);
+
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+  assertTagsComplete(fx);
+  assert.match(git(fx.origin, "tag", "-l", "--format=%(contents)", "pi-0.1.0"), /- ANH-40 : nouvelle rampe d'arrêt \(#40\)/);
+  assert.match(git(fx.origin, "tag", "-l", "--format=%(contents)", "cloud-0.1.0"), /- ANH-41 : nouvelle table des versions \(#41\)/);
+
+  // And the next version starts after them.
+  fx.mergeTicket("ANH-50 : nouveau palier de vitesse (#50)", { "raspberry-pi/src/tiers.py": "t = 1\n" });
+  const next = fx.run(["prepare", "--pi", "0.2.0", "--pi-validation", "bench", "--date", "2026-11-02", "--dry-run"]);
+  assert.equal(next.status, 0, next.stderr);
+  assert.deepEqual(next.stdout.match(/^- ANH-\d+ .*$/gm).filter((line, index, all) => all.indexOf(line) === index), [
+    "- ANH-50 : nouveau palier de vitesse (#50)",
+  ]);
+});
+
+test("EX-2 the invariant check of these tests does see a tag put on an incomplete section", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.mergeTicket("ANH-40 : nouvelle rampe d'arrêt (#40)", { "raspberry-pi/src/stop.py": "stop = 1\n" });
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  fx.mergeIntoMain();
+  // What release.sh refuses to do, done by hand.
+  git(fx.work, "tag", "-a", "-m", "pi-0.1.0\n\n- ANH-10 : régler la rampe du bras (#1)", "pi-0.1.0", "origin/main");
+  git(fx.work, "push", "--quiet", "origin", "refs/tags/pi-0.1.0");
+  assert.throws(() => assertTagsComplete(fx), /pi-0\.1\.0 is on a commit that contains "ANH-40 : nouvelle rampe d'arrêt \(#40\)"/);
+});
+
+test("EX-2 prepare run again has nothing to do while the sections cite every ticket", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  // A ticket that touches no component does not make a section stale.
+  fx.mergeTicket("ANH-42 : guide de release (#42)", { "docs/release-guide.md": "# Guide\n" });
+  const before = fx.state();
+  const again = fx.run(["prepare", ...ALL.slice(0, -2)]);
+  refuses(again, /rien à changer/);
+  assert.equal(fx.state(), before);
+  assert.deepEqual(again.gh.filter((call) => call.startsWith("pr ")), []);
+  assert.equal(fx.run(["pr"]).status, 0);
 });
 
 for (const [name, checks, message] of [
