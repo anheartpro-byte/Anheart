@@ -738,13 +738,14 @@ Les types d'événements :
 | `acknowledged` | verdict acquitté, avec les règles effacées |
 | `fault_reset_requested` | reset du variateur demandé |
 | `session_idle` | retour au repos |
-| `refused` (orange) | la machine a refusé une demande. Pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
+| `refused` (orange) | la machine a refusé une demande. Hors séance manuelle, pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
 
 Important : une demande « acceptée » (démarrage, cible, reset) veut seulement dire
 « reçue ». La machine vérifie ensuite. Pour une **cible manuelle**, sa réponse
 s'écrit aussi dans la note de la carte Mode MANUEL (§6). Pour un **démarrage** ou un
-**reset**, un refus n'apparaît **que** dans cette liste : la note du bouton garde la
-réponse immédiate de la console. Après ces actions, jetez un œil aux événements.
+**reset**, la note du bouton garde la réponse immédiate de la console : hors séance
+manuelle, un refus n'apparaît **que** dans cette liste. Après ces actions, jetez un
+œil aux événements.
 
 Cas particulier : une ligne `refused` **sans nom**, qui commence par
 `cible de ... tr/min moteur remise a 0`, n'est pas la réponse à un clic. La machine

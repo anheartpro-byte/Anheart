@@ -428,7 +428,7 @@ cycle suivant. La note suit ce que la machine rapporte :
 |---|---|---|
 | `cible envoyee : 5.10 output rpm - pas encore prise par la machine` | à la réponse 202 | la console a reçu la demande ; la boucle n'a rien dit encore |
 | `cible prise par la machine : 5.10 output rpm (suivie aux limites de mouvement)` | à la première image prise après la demande dont la `cible appliquee` est la cible envoyée (au tr/min moteur près) | la machine tient cette cible. La note est effacée dès que la machine ne la tient plus (STOP, verdict, cible d'un autre écran) |
-| `refus de la machine (<heure>) : <message>` (rouge) | à l'événement `refused` de la boucle | la cible a été refusée, ou remise à 0 : le message est celui de la section 13. Avec une séance manuelle à l'écran, un écran qui n'a pas cliqué l'affiche aussi |
+| `refus de la machine (<heure>) : <message>` (rouge) | à l'événement `refused` de la boucle | la cible a été refusée, ou remise à 0 : le message est celui de la section 13. Avec une séance manuelle à l'écran, un écran qui n'a pas cliqué l'affiche aussi, et tout autre refus de la boucle s'y écrit de la même façon (un reset de défaut refusé pendant l'arrêt de la séance, par exemple) : le message dit lui-même ce qui est refusé |
 | `cible NON prise par la machine : la cible appliquee est <x> tr/min de sortie. La raison n'est pas arrivee a cet ecran.` (rouge) | une seconde de l'horloge de la machine après la demande, sans refus reçu ni cible appliquée | la cible n'a pas été prise et l'événement s'est perdu (un WebSocket qui se reconnecte perd ses événements) |
 | `cible NON prise par la machine : la seance manuelle est terminee.` (rouge) | même délai, la séance étant finie | la séance s'est terminée avant que la cible soit prise |
 
@@ -668,10 +668,10 @@ Types d'événements : `start_requested`, `fault_reset_requested`, `end_requeste
 `refused`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
 l'arrêt, reset refusé, démarrage refusé) arrivent comme événements `refused` : la
 route HTTP a déjà répondu 202. Une cible manuelle que la machine a remise à 0 arrive de
-la même façon, sans nom d'opérateur : personne ne l'a demandé. Les refus qui touchent
-une cible manuelle sont aussi écrits dans la note de la carte Mode MANUEL
-(section 6) ; un démarrage ou un reset refusé par la boucle n'apparaît que dans cette
-liste.
+la même façon, sans nom d'opérateur : personne ne l'a demandé. Tant qu'une séance
+manuelle est à l'écran, ces refus sont aussi écrits dans la note de la carte Mode
+MANUEL (section 6). Hors séance manuelle, un démarrage ou un reset refusé par la
+boucle n'apparaît que dans cette liste.
 
 ---
 
@@ -920,9 +920,9 @@ Rejoué en simulation, dans cet ordre :
 ## 13. Messages d'erreur typiques
 
 Les réponses HTTP (codes 4xx) s'affichent sous le bouton concerné. Les refus de la boucle
-arrivent comme événements `refused` dans la liste **Evenements** (page Seance). Ceux qui
-touchent une cible manuelle sont aussi écrits dans la note sous la carte Mode MANUEL,
-précédés de `refus de la machine (<heure>) :` (section 6).
+arrivent comme événements `refused` dans la liste **Evenements** (page Seance). Tant
+qu'une séance manuelle est à l'écran, ils sont aussi écrits dans la note sous la carte
+Mode MANUEL, précédés de `refus de la machine (<heure>) :` (section 6).
 
 ### Refus immédiats (réponse HTTP)
 
@@ -1122,9 +1122,9 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
   `motion_enabled=True`.
 - Après un démarrage manuel, un démarrage de programme ou un reset de défaut, la note
   du bouton dit `accepte : …` ou `reset demande : …` dès la réponse 202, même quand la
-  boucle refuse ensuite la demande : ce refus n'apparaît que dans la liste
-  **Evenements** de la page Seance. Pour une cible manuelle, la note suit maintenant la
-  réponse de la boucle (section 6).
+  boucle refuse ensuite la demande : hors séance manuelle, ce refus n'apparaît que
+  dans la liste **Evenements** de la page Seance. Pour une cible manuelle, la note suit
+  maintenant la réponse de la boucle (section 6).
 - La phrase anglaise ajoutée aux avertissements non verrouillés (section 11) figure
   encore dans le détail du verdict d'un bras manuel tenu à l'arrêt, où plus rien ne
   peut remonter. Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`, lui, suit la cible.
