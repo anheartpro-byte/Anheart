@@ -2,7 +2,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
-import { hashApiKey, verifyApiKey } from "./lib/crypto";
+import { generateApiKey, hashApiKey, verifyApiKey } from "./lib/crypto";
 import { machineFixture } from "./machineAuth.fixtures";
 
 const modules = import.meta.glob([
@@ -140,5 +140,32 @@ describe("ANH-121 salted credential storage and migration", () => {
     await expect(
       f.t.mutation(api.machines.regenerateApiKey, { machineId: f.machineId }),
     ).rejects.toThrow();
+  });
+});
+
+// ANH-132 completes the EX-6 crypto coverage left open by the suite above: it
+// does not restate irreversibility (proven by `machineAuth.test.ts` and the
+// salted-digest oracle), but adds the "same prefix, different secret" case.
+describe("ANH-132 same-prefix credentials are not interchangeable", () => {
+  it("refuses a different secret that shares the public selector prefix", async () => {
+    // Given two credentials with the SAME selector but different secrets.
+    const selector = "ab".repeat(16);
+    const first = `anh1.${selector}.${"11".repeat(32)}`;
+    const second = `anh1.${selector}.${"22".repeat(32)}`;
+    const firstHash = await hashApiKey(first);
+    // When / Then the stored verifier for the first key rejects the second.
+    expect(await verifyApiKey(first, firstHash)).toBe(true);
+    expect(await verifyApiKey(second, firstHash)).toBe(false);
+  });
+
+  it("gives two freshly generated keys independent, non-interchangeable verifiers", async () => {
+    // Given two independently generated credentials.
+    const a = await generateApiKey();
+    const b = await generateApiKey();
+    // Then their selectors and verifiers differ and neither opens the other.
+    expect(a.selector === b.selector).toBe(false);
+    expect(a.hashed === b.hashed).toBe(false);
+    expect(await verifyApiKey(a.plain, b.hashed)).toBe(false);
+    expect(await verifyApiKey(b.plain, a.hashed)).toBe(false);
   });
 });
