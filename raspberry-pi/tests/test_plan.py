@@ -360,7 +360,12 @@ REFUSALS: Final[tuple[tuple[Violation, Callable[[], TrainingProfile]], ...]] = (
 )
 
 
-@pytest.mark.parametrize(("violation", "build"), REFUSALS, ids=str)
+# The id is the violation alone: ``str`` of a lambda carries its memory address,
+# which differs in every process, and the gate, when it spreads the suite over
+# several processes, refuses to pass unless they all collect identical ids.
+@pytest.mark.parametrize(
+    ("violation", "build"), REFUSALS, ids=[str(violation) for violation, _ in REFUSALS]
+)
 def test_each_violation_is_refused_at_construction(
     violation: Violation, build: Callable[[], TrainingProfile]
 ) -> None:
