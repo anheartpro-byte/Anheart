@@ -10,11 +10,19 @@ One scenario, end to end. A programme is running; the heart rate is lost for
 50 s; the arm is held, lowered, and stops; the heart rate comes back. Then:
 
 * the arm does not move again, whoever waits;
-* a START typed at the console is refused, with the reason on the screen;
+* the status page shows the ending as the standing verdict AND as the latched
+  floor, like any other latched end;
+* a START typed at the console is refused at once (409), with the reason in
+  the answer;
 * a launch waiting on the dashboard is refused and goes back as a failed
-  session, with the reason;
+  session, naming the verdict to acknowledge;
 * a named acknowledgement at the console clears it, and only then does a
   dashboard launch run.
+
+The second and third points fail on the first version of this change (head
+``91b0e90``), where the ending was a latch of the runtime's that the status
+page and the start gate did not read: the floor showed "none" under a latched
+verdict, and a START was answered 202 before the loop refused it.
 
 The heart rate is the simulated subject's own, read once a second in place of
 the DSP (as ``tests/test_failure_ecg.py`` does for link-level cases), and every
@@ -34,8 +42,8 @@ from src.bitalino_client import SampleBatch
 from src.ecg_pipeline import EcgFrame, EcgMetrics, Treatment
 from src.sim.physiology import Physiology, SubjectState
 from src.training.plan import JsonValue
-from src.training.runtime import RULE_REDUCED_TO_STANDSTILL, EndReason, RuntimeState
-from src.training.safety import RULE_HR_STALE
+from src.training.runtime import EndReason, RuntimeState
+from src.training.safety import RULE_HR_STALE, RULE_SESSION_STANDSTILL, SELF_CLEARING
 from src.training.types import RunMode, SafetyAction, SignalQuality, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm
 from tests.test_cloud_sync import LAUNCH, Dashboard, Reply, ok
@@ -183,7 +191,7 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         shown = {s.safety.rule: s.safety.action for s in lost if s.safety is not None}
         assert shown[RULE_HR_STALE] is SafetyAction.REDUCE, "the warning never lowered the speed"
         assert runtime.applied_rpm == 0, "the REDUCE never reached standstill"
-        assert run.standing_rule() == RULE_REDUCED_TO_STANDSTILL
+        assert run.standing_rule() == RULE_SESSION_STANDSTILL
         assert runtime.end_reason is EndReason.SAFETY_VERDICT
 
         # It is refitted, the heart rate is back, and nobody clicks.
@@ -195,15 +203,24 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         assert abs(back[-1].measured.motor_rpm) < 1
         assert run.state() is RuntimeState.FINISHED
         assert back[-1].mode is RunMode.REPOS
-        # The supervisor itself holds nothing: only the runtime's latch stands.
-        assert runtime.supervisor.standing is None
-        assert run.standing_rule() == RULE_REDUCED_TO_STANDSTILL
+        assert run.standing_rule() == RULE_SESSION_STANDSTILL
         latest = await session.get("/api/snapshot")
-        assert latest.json()["safety"]["rule"] == RULE_REDUCED_TO_STANDSTILL
+        assert latest.json()["safety"]["rule"] == RULE_SESSION_STANDSTILL
         assert latest.json()["safety"]["latched"] is True
         assert latest.json()["mode"] == "repos"
 
-        # A START typed at the console: taken by the mailbox, refused by the loop.
+        # The status page: the standing verdict and the latched floor agree, and
+        # nothing on it says that anything lifts by itself.
+        status = await session.get("/api/status")
+        assert status.status_code == 200, status.text
+        for field in ("standing", "floor"):
+            assert status.json()[field]["rule"] == RULE_SESSION_STANDSTILL, field
+            assert status.json()[field]["latched"] is True
+            assert status.json()[field]["action"] == "ramp_down"
+            assert f"the warning {RULE_HR_STALE}" in status.json()[field]["detail"]
+        assert SELF_CLEARING not in status.text
+
+        # A START typed at the console: refused at once, with the reason.
         typed = await session.post(
             "/api/session/start",
             json={
@@ -213,15 +230,21 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
                 "subject_age": 30,
             },
         )
-        assert typed.status_code == 202, typed.text
+        assert typed.status_code == 409, typed.text
+        assert RULE_SESSION_STANDSTILL in typed.json()["detail"]
+        assert f"the warning {RULE_HR_STALE}" in typed.json()["detail"]
+        assert "acknowledged by name" in typed.json()["detail"]
+        manual = await session.post(
+            "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+        )
+        assert manual.status_code == 409, manual.text
+        assert RULE_SESSION_STANDSTILL in manual.json()["detail"]
         after_start = await run.run(2.0)
         assert run.state() is RuntimeState.FINISHED
         assert not _moved(after_start)
-        assert any(RULE_REDUCED_TO_STANDSTILL in refusal for refusal in rig.refusals()), (
-            rig.refusals()
-        )
 
-        # A launch waiting on the dashboard: refused, and sent back failed with the reason.
+        # A launch waiting on the dashboard: refused, and sent back failed,
+        # naming the verdict somebody has to acknowledge at the console.
         run.offer("remote-1")
         polled = await run.run(8.0)
         assert run.state() is RuntimeState.FINISHED
@@ -233,15 +256,15 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         reason = refused[0]["reason"]
         assert isinstance(reason, str)
         assert "refusee par la machine" in reason
-        assert RULE_REDUCED_TO_STANDSTILL in reason
-        assert RULE_HR_STALE in reason, "the dashboard is not told which warning did it"
+        assert RULE_SESSION_STANDSTILL in reason
+        assert "a acquitter a la console" in reason
 
         # Somebody at the machine acknowledges, by name.
         acknowledged = await session.post(
             "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": False}
         )
         assert acknowledged.status_code == 200, acknowledged.text
-        assert acknowledged.json()["cleared"] == [RULE_REDUCED_TO_STANDSTILL]
+        assert acknowledged.json()["cleared"] == [RULE_SESSION_STANDSTILL]
         assert run.standing_rule() is None
 
         # Only now does a dashboard launch run.

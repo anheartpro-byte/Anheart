@@ -318,11 +318,17 @@ class SafetyVerdict:
     """Whether this verdict persists until an operator clears it.
 
     A latched verdict outlives the condition that raised it. That is the point:
-    there is no automatic fault reset and no automatic resumption of motion
-    anywhere in this system, so a rule that latches has taken the machine out
-    of service until a human looks at it. An unlatched verdict is re-evaluated
+    there is no automatic fault reset in this system and nothing resumes behind
+    a latched verdict, so a rule that latches has taken the machine out of
+    service until a human looks at it. An unlatched verdict is re-evaluated
     every tick and disappears on its own when the evidence does - which also
     means a transient that needs remembering must latch, or it is forgotten.
+    When it disappears the speed follows the controller, or the manual target,
+    again with nobody clicking: that is automatic, and it is kept while the arm
+    is turning. Where it stops: once the arm has moved in a session, a setpoint
+    that came back to zero without anybody having asked for it ends the session
+    on a latched verdict (``session_standstill`` in ``src.training.safety``,
+    whose module docstring also says what that leaves out).
     """
 
     since: Monotonic

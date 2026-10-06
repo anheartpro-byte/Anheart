@@ -49,18 +49,22 @@ outlives its evidence:
   taken the machine out of service.
 * **unlatched**: an advisory (``FREEZE``/``REDUCE``) that is re-evaluated every
   tick and disappears when its evidence does - a heart rate that comes back, a
-  current that settles, an attendant who returns. **When it disappears, motion
-  resumes by itself**: the runtime follows the controller, or the operator's
-  manual target, again at once, with nobody clicking. That is deliberate, and
-  every unlatched verdict says so in its ``detail`` for as long as it stands
-  (:data:`SELF_CLEARING`). Where it stops is not decided in this module: when a
-  ``REDUCE`` has walked the setpoint all the way to zero with a person on
-  board, the runtime ends the session there and latches that ending itself
-  (``src.training.runtime.RULE_REDUCED_TO_STANDSTILL``; product decision of
-  2026-10-05, ``docs/securite.md``), so the arm does not leave by itself a
-  standstill that a warning produced. Two cases are not covered and are listed
-  as open in that document: a warning that appears while the setpoint is
-  already zero, and a BENCH manual session.
+  current that settles, an attendant who returns. **When it disappears, the
+  speed follows the controller, or the operator's manual target, again at
+  once, with nobody clicking.** That is deliberate while the arm is still
+  turning, and every unlatched verdict says so in its ``detail`` for as long
+  as the session can still be asked for speed (:data:`SELF_CLEARING`). It
+  stops at standstill: once the arm has moved in a session, a setpoint that
+  comes back to zero without anybody having asked for it - walked there by a
+  ``REDUCE``, or by the heart-rate regulation itself - ends the session on the
+  latched ``session_standstill``
+  (:meth:`SafetySupervisor._rule_session_standstill`; product decisions of
+  2026-10-05 and 2026-10-06, ``docs/securite.md``): a stopped arm never
+  restarts by itself. Two things are left as they were, and that document
+  lists them: the first motion of a session (a warning during ``BASELINE`` is
+  followed by the programme's normal start), and a manual target the operator
+  typed while a warning held the arm at zero, which is followed when the
+  warning lifts.
 
 Both levels exist on purpose, and the reason is a real failure mode rather than
 convenience. If a ten-second electrode dropout required an operator click, the
@@ -154,6 +158,7 @@ RULE_SESSION_OVERRUN: Final[str] = "session_overrun"
 RULE_LOOP_STALL: Final[str] = "loop_stall"
 RULE_ATTENDANT_ABSENT: Final[str] = "attendant_absent"
 RULE_SETPOINT_UNCONFIRMED: Final[str] = "setpoint_unconfirmed"
+RULE_SESSION_STANDSTILL: Final[str] = "session_standstill"
 
 ALL_RULES: Final[tuple[str, ...]] = (
     RULE_OPERATOR_ESTOP,
@@ -173,6 +178,7 @@ ALL_RULES: Final[tuple[str, ...]] = (
     RULE_LOOP_STALL,
     RULE_ATTENDANT_ABSENT,
     RULE_SETPOINT_UNCONFIRMED,
+    RULE_SESSION_STANDSTILL,
 )
 """Every rule this supervisor can fire. One dwell tracker is allocated per entry."""
 
@@ -211,18 +217,34 @@ line, which reads as a display bug rather than as a safety demand.
 """
 
 SELF_CLEARING: Final[str] = (
-    "; NOT LATCHED: it lifts by itself when its cause ends, and a session that is still "
-    "running may then speed up again with nobody clicking"
+    "; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the "
+    "programme or the manual target again, upwards too, with nobody clicking"
 )
-"""What every unlatched verdict appends to its ``detail``, for as long as it stands.
+"""What an unlatched verdict appends to its ``detail`` while the session can still move.
 
 The operator's screen shows a verdict's ``detail`` verbatim, and a speed that is
 "held" or "lowered" reads as "stopped for good" to somebody about to walk up to
 the arm. It is not: an unlatched advisory disappears with its evidence and the
-runtime then follows the controller again (see the module docstring, and
-``docs/securite.md`` for the decision of 2026-10-05 that stops this at
-standstill). Appended in one place, :func:`_announced`, so that a rule added
-later cannot forget it.
+runtime then follows the controller, or the manual target, again (see the
+module docstring). Appended in one place, :func:`_announced`, so that a rule
+added later cannot forget it, and only in a phase that can still be asked for
+speed (:data:`CAN_STILL_MOVE`) of a session that has not stopped by itself: on
+a session that is ending the sentence would be untrue, so it is left off.
+
+A stopgap, and not the answer to "the console says so clearly and permanently":
+it is English, it comes at the end of a long sentence, and the page shows a
+verdict's detail on two of its views only. The banner is the front end's to add.
+"""
+
+CAN_STILL_MOVE: Final[frozenset[Phase]] = frozenset({Phase.BASELINE, Phase.WARMUP, Phase.HOLD})
+"""The phases in which a session can still be asked for speed.
+
+``BASELINE`` counts: nothing turns yet, and the programme starts the arm by
+itself when it ends. From ``COOLDOWN`` on, the speed follows nothing upwards.
+Used for one thing only, the wording of an unlatched verdict
+(:data:`SELF_CLEARING`). A set rather than an exhaustive ``match``, on purpose:
+nothing reached from :meth:`SafetySupervisor.evaluate` may raise, and a phase
+this set does not know merely leaves a sentence off.
 """
 
 ESTOP_ATTESTATION: Final[str] = (
@@ -718,10 +740,12 @@ class SafetyObservation:
     ``reverse_rotation`` judge the wrong number without any checker noticing.
 
     **No field carries a demand.** There is no ``desired_rpm``, no
-    :class:`~src.training.types.ControlDecision`, nothing from the control law.
-    ``commanded_rpm`` is what was last *written to the drive*, i.e. a
+    :class:`~src.training.types.ControlDecision`, nothing the control law
+    wants. ``commanded_rpm`` is what was last *written to the drive*, i.e. a
     measurement of the machine, not a request. That omission is the whole point
-    of the module: see its docstring on the vasovagal inversion.
+    of the module: see its docstring on the vasovagal inversion. The one field
+    that names the control law, ``stopped_by``, reports a write that already
+    happened (the setpoint came back to zero) and can only add a verdict.
 
     ``measured_rpm``, ``current`` and ``fault`` are optional because a failed
     read has no value. They must be ``None`` in that case and never a
@@ -850,6 +874,25 @@ class SafetyObservation:
     rig and stop a bench test because they walked away from the electrodes.
     Every other rule is unaffected. Defaults to ``True``, the fail-safe
     direction: an observation built without saying so is supervised.
+    """
+
+    stopped_by: str | None = None
+    """What brought this session's arm to a standstill by itself, or ``None`` if nothing has.
+
+    The runtime's statement of something that HAPPENED, like :attr:`ramping`:
+    inside a running session, after the arm had moved, the setpoint came back
+    to zero and the drive acknowledged it, without an operator having asked
+    for that (a stop, a manual target of zero with no warning standing) and
+    outside the programme's own cooldown. The words name what did it - a
+    warning, by its rule id, or the heart-rate regulation - and go into the
+    verdict's sentence unread. It is the runtime's to state, not something
+    inferred here from two commanded speeds, because a zero the operator asked
+    for and a zero nobody asked for are the same number. Once stated it stays
+    stated until a new session is armed. ``session_standstill`` is the only
+    rule that reads it. Not a demand: no field of this record is one. And it
+    can only ADD a verdict: no rule is quieter for it being set, so saying it
+    wrongly costs an acknowledgement and never a protection. Defaults to
+    ``None``: an observation built without saying so ends no session.
     """
 
 
@@ -1122,13 +1165,17 @@ def _severity(verdict: SafetyVerdict) -> SafetyAction:
     return verdict.action
 
 
-def _announced(verdict: SafetyVerdict) -> SafetyVerdict:
+def _announced(verdict: SafetyVerdict, *, resumable: bool) -> SafetyVerdict:
     """Make an unlatched verdict say that it is one, in the sentence the operator reads.
 
-    A latched verdict is returned untouched: it stands until a named operator
-    clears it, and nothing resumes behind it. See :data:`SELF_CLEARING`.
+    Only where that sentence is true. A latched verdict is returned untouched:
+    it stands until a named operator clears it, and nothing resumes behind it.
+    So is an unlatched one when the session is not ``resumable``: its own
+    cooldown, an ending under way, a session that is over or that has just
+    stopped by itself. The speed follows nothing upwards from there. See
+    :data:`SELF_CLEARING`.
     """
-    if verdict.latched:
+    if verdict.latched or not resumable:
         return verdict
     return replace(verdict, detail=verdict.detail + SELF_CLEARING)
 
@@ -1653,9 +1700,9 @@ class SafetySupervisor:
         list because it is not a function of an observation: it is latched
         synchronously by :meth:`latch_estop`.
 
-        Every unlatched verdict leaves here saying that it is one
-        (:func:`_announced`): that sentence is what the operator reads while a
-        speed is held or lowered.
+        An unlatched verdict leaves here saying that it is one, while the
+        session can still move (:func:`_announced`): that sentence is what the
+        operator reads while a speed is held or lowered.
         """
         candidates = (
             self._rule_drive_fault(observation),
@@ -1674,8 +1721,14 @@ class SafetySupervisor:
             self._rule_loop_stall(observation),
             self._rule_attendant_absent(observation),
             self._rule_setpoint_unconfirmed(observation),
+            self._rule_session_standstill(observation),
         )
-        return tuple(_announced(verdict) for verdict in candidates if verdict is not None)
+        resumable = observation.phase in CAN_STILL_MOVE and observation.stopped_by is None
+        return tuple(
+            _announced(verdict, resumable=resumable)
+            for verdict in candidates
+            if verdict is not None
+        )
 
     # =====================================================================
     # Shared evidence helpers
@@ -2604,5 +2657,58 @@ class SafetySupervisor:
                 "not permitted to run with nobody watching it"
             ),
             latched=latched,
+            since=firing.since,
+        )
+
+    def _rule_session_standstill(self, observation: SafetyObservation) -> SafetyVerdict | None:
+        """The arm came to a standstill by itself inside a session: the session is over.
+
+        Product decisions of 2026-10-05 and 2026-10-06 (``docs/securite.md``):
+        **a stopped arm never restarts by itself.** An unlatched warning lifts
+        with its cause and the control law regulates in both directions, so
+        without this rule a setpoint that had come back to zero in the middle
+        of a session left it again with nobody clicking: 69 motor rpm 45 s
+        after a detached electrode was refitted, on the shipped profile, with
+        the operator beside the capsule.
+
+        The evidence is the runtime's own statement
+        (:attr:`SafetyObservation.stopped_by`), because only the runtime knows
+        which of its paths wrote the zero and whether an operator had asked for
+        it. The rule adds nothing to that statement and cannot be talked out of
+        it. It holds for as long as the session that stopped is on its way out
+        (its descent confirmed, then its monitored recovery), so an
+        acknowledgement given before then is taken back on the next tick, as
+        for any rule whose condition is still true. ``DONE`` releases it: the
+        session is over, and what stands from there is the latch on the floor,
+        until a named operator clears it and a NEW session is started.
+
+        ``RAMP_DOWN``, latched. The setpoint is already zero, so there is
+        nothing left to ramp: what the verdict carries is the ending, with its
+        monitored recovery, and the refusal of every start until it is
+        acknowledged. It is a verdict of this supervisor like any other, so the
+        status page, the start gate and the acknowledgement treat it exactly as
+        they treat the latched end ``hr_stale`` reaches at 60 s while the heart
+        rate is still missing.
+        """
+        cause = None if observation.phase is Phase.DONE else observation.stopped_by
+        firing = self._trackers[RULE_SESSION_STANDSTILL].update(
+            condition=cause is not None,
+            now=observation.now,
+            dwell=NO_DWELL,
+        )
+        # `cause` is set whenever the rule fires; the second test only tells the
+        # type checker so.
+        if firing is None or cause is None:
+            return None
+        return SafetyVerdict(
+            action=SafetyAction.RAMP_DOWN,
+            rule=RULE_SESSION_STANDSTILL,
+            detail=(
+                f"the arm came to a standstill inside the session ({cause} brought the "
+                "setpoint to zero): the session has ended, and a stopped arm never restarts "
+                "by itself. To be acknowledged by a named operator once the session is over; "
+                "moving again takes a new start"
+            ),
+            latched=True,
             since=firing.since,
         )

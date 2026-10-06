@@ -114,6 +114,7 @@ from src.training.safety import (
     RULE_ATTENDANT_ABSENT,
     RULE_COMMS_LOST,
     RULE_HR_STALE,
+    RULE_SESSION_STANDSTILL,
     AcknowledgeRefusal,
     EmergencyStopStillLatched,
     GoSilentIsTerminal,
@@ -1728,6 +1729,23 @@ async def _exit_vasovagal_drop(rig: Rig) -> None:
     await rig.run(14.0)
 
 
+async def _exit_standstill_inside_the_session(rig: Rig) -> None:
+    """A warning lowers the speed all the way to zero: the session ends there (ANH-176).
+
+    The one ending that is reached with the setpoint ALREADY at zero: the
+    verdict that records it lands on the tick after. Asserted here, so that
+    this case cannot quietly become "the programme's own cooldown got there
+    first" if the rig's timeline is ever shortened.
+    """
+    rig.fed_bpm = Bpm(82)  # the resting rate: no fall for hr_drop once the load is gone
+    rig.runtime.trip_from_thread("rig_reduce", SafetyAction.REDUCE, "under test")
+    await rig.run(12.0)
+    standing = rig.runtime.standing
+    assert standing is not None
+    assert standing.rule == RULE_SESSION_STANDSTILL
+    assert rig.runtime.end_reason is EndReason.SAFETY_VERDICT
+
+
 ExitPath = Callable[[Rig], Awaitable[None]]
 
 
@@ -1758,6 +1776,7 @@ EXIT_CASES: Final[tuple[ExitCase, ...]] = (
     ExitCase("shutdown", _exit_shutdown),
     ExitCase("critical heart rate", _exit_critical_heart_rate),
     ExitCase("vasovagal drop", _exit_vasovagal_drop),
+    ExitCase("standstill inside the session", _exit_standstill_inside_the_session),
 )
 
 

@@ -8,8 +8,11 @@ supervisor appends :data:`~src.training.safety.SELF_CLEARING` to the detail of
 every unlatched verdict, in one place, and to no latched one.
 
 Each case below produces the verdict the way its own rule does, on the
-supervisor rig of ``tests/test_safety.py``. No threshold is touched: the cases
-only choose evidence.
+supervisor rig of ``tests/test_safety.py``, whose session is in HOLD: a phase
+in which the speed can still be asked to rise. No threshold is touched: the
+cases only choose evidence. That the sentence is left off where it would be
+untrue (a session that is ending, or that has stopped by itself) is proved in
+``tests/test_safety_session_standstill.py``.
 """
 
 from __future__ import annotations
@@ -190,8 +193,12 @@ def test_the_sentence_says_what_an_operator_needs_before_walking_up_to_the_arm()
     """Pinned in words, because it is the one line of this module written for the screen."""
     assert SELF_CLEARING.startswith("; NOT LATCHED: ")
     assert "lifts by itself" in SELF_CLEARING
-    assert "speed up again" in SELF_CLEARING
+    assert "follows the programme or the manual target again" in SELF_CLEARING
+    assert "upwards too" in SELF_CLEARING
     assert "nobody clicking" in SELF_CLEARING
+    # Unconditional, because it is only shown where it is true (see
+    # tests/test_safety_session_standstill.py): no "if the session is still running".
+    assert "still running" not in SELF_CLEARING
 
 
 def test_the_warning_goes_with_the_verdict_and_leaves_when_it_is_latched() -> None:
