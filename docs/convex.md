@@ -32,6 +32,7 @@ Sommaire :
 7. [Tâche planifiée](#7-tâche-planifiée)
 8. [Déployer](#8-déployer)
 9. [Défauts connus et reste à faire](#9-défauts-connus-et-reste-à-faire)
+10. [Tests automatisés](#10-tests-automatisés)
 
 ---
 
@@ -569,3 +570,65 @@ essai de bout en bout avec un Pi en simulation complète. Reste à faire, dans
 l'ordre logique : corriger 1, 2, 4 et 11 ; écrire des tests Convex ; déployer
 en production. Le site a été ouvert contre le développement le 2 octobre 2026
 (voir le [guide du tableau de bord](guides/guide-tableau-de-bord.md#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026)). Voir aussi [securite.md](securite.md).
+
+---
+
+## 10. Tests automatisés
+
+Les tests Convex s'exécutent **entièrement en mémoire** avec `convex-test` ; ils
+ne touchent aucun déploiement et n'exigent ni réseau ni compte.
+
+### Lancer
+
+```bash
+npm run test:convex
+```
+
+C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
+
+### Les suites
+
+| Fichier | Rôle |
+|---|---|
+| `convex/test.setup.ts` | Fabriques partagées : un monde d'un centre (admin, deux gestionnaires, trois patients, deux machines, droits de lancement, profils) et un monde de machines avec de vraies clés pour les routes HTTP. Nom à deux points : non déployé. |
+| `convex/authorization.matrix.ts` | La **matrice d'autorisation** : la politique de chaque fonction publique, une ligne par rôle (et par côté quand l'accès dépend de la propriété). Nom à deux points : non déployé. |
+| `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
+| `convex/httpRoutes.test.ts` | Les 14 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/crons.test.ts` | Le cron `check-offline-machines`. |
+| `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice. |
+| `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). |
+| `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71). |
+
+### Lire la matrice
+
+Chaque entrée de `authorization.matrix.ts` décrit une fonction publique :
+son identifiant (`module.fonction`), son type, une fonction `build` qui prépare
+les arguments, et une liste de `cases`. Une cellule est un acteur nommé
+(`admin`, `manager`, `otherManager`, `patient`, `otherPatient`, `stranger`, ou
+`anonymous`) avec une portée (`own` / `other` / `self`) et un résultat attendu :
+
+- `refuse` : l'appel lève une erreur (avec, si utile, un extrait du message ;
+  il n'existe **aucun code d'erreur stable**, seulement des messages anglais) ;
+- `success` : l'effet ou la donnée renvoyée est vérifié ;
+- `empty` : la requête renvoie `null` ou `[]` (pas d'accès, rien n'est exposé) ;
+- `filtered` : la liste renvoyée contient la donnée du demandeur et exclut
+  celle des autres.
+
+Une cellule marquée `knownDefect` est un **défaut inoffensif connu** : le test
+affirme la politique **voulue** et tourne avec `it.fails`, donc il passe tant
+que le défaut existe et échoue bruyamment le jour où le comportement est corrigé.
+
+Les rôles existants aujourd'hui sont `admin`, `gestionnaire` et `user`, plus
+l'appelant anonyme. Il n'y a pas encore de dimension organisation
+([ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site)) :
+les acteurs nommés portent rôle et relation, de sorte qu'une organisation
+s'ajoutera plus tard comme nouveaux acteurs sans réécrire les tests.
+
+### Ajouter une fonction ou une route
+
+- Nouvelle fonction publique (`query`/`mutation`/`action`) : ajouter une entrée
+  dans `authorization.matrix.ts` (identifiant, `ref`, `build`, `cases`, et un
+  `onSuccess`/`onFiltered` qui vérifie le comportement), sinon
+  `completeness.test.ts` échoue.
+- Nouvelle route de `http.ts` : l'ajouter à `ROUTE_COVERAGE` et lui écrire un
+  test dans `httpRoutes.test.ts`, sinon la gate de complétude échoue.
