@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
@@ -34,6 +35,7 @@ from src.record.journal import (
     FSYNC_PERIOD,
     MIN_FREE_BYTES,
     PROBE_PERIOD,
+    PUBLISH_PERIOD,
     STALL_AFTER,
     STOP_TIMEOUT,
     Cause,
@@ -761,10 +763,12 @@ def test_ex3_a_failed_cycle_does_not_raise_and_the_stall_detector_sees_it(
     real = Scribe.cycle
     failing = [True]
 
-    def broken(self: Scribe, queue: deque[Item], dropped: int) -> Progress:
+    def broken(
+        self: Scribe, queue: deque[Item], dropped: int, publish: Callable[[Progress], None]
+    ) -> None:
         if failing[0]:
             raise RuntimeError("injected: a bug in the cycle")
-        return real(self, queue, dropped)
+        real(self, queue, dropped, publish)
 
     monkeypatch.setattr(Scribe, "cycle", broken)
     journal.submit(row())
@@ -813,6 +817,32 @@ def test_ex2_a_blocked_disk_blocks_the_thread_and_never_the_producer(
     assert journal.stop(Seconds(0.05)) is False
     release.set()
     wait_for(lambda: journal_threads() == [])
+
+
+def test_ex3_a_long_backlog_on_a_slow_disk_is_progress_not_a_stall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One long cycle publishes its progress as it goes: the producer sees it consume."""
+    clock = clock_at_start()
+    journal = opened(tmp_path, clock)
+    journal.drain()
+    for index in range(20):
+        journal.submit(replace(row(), t=index * 0.2))
+    real = Writer.tick
+    seen: list[tuple[int, Cause | None]] = []
+
+    def slow(self: Writer, value: Row) -> Result[None, RecordError]:
+        # What the loop sees while the disk takes a whole second per row.
+        status = journal.status(clock.monotonic())
+        seen.append((status.pending, status.cause))
+        clock.advance(PUBLISH_PERIOD)
+        return real(self, value)
+
+    monkeypatch.setattr(Writer, "tick", slow)
+    journal.drain()
+    assert [pending for pending, _cause in seen] == list(range(20, 0, -1))
+    assert {cause for _pending, cause in seen} == {None}, "twenty seconds of work, no stall"
+    assert journal.status(clock.monotonic()).pending == 0
 
 
 def test_the_documented_periods_and_floor() -> None:

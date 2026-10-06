@@ -37,11 +37,13 @@ from src.record.session import (
     BROKEN,
     INTERRUPTED,
     MAX_NAMES,
+    MAX_TEXT,
     SessionRecorder,
     SessionRequest,
     Stamp,
     describe_status,
     manifest_for,
+    names_of,
     opaque,
     operator_alias,
     record_kind,
@@ -788,10 +790,36 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("operator_action", "emergency_stop: unattributed: pressed", "system"),
         ("verdict_ack", "acknowledged: operator_estop", ALIAS),
         ("refusal", "refused: consigne refusee par [redacted]", ALIAS),
-        ("remote_command", "end_requested: arret demande par Jean Dupont", "remote"),
+        ("remote_command", "end_requested: arret demande par [redacted]", "remote"),
         ("refusal", "refused: refuse", "remote"),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
+
+
+def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(
+    tmp_path: Path,
+) -> None:
+    assert names_of("  Jean   Dupont (tableau de bord) ") == (
+        "Jean Dupont (tableau de bord)",
+        "Jean Dupont",
+    )
+    assert names_of("tableau de bord") == ("tableau de bord",)
+    assert names_of("   ") == ()
+    recorder, journal, _clock = bare_recorder(tmp_path)
+    recorder.begin(
+        SessionRequest(occupancy=Occupancy.BENCH, operator="Jean Dupont (tableau de bord)")
+    )
+    recorder.note_event(
+        surface_event(SurfaceEvent.REFUSED, "", "Jean Dupont a dit : " + "x" * 2000, 11.0)
+    )
+    journal.drain()
+    path = journal.status(Monotonic(0.0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    detail = loaded.value.events[-1].detail
+    assert detail.startswith("refused: [redacted] a dit : xxx")
+    assert len(detail) == MAX_TEXT - len("Jean Dupont") + len("[redacted]")
 
 
 def test_past_too_many_operator_names_the_text_is_withheld_not_leaked(tmp_path: Path) -> None:

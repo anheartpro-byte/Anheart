@@ -85,6 +85,9 @@ CONTRACT_VERSION: Final[str] = "2"
 MAX_NAMES: Final[int] = 32
 """Operator names remembered per session for redaction. Past that, event text is withheld."""
 
+MAX_TEXT: Final[int] = 500
+"""Characters of free text kept per event: a message, not a document."""
+
 WITHHELD: Final[str] = "[redacted]"
 
 SYSTEM: Final[str] = "system"
@@ -129,6 +132,17 @@ def opaque(prefix: str, value: str) -> str:
     if IDENTIFIER.fullmatch(value) is not None:
         return value
     return f"{prefix}-" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def names_of(operator: str) -> tuple[str, ...]:
+    """Every spelling of ``operator`` to keep out of the record's text.
+
+    A launch from the dashboard is attributed to ``<name> (tableau de bord)``:
+    the name alone is one of them too.
+    """
+    whole = " ".join(operator.split())
+    alone = whole.removesuffix(f"({DASHBOARD_OPERATOR})").strip()
+    return tuple(dict.fromkeys(name for name in (whole, alone) if name))
 
 
 def redact(text: str, names: tuple[str, ...]) -> str:
@@ -475,8 +489,7 @@ class SessionRecorder:
         if self._live is not None:
             # The previous session's end was never observed; close what is open.
             self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None))
-        operator = " ".join(request.operator.split())
-        live = _Live(origin=clock.monotonic(), names=(operator,) if operator else ())
+        live = _Live(origin=clock.monotonic(), names=names_of(request.operator))
         self._live = live
         self._journal.open(manifest_for(self._stamp, request, clock), _EMAILS)
         kind = "manual" if request.program is None else "auto"
@@ -552,13 +565,13 @@ class SessionRecorder:
         live = self._live
         if live is None:
             return
-        operator = " ".join(event.operator.split())
-        if operator and operator not in live.names and len(live.names) <= MAX_NAMES:
-            live.names = (*live.names, operator)
+        fresh = tuple(name for name in names_of(event.operator) if name not in live.names)
+        if fresh and len(live.names) <= MAX_NAMES:
+            live.names = (*live.names, *fresh)
         kind = record_kind(event.kind)
         if kind is None:
             return
-        actor = operator_alias(event.operator) if operator else SYSTEM
+        actor = operator_alias(event.operator) if event.operator.strip() else SYSTEM
         if DASHBOARD_OPERATOR in event.operator:
             actor = REMOTE
             if kind is EventKind.OPERATOR_ACTION:
@@ -646,7 +659,7 @@ class SessionRecorder:
     def _text(self, live: _Live, text: str) -> str:
         if len(live.names) > MAX_NAMES:
             return WITHHELD
-        return redact(text, live.names)
+        return redact(text[:MAX_TEXT], live.names)
 
     def _event(self, live: _Live, at: Monotonic, kind: EventKind, detail: str, actor: str) -> None:
         self._journal.submit(

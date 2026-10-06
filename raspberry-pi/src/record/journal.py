@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import shutil
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -78,6 +78,12 @@ STOP_TIMEOUT: Final[Seconds] = Seconds(5.0)
 
 PURGE_PERIOD: Final[Seconds] = Seconds(6 * 3600.0)
 """How often the retention is applied, and only between two sessions."""
+
+PUBLISH_PERIOD: Final[Seconds] = Seconds(1.0)
+"""Inside one cycle, the thread publishes its progress at least this often.
+
+A long backlog on a slow disk is one long cycle: without this the producer
+would see nothing consumed for its whole length and call it a stall."""
 
 MIN_FREE_BYTES: Final[int] = 500_000_000
 """Below 500 MB free under the records directory, no session is armed."""
@@ -339,16 +345,25 @@ class Scribe:
             path=self._path,
         )
 
-    def cycle(self, queue: deque[Item], dropped: int) -> Progress:
-        """Write everything queued when the cycle began, then the periodic work."""
+    def cycle(self, queue: deque[Item], dropped: int, publish: Callable[[Progress], None]) -> None:
+        """Write everything queued when the cycle began, then the periodic work.
+
+        ``publish`` receives the progress every :data:`PUBLISH_PERIOD` while the
+        cycle lasts, and once at the end.
+        """
         now = self._clock.monotonic()
+        published = now
         for _ in range(len(queue)):
             item = queue.popleft()
             self._consumed += 1
             self._samples += _sample_count(item)
             self._note(self._take(item, now, dropped))
+            moment = self._clock.monotonic()
+            if moment - published >= PUBLISH_PERIOD:
+                published = moment
+                publish(self.progress())
         self._checkpoint(now, dropped)
-        return self.progress()
+        publish(self.progress())
 
     def _note(self, outcome: Result[None, RecordError]) -> None:
         if isinstance(outcome, Err):
@@ -455,7 +470,7 @@ class Scribe:
         error = self._error
         last = "" if error is None else f" last={error.operation}:{error.detail}"
         warning = Event(
-            t=now - writer.manifest.clocks.monotonic_start,
+            t=round(now - writer.manifest.clocks.monotonic_start, 3),
             kind=EventKind.WARNING,
             detail=f"record_degraded: dropped={dropped} failures={self._failures}{last}",
         )
@@ -641,7 +656,11 @@ class Journal:
         Public for the code that runs without the thread (tests, and
         :meth:`stop` when it was never started).
         """
-        self._progress = self._scribe.cycle(self._queue, self._dropped)
+        self._scribe.cycle(self._queue, self._dropped, self._publish)
+
+    def _publish(self, progress: Progress) -> None:
+        """The journal thread's one write to the producer's side: a whole value, swapped in."""
+        self._progress = progress
 
     def stop(self, timeout: Seconds = STOP_TIMEOUT) -> bool:
         """Drain what is queued and end the thread. Blocking: call it off the event loop.
