@@ -2317,9 +2317,9 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 
 Pour le mainteneur de la documentation technique :
 
-- elle ne signale pas l'erreur affichée au gestionnaire qui modifie une
-  machine (§9.2 n°4), ni le blocage durable causé par **Nouvelle session**
-  (n°3) ;
+- elle ne signale pas le défaut de **Assigner des Machines** (§9.2 n°2), ni
+  l'erreur affichée au gestionnaire qui modifie une machine (n°4), ni le
+  blocage durable causé par **Nouvelle session** (n°3) ;
 - elle dit que la fenêtre bloque le lancement pour un pratiquant de moins de 18
   ans : ce contrôle ne vaut que pour un patient choisi dans la liste, pas pour
   « Moi-même » ;
