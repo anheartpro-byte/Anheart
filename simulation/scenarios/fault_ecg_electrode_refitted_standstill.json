@@ -1,0 +1,43 @@
+{
+  "name": "fault_ecg_electrode_refitted_standstill",
+  "description": "ANH-176, the detached electrode: 50 s without a heart rate during WARMUP of the shipped 30-min programme (FREEZE at 10 s, REDUCE at 30 s, the setpoint reaches zero), then the electrode is refitted. The session must END at that standstill, latched (session_standstill): a stopped arm never restarts by itself, so nothing moves when the heart rate returns, and a START is refused until a named acknowledgement.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 900,
+  "profile": "standard_30_min",
+  "actions": [
+    {
+      "at_s": 420,
+      "do": "ecg_dropout",
+      "duration_s": 50
+    },
+    {
+      "at_s": 500,
+      "do": "start_again",
+      "expect": "refused"
+    },
+    {
+      "at_s": 800,
+      "do": "start_again",
+      "expect": "refused"
+    },
+    {
+      "at_s": 810,
+      "do": "acknowledge",
+      "estop_released": false
+    }
+  ],
+  "expect": {
+    "end_reason": "safety_verdict",
+    "final_state": "finished",
+    "rules": [
+      "hr_stale",
+      "session_standstill"
+    ],
+    "max_output_rpm": 3.4
+  }
+}

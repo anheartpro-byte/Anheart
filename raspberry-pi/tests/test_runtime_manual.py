@@ -59,7 +59,7 @@ from src.training.runtime import (
     TrainingRuntime,
     status_fault_report,
 )
-from src.training.safety import RULE_DRIVE_FAULT, RULE_HR_STALE
+from src.training.safety import RULE_DRIVE_FAULT, RULE_HR_STALE, RULE_SESSION_STANDSTILL
 from src.training.types import Occupancy, Phase, RunMode, SafetyAction, TelemetrySnapshot
 from src.units import (
     Amperes,
@@ -465,10 +465,30 @@ async def test_reduce_descends_at_the_motion_rate_whatever_the_target() -> None:
     await rig.run(25.0)
     rig.runtime.trip_from_thread("rig_reduce", SafetyAction.REDUCE, "under test")
     down = await rig.run(30.0)
-    assert all(snapshot.safety_action is SafetyAction.REDUCE for snapshot in down)
     _assert_ramp_conforms([300, *_setpoints(down)])
     assert _setpoints(down)[-1] == 0
-    assert rig.runtime.manual_target == 300  # a REDUCE is not a stop
+    turning = [snapshot for snapshot in down if snapshot.setpoint.motor_rpm != 0]
+    assert turning
+    assert all(snapshot.safety_action is SafetyAction.REDUCE for snapshot in turning)
+    # A REDUCE is not a stop while the arm turns: the operator's target is kept.
+    assert all(
+        snapshot.manual is not None and snapshot.manual.target.motor_rpm == 300
+        for snapshot in turning
+    )
+    # The standstill it reaches is one (ANH-176, decisions of 2026-10-05 and
+    # 2026-10-06): a stopped arm never restarts by itself, empty capsule
+    # included. The session ends there, latched, and the target is zeroed as
+    # after any stop. Before, the target stayed at 300 and the arm went back to
+    # it as soon as the REDUCE was acknowledged.
+    last = down[-1].safety
+    assert last is not None
+    assert (last.action, last.rule, last.latched) == (
+        SafetyAction.RAMP_DOWN,
+        RULE_SESSION_STANDSTILL,
+        True,
+    )
+    assert rig.runtime.manual_target == 0
+    assert rig.runtime.end_reason is EndReason.SAFETY_VERDICT
 
 
 async def test_a_ramp_down_verdict_ends_the_session_at_the_motion_rate() -> None:

@@ -73,7 +73,9 @@ WHAT THIS MODULE REFUSES TO ASSUME
   leave. If ETA reports ``OPERATION_ENABLED``, a previous process died with the
   motor commanded: zero the reference, ramp-stop, latch, refuse to start, and
   require a named operator acknowledgement. There is no automatic fault reset
-  and no automatic resumption of motion anywhere in this file.
+  anywhere in this file, and nothing resumes by itself behind a latched
+  verdict; what does resume by itself, and where that stops, is in the next
+  section.
 * **That an unchanged heart rate is a measured one.**
   ``src/signal_processing.py`` re-emits its previous metrics dict when
   extraction fails, so :meth:`TrainingRuntime.observe_ecg` carries the sample
@@ -105,6 +107,25 @@ control law: the verdict decides first, always. A programme's setpoint walks the
 same profiler - the controller only chooses where to - and may not rise at all
 while the heart rate is falling fast (the vasovagal gate,
 ``RuntimeLimits.falling_trend``).
+
+A warning that is not latched (FREEZE, REDUCE) does not end the session: when
+its cause clears, the setpoint follows the controller, or the operator's
+target, again with nobody clicking; and the control law itself regulates in
+both directions. Both are kept while the arm is turning. Neither may take the
+arm out of a standstill: **a stopped arm never restarts by itself.** Once the
+arm has moved in a session, a setpoint that comes back to zero without anybody
+having asked for it ends the session (product decisions of 2026-10-05 and
+2026-10-06, ``docs/securite.md``). ONE place sees every such zero, whichever
+arm of the verdict wrote it: the end of :meth:`TrainingRuntime._command`, which
+states the fact (:meth:`TrainingRuntime._note_standstill`) and leaves the
+verdict to the supervisor's ``session_standstill`` rule, so that this ending is
+reported, refused against and acknowledged like every other latched one. Not a
+standstill "by itself": an operator's stop, an operator's manual target of zero
+with no warning standing, the programme's own cooldown. Left as they were: a
+warning before the arm has moved at all (BASELINE), where the motion that
+follows is the programme's normal start; and a manual target the operator
+typed while a warning held the arm at zero, which is followed when the warning
+lifts.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -1085,6 +1106,7 @@ class TrainingRuntime:
         "_snapshot",
         "_started_at",
         "_stop_requested",
+        "_stopped_by",
         "_subject",
         "_supervisor",
         "_tracker",
@@ -1167,6 +1189,9 @@ class TrainingRuntime:
         self._end_reason: EndReason | None = None
         self._recovery_from: Monotonic | None = None
         self._stop_requested: str | None = None
+        # What brought this session's arm to a standstill by itself, in words,
+        # or None: stated once by _note_standstill, read by the supervisor.
+        self._stopped_by: str | None = None
         self._warmup_satisfied: bool = False
         self._resting_bpm: Bpm | None = None
         # A manual session instead of a programme; at most one of the two.
@@ -1747,6 +1772,7 @@ class TrainingRuntime:
         self._end_reason = None
         self._recovery_from = None
         self._stop_requested = None
+        self._stopped_by = None
         self._warmup_satisfied = False
         self._resting_bpm = None
         self._decision = None
@@ -2406,6 +2432,8 @@ class TrainingRuntime:
         the whole reason the two layers exist. ``commanded_g`` is the applied
         setpoint - a measurement - rendered through the geometry, and
         ``envelope`` is derived from it and from the drive's ramp.
+        ``stopped_by`` is a fact about the applied setpoint too (it came back
+        to zero, and nobody had asked): see :meth:`_note_standstill`.
 
         ``measured_rpm`` and ``current`` go to ``None`` the moment the status is
         stale, never to a fabricated zero - a made-up 0 rpm is exactly the lie
@@ -2436,6 +2464,7 @@ class TrainingRuntime:
             setpoint_echo_rpm=echo,
             envelope=envelope,
             heart_rate_supervised=self._occupied(),
+            stopped_by=self._stopped_by,
         )
 
     def _envelope(self, now: Monotonic) -> SpeedEnvelope | None:
@@ -2565,8 +2594,12 @@ class TrainingRuntime:
         Exhaustive over :class:`~src.training.types.SafetyAction`, so a new
         action fails the type check here rather than falling into whichever
         branch happened to be last.
+
+        The last lines are the ONE place that sees a setpoint come back to
+        zero, whichever arm wrote it: see :meth:`_note_standstill`.
         """
         action = SafetyAction.NONE if standing is None else standing.action
+        before = self._applied_rpm
         match action:
             case SafetyAction.NONE:
                 self._descent_from = None
@@ -2621,6 +2654,68 @@ class TrainingRuntime:
                 assert_never(unreachable)
         if action is not SafetyAction.NONE:
             self._rebase_controller(now)
+        # This tick's step, ACKNOWLEDGED by the drive, took the setpoint to zero
+        # (`_applied_rpm` advances on an acknowledged write and on nothing else).
+        if before != 0 and self._applied_rpm == 0:
+            self._note_standstill(standing)
+
+    def _note_standstill(self, standing: SafetyVerdict | None) -> None:
+        """The setpoint has just come back to zero: was that by itself? If so, say it.
+
+        Product decisions of 2026-10-05 and 2026-10-06 (``docs/securite.md``):
+        once the arm has moved in a session, any return of the setpoint to zero
+        that nobody asked for ends the session, latched. **A stopped arm never
+        restarts by itself.** Before this, two things took the arm out of a
+        standstill with nobody clicking. An unlatched warning that lifted: on
+        the shipped profile a heart rate lost for 50 s stopped the arm at 42 s,
+        and 45 s after it came back the setpoint was 69 motor rpm, the mode
+        still SEANCE, the operator beside the capsule refitting the electrode.
+        And the control law, which regulates in both directions: it writes
+        zero when the heart rate is above the zone and leaves zero again when
+        it has come back down, with no verdict on screen at any point.
+
+        Called from the end of :meth:`_command` and from nowhere else, on the
+        tick a non-zero setpoint became an acknowledged zero, so every arm is
+        covered by one test instead of one copy per arm, and a zero that never
+        landed ends nothing: the next tick tries again. "After the arm has
+        moved" is that same test: the step started above zero.
+
+        This method only STATES what happened (:attr:`_stopped_by`, handed to
+        the supervisor in :meth:`_observe`). The verdict is the supervisor's
+        ``session_standstill``, on the next tick: it lands in the supervisor's
+        latched floor, so the status page, the start gate and the
+        acknowledgement see this ending exactly as they see every other latched
+        one, and this module's own single latch stays free for a refused stop
+        word (``disable_refused``) that may follow. Nothing moves in between:
+        the setpoint is zero, and the tick that could raise it is the tick the
+        verdict decides.
+
+        A zero somebody asked for is not a standstill "by itself", and two of
+        them come through here:
+
+        * the session is already ending (:func:`motion_is_over`): an operator
+          stop, the programme's own cooldown and recovery, a verdict that
+          ended the session. That ending keeps its own cause, and nothing
+          restarts from there;
+        * a manual session with no warning standing: the setpoint follows the
+          operator's target and nothing else, so the operator typed that zero
+          and may type another speed.
+
+        The baseline never comes here at all: nothing has moved yet, so no step
+        can start above zero. A warning that comes and goes there is followed
+        by the programme's normal start, and the decision leaves that as it is.
+
+        A manual target of zero typed WHILE a warning is lowering the speed is
+        not told apart from the warning's own descent: the cautious reading,
+        the session ends. And nobody on board (a BENCH manual session) changes
+        nothing here: the decision of 2026-10-06 covers the empty capsule too.
+        """
+        if motion_is_over(self._phase):
+            return
+        if standing is not None:
+            self._stopped_by = f"the warning {standing.rule}"
+        elif self._manual is None:
+            self._stopped_by = "the heart-rate regulation"
 
     def _rebase_controller(self, now: Monotonic) -> None:
         """Hand the controller the setpoint a verdict put in force.
