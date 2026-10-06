@@ -408,8 +408,9 @@ seconde** :
   `lib/training.ts` et importé par `convex/training.ts` : le serveur et le site
   ne peuvent pas diverger ;
 - la carte « État en direct », chaque carte de Mes machines et le panneau
-  d'entraînement lisent ce hook. Aucun badge « En direct » n'est affiché sans
-  lui.
+  d'entraînement lisent ce hook. Le badge « En direct » de l'état d'une machine
+  n'est jamais affiché sans lui (l'ancien bloc ECG fait exception, voir les
+  limites).
 
 | Moment | Ce que le site affiche |
 |---|---|
@@ -427,8 +428,10 @@ Limites :
 
 - La fraîcheur compare l'heure du serveur (état de la machine) ou du Pi
   (télémétrie) à l'**horloge du navigateur**. Un poste dont l'horloge retarde
-  voit « Données périmées » plus tard, un poste dont l'horloge avance le voit
-  plus tôt.
+  voit « Données périmées » plus tard (pour l'état d'une machine, jamais plus
+  tard qu'au passage hors ligne, voir ci-dessus). Un poste dont l'horloge
+  avance le voit plus tôt : au delà de 80 s d'avance environ, il l'affiche
+  alors que la machine envoie encore. L'écart n'est ni mesuré ni corrigé.
 - Le **statut** « En ligne » / « Hors ligne » et « Dernier signal » ne sont pas
   concernés : le statut est écrit par le serveur une fois par minute (hors
   ligne entre 1,5 et 2,5 min après le dernier signal) et « Dernier signal » ne
