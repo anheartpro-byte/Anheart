@@ -13,7 +13,13 @@ real suite. Three kinds of test:
   differ between processes;
 * the environment and the import path the tests run with, which must be those
   of the serial gate;
-* the runner being told to stop.
+* the runner being told to stop;
+* the simulation battery's own dealing rule (tests that share one cached run
+  stay together, the cohort has a process to itself), as plain functions and
+  against a throwaway battery;
+* a suite whose shares are run by several calls, as the CI jobs of the
+  simulation gate do (``--shares`` then ``--combine``): the green case, then
+  once for each way the calls together must NOT be able to pass.
 
 Several of the throwaway scenarios are built so that ONE check is all that
 stands between them and a pass: process 0 alone covers the whole of the
@@ -35,14 +41,28 @@ from typing import Final
 
 import pytest
 from coverage import CoverageData
-from pi_gate_parallel import check_partition, merge_coverage, read_lines
+from pi_gate_parallel import (
+    Mode,
+    check_partition,
+    merge_coverage,
+    parse_arguments,
+    parse_shares,
+    read_lines,
+)
 from pi_gate_shard import (
+    ALONE_IN_PROCESS_ZERO,
+    OTHER_SECONDS,
     SAME_PROCESS,
+    SLOW_SECONDS,
     Share,
+    Suite,
     given,
     parse_share,
+    parse_suite,
     restore_environment,
     restore_import_path,
+    shared_run,
+    simulation_owners,
 )
 
 RUNNER: Final[Path] = Path(__file__).with_name("pi_gate_parallel.py")
@@ -576,3 +596,444 @@ def test_sigterm_stops_the_runner_and_every_process_it_started(project: Path) ->
         for pid in started:
             if is_alive(pid):
                 os.kill(pid, signal.SIGKILL)
+
+
+# --- The simulation battery's dealing rule ---------------------------------
+
+COHORT: Final[str] = next(iter(ALONE_IN_PROCESS_ZERO))
+
+SIMULATION_IDS: Final[Sequence[str]] = (
+    "tests/test_battery.py::test_invariants[jog]",
+    "tests/test_battery.py::test_invariants[bench]",
+    "tests/test_battery.py::test_invariants[estop]",
+    "tests/test_battery.py::test_motor_stopped[jog]",
+    "tests/test_battery.py::test_motor_stopped[bench]",
+    "tests/test_battery.py::test_motor_stopped[estop]",
+    "tests/test_battery.py::test_the_battery_is_complete",
+    f"{COHORT}::test_the_cohort_file_is_current",
+    f"{COHORT}::test_invariants[S01-jog]",
+    f"{COHORT}::test_motor_stopped[S01-jog]",
+    "tests/test_failures.py::test_handled[jog]",
+    "tests/test_failures.py::test_motor_stopped[jog]",
+    "tests/test_units.py::test_plain",
+)
+"""Shaped like the real battery: runs shared inside a file, and the cohort."""
+
+
+def test_simulation_tests_that_share_a_run_go_to_the_same_process() -> None:
+    owners = dict(zip(SIMULATION_IDS, simulation_owners(SIMULATION_IDS, 4), strict=True))
+    battery = "tests/test_battery.py"
+    # Groups in the order they are first met, dealt in turn to processes 1, 2, 3.
+    assert owners[f"{battery}::test_invariants[jog]"] == 1
+    assert owners[f"{battery}::test_invariants[bench]"] == 2
+    assert owners[f"{battery}::test_invariants[estop]"] == 3
+    assert owners[f"{battery}::test_the_battery_is_complete"] == 1
+    assert owners["tests/test_failures.py::test_handled[jog]"] == 2
+    assert owners["tests/test_units.py::test_plain"] == 3
+    # The second question about a run goes where the first one made it.
+    for run in ("jog", "bench", "estop"):
+        asked_first = owners[f"{battery}::test_invariants[{run}]"]
+        assert owners[f"{battery}::test_motor_stopped[{run}]"] == asked_first
+    handled = owners["tests/test_failures.py::test_handled[jog]"]
+    assert owners["tests/test_failures.py::test_motor_stopped[jog]"] == handled
+
+
+def test_the_cohort_has_process_zero_to_itself() -> None:
+    owners = simulation_owners(SIMULATION_IDS, 4)
+    for nodeid, owner in zip(SIMULATION_IDS, owners, strict=True):
+        assert (owner == 0) == nodeid.startswith(COHORT), nodeid
+
+
+def a_test_of(group: str) -> str:
+    """A test id whose ``shared_run`` is ``group``, as the table of slow runs names it."""
+    file, bracket, parameter = group.partition("[")
+    return f"{file}::test_it[{parameter}" if bracket else group
+
+
+def test_the_slowest_simulation_runs_are_dealt_first_and_weighed() -> None:
+    """Collected last, after sixty light runs: they still open the dealing, slowest first."""
+    slowest_first = sorted(SLOW_SECONDS, key=lambda group: -SLOW_SECONDS[group])
+    for group in slowest_first:
+        assert shared_run(a_test_of(group)) == group, "not the name of a group of tests"
+        assert SLOW_SECONDS[group] > OTHER_SECONDS
+    light = [f"tests/test_failures.py::test_handled[light{n}]" for n in range(60)]
+    nodeids = [*light, *(a_test_of(group) for group in slowest_first)]
+
+    owners = dict(zip(nodeids, simulation_owners(nodeids, 4), strict=True))
+
+    assert [owners[a_test_of(group)] for group in slowest_first[:3]] == [1, 2, 3]
+    work: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    runs: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    for nodeid, owner in owners.items():
+        work[owner] += SLOW_SECONDS.get(shared_run(nodeid), OTHER_SECONDS)
+        runs[owner] += 1
+    # The light runs fill what the slow ones left uneven, to within one of them.
+    assert max(work.values()) - min(work.values()) <= OTHER_SECONDS
+    # Dealt in turn, as before this table, every process would have had 25 runs.
+    assert max(runs.values()) > min(runs.values())
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4, 13])
+def test_every_simulation_test_has_one_process_whatever_their_number(count: int) -> None:
+    nodeids = [
+        f"tests/test_m{m}.py::test_t{t}[{p}]" for m in range(3) for t in range(4) for p in "abcde"
+    ]
+    nodeids += [f"{COHORT}::test_c{c}" for c in range(7)]
+    owners = simulation_owners(nodeids, count)
+    assert len(owners) == len(nodeids)
+    assert set(owners) <= set(range(count))
+    groups: dict[str, set[int]] = {}
+    for nodeid, owner in zip(nodeids, owners, strict=True):
+        groups.setdefault(shared_run(nodeid), set()).add(owner)
+    dealt = [next(iter(where)) for group, where in groups.items() if not group.startswith(COHORT)]
+    assert all(len(where) == 1 for group, where in groups.items() if not group.startswith(COHORT))
+    if count == 1:
+        assert set(owners) == {0}
+    else:
+        # In turn: no process is given two more runs than another.
+        runs_of = [dealt.count(process) for process in range(1, count)]
+        assert 0 not in dealt
+        assert max(runs_of) - min(runs_of) <= 1
+
+
+def test_the_run_two_tests_share_is_read_from_their_ids() -> None:
+    assert shared_run("tests/t.py::test_x[a-b]") == "tests/t.py[a-b]"
+    assert shared_run("tests/t.py::test_y[a-b]") == "tests/t.py[a-b]"
+    assert shared_run("tests/t.py::TestK::test_x[a-b]") == "tests/t.py[a-b]"
+    assert shared_run("tests/u.py::test_x[a-b]") == "tests/u.py[a-b]"
+    assert shared_run("tests/t.py::test_x[p[0]]") == "tests/t.py[p[0]]"
+    assert shared_run("tests/t.py::test_x") == "tests/t.py::test_x"
+
+
+def test_the_suite_is_the_pi_one_unless_named() -> None:
+    assert parse_suite([]) is Suite.PI
+    assert parse_suite(["pi"]) is Suite.PI
+    assert parse_suite(["simulation"]) is Suite.SIMULATION
+    for refused in (["battery"], ["pi", "simulation"], [""]):
+        with pytest.raises(pytest.UsageError):
+            parse_suite(refused)
+
+
+def test_each_suite_names_what_it_no_longer_collects(tmp_path: Path) -> None:
+    pi = Share(index=0, count=2, evidence=tmp_path)
+    simulation = Share(index=0, count=2, evidence=tmp_path, suite=Suite.SIMULATION)
+    assert pi.absent(sorted(SAME_PROCESS)) == []
+    assert pi.absent(SIMULATION_IDS) == sorted(SAME_PROCESS)
+    assert simulation.absent(SIMULATION_IDS) == []
+    assert simulation.absent(sorted(SAME_PROCESS)) == sorted(ALONE_IN_PROCESS_ZERO)
+
+
+BATTERY: Final[Mapping[str, str]] = {
+    "pyproject.toml": PROJECT["pyproject.toml"],
+    "src/__init__.py": "",
+    "src/lib.py": PROJECT["src/lib.py"],
+    "tests/__init__.py": "",
+    # Three questions about each of five runs. A run is made by the first test
+    # of a process to ask for it, and leaves a file that names the process.
+    "tests/test_battery.py": (
+        "import os\nfrom pathlib import Path\n\nimport pytest\n\n"
+        "RUNS: dict[str, int] = {}\n"
+        'NAMES = ["a", "b", "c", "d", "e"]\n\n\n'
+        "def run(name: str) -> int:\n"
+        "    if name not in RUNS:\n"
+        '        Path(f"made-{name}-by-{os.getpid()}").touch()\n'
+        "        RUNS[name] = len(name)\n"
+        "    return RUNS[name]\n\n\n"
+        '@pytest.mark.parametrize("name", NAMES)\n'
+        "def test_first(name: str) -> None:\n    assert run(name) == 1\n\n\n"
+        '@pytest.mark.parametrize("name", NAMES)\n'
+        "def test_second(name: str) -> None:\n    assert run(name) == 1\n\n\n"
+        '@pytest.mark.parametrize("name", NAMES)\n'
+        "def test_third(name: str) -> None:\n    assert run(name) == 1\n\n\n"
+        "def test_alone() -> None:\n    assert NAMES\n"
+    ),
+    # The file the simulation rule sends whole to process 0.
+    COHORT: (
+        "from src.lib import sign\n\n\n"
+        "def test_negative() -> None:\n    assert sign(-3) == -1\n\n\n"
+        "def test_positive() -> None:\n    assert sign(3) == 1\n"
+    ),
+}
+
+
+@pytest.fixture
+def battery(tmp_path: Path) -> Path:
+    for name, content in BATTERY.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return tmp_path
+
+
+def run_runner(
+    directory: Path, *arguments: str, exit_grace: float = 60.0
+) -> subprocess.CompletedProcess[str]:
+    """Run the real runner as asked, in a throwaway project."""
+    return subprocess.run(  # noqa: S603  # fixed argv, no shell
+        [sys.executable, str(RUNNER), *arguments, "--exit-grace", str(exit_grace)],
+        cwd=directory,
+        env=clean_environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=RUN_TIMEOUT_S,
+    )
+
+
+def test_a_battery_makes_each_shared_run_once_and_keeps_the_cohort_apart(battery: Path) -> None:
+    result = run_runner(battery, "--processes", "3", "--suite", "simulation", "--fail-under", "100")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[gate] tests collected by each process: 18 / 18 / 18" in result.stdout
+    assert "[gate] tests run by each process: 2 + 9 + 7" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    for name in "abcde":
+        made = list(battery.glob(f"made-{name}-by-*"))
+        assert len(made) == 1, f"run {name} was made {len(made)} times: one per process that asked"
+    ran_cohort = {line[:4] for line in result.stdout.splitlines() if f"{COHORT}::" in line}
+    assert ran_cohort == {"[p0]"}
+    passed_in_zero = [line for line in result.stdout.splitlines() if line.startswith("[p0] tests/")]
+    assert len(passed_in_zero) == 2, "process 0 ran something besides the cohort"
+
+
+def test_the_same_battery_dealt_by_position_makes_its_runs_again(battery: Path) -> None:
+    """What the rule above is for: the Pi rule would make most runs three times."""
+    for nodeid in SAME_PROCESS:
+        name, _, function = nodeid.partition("::")
+        (battery / name).write_text(f"def {function}() -> None:\n    pass\n", encoding="utf-8")
+    result = run_runner(battery, "--processes", "3", "--fail-under", "100")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(list(battery.glob("made-*"))) > 5
+
+
+def test_a_battery_without_its_cohort_file_fails_the_gate(battery: Path) -> None:
+    (battery / COHORT).unlink()
+    result = run_runner(battery, "--processes", "3", "--suite", "simulation", "--fail-under", "100")
+    assert result.returncode == 1
+    assert "no longer collected" in result.stdout
+    assert "ALONE_IN_PROCESS_ZERO" in result.stdout
+
+
+# --- Reading the command line ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "shares", "count"),
+    [("0-0/1", range(1), 1), ("5-8/13", range(5, 9), 13), ("0-12/13", range(13), 13)],
+)
+def test_a_span_of_shares_is_read(text: str, shares: range, count: int) -> None:
+    assert parse_shares(text) == (shares, count)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "4", "4/13", "4-/13", "-4/13", "5-4/13", "5-13/13", "a-b/c", "1-2/3/4", "1-2", "0-0/0"],
+)
+def test_a_span_that_names_no_share_is_refused(text: str) -> None:
+    assert parse_shares(text) is None
+
+
+def test_each_way_to_call_the_runner_is_told_apart(tmp_path: Path) -> None:
+    directory = str(tmp_path)
+    whole = parse_arguments(["--processes", "4", "--fail-under", "100"])
+    assert (whole.mode, whole.shares, whole.count) == (Mode.WHOLE, range(4), 4)
+    assert (whole.suite, whole.evidence, whole.fail_under) == ("pi", None, "100")
+    part = parse_arguments(["--shares", "5-8/13", "--evidence", directory, "--suite", "simulation"])
+    assert (part.mode, part.shares, part.count) == (Mode.PART, range(5, 9), 13)
+    assert (part.suite, part.evidence) == ("simulation", tmp_path)
+    combine = parse_arguments(["--combine", "13", "--evidence", directory, "--fail-under", "99.5"])
+    assert (combine.mode, combine.shares, combine.count) == (Mode.COMBINE, range(0), 13)
+    assert (combine.evidence, combine.fail_under) == (tmp_path, "99.5")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [],
+        ["--processes", "4"],
+        ["--processes", "0", "--fail-under", "100"],
+        ["--processes", "4", "--fail-under", "100", "--evidence", "kept"],
+        ["--processes", "2", "--shares", "0-1/2", "--evidence", "kept", "--fail-under", "100"],
+        ["--shares", "5-8/13"],
+        ["--shares", "9-8/13", "--evidence", "kept"],
+        ["--shares", "5-8/13", "--evidence", "kept", "--suite", "battery"],
+        ["--combine", "13", "--evidence", "kept"],
+        ["--combine", "13", "--fail-under", "100"],
+        ["--combine", "0", "--evidence", "kept", "--fail-under", "100"],
+    ],
+)
+def test_a_call_that_does_not_say_enough_is_refused(arguments: Sequence[str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_arguments(arguments)
+
+
+# --- One suite, its shares run by several calls ----------------------------
+
+
+def test_some_of_the_shares_are_not_blamed_for_the_tests_of_the_others() -> None:
+    collected = [["a", "b", "c", "d"], ["a", "b", "c", "d"]]
+    assert check_partition(collected, [["a"], ["b"]], first=5, whole=False) == []
+    twice = check_partition(collected, [["a"], ["a"]], first=5, whole=False)
+    assert twice == ["1 tests ran more than once: a"]
+    differing = check_partition([["a", "b"], ["a", "x"]], [["a"], []], first=5, whole=False)
+    assert len(differing) == 1
+    assert "process 6 did not collect the same tests as process 5" in differing[0]
+
+
+def test_a_missing_measure_is_named_after_its_own_process(tmp_path: Path) -> None:
+    present = coverage_file(tmp_path / "present", {"src/lib.py": [(-1, 1)]})
+    problems = merge_coverage([present, tmp_path / "absent"], tmp_path / "merged", first=5)
+    assert problems == ["process 6 left no coverage data"]
+
+
+@pytest.fixture
+def kept(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory for the evidence, outside the project and not yet there."""
+    return tmp_path_factory.mktemp("evidence") / "kept" / "here"
+
+
+def run_shares(
+    project: Path, shares: str, kept: Path, *, exit_grace: float = 60.0
+) -> subprocess.CompletedProcess[str]:
+    return run_runner(project, "--shares", shares, "--evidence", str(kept), exit_grace=exit_grace)
+
+
+def combine(project: Path, kept: Path, count: int = 2) -> subprocess.CompletedProcess[str]:
+    arguments = ["--combine", str(count), "--evidence", str(kept), "--fail-under", "100"]
+    return run_runner(project, *arguments)
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [["0-0/2", "1-1/2"], ["1-1/2", "0-0/2"], ["0-1/2"], ["0-0/3", "1-2/3"]],
+    ids=["one-share-each", "in-any-order", "all-in-one-call", "one-then-two"],
+)
+def test_shares_run_by_separate_calls_are_proven_together(
+    project: Path, kept: Path, calls: Sequence[str]
+) -> None:
+    for shares in calls:
+        part = run_shares(project, shares, kept)
+        assert part.returncode == 0, part.stdout + part.stderr
+        assert "exited cleanly and left their records" in part.stdout
+        # No call that ran part of the suite may speak for the whole of it.
+        assert "[gate] partition proven" not in part.stdout
+        assert "required coverage" not in part.stdout
+    assert not (project / "coverage.xml").exists()
+
+    count = int(calls[0].rpartition("/")[2])
+    result = combine(project, kept, count)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] verdicts over all processes: 6 passed" in result.stdout
+    assert f"[gate] coverage data merged from {count} of {count} processes" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert (project / "coverage.xml").is_file()
+
+
+def test_a_share_no_call_ran_fails_the_combined_gate(project: Path, kept: Path) -> None:
+    """Process 0 covers everything and passes: only the missing record tells."""
+    assert run_shares(project, "0-0/2", kept).returncode == 0
+    result = combine(project, kept)
+    assert result.returncode == 1
+    assert "process 1 left no record of what it collected and ran" in result.stdout
+    assert "process 1 left no coverage data" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] partition proven" not in result.stdout
+
+
+def test_shares_cut_differently_by_two_calls_fail_the_combined_gate(
+    project: Path, kept: Path
+) -> None:
+    """One call cut the suite in three, the other in two: a test twice, another never.
+
+    Both calls pass, every test that ran passed and coverage is complete. The
+    proof does not know how either call chose its tests, and does not need to.
+    """
+    assert run_shares(project, "0-0/3", kept).returncode == 0
+    assert run_shares(project, "1-1/2", kept).returncode == 0
+    result = combine(project, kept)
+    assert result.returncode == 1
+    assert "1 collected tests ran in no process: tests/test_lib.py::test_zero" in result.stdout
+    assert "1 tests ran more than once: tests/test_lib.py::test_large" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert "[gate] TESTS FAILED, 2 reason(s):" in result.stdout
+
+
+def test_a_failing_test_fails_its_own_call_and_the_combined_gate(project: Path, kept: Path) -> None:
+    with (project / "tests/test_lib.py").open("a", encoding="utf-8") as tests:
+        tests.write("\n\ndef test_broken() -> None:\n    assert sign(1) == -1\n")
+    ran_it = run_shares(project, "0-0/2", kept)
+    assert ran_it.returncode == 1
+    assert "process 0 did not end cleanly: exit code 1" in ran_it.stdout
+    assert "1 tests failed or errored according to the processes' records" in ran_it.stdout
+    assert run_shares(project, "1-1/2", kept).returncode == 0
+    # Should whoever gathers the shares forget to ask how each call ended.
+    result = combine(project, kept)
+    assert result.returncode == 1
+    assert "[gate] partition proven" in result.stdout
+    assert "1 tests failed or errored according to the processes' records" in result.stdout
+
+
+def test_a_process_killed_at_shutdown_fails_the_call_that_ran_it(project: Path, kept: Path) -> None:
+    (project / "tests/conftest.py").write_text(
+        "import atexit\nimport signal\n"
+        + ONLY_IN_PROCESS_ONE
+        + "    atexit.register(os.kill, os.getpid(), signal.SIGKILL)\n",
+        encoding="utf-8",
+    )
+    result = run_shares(project, "1-1/2", kept)
+    assert result.returncode == 1
+    assert "process 1 did not end cleanly: killed by SIGKILL" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_process_that_never_exits_fails_the_call_that_ran_it(project: Path, kept: Path) -> None:
+    (project / "tests/conftest.py").write_text(
+        "import threading\n"
+        + ONLY_IN_PROCESS_ONE
+        + "    threading.Thread(target=threading.Event().wait).start()\n",
+        encoding="utf-8",
+    )
+    result = run_shares(project, "1-1/2", kept, exit_grace=1.0)
+    assert result.returncode == 1
+    assert "process 1 finished its tests but had not exited 1 s later" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_hole_in_the_coverage_shows_once_every_share_is_gathered(
+    project: Path, kept: Path
+) -> None:
+    remove_the_only_test_of_the_negative_branch(project)
+    assert run_shares(project, "0-0/2", kept).returncode == 0
+    assert run_shares(project, "1-1/2", kept).returncode == 0
+    result = combine(project, kept)
+    assert result.returncode == 1
+    assert "[gate] partition proven" in result.stdout
+    assert "combined coverage is below the required 100%" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_a_share_without_its_measure_fails_the_call_that_ran_it(project: Path, kept: Path) -> None:
+    misbehave_in_process_one(project, "pytest_unconfigure", "COVERAGE_DATA.unlink()")
+    result = run_shares(project, "1-1/2", kept)
+    assert result.returncode == 1
+    assert "process 1 left no coverage data" in result.stdout
+    assert "[gate] TESTS FAILED, 1 reason(s):" in result.stdout
+
+
+def test_what_an_earlier_call_left_for_a_share_is_not_judged_again(
+    project: Path, kept: Path
+) -> None:
+    """The directory is kept, so it can be used twice: the second time must not read the first."""
+    assert run_shares(project, "0-1/2", kept).returncode == 0
+    assert (kept / "executed-1.txt").is_file()
+    misbehave_in_process_one(project, "pytest_sessionfinish", "os._exit(0)", first=True)
+
+    again = run_shares(project, "1-1/2", kept)
+
+    assert again.returncode == 1
+    assert "[gate] process 1 ended: exit code 0" in again.stdout
+    assert "process 1 left no record of what it collected and ran" in again.stdout
+    assert not (kept / "executed-1.txt").exists()
+    assert combine(project, kept).returncode == 1
