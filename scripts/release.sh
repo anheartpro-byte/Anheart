@@ -15,6 +15,9 @@ REMOTE=origin
 DEVELOP="${RELEASE_DEVELOP:-develop}"
 MAIN="${RELEASE_MAIN:-main}"
 COMPONENTS="pi cloud web"
+# Les jobs de .github/workflows/ci.yml sans lesquels un commit n'est pas vert.
+# Si un job est renommé, cette liste doit suivre : sinon le script refuse tout.
+REQUIRED_CHECKS="pi-gate simulation-gate convex-tests web audit docs"
 MARKER='<!-- release.sh : nouvelles sections sous cette ligne -->'
 VERSIONS_SLOT='<!-- release.sh : versions -->'
 CHANGELOG_SLOT='<!-- release.sh : changelog -->'
@@ -114,9 +117,13 @@ is_level() {
   return 1
 }
 
-# Refuse si une vérification CI du commit n'est pas terminée et réussie.
+# Refuse si le commit n'est pas vert : chaque gate de REQUIRED_CHECKS doit être
+# présente, terminée et réussie, et aucune autre vérification ne doit avoir
+# échoué ni être en cours. Une vérification tierce réussie (aperçu Vercel, par
+# exemple) ne remplace jamais une gate : un commit sur lequel la CI n'a pas
+# tourné n'est pas vert.
 require_green() { # sha branche
-  local runs bad total
+  local runs bad missing name total
   runs="$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" --paginate \
     --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')" ||
     die "lecture des vérifications CI impossible pour $2 ($1)"
@@ -127,10 +134,16 @@ require_green() { # sha branche
     }')"
   [ -z "$bad" ] || die "$2 n'est pas vert ($1) :
 $bad"
-  printf '%s\n' "$runs" | awk -F '\t' '$3 == "success" { ok = 1 } END { exit !ok }' ||
-    die "aucune vérification CI réussie pour $2 ($1)"
+  missing=""
+  for name in $REQUIRED_CHECKS; do
+    printf '%s\n' "$runs" | awk -F '\t' -v gate="$name" '
+      $1 == gate && $2 == "completed" && $3 == "success" { ok = 1 }
+      END { exit !ok }' || missing="$missing $name"
+  done
+  [ -z "$missing" ] ||
+    die "$2 n'est pas vert ($1) : gates absentes ou non réussies :$missing"
   total="$(printf '%s\n' "$runs" | wc -l | tr -d ' ')"
-  CI_SUMMARY="verte ($total vérifications terminées, aucune en échec)"
+  CI_SUMMARY="verte ($total vérifications terminées, toutes les gates réussies)"
 }
 
 # Titres des PR de ticket (ANH-n) qui touchent le composant, du plus ancien au

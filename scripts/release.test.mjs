@@ -28,7 +28,20 @@ const TEMPLATE = ".github/PULL_REQUEST_TEMPLATE/release.md";
 const MARKER = "<!-- release.sh : nouvelles sections sous cette ligne -->";
 const DATE = "2026-10-07";
 const ALL = ["--pi", "0.1.0", "--cloud", "0.1.0", "--web", "0.1.0", "--pi-validation", "bench", "--date", DATE];
-const GREEN = "pi-gate\tcompleted\tsuccess\nweb\tcompleted\tsuccess\ndocs\tcompleted\tskipped\n";
+const GATES = ["pi-gate", "simulation-gate", "convex-tests", "web", "audit", "docs"];
+const VERCEL = "Vercel Preview Comments\tcompleted\tsuccess\n";
+
+/**
+ * What the CI answers for a commit: the six gates, each "completed success"
+ * unless `overrides` says otherwise (`null` leaves a gate out), then `extra`.
+ */
+function ci(overrides = {}, extra = VERCEL) {
+  const lines = GATES.filter((gate) => overrides[gate] !== null).map(
+    (gate) => `${gate}\t${overrides[gate] ?? "completed\tsuccess"}\n`,
+  );
+  return lines.join("") + extra;
+}
+const GREEN = ci();
 
 const real = (path) => readFileSync(join(ROOT, path), "utf8");
 
@@ -388,11 +401,16 @@ test("EX-2 a later release lists only what merged since the component's last tag
 });
 
 for (const [name, checks, message] of [
-  ["a failed check", "pi-gate\tcompleted\tfailure\nweb\tcompleted\tsuccess\n", /develop n'est pas vert[\s\S]*pi-gate : completed failure/],
-  ["a cancelled check", "pi-gate\tcompleted\tcancelled\nweb\tcompleted\tsuccess\n", /develop n'est pas vert/],
-  ["a check still running", "pi-gate\tin_progress\t\nweb\tcompleted\tsuccess\n", /develop n'est pas vert[\s\S]*pi-gate : in_progress/],
+  ["a failed gate", ci({ "pi-gate": "completed\tfailure" }), /develop n'est pas vert[\s\S]*pi-gate : completed failure/],
+  ["a cancelled gate", ci({ "pi-gate": "completed\tcancelled" }), /develop n'est pas vert[\s\S]*pi-gate : completed cancelled/],
+  ["a gate still running", ci({ "simulation-gate": "in_progress\t" }), /develop n'est pas vert[\s\S]*simulation-gate : in_progress/],
+  ["a failed check that is not a gate", ci({}, "Vercel\tcompleted\tfailure\n"), /develop n'est pas vert[\s\S]*Vercel : completed failure/],
   ["no check at all", "", /aucune vérification CI pour develop/],
-  ["only skipped checks", "pi-gate\tcompleted\tskipped\n", /aucune vérification CI réussie/],
+  // Seen on the real repository: before the CI starts, a pushed commit carries
+  // one successful third-party check and none of the gates.
+  ["only a third-party check, the CI never ran", VERCEL, /gates absentes ou non réussies : pi-gate simulation-gate convex-tests web audit docs$/m],
+  ["one gate missing", ci({ "simulation-gate": null }), /gates absentes ou non réussies : simulation-gate$/m],
+  ["a gate that was skipped", ci({ audit: "completed\tskipped" }), /gates absentes ou non réussies : audit$/m],
 ]) {
   test(`EX-2 prepare refuses when develop has ${name}`, (t) => {
     const fx = fixture(t);
@@ -411,13 +429,15 @@ test("EX-2 pr and tag refuse a branch that is not green", (t) => {
   const fx = fixture(t);
   assert.equal(fx.run(["prepare", ...ALL]).status, 0);
   fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
-  const red = "web\tcompleted\tfailure\n";
+  const red = ci({ web: "completed\tfailure" });
   const blocked = fx.run(["pr"], { checks: red });
   refuses(blocked, /develop n'est pas vert/);
   assert.deepEqual(blocked.gh.filter((call) => call.startsWith("pr ")), []);
 
   fx.mergeIntoMain();
   refuses(fx.run(["tag"], { checks: red }), /main n'est pas vert/);
+  // Right after the merge, before the CI of main has registered its gates.
+  refuses(fx.run(["tag"], { checks: VERCEL }), /main n'est pas vert[\s\S]*gates absentes ou non réussies/);
   assert.equal(git(fx.origin, "tag", "-l"), "");
 });
 

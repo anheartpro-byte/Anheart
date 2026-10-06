@@ -166,9 +166,22 @@ relancer.
 | `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` |
 | `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash) |
 
-« Vert » veut dire : toutes les vérifications GitHub du commit sont terminées,
-aucune n'a échoué ni n'a été annulée, et au moins une a réussi. Un commit sans
-vérification n'est pas vert.
+« Vert » veut dire deux choses à la fois :
+
+- chacune des six gates de la CI (`pi-gate`, `simulation-gate`, `convex-tests`,
+  `web`, `audit`, `docs`) est présente sur le commit, terminée et réussie ;
+- aucune autre vérification GitHub du commit n'a échoué, n'a été annulée ou
+  n'est encore en cours.
+
+Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si une
+vérification tierce y a réussi (l'aperçu Vercel, par exemple, répond avant que
+les gates ne démarrent). Une gate ignorée (`skipped`) ne compte pas comme
+réussie.
+
+La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Si un job
+de `.github/workflows/ci.yml` est renommé, cette liste doit suivre dans la même
+PR : sinon le script refuse toute release, ce qui est le sens voulu de la
+panne.
 
 `pr` et `tag` ne prennent aucune version en argument : ils lisent celles des
 fichiers de la branche, et publient celles qui n'ont pas encore de tag.
@@ -306,6 +319,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Envoyer la version dans le heartbeat | ANH-133 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
+| Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 en cours) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
 | Déployer Convex et le site à la fusion dans `main` | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
