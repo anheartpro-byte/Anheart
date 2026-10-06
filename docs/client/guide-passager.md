@@ -1,7 +1,7 @@
 # Guide passager : votre séance dans la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 5 octobre 2026. Aucun passager n'a encore utilisé ce guide.
+> Version du 6 octobre 2026. Aucun passager n'a encore utilisé ce guide.
 >
 > - À cette date, aucune séance avec une personne à bord n'a encore eu lieu
 >   avec ce logiciel. Ce guide décrit ce que le logiciel est conçu pour faire.
@@ -155,10 +155,12 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 > garde sa vitesse au lieu de ralentir : l'opérateur dispose alors de son
 > arrêt d'urgence.
 
-> **Un bras arrêté peut repartir.** Pendant la séance, la machine peut ralentir
-> jusqu'à l'arrêt, puis repartir d'elle-même, par exemple quand votre
-> fréquence cardiaque redevient lisible. Un bras à l'arrêt ne veut donc pas
-> dire que la séance est finie.
+> **Un bras à l'arrêt ne veut pas dire que la séance est finie.** Au début de
+> la séance, le bras est à l'arrêt, puis il se met à tourner de lui-même.
+> Pendant la séance, la machine peut ralentir, puis réaccélérer d'elle-même,
+> par exemple quand votre fréquence cardiaque redevient lisible. Si la machine
+> ramène elle-même le bras jusqu'à l'arrêt avant la fin du programme, elle
+> termine la séance : le bras ne repart pas sans une nouvelle séance.
 
 Tant que l'opérateur ne vous a pas dit que la séance est terminée, restez
 installé et considérez que le bras peut tourner ou repartir. C'est lui qui lit
@@ -184,9 +186,9 @@ arrêt normal, avec la même limite. Cela ne fonctionne que si la machine est
 reliée à Internet. Ce n'est pas un arrêt d'urgence.
 
 **4. La machine décide seule.** Elle se surveille en permanence. Selon le cas,
-elle garde sa vitesse, elle ralentit (parfois jusqu'à l'arrêt, sans terminer
-la séance), elle termine la séance en douceur, ou elle déclenche elle-même un
-arrêt d'urgence. Par exemple :
+elle garde sa vitesse, elle ralentit, elle termine la séance en douceur, ou
+elle déclenche elle-même un arrêt d'urgence. Si elle ralentit jusqu'à l'arrêt
+du bras, la séance est terminée. Par exemple :
 
 - votre fréquence cardiaque dépasse le seuil de sécurité du programme ;
 - votre fréquence cardiaque chute brutalement ;
@@ -204,10 +206,10 @@ fois que le logiciel de la machine redémarre. Le logiciel ne voit pas cet
 arrêt câblé et ne peut pas vérifier qu'il existe.
 
 Une séance terminée ne reprend pas d'elle-même : il faut un nouveau démarrage,
-à l'écran de l'opérateur ou depuis le site web. Après un arrêt d'urgence, ou
-un arrêt de sécurité qui a mis fin à la séance, le logiciel refuse tout
-nouveau démarrage tant que quelqu'un ne l'a pas confirmé par son nom, à
-l'écran de l'opérateur.
+à l'écran de l'opérateur ou depuis le site web. Après un arrêt d'urgence
+déclenché à l'écran, ou un arrêt de sécurité décidé par la machine qui a mis
+fin à la séance, le logiciel refuse tout nouveau démarrage tant que quelqu'un
+ne l'a pas confirmé par son nom, à l'écran de l'opérateur.
 
 > **À compléter par Anheart avant la semaine pilote :** ce que fait exactement
 > l'arrêt d'urgence câblé de la machine, et ce que vous ressentirez.

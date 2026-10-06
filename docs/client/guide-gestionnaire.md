@@ -1,7 +1,7 @@
 # Guide gestionnaire : le tableau de bord
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 5 octobre 2026. Aucun client n'a encore utilisé ce guide.
+> Version du 6 octobre 2026. Aucun client n'a encore utilisé ce guide.
 >
 > - Les écrans décrits ici (machines en direct, lancement d'une séance auto,
 >   suivi en direct, droits de lancement, physiologie) appartiennent à la
@@ -9,9 +9,13 @@
 >   n'est pas encore en ligne : le site que vous ouvrez aujourd'hui peut
 >   différer.
 > - Les captures d'écran viennent d'un site d'essai, avec des comptes de
->   démonstration et une machine simulée. En cas d'écart, votre écran fait foi.
-> - Quelques écrans sont encore en anglais. Ce guide décrit alors leur
->   fonction, sans citer leur texte.
+>   démonstration et une machine simulée. Elles ont été prises avant la
+>   traduction de plusieurs écrans : certaines montrent encore des textes en
+>   anglais que le site affiche maintenant en français. En cas d'écart, votre
+>   écran fait foi.
+> - Quelques messages sont encore en anglais : ceux que le serveur renvoie
+>   quand il refuse une action, et le motif d'une séance annulée. Ce guide
+>   décrit alors leur fonction, sans citer leur texte.
 > - Certaines informations dont vous avez besoin ne sont pas encore validées.
 >   Elles sont signalées par un encadré qui commence par les mots *À compléter
 >   par Anheart*. Tant qu'un de ces encadrés vous concerne, demandez la réponse
@@ -77,7 +81,7 @@ Le site vous permet de :
 | Le site ne peut pas | Ce qu'il faut savoir |
 |---|---|
 | Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : uniquement depuis la console de la machine ». |
-| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement. Mais tant qu'elle garde sa vitesse pour une raison de sécurité (action « freeze »), la demande ne ralentit pas le bras. L'arrêt d'urgence se fait à la machine, par l'opérateur. |
+| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement. Mais tant qu'elle garde sa vitesse pour une raison de sécurité (action « Vitesse figée »), la demande ne ralentit pas le bras. L'arrêt d'urgence se fait à la machine, par l'opérateur. |
 | Voir la machine | Le site ne voit ni la capsule, ni la salle, ni l'opérateur. Il affiche ce que la machine lui envoie, avec quelques secondes de retard. |
 | Forcer un départ | La machine refait tous les contrôles et peut refuser. |
 | Créer ou modifier un programme | Les programmes viennent de la machine. Le site les affiche en lecture seule. |
@@ -98,7 +102,8 @@ Le site vous permet de :
 ![Le tableau de bord d'un gestionnaire](../guides/img/site-23-gestionnaire-tableau-de-bord.png)
 
 *Le tableau de bord d'un gestionnaire, avec le menu à gauche. Capture du site
-d'essai, compte de démonstration.*
+d'essai, compte de démonstration, prise avant la traduction : les statuts des
+séances y sont encore écrits au pluriel.*
 
 Votre menu, à gauche :
 
@@ -169,7 +174,8 @@ saisie du logiciel.
 ![La fiche d'un patient et sa carte Physiologie](../guides/img/site-16-patient-fiche.png)
 
 *La fiche d'une patiente de démonstration, avec la carte Physiologie en bas à
-gauche. Capture du site d'essai, vue par un administrateur.*
+gauche. Capture du site d'essai, vue par un administrateur, prise avant la
+traduction : le chemin en haut de page y est encore en anglais.*
 
 Ce que le logiciel contrôle ensuite, à chaque lancement :
 
@@ -223,7 +229,8 @@ Retirer le droit n'arrête pas une séance déjà en cours.
 
 *Le détail d'une machine : état en direct, programmes, puis la carte Droits de
 lancement. Capture du site d'essai, vue par un administrateur, machine
-simulée. Les valeurs des programmes sont des valeurs d'essai.*
+simulée, prise avant la traduction : quelques libellés y sont encore en
+anglais. Les valeurs des programmes sont des valeurs d'essai.*
 
 Si quelque chose bloque :
 
@@ -244,6 +251,12 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
   programme.
 - La physiologie du pratiquant est renseignée
   ([section 4.2](#42-renseigner-la-physiologie)).
+- **Aucune alerte n'attend à la console.** À la date de ce brouillon, la
+  console verrouille d'elle-même une alerte quelque temps après une séance
+  ([manuel opérateur, section 9.2](manuel-operateur.md#92-la-console-agit-seule)).
+  Tant qu'une alerte attend, la machine refuse tout lancement : votre séance
+  prend le statut « Échouée », avec un motif qui commence par « refusee par la
+  machine ». Voyez alors avec l'opérateur.
 - **Un opérateur est à côté de la machine, console prête, et le pratiquant est
   installé.** Le site ne voit pas la machine. La machine prend votre demande
   d'elle-même, sans aucune action de l'opérateur à la console : en quelques
@@ -333,16 +346,17 @@ avec l'opérateur.
 > elle redevient joignable, et démarrer sans aucune action à la console,
 > alors que plus personne ne s'y attend.
 
-Il arrive aussi que la machine refuse le départ. La séance passe alors
-**Échouées**, avec un motif qui commence par « refusee par la machine » : voir
-la [section 9.2](#92-lire-le-détail-dune-séance).
+Il arrive aussi que la machine refuse le départ. La séance prend alors le
+statut « Échouée », avec un motif qui commence par « refusee par la
+machine » : voir la [section 9.2](#92-lire-le-détail-dune-séance).
 
 ### En cours
 
 ![Une séance auto en cours](../guides/img/site-11-seance-auto-active.png)
 
 *Une séance auto à son début : phase « Mesure de référence », le bras ne tourne
-pas encore. Capture du site d'essai, machine simulée.*
+pas encore. Capture du site d'essai, machine simulée, prise avant la
+traduction : le haut de la page et le bloc du bas y sont encore en anglais.*
 
 Le panneau **Séance d'entraînement** affiche :
 
@@ -351,7 +365,7 @@ Le panneau **Séance d'entraînement** affiche :
 | **Fréquence cardiaque** | En bpm. En vert « Dans la zone », en bleu « Sous la zone », en rouge « Au-dessus de la zone ». Un tiret et « Pas de fréquence cardiaque fiable » quand la machine n'en a pas, ou qu'aucune valeur n'est arrivée depuis 20 secondes. |
 | **Vitesse du bras** | En tr/min. Dessous, la vitesse du moteur. |
 | **Charge** | En g. |
-| **Phase** | « Mesure de référence », « Échauffement », « Maintien », « Retour au calme », « Récupération », « Terminé ». Une mention « Action de sécurité » s'ajoute quand la machine applique une action de sécurité. |
+| **Phase** | « Mesure de référence », « Échauffement », « Maintien », « Retour au calme », « Récupération », « Terminé ». Une mention « Action de sécurité », suivie de sa valeur, s'ajoute quand la machine applique une action de sécurité. |
 | **Écoulé** | Le temps depuis le départ, et dessous le temps « Restant ». |
 
 Sous ces blocs, deux courbes :
@@ -365,11 +379,14 @@ La séance commence par la phase « Mesure de référence » : le bras ne tourne
 pas, la machine mesure la fréquence cardiaque de repos. La rotation commence
 ensuite, sans autre action de votre part.
 
-Une vitesse à zéro ne veut pas dire que la séance est finie. Tant que la séance
-est en cours, la machine peut ralentir le bras jusqu'à l'arrêt, puis le
-relancer d'elle-même quand la cause disparaît (par exemple une fréquence
-cardiaque qui redevient lisible). La phase affichée ne prouve pas non plus
-l'arrêt du bras : lisez **Vitesse du bras**.
+Une vitesse à zéro ne veut pas toujours dire que la séance est finie : au
+début de la séance, le bras est à l'arrêt, puis il part de lui-même. Pendant
+la séance, la machine peut aussi ralentir le bras, puis le laisser réaccélérer
+quand la cause disparaît (par exemple une fréquence cardiaque qui redevient
+lisible). Si la machine ramène elle-même le bras jusqu'à l'arrêt avant la fin
+du programme, elle termine la séance : le bras ne repart pas, et quelqu'un
+devra acquitter l'arrêt à la console avant toute nouvelle séance. La phase
+affichée ne prouve pas l'arrêt du bras : lisez **Vitesse du bras**.
 
 Les valeurs arrivent par paquets, toutes les 5 secondes environ. L'écran a
 donc toujours plusieurs secondes de retard.
@@ -378,16 +395,21 @@ donc toujours plusieurs secondes de retard.
 > d'Internet. La surveillance de la séance se fait à la machine, par
 > l'opérateur.
 
-Sous le panneau, un bloc en anglais vient d'un ancien mode d'enregistrement.
-Il reste vide pour une séance d'entraînement. Ignorez-le.
+Sous le panneau, un bloc vient d'un ancien mode d'enregistrement : les cartes
+« Qualité du signal », « Fréquence cardiaque (BPM) » et « Lots de données »,
+puis un encadré « En attente des données ECG ». Il reste vide pour une séance
+d'entraînement. Ignorez-le, y compris son message qui demande de vérifier le
+capteur : pour la fréquence cardiaque d'une séance d'entraînement, seul le
+panneau **Séance d'entraînement** compte. Pour la même raison, le badge
+« Connexion... » en haut de la page ne dit rien de la machine.
 
 ### Signaux d'alerte
 
 | Vous voyez | Ce que cela veut dire | Quoi faire |
 |---|---|---|
-| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis ralentit, puis termine la séance. Si la fréquence revient avant, la séance reprend seule. | Prévenez l'opérateur. |
-| « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine ajuste sa vitesse et applique ses règles de sécurité. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
-| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Si la valeur affichée est « freeze », elle garde sa vitesse : une demande d'arrêt envoyée depuis le site ne ralentit pas le bras tant que cette valeur reste affichée. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
+| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis ralentit, et termine la séance dès que le bras est à l'arrêt, au plus tard après 60 secondes. Si la fréquence revient alors que le bras tourne encore, la séance reprend seule. | Prévenez l'opérateur. |
+| « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine baisse sa vitesse et applique ses règles de sécurité. Si elle ramène le bras jusqu'à l'arrêt, elle termine la séance. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
+| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Sa valeur dit laquelle : « Vitesse figée » (elle garde sa vitesse), « Réduction » (elle la baisse), « Décélération » (elle termine la séance), « Arrêt rapide (rampe du variateur) » (arrêt d'urgence logiciel), « Mise en silence (arrêt par le variateur) » (la console ne commande plus le moteur). Tant que « Vitesse figée » reste affichée, une demande d'arrêt envoyée depuis le site ne ralentit pas le bras. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
 | Les nombres remplacés par des tirets, plus de nouveaux points | La machine n'envoie plus rien : liaison Internet coupée, ou machine arrêtée. Le site ne peut plus rien lui demander. | Téléphonez à l'opérateur. |
 
 ## 8. Arrêter ou annuler une séance
@@ -400,13 +422,12 @@ administrateur.
 1. Ouvrez la vue en direct de la séance. Juste après le lancement, vous y êtes
    déjà. Sinon : **Sessions**, onglet **Tous**, cliquez la ligne de la séance.
    Vous arrivez sur sa page de détail, qui n'a pas de bouton d'annulation.
-   Cliquez alors le bouton en haut à droite de cette page (son libellé est
-   encore en anglais) : il ouvre la vue en direct.
+   Cliquez alors **Voir en direct**, en haut à droite de cette page.
 2. Cliquez **Annuler la séance**.
 3. Dans la fenêtre « Annuler la séance ? », cliquez **Annuler la séance**.
 
-La séance passe **Échouées**. C'est normal : le site range ainsi les séances
-annulées.
+La séance prend le statut « Échouée ». C'est normal : le site range ainsi les
+séances annulées.
 
 ### Arrêter une séance en cours
 
@@ -434,8 +455,8 @@ Ensuite :
 >
 > - la machine n'a plus Internet : la demande ne lui parvient pas ;
 > - la machine garde sa vitesse pour une raison de sécurité (mention « Action
->   de sécurité » avec la valeur « freeze ») : elle enregistre la fin de
->   séance, mais ne ralentit pas tant que cette valeur reste affichée.
+>   de sécurité » avec la valeur « Vitesse figée ») : elle enregistre la fin
+>   de séance, mais ne ralentit pas tant que cette valeur reste affichée.
 >
 > En cas de danger, l'arrêt se fait à la machine, par l'opérateur.
 
@@ -459,12 +480,14 @@ Cliquez **Sessions**.
 - La colonne **Type** dit de quelle séance il s'agit (**Auto** ou **Manuel**)
   et d'où elle a été lancée (**Tableau de bord** ou **Machine**).
 
-| Statut | Sens |
-|---|---|
-| **En attente** | Lancée depuis le site, pas encore prise par la machine. |
-| **Actives** | En cours. |
-| **Terminées** | Le programme est allé au bout, ou un arrêt normal a été demandé en premier. Ce statut ne dit pas que la séance s'est passée sans incident : voir le motif de fin. |
-| **Échouées** | Refusée par la machine, annulée, ou terminée d'abord par l'arrêt d'urgence de la console ou par une action de sécurité. |
+Chaque ligne porte un statut :
+
+| Statut de la ligne | Onglet | Sens |
+|---|---|---|
+| « En attente » | **Tous** seulement | Lancée depuis le site, pas encore prise par la machine. |
+| « Active » | **Actives** | En cours. |
+| « Terminée » | **Terminées** | Le programme est allé au bout, ou un arrêt normal a été demandé en premier. Ce statut ne dit pas que la séance s'est passée sans incident : voir le motif de fin. |
+| « Échouée » | **Échouées** | Refusée par la machine, annulée, ou terminée d'abord par l'arrêt d'urgence de la console ou par une action de sécurité. Ce statut ne veut pas dire que le logiciel a eu une erreur. |
 
 Cliquez une ligne : une séance en cours s'ouvre en direct, les autres ouvrent
 leur détail.
@@ -474,11 +497,19 @@ leur détail.
 ![Le détail d'une séance terminée](../guides/img/site-14-seance-detail.png)
 
 *Le détail d'une séance : la carte Entraînement, le motif de fin et les deux
-courbes. Capture du site d'essai, machine simulée.*
+courbes. Capture du site d'essai, machine simulée, prise avant la
+traduction : le statut et les blocs qui entourent la carte Entraînement y
+sont encore en anglais.*
 
-Regardez la carte **Entraînement**. Les autres blocs de la page, en anglais,
-viennent d'un ancien mode d'enregistrement : ils restent vides ou sans intérêt
-pour une séance d'entraînement.
+Regardez la carte **Entraînement**. Les autres blocs de la page viennent d'un
+ancien mode d'enregistrement : les cartes du haut (dont « Lots de données »)
+et le bloc « Enregistrement ECG » restent vides ou sans intérêt pour une
+séance d'entraînement.
+
+Pour une séance de statut « Échouée », la page affiche en haut un encadré
+rouge « Session échouée ». Son texte parle d'une erreur, même quand la séance
+a été annulée ou arrêtée par sécurité. Lisez le motif de fin, que cet encadré
+reprend.
 
 | Élément | Sens |
 |---|---|
@@ -515,18 +546,22 @@ Les courbes se lisent comme dans la vue en direct
 
 ### 9.3 Les rapports
 
-Cliquez **Rapports**. La page liste vos séances **Terminées** (pas les
-**Échouées**).
+Cliquez **Rapports**. La page liste vos séances de statut « Terminée » (pas
+celles de statut « Échouée »).
 
 ![La page Rapports](../guides/img/site-21-rapports.png)
 
-*La page Rapports. Capture du site d'essai, vue par un administrateur.*
+*La page Rapports. Capture du site d'essai, vue par un administrateur, prise
+avant la traduction : la ligne de chiffres sous une carte y est encore en
+anglais.*
 
 - **Voir** ouvre le détail de la séance, décrit ci-dessus. C'est là que se
   trouvent les courbes.
-- **Télécharger PDF** produit un fichier. À la date de ce brouillon, ce fichier
-  est en anglais et ne contient pas les courbes d'une séance d'entraînement.
-  Pour relire une séance, utilisez **Voir**.
+- **Télécharger PDF** produit un fichier intitulé « Rapport de session ECG ».
+  C'est le rapport de l'ancien mode d'enregistrement : il donne l'identité,
+  les horaires et les canaux, mais ni le programme, ni le motif de fin, ni les
+  courbes d'une séance d'entraînement. Pour relire une séance, utilisez
+  **Voir**.
 
 ### 9.4 Ce que vous ne verrez pas
 
