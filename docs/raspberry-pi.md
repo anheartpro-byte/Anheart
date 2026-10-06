@@ -177,7 +177,10 @@ nominatif.
    écritures cessent et le ttO du variateur l'arrête seul.
 2. Deuxième mot d'un réarmement de défaut en cours (`SHUTDOWN` 0,2 s après
    `FAULT_RESET`).
-3. Calcul de la phase de la séance.
+3. Calcul de la phase de la séance. C'est là aussi que le runtime constate
+   qu'une séance est finie : le premier tic où sa phase vaut `DONE`. Le
+   constat est gardé jusqu'au départ suivant (voir `session_overrun` en
+   [5.2](#52-les-18-règles-du-superviseur)).
 4. **Évaluation de la sécurité** (`SafetySupervisor.evaluate`) avec une
    observation qui ne contient **aucune** demande de la loi de commande.
 5. **Commande** : un `match` sur l'action du verdict (table ci-dessous). La loi
@@ -317,6 +320,9 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
 * Phase HOLD pendant toute la séance ; au bout de 3600 s
   (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP,
   avec la limite actuelle sous FREEZE décrite en [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt).
+  Si la descente dure plus de 30 s, `session_overrun` se verrouille pendant
+  cette descente, à 3630 s, sans rien changer à la rampe : voir
+  [5.2](#52-les-18-règles-du-superviseur).
 * Après une fin de séance, la cible vaut 0 : une nouvelle séance exige un
   nouveau départ. Une consigne ramenée à 0 par un avertissement termine la
   séance sur le verrou `session_standstill`, capsule vide comprise (voir
@@ -353,7 +359,7 @@ est renvoyé comme séance échouée avec la raison.
 | `HOLD` | La loi de commande module la vitesse pour tenir la FC dans la zone. Si elle ramène la consigne jusqu'à 0 (FC durablement au-dessus de la zone), la séance se termine sur le verrou `session_standstill` : elle ne se repose pas à 0 pour repartir ensuite (voir [5.2](#52-les-18-règles-du-superviseur)). |
 | `COOLDOWN` | Consigne vers 0 (fin normale ou verdict). Se termine sur arrêt confirmé, ou au bout de la durée de cooldown du profil. |
 | `RECOVERY` | Moteur arrêté, passager toujours à bord, **toutes les règles de FC restent actives** (phase au plus fort risque vasovagal). |
-| `DONE` | Programme terminé. Seules les règles de FC et `attendant_absent` s'arrêtent. |
+| `DONE` | Programme terminé. Les règles de FC et `attendant_absent` s'arrêtent. `session_overrun` ne juge plus la séance dès que la consigne en vigueur est 0 : une séance finie n'est plus mesurée contre sa durée (voir [5.2](#52-les-18-règles-du-superviseur)). |
 
 **Loi de commande** (`hr_control.py`) :
 
@@ -396,11 +402,16 @@ scénarios de simulation. La console copie les profils livrés dans
 * **Il ne voit pas la demande de la loi de commande.** `SafetyObservation` ne
   contient ni vitesse désirée ni décision ; seulement des mesures (dont
   `commanded_rpm`, ce qui a été écrit au variateur) et quelques constats du
-  runtime sur ce qu'il a lui-même écrit (la consigne est en rampe ; la consigne
-  est revenue à 0 sans que personne l'ait demandé, champ `stopped_by`). Aucun
-  de ces champs n'est une demande, et `stopped_by` ne peut qu'ajouter un
-  verdict. Raison : lors d'un malaise vasovagal la FC **baisse** ; la loi de
-  commande y lit « sous la zone » et veut accélérer.
+  runtime sur ce qu'il a lui-même écrit ou décidé (la consigne est en rampe ;
+  la consigne est revenue à 0 sans que personne l'ait demandé, champ
+  `stopped_by` ; la séance est finie, champ `session_over`). Aucun de ces
+  champs n'est une demande, et `stopped_by` ne peut qu'ajouter un verdict.
+  `session_over` est le seul constat qui fait taire une règle, et il n'en fait
+  taire qu'une, `session_overrun` : il réunit deux faits (la séance a atteint
+  la phase `DONE` depuis son départ, et la consigne en vigueur est 0) et vaut
+  « non » par défaut. Raison de la première phrase : lors d'un malaise
+  vasovagal la FC **baisse** ; la loi de commande y lit « sous la zone » et
+  veut accélérer.
 * **Il ne touche jamais le fil** : pas de Modbus, pas d'`await`. C'est une
   fonction pure des mesures et de son historique.
 * **Chaque règle est indépendante**, puis on garde la plus sévère.
@@ -466,7 +477,7 @@ n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` 
 | `no_load` | consigne ≥ 100 tr/min, sortie active, courant < 0,2 A pendant 3 s (phase ouverte, pas de moteur, mauvais registre) | 0,2 A, 100 tr/min, 3 s | RAMP_DOWN | oui |
 | `tracking_error` | vitesse mesurée hors de l'enveloppe de plus de 60 tr/min moteur pendant 2 s, sortie active | 60 tr/min, 2 s | RAMP_DOWN ; **GO_SILENT** si l'écho LFRD est aussi faux depuis 1 s | oui |
 | `reverse_rotation` | vitesse mesurée de signe opposé à la consigne et > 10 tr/min | 10 tr/min, aucun délai | QUICK_STOP | oui |
-| `session_overrun` | durée écoulée > durée du programme + 30 s | 30 s | RAMP_DOWN | oui |
+| `session_overrun` | séance en cours (le runtime ne l'a pas constatée finie : `session_over` faux) **et** durée écoulée depuis le départ > durée du programme (3600 s en séance manuelle) + 30 s | 30 s | RAMP_DOWN | oui ; se redéclenche tant que la séance n'est pas finie |
 | `loop_stall` | écart entre deux tics > 3 périodes ; > 15 périodes | 0,6 s → FREEZE ; 3,0 s → GO_SILENT | FREEZE ou GO_SILENT | oui (les deux) |
 | `attendant_absent` | aucun signe de présence de la page depuis… (mesuré depuis le départ s'il n'y en a jamais eu) | > 60 s FREEZE ; > 120 s RAMP_DOWN | FREEZE → RAMP_DOWN | seulement RAMP_DOWN |
 | `setpoint_unconfirmed` | LFRD relu ≠ LFRD écrit pendant 1 s | 1 s | RAMP_DOWN | oui |
@@ -482,6 +493,54 @@ consigne ne suit alors que la cible de l'opérateur, qui a donc demandé ce 0) ;
 si la consigne n'a jamais quitté 0 (BASELINE). Séance `bench` ou `occupied`,
 c'est la même règle. Une cible 0 tapée pendant qu'un avertissement baisse la
 vitesse est comptée comme l'arrêt de l'avertissement.
+
+**`session_overrun` en détail.** La règle arrête une séance qui dure plus que
+son programme : la machine tournerait alors sans plan. La durée qu'elle mesure
+est le temps écoulé depuis le départ, et ce temps continue de courir après la
+fin de la séance, jusqu'au départ suivant. La règle ne juge donc qu'une séance
+**en cours**
+([ANH-181](https://linear.app/anheart/issue/ANH-181/la-regle-session-overrun-se-verrouille-apres-la-fin-dune-seance-et)).
+Avant ce correctif elle se verrouillait sur une machine au repos : 30 s après
+la fin d'un programme allé à son terme, 1831 s après le départ du profil
+standard même arrêté tôt, 3631 s après le départ d'une séance manuelle ;
+l'acquittement ne tenait pas, tout départ était refusé et il fallait
+redémarrer la console.
+
+* **« En cours »** veut dire : tant que le runtime n'a pas constaté la séance
+  finie. Il la constate finie quand deux faits sont vrais ensemble : depuis le
+  départ, la phase a atteint `DONE` au moins une fois
+  (`TrainingRuntime._advance_phase`, constat gardé jusqu'au départ suivant), et
+  la consigne en vigueur est 0. C'est le champ `session_over` de l'observation.
+* **La phase seule ne suffit pas**, dans les deux sens. Un verdict qui arrive
+  au repos après un programme allé à son terme (E-STOP pendant que le passager
+  descend, variateur éteint qui passe en défaut) rouvre une fin de séance : la
+  phase repasse par `RECOVERY` sur une séance finie depuis longtemps, et la
+  règle ne doit pas s'y déclencher. À l'inverse, un runtime devenu silencieux
+  atteint `DONE` avec une consigne qu'il ne peut plus reprendre : la règle
+  continue alors de juger.
+* **Rien ne change pendant une séance** : même seuil, même action, même
+  verrou, au même instant. La règle arrête toujours un bras qu'un FREEZE
+  verrouillé tient en vitesse au-delà de la fin du programme (RAMP_DOWN
+  l'emporte sur FREEZE). Elle se déclenche toujours quand la fin de la séance
+  elle-même dépasse l'échéance, bras déjà arrêté ou en descente : un STOP donné
+  tard dans un programme rouvre une `RECOVERY` complète (avec le profil
+  standard, tout STOP après 1530 s environ mène au verdict à 1830 s), et une
+  séance manuelle qui atteint ses 3600 s à grande vitesse descend encore 30 s
+  plus tard (mesuré sur le banc d'essai logiciel : depuis 1344 tr/min moteur,
+  descente d'environ 104 s et verdict à la limite + 30 s ; depuis 300 tr/min
+  moteur, descente de 20 s et aucun verdict). Dans ces cas le verdict ne
+  change rien au mouvement, déjà commandé vers 0.
+* **Un verdict levé pendant la séance s'acquitte une fois la séance finie**,
+  et l'acquittement tient : la condition n'est plus vraie. Avant la fin
+  (mode `ARRET`), l'acquittement est accepté et le verdict revient au tic
+  suivant, comme pour toute règle dont la cause est encore là.
+* Avec un variateur en défaut, la fin de séance attend le réarmement par
+  l'opérateur (le variateur refuse tout autre mot, et ne produit pas de couple)
+  et le mode reste `ARRET` : la séance y est pourtant finie pour cette règle
+  dès la phase `DONE`, consigne à 0.
+
+Mesures avant et après, et ce que le correctif ne couvre pas :
+[securite.md](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
 
 **`hr_drop` en détail** (la règle vasovagale). Seules les lectures dont le
 numéro de séquence a avancé et dont la qualité est `good` comptent.
