@@ -40,6 +40,16 @@ worst a lost link does is leave the dashboard's picture stale, which the
 dashboard shows as stale. Telemetry waiting for the link is bounded
 (:data:`MAX_QUEUED_POINTS`), oldest dropped first.
 
+One contract, checked on both sides
+-----------------------------------
+Every request carries the contract this console speaks
+(:mod:`src.contract`), and the heartbeat says which software it runs. A
+dashboard of another major refuses the console (426), and the console refuses
+the dashboard: a poll answer that does not name this console's major arms
+nothing, whatever launch it carries. Either way the operator reads
+``serveur incompatible (contrat X vs Y)`` in the console's event list, and the
+machine goes on exactly as it would with no dashboard.
+
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
 
@@ -57,6 +67,19 @@ from typing import Final, Protocol, assert_never, cast
 import httpx
 
 from src.clock import Clock
+from src.contract import (
+    CONTRACT_HEADER,
+    CONTRACT_UNSUPPORTED,
+    CONTRACT_VERSION,
+    SERVER_VERSION_FIELD,
+    UNKNOWN_SOFTWARE_VERSION,
+    ErrorCode,
+    SoftwareVersion,
+    error_code_of,
+    majors_of,
+    server_refusal,
+    unsupported_refusal,
+)
 from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
 from src.local_config import CardiacTiers, CloudConfig
 from src.result import Err, Ok, Result
@@ -88,6 +111,13 @@ RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
 LAUNCH_TIMEOUT: Final[Seconds] = Seconds(60.0)
 """A launch the loop has neither started nor refused by now is reported as failed."""
 
+INCOMPATIBLE_REPEAT: Final[Seconds] = Seconds(60.0)
+"""How often a dashboard of another contract is said again on the console while it lasts.
+
+The event list is only sent to the screens connected at that moment, so a
+standing condition said once at startup would never reach a page opened later.
+"""
+
 MAX_QUEUED_POINTS: Final[int] = 3600
 """An hour of 1 Hz telemetry held for a lost link; the oldest go first."""
 
@@ -117,6 +147,13 @@ class Refused:
 
     status: int
     detail: str
+    """The dashboard's words, for a person."""
+
+    code: ErrorCode | None = None
+    """Its stable code (``contracts/machine-api.json``); ``None`` when it sent only words."""
+
+    supported: tuple[str, ...] = ()
+    """With ``contract_unsupported``: the contract majors the dashboard serves."""
 
 
 type CloudError = Unreachable | Refused
@@ -158,6 +195,8 @@ class HttpxTransport:
             timeout=httpx.Timeout(3.0),
             headers={"Authorization": f"Bearer {config.api_key}"},
         )
+        # On the client itself, so no request can leave without it.
+        self._client.headers[CONTRACT_HEADER] = CONTRACT_VERSION
 
     async def get(
         self, path: str, params: Mapping[str, str] | None = None
@@ -183,12 +222,34 @@ class HttpxTransport:
 def _answer(response: httpx.Response) -> Result[Document, CloudError]:
     document = _parse_document(response.text)
     if response.status_code >= httpx.codes.BAD_REQUEST:
-        found = None if document is None else document.get("error")
-        detail = found if isinstance(found, str) else f"HTTP {response.status_code}"
-        return Err(Refused(status=response.status_code, detail=detail))
+        return Err(_refusal(response.status_code, document))
     if document is None:
         return Err(Unreachable(f"HTTP {response.status_code}: not a JSON object"))
     return Ok(document)
+
+
+def _refusal(status: int, document: Document | None) -> Refused:
+    """A refusal as the dashboard words it: ``{error: <stable code>, message: <words>}``.
+
+    A dashboard older than the stable codes sends its sentence in ``error``
+    alone; it is then kept as the words, with no code.
+    """
+    found = None if document is None else document.get("error")
+    if document is None or not isinstance(found, str):
+        return Refused(status=status, detail=f"HTTP {status}")
+    message = document.get("message")
+    return Refused(
+        status=status,
+        detail=message if isinstance(message, str) else found,
+        code=error_code_of(found),
+        supported=majors_of(document.get("supported")),
+    )
+
+
+def describe_refusal(refused: Refused) -> str:
+    """One log line for a refusal: its stable code first, then the status and the words."""
+    code = "sans code" if refused.code is None else refused.code
+    return f"{code} (HTTP {refused.status}): {refused.detail}"
 
 
 # =========================================================================
@@ -387,8 +448,10 @@ class CloudSync:
         "_clock",
         "_current",
         "_finished",
+        "_incompatible",
         "_last_heartbeat",
         "_last_poll",
+        "_last_refused",
         "_last_sample",
         "_last_status",
         "_last_telemetry",
@@ -396,7 +459,10 @@ class CloudSync:
         "_online",
         "_programs_enabled",
         "_pushed_rev",
+        "_refused_launch",
         "_runtime",
+        "_said_at",
+        "_software_version",
         "_store",
         "_surface",
         "_tiers",
@@ -413,6 +479,7 @@ class CloudSync:
         store: ProfileStore,
         tiers: CardiacTiers,
         programs_enabled: bool,
+        software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
     ) -> None:
         self._clock: Clock = clock
         self._transport: CloudTransport = transport
@@ -421,6 +488,13 @@ class CloudSync:
         self._store: ProfileStore = store
         self._tiers: CardiacTiers = tiers
         self._programs_enabled: bool = programs_enabled
+        self._software_version: SoftwareVersion = software_version
+        # What was last said about the dashboard's contract and its refusals,
+        # so that a standing condition is not said again at every exchange.
+        self._incompatible: str | None = None
+        self._said_at: Monotonic | None = None
+        self._refused_launch: str | None = None
+        self._last_refused: Refused | None = None
         # Delivery state, mutated only by this object's own step and callbacks.
         self._current: _Tracked | None = None
         self._finished: deque[_Tracked] = deque(maxlen=MAX_FINISHED)
@@ -544,6 +618,11 @@ class CloudSync:
         body: dict[str, JsonValue] = {
             "live": live_row(snapshot, self.current_session_id),
             "programsEnabled": self._programs_enabled,
+            "software_version": self._software_version,
+            "contract_version": CONTRACT_VERSION,
+            # This console has neither yet: said to be absent, not left out.
+            "medical_parameters_version": None,
+            "config_hash": None,
         }
         session = self.current_session_id
         if session is not None:
@@ -587,6 +666,12 @@ class CloudSync:
         if isinstance(polled, Err):
             return
         launch = _launch_of(polled.value)
+        refusal = server_refusal(polled.value.get(SERVER_VERSION_FIELD))
+        if refusal is not None:
+            # An answer of another major arms nothing here, whatever it carries.
+            self._refuse_server(refusal, launch)
+            return
+        self._incompatible = None
         if launch is None:
             return
         submitted = self._surface.submit_start(
@@ -603,6 +688,29 @@ class CloudSync:
             return
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
+
+    def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
+        """The dashboard is of another contract: say so on the console, and fail its launch.
+
+        Said for each launch refused, when the sentence changes, and otherwise
+        every :data:`INCOMPATIBLE_REPEAT`: the condition lasts until somebody
+        updates one side, and must not flood the event list meanwhile.
+        """
+        now = self._clock.monotonic()
+        if launch is not None and launch.session_id != self._refused_launch:
+            self._refused_launch = launch.session_id
+            _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
+            self._say_incompatible(sentence, now)
+            self._owe_refusal(launch.session_id, sentence)
+        elif sentence != self._incompatible or _due(self._said_at, now, INCOMPATIBLE_REPEAT):
+            self._say_incompatible(sentence, now)
+
+    def _say_incompatible(self, sentence: str, now: Monotonic) -> None:
+        if sentence != self._incompatible:
+            _logger.error("dashboard: %s", sentence)  # logged when it changes, not at each reminder
+        self._incompatible = sentence
+        self._said_at = now
+        self._surface.note_remote_refusal(sentence)
 
     def _check_launch_timeout(self, now: Monotonic) -> None:
         awaiting = self._awaiting
@@ -685,7 +793,7 @@ class CloudSync:
             return False
         # Refused: cancelled on the dashboard between the poll and the arm.
         # The machine is armed for a session nobody wants: end it.
-        _logger.warning("dashboard refused the start (%s): stopping", error.detail)
+        _logger.warning("dashboard refused the start (%s): stopping", describe_refusal(error))
         tracked.start_confirmed = True
         self._forward_stop(tracked, f"annulee au tableau de bord ({error.detail})")
         return True
@@ -753,12 +861,21 @@ class CloudSync:
                     self._online = False
                     if was:
                         _logger.warning("dashboard unreachable: %s", detail)
-                case Refused():
-                    pass  # an answer, even a refusal, is a working link
+                case Refused() as refused:
+                    # An answer, even a refusal, is a working link.
+                    self._hear_refusal(refused)
                 case _ as unreachable:
                     assert_never(unreachable)
         if self._online and not was:
             _logger.info("dashboard reachable")
+
+    def _hear_refusal(self, refused: Refused) -> None:
+        """Log a refusal by its stable code, once; a refused contract goes to the console."""
+        if refused != self._last_refused:
+            self._last_refused = refused
+            _logger.warning("dashboard refused a request: %s", describe_refusal(refused))
+        if refused.code == CONTRACT_UNSUPPORTED:
+            self._refuse_server(unsupported_refusal(refused.supported), None)
 
 
 # =========================================================================

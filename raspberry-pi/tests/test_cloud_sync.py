@@ -50,6 +50,7 @@ from src.cloud_sync import (
     runnable_profiles,
     telemetry_point,
 )
+from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.control_surface import LOCAL_SUBJECT, StartRefusal, StartSession
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
 from src.local_panel import LocalPanel, build_panel, describe_resolve_error
@@ -113,7 +114,10 @@ class Dashboard:
     def _reply(self, method: str, path: str, body: Mapping[str, object]) -> Reply:
         self.calls.append((method, path, body))
         handler = self.handlers.get(path)
-        return ok() if handler is None else handler(body)
+        if handler is not None:
+            return handler(body)
+        # Unscripted, it is a dashboard of this console's contract with nothing waiting.
+        return launch_answer() if path == POLL_PATH else ok()
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         return self._reply("GET", path, dict(params or {}))
@@ -126,11 +130,19 @@ class Dashboard:
 
 
 DOWN: Final[Reply] = Err(Unreachable("no route to host"))
+POLL_PATH: Final[str] = "/api/machine/training/poll"
 
 
 def ok(document: Document | None = None) -> Reply:
     """A typed success, so an empty ``{}`` is a Document and not a ``dict[Unknown, Unknown]``."""
     return Ok({} if document is None else document)
+
+
+def launch_answer(
+    session: Mapping[str, JsonValue] | None = None, *, version: object = CONTRACT_VERSION
+) -> Reply:
+    """A poll answer carrying ``session``, from a dashboard announcing ``version``."""
+    return ok({"session": session, SERVER_VERSION_FIELD: version})
 
 
 def count(value: object) -> int:
@@ -419,7 +431,7 @@ async def test_a_launch_is_submitted_through_the_surface_with_the_rider(tmp_path
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(
-        "/api/machine/training/poll", ok({"session": {**LAUNCH, "totalDurationS": 2700}})
+        "/api/machine/training/poll", launch_answer({**LAUNCH, "totalDurationS": 2700})
     )
     await r.step()
     pending = r.panel.surface.pending
@@ -437,7 +449,7 @@ async def test_a_launch_is_submitted_through_the_surface_with_the_rider(tmp_path
 
 async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) -> None:
     r = rig(tmp_path)  # e-stop wiring NOT attested
-    r.dashboard.answer("/api/machine/training/poll", ok({"session": dict(LAUNCH)}))
+    r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
@@ -451,7 +463,7 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) ->
 async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
-    r.dashboard.answer("/api/machine/training/poll", ok({"session": dict(LAUNCH)}))
+    r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
     r.sync.start_refused("someone-else", "not this one")
     r.sync.start_refused("remote-1", "variateur en defaut")
@@ -469,7 +481,7 @@ async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> No
 async def test_a_launch_nobody_answers_times_out(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
-    r.dashboard.answer("/api/machine/training/poll", ok({"session": dict(LAUNCH)}))
+    r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
     await r.step(LAUNCH_TIMEOUT)
     reason = r.dashboard.to("/api/machine/training/end")[0]["reason"]
@@ -481,14 +493,14 @@ async def test_a_launch_nobody_answers_times_out(tmp_path: Path) -> None:
     "answer",
     [
         DOWN,
-        ok(),
-        ok({"session": None}),
-        ok({"session": {**LAUNCH, "sessionId": 3}}),
-        ok({"session": {**LAUNCH, "profileId": None}}),
-        ok({"session": {**LAUNCH, "subjectId": None}}),
-        ok({"session": {**LAUNCH, "subjectHrMax": "170"}}),
-        ok({"session": {**LAUNCH, "subjectHrMax": True}}),
-        ok({"session": {**LAUNCH, "operatorName": None}}),
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION}),  # no "session" key at all
+        launch_answer(None),
+        launch_answer({**LAUNCH, "sessionId": 3}),
+        launch_answer({**LAUNCH, "profileId": None}),
+        launch_answer({**LAUNCH, "subjectId": None}),
+        launch_answer({**LAUNCH, "subjectHrMax": "170"}),
+        launch_answer({**LAUNCH, "subjectHrMax": True}),
+        launch_answer({**LAUNCH, "operatorName": None}),
     ],
 )
 async def test_no_launch_or_a_malformed_one_submits_nothing(tmp_path: Path, answer: Reply) -> None:
@@ -504,7 +516,7 @@ async def test_a_blank_operator_and_odd_duration_are_tolerated(tmp_path: Path) -
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     odd = {**LAUNCH, "operatorName": "", "totalDurationS": True}
-    r.dashboard.answer("/api/machine/training/poll", ok({"session": odd}))
+    r.dashboard.answer("/api/machine/training/poll", launch_answer(odd))
     await r.step()
     pending = r.panel.surface.pending
     assert isinstance(pending, StartSession)
@@ -791,7 +803,7 @@ def linked(tmp_path: Path, **changes: str) -> Linked:
 
 async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Path) -> None:
     rig_ = linked(tmp_path)
-    rig_.dashboard.answer("/api/machine/training/poll", ok({"session": dict(LAUNCH)}))
+    rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await rig_.run(2.0)
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
     assert rig_.dashboard.to("/api/machine/training/start") == [{"sessionId": "remote-1"}]
@@ -809,7 +821,7 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Pa
 
 async def refused_launch(tmp_path: Path, launch: Mapping[str, JsonValue], **env: str) -> str:
     rig_ = linked(tmp_path, **env)
-    rig_.dashboard.answer("/api/machine/training/poll", ok({"session": dict(launch)}))
+    rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(launch)))
     await rig_.run(3.0)
     assert rig_.panel.runtime.state is RuntimeState.IDLE
     ends = rig_.dashboard.to("/api/machine/training/end")

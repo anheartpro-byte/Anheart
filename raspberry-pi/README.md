@@ -129,11 +129,18 @@ network only makes the dashboard's picture stale.
 
 | Direction | What | When |
 |---|---|---|
-| machine → dashboard | heartbeat with live state (mode, phase, bpm, rpm, g, safety) | every 10 s |
+| machine → dashboard | heartbeat with live state (mode, phase, bpm, rpm, g, safety), the software version (`VERSION`) and the contract version | every 10 s |
 | machine → dashboard | training presets whose cardiac tiers match this machine | when the profile store changes |
 | machine → dashboard | every session run here, AUTO or MANUAL, with telemetry at 1 Hz and its end | while it runs |
 | dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate) | polled every 3 s when idle |
 | dashboard → machine | a stop request forwarded to the ordinary STOP path: the setpoint walks down at the motion limits, under a FREEZE too | checked every 3 s |
+
+Both sides check one versioned contract (`contracts/machine-api.json` at the
+repository root, `src/contract.py` here). Every request carries
+`X-Anheart-Contract`; a dashboard that does not serve this major answers 426,
+and the console arms nothing from a dashboard of another major. Either way the
+event list shows `serveur incompatible (contrat X vs Y)` and the machine runs
+on as it would with no dashboard.
 
 **A stop that was asked for always comes down.** STOP at the console, a stop
 sent from the dashboard and a manual target of zero walk the setpoint to zero
@@ -271,7 +278,8 @@ sudo apt install libbluetooth-dev python3-dev
 4. Test connectivity:
    ```bash
    curl -X POST "https://your-project.convex.site/api/machine/heartbeat" \
-     -H "Authorization: Bearer YOUR_API_KEY"
+     -H "Authorization: Bearer YOUR_API_KEY" \
+     -H "X-Anheart-Contract: 1.0"
    ```
 
 ### Data not appearing in dashboard

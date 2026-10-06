@@ -101,12 +101,16 @@ else
         *.convex.cloud*) fail "CONVEX_URL must be the .convex.site host, not .convex.cloud" ;;
         https://*)
             # A wrong key answers 401; a right one answers 400 to this empty body
-            # without recording anything. Either way the machine state is untouched.
+            # without recording anything, or 426 when the dashboard does not serve
+            # the contract this console speaks. Either way the machine state is untouched.
+            contract="$(sed -nE 's/^CONTRACT_VERSION.*ContractVersion\("([0-9.]+)"\).*/\1/p' src/contract.py)"
             code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$url/api/machine/training/start" \
-                -H "Authorization: Bearer $key" -H 'Content-Type: application/json' -d '{}')"
+                -H "Authorization: Bearer $key" -H "X-Anheart-Contract: $contract" \
+                -H 'Content-Type: application/json' -d '{}')"
             case "$code" in
-                400) ok "$url reachable, key accepted" ;;
+                400) ok "$url reachable, key accepted, contract $contract served" ;;
                 401) fail "$url reachable, but the key is refused (regenerate it on the site)" ;;
+                426) fail "$url reachable, key accepted, but it does not serve contract $contract (update the console or the dashboard)" ;;
                 000) fail "$url unreachable (network?)" ;;
                 *)   warn "$url answered HTTP $code" ;;
             esac ;;

@@ -769,6 +769,17 @@ class ControlSurface:
         self._publish(EventKind.REFUSED, self._clock.monotonic(), operator, detail)
         _logger.warning("command refused by the loop")
 
+    def note_remote_refusal(self, detail: str) -> None:
+        """The dashboard link turned something down on this machine's behalf. Say so.
+
+        Published like any refusal so the operator reads it in the same list,
+        but it answers no command from the mailbox: unlike :meth:`note_refused`
+        it neither counts as a refused command nor touches the start intention,
+        so a start the operator has just typed here is not un-queued by news
+        about the dashboard.
+        """
+        self._publish(EventKind.REFUSED, self._clock.monotonic(), "", detail)
+
     def note_presence(self, operator: str) -> Monotonic:
         """Record an attendant presence ping. Returns the instant recorded.
 
