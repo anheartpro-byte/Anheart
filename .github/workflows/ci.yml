@@ -20,15 +20,68 @@ defaults:
   run:
     shell: bash
 
+env:
+  # The simulation battery is cut into this many shares. The matrix of
+  # `simulation-battery` must name each of them once (0 to this number minus
+  # one): `simulation-gate` fails if a share is missing or if a test ran twice.
+  SIMULATION_SHARES: '13'
+
+# Which gates run (docs/framework-de-test.md, section CI).
+#
+# `changes` reads the files a pull request changes (scripts/ci/gates-for-changes.mjs).
+# The jobs that depend on it carry the same condition: they are skipped only
+# on a pull request, and only when `changes` answered an explicit 'false'.
+# A push, the nightly run, a manual run, a `changes` job that failed or said
+# nothing: every gate runs. `!cancelled()` is what lets a gate run when
+# `changes` failed; without it GitHub would skip the gate and report the
+# required check as passed. `docs` and `audit` never depend on `changes`.
+#
+# `simulation-gate` says `always()` where the others say `!cancelled()`: it
+# waits for other jobs, so a run cancelled while they work would otherwise
+# skip it, and a skipped job passes a required check. It starts instead, and
+# fails because a part did not succeed. The others do not wait for the work
+# of another job: cancelled while they run, they report "cancelled". Only a
+# run cancelled during the few seconds of `changes` leaves them skipped.
+#
+# The names `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` and
+# `docs` are required by branch protection: each must stay the name of one
+# job, never of a matrix (a skipped matrix job reports under another name).
+
 jobs:
-  python:
-    name: ${{ matrix.gate }}
+  changes:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.gate == 'simulation-gate' && 90 || 60 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [pi-gate, simulation-gate]
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.rule.outputs.python }}
+      node: ${{ steps.rule.outputs.node }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Test the path rule and the workflow that applies it
+        run: node --test scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs
+      - name: Decide which gates this run needs
+        id: rule
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          changed="$RUNNER_TEMP/changed-paths"
+          : > "$changed"
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            # The checkout is the merge of the pull request into its base
+            # branch: its first parent is the base, its second the pull request.
+            # Renames are listed under both names, removals like any change.
+            git rev-parse --verify --quiet 'HEAD^2' > /dev/null
+            git diff --name-only --no-renames -z 'HEAD^1' HEAD > "$changed"
+          fi
+          node scripts/ci/gates-for-changes.mjs --event "$EVENT_NAME" < "$changed" | tee -a "$GITHUB_OUTPUT"
+
+  pi-gate:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       PYTHONPATH: .:raspberry-pi
     steps:
@@ -41,30 +94,125 @@ jobs:
           version: '0.8.22'
           python-version: '3.12'
           enable-cache: true
-          cache-suffix: ${{ matrix.gate }}
+          cache-suffix: pi-gate
       - name: Install Python dependencies
         run: |
           uv venv raspberry-pi/.venv
           uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
           uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
-      - name: Install and verify CAD extractor
-        if: matrix.gate == 'simulation-gate'
-        run: |
-          uv venv simulation/cad/.venv-cad
-          uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt
-          simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
       - name: Pi gate
-        if: matrix.gate == 'pi-gate'
         env:
           PYTEST_ADDOPTS: --durations=25
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           PI_GATE_PROCESSES="$(nproc)" bash raspberry-pi/scripts/check.sh
-      - name: Simulation gate
-        if: matrix.gate == 'simulation-gate'
-        run: bash simulation/scripts/check.sh --cov-report=term-missing --cov-report=xml:coverage.xml
+      # The same list of paths in `pi-gate` and in `simulation-gate`, as when
+      # one job published both: it is what keeps each file under its full
+      # path inside the artifact (raspberry-pi/coverage.xml, simulation/...).
+      - name: Publish coverage and synthetic reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pi-gate-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            raspberry-pi/coverage.xml
+            simulation/coverage.xml
+            simulation/out/ci/report.json
+            simulation/out/ci/report.html
+
+  # The scenario battery of the simulation gate, cut into SIMULATION_SHARES
+  # shares, one pytest process each. Share 0 is the cohort, which uses every
+  # CPU by itself: it has a runner of its own. `simulation-gate` judges them.
+  simulation-battery:
+    name: simulation (${{ matrix.part }})
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: cohort
+            shares: 0-0
+          - part: battery 1
+            shares: 1-4
+          - part: battery 2
+            shares: 5-8
+          - part: battery 3
+            shares: 9-12
+    env:
+      PYTHONPATH: .:raspberry-pi
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          lfs: true
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: simulation-gate
+      - name: Install Python dependencies
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+      # In every part: the test of the CAD extraction is skipped without it,
+      # and no part knows in advance which one will be given that test.
+      - name: Install and verify CAD extractor
+        run: |
+          uv venv simulation/cad/.venv-cad
+          uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt
+          simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
+      - name: Simulation gate, shares ${{ matrix.shares }} of the battery
+        env:
+          PYTEST_ADDOPTS: --durations=15
+          SIMULATION_GATE_SHARES: ${{ matrix.shares }}/${{ env.SIMULATION_SHARES }}
+          SIMULATION_GATE_EVIDENCE: ${{ runner.temp }}/simulation-evidence
+        run: |
+          echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
+          bash simulation/scripts/check.sh
+      # One artifact per part, replaced when the part is run again: the gate
+      # must judge the latest run of each part, never two runs of the same one.
+      - name: Keep what these shares recorded and measured
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: simulation-evidence-${{ matrix.shares }}
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+          include-hidden-files: true
+          path: ${{ runner.temp }}/simulation-evidence
+
+  simulation-report:
+    name: simulation (report)
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PYTHONPATH: .:raspberry-pi
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: simulation-gate
+      - name: Install Python dependencies
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
       - name: Synthetic simulation report
-        if: ${{ !cancelled() && matrix.gate == 'simulation-gate' }}
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -74,7 +222,7 @@ jobs:
           fi
           raspberry-pi/.venv/bin/python -m simulation.quick "${args[@]}"
       - name: Replay committed real scenarios
-        if: ${{ github.event_name == 'schedule' && matrix.gate == 'simulation-gate' }}
+        if: ${{ github.event_name == 'schedule' }}
         run: |
           shopt -s nullglob
           scenarios=(simulation/scenarios/real/*.json)
@@ -84,11 +232,85 @@ jobs:
           for scenario in "${scenarios[@]}"; do
             raspberry-pi/.venv/bin/python -m simulation.run "$scenario" --out "$RUNNER_TEMP/real-replay" >/dev/null 2>&1
           done
+      - name: Keep the synthetic reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: simulation-report
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+          path: |
+            simulation/out/ci/report.json
+            simulation/out/ci/report.html
+
+  # The required check. It passes only if every part above succeeded AND the
+  # records they left prove that every test of the battery ran exactly once,
+  # with 100 % of branches covered once their measures are merged.
+  simulation-gate:
+    needs: [changes, simulation-battery, simulation-report]
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: .:raspberry-pi
+    steps:
+      # Runs whatever happened to the run, cancelled included: a part that was
+      # cancelled, that failed, that ran out of time or that was skipped when
+      # it should not have been must leave this required check failed.
+      - name: Every part of the gate succeeded
+        if: ${{ always() }}
+        env:
+          BATTERY: ${{ needs.simulation-battery.result }}
+          REPORT: ${{ needs.simulation-report.result }}
+        run: |
+          echo "simulation battery (all parts): $BATTERY"
+          echo "simulation report: $REPORT"
+          [[ "$BATTERY" == success && "$REPORT" == success ]]
+      # The steps below run even when a part failed: what did run is still
+      # judged and shown, and the job stays failed because of the step above.
+      # They do not run when the run was cancelled.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: ${{ !cancelled() }}
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        if: ${{ !cancelled() }}
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: simulation-gate
+      - name: Install Python dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+      - name: Gather what every share recorded and measured
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: simulation-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/simulation-evidence
+      - name: Gather the synthetic reports
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: simulation-report
+          path: simulation/out/ci
+      - name: Simulation gate, every test once and combined coverage
+        if: ${{ !cancelled() }}
+        env:
+          SIMULATION_GATE_COMBINE: ${{ env.SIMULATION_SHARES }}
+          SIMULATION_GATE_EVIDENCE: ${{ runner.temp }}/simulation-evidence
+        run: bash simulation/scripts/check.sh
       - name: Publish coverage and synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ${{ matrix.gate }}-${{ github.run_attempt }}
+          name: simulation-gate-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: error
           path: |
@@ -98,6 +320,8 @@ jobs:
             simulation/out/ci/report.html
 
   convex-tests:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.node != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -109,9 +333,13 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Type-check the Convex functions
+        run: npx tsc -p convex/tsconfig.json --noEmit
       - run: npm run test:convex
 
   web:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.node != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:

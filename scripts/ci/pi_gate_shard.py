@@ -1,9 +1,10 @@
-"""pytest plugin: run one share of the Pi suite and leave evidence of what ran.
+"""pytest plugin: run one share of a suite and leave evidence of what ran.
 
 Loaded only by ``pi_gate_parallel.py`` (``-p pi_gate_shard``), never by a
 plain pytest run. Each process collects the WHOLE suite, exactly as the serial
-gate does, then keeps the tests at the positions that belong to it and hands
-the rest back to pytest as deselected.
+gate does, then keeps the tests that belong to it and hands the rest back to
+pytest as deselected. Two suites are dealt out this way, each by its own rule:
+the Pi suite (the default) and the simulation battery (``--pi-gate-suite``).
 
 Nothing here decides whether the gate passes. The plugin only writes down two
 facts, which ``pi_gate_parallel.py`` checks afterwards without trusting the
@@ -30,8 +31,9 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import Final, assert_never
 
 import pytest
 
@@ -43,6 +45,17 @@ OPTION_EVIDENCE: Final[str] = "--pi-gate-evidence"
 
 OPTION_RESTORE: Final[str] = "--pi-gate-restore"
 """``NAME=value`` or ``NAME``: a variable to put back as the runner found it."""
+
+OPTION_SUITE: Final[str] = "--pi-gate-suite"
+"""``pi`` (when absent) or ``simulation``: whose rule deals the tests out."""
+
+
+class Suite(Enum):
+    """The suites this plugin knows how to deal out."""
+
+    PI = "pi"
+    SIMULATION = "simulation"
+
 
 SAME_PROCESS: Final[frozenset[str]] = frozenset(
     {
@@ -58,6 +71,53 @@ cannot give. A name listed here that is no longer collected stops the run:
 a stale entry would silently give the guarantee up.
 """
 
+ALONE_IN_PROCESS_ZERO: Final[frozenset[str]] = frozenset({"tests/test_cohort.py"})
+"""Simulation test files that go whole to process 0, which then runs nothing else.
+
+The first cohort test that needs an outcome runs the WHOLE cohort, over every
+CPU of the machine, and the two parametrized tests then read that one result
+90 times each. Dealt out like the rest, every process would run the whole
+cohort again. Nothing else is given to process 0, so that it can be started
+alone on a machine and leave the CPUs to the cohort. A file listed here from
+which nothing is collected any more stops the run: the cost of a stale entry
+(every process running the cohort) would otherwise only show as a slow gate.
+"""
+
+SLOW_SECONDS: Final[Mapping[str, int]] = {
+    "tests/test_battery.py[fault_ecg_mains_burst_dsp]": 390,
+    "tests/test_battery.py[fault_ecg_electrode_off_dsp]": 380,
+    "tests/test_quick.py[fault_ecg_mains_burst_dsp]": 310,
+    "tests/test_quick.py[fault_ecg_electrode_off_dsp]": 240,
+    "tests/test_battery.py[auto_jog_150_dsp]": 220,
+    "tests/test_failures.py[ecg_dsp_corrupted]": 120,
+    "tests/test_properties.py::test_any_heart_rate_the_sensor_reports_keeps_every_invariant": 120,
+    "tests/test_failures.py[ecg_dsp_mains]": 105,
+    "tests/test_battery.py[fault_bitalino_disconnect_dsp]": 90,
+    "tests/test_failures.py[ecg_dsp_stopped]": 85,
+    "tests/test_properties.py::test_any_plausible_subject_keeps_every_invariant_in_a_programme": 80,
+    "tests/test_failures.py[ecg_dsp_saturated]": 80,
+    "tests/test_failures.py[ecg_dsp_flat]": 80,
+    "tests/test_failures.py[ecg_dsp_gaps]": 55,
+    (
+        "tests/test_properties.py"
+        "::test_every_ending_at_any_moment_of_a_manual_session_stops_the_motor"
+    ): 45,
+}
+"""The slowest runs of the simulation battery, by ``shared_run``, in seconds.
+
+Measured on CI (run 37539316521 of 6 October 2026, four processes on a 4-CPU
+runner): the runs through the real signal processing and the property tests.
+A handful of them weigh as much as everything else, so dealing the tests out
+in turn left one process with fifteen minutes of work and another with three.
+These numbers only steer the dealing. A name that is no longer collected is
+ignored, a slow run that is not listed is dealt like any other: both show as
+an unbalanced gate, in the ``--durations`` each process prints, never as a
+wrong verdict. To refresh the table, read those lines.
+"""
+
+OTHER_SECONDS: Final[int] = 6
+"""What a run that is not in ``SLOW_SECONDS`` is taken to cost, on average."""
+
 _SEVERITY: Final[Mapping[str, int]] = {
     "passed": 0,
     "skipped": 1,
@@ -68,6 +128,58 @@ _SEVERITY: Final[Mapping[str, int]] = {
 }
 
 
+def file_of(nodeid: str) -> str:
+    """The file a test id names: what comes before its first ``::``."""
+    return nodeid.partition("::")[0]
+
+
+def shared_run(nodeid: str) -> str:
+    """What the simulation tests that reuse one cached run have in common.
+
+    The battery asks three things of each scenario, the failure matrix two of
+    each case, and every one of them reads a run its file keeps for the whole
+    process: the first test to ask pays for it. Those tests carry the same
+    parameter id in the same file, so that is the group. A test without a
+    parameter id is a group of its own.
+    """
+    name, bracket, rest = nodeid.partition("[")
+    if bracket and rest.endswith("]"):
+        return f"{file_of(name)}[{rest[:-1]}]"
+    return nodeid
+
+
+def simulation_owners(nodeids: Sequence[str], count: int) -> Sequence[int]:
+    """The process that runs each simulation test, in collection order.
+
+    Three rules, all of them about time only: whatever comes out of here, the
+    runner still proves from the processes' own records that every test ran
+    exactly once.
+
+    * the files of ``ALONE_IN_PROCESS_ZERO`` go whole to process 0;
+    * elsewhere, the tests of one ``shared_run`` go to the same process, so
+      that the run they share is made once;
+    * each of those groups goes to the process that has the least to do so
+      far, among every process but 0 (process 0 too when it is the only one):
+      first the groups of ``SLOW_SECONDS``, slowest first, then the others in
+      the order they are first met. With nothing slow this is dealing them
+      out in turn.
+    """
+    dealt_to = range(1, count) if count > 1 else range(1)
+    alone = [file_of(nodeid) in ALONE_IN_PROCESS_ZERO for nodeid in nodeids]
+    dealt = [nodeid for nodeid, apart in zip(nodeids, alone, strict=True) if not apart]
+    met = dict.fromkeys(shared_run(nodeid) for nodeid in dealt)
+    load = dict.fromkeys(dealt_to, 0)
+    owner_of: dict[str, int] = {}
+    # sorted() keeps the order of equal keys: the groups that are not slow stay as first met.
+    for group in sorted(met, key=lambda group: -SLOW_SECONDS.get(group, 0)):
+        owner_of[group] = min(dealt_to, key=lambda process: (load[process], process))
+        load[owner_of[group]] += SLOW_SECONDS.get(group, OTHER_SECONDS)
+    return [
+        0 if apart else owner_of[shared_run(nodeid)]
+        for nodeid, apart in zip(nodeids, alone, strict=True)
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class Share:
     """Which part of the suite one process runs, and where it reports."""
@@ -75,15 +187,38 @@ class Share:
     index: int
     count: int
     evidence: Path
+    suite: Suite = Suite.PI
 
     def owns(self, position: int, nodeid: str) -> bool:
-        """Whether the test collected at ``position`` belongs to this process.
+        """Whether the Pi test collected at ``position`` belongs to this process.
 
         Positions are dealt out in turn, so a run of slow parametrized cases is
         spread over every process instead of landing in one.
         """
         owner = 0 if nodeid in SAME_PROCESS else position % self.count
         return owner == self.index
+
+    def selects(self, nodeids: Sequence[str]) -> Sequence[bool]:
+        """For each collected test, in order, whether this process runs it."""
+        match self.suite:
+            case Suite.PI:
+                return [self.owns(position, nodeid) for position, nodeid in enumerate(nodeids)]
+            case Suite.SIMULATION:
+                owners = simulation_owners(nodeids, self.count)
+                return [owner == self.index for owner in owners]
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def absent(self, nodeids: Sequence[str]) -> Sequence[str]:
+        """What the dealing rule names that is no longer collected, sorted."""
+        match self.suite:
+            case Suite.PI:
+                return sorted(SAME_PROCESS.difference(nodeids))
+            case Suite.SIMULATION:
+                files = {file_of(nodeid) for nodeid in nodeids}
+                return sorted(ALONE_IN_PROCESS_ZERO.difference(files))
+            case _ as unreachable:
+                assert_never(unreachable)
 
     def collected_file(self) -> Path:
         return self.evidence / f"collected-{self.index}.txt"
@@ -92,7 +227,17 @@ class Share:
         return self.evidence / f"executed-{self.index}.txt"
 
 
-def parse_share(text: str, evidence: str) -> Share:
+def parse_suite(names: Sequence[str]) -> Suite:
+    """The suite named on the command line: the Pi's when none is."""
+    if not names:
+        return Suite.PI
+    known = {suite.value: suite for suite in Suite}
+    if len(names) != 1 or names[0] not in known:
+        raise pytest.UsageError(f"{OPTION_SUITE} must be one of {sorted(known)}, got {names}")
+    return known[names[0]]
+
+
+def parse_share(text: str, evidence: str, suite: Suite = Suite.PI) -> Share:
     """Read ``<index>/<count>``; anything else is a usage error, never a guess."""
     index_text, separator, count_text = text.partition("/")
     if separator != "/" or not index_text.isdecimal() or not count_text.isdecimal():
@@ -100,7 +245,7 @@ def parse_share(text: str, evidence: str) -> Share:
     index, count = int(index_text), int(count_text)
     if count < 1 or index >= count:
         raise pytest.UsageError(f"{OPTION_SHARE}={text!r} names no share of the suite")
-    return Share(index=index, count=count, evidence=Path(evidence))
+    return Share(index=index, count=count, evidence=Path(evidence), suite=suite)
 
 
 def given(arguments: Sequence[str], option: str) -> Sequence[str]:
@@ -173,16 +318,16 @@ class ShareRecorder:
     ) -> None:
         nodeids = [item.nodeid for item in items]
         write_lines(self._share.collected_file(), nodeids)
-        absent = sorted(SAME_PROCESS.difference(nodeids))
+        absent = self._share.absent(nodeids)
         if absent:
             raise pytest.UsageError(
-                "tests pinned to one process are no longer collected, update SAME_PROCESS in "
-                f"scripts/ci/pi_gate_shard.py: {absent}"
+                "tests pinned to one process are no longer collected, update SAME_PROCESS or "
+                f"ALONE_IN_PROCESS_ZERO in scripts/ci/pi_gate_shard.py: {absent}"
             )
         kept: list[pytest.Item] = []
         dropped: list[pytest.Item] = []
-        for position, item in enumerate(items):
-            (kept if self._share.owns(position, item.nodeid) else dropped).append(item)
+        for item, selected in zip(items, self._share.selects(nodeids), strict=True):
+            (kept if selected else dropped).append(item)
         items[:] = kept
         config.hook.pytest_deselected(items=dropped)
 
@@ -200,8 +345,9 @@ class ShareRecorder:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("pi-gate", "one share of the Pi suite (set by pi_gate_parallel.py)")
+    group = parser.getgroup("pi-gate", "one share of a suite (set by pi_gate_parallel.py)")
     group.addoption(OPTION_SHARE, help="<index>/<count>: the share this process runs")
+    group.addoption(OPTION_SUITE, help="pi (default) or simulation: whose dealing rule applies")
     group.addoption(OPTION_EVIDENCE, help="directory for the collected and executed lists")
     group.addoption(
         OPTION_RESTORE,
@@ -235,6 +381,7 @@ def pytest_configure(config: pytest.Config) -> None:
             f"pi_gate_shard needs one {OPTION_SHARE}= and one {OPTION_EVIDENCE}=: "
             "pi_gate_parallel.py starts it"
         )
+    suite = parse_suite(given(arguments, OPTION_SUITE))
     config.pluginmanager.register(
-        ShareRecorder(parse_share(shares[0], evidence[0])), "pi-gate-share"
+        ShareRecorder(parse_share(shares[0], evidence[0], suite)), "pi-gate-share"
     )
