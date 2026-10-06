@@ -36,7 +36,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 |---|---|
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
-| **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend derrière un verdict : tant qu'un verdict, verrouillé ou non, tient un bras à l'arrêt, une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève ni un acquittement ne mettent le bras en mouvement. Restent possibles sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE, et, avec une personne à bord, une cible manuelle acceptée qui attendait la fréquence cardiaque sans qu'aucun verdict ne tienne ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 et 7.6 la liste exacte de ce que les règles ne couvrent pas). | `safety.py`, `runtime.py` |
+| **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend sur un bras à l'arrêt : tant que quelque chose y retient une montée (un verdict, verrouillé ou non ; avec une personne à bord, une fréquence cardiaque inutilisable, de tendance inconnue ou en baisse rapide ; un premier pas que le variateur n'a pas confirmé), une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève, ni un acquittement, ni une fréquence cardiaque qui revient ou se stabilise ne mettent le bras en mouvement. Reste possible sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 la liste exacte de ce que les règles ne couvrent pas et en 7.6 la règle des cibles manuelles). | `safety.py`, `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -132,7 +132,8 @@ Ticket ANH-176. Les deux décisions ci-dessous sont celles du propriétaire du
 produit, reprises telles qu'il les a formulées. Les mesures, la façon de les
 appliquer et la liste de ce qui reste (7.2 à 7.5) sont de l'auteur du
 changement et de la revue indépendante : elles n'engagent pas le propriétaire
-du produit.
+du produit. La section 7.6 (ticket ANH-178, cibles manuelles) porte ses deux
+propres décisions, du 6 octobre 2026 elles aussi, et dit qui les a prises.
 
 ### 7.1 Les décisions
 
@@ -281,7 +282,7 @@ cohorte de 30 personnes : 350 courses) a été rejouée avant et après.
 
 ### 7.4 Ce que la règle ne couvre pas
 
-Dans ces cas le bras peut encore quitter l'arrêt sans clic à cet instant.
+Dans ce cas le bras peut encore quitter l'arrêt sans clic à cet instant.
 
 1. **Avant le premier mouvement d'une séance programmée** (décision du 6
    octobre, point 3). Mesuré : aucune FC pendant les 45 premières secondes de
@@ -289,14 +290,21 @@ Dans ces cas le bras peut encore quitter l'arrêt sans clic à cet instant.
    30 s, la consigne étant à 0 depuis le départ. La FC arrive, l'avertissement
    se lève, le programme continue, et le bras fait son premier mouvement
    pendant WARMUP (81 tr/min moteur à 285 s). La phrase ci-dessus reste
-   affichée tant que l'avertissement dure.
-2. **Une cible manuelle acceptée qui attend la fréquence cardiaque, sans aucun
-   verdict.** Avec une personne déclarée à bord, la consigne ne monte pas tant
-   qu'aucune FC n'est utilisable, ni tant que la FC baisse de plus de
-   20 bpm/min (garde vasovagale). Ce ne sont pas des verdicts. Une cible tapée
-   à ce moment est acceptée, n'est pas suivie, puis l'est quand la garde se
-   lève. Voir 7.6 pour les mesures : c'est ce qui reste de l'ancien point 2,
-   la cible qui attendait derrière un verdict, fermé par ANH-178.
+   affichée tant que l'avertissement dure. Ce premier mouvement est aussi
+   retenu, sans verdict, par la garde vasovagale et par un état du variateur
+   illisible (`_follow_controller`), et il a lieu quand la retenue disparaît :
+   c'est lu dans le code, pas mesuré ici, et c'est le même cas.
+
+**Ce qui n'est plus dans cette liste.** Une cible manuelle saisie sur un bras à
+l'arrêt y figurait deux fois : derrière un verdict, puis derrière la fréquence
+cardiaque sans aucun verdict (FC inutilisable, ou en baisse de plus de
+20 bpm/min, garde vasovagale). Les deux sont fermés par ANH-178 (7.6) : une
+telle cible est refusée, ou retirée si elle était déjà saisie. En séance
+manuelle, il ne reste entre une cible acceptée et le premier pas que le temps
+du profil de mouvement, qui ne dépend que du temps : avec les limites livrées
+et le cycle de 0,2 s, le pas est écrit au premier cycle qui suit, ou au second
+quand le profil n'a pas encore de base de temps (premier cycle de la séance,
+cycle qui suit un FREEZE), soit 0,4 s au plus.
 
 **Le bandeau à l'écran reste à faire.** Dire clairement et en permanence, en
 français et sur toutes les pages, qu'une reprise automatique reste possible
@@ -316,17 +324,30 @@ anglaise ci-dessus est un palliatif.
 - Chaque fin de ce type demande un acquittement nominatif avant le départ
   suivant.
 
-### 7.6 Aucune cible manuelle n'attend derrière un verdict (ANH-178)
+### 7.6 Aucune cible manuelle n'attend sur un bras à l'arrêt (ANH-178)
 
-**La décision.** Le propriétaire du produit a retenu la recommandation de la
-revue indépendante d'ANH-176 : refuser une cible manuelle tant qu'un verdict
-tient un bras à l'arrêt. Le reste de cette section (mesures, application,
-limites) est de l'auteur du changement.
+**Les décisions.**
 
-**Ce qui se passait** (mesures de la revue indépendante, sur le banc d'essai
-logiciel, séance manuelle). Une cible est une destination ; sous un verdict
-elle n'est pas suivie vers le haut. Tapée sur un bras à l'arrêt, elle
-attendait :
+- **6 octobre 2026.** Le propriétaire du produit a retenu la recommandation de
+  la revue indépendante d'ANH-176 : refuser une cible manuelle tant qu'un
+  verdict tient un bras à l'arrêt.
+- **6 octobre 2026**, décision prise par le coordinateur sur délégation du
+  propriétaire du produit, qui suit la recommandation de la revue pour les
+  verdicts et l'étend à l'attente de la fréquence cardiaque : un bras à l'arrêt
+  ne part que sur une cible saisie alors que rien ne le retient.
+
+Le reste de cette section (mesures, application, limites, coûts) est de
+l'auteur du changement. Il a appliqué le même principe à une troisième retenue
+trouvée à la lecture du code, le premier pas que le variateur ne confirme pas ;
+c'est signalé comme tel plus bas.
+
+**Ce qui se passait.** Une cible est une destination ; tant qu'une montée est
+retenue, elle n'est pas suivie. Tapée sur un bras à l'arrêt, elle attendait, et
+le bras partait seul quand la retenue disparaissait. Tout est mesuré sur le
+banc d'essai logiciel, en séance manuelle.
+
+*Derrière un verdict* (mesures de la revue indépendante, « avant » = `develop`
+avant ANH-178) :
 
 | Séquence | Avant | Maintenant |
 |---|---|---|
@@ -334,24 +355,53 @@ attendait :
 | Séance manuelle qui n'a pas encore bougé, même avertissement, même cible. | Acceptée ; premier mouvement 3,2 s après le retour de la FC. | Refusée ; rien ne bouge. |
 | FREEZE verrouillé (`loop_stall`) sur un bras que l'opérateur a arrêté ; une cible est tapée, puis le verdict est acquitté. | Acceptée ; le bras part 0,4 s après l'acquittement : acquitter relançait. | Refusée ; l'acquittement ne met rien en mouvement. |
 
-Dans les trois cas, une cible tapée ensuite, quand plus aucun verdict ne
-tient, est acceptée et suivie.
+*Sans aucun verdict* (mesures de l'auteur ; « avant » = la première version de
+ce changement, qui ne jugeait que les verdicts, et `develop`, identiques sur ce
+point). Personne déclarée à bord pour les trois premières lignes ; aucun
+verdict à aucun moment :
+
+| Séquence | Avant | Maintenant |
+|---|---|---|
+| Six secondes sans lecture de FC, ce qui n'est pas encore un avertissement. 200 tr/min moteur sont tapés ; la lecture revient deux secondes après. | Cible acceptée ; première consigne non nulle 0,2 s après le retour de la lecture. | Refusée : « pas de frequence cardiaque utilisable ». La lecture revient : rien ne bouge. |
+| L'opérateur arrête le bras ; la FC redescend de 130 à 80 à 30 bpm/min, comme après un effort. La cible est tapée dix secondes après le début de la baisse. | Acceptée ; elle attend 91 s, puis le bras part quand la baisse s'arrête (66 s pour une baisse de 140 à 90 à 40 bpm/min). | Refusée : « la frequence cardiaque baisse trop vite ». La baisse s'arrête : rien ne bouge. |
+| Premières secondes d'un ECG : une seule lecture, ce qui suffit au départ, puis une cible. | Acceptée ; le bras part 3,2 s plus tard, à la cinquième lecture. | Refusée : « tendance de la frequence cardiaque pas encore connue ». Rien ne bouge. |
+| Le variateur confirme le maintien de liaison mais pas le premier pas (capsule vide ou non). | Cible gardée ; le premier pas est redemandé à chaque cycle (100 fois en 20 s) sans qu'aucun verdict ne se lève, et le bras part 0,2 s après la première confirmation. | Le pas est demandé une fois ; la cible est remise à 0 et la console le dit. Le variateur confirme de nouveau : rien n'est demandé. |
+
+Dans tous les cas, une cible tapée ensuite, quand plus rien ne retient, est
+acceptée et suivie.
 
 **La règle**, en deux moitiés :
 
-- **Refus.** Tant qu'un verdict tient, verrouillé ou non, et que la consigne
-  appliquée vaut 0, une cible non nulle est refusée. Le message nomme le
-  verdict et dit quoi attendre : « consigne refusee : le verdict hr_stale
-  tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible »
-  (pour un verdict verrouillé : « L'acquitter une fois sa cause levee »). Une
-  cible de 0 est toujours acceptée.
-- **Retrait.** Une cible non nulle déjà saisie est remise à 0 au cycle où un
-  verdict tient le bras à l'arrêt. Elle n'est donc pas suivie quand le verdict
-  se lève ou est acquitté ; l'opérateur la retape. La console le dit une
-  fois : « cible de 200 tr/min moteur remise a 0 : le verdict … ».
+- **Refus.** Tant que quelque chose retient une montée et que la consigne
+  appliquée vaut 0, une cible non nulle est refusée. Le message nomme ce qui
+  retient et dit quoi faire (tableau ci-dessous). Une cible de 0 est toujours
+  acceptée.
+- **Retrait.** Une cible non nulle déjà saisie est remise à 0 au cycle où
+  quelque chose retient le bras à l'arrêt. Elle n'est donc pas suivie quand la
+  retenue disparaît ; l'opérateur la retape. La console le dit une fois :
+  « cible de 200 tr/min moteur remise a 0 : … », avec la même raison.
 
-Un bras à l'arrêt ne reçoit donc de vitesse que d'une cible saisie alors
-qu'aucun verdict ne tient.
+À la fin de chaque cycle : **si la consigne appliquée vaut 0 et que quelque
+chose retiendrait une montée, la cible vaut 0.** Un bras à l'arrêt ne reçoit
+donc de vitesse que d'une cible saisie alors que rien ne le retient.
+
+**Ce qui peut retenir une montée sur un bras à l'arrêt**, en séance manuelle.
+Liste établie en lisant toutes les conditions sous lesquelles
+`_follow_manual`, et ce qu'il appelle, n'élève pas la consigne :
+
+| Ce qui retient | Refus à la saisie | Retrait au cycle | Ce que dit la console, puis « puis redonner la cible » |
+|---|---|---|---|
+| Un verdict, verrouillé ou non (FREEZE, REDUCE, et tout verdict de fin) | oui | oui | « le verdict hr_stale tient le bras a l'arret. Attendre qu'il soit leve » (verrouillé : « L'acquitter une fois sa cause levee ») |
+| Personne à bord, pas de FC utilisable (aucune lecture fiable depuis plus de 4 s) | oui | oui | « pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable » |
+| Personne à bord, tendance de la FC inconnue (moins de 5 lectures depuis le début de l'historique : premières secondes de l'ECG, ou après un saut confirmé) | oui | oui | « tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture » |
+| Personne à bord, FC en baisse de plus de 20 bpm/min sur les 5 dernières lectures (garde vasovagale) | oui | oui | « la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise » |
+| Le variateur n'a pas confirmé l'écriture du premier pas (troisième retenue, trouvée à la lecture du code) | non : rien ne permet de le prévoir | oui, au cycle où le pas est demandé | « le variateur n'a pas confirme la consigne, le bras reste a l'arret. Verifier la liaison » |
+
+Ne sont pas des retenues : une séance qui se termine (cible refusée, comme
+avant) ; une cible hors domaine (refusée, comme avant) ; le profil de
+mouvement, qui écrit le premier pas au premier cycle après la cible, ou au
+second quand il n'a pas encore de base de temps (0,4 s au plus avec les limites
+livrées, voir 7.4). Le plafond d'un REDUCE est un verdict : première ligne.
 
 **Comment c'est appliqué.**
 
@@ -361,53 +411,83 @@ qu'aucun verdict ne tient.
   suivant ; la simulation appelle la même méthode. Le tableau de bord ne sait
   pas envoyer de cible. Un refus revient à la page comme un événement
   `refused`, comme pour une cible hors domaine.
-- Le refus juge sur ce que le dernier cycle a laissé en vigueur, seule chose
-  connue entre deux cycles : un verdict sur le point de se lever refuse encore.
-  Un verdict sur le point d'apparaître est l'affaire du retrait, fait à la fin
-  de l'étape de commande de chaque cycle, quel que soit le verdict et quel que
-  soit le bras (`_withdraw_waiting_target`). Aucun chemin ne passe entre les
-  deux : pour qu'un cycle sans verdict suive une cible depuis l'arrêt, il faut
-  qu'elle ait été saisie alors que rien ne tenait.
+- Le refus juge un verdict sur ce que le dernier cycle a laissé en vigueur,
+  seule chose connue entre deux cycles : un verdict sur le point de se lever
+  refuse encore. La fréquence cardiaque, elle, est lue à l'instant de la
+  saisie. Quand un verdict et la FC retiennent tous les deux, c'est le verdict
+  qui est nommé.
+- Le retrait est fait à la fin de l'étape de commande de chaque cycle
+  (`_withdraw_waiting_target`), quel que soit le verdict et quel que soit le
+  bras ; sans verdict, il lit ce que le suivi de la cible vient de constater à
+  ce même cycle (`_follow_manual`) : la garde de la FC, ou une écriture non
+  confirmée. Ce qui apparaît entre la saisie et le premier pas est donc
+  l'affaire du retrait. Aucun chemin ne passe entre les deux : pour qu'un cycle
+  suive une cible depuis l'arrêt, il faut qu'elle ait été saisie alors que rien
+  ne retenait, et que rien ne retienne à ce cycle.
+- La garde de la FC est énoncée une seule fois (`_heart_rate_hold`), lue par le
+  refus et par le cycle. Sa décision est celle d'avant, inchangée : FC
+  utilisable, et garde vasovagale ouverte (le test que passe aussi la montée
+  d'un programme). Les trames envoyées au variateur sont les mêmes qu'avant ;
+  seule la cible change.
 - **Rien ne change pour un bras qui tourne** : une cible tapée pendant qu'un
-  FREEZE ou un REDUCE tient un bras en mouvement est acceptée, gardée, et
-  suivie quand le verdict se lève ou est acquitté.
+  FREEZE, un REDUCE, la garde de la FC ou un variateur qui ne confirme pas
+  retiennent la montée d'un bras en mouvement est acceptée, gardée, et suivie
+  quand la retenue disparaît, comme avant.
 - Au cycle où un avertissement vient lui-même d'amener la consigne à 0, la
   cible est remise à 0 sans message : la séance se termine au cycle suivant
   (`session_standstill`) et cette fin dit tout. Entre les deux, une cible est
   refusée au nom de l'avertissement.
 - Un départ manuel ne porte jamais de cible : la séance qu'il arme a une cible
   de 0, et il est refusé tant qu'un verdict tient.
+- Capsule vide (`bench`) : la FC n'y retient rien, comme avant. Restent les
+  verdicts et le variateur.
 - Aucun seuil, aucun délai, aucune règle du superviseur n'est modifié.
+
+**Le départ normal avec une personne à bord.** L'ECG tourne avant le départ :
+quand l'opérateur tape sa première cible, la FC est utilisable et sa tendance
+connue. Si elle est stable, la cible est acceptée et le premier pas est écrit
+au cycle suivant, ou au second : c'est vérifié sur le runtime avec les limites
+de la console, sur la console réelle avec le sujet simulé, et par les deux
+scénarios de simulation avec une personne à bord, qui ne changent pas. Le
+départ lui-même reste refusé sans FC utilisable, comme avant. Si la première
+cible est refusée, l'opérateur lit la raison dans la liste des événements,
+attend ce qu'elle dit d'attendre (une lecture fiable, quelques secondes de
+lecture, une FC stabilisée) et retape la cible : rien d'autre à faire, aucun
+acquittement.
 
 **Ce que l'opérateur voit.** La page existante affiche déjà les événements
 `refused` avec leur texte (en orange, dans la liste des événements) et la
 « cible appliquee » lue dans l'instantané : elle montre donc le refus, et la
-cible revenue à 0 avec le brouillon resté en orange. Deux défauts restent,
+cible revenue à 0 avec le brouillon resté en orange. Trois défauts restent,
 à corriger dans la page : après « Appliquer », la note dit encore « cible
 envoyee … la machine y va » parce que la boîte aux lettres a répondu 202
-avant que la boucle refuse ; et rien de plus visible qu'une ligne d'événement
-ne signale le retrait.
+avant que la boucle refuse ; rien de plus visible qu'une ligne d'événement
+ne signale le retrait ; et rien n'indique, avant de taper, que la FC retient
+la montée.
 
-**Ce que la règle ne couvre pas : l'attente sans verdict.** Avec une personne
-déclarée à bord, deux gardes retiennent une montée sans lever de verdict. Une
-cible saisie à ce moment est acceptée (aucun verdict ne tient) et elle attend.
-Mesuré, limites de la console, aucun verdict à aucun moment :
+**Ce que cela coûte.**
 
-- *Pas de FC utilisable.* Six secondes sans lecture fraîche, cible tapée,
-  lecture revenue deux secondes après : le bras part. L'attente est bornée :
-  à 10 s `hr_stale` tient le bras, et la cible est retirée.
-- *FC en baisse rapide* (garde vasovagale, 20 bpm/min). L'opérateur arrête le
-  bras, la FC redescend de 130 à 80 à 30 bpm/min, comme après un effort. Une
-  cible tapée dix secondes après le début de la baisse attend 91 s, puis le
-  bras part quand la baisse s'arrête, sans clic à cet instant. À 40 bpm/min
-  (de 140 à 90) : 66 s. Rien ne borne cette attente, sinon la fin de la baisse.
-
-Ces deux cas sont figés par des tests et laissés au propriétaire du produit :
-c'est le même danger que celui du ticket, par une route où aucun verdict ne
-parle.
-
-**Ce que cela coûte.** Après un avertissement passager sur un bras à l'arrêt,
-l'opérateur doit retaper sa cible une fois l'avertissement levé. Une cible
-tapée dans le cycle (0,2 s) où un verdict se lève peut être refusée : il la
-retape. Aucune séance simulée n'est concernée : les 350 courses de la batterie
-donnent le même résultat avant et après.
+- Après un avertissement passager sur un bras à l'arrêt, l'opérateur doit
+  retaper sa cible une fois l'avertissement levé. Une cible tapée dans le cycle
+  (0,2 s) où un verdict se lève peut être refusée : il la retape.
+- **La garde vasovagale se ferme aussi sur des variations ordinaires de la
+  FC.** Elle juge la pente des 5 dernières lectures, une par seconde, contre
+  20 bpm/min : deux battements de moins en cinq secondes suffisent. Avant, une
+  telle fermeture retardait le premier pas de quelques secondes ; maintenant
+  elle refuse la cible, que l'opérateur retape. Estimation, pas mesure : FC
+  stable plus un bruit gaussien indépendant à chaque lecture, arrondi au
+  battement, la garde est fermée 3 % du temps pour un écart-type de 0,5 bpm,
+  14 % pour 1 bpm, 29 % pour 2 bpm. Sur l'ECG synthétique de la simulation
+  passé par le vrai traitement (trace du scénario `auto_jog_150_dsp`, une
+  lecture par seconde), elle n'est jamais fermée au repos, où ce signal n'a
+  aucune variabilité, et elle l'est sur 6 lectures sur 116 (5 %) pendant le
+  palier d'effort, où la FC lue bouge d'un ou deux battements. **La fréquence
+  réelle de ces refus est à mesurer avec un vrai ECG avant la première séance
+  manuelle avec une personne à bord.** Le seuil et la fenêtre de la garde ne
+  sont pas modifiés.
+- Une seule trame perdue au moment du premier pas retire la cible, alors
+  qu'avant le pas était redemandé 0,2 s plus tard. L'opérateur la retape.
+- Aucune séance simulée n'est concernée : les 350 courses de la batterie
+  donnent le même résultat avant et après (mêmes fins, mêmes règles, mêmes
+  vitesses de pointe), y compris les deux scénarios manuels avec une personne
+  à bord.
