@@ -243,6 +243,31 @@ export default function MachineDetailPage({
                 {format(machine.createdAt, "PPP", { locale: dateLocale })}
               </p>
             </div>
+            <Separator />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.softwareVersion")}
+                </p>
+                <p className="font-medium">{machine.softwareVersion ?? "-"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.contractVersion")}
+                </p>
+                <p className="font-medium">{machine.contractVersion ?? "-"}</p>
+              </div>
+            </div>
+            {machine.lastVersionSeenAt !== undefined && (
+              <p className="text-xs text-muted-foreground">
+                {t("machines.versionSeen", {
+                  when: formatDistanceToNow(machine.lastVersionSeenAt, {
+                    addSuffix: true,
+                    locale: dateLocale,
+                  }),
+                })}
+              </p>
+            )}
           </CardContent>
         </Card>
 

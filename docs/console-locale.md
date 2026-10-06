@@ -673,6 +673,8 @@ la même façon, sans nom d'opérateur : personne ne l'a demandé. Tant qu'une s
 manuelle est à l'écran, ces refus sont aussi écrits dans la note de la carte Mode
 MANUEL (section 6). Hors séance manuelle, un démarrage ou un reset refusé par la
 boucle n'apparaît que dans cette liste.
+Un tableau de bord d'un autre contrat y arrive aussi, sans nom d'opérateur
+(section « Lien avec le tableau de bord » plus bas).
 
 ---
 
@@ -1002,6 +1004,17 @@ verdict `hr_stale` non verrouillé, et les refus `pas de frequence cardiaque
 utilisable` et `la frequence cardiaque baisse trop vite`. Les trois raisons de
 fréquence cardiaque ne concernent qu'une séance manuelle « personne à bord », que la
 page ne propose pas (section 6).
+
+Lien avec le tableau de bord (`incompatible_server`, événement `refused` sans nom
+d'opérateur). Rien n'a été demandé à la console : c'est le lien qui refuse.
+
+| Message | Sens |
+|---|---|
+| `serveur incompatible (contrat <X> vs <Y>)` | le tableau de bord ne parle pas la même majeure de contrat que cette console (X : la version de la console ; Y : celle du serveur, les majeures qu'il dit servir, ou `inconnu` s'il n'en annonce aucune). Aucun lancement distant n'est armé tant que cela dure ; la console fonctionne comme sans tableau de bord. Mettre à jour le côté en retard. |
+
+Le message est émis pour chaque lancement refusé, quand il change, et sinon
+rappelé toutes les 60 s tant que l'incompatibilité dure. Vérifié par
+`raspberry-pi/tests/test_cloud_contract.py`, pas rejoué dans un navigateur.
 
 Reset défaut variateur (`describe_reset_refusal`) :
 

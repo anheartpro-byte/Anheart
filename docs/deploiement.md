@@ -468,8 +468,11 @@ docker compose logs -f
 ```
 
 `preflight.sh` contrôle Docker, le `.env`, la présence du câble du variateur,
-l'appairage du BITalino et la clé de la machine. Il ne parle jamais au
-variateur. Il sort avec le code 1 s'il trouve un point bloquant.
+l'appairage du BITalino, la clé de la machine et le contrat que sert le
+tableau de bord (il échoue si Convex répond 426 : le serveur ne sert pas la
+majeure de contrat de cette console, voir
+[Versions et compatibilité](convex.md#11-versions-et-compatibilité)). Il ne parle
+jamais au variateur. Il sort avec le code 1 s'il trouve un point bloquant.
 
 La première ligne des journaux résume ce que la console a compris de sa
 configuration, par exemple :
