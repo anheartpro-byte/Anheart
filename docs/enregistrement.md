@@ -155,7 +155,12 @@ de configuration ou le dernier tic ; les indicateurs inconnus restent inconnus.
 ## Tics, 5 Hz
 
 `ticks.csv` a une ligne d'en-tête, puis une ligne par tic réellement observé.
-Le writer n'invente pas les tics manquants. L'ordre est celui du type partagé
+Le writer n'invente pas les tics manquants. Les tics de la console au repos
+qui précèdent le départ ont un `t` négatif ou nul : `t = 0` est l'instant de
+la commande de départ, et un tic horodaté 0 est le dernier tic d'avant le
+départ. Les tics de la séance ont un `t` strictement positif. La simulation
+écrit les tics de sa période de repos (15 s par défaut) ; le viewer n'affiche
+que la séance. L'ordre des colonnes est celui du type partagé
 `src.record.rows.Row`, réexporté par `simulation.tracefile` :
 
 ```text
@@ -197,7 +202,7 @@ du wrapper variateur ; ils ne sont pas reconstruits depuis un état simulé.
 Chaque ligne complète de `events.jsonl` est un objet :
 
 ```json
-{"t":12.4,"kind":"verdict_ack","detail":"acknowledged","actor":"operator-42"}
+{"t":12.4,"kind":"verdict_ack","detail":"acknowledge estop_released=true","actor":"operator-42"}
 ```
 
 L'énumération fermée est `verdict`, `verdict_ack`, `refusal`, `phase`,
@@ -209,6 +214,41 @@ L'énumération fermée est `verdict`, `verdict_ack`, `refusal`, `phase`,
 Le texte d'un événement n'est pas un canal de métadonnées. Le viewer ne
 décode aucun préfixe réservé dans `detail` : géométrie et état final viennent
 uniquement des champs typés communs du manifeste.
+
+### Commandes : les trois kinds qui sont des entrées du runtime
+
+`operator_action`, `remote_command` et `verdict_ack` ne décrivent pas ce que
+le runtime a fait : ils disent ce qu'on lui a demandé. Pour qu'un rejeu puisse
+redonner la même demande, leur `detail` est une commande d'un vocabulaire
+fermé, écrite par `encode` et relue par `parse` dans
+`raspberry-pi/src/record/commands.py`, à côté du writer, pour que la console
+et la simulation écrivent la même chose :
+
+| `detail` | Appel du runtime rejoué |
+| --- | --- |
+| `confirm_estop_wiring` | `confirm_estop_wiring(actor)` |
+| `start_programme` | `start(programme du manifeste, sujet)` |
+| `start_manual ceiling_motor_rpm=1380` | `start_manual(occupation du manifeste, actor, plafond)` |
+| `manual_target output_rpm=27.0` | `set_manual_target(27.0)` |
+| `stop` | `request_stop(...)` (bouton, ou fin demandée à distance : kind `remote_command`) |
+| `estop` | `request_estop(...)` |
+| `acknowledge estop_released=true` | `acknowledge(actor, estop_released=True)` (kind `verdict_ack`) |
+| `fault_reset` | `fault_reset()` |
+| `shutdown` | `shutdown(...)` : la console quitte (signal, tâche en échec, fin d'une simulation) |
+| `attendant present=true` | tant que `true`, chaque tic note la présence de l'accompagnant |
+
+Qui a demandé est dans `actor`. Ce que le runtime a répondu n'est pas dans la
+commande : un refus est son propre événement `refusal`, et les décisions sont
+dans `ticks.csv`. Le plafond d'une séance manuelle est écrit dans la commande
+parce que le manifeste ne le porte pas. `t` est l'horloge monotone que le
+runtime lit en traitant la commande, **non arrondie**.
+
+Tout autre texte sous l'un de ces trois kinds rend l'enregistrement non
+rejouable, et le rejeu le dit : une commande ignorée en silence donnerait le
+rejeu d'une autre séance. Ce que la simulation fait au modèle (défaut
+variateur injecté, perte de liaison, électrode décollée) n'est pas une commande
+au runtime : c'est un événement `warning` d'acteur `system`, préfixé
+`simulation:`.
 
 ## Observations du variateur
 
@@ -284,7 +324,13 @@ un octet LF (`0a`), puis le binaire :
 
 Les champs sont : numéro de bloc `seq`, premier instant relatif `t_first`
 en secondes, nombre d'échantillons **par canal** `n_samples`, noms de canaux
-dans l'ordre, et fréquence `sample_rate`, exactement 1000 Hz. Le binaire est
+dans l'ordre, et fréquence `sample_rate`, exactement 1000 Hz. Un champ
+optionnel `t_received` donne l'instant relatif, en secondes, auquel
+l'acquisition a remis ce lot au traitement. Ce n'est pas `t_first` plus la
+durée du bloc : `t_first` est l'heure de l'horloge d'échantillonnage, et un
+lot peut être lu un tic plus tard que la fin de ses échantillons. Un
+producteur qui ne connaît pas cet instant omet le champ, et l'en-tête reste
+alors, octet pour octet, celui de l'exemple ci-dessus. Le binaire est
 en entiers signés 16 bits little-endian, **canal par canal** : tous les
 échantillons du premier canal, puis tous ceux du deuxième, etc. Sa taille
 est exactement `2 × n_samples × nombre_de_canaux` octets. Il n'y a aucun
@@ -305,7 +351,9 @@ que le BITalino lui-même a perdu est dit par un événement `warning`
 `t_first`. Le premier bloc d'une séance peut commencer un peu avant `t = 0`.
 
 Dans les scénarios DSP, le tap placé avant le traitement capture tous les
-canaux acquis. La perturbation secteur synthétique est quantifiée au point
+canaux acquis, avec `t_received`. Les blocs acquis pendant le repos qui précède
+le départ sont conservés, avec des instants négatifs : la fenêtre du DSP en est
+pleine quand la séance commence. La perturbation secteur synthétique est quantifiée au point
 de production des comptes ADC ; le DSP et le fichier reçoivent donc les
 mêmes valeurs entières. Le recorder refuse une valeur fractionnaire plutôt
 que de fabriquer une autre version des données. Les scénarios `direct`
@@ -368,6 +416,53 @@ des données machine sans identité inconnue. Le recorder ne reconnaît pas
 magiquement un nom humain arbitraire : le test sentinelle prouve le respect
 de cette frontière explicite, pas une détection générale de personnes.
 
+## Ce qu'un enregistrement doit contenir pour être rejoué
+
+`python -m simulation.run --replay <dossier>` redonne un enregistrement à un
+vrai `TrainingRuntime` neuf et compare ce qu'il décide à ce qui a été
+enregistré (voir [framework-de-test.md](framework-de-test.md#16-rejouer-une-séance-enregistrée)).
+Le runtime décide à partir de quatre choses, et le rejeu ne peut redonner que
+ce que l'enregistrement contient :
+
+| Entrée du runtime | Où elle est | Ce qu'il faut |
+| --- | --- | --- |
+| l'horloge de chaque tic | `ticks.csv`, colonne `t` | tous les tics, y compris ceux du repos avant le départ (`t ≤ 0`) : la scrutation du variateur au repos et la fenêtre du DSP font partie de l'état au départ |
+| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), depuis le premier tic |
+| l'ECG | `ecg_raw/` | les blocs bruts depuis au moins 8 s avant le départ (la fenêtre du DSP), chacun avec `t_received` |
+| les demandes | `events.jsonl` | les commandes du tableau ci-dessus, pour les trois kinds d'entrée |
+
+À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'au
+départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les
+commandes puis le tic, comme la console vide sa boîte de commandes avant de
+tiquer ; `shutdown` vient toujours après le tic de son instant.
+
+L'horloge rejouée part de l'instant de la première entrée, tel qu'il est
+écrit, et avance par les intervalles enregistrés, arrondis à la milliseconde.
+Un enregistrement produit sur une horloge déterministe (la simulation) est
+ainsi rejoué sur les mêmes nombres flottants, et son rejeu est exact. Les
+instants d'une séance réelle sont connus à la milliseconde : une décision
+prise à moins d'une milliseconde d'un seuil peut tomber un tic plus tôt ou
+plus tard au rejeu.
+
+Ce qu'un rejeu ne peut pas redonner aujourd'hui, parce que le format ou le
+producteur ne le porte pas :
+
+- les échanges Modbus natifs (`modbus_read`, `modbus_write`, `modbus_send`,
+  `modbus_receive_chunk`) : il faudrait rejouer un maître Modbus sous le vrai
+  pilote ATV320. Un enregistrement qui en contient est refusé, pas rejoué à
+  moitié ;
+- la nature d'un échange en échec : chaque échec est rejoué comme une absence
+  de réponse. Le runtime ne distingue que deux variantes (étage de sortie
+  peut-être sous tension), que seul le pilote natif produit ;
+- le courant moteur à mieux que 0,1 A, résolution du registre dans lequel
+  l'observation est écrite ;
+- une fréquence cardiaque qui n'est pas passée par l'acquisition : le mode
+  `direct` de la batterie injecte des bpm sans ECG brut, et ses enregistrements
+  sont refusés au rejeu ;
+- une exception levée dans le tic d'origine, un saut de l'horloge murale
+  pendant l'acquisition, une perte signalée par le lien d'acquisition sans
+  trou dans les horodatages.
+
 ## Utilisation et compatibilité
 
 Depuis la racine, avec l'environnement Python existant :
@@ -391,7 +486,7 @@ d'image de présence, de clé machine, de jeton ou de mot de passe. Pas de
 consigne interpolée, de battement synthétisé pour masquer une perte, ni de
 vérité physiologique réelle inventée. Pas de preuve de chiffrement au repos,
 de consentement ou de conformité réglementaire. Pas de dépôt Storage,
-synchronisation, rejeu ni capture RTU native : ces fonctionnalités relèvent
+synchronisation ni capture RTU native : ces fonctionnalités relèvent
 des tickets suivants. Le branchement de la console réelle et la rétention
 locale existent (ANH-128) et sont décrits dans
 [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).

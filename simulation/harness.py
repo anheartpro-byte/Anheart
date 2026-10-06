@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Protocol, assert_never, final
 
 from simulation.capture import Capture
@@ -85,6 +85,7 @@ from src.local_panel import (
     describe_target_refusal,
 )
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
+from src.record import commands
 from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
@@ -124,6 +125,9 @@ PREROLL: Final[Seconds] = Seconds(15.0)
 as on a console that has been open for a moment before anybody presses start."""
 
 OPERATOR: Final[str] = "sim-operator"
+REMOTE: Final[str] = "remote"
+SYSTEM: Final[str] = "system"
+"""Event actors, as the record format names them: an operator id, ``remote``, ``system``."""
 ORIGIN: Final[Monotonic] = Monotonic(100.0)
 EPOCH: Final[UnixMillis] = UnixMillis(1_700_000_000_000)
 
@@ -501,6 +505,7 @@ class Session:
         "_messages",
         "_motion",
         "_pending",
+        "_preamble",
         "_preroll_final",
         "_preroll_peak",
         "_preroll_rules",
@@ -523,7 +528,7 @@ class Session:
         "_truth",
     )
 
-    def __init__(
+    def __init__(  # noqa: PLR0915  # one statement per wired part
         self,
         scenario: Scenario,
         *,
@@ -594,6 +599,10 @@ class Session:
         self._last_measured: MotorRpm = MotorRpm(0)
         self._latency_until: Monotonic | None = None
         self._rows: list[Row] = []
+        # The idle ticks before the start, with their instants: they are inputs of
+        # a replay (the DSP and the idle poll are warm when the session starts),
+        # written to the record with t <= 0. Not part of ``Trace.rows``.
+        self._preamble: list[tuple[Monotonic, Row]] = []
         self._events: list[Event] = []
         self._targets: list[TargetOutcome] = []
         self._requests: list[RequestOutcome] = []
@@ -621,7 +630,10 @@ class Session:
             await self._bitalino.start_acquisition()
         for _ in range(round(self._scenario.preroll / TICK)):
             await self._step(await self._ticker.next(), record=False)
+        opened_at = self._start_at
         self._start_at = self._ticker.clock.monotonic()
+        # Somebody was at the console from the moment it was opened.
+        self._input(commands.Attendant(present=True), at=opened_at)
         self._capture.reset()
         self._manifest = manifest_for(
             self._scenario, self._ticker.clock, self._start_at, self.meta()
@@ -637,6 +649,7 @@ class Session:
             if alive and self._done(now):
                 break
         if self._shutdown_detail is None and self._runtime.state is not RuntimeState.IDLE:
+            self._input(commands.Shutdown(), actor=SYSTEM)
             report = await self._runtime.shutdown("simulation: console exit at the horizon")
             self._shutdown_detail = report.detail
             self._event(self._ticker.clock.monotonic(), EventKind.END, report.detail)
@@ -667,7 +680,7 @@ class Session:
         return not self._pending and elapsed(self._finished_at, now) >= FINISHED_LINGER
 
     async def _start(self) -> None:
-        scenario = self._scenario
+        self._input(commands.ConfirmEstopWiring())
         self._runtime.confirm_estop_wiring(OPERATOR)
         started = await self._arm()
         now = self._ticker.clock.monotonic()
@@ -675,8 +688,6 @@ class Session:
             self._start_refusal = type(started.error).__name__
             self._event(now, EventKind.REFUSAL, repr(started.error))
             self._message(now, "refusal", describe_start_refusal(started.error))
-        else:
-            self._event(now, EventKind.OPERATOR_ACTION, f"{scenario.kind.value} session started")
 
     async def _arm(self) -> Result[object, StartRefusal]:
         """The start command, as the console issues it (programme or manual)."""
@@ -690,9 +701,11 @@ class Session:
                 resolved_at=self._ticker.clock.unix_millis(),
                 total_overridden=False,
             )
+            self._input(commands.StartProgramme())
             return await runtime.start(program, Subject(subject_id="sim", operator=OPERATOR))
         occupancy = scenario.manual.occupancy
         ceiling = self._ceiling if self._ceiling is not None else scenario.manual.ceiling
+        self._input(commands.StartManual(ceiling))
         return await runtime.start_manual(occupancy, OPERATOR, ceiling)
 
     async def _step(self, now: Monotonic, *, record: bool) -> bool:
@@ -715,6 +728,7 @@ class Session:
             snapshot = await self._runtime.tick(now)
         except Exception as error:  # the console's task failing, recorded
             self._event(now, EventKind.WARNING, repr(error))
+            self._input(commands.Shutdown(), actor=SYSTEM)
             report = await self._runtime.shutdown("simulation: console task failed")
             self._shutdown_detail = report.detail
             self._event(now, EventKind.END, report.detail)
@@ -724,6 +738,7 @@ class Session:
         self._note_messages(now, snapshot)
         if not record:
             self._note_preroll(snapshot)
+            self._preamble.append((now, self._row(now, snapshot)))
         if record:
             row = self._row(now, snapshot)
             self._rows.append(row)
@@ -766,11 +781,12 @@ class Session:
         """One scenario action. ``False`` when it ended the process (shutdown)."""
         runtime = self._runtime
         sim = self._sim
-        detail = type(action).__name__
-        event_kind = EventKind.OPERATOR_ACTION
-        actor = OPERATOR
+        # What the scenario did to the plant, in words, or None when the action was
+        # a command to the runtime: that one is recorded by _input, replayably.
+        detail: str | None = type(action).__name__
         match action:
             case ManualTarget(at=at, output_rpm=rpm, expect=expect):
+                self._input(commands.SetManualTarget(rpm))
                 result = runtime.set_manual_target(rpm)
                 accepted = isinstance(result, Ok)
                 if isinstance(result, Ok):
@@ -783,20 +799,25 @@ class Session:
                         at=at, requested=rpm, expected=expect, accepted=accepted, detail=outcome
                     )
                 )
-                detail = f"target {rpm} output rpm: {outcome}"
+                detail = None
             case OperatorStop():
+                self._input(commands.Stop())
                 runtime.request_stop("operator: stop button")
+                detail = None
             case RemoteStop():
-                event_kind = EventKind.REMOTE_COMMAND
-                actor = "remote"
+                self._input(commands.Stop(), actor=REMOTE, remote=True)
                 runtime.request_stop("remote: end requested off the machine")
+                detail = None
             case EmergencyStop():
-                verdict = runtime.request_estop("operator: e-stop")
-                detail = f"e-stop: {verdict.rule} {verdict.action.name}"
+                self._input(commands.EmergencyStop())
+                runtime.request_estop("operator: e-stop")
+                detail = None
             case Acknowledge(estop_released=released):
-                event_kind = EventKind.VERDICT_ACK
+                self._input(commands.Acknowledge(released))
                 acknowledged = runtime.acknowledge(OPERATOR, estop_released=released)
-                detail = f"acknowledge: {acknowledged!r}"
+                if isinstance(acknowledged, Err):
+                    self._event(now, EventKind.REFUSAL, repr(acknowledged.error))
+                detail = None
             case InjectDriveFault(fault=fault):
                 sim.inject_fault(fault)
                 detail = f"drive fault {fault.name}"
@@ -829,13 +850,15 @@ class Session:
                 if self._bitalino is not None:
                     await self._bitalino.inject_disconnect()
             case AttendantLeaves():
+                self._input(commands.Attendant(present=False))
                 self._attendant = False
+                detail = None
             case TickException():
                 self._drive.raise_on_next_read()
             case Shutdown():
+                self._input(commands.Shutdown(), actor=SYSTEM)
                 report = await runtime.shutdown("simulation: SIGTERM")
                 self._shutdown_detail = report.detail
-                self._event(now, EventKind.OPERATOR_ACTION, detail)
                 self._event(now, EventKind.END, report.detail)
                 self._message(now, "shutdown", report.detail)
                 return False
@@ -855,11 +878,16 @@ class Session:
                 detail = await self._apply_injection(now, action)
             case _ as unreachable:
                 assert_never(unreachable)
-        self._event(now, event_kind, detail, actor=actor)
+        if detail is not None:
+            self._event(now, EventKind.WARNING, f"simulation: {detail}")
         return True
 
-    async def _apply_injection(self, now: Monotonic, action: Injection) -> str:  # noqa: PLR0911, PLR0912  # one arm per action
-        """The failure-injection and operator-error actions. Returns the event detail."""
+    async def _apply_injection(self, now: Monotonic, action: Injection) -> str | None:  # noqa: PLR0911, PLR0912  # one arm per action
+        """The failure-injection and operator-error actions.
+
+        Returns what was done to the plant, in words, or ``None`` for a command
+        to the runtime (recorded by :meth:`_input`).
+        """
         faulty = self._faulty
         match action:
             case DriveRefuseCommand(word=word):
@@ -894,12 +922,15 @@ class Session:
                 started = await self._arm()
                 if isinstance(started, Err):
                     self._message(now, "refusal", describe_start_refusal(started.error))
-                return self._request(at, "start", expect, started)
+                self._request(at, "start", expect, started)
+                return None
             case OperatorFaultReset(at=at, expect=expect):
+                self._input(commands.FaultReset())
                 reset = await self._runtime.fault_reset()
                 if isinstance(reset, Err):
                     self._message(now, "refusal", describe_reset_refusal(reset.error))
-                return self._request(at, "fault_reset", expect, reset)
+                self._request(at, "fault_reset", expect, reset)
+                return None
             case _ as unreachable:
                 assert_never(unreachable)
 
@@ -909,7 +940,7 @@ class Session:
         request: str,
         expect: Expectation,
         result: Result[object, object],
-    ) -> str:
+    ) -> None:
         """Record an operator request's outcome; a refused START is worded for the operator."""
         accepted = isinstance(result, Ok)
         detail = "accepted" if isinstance(result, Ok) else f"refused: {result.error!r}"
@@ -918,7 +949,6 @@ class Session:
                 at=at, request=request, expected=expect, accepted=accepted, detail=detail
             )
         )
-        return f"{request}: {detail}"
 
     async def _stall(self, duration: Seconds) -> None:
         """No tick for ``duration``: the plant runs on, nobody services the drive or the ECG."""
@@ -954,6 +984,31 @@ class Session:
     ) -> None:
         self._events.append(
             Event(t=elapsed(self._start_at, now), kind=kind, detail=detail, actor=actor)
+        )
+
+    def _input(
+        self,
+        command: commands.Command,
+        *,
+        actor: str = OPERATOR,
+        remote: bool = False,
+        at: Monotonic | None = None,
+    ) -> None:
+        """Record a command the runtime is about to receive, so a replay can issue it again.
+
+        Stamped with the clock the runtime will read while it handles the
+        command (not the tick's ``now``: a stall earlier in the same step has
+        moved it), and NOT rounded: the first of them is where a replay starts
+        its clock, and a clock one ulp off decides a threshold the other way.
+        """
+        stamp = self._ticker.clock.monotonic() if at is None else at
+        self._events.append(
+            Event(
+                t=float(stamp) - float(self._start_at),
+                kind=commands.kind_of(command, remote=remote),
+                detail=commands.encode(command),
+                actor=actor,
+            )
         )
 
     def _message(self, now: Monotonic, source: str, text: str) -> None:
@@ -1080,6 +1135,7 @@ class Session:
         trace = Trace(
             meta=self.meta(),
             rows=tuple(self._rows),
+            preamble=tuple(replace(row, t=float(at) - origin) for at, row in self._preamble),
             frames=tuple(frame_to_json(frame, origin) for frame in self._drive.frames),
             events=tuple(self._events),
             final=final,

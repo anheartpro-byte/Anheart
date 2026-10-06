@@ -13,7 +13,7 @@ from simulation.tracefile import RecordingWriteError
 from src.bitalino_client import ChannelData, SampleBatch
 from src.clock import ManualClock
 from src.record.codec import Privacy
-from src.record.ecg import decode_block
+from src.record.ecg import Header, RawBlock, decode_block, encode_block
 from src.record.reader import read
 from src.record.writer import Writer
 from src.result import Err, Ok
@@ -28,9 +28,17 @@ def test_ex11_battery_scenario_writes_shared_v2_and_viewer_reads_the_same_rows(
     directory = trace.write_record(tmp_path, Privacy())
     readback = read(directory)
     assert isinstance(readback, Ok)
-    assert len(readback.value.rows) == len(trace.rows)
-    assert readback.value.rows[0].hr_raw == trace.rows[0].hr_raw
-    assert readback.value.rows[0].drive_status_word == trace.rows[0].drive_status_word
+    # The record also keeps the idle ticks of before the start (t <= 0), for a
+    # replay; the session's own ticks follow, and are all the viewer is given.
+    idle = len(trace.preamble)
+    assert idle > 0
+    assert all(row.t <= 0.0 for row in readback.value.rows[:idle])
+    assert readback.value.rows[idle - 1].t == 0.0
+    session = readback.value.rows[idle:]
+    assert len(session) == len(trace.rows)
+    assert session[0].t > 0.0
+    assert session[0].hr_raw == trace.rows[0].hr_raw
+    assert session[0].drive_status_word == trace.rows[0].drive_status_word
     stream = view_record(tmp_path, directory.name)
     assert isinstance(stream, Ok)
     lines = [document(line) for line in stream.value.splitlines()]
@@ -152,10 +160,39 @@ def test_event_detail_is_prose_and_cannot_override_shared_context(tmp_path: Path
 
 def test_empty_trace_exports_a_readable_folder(tmp_path: Path) -> None:
     trace = run_file(SCENARIO_DIR / "manual_32_rpm_refused.json").trace
-    path = replace(trace, rows=()).write_record(tmp_path, Privacy())
+    path = replace(trace, rows=(), preamble=()).write_record(tmp_path, Privacy())
     result = read(path)
     assert isinstance(result, Ok)
     assert result.value.rows == ()
+
+
+def test_anh131_capture_stamps_reception_and_keeps_the_blocks_of_before_the_start() -> None:
+    clock = HarnessClock()
+    capture = Capture(clock, (SensorKind.ECG,))
+    batch = (ChannelData("ECG", (1.0, 2.0)),)
+    capture.accept(SampleBatch(clock.unix_millis(), batch))
+    # Acquired at 0.2 s, handed over a tick late, at 0.4 s: two different instants.
+    clock.advance(Seconds(0.4))
+    capture.accept(SampleBatch(UnixMillis(clock.unix_millis() - 200), batch))
+    # A block from a producer that does not know when it was received.
+    capture.blocks.append(encode_block(RawBlock(Header(9, 0.1, 2, ("ECG",)), ((3, 4),))))
+    before = [decode_block(raw).header for raw in capture.blocks]
+    assert [(h.t_first, h.t_received) for h in before] == [(0.0, 0.0), (0.2, 0.4), (0.1, None)]
+    # The session starts at 0.5 s: that instant becomes t = 0, and nothing is dropped.
+    clock.advance(Seconds(0.1))
+    asyncio.run(capture.refresh())
+    capture.reset()
+    after = [decode_block(raw).header for raw in capture.blocks]
+    assert [h.seq for h in after] == [h.seq for h in before]
+    assert [(h.t_first, h.t_received) for h in after] == [(-0.5, -0.5), (-0.3, -0.1), (-0.4, None)]
+    assert [decode_block(raw).samples for raw in capture.blocks] == [
+        ((1, 2),),
+        ((1, 2),),
+        ((3, 4),),
+    ]
+    assert capture.sensors == []
+    capture.accept(SampleBatch(clock.unix_millis(), batch))
+    assert decode_block(capture.blocks[-1]).header.t_received == 0.0
 
 
 def test_ex6_capture_rejects_fractional_counts_instead_of_rounding_the_archive() -> None:

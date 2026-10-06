@@ -4,7 +4,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 
-from src.record.codec import Privacy, document, encode
+from src.record.codec import Privacy, document, encode, mapping
 from src.record.schema import CONFIG
 from src.sensors.base import SensorKind
 
@@ -20,6 +20,13 @@ class Header:
     n_samples: int
     channels: tuple[str, ...]
     sample_rate: Literal[1000] = 1000
+    t_received: float | None = None
+    """When the acquisition handed this batch over, seconds on the record's axis.
+
+    Optional: a producer that does not know it leaves it out. A replay needs it
+    to hand the block back at the same instant, because ``t_first`` is the
+    sample clock's time, not the moment the batch reached the DSP.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +58,12 @@ def encode_block(block: RawBlock) -> bytes:
             if not INT16_MIN <= value <= INT16_MAX:
                 raise ValueError("ECG value outside int16")
             payload.extend(value.to_bytes(2, "little", signed=True))
-    prefix = encode(document(HEADER, header), Privacy()).encode("utf-8") + b"\n"
+    fields = dict(mapping(document(HEADER, header)))
+    if header.t_received is None:
+        # Left out, never written as null: a block from a producer that does not
+        # know the instant stays byte-identical to what it always was.
+        del fields["t_received"]
+    prefix = encode(fields, Privacy()).encode("utf-8") + b"\n"
     return gzip.compress(prefix + payload, mtime=0)
 
 

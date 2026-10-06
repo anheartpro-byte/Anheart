@@ -8,7 +8,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, encode, mapping
-from src.record.ecg import Header, RawBlock, decode_block
+from src.record.ecg import Header, RawBlock, decode_block, encode_block
 from src.record.reader import read
 from src.record.schema import DriveFrame, Event, EventKind
 from src.record.writer import TICK_COLUMNS, Writer
@@ -98,6 +98,19 @@ def test_ex6_raw_blocks_are_gzip_json_then_channel_major_int16_le_with_gaps(tmp_
     loaded = read(recording.path)
     assert isinstance(loaded, Ok)
     assert loaded.value.raw == (first, third)
+
+
+def test_anh131_reception_instant_is_optional_and_a_block_without_it_keeps_its_bytes() -> None:
+    plain = RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),))
+    received = replace(plain, header=replace(plain.header, t_received=0.2))
+    header, _ = gzip.decompress(encode_block(plain)).split(b"\n", 1)
+    assert header == b'{"seq":0,"t_first":0.0,"n_samples":1,"channels":["ECG"],"sample_rate":1000}'
+    stamped, _ = gzip.decompress(encode_block(received)).split(b"\n", 1)
+    assert mapping(JSON.validate_json(stamped))["t_received"] == 0.2
+    assert decode_block(encode_block(plain)) == plain
+    assert decode_block(encode_block(received)) == received
+    with pytest.raises(ValueError, match="finite"):
+        Header(0, 0.0, 1, ("ECG",), 1000, float("nan"))
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:
