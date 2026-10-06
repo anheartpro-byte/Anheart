@@ -13,7 +13,9 @@ import asyncio
 import os
 import runpy
 import signal
+import stat
 import sys
+import threading
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -24,7 +26,7 @@ import pytest
 
 from src import local_panel
 from src.bitalino_client import BITalinoClient, LinkStats, SampleBatch
-from src.clock import ManualClock
+from src.clock import Clock, ManualClock
 from src.control_surface import ControlSurface, RunState, StartSession
 from src.ecg_pipeline import EcgBridge, EcgBridgeStats
 from src.local_config import EcgSource, LocalConfig, MotorBackend, load_local_config
@@ -52,6 +54,7 @@ from src.local_panel import (
 from src.motor.atv320 import ATV320Drive, FtdiModbusClient
 from src.motor.drive import DriveFault, DriveState, LowSpeedNotZero, describe_fault
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.record.journal import Journal
 from src.result import Ok
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.telemetry import TelemetryClient
@@ -472,19 +475,50 @@ def _failing_runner(_services: Services, _config: LocalConfig) -> FakeWeb:
     return FakeWeb(fail_at_start=True)
 
 
+def _recording_env(tmp_path: Path) -> Mapping[str, str]:
+    """The production console records: keep its records out of the repository."""
+    return {**BASE_ENV, "RECORD_ROOT": str(tmp_path / "records")}
+
+
 async def test_run_console_builds_on_the_real_clock_and_undoes_its_signals(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(local_panel, "UvicornRunner", _fake_runner)
     stop = asyncio.Event()
     stop.set()
-    assert await run_console(config_from(BASE_ENV), stop=stop) == EXIT_OK
+    assert await run_console(config_from(_recording_env(tmp_path)), stop=stop) == EXIT_OK
     assert not sys.platform.startswith("win")
 
 
-async def test_run_console_makes_its_own_stop_event(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_console_makes_its_own_stop_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(local_panel, "UvicornRunner", _failing_runner)
-    assert await run_console(config_from(BASE_ENV)) == EXIT_FAILED
+    assert await run_console(config_from(_recording_env(tmp_path))) == EXIT_FAILED
+
+
+async def test_the_production_console_records_its_sessions_and_stops_its_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ANH-128 EX-1: ``run_console`` is what wires the black box; nothing else may forget it."""
+    built: list[LocalPanel] = []
+    real = build_panel
+
+    def remembered(config: LocalConfig, *, clock: Clock, journal: Journal) -> LocalPanel:
+        panel = real(config, clock=clock, journal=journal, profiles_path=tmp_path / "p.json")
+        built.append(panel)
+        return panel
+
+    monkeypatch.setattr(local_panel, "build_panel", remembered)
+    monkeypatch.setattr(local_panel, "UvicornRunner", _fake_runner)
+    stop = asyncio.Event()
+    stop.set()
+    assert await run_console(config_from(_recording_env(tmp_path)), stop=stop) == EXIT_OK
+    recorder = built[0].recorder
+    assert recorder is not None
+    assert recorder.journal.root == tmp_path / "records"
+    assert stat.S_IMODE(recorder.journal.root.stat().st_mode) == 0o700
+    assert [t.name for t in threading.enumerate() if t.name == "record-journal"] == []
 
 
 async def test_the_stop_signals_are_routed_to_the_event_and_removed() -> None:

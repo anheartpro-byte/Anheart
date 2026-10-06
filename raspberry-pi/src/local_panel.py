@@ -60,6 +60,18 @@ unacquired links are released without writes; acquired unknown state and
 started runtimes go through
 :meth:`~src.training.runtime.TrainingRuntime.shutdown`.
 
+The session record
+------------------
+
+Every session is written to disk as it runs (``data/records/``, one directory
+per session, the format of ``docs/enregistrement.md``): the local black box.
+The loop only hands frozen values to a bounded in-memory queue
+(:class:`~src.record.session.SessionRecorder`); ONE other thread writes and
+flushes them (:class:`~src.record.journal.Journal`). No tick ever waits on the
+disk, and a disk that fills up, refuses or hangs costs the record, never the
+session: the operator is told, the dashboard heartbeat says so, and every
+safety rule goes on as before.
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -95,11 +107,18 @@ from src.control_surface import (
     ControlSurface,
     EndSession,
     FaultReset,
+    SessionEvent,
     SetManualTarget,
     StartManual,
     StartSession,
 )
-from src.ecg_pipeline import EcgBridge, TreatFunction, load_treatment, treat_off_loop
+from src.ecg_pipeline import (
+    BatchTap,
+    EcgBridge,
+    TreatFunction,
+    load_treatment,
+    treat_off_loop,
+)
 from src.local_config import (
     DEFAULT_HR_CRITICAL_BPM,
     DEFAULT_HR_HARD_MAX_BPM,
@@ -119,6 +138,8 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.journal import Journal
+from src.record.session import SessionRecorder, SessionRequest, stamp_for, storage_gate
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -151,6 +172,7 @@ from src.training.runtime import (
     NoManualSession,
     NotAttested,
     PlanUnusable,
+    RecordStorageLow,
     ResetBehindVerdict,
     ResetForbidden,
     ResetUndelivered,
@@ -168,7 +190,7 @@ from src.training.runtime import (
 )
 from src.training.safety import SELF_CLEARING, SafetyLimits
 from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
-from src.units import Bpm, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
+from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
 
@@ -337,6 +359,45 @@ class EcgLink:
 
 
 # =========================================================================
+# The session record's two taps
+# =========================================================================
+
+
+@final
+class RecordedSink:
+    """The telemetry hub, with every event also offered to the session record.
+
+    A :class:`~src.control_surface.TelemetrySink`. Both sides are memory only
+    and total: the hub's contract, and the recorder's own (it never raises).
+    """
+
+    __slots__ = ("_hub", "_recorder")
+
+    def __init__(self, hub: TelemetryHub, recorder: SessionRecorder) -> None:
+        self._hub: TelemetryHub = hub
+        self._recorder: SessionRecorder = recorder
+
+    def publish_snapshot(self, snapshot: TelemetrySnapshot) -> None:
+        """Snapshots go to the page only: the record writes its own row per tick."""
+        self._hub.publish_snapshot(snapshot)
+
+    def publish_event(self, event: SessionEvent) -> None:
+        """An event goes to the page, then to the record of the session in progress."""
+        self._hub.publish_event(event)
+        self._recorder.note_event(event)
+
+
+def recorded_tap(first: BatchTap, recorder: SessionRecorder) -> BatchTap:
+    """``first``, then the session record: every batch as acquired, before any DSP."""
+
+    def tap(batch: SampleBatch) -> None:
+        first(batch)
+        recorder.note_batch(batch)
+
+    return tap
+
+
+# =========================================================================
 # What the panel reports
 # =========================================================================
 
@@ -436,6 +497,7 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_presence",
+        "_recorder",
         "_reporter",
         "_runtime",
         "_sensors",
@@ -465,8 +527,10 @@ class LocalPanel:
         listener: SessionListener | None = None,
         cloud: CloudSync | None = None,
         transport: HttpxTransport | None = None,
+        recorder: SessionRecorder | None = None,
     ) -> None:
         self._clock: Clock = clock
+        self._recorder: SessionRecorder | None = recorder
         self._config: LocalConfig = config
         self._drive: DriveSide = drive
         self._runtime: TrainingRuntime = runtime
@@ -531,6 +595,11 @@ class LocalPanel:
         """The dashboard link, or ``None`` when this console runs unlinked."""
         return self._cloud
 
+    @property
+    def recorder(self) -> SessionRecorder | None:
+        """The session record, or ``None`` when this console was built without one."""
+        return self._recorder
+
     # --- the two periodic steps ------------------------------------------
 
     async def control_step(self) -> TelemetrySnapshot:
@@ -547,7 +616,10 @@ class LocalPanel:
            standstill (a verdict, the heart rate of a person on board, or a
            first step the drive did not acknowledge), goes back to the page
            as an event, like a refusal;
-        5. the snapshot is published to the surface and, through it, the hub,
+        5. the tick is handed to the session record (memory only: the disk
+           is another thread's), and what the record has to say to the
+           operator goes to the page as an event;
+        6. the snapshot is published to the surface and, through it, the hub,
            and the surface learns whether a session is running.
         """
         if self._surface.take_estop() is not None:
@@ -570,6 +642,7 @@ class LocalPanel:
         if withdrawn is not None:
             # Nobody's command: the machine took back a target it had accepted.
             self._surface.note_refused("", describe_withdrawn_target(withdrawn))
+        self._record(now, snapshot)
         self._surface.publish(snapshot)
         match self._runtime.state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
@@ -581,6 +654,26 @@ class LocalPanel:
             case _ as unreachable:
                 assert_never(unreachable)
         return snapshot
+
+    def _record(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
+        """Hand the tick to the session record, and its news to the operator.
+
+        Nothing here opens, writes or flushes a file, and nothing here raises:
+        the recorder queues frozen values and its entry points are total.
+        """
+        recorder = self._recorder
+        if recorder is None:
+            return
+        recorder.observe(now, snapshot, self._runtime)
+        recorder.refresh(now)
+        message = recorder.take_notice()
+        if message is not None:
+            self._surface.note_recording(message)
+
+    def _begin_record(self, request: SessionRequest) -> None:
+        """A session was just armed: open its record."""
+        if self._recorder is not None:
+            self._recorder.begin(request)
 
     async def _dispatch(self) -> None:
         """Hand the mailbox's command to the runtime. Exhaustive over ``Command``."""
@@ -620,6 +713,7 @@ class LocalPanel:
         if isinstance(started, Err):
             self._surface.note_refused(operator, describe_start_refusal(started.error))
             return
+        self._begin_record(SessionRequest(occupancy=occupancy, operator=operator))
         if self._listener is not None:
             self._listener.session_started(
                 StartedSession(
@@ -659,6 +753,15 @@ class LocalPanel:
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
             return
+        self._begin_record(
+            SessionRequest(
+                occupancy=Occupancy.OCCUPIED,
+                operator=operator,
+                program=program,
+                subject_id=command.subject_id,
+                cloud_session_id=command.cloud_session_id,
+            )
+        )
         if self._listener is not None:
             self._listener.session_started(
                 StartedSession(
@@ -713,6 +816,9 @@ class LocalPanel:
     async def ecg_step(self) -> None:
         """Keep the BITalino acquiring and move its samples to the page and the runtime."""
         await self._ecg.step()
+        if self._recorder is not None:
+            # What the link lost and papered over since the last batch, if anything.
+            self._recorder.note_link()
 
     @property
     def presence(self) -> PresenceGuard | None:
@@ -734,7 +840,9 @@ class LocalPanel:
 
     async def sensor_step(self) -> None:
         """Re-process every sensor window (on a worker thread) and publish the readings."""
-        await self._sensors.refresh()
+        readings = await self._sensors.refresh()
+        if self._recorder is not None:
+            self._recorder.note_sensors(readings)
 
     async def cloud_step(self) -> None:
         """One dashboard step. A failure here is logged and never ends the console.
@@ -757,6 +865,8 @@ class LocalPanel:
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
+        if self._recorder is not None:
+            self._recorder.journal.start()
         control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_step, stop))
         observers = (
             asyncio.create_task(self._every(ECG_PERIOD, self.ecg_step, stop)),
@@ -786,6 +896,10 @@ class LocalPanel:
         An acquired link with unreadable state remains unknown. It goes through
         :meth:`~src.training.runtime.TrainingRuntime.shutdown`, whose close
         waits for measured standstill before removing the run command.
+
+        The session record is closed AFTER the drive: the stop never waits on
+        a disk. Its last writes happen on a worker thread, for at most
+        :data:`~src.record.journal.STOP_TIMEOUT`.
         """
         if not self._runtime.needs_stop_before_release:
             self._drive.release()
@@ -793,6 +907,14 @@ class LocalPanel:
         else:
             report = await self._runtime.shutdown("console exit")
             detail = report.detail
+        recorder = self._recorder
+        if recorder is not None:
+            recorder.finish(self._clock.monotonic(), self._runtime, detail)
+            if not await asyncio.to_thread(recorder.journal.stop):
+                _logger.error(
+                    "session record not finalised: the disk did not answer in time "
+                    "(what was already written stays readable)"
+                )
         await self._ecg.client.disconnect()
         if self._transport is not None:
             await self._transport.close()
@@ -955,6 +1077,7 @@ def build_panel(
     treat: TreatFunction = treat_off_loop,
     drive: DriveSide | None = None,
     transport: CloudTransportFactory | None = None,
+    journal: Journal | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -966,6 +1089,11 @@ def build_panel(
     which is neither the simulator nor copper. ``transport`` replaces the
     dashboard link's HTTP transport, for the same reason; it is used only when
     ``config.cloud`` is set.
+
+    ``journal`` is the session record's queue and thread (:func:`open_journal`
+    in production). ``None``: nothing is recorded and no arming is refused for
+    lack of disk space, which is what a test that is not about the record
+    wants. Its thread is started by :meth:`LocalPanel.run`, not here.
     """
     motion = load_panel_motion_limits(config)
     drive = build_drive(config, clock) if drive is None else drive
@@ -980,15 +1108,30 @@ def build_panel(
         safety=safety,
         motion=motion,
         limit_radius=config.leg_tip_radius,
+        arming_gate=None if journal is None else storage_gate(journal),
     )
     hub = TelemetryHub(clock=clock)
+    ecg_side = build_ecg_client(config, clock)
+    recorder = (
+        None
+        if journal is None
+        else build_recorder(
+            config,
+            clock=clock,
+            journal=journal,
+            safety=safety,
+            motion=motion,
+            drive=drive,
+            ecg=ecg_side,
+        )
+    )
     # ONE supervisor: the surface latches the runtime's own. And the runtime
     # acknowledges, so its own latches clear with the supervisor's.
     presence = build_presence(config, clock, runtime)
     surface = ControlSurface(
         clock=clock,
         supervisor=runtime.supervisor,
-        sink=hub,
+        sink=hub if recorder is None else RecordedSink(hub, recorder),
         # With a camera, an acknowledgement clears the presence latch too.
         acknowledger=runtime if presence is None else PresenceAcknowledger(runtime, presence),
     )
@@ -999,7 +1142,6 @@ def build_panel(
         case _:
             pass
 
-    ecg_side = build_ecg_client(config, clock)
     sensor_hub = SensorHub(clock=clock, kinds=config.sensors, fs=ECG_SAMPLE_RATE)
     bridge = EcgBridge(
         clock=clock,
@@ -1009,7 +1151,7 @@ def build_panel(
         waveform=hub,
         sample_rate=ECG_SAMPLE_RATE,
         treat=treat,
-        tap=sensor_hub.accept,
+        tap=sensor_hub.accept if recorder is None else recorded_tap(sensor_hub.accept, recorder),
         link_gaps=None if ecg_side.link_stats is None else link_losses(ecg_side.link_stats),
     )
     ecg = EcgLink(
@@ -1054,6 +1196,7 @@ def build_panel(
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
             software_version=read_software_version(),
+            record_degraded=None if recorder is None else recorder.is_degraded,
         )
     return LocalPanel(
         clock=clock,
@@ -1072,7 +1215,50 @@ def build_panel(
         listener=cloud,
         cloud=cloud,
         transport=owned,
+        recorder=recorder,
     )
+
+
+def build_recorder(
+    config: LocalConfig,
+    *,
+    clock: Clock,
+    journal: Journal,
+    safety: SafetyLimits,
+    motion: MotionLimits,
+    drive: DriveSide,
+    ecg: EcgSide,
+) -> SessionRecorder:
+    """The session record's loop side, stamped with the configuration actually applied."""
+    simulator = drive.simulator
+    radius = config.geometry.radius
+    leg_tip = config.leg_tip_radius
+    return SessionRecorder(
+        clock=clock,
+        journal=journal,
+        stamp=stamp_for(config, RUNTIME_LIMITS, safety, motion),
+        radius=radius,
+        leg_tip=radius if leg_tip is None else Metres(max(float(leg_tip), float(radius))),
+        sim_state=None if simulator is None else _sim_state_of(simulator),
+        link_stats=ecg.link_stats,
+    )
+
+
+def _sim_state_of(simulator: SimulatedDrive) -> Callable[[], str]:
+    def read() -> str:
+        return simulator.sim_state.name
+
+    return read
+
+
+def open_journal(config: LocalConfig, clock: Clock) -> Journal:
+    """The session record's queue and thread, on ``RECORD_ROOT`` (under ``raspberry-pi/``).
+
+    Creates the directory, private to the service user, and measures its free
+    space: startup I/O, with nothing turning. The thread is not started here.
+    """
+    root = config.record.root
+    return Journal(root if root.is_absolute() else PROJECT_ROOT / root, clock)
 
 
 # =========================================================================
@@ -1108,9 +1294,25 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
         case DriveInFault(report=report):
             code = "?" if report is None else f"{report.fault.mnemonic}, LFT {report.raw_code}"
             reason = f"variateur en defaut ({code})"
+        case RecordStorageLow(free_bytes=free, required_bytes=required, where=where):
+            reason = describe_record_storage(free, required, where)
         case _ as unreachable:
             assert_never(unreachable)
     return f"demarrage refuse : {reason}"
+
+
+def describe_record_storage(free: int | None, required: int, where: str) -> str:
+    """Why the session record refuses an arming, with the numbers and the directory."""
+    megabyte = 1_000_000
+    if free is None:
+        return (
+            f"enregistrement de seance impossible, espace libre illisible sous {where} "
+            "(dossier absent, droits, disque)"
+        )
+    return (
+        f"espace disque insuffisant pour l'enregistrement de seance : {free // megabyte} Mo "
+        f"libres sous {where}, {required // megabyte} Mo requis. Liberer de l'espace"
+    )
 
 
 def rider_age_refusal(age: int | None, minimum: int) -> str | None:
@@ -1262,7 +1464,8 @@ def install_stop_signals(stop: asyncio.Event) -> Callable[[], None]:
 async def run_console(config: LocalConfig, *, stop: asyncio.Event | None = None) -> int:
     """Build the console on the real clock and run it until a signal."""
     event = asyncio.Event() if stop is None else stop
-    panel = build_panel(config, clock=RealClock())
+    clock = RealClock()
+    panel = build_panel(config, clock=clock, journal=open_journal(config, clock))
     undo = install_stop_signals(event)
     try:
         return await panel.run(event, UvicornRunner(panel.services, config))

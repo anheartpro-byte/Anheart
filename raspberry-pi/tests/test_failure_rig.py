@@ -43,6 +43,7 @@ from src.motor.drive import (
     EmergencyStopOutcome,
 )
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
+from src.record.journal import Journal
 from src.result import Err, Ok, Result
 from src.telemetry import PayloadKind, TelemetryClient
 from src.training.types import TelemetrySnapshot
@@ -325,8 +326,13 @@ def make_rig(
     treat: TreatFunction | None = None,
     clock: SteppedClock | None = None,
     transport: CloudTransportFactory | None = None,
+    journal: Journal | None = None,
 ) -> tuple[Rig, Wrapped | None]:
-    """Build the console. ``wrap`` puts one faulty backend between runtime and simulator."""
+    """Build the console. ``wrap`` puts one faulty backend between runtime and simulator.
+
+    ``journal`` makes it record its sessions (the tests of the session record);
+    without one nothing is written, as before.
+    """
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000)) if clock is None else clock
     config = config_of(env)
     sim = (
@@ -348,6 +354,7 @@ def make_rig(
         treat=(treat_inline if dsp else no_dsp) if treat is None else treat,
         drive=side,
         transport=transport,
+        journal=journal,
     )
     rig = Rig(clock=clock, panel=panel, simulator=sim, watcher=panel.hub.subscribe(), config=config)
     return rig, wrapper
