@@ -23,20 +23,6 @@ SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 #: A direct call site for the system clock.
 DIRECT_TIME_CALL = re.compile(r"\btime\.(monotonic|time|perf_counter|monotonic_ns|time_ns)\s*\(")
 
-#: Modules written before the injected-clock rule existed. They are being
-#: migrated as the machine-control path is built; every one of them is in or
-#: adjacent to the safety chain, so none of them gets to stay here.
-#:
-#: The tests below enforce this list in BOTH directions: a new offender fails,
-#: and an entry that no longer has any offending line ALSO fails. So the list
-#: can only shrink, and it cannot quietly rot into a permanent exemption.
-PENDING_CLOCK_MIGRATION: frozenset[str] = frozenset(
-    {
-        "data_buffer.py",
-        "session_manager.py",
-    }
-)
-
 
 def _direct_time_calls() -> dict[str, list[str]]:
     """Map each module under src/ to its direct clock-reading lines."""
@@ -55,31 +41,14 @@ def _direct_time_calls() -> dict[str, list[str]]:
 
 
 def test_no_direct_time_calls_in_src() -> None:
-    """Only src/clock.py may read the system clock. See SKILL.md rule 4."""
-    offenders = [
-        line
-        for name, lines in _direct_time_calls().items()
-        if name not in PENDING_CLOCK_MIGRATION
-        for line in lines
-    ]
+    """Only src/clock.py may read the system clock. See SKILL.md rule 4.
+
+    No module is exempt: the last ones written before the rule are gone.
+    """
+    offenders = [line for lines in _direct_time_calls().values() for line in lines]
     assert not offenders, (
         "these modules read the clock directly instead of taking an injected Clock, "
         "which makes accelerated session tests impossible:\n  " + "\n  ".join(offenders)
-    )
-
-
-def test_clock_migration_allowlist_has_no_stale_entries() -> None:
-    """Every allowlisted module must still actually need the exemption.
-
-    Without this, the allowlist becomes a permanent hiding place: a module gets
-    migrated, nobody removes its entry, and the next direct clock call added to
-    it goes unnoticed.
-    """
-    outstanding = set(_direct_time_calls())
-    stale = sorted(PENDING_CLOCK_MIGRATION - outstanding)
-    assert not stale, (
-        "these modules no longer read the clock directly; remove them from "
-        f"PENDING_CLOCK_MIGRATION: {stale}"
     )
 
 

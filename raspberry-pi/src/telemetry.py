@@ -98,7 +98,7 @@ session.
 """
 
 DEFAULT_ECG_RATE_HZ: Final[int] = 250
-"""The treated output rate (``OUTPUT_SAMPLE_RATE``), for sizing the ring."""
+"""The treated output rate, for sizing the ring."""
 
 
 # =========================================================================

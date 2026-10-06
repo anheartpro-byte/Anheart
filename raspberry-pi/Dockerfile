@@ -1,10 +1,9 @@
 # AnHeart Raspberry Pi - Docker image of the operator console.
 # Works on Raspberry Pi 4/5 (ARM64) and on an ARM64 or x86-64 development host.
 #
-# Default command: the local operator console (python -m src.local_panel), the
+# One command: the local operator console (python -m src.local_panel), the
 # process that drives the ATV320, reads the BITalino, applies the safety
-# supervisor and serves the operator page. The legacy ECG recorder is still in
-# the image: `docker compose run --rm anheart python -m src.main`.
+# supervisor and serves the operator page.
 
 # 3.12 (not 3.11): numpy's bundled type stubs require a 3.12+ target, and the
 # strict type-check gate runs against this same version.
@@ -56,12 +55,11 @@ COPY config/ ./config/
 COPY docker/entrypoint.sh /usr/local/bin/anheart-entrypoint
 RUN chmod +x /usr/local/bin/anheart-entrypoint
 
-# Create data directory (profiles.local.json and the recorder's buffer)
+# Create data directory (profiles.local.json)
 RUN mkdir -p /app/data
 
 # Environment variables (override with docker-compose or -e flag)
 ENV PYTHONUNBUFFERED=1
-ENV LOG_LEVEL=INFO
 
 # /healthz answers without a token and says nothing about the session.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

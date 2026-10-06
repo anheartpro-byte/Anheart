@@ -33,7 +33,6 @@ pytest.ini
 # Data files (mounted as volume)
 data/
 *.db
-buffer.db
 
 # Documentation
 *.md

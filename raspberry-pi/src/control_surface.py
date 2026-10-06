@@ -85,32 +85,6 @@ LOCAL_SUBJECT: Final[str] = "local"
 # =========================================================================
 
 
-@runtime_checkable
-class SessionEnder(Protocol):
-    """Something that can be asked to wind a recording session down.
-
-    ``src.session_manager.SessionManager.request_end_session`` satisfies this
-    structurally, and until now it had **no caller at all**: the method existed,
-    documented as "called externally", and nothing external existed to call it.
-    :meth:`ControlSurface.submit_end` is that caller.
-
-    Structural rather than an import on purpose. ``session_manager.py`` is still
-    outside the strict type gate (see the migration banner in
-    ``pyproject.toml``), and importing it here would drag its untyped surface
-    into a checked module and couple the operator interface to the acquisition
-    state machine. A one-method protocol says exactly what is needed and lets
-    the tests hand in a recorder that only counts calls.
-
-    The implementation must be synchronous, non-blocking and free of I/O - it is
-    called from a request handler. ``request_end_session`` is a single enum
-    write, which is exactly that.
-    """
-
-    def request_end_session(self) -> None:
-        """Ask for the current recording session to end. Must not block."""
-        ...
-
-
 class Acknowledger(Protocol):
     """Whatever clears the latched verdicts, by name.
 
@@ -420,7 +394,6 @@ class ControlSurface:
         "_accepted",
         "_acknowledger",
         "_clock",
-        "_ender",
         "_ending",
         "_estop_latched",
         "_estop_receipt",
@@ -441,15 +414,9 @@ class ControlSurface:
         clock: Clock,
         supervisor: SafetySupervisor,
         sink: TelemetrySink,
-        ender: SessionEnder | None = None,
         acknowledger: Acknowledger | None = None,
     ) -> None:
         """Wire the surface to the clock, the supervisor and the telemetry sink.
-
-        ``ender`` is optional because the machine-control loop and the recording
-        session manager are separable: a motor bench run has no BITalino session
-        to end. ``None`` means "nothing to tell", not "ignore the stop" - the
-        mailbox still carries the command to the loop either way.
 
         ``acknowledger`` clears latches on :meth:`acknowledge`; the supervisor
         when omitted. See :class:`Acknowledger`.
@@ -457,7 +424,6 @@ class ControlSurface:
         self._clock: Clock = clock
         self._supervisor: SafetySupervisor = supervisor
         self._sink: TelemetrySink = sink
-        self._ender: SessionEnder | None = ender
         self._acknowledger: Acknowledger = supervisor if acknowledger is None else acknowledger
 
         self._pending: Command | None = None
@@ -729,14 +695,7 @@ class ControlSurface:
         return Ok(command)
 
     def submit_end(self, *, operator: str, reason: str) -> Result[EndSession, EndRefusal]:
-        """Ask for the running session to end on the controlled ramp.
-
-        This is the method that finally calls
-        :meth:`SessionEnder.request_end_session`. It is called **after** the
-        mailbox is filled, so that a loop which happens to tick between the two
-        writes finds a consistent surface rather than a recorder that has been
-        told to stop and a mailbox that is still empty.
-        """
+        """Ask for the running session to end on the controlled ramp."""
         state = self.run_state
         if state is RunState.IDLE:
             return self._refuse_end(NothingRunning(state))
@@ -747,10 +706,6 @@ class ControlSurface:
         self._ending = True
         self._pending = command
         self._accepted += 1
-        if self._ender is not None:
-            # Synchronous, non-blocking, no I/O: a single enum write in the
-            # acquisition state machine. See SessionEnder.
-            self._ender.request_end_session()
         self._publish(EventKind.END_REQUESTED, command.at, operator, reason)
         return Ok(command)
 

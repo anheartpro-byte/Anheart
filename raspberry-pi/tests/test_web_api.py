@@ -146,22 +146,6 @@ GEOMETRY: Final[MachineGeometry] = MachineGeometry(radius=Metres(1.0))
 
 
 @dataclass(slots=True)
-class RecordingEnder:
-    """Counts ``request_end_session`` calls. Structurally a ``SessionEnder``.
-
-    ``SessionManager`` satisfies the same protocol; this stands in for it so the
-    test needs no BITalino, no Convex client and no database, and so the
-    assertion is about *whether* the call happened rather than about what the
-    acquisition state machine did next.
-    """
-
-    calls: int = 0
-
-    def request_end_session(self) -> None:
-        self.calls += 1
-
-
-@dataclass(slots=True)
 class StubPorts:
     """A port lister with a fixed answer, so the status page is testable."""
 
@@ -189,13 +173,12 @@ class RecordingSink:
 
 @dataclass(slots=True)
 class Rig:
-    """Everything wired together, the way ``main.py`` will wire it."""
+    """Everything wired together, the way ``src/local_panel.py`` wires it."""
 
     clock: ManualClock
     supervisor: SafetySupervisor
     hub: TelemetryHub
     surface: ControlSurface
-    ender: RecordingEnder
     store: ProfileStore
     config: WebConfig
     app: FastAPI
@@ -216,8 +199,7 @@ def build_rig(tmp_path: Path, *, token: str | None = TOKEN, host: str = "127.0.0
     clock = ManualClock()
     supervisor = SafetySupervisor(clock=clock, limits=build_limits())
     hub = TelemetryHub(clock=clock)
-    ender = RecordingEnder()
-    surface = ControlSurface(clock=clock, supervisor=supervisor, sink=hub, ender=ender)
+    surface = ControlSurface(clock=clock, supervisor=supervisor, sink=hub)
     store = ProfileStore(tmp_path / "profiles.json")
     loaded = store.load()
     assert isinstance(loaded, Ok)
@@ -236,7 +218,6 @@ def build_rig(tmp_path: Path, *, token: str | None = TOKEN, host: str = "127.0.0
         supervisor=supervisor,
         hub=hub,
         surface=surface,
-        ender=ender,
         store=store,
         config=config,
         app=create_app(services=services, config=config),
@@ -540,10 +521,6 @@ async def test_start_stop_flow(client: httpx.AsyncClient, rig: Rig) -> None:
     assert parse(CommandRow, stopped).kind == "end"
     assert state_of(rig.surface) is RunState.STOPPING
     assert isinstance(rig.surface.take_command(), EndSession)
-
-    # THE point of this test beyond the happy path: request_end_session had no
-    # caller in this system until the control surface became one.
-    assert rig.ender.calls == 1
 
     rig.surface.note_idle()
     assert state_of(rig.surface) is RunState.IDLE
@@ -1566,8 +1543,8 @@ def test_the_loop_takes_the_estop_receipt_once_but_the_latch_persists() -> None:
     assert surface.estop_latched
 
 
-def test_a_surface_without_an_ender_still_carries_the_command() -> None:
-    """A motor bench has no recording session to end; the mailbox is unaffected."""
+def test_an_end_request_fills_the_mailbox() -> None:
+    """The stop reaches the loop through the mailbox, and through nothing else."""
     _clock, supervisor, _sink, surface = surface_rig()
     assert isinstance(supervisor.confirm_estop_wiring(OPERATOR), Ok)
     assert isinstance(

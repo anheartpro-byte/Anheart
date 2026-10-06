@@ -37,7 +37,7 @@ which is:
 
 All configuration lives in `raspberry-pi/pyproject.toml` (tool sections only;
 there is deliberately no `[project]` table). The operator console runs with
-`python -m src.local_panel`; `python -m src.main` is the legacy ECG recorder.
+`python -m src.local_panel`, the only entry point.
 
 ## 1. Use domain units, never bare numbers
 
