@@ -15,6 +15,7 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -418,7 +419,7 @@ export default function UserDetailPage({
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const statusLabel = useSessionStatusLabel();
 
   const variants: Record<
     string,
@@ -431,9 +432,7 @@ function SessionStatusBadge({ status }: { status: string }) {
   };
 
   return (
-    <Badge variant={variants[status] || "outline"}>
-      {t(status as "active" | "completed" | "pending" | "failed")}
-    </Badge>
+    <Badge variant={variants[status] || "outline"}>{statusLabel(status)}</Badge>
   );
 }
 

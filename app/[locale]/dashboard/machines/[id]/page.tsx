@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
+import { useMachineStatusLabel } from "@/components/dashboard/statusLabels";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
@@ -72,6 +73,7 @@ export default function MachineDetailPage({
   const restoreMachine = useMutation(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
+  const statusLabel = useMachineStatusLabel();
 
   const canManage = user?.role === "admin" || user?.role === "gestionnaire";
   const isAdmin = user?.role === "admin";
@@ -122,7 +124,7 @@ export default function MachineDetailPage({
   if (machine === null) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Machine not found</p>
+        <p className="text-muted-foreground">{t("machines.notFound")}</p>
         <Link
           href="/dashboard/machines"
           className="text-primary hover:underline mt-2 inline-block"
@@ -204,7 +206,7 @@ export default function MachineDetailPage({
                 <p className="text-sm text-muted-foreground">
                   {t("machines.status")}
                 </p>
-                <p className="font-medium">{machine.status}</p>
+                <p className="font-medium">{statusLabel(machine.status)}</p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
@@ -247,7 +249,9 @@ export default function MachineDetailPage({
             </div>
             <Separator />
             <div>
-              <p className="text-sm text-muted-foreground">Created</p>
+              <p className="text-sm text-muted-foreground">
+                {t("machines.createdAt")}
+              </p>
               <p className="font-medium">
                 {format(machine.createdAt, "PPP", { locale: dateLocale })}
               </p>
@@ -301,7 +305,9 @@ export default function MachineDetailPage({
       {canManage && !machine.isDeleted && (
         <Card className="border-destructive/50">
           <CardHeader>
-            <CardTitle className="text-destructive">Danger Zone</CardTitle>
+            <CardTitle className="text-destructive">
+              {t("machines.dangerZone")}
+            </CardTitle>
             <CardDescription>{t("machines.dangerZoneDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -396,8 +402,7 @@ export default function MachineDetailPage({
           <DialogHeader>
             <DialogTitle>{t("machines.regenerateKey")}</DialogTitle>
             <DialogDescription>
-              This will invalidate the current API key immediately. The machine
-              will need to be reconfigured with the new key.
+              {t("machines.regenerateKeyConfirmDesc")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -473,6 +478,7 @@ function MachineStatusBadge({
   isDeleted?: boolean;
 }) {
   const t = useTranslations("machines");
+  const statusLabel = useMachineStatusLabel();
 
   if (isDeleted) {
     return (
@@ -491,15 +497,9 @@ function MachineStatusBadge({
     in_session: "secondary",
   };
 
-  const labels: Record<string, string> = {
-    online: t("online"),
-    offline: t("offline"),
-    in_session: t("inSession"),
-  };
-
   return (
     <Badge variant={variants[status] || "outline"} className="text-sm">
-      {labels[status] || status}
+      {statusLabel(status)}
     </Badge>
   );
 }

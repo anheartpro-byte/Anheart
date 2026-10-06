@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "@/i18n/navigation";
 import { Cpu, Activity, Users, Clock } from "lucide-react";
@@ -163,7 +164,7 @@ export default function DashboardPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const statusLabel = useSessionStatusLabel();
   const variants: Record<
     string,
     "default" | "secondary" | "destructive" | "outline"
@@ -176,7 +177,7 @@ function StatusBadge({ status }: { status: string }) {
 
   return (
     <Badge variant={variants[status] || "outline"} className="text-xs">
-      {t(status as "active" | "completed" | "pending" | "failed")}
+      {statusLabel(status)}
     </Badge>
   );
 }

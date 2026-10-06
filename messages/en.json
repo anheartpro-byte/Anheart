@@ -16,7 +16,8 @@
     "copied": "Copied!",
     "all": "All",
     "actions": "Actions",
-    "view": "View"
+    "view": "View",
+    "name": "Name"
   },
   "auth": {
     "signIn": "Sign in",
@@ -44,6 +45,12 @@
     "administration": "Administration",
     "management": "Management",
     "myHealth": "My Health"
+  },
+  "breadcrumb": {
+    "details": "Details",
+    "live": "Live",
+    "new": "New",
+    "edit": "Edit"
   },
   "settings": {
     "title": "Settings",
@@ -89,7 +96,7 @@
   "home": {
     "badge": "Gravity for Life",
     "title": "Train Your Heart With Artificial Gravity",
-    "description": "The Gaura machine recreates centrifugal force to simulate gravity up to 3 times that of Earth, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
+    "description": "The Gaura machine recreates centrifugal force to simulate artificial gravity, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. Intensity is set by the rotation speed, within the limits set by the machine's software. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
     "getStarted": "Get Started",
     "signIn": "Sign In",
     "goToDashboard": "Go to Dashboard",
@@ -157,7 +164,7 @@
     "benefits": {
       "badge": "Solution Benefits",
       "title": "Personalized, efficient, and fast training",
-      "description": "30 to 40 minutes per day, at an intensity of 1 to 3 G, are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance.",
+      "description": "30 to 40 minutes per day are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance. Intensity is set for each person by the rotation speed, within the limits set by the machine's software.",
       "heartTraining": "Targeted Cardiovascular Training",
       "heartTrainingDesc": "Strengthen your cardiovascular system through adapted stimulation and a personalized training program, designed to improve endurance and blood circulation.",
       "recovery": "Recovery Improvement",
@@ -208,6 +215,8 @@
     "categories": {
       "general": "General Questions",
       "technology": "Technology & Training",
+      "health": "Health Benefits",
+      "medical": "Medical Applications",
       "athletes": "Athletes & Performance"
     }
   },
@@ -268,7 +277,19 @@
     "dangerZoneDesc": "These actions may impact machine operation",
     "showDeleted": "Show deleted machines",
     "assignGestionnaires": "Assign to Gestionnaires",
-    "assignGestionnairesDesc": "Select which gestionnaires can use this machine"
+    "assignGestionnairesDesc": "Select which gestionnaires can use this machine",
+    "notFound": "Machine not found",
+    "createdAt": "Created",
+    "dangerZone": "Danger Zone",
+    "regenerateKeyConfirmDesc": "This will invalidate the current API key immediately. The machine will need to be reconfigured with the new key.",
+    "form": {
+      "editDescription": "Update machine configuration",
+      "createDescription": "Configure a new Raspberry Pi machine",
+      "namePlaceholder": "Raspberry Pi 1",
+      "locationPlaceholder": "Room 101",
+      "nameRequired": "Name is required",
+      "channelRequired": "Select at least one channel"
+    }
   },
   "sessions": {
     "title": "ECG Sessions",
@@ -298,7 +319,46 @@
     "endConfirm": "Are you sure you want to end this session?",
     "patient": "Patient",
     "machine": "Machine",
-    "startedBy": "Started by"
+    "startedBy": "Started by",
+    "status": {
+      "active": "Active",
+      "completed": "Completed",
+      "pending": "Pending",
+      "failed": "Failed"
+    },
+    "notFound": "Session not found",
+    "inProgress": "In progress",
+    "form": {
+      "machineRequired": "Please select a machine",
+      "patientRequired": "Please select a patient",
+      "channelRequired": "Select at least one channel"
+    },
+    "channelOptions": {
+      "ECG": {
+        "name": "ECG (Heart)",
+        "description": "Electrocardiography: 3 electrodes on chest"
+      },
+      "EDA": {
+        "name": "EDA (Stress)",
+        "description": "Electrodermal Activity: 2 finger bands"
+      },
+      "SpO2": {
+        "name": "SpO2 (Oxygen)",
+        "description": "Pulse Oximetry: finger clip sensor"
+      },
+      "RESP": {
+        "name": "Respiration",
+        "description": "Breathing: chest band sensor"
+      },
+      "EMG": {
+        "name": "EMG (Muscle)",
+        "description": "Electromyography: muscle sensor"
+      },
+      "LUX": {
+        "name": "Light",
+        "description": "Ambient light sensor"
+      }
+    }
   },
   "ecg": {
     "liveView": "Live View",
@@ -310,7 +370,124 @@
     "maxHeartRate": "Max Heart Rate",
     "hrv": "Heart Rate Variability (HRV)",
     "live": "Live",
-    "delay": "5s delay"
+    "delay": "5s delay",
+    "waitingForChannel": "Waiting for {channel} data...",
+    "connectDevice": "Connect BITalino to see waveform"
+  },
+  "recording": {
+    "dataBatches": "Data Batches",
+    "samples": "{channels, plural, =0 {Samples recorded} =1 {Samples recorded} other {Samples recorded, all channels combined}}",
+    "samplesPartial": "{channels, plural, =0 {Samples} =1 {Samples} other {Samples, all channels combined}} ({loaded, number} of {total, number} batches loaded)",
+    "partialNote": "Counted over the {loaded, number} loaded batches, out of {total, number} in total.",
+    "sampleRateHz": "Sample Rate (Hz)",
+    "sampleRateHzPartial": "Sample Rate (Hz, loaded batches)",
+    "acquisitionRate": "Configured acquisition rate: {rate} Hz"
+  },
+  "sessionDetail": {
+    "failedTitle": "Session Failed",
+    "failedDescription": "This session encountered an error and was terminated. Any data recorded before the failure is shown below.",
+    "pendingTitle": "Waiting for Device",
+    "pendingDescription": "This session is waiting for the recording device to connect and start capturing data.",
+    "ecgRecording": "ECG Recording",
+    "channelTitle": "{channel} Channel",
+    "samplesRecorded": "{count, plural, =0 {No samples recorded} one {# sample recorded} other {# samples recorded}}",
+    "noChannelData": "No data for {channel}",
+    "sessionActive": "Session is active",
+    "viewLiveRecording": "View Live Recording",
+    "waitingForDevice": "Waiting for device to start recording...",
+    "noEcgData": "No ECG data recorded for this session",
+    "timing": "Session Timing",
+    "started": "Started",
+    "ended": "Ended",
+    "recordingDevice": "Recording Device",
+    "recordedChannels": "Recorded Channels",
+    "notes": "Session Notes",
+    "summary": "Recording Summary",
+    "dataDuration": "Data Duration",
+    "seconds": "{seconds, number}s",
+    "recordedRange": "Data recorded from {start} to {end}"
+  },
+  "sessionLive": {
+    "notActive": "Session is not active",
+    "viewDetails": "View Session Details",
+    "started": "Started {time}",
+    "connecting": "Connecting...",
+    "mainsTitle": "Signal dominated by electrical interference: check electrode contact",
+    "poorTitle": "Poor signal quality: check electrode connection",
+    "warningDescription": "The ECG signal is mostly powerline hum or noise rather than a heartbeat. This usually means:",
+    "cause1": "ECG electrodes are not connected to the patient",
+    "cause2": "Electrodes have poor skin contact (try adding gel)",
+    "cause3": "Cables are loose or disconnected",
+    "tipLabel": "Tip:",
+    "tipText": "connect red to the right arm, black to the left arm and white to the right leg",
+    "qualityGood": "Good",
+    "qualityPoor": "Poor",
+    "signalQuality": "Signal Quality",
+    "heartRateBpm": "Heart Rate (BPM)",
+    "waitingTitle": "Waiting for ECG Data",
+    "waitingDescription": "Make sure the BITalino device is connected and the Raspberry Pi client is running. Data should appear here within a few seconds.",
+    "explainTitle": "Understanding the ECG Data",
+    "yAxisLabelTreated": "Y-axis ({unit}):",
+    "yAxisTextTreated": "electrical signal from the heart, filtered and converted by the machine before sending. This is not the heart rate.",
+    "yAxisLabelRaw": "Y-axis:",
+    "yAxisTextRaw": "raw sensor values, filtered for display. They represent the electrical signal from the heart, not the heart rate.",
+    "xAxisLabel": "X-axis (seconds):",
+    "xAxisText": "time window showing the last 5 seconds of data. The graph scrolls as new data arrives.",
+    "sampleRateLabel": "Sample Rate:",
+    "sampleRateText": "{rate} Hz, read from the received data.",
+    "heartRateLabel": "Heart Rate:",
+    "heartRateText": "estimated by detecting R-wave peaks in the ECG signal.",
+    "endDialogTitle": "End Recording Session?",
+    "endDialogDescription": "This will stop recording ECG data for patient {name}. The recorded data will be saved and available for review.",
+    "ending": "Ending..."
+  },
+  "sensors": {
+    "noSignal": "No signal",
+    "normal": "Normal",
+    "bpm": "BPM",
+    "ecg": {
+      "title": "ECG: Heart Activity",
+      "bradycardia": "Bradycardia",
+      "elevated": "Elevated",
+      "tachycardia": "Tachycardia",
+      "hrv": "HRV (RMSSD)",
+      "waiting": "Waiting for ECG data...",
+      "scale": "Vertical scale adjusts automatically",
+      "rPeaks": "R-peaks detected: {count, number}"
+    },
+    "eda": {
+      "title": "EDA: Stress Response",
+      "skinConductance": "Skin Conductance",
+      "scrUnit": "SCRs",
+      "responses": "Responses",
+      "stress": {
+        "low": "LOW",
+        "moderate": "MODERATE",
+        "high": "HIGH",
+        "unknown": "UNKNOWN"
+      },
+      "waiting": "Waiting for EDA data...",
+      "legend": "SCR = Skin Conductance Response (emotional arousal indicator)"
+    },
+    "spo2": {
+      "title": "SpO2: Blood Oxygen",
+      "low": "Low",
+      "critical": "Critical",
+      "pulse": "Pulse",
+      "perfusionIndex": "PI",
+      "waiting": "Waiting for SpO2 data...",
+      "legend": "PPG waveform • PI = Perfusion Index (signal quality)"
+    },
+    "resp": {
+      "title": "Respiration: Breathing",
+      "slow": "Slow",
+      "fast": "Fast",
+      "rapid": "Rapid",
+      "perMinute": "/min",
+      "regularity": "Regularity",
+      "waiting": "Waiting for respiration data...",
+      "legend": "Normal: 12-20 breaths/min • Deep breathing improves HRV"
+    }
   },
   "gestionnaires": {
     "title": "Gestionnaire Management",
@@ -360,7 +537,44 @@
     "ecgOverview": "ECG Overview",
     "sessionReport": "Session Report",
     "noReports": "No reports available yet",
-    "view": "View"
+    "view": "View",
+    "batches": "{count, plural, one {# data batch} other {# data batches}}",
+    "recordingSeconds": "{seconds, number}s of recording",
+    "samples": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined}}",
+    "samplesPartial": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined,}} over the {loaded, number} loaded batches ({total, number} in total)",
+    "durationMinutes": "{minutes, number} min",
+    "pdf": {
+      "title": "ECG Session Report",
+      "reportId": "Report ID: {id}",
+      "generatedAt": "Generated: {date}",
+      "patientInfo": "Patient Information",
+      "name": "Name",
+      "email": "Email",
+      "sessionDetails": "Session Details",
+      "machine": "Machine",
+      "started": "Started",
+      "ended": "Ended",
+      "duration": "Duration",
+      "durationValue": "{minutes} min {seconds} s",
+      "channels": "Channels",
+      "statistics": "Recording Statistics",
+      "totalBatches": "Data Batches",
+      "recordingDuration": "Recording Duration",
+      "recordingDurationValue": "{seconds} s",
+      "sampleRate": "Sample Rate",
+      "sampleRateValue": "{rate} Hz",
+      "sampleRateValuePartial": "{rate} Hz (from the loaded batches)",
+      "sampleRateUnknown": "Not recorded in the data",
+      "samples": "Samples recorded",
+      "samplesValue": "{count}{channels, plural, =0 {} =1 {} other { (all channels combined)}}",
+      "samplesPartial": "{count} ({channels, plural, =0 {} =1 {} other {all channels combined, }}counted over {loaded} loaded batches, {total} in total)",
+      "waveformPreview": "ECG Waveform Preview",
+      "channelPreview": "{channel} Channel (first {count} samples)",
+      "notes": "Notes",
+      "footer": "Gaura ECG Monitoring System, page {page} of {total}",
+      "notAvailable": "Not available",
+      "fileName": "ECG_Report_{id}_{date}.pdf"
+    }
   },
   "privacy": {
     "title": "Privacy Policy",
@@ -436,11 +650,23 @@
     },
     "safety": {
       "none": "None",
+      "freeze": "Speed frozen",
       "hold": "Hold speed",
       "reduce": "Reduce",
       "ramp_down": "Ramp down",
+      "quick_stop": "Quick stop (drive ramp)",
+      "go_silent": "Go silent (drive stops on its own)",
       "stop": "Stop",
       "estop": "Emergency stop"
+    },
+    "driveState": {
+      "not_ready": "Not ready",
+      "switch_on_disabled": "Switch-on disabled",
+      "ready": "Ready",
+      "switched_on": "Switched on",
+      "operation_enabled": "Operation enabled",
+      "fault": "Fault",
+      "comm_lost": "Communication lost"
     },
     "live": {
       "title": "Live state",

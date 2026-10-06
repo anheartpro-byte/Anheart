@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Area, AreaChart, XAxis, YAxis, CartesianGrid } from "recharts";
 import { ChartContainer, ChartConfig } from "@/components/ui/chart";
 import { filterEcg } from "@/lib/ecg";
@@ -53,6 +54,8 @@ export function ECGWaveform({
   height = 300,
   preFiltered = false,
 }: ECGWaveformProps) {
+  const t = useTranslations("ecg");
+
   // Calculate how many samples to display
   const maxSamples = sampleRate * displaySeconds;
 
@@ -107,8 +110,8 @@ export function ECGWaveform({
         style={{ height }}
       >
         <div className="text-center text-muted-foreground">
-          <p className="text-sm">Waiting for {channel} data...</p>
-          <p className="text-xs mt-1">Connect BITalino to see waveform</p>
+          <p className="text-sm">{t("waitingForChannel", { channel })}</p>
+          <p className="text-xs mt-1">{t("connectDevice")}</p>
         </div>
       </div>
     );
