@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { canAssignGestionnaires, gestionnaireIdsToSubmit } from "./machineForm";
+import { describe, expect, it, vi } from "vitest";
+import {
+  canAssignGestionnaires,
+  gestionnaireIdsToSubmit,
+  submitGestionnaireList,
+} from "./machineForm";
 
 describe("ANH-155 canAssignGestionnaires", () => {
   it.each([
@@ -44,13 +48,32 @@ describe("ANH-155 gestionnaireIdsToSubmit", () => {
     ).toBeNull();
   });
 
-  it("does not treat the order of the boxes as a change", () => {
-    // Given an admin unchecked G1 then checked it again: same people.
+  it("sends the reordered list when an admin unchecks the owner and checks it again", () => {
+    // Given G1 is first, so it is the owner. The admin unchecks G1 then checks
+    // it again: the form's list is now G2 then G1.
+    const sent = gestionnaireIdsToSubmit({
+      role: "admin",
+      current: ["G1", "G2"],
+      selected: ["G2", "G1"],
+    });
+    // Then the list is sent in that order: the server makes G2 the owner.
+    expect(sent).toEqual(["G2", "G1"]);
+  });
+
+  it("sends nothing when a repeated identifier leaves the same list", () => {
+    // Read once, G1 G1 G2 is the machine's current list G1 G2.
     expect(
       gestionnaireIdsToSubmit({
         role: "admin",
         current: ["G1", "G2"],
-        selected: ["G2", "G1"],
+        selected: ["G1", "G1", "G2"],
+      }),
+    ).toBeNull();
+    expect(
+      gestionnaireIdsToSubmit({
+        role: "admin",
+        current: ["G1", "G1", "G2"],
+        selected: ["G1", "G2"],
       }),
     ).toBeNull();
   });
@@ -116,5 +139,128 @@ describe("ANH-155 gestionnaireIdsToSubmit", () => {
         selected: ["G1", "G1", "G2"],
       }),
     ).toEqual(["G1", "G2"]);
+  });
+});
+
+/**
+ * The step the form runs after `machines.updateMachine`. `assign` stands in
+ * for the admin-only `machines.assignMachineToGestionnaires` mutation.
+ */
+describe("ANH-155 submitGestionnaireList", () => {
+  const assignStandIn = () => vi.fn(async (ids: string[]) => ids.length);
+
+  it("does not call the admin mutation when a gestionnaire saves the form", async () => {
+    // Given the form of a gestionnaire: it holds the machine's gestionnaires
+    // (G1, G2) although it shows no box for them.
+    const assign = assignStandIn();
+
+    // When the gestionnaire saves the name and the place.
+    await submitGestionnaireList({
+      role: "gestionnaire",
+      current: ["G1", "G2"],
+      selected: ["G1", "G2"],
+      assign,
+    });
+
+    // Then the admin-only mutation was never called.
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it.each(["gestionnaire", "user", undefined])(
+    "does not call the admin mutation for the role %s even if the list differs",
+    async (role) => {
+      const assign = assignStandIn();
+
+      await submitGestionnaireList({
+        role,
+        current: ["G1"],
+        selected: ["G2"],
+        assign,
+      });
+
+      expect(assign).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not call the admin mutation when an admin leaves the boxes as they were", async () => {
+    const assign = assignStandIn();
+
+    await submitGestionnaireList({
+      role: "admin",
+      current: ["G1", "G2"],
+      selected: ["G1", "G2"],
+      assign,
+    });
+
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("calls the admin mutation once with the form's list when an admin changes it", async () => {
+    const assign = assignStandIn();
+
+    await submitGestionnaireList({
+      role: "admin",
+      current: ["G1", "G2"],
+      selected: ["G2", "G1"],
+      assign,
+    });
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith(["G2", "G1"]);
+  });
+
+  it("calls the admin mutation with an empty list when an admin unchecks everyone", async () => {
+    const assign = assignStandIn();
+
+    await submitGestionnaireList({
+      role: "admin",
+      current: ["G1"],
+      selected: [],
+      assign,
+    });
+
+    expect(assign).toHaveBeenCalledWith([]);
+  });
+
+  it("lets a refusal of the admin mutation reach the form", async () => {
+    const refusal = new Error("Unauthorized. Required roles: admin.");
+    const assign = vi.fn(async () => {
+      throw refusal;
+    });
+
+    await expect(
+      submitGestionnaireList({
+        role: "admin",
+        current: ["G1"],
+        selected: ["G2"],
+        assign,
+      }),
+    ).rejects.toBe(refusal);
+  });
+
+  it("waits for the admin mutation before the form reports success", async () => {
+    // Given a mutation that settles only when released.
+    let release: () => void = () => undefined;
+    const assign = vi.fn(
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    let settled = false;
+
+    const pending = submitGestionnaireList({
+      role: "admin",
+      current: ["G1"],
+      selected: ["G2"],
+      assign,
+    }).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Then the step is still pending until the mutation settles.
+    expect(settled).toBe(false);
+    release();
+    await pending;
+    expect(settled).toBe(true);
   });
 });

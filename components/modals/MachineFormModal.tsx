@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
-import { gestionnaireIdsToSubmit } from "@/lib/machineForm";
+import { submitGestionnaireList } from "@/lib/machineForm";
 import { convexErrorMessage } from "@/lib/training";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -140,21 +140,20 @@ export function MachineFormModal({
             batchInterval: values.batchInterval,
           },
         });
-        // The gestionnaire list is an admin-only call: it is made only by a
-        // caller allowed to choose the gestionnaires, and only when the
-        // checked boxes changed. A gestionnaire saving the name or the place
-        // never makes it.
-        const gestionnaireIds = gestionnaireIdsToSubmit({
+        // The gestionnaire list is an admin-only call. Whether it is made is
+        // decided in lib/machineForm.ts, never here: only for a caller
+        // allowed to choose the gestionnaires, and only when the list
+        // changed. A gestionnaire saving the name or the place never makes it.
+        await submitGestionnaireList({
           role: currentUser?.role,
           current: machine.gestionnaires?.map((g) => g._id) ?? [],
           selected: values.gestionnaireIds as Id<"users">[] | undefined,
+          assign: (gestionnaireIds) =>
+            assignMachineToGestionnaires({
+              machineId: machine._id,
+              gestionnaireIds,
+            }),
         });
-        if (gestionnaireIds) {
-          await assignMachineToGestionnaires({
-            machineId: machine._id,
-            gestionnaireIds,
-          });
-        }
         onOpenChange(false);
         onSuccess?.();
       } else {

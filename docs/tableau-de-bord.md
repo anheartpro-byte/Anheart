@@ -167,9 +167,12 @@ gestionnaire de la machine.
 La liste des gestionnaires de la machine, que seul un admin voit dans la
 fenêtre, part dans un second appel réservé à l'admin
 (`machines.assignMachineToGestionnaires`) : la fenêtre ne le fait que si
-l'appelant est admin **et** si les cases ont changé. Un gestionnaire qui
-modifie le nom ou le lieu ne fait donc que le premier appel, et un admin qui
-ne touche pas aux cases ne réécrit pas la liste. Après l'enregistrement, la
+l'appelant est admin **et** si la liste a changé. L'ordre fait partie de la
+liste, car le serveur fait du premier gestionnaire le « Propriétaire » : un
+gestionnaire décoché puis recoché passe en fin de liste, et la liste est alors
+envoyée. Un gestionnaire qui modifie le nom ou le lieu ne fait donc que le
+premier appel, et un admin qui ne touche pas aux cases ne réécrit pas la
+liste. Après l'enregistrement, la
 fenêtre se ferme et la carte Configuration affiche « Machine mise à jour avec
 succès » ; si le serveur refuse, son message s'affiche en rouge en haut de la
 fenêtre, qui reste ouverte. La règle d'envoi est dans `lib/machineForm.ts`.

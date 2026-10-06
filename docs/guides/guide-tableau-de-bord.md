@@ -568,8 +568,10 @@ fichier de configuration du Raspberry Pi (voir [procédure P5](#p5-enregistrer-u
 Configuration du détail affiche « Machine mise à jour avec succès ». Un
 gestionnaire enregistre ainsi le nom et le lieu de sa machine sans erreur. La
 liste **Assigner aux Gestionnaires** n'est envoyée au serveur que par un
-administrateur, et seulement s'il a changé les cases. Si le serveur refuse,
-son message s'affiche en rouge en haut de la fenêtre, qui reste ouverte.
+administrateur, et seulement s'il l'a changée. L'ordre compte : un
+gestionnaire décoché puis recoché passe en fin de liste, et le premier de la
+liste devient « Propriétaire ». Si le serveur refuse, son message s'affiche en
+rouge en haut de la fenêtre, qui reste ouverte.
 
 > **Attention (gestionnaire qui modifie une machine) : corrigé dans le code le
 > 6 octobre 2026, pas encore en production.** Tant que le redéploiement n'a
