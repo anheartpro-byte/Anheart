@@ -354,6 +354,289 @@ async function snapshotCentreB(w: World) {
 }
 
 // ---------------------------------------------------------------------------
+// Another organisation's resource answers like a resource that does not exist
+// ---------------------------------------------------------------------------
+
+type Targets = {
+  machineId: Id<"machines">;
+  userId: Id<"users">;
+  sessionId: Id<"sessions">;
+  pendingSessionId: Id<"sessions">;
+};
+
+/** Identifiers of rows that existed and were deleted: valid, and unknown. */
+async function deletedTargets(w: World): Promise<Targets> {
+  return await w.t.run(async (ctx) => {
+    const machineId = await ctx.db.insert("machines", {
+      name: "Removed machine",
+      apiKey: "synthetic-hash",
+      status: "online" as const,
+      lastHeartbeat: NOW,
+      config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
+      createdAt: NOW,
+    });
+    const userId = await ctx.db.insert("users", {
+      clerkId: "removed-account",
+      role: "user" as const,
+      firstName: "Removed",
+      lastName: "Account",
+      email: "removed-account@example.invalid",
+      language: "fr" as const,
+      createdAt: NOW,
+    });
+    const session = {
+      machineId,
+      status: "active" as const,
+      startedAt: NOW,
+      channels: ["ECG"],
+    };
+    const sessionId = await ctx.db.insert("sessions", session);
+    const pendingSessionId = await ctx.db.insert("sessions", session);
+    for (const id of [machineId, userId, sessionId, pendingSessionId]) {
+      await ctx.db.delete(id);
+    }
+    return { machineId, userId, sessionId, pendingSessionId };
+  });
+}
+
+/** The answer of a call: its result, or the message of its refusal. */
+async function answerOf(call: Promise<unknown>) {
+  return await call.then(
+    (result) => ({ result }),
+    (error: Error) => ({ refused: error.message }),
+  );
+}
+
+describe("EX-5 a resource of another organisation answers like one that does not exist", () => {
+  it.each(["orgAdmin", "manager", "patient"] as const)(
+    "gives %s the same answer for centre B's identifiers and for unknown ones",
+    async (actor) => {
+      const w = await seedWorld(modules);
+      const foreign: Targets = {
+        machineId: w.orgBMachine,
+        userId: w.orgBPatient,
+        sessionId: await withCentreBSession(w),
+        pendingSessionId: await addSession(w, {
+          machineId: w.orgBMachine,
+          userId: w.orgBPatient,
+          status: "pending",
+          kind: "recording",
+        }),
+      };
+      const unknown = await deletedTargets(w);
+      const me = as(w.t, actor);
+
+      /** Every call that takes an identifier, aimed at one set of targets. */
+      const calls = (t: Targets): Record<string, () => Promise<unknown>> => ({
+        // --- writes
+        "machines.updateMachine": () =>
+          me.mutation(api.machines.updateMachine, {
+            machineId: t.machineId,
+            name: "taken",
+          }),
+        "machines.deleteMachine": () =>
+          me.mutation(api.machines.deleteMachine, { machineId: t.machineId }),
+        "machines.regenerateApiKey": () =>
+          me.mutation(api.machines.regenerateApiKey, {
+            machineId: t.machineId,
+          }),
+        "machines.restoreMachine": () =>
+          me.mutation(api.machines.restoreMachine, { machineId: t.machineId }),
+        "machines.assignMachineToGestionnaires": () =>
+          me.mutation(api.machines.assignMachineToGestionnaires, {
+            machineId: t.machineId,
+            gestionnaireIds: [w.manager],
+          }),
+        "machines.assignGestionnaireToMachine": () =>
+          me.mutation(api.machines.assignGestionnaireToMachine, {
+            machineId: t.machineId,
+            gestionnaireId: w.manager,
+          }),
+        "machines.assignGestionnaireToMachine (gestionnaire)": () =>
+          me.mutation(api.machines.assignGestionnaireToMachine, {
+            machineId: w.machine,
+            gestionnaireId: t.userId,
+          }),
+        "machines.removeGestionnaireFromMachine": () =>
+          me.mutation(api.machines.removeGestionnaireFromMachine, {
+            machineId: t.machineId,
+            gestionnaireId: w.manager,
+          }),
+        "users.updateUserRole": () =>
+          me.mutation(api.users.updateUserRole, {
+            userId: t.userId,
+            role: "admin",
+          }),
+        "users.updatePatient": () =>
+          me.mutation(api.users.updatePatient, {
+            userId: t.userId,
+            firstName: "taken",
+          }),
+        "users.deleteUser": () =>
+          me.mutation(api.users.deleteUser, { userId: t.userId }),
+        "users.assignGestionnaireToUser": () =>
+          me.mutation(api.users.assignGestionnaireToUser, {
+            userId: t.userId,
+            gestionnaireId: w.manager,
+          }),
+        "users.assignGestionnaireToUser (gestionnaire)": () =>
+          me.mutation(api.users.assignGestionnaireToUser, {
+            userId: w.stranger,
+            gestionnaireId: t.userId,
+          }),
+        "users.removeGestionnaireFromUser": () =>
+          me.mutation(api.users.removeGestionnaireFromUser, {
+            userId: t.userId,
+            gestionnaireId: w.manager,
+          }),
+        "users.assignPatientsToGestionnaire": () =>
+          me.mutation(api.users.assignPatientsToGestionnaire, {
+            gestionnaireId: t.userId,
+            patientIds: [],
+          }),
+        "training.setUserPhysiology": () =>
+          me.mutation(api.training.setUserPhysiology, {
+            userId: t.userId,
+            hrMax: 150,
+          }),
+        "training.grantLaunchRight": () =>
+          me.mutation(api.training.grantLaunchRight, {
+            machineId: t.machineId,
+            userId: w.patient,
+          }),
+        "training.grantLaunchRight (user)": () =>
+          me.mutation(api.training.grantLaunchRight, {
+            machineId: w.machine,
+            userId: t.userId,
+          }),
+        "training.revokeLaunchRight": () =>
+          me.mutation(api.training.revokeLaunchRight, {
+            machineId: t.machineId,
+            userId: w.patient,
+          }),
+        "training.launchAutoSession": () =>
+          me.mutation(api.training.launchAutoSession, {
+            machineId: t.machineId,
+            profileId: w.profileId,
+          }),
+        "training.launchAutoSession (rider)": () =>
+          me.mutation(api.training.launchAutoSession, {
+            machineId: w.machine,
+            profileId: w.profileId,
+            userId: t.userId,
+          }),
+        "training.requestStop": () =>
+          me.mutation(api.training.requestStop, { sessionId: t.sessionId }),
+        "sessions.createSession": () =>
+          me.mutation(api.sessions.createSession, {
+            machineId: t.machineId,
+            userId: w.patient,
+            channels: ["ECG"],
+          }),
+        "sessions.createSession (patient)": () =>
+          me.mutation(api.sessions.createSession, {
+            machineId: w.machine,
+            userId: t.userId,
+            channels: ["ECG"],
+          }),
+        "sessions.endSession": () =>
+          me.mutation(api.sessions.endSession, { sessionId: t.sessionId }),
+        "sessions.cancelSession": () =>
+          me.mutation(api.sessions.cancelSession, {
+            sessionId: t.pendingSessionId,
+          }),
+        // --- reads
+        "machines.getMachine": () =>
+          me.query(api.machines.getMachine, { machineId: t.machineId }),
+        "machines.getRecentHeartbeats": () =>
+          me.query(api.machines.getRecentHeartbeats, {
+            machineId: t.machineId,
+          }),
+        "machines.getGestionnairesForMachine": () =>
+          me.query(api.machines.getGestionnairesForMachine, {
+            machineId: t.machineId,
+          }),
+        "machines.getMachinesForGestionnaire": () =>
+          me.query(api.machines.getMachinesForGestionnaire, {
+            gestionnaireId: t.userId,
+          }),
+        "users.getUserById": () =>
+          me.query(api.users.getUserById, { userId: t.userId }),
+        "users.listUsers": () =>
+          me.query(api.users.listUsers, { gestionnaireId: t.userId }),
+        "users.getGestionnairesForPatient": () =>
+          me.query(api.users.getGestionnairesForPatient, { userId: t.userId }),
+        "users.getPatientsForGestionnaire": () =>
+          me.query(api.users.getPatientsForGestionnaire, {
+            gestionnaireId: t.userId,
+          }),
+        "sessions.getSession": () =>
+          me.query(api.sessions.getSession, { sessionId: t.sessionId }),
+        "sessions.getActiveSessionForMachine": () =>
+          me.query(api.sessions.getActiveSessionForMachine, {
+            machineId: t.machineId,
+          }),
+        "sessions.listSessions (machine)": () =>
+          me.query(api.sessions.listSessions, { machineId: t.machineId }),
+        "sessions.listSessions (user)": () =>
+          me.query(api.sessions.listSessions, { userId: t.userId }),
+        "training.listLaunchRights": () =>
+          me.query(api.training.listLaunchRights, { machineId: t.machineId }),
+        "training.listMachineProfiles": () =>
+          me.query(api.training.listMachineProfiles, {
+            machineId: t.machineId,
+          }),
+        "training.getMachineLive": () =>
+          me.query(api.training.getMachineLive, { machineId: t.machineId }),
+        "training.getSessionTelemetry": () =>
+          me.query(api.training.getSessionTelemetry, {
+            sessionId: t.sessionId,
+          }),
+        "training.getTrainingSession": () =>
+          me.query(api.training.getTrainingSession, {
+            sessionId: t.sessionId,
+          }),
+        "ecgData.getSessionAllData": () =>
+          me.query(api.ecgData.getSessionAllData, { sessionId: t.sessionId }),
+        "ecgData.getRecentEcgData": () =>
+          me.query(api.ecgData.getRecentEcgData, { sessionId: t.sessionId }),
+        "ecgData.getSessionEcgRange": () =>
+          me.query(api.ecgData.getSessionEcgRange, {
+            sessionId: t.sessionId,
+            startTime: 0,
+            endTime: NOW * 2,
+          }),
+        "ecgData.getSessionDataStats": () =>
+          me.query(api.ecgData.getSessionDataStats, { sessionId: t.sessionId }),
+        "ecgData.getLatestEcgBatch": () =>
+          me.query(api.ecgData.getLatestEcgBatch, { sessionId: t.sessionId }),
+        "sessionSummaries.getSummary": () =>
+          me.query(api.sessionSummaries.getSummary, { sessionId: t.sessionId }),
+        "sessionSummaries.getSummaryWithEcg": () =>
+          me.query(api.sessionSummaries.getSummaryWithEcg, {
+            sessionId: t.sessionId,
+          }),
+      });
+
+      const onForeign = calls(foreign);
+      const onUnknown = calls(unknown);
+      const different: string[] = [];
+      for (const name of Object.keys(onForeign)) {
+        const foreignAnswer = await answerOf(onForeign[name]());
+        const unknownAnswer = await answerOf(onUnknown[name]());
+        if (JSON.stringify(foreignAnswer) !== JSON.stringify(unknownAnswer)) {
+          different.push(
+            `${name}: ${JSON.stringify(foreignAnswer)} vs ${JSON.stringify(unknownAnswer)}`,
+          );
+        }
+      }
+
+      expect(different).toEqual([]);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Arguments that mix two organisations
 // ---------------------------------------------------------------------------
 

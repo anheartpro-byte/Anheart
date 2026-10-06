@@ -553,8 +553,10 @@ export const requestStop = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const me = await getCurrentUserOrThrow(ctx);
+    // A session of another organisation is a session that does not exist.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) throw new ConvexError("Session not found");
+    if (!session || !inScope(me, session.organizationId))
+      throw new ConvexError("Session not found");
     if (!(await canAccessSession(ctx, session, me))) {
       throw new ConvexError("Not authorized to stop this session");
     }
