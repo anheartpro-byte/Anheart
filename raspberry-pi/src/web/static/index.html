@@ -51,11 +51,19 @@
   other's element is gone at that one's next refresh. It stays for as long as
   the stop is latched, so it is kept short, and it says "latched", never
   "stopped".
+
+  Between the two, the E-STOP this page asked for and has no proof of: the
+  request went out and nothing came back. An operator must not be left
+  waiting for an answer that is not coming.
 -->
 <div id="banners" class="banners">
   <div id="banner" class="banner hidden" role="alert" aria-live="assertive">
     <strong>NO LIVE DATA</strong>
     <span id="banner-detail">la liaison avec la machine est coupee</span>
+  </div>
+  <div id="estop-unanswered" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>ARRET D'URGENCE NON CONFIRME</strong>
+    <span id="estop-unanswered-detail">aucune reponse de la console - UTILISEZ L'ARRET CABLE</span>
   </div>
   <div id="estop-banner" class="banner hidden" role="alert" aria-live="assertive">
     <strong>ARRET D'URGENCE VERROUILLE</strong>

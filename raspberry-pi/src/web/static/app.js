@@ -33,6 +33,7 @@
 
 var STALE_FRAME_MS = 2000;      // no frame for this long: the screen is not live
 var RECONNECT_MS = 1500;        // socket retry interval
+var ESTOP_ANSWER_MS = 2000;     // an E-STOP request with no answer for this long is said so, loudly
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
 var PANEL_MS = 1000;            // console link panel refresh
@@ -68,6 +69,7 @@ var state = {
   estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
   estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
   estopFrame: null,      // what the last frame said about it: "latched", "clear" or "silent"
+  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: {at, failed}
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
@@ -303,6 +305,7 @@ function refreshLiveness() {
   }
   // After its text: the banner is measured as it reads, not as it read last time.
   showBanner(el("banner"), !fresh, reworded);
+  renderEstopUnanswered();
   ["hr", "measured-output", "setpoint-output", "console-hr", "console-output"].forEach(function (id) {
     el(id).classList.toggle("stale", !fresh);
   });
@@ -393,6 +396,49 @@ function renderEstopBanner() {
         /* the banner keeps its state; the periodic refresh asks again */
       });
     }
+  }
+}
+
+/*
+  An E-STOP this page asked for and has no proof of. The request is answered
+  in a few milliseconds when everything works; when the console is stuck or
+  the network is mute it simply stays out, and nothing used to tell the
+  operator, who was left waiting for an answer that was not coming.
+
+  ESTOP_ANSWER_MS after the first click left unanswered, a banner says so and
+  names the wired stop. A request that failed says so at once. The request
+  itself is never withdrawn: it may still get through, and then its receipt
+  takes the notice down. So does a frame or a status answer, arriving after
+  the click, that shows a stop latched: the machine has it, whichever way it
+  came. A report under go_silent shows nothing either way and leaves the
+  notice up.
+
+  The count runs from the first unanswered click, however many follow it: a
+  second click must not make the page look reassured for two more seconds.
+*/
+function renderEstopUnanswered() {
+  var asked = state.estopAsked;
+  var waited = asked ? performance.now() - asked.at : 0;
+  var overdue = Boolean(asked) && (asked.failed !== null || waited >= ESTOP_ANSWER_MS);
+  var reworded = false;
+  if (overdue) {
+    var detail = el("estop-unanswered-detail");
+    var notice = (asked.failed !== null
+      ? "la demande a echoue : " + asked.failed
+      : "aucune reponse de la console depuis " + Math.round(waited / 1000) + " s") +
+      " - UTILISEZ L'ARRET CABLE";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  // After its text, like the other banners: measured as it reads.
+  showBanner(el("estop-unanswered"), overdue, reworded);
+}
+
+/** A report that has just arrived shows a stop latched: this page's E-STOP is no longer in doubt. */
+function estopSeenLatched(opinion) {
+  if (opinion === "latched" && state.estopAsked) {
+    state.estopAsked = null;
+    renderEstopUnanswered();
   }
 }
 
@@ -554,6 +600,7 @@ function renderSnapshot(snapshot) {
   renderManual(snapshot);
   settleManualTarget(snapshot);
   renderManualHold();
+  estopSeenLatched(estopOpinion(snapshot.safety, false));
   renderEstopBanner();
 
   /* --- heart rate, with its age carried alongside --------------------- */
@@ -1740,6 +1787,7 @@ function loadStatus() {
       // Asked after the E-STOP was latched: this answer carries it from here on.
       state.estopReceipt = null;
     }
+    estopSeenLatched(estopOpinion(status.standing, estopLatched(status)));
     renderEstopBanner();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
@@ -1988,14 +2036,23 @@ function doStop() {
   network, the web server and the session process, any one of which can be the
   thing that has failed - and it is never safety-rated. The safety-rated stop
   is the wired mushroom, and while STO is jumpered even that one is a ramp.
+
+  For the same reason the page does not wait in silence for the answer: see
+  renderEstopUnanswered().
 */
 function doEstop() {
   state.manualDraft = null;
+  if (!state.estopAsked) {
+    state.estopAsked = { at: performance.now(), failed: null };
+  }
+  window.setTimeout(renderEstopUnanswered, ESTOP_ANSWER_MS);
   api("/api/session/estop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed E-STOP" },
   })
     .then(function (receipt) {
+      state.estopAsked = null;
+      renderEstopUnanswered();
       state.estopReceipt = receipt;
       state.estopReceiptSent = state.statusSent;
       renderEstopBanner();
@@ -2004,6 +2061,10 @@ function doEstop() {
       });
     })
     .catch(function (error) {
+      if (state.estopAsked) {
+        state.estopAsked.failed = error.message;
+      }
+      renderEstopUnanswered();
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
     });
 }

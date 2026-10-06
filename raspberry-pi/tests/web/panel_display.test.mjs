@@ -64,6 +64,8 @@ function panel() {
   const clock = { now: 1000 };
   const published = new Map();
   const listeners = [];
+  // One-shot timers the page sets: kept here, and fired by `wait` when their time has come.
+  const timers = [];
   const context = vm.createContext({
     document: {
       title: /<title>([^<]*)<\/title>/.exec(html)[1],
@@ -74,6 +76,7 @@ function panel() {
     window: {
       addEventListener: (name, listener) => listeners.push([name, listener]),
       sessionStorage: { getItem: () => null, setItem: () => undefined },
+      setTimeout: (callback, delay) => timers.push({ callback, due: clock.now + delay }),
     },
     performance: { now: () => clock.now },
   });
@@ -112,6 +115,13 @@ function panel() {
     stack,
     // What the browser does on a window event: call whoever listens to it.
     fire: (name) => listeners.filter((entry) => entry[0] === name).forEach((entry) => entry[1]()),
+    // Time passing with nothing arriving: the timers that have come due fire, in the order they were set.
+    wait: (ms) => {
+      clock.now += ms;
+      const due = timers.filter((timer) => timer.due <= clock.now);
+      due.forEach((timer) => timers.splice(timers.indexOf(timer), 1));
+      due.forEach((timer) => timer.callback());
+    },
     shown: (id) => !node(id).classes.has("hidden"),
     // Whether a banner saying `phrase` is on screen, whichever element carries it.
     announced: (phrase) =>
@@ -1141,4 +1151,148 @@ test("the state chip is red for a latched emergency stop whoever latched it", as
   context.api = () => Promise.resolve(status());
   await context.loadStatus();
   assert.equal(node("run-state").classes.has("pill-bad"), false);
+});
+
+/* ======================= an E-STOP the console does not answer ======================= */
+
+// The operator presses E-STOP and nothing comes back: the request stays out until the test answers it.
+function pressUnanswered(context) {
+  const request = deferred();
+  const sent = [];
+  context.api = (path) => {
+    sent.push(path);
+    return path === "/api/session/estop" ? request.promise : new Promise(() => undefined);
+  };
+  context.doEstop();
+  return { request, sent };
+}
+
+test("an E-STOP the console does not answer is said so after two seconds, with the wired stop named", async () => {
+  // Given a live page, and a console that takes the request and answers nothing.
+  const { context, frame, announced, published, stack, wait } = panel();
+  frame(snapshot({ at: 59.9, mode: "manuel", phase: "hold" }));
+  const { sent } = pressUnanswered(context);
+  await settle();
+  assert.deepEqual(sent, ["/api/session/estop"], "the request did not leave on the first click");
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  // While an answer can still be on its way, the page does not cry wolf.
+  wait(1900);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  // When two seconds have gone by with nothing back.
+  wait(100);
+  // Then a banner says the stop is not confirmed, for how long, and what to use instead.
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("aucune reponse de la console depuis 2 s"), true);
+  assert.equal(announced("UTILISEZ L'ARRET CABLE"), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And it claims no latch: the banner of a latched stop is not up.
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), false);
+});
+
+test("the notice of an unanswered E-STOP keeps counting, frames or no frames, and outlives further clicks", async () => {
+  const { context, clock, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("depuis 2 s"), true);
+  // A second click, also unanswered, must not make the page look reassured for two more seconds.
+  context.doEstop();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // Live frames with no stop in them keep it up and current.
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  assert.equal(announced("depuis 4 s"), true);
+  // So does the liveness check alone, once the frames have stopped as well.
+  clock.now += 3000;
+  context.refreshLiveness();
+  assert.equal(announced("depuis 7 s"), true);
+  assert.equal(announced("NO LIVE DATA"), true);
+});
+
+test("the notice appears even in a browser whose timer never fires", () => {
+  // Given a page whose one-shot timer is lost; its periodic liveness check still runs.
+  const { context, clock, announced } = panel();
+  pressUnanswered(context);
+  clock.now += 2500;
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+});
+
+test("a late answer takes the unanswered notice down and raises the banner of the latched stop", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  const { request } = pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // When the request gets through after all.
+  request.resolve(receipt);
+  await settle();
+  // Then the stop is known latched, and said so.
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  // And the timers still pending from the clicks bring nothing back.
+  wait(5000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+});
+
+test("a frame that shows a stop latched ends the doubt; one under go_silent does not", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  // go_silent hides whatever is latched behind it: the notice stays.
+  frame(snapshot({ at: 62.2, mode: "arret", ...silent() }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // A latched quick stop, whichever way it came, is the stop the click was asking for.
+  frame(snapshot({ at: 62.4, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+});
+
+test("a status answer that shows the stop latched ends the doubt as well", async () => {
+  // Given frames that have stopped and an E-STOP left unanswered.
+  const { context, clock, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // When HTTP answers a status in which the stop is latched.
+  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  await context.loadStatus();
+  clock.now += 100;
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+});
+
+test("a failed E-STOP request is said at once and stays on screen after its alert", async () => {
+  // Given a console that cannot be reached at all.
+  const { context, frame, announced, wait } = panel();
+  const alerts = [];
+  context.window.alert = (message) => alerts.push(message);
+  frame(snapshot({ at: 59.9 }));
+  context.api = () => Promise.reject(new Error("Failed to fetch"));
+  context.doEstop();
+  await settle();
+  // Then the alert is raised as before, and the banner stays once it is dismissed.
+  assert.equal(alerts.length, 1);
+  assert.ok(alerts[0].includes("UTILISEZ L'ARRET CABLE"));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("la demande a echoue : Failed to fetch - UTILISEZ L'ARRET CABLE"), true);
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  wait(3000);
+  assert.equal(announced("la demande a echoue : Failed to fetch"), true);
+});
+
+test("an E-STOP answered in time never shows the unanswered notice", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  await pressEstop(context);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  wait(5000);
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
 });
