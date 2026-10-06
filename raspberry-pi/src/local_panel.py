@@ -1257,8 +1257,9 @@ def open_journal(config: LocalConfig, clock: Clock) -> Journal:
     Creates the directory, private to the service user, and measures its free
     space: startup I/O, with nothing turning. The thread is not started here.
     """
-    root = config.record.root
-    return Journal(root if root.is_absolute() else PROJECT_ROOT / root, clock)
+    record = config.record
+    root = record.root if record.root.is_absolute() else PROJECT_ROOT / record.root
+    return Journal(root, clock, retention_days=record.retention_days)
 
 
 # =========================================================================

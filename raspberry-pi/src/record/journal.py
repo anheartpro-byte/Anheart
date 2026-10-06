@@ -26,6 +26,10 @@ split, and is tested:
   (what the OS already holds survives a killed process), and at most
   :data:`FSYNC_PERIOD` more if the power goes with it.
 
+Between sessions the same thread applies the local retention
+(:mod:`src.record.retention`): a record deposited AND confirmed longer ago than
+the retention is removed; one that was not deposited never is.
+
 The producer side (:meth:`Journal.open`, :meth:`Journal.submit`,
 :meth:`Journal.close`, :meth:`Journal.status`) belongs to the event loop
 thread, and to it alone: the bound relies on there being one producer.
@@ -47,6 +51,7 @@ from typing import Final, assert_never
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
 from src.record.ecg import Header, RawBlock
+from src.record.retention import purge
 from src.record.rows import Row
 from src.record.schema import DriveFrame, EndObservation, Event, EventKind, Manifest, RecordError
 from src.record.writer import Writer, describe_os_error
@@ -70,6 +75,9 @@ STALL_AFTER: Final[Seconds] = Seconds(5.0)
 
 STOP_TIMEOUT: Final[Seconds] = Seconds(5.0)
 """How long the console's exit waits for the last record to be closed."""
+
+PURGE_PERIOD: Final[Seconds] = Seconds(6 * 3600.0)
+"""How often the retention is applied, and only between two sessions."""
 
 MIN_FREE_BYTES: Final[int] = 500_000_000
 """Below 500 MB free under the records directory, no session is armed."""
@@ -281,6 +289,8 @@ class Scribe:
         "_failures",
         "_path",
         "_probed_at",
+        "_purged_at",
+        "_retention_days",
         "_root",
         "_samples",
         "_session",
@@ -290,9 +300,12 @@ class Scribe:
         "_writer",
     )
 
-    def __init__(self, root: Path, clock: Clock) -> None:
+    def __init__(self, root: Path, clock: Clock, retention_days: int | None) -> None:
         self._root: Path = root
         self._clock: Clock = clock
+        self._retention_days: int | None = retention_days
+        # Due at once: the first idle cycle after startup applies the retention.
+        self._purged_at: Monotonic = Monotonic(clock.monotonic() - PURGE_PERIOD)
         self._writer: Writer | None = None
         self._session: int = 0
         self._consumed: int = 0
@@ -422,6 +435,17 @@ class Scribe:
         if now - self._probed_at >= PROBE_PERIOD:
             self._probed_at = now
             self._storage = measure(self._root)
+        retention = self._retention_days
+        if writer is None and retention is not None and now - self._purged_at >= PURGE_PERIOD:
+            self._purged_at = now
+            report = purge(self._root, self._clock.unix_millis(), retention)
+            if report.removed or report.failed:
+                _logger.warning(
+                    "local retention (%d days): removed %s, could not remove %s",
+                    retention,
+                    list(report.removed),
+                    list(report.failed),
+                )
 
     def _warn(self, writer: Writer, now: Monotonic, dropped: int) -> None:
         """Say in the record itself what it is missing, once per change, if the disk lets us."""
@@ -478,18 +502,22 @@ class Journal:
         *,
         limits: Limits = DEFAULT_LIMITS,
         period: Seconds = DRAIN_PERIOD,
+        retention_days: int | None = None,
     ) -> None:
         """Claim the records directory and measure it. Startup I/O, nothing is turning.
 
         A directory that cannot be created or made private is not an error
         here: it is an unknown free space, which refuses the next arming.
+
+        ``retention_days``: how long a record deposited and confirmed is kept
+        (:mod:`src.record.retention`). ``None``: nothing is ever removed.
         """
         self._root: Path = root
         self._clock: Clock = clock
         self._limits: Limits = limits
         self._period: Seconds = period
         self._queue: deque[Item] = deque()
-        self._scribe: Scribe = Scribe(root, clock)
+        self._scribe: Scribe = Scribe(root, clock, retention_days)
         self._progress: Progress = self._scribe.progress()
         self._session: int = 0
         self._open: bool = False
