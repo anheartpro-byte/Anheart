@@ -21,11 +21,18 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > STOP sous un `freeze` et la cible manuelle refusée ou remise à 0 (sections 4, 5, 6,
 > 11 et 13, ajoutés le 6 octobre 2026, ceux sur STOP sous un `freeze` réécrits le
 > 7 octobre 2026) viennent du code, des tests automatiques et de rejeux par l'API sur
-> la console en simulation ; ils n'ont pas été rejoués dans un navigateur.
+> la console en simulation ; ils n'ont pas été rejoués dans un navigateur, à
+> l'exception de ce que dit le dernier alinéa de cet encadré.
 > Les passages sur la règle `session_overrun` (sections 4, 5 et 11, ajoutés le
 > 6 octobre 2026 avec ANH-181) viennent du code, des tests automatiques sur la console
 > en simulation et de mesures sur le banc d'essai logiciel ; ils n'ont pas été rejoués
 > dans un navigateur.
+> Ce que la page affiche de plus depuis le 7 octobre 2026 (la note de la carte MANUEL
+> pour une cible prise, refusée ou remise à 0, l'encadré de la fréquence cardiaque, les
+> bandeaux `ARRET D'URGENCE NON CONFIRME` et `REPRISE AUTOMATIQUE POSSIBLE`, les
+> pastilles barrées sous `NO LIVE DATA`, `perime` en orange) a été rejoué dans un
+> navigateur sans interface, sur la console en simulation, avec une personne à bord
+> déclarée par l'API pour ce qui dépend de la fréquence cardiaque.
 
 ---
 
@@ -111,7 +118,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux rouges en haut | `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). La barre latérale et la barre mobile commencent sous eux |
+| Bandeaux en haut | Trois rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, six pastilles d'état de la machine, la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
@@ -125,13 +132,17 @@ seconde) et par des interrogations périodiques :
 | Source | Période | Sert à |
 |---|---|---|
 | `/ws/telemetry` | continu | instantanés, événements, tracé ECG |
-| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console |
+| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle |
 | `/api/sensors` | 1 s | pages Capteurs |
 | `/api/camera` | 1 s | carte caméra de la page Securite |
 | `/api/status` | 5 s | état, verdicts, attestation, système |
 | `/api/presence` (POST) | 5 s | signal « l'accompagnant est là » |
 
 Si le WebSocket tombe, la page réessaie toutes les 1,5 s.
+
+Chaque source est jugée sur ses propres réponses. Ce qu'elle alimente est barré et
+grisé quand elle se tait (section 3) : après 2 s sans image pour le WebSocket, 3,5 s
+sans réponse pour `/api/panel`, 12 s pour `/api/status`.
 
 ---
 
@@ -145,7 +156,18 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
      `la liaison est ouverte mais aucune donnee depuis N s - la machine tourne peut-etre encore`
      ou `la liaison avec la machine est coupee - la machine tourne peut-etre encore` ;
    - les grands nombres (fréquence cardiaque, vitesse mesurée, consigne) sont barrés et grisés ;
+   - les pastilles que les images alimentent le sont aussi, et perdent leur couleur :
+     celles de la barre latérale (Mode, Rotation, Securite) et celles des cartes
+     (qualité de la fréquence cardiaque, rotation, état du variateur, consigne
+     confirmée, action de sécurité, phase, occupation du mode manuel, ECG). Une
+     pastille `good` ou `a l'arret` ne reste pas verte à côté d'un nombre barré ;
    - la pastille **Liaison** passe à `donnees figees` ou `hors ligne`.
+
+   La même règle vaut pour les deux autres sources. Sans réponse de `/api/panel`
+   depuis 3,5 s, les pastilles **Console** et BITalino (`acquisition`) sont barrées ;
+   sans réponse de `/api/status` depuis 12 s, **Etat** et la pastille de
+   l'attestation. Le WebSocket peut tomber alors que ces deux sources répondent
+   encore : leurs pastilles restent alors lisibles, à juste titre.
 2. **« Est-ce arrêté ? » se lit sur la vitesse MESURÉE, jamais sur la consigne.** Une
    consigne à zéro sur une masse qui ralentit n'est pas un zéro mesuré.
 3. **Les vitesses sont toujours données ensemble** : tr/min moteur, tr/min de sortie
@@ -153,8 +175,10 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
    Le rapport de réduction est 49,79 : un seul de ces nombres masquerait une erreur d'un
    facteur 50. Voir [glossaire](glossaire.md) pour Gc et Gr.
 4. **Une fréquence cardiaque périmée est barrée.** Elle est affichée avec son âge, et sa
-   pastille de qualité dit `perime` (grise) au lieu de la dernière note reçue. Un capteur
+   pastille de qualité dit `perime` au lieu de la dernière note reçue. Un capteur
    dont la fenêtre n'avance plus depuis 3,5 s est marqué `perime` de la même façon.
+   `perime` est en orange, la couleur des données périmées dans cette page : dans le
+   menu, le point d'un capteur périmé devient un anneau orange.
 5. **L'E-STOP ne demande rien** : ni confirmation, ni nom, ni raison.
 
 L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`) vaut :
@@ -174,10 +198,10 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 | Pastille | Valeurs | Source |
 |---|---|---|
 | **Mode** | `REPOS`, `MANUEL`, `SEANCE`, `ARRET` | l'instantané (`mode`) |
-| **Etat** | `idle`, `starting`, `running`, `stopping` (rouge si E-STOP verrouillé) | `/api/status` (`run_state`) |
+| **Etat** | `idle`, `starting`, `running`, `stopping`. En rouge tant qu'un arrêt d'urgence est verrouillé, quel qu'en soit l'auteur : après un arrêt posé par la caméra, la pastille dit `idle` en rouge | `/api/status` (`run_state`, `estop_latched`, `supervisor_estop`, `standing`) |
 | **Liaison** | `en direct`, `donnees figees`, `hors ligne` | la fraîcheur du WebSocket |
 | **Rotation** | `a l'arret`, `EN ROTATION`, `VITESSE INCONNUE` | vitesse mesurée |
-| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11) | l'instantané |
+| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 
 Les modes :
@@ -195,7 +219,7 @@ Les états `run_state` (vue « intention » de la surface de commande) :
 |---|---|
 | `idle` | rien de demandé. Seul état où un démarrage est accepté |
 | `starting` | un démarrage est accepté, la boucle ne l'a peut-être pas encore pris |
-| `running` | la boucle confirme qu'une séance tourne |
+| `running` | la boucle a confirmé une séance, et personne n'a demandé sa fin ni un E-STOP depuis la page. L'état reste `running` pendant tout le mode `ARRET` d'une fin de séance que la console décide elle-même (un verdict d'arrêt, un arrêt posé par la caméra, la règle `session_standstill`) : il ne dit donc pas que la séance avance encore. Lire **Mode** |
 | `stopping` | une fin ou un E-STOP est accepté ; un E-STOP garde cet état jusqu'à l'acquittement |
 
 Sous les pastilles, une ligne indique l'adresse d'écoute, par exemple
@@ -269,23 +293,41 @@ s'arrête au mode : `liaison ouverte · repos`.
 - Ce bandeau ne dépend pas du clic. Un écran le lève dès qu'une de ses trois sources
   dit qu'un arrêt d'urgence est verrouillé : la réponse à son propre clic, les
   instantanés du WebSocket (verdict `quick_stop` verrouillé), ou `/api/status`
-  (`estop_latched`, ou verdict retenu `quick_stop` verrouillé). Il apparaît donc aussi
-  sur un écran qui n'a pas cliqué, après un arrêt posé par la caméra, et pour le
-  `quick_stop` verrouillé d'une règle de sécurité (`reverse_rotation` par exemple ; la
-  ligne `e-stop verrouille` dit alors `non`).
+  (`estop_latched`, `supervisor_estop`, ou verdict retenu `quick_stop` verrouillé). Il
+  apparaît donc aussi sur un écran qui n'a pas cliqué, après un arrêt posé par la
+  caméra, et pour le `quick_stop` verrouillé d'une règle de sécurité
+  (`reverse_rotation` par exemple ; la ligne `e-stop verrouille` dit alors `non`).
 - Il ne se baisse que sur une donnée plus récente qui montre le verdict levé ; dans le
   doute il reste, sur toutes les pages. Un verdict `go_silent` prend la place d'un arrêt
   d'urgence comme verdict retenu et refuse tout acquittement : un bandeau déjà affiché
   reste alors jusqu'au redémarrage de la console. Si le WebSocket tombe, il reste à
   côté de `NO LIVE DATA`.
-- Limite : un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict retenu
-  ne peut pas savoir qu'un arrêt posé par la caméra est verrouillé derrière lui, car
-  aucune réponse de la console ne le dit. Il affiche `go_silent`, sans ce bandeau.
+- Un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict retenu affiche
+  lui aussi le bandeau quand un arrêt d'urgence est verrouillé derrière : `/api/status`
+  porte `supervisor_estop`, l'arrêt d'urgence que le superviseur tient verrouillé, quel
+  qu'en soit l'auteur (bouton de la page, autre écran, caméra), et qui reste lisible
+  quand `go_silent` a pris la place du verdict retenu et du plancher. La ligne
+  `e-stop verrouille` dit alors `OUI` et la pastille **Etat** est rouge.
 - Ce que l'E-STOP web **n'est pas** : un arrêt de sécurité. Il dépend du navigateur,
   du réseau, du serveur web et du processus. Le STO est ponté sur cette machine : même
   l'arrêt d'urgence le plus rapide est une rampe (voir [securite.md](securite.md)).
   L'arrêt de sécurité est le coup de poing câblé.
-- Si la requête échoue : `la demande d'arret d'urgence a echoue : … - UTILISEZ L'ARRET CABLE`.
+- **Une demande restée sans réponse est dite.** Si la console est bloquée ou le réseau
+  muet, la requête reste en attente. Deux secondes après le premier clic resté sans
+  réponse, un bandeau rouge propre à ce cas s'affiche :
+  `ARRET D'URGENCE NON CONFIRME` suivi de
+  `aucune reponse de la console depuis N s - UTILISEZ L'ARRET CABLE`. Le compte court
+  depuis le premier clic sans réponse, pas depuis le dernier. La requête n'est jamais
+  retirée : si elle finit par passer, sa réponse baisse ce bandeau et lève
+  `ARRET D'URGENCE VERROUILLE`. Une image ou une réponse de statut, arrivée après le
+  clic, qui montre un arrêt verrouillé le baisse aussi ; sous `go_silent` il reste.
+  Rejoué dans un navigateur, console suspendue (processus arrêté par un signal, ses
+  connexions ouvertes) : bandeau affiché 2,07 s après le clic, puis remplacé par
+  `ARRET D'URGENCE VERROUILLE` moins de 0,1 s après la reprise de la console.
+- Si la requête échoue : le même bandeau dit tout de suite
+  `la demande a echoue : … - UTILISEZ L'ARRET CABLE` et reste affiché ; la boîte
+  d'alerte `la demande d'arret d'urgence a echoue : … - UTILISEZ L'ARRET CABLE`
+  s'ouvre comme avant.
 - Un E-STOP reste verrouillé jusqu'à un **acquittement nommé** (page Securite), avec la
   case « coup de poing déverrouillé » cochée.
 
@@ -339,6 +381,7 @@ Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occu
 | grand nombre central | le brouillon, en tr/min de sortie. En **orange** tant qu'il diffère de la cible appliquée |
 | `Appliquer` | envoie le brouillon : `POST /api/manual/target`. Rien n'est envoyé avant ce clic |
 | grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss`, `cible atteinte`, ou `consigne maintenue, cible non atteinte` quand un `freeze` tient la consigne à distance d'une cible non nulle) |
+| encadré orange `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE` | au-dessus de la cible, seulement avec une personne à bord : la fréquence cardiaque retient toute montée (voir plus bas) |
 
 Règles de la cible :
 
@@ -372,17 +415,56 @@ Règles de la cible :
   messages sont en section 13, la règle et ses mesures dans
   [securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178).
 - **Ce que la page montre dans ce cas.** Le refus et la remise à 0 arrivent comme
-  événements `refused` dans la liste **Evenements** de la page Seance, et nulle part
-  ailleurs. `cible appliquee` reste ou revient à `0.00`, le brouillon reste affiché en
-  orange, et `rampe` dit `cible atteinte`. La note sous la carte, elle, dit encore
-  `cible envoyee … la machine y va aux limites de mouvement` : elle est écrite dès que
-  la console a reçu la demande (202), avant que la boucle ne la juge. Rien n'indique non
-  plus, avant de taper, que la fréquence cardiaque retient une montée. Ces deux défauts
-  de la page sont connus (section 15).
+  événements `refused` : ils sont listés dans **Evenements** (page Seance) et écrits,
+  en rouge et mot pour mot, dans la note sous la carte (voir ci-dessous).
+  `cible appliquee` reste ou revient à `0.00`, le brouillon reste affiché en orange, et
+  `rampe` dit `cible atteinte`.
 
-Messages sous la carte : `accepte : manual_start bench (cible 0)`,
-`cible envoyee : 5.00 output rpm - la machine y va aux limites de mouvement`, ou l'erreur
-de la réponse HTTP. Un refus de la boucle n'y apparaît pas.
+**La note sous la carte dit ce que la boucle a fait de la cible.** `Appliquer` reçoit
+une réponse 202 dès que la boîte aux lettres a pris la cible ; la boucle la juge au
+cycle suivant. La note suit ce que la machine rapporte :
+
+| Note | Quand | Sens |
+|---|---|---|
+| `cible envoyee : 5.10 output rpm - pas encore prise par la machine` | à la réponse 202 | la console a reçu la demande ; la boucle n'a rien dit encore |
+| `cible prise par la machine : 5.10 output rpm (suivie aux limites de mouvement)` | à la première image prise après la demande dont la `cible appliquee` est la cible envoyée (au tr/min moteur près) | la machine tient cette cible. La note est effacée dès que la machine ne la tient plus (STOP, verdict, cible d'un autre écran) |
+| `refus de la machine (<heure>) : <message>` (rouge) | à l'événement `refused` de la boucle | la cible a été refusée, ou remise à 0 : le message est celui de la section 13. Avec une séance manuelle à l'écran, un écran qui n'a pas cliqué l'affiche aussi |
+| `cible NON prise par la machine : la cible appliquee est <x> tr/min de sortie. La raison n'est pas arrivee a cet ecran.` (rouge) | une seconde de l'horloge de la machine après la demande, sans refus reçu ni cible appliquée | la cible n'a pas été prise et l'événement s'est perdu (un WebSocket qui se reconnecte perd ses événements) |
+| `cible NON prise par la machine : la seance manuelle est terminee.` (rouge) | même délai, la séance étant finie | la séance s'est terminée avant que la cible soit prise |
+
+Un refus arrivé avant la réponse 202 n'est pas écrasé par elle. Rejoué dans un
+navigateur sur la console en simulation : après le clic, `cible envoyee …` à 49 ms,
+puis `cible prise par la machine …` à 231 ms ; pour une cible refusée, `cible
+envoyee …` à 67 ms puis `refus de la machine …` à 152 ms.
+
+**L'encadré `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE`.** Avec une personne à bord, la
+fréquence cardiaque retient toute montée de la consigne sans qu'aucun verdict ne
+tienne. L'encadré le dit **avant** qu'une cible soit tapée, avec la raison :
+
+| Texte | Raison |
+|---|---|
+| `pas de frequence cardiaque utilisable` | aucune lecture fiable depuis plus de 4 s |
+| `tendance de la frequence cardiaque pas encore connue` | moins de 5 lectures depuis le début de l'ECG, ou depuis un saut confirmé |
+| `la frequence cardiaque baisse trop vite` | baisse de plus de 20 bpm/min sur 5 lectures (garde vasovagale) |
+
+Il est suivi de ce que cela implique :
+`Bras a l'arret : une cible non nulle est refusee. Bras en rotation : la vitesse ne monte pas, puis remonte seule vers la cible quand la retenue cesse.`
+La page ne recalcule pas cette garde : la console la donne elle-même dans `/api/panel`
+(`manual_rise_hold`), par le test que la boucle applique, lu une fois par seconde.
+L'encadré peut donc avoir jusqu'à une seconde de retard sur la boucle : une cible
+envoyée dans cet intervalle est refusée, et la note en donne la raison. Il n'est
+affiché qu'en mode `MANUEL`. Si `/api/panel` ne répond plus depuis 3,5 s alors qu'une
+personne est à bord, il dit `RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE` au lieu de
+s'éteindre : éteint, il veut dire que rien ne retient. Avec une capsule vide il
+n'apparaît jamais. Rejoué dans un navigateur, personne à bord déclarée par l'API :
+4,4 s après la perte de l'ECG, l'encadré dit `pas de frequence cardiaque utilisable`,
+avant tout verdict ; une cible envoyée alors est refusée pour cette raison. Sur la
+fréquence cardiaque simulée, la raison `baisse trop vite` s'allume et s'éteint d'une
+seconde à l'autre : la garde est sensible ([securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178)).
+
+Autres messages sous la carte : `accepte : manual_start bench (cible 0)`, ou l'erreur
+de la réponse HTTP. Le refus d'un **démarrage** manuel par la boucle n'y apparaît pas :
+la note dit encore `accepte : …`, et le refus est dans la liste **Evenements**.
 
 ### Carte « Frequence cardiaque (regulation) »
 
@@ -391,7 +473,9 @@ Capteurs n'est que de la surveillance). Grand nombre en bpm, pastille de qualit�
 (`good`, `noisy`, `mains_dominated`, `no_signal`, `perime`, ou `pas de signal`), et :
 `age` (en s, barré si périmé), `brut` (dernière valeur), `seq` (numéro de la mesure).
 Une fréquence périmée (plus de 4 s) est barrée, et sa pastille passe à `perime`
-(grise) : la dernière note reçue ne dit plus rien du signal.
+(orange) : la dernière note reçue ne dit plus rien du signal. La pastille est colorée
+dès la péremption, sans attendre le premier verdict sur la fréquence cardiaque
+(`hr_stale`, à 10 s).
 
 ### Carte « Vitesse mesuree »
 
@@ -470,8 +554,8 @@ moteur.
 
 Pastille du titre : `N / M bon signal`, `aucun canal` ou `hors ligne`. Une carte par
 capteur : nom, pastille de qualité (`bon signal`, `bruite`, `parasite secteur`,
-`pas de signal`, ou `perime`), une mini-courbe, le canal, l'unité, la cadence affichée, et
-jusqu'à quatre mesures. Cliquer une carte ouvre la page du capteur.
+`pas de signal`, ou `perime` en orange), une mini-courbe, le canal, l'unité, la cadence
+affichée, et jusqu'à quatre mesures. Cliquer une carte ouvre la page du capteur.
 
 Si aucun canal n'est acquis :
 `Aucun canal BITalino supplementaire n'est acquis par cette console (variable SENSORS).`
@@ -582,9 +666,12 @@ zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
 Types d'événements : `start_requested`, `fault_reset_requested`, `end_requested`,
 `emergency_stop`, `acknowledged`, `attested`, `session_running`, `session_idle`,
 `refused`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
-l'arrêt, reset refusé, démarrage refusé) arrivent **uniquement** comme événements
-`refused` : la route HTTP a déjà répondu 202. Une cible manuelle que la machine a
-remise à 0 arrive de la même façon, sans nom d'opérateur : personne ne l'a demandé.
+l'arrêt, reset refusé, démarrage refusé) arrivent comme événements `refused` : la
+route HTTP a déjà répondu 202. Une cible manuelle que la machine a remise à 0 arrive de
+la même façon, sans nom d'opérateur : personne ne l'a demandé. Les refus qui touchent
+une cible manuelle sont aussi écrits dans la note de la carte Mode MANUEL
+(section 6) ; un démarrage ou un reset refusé par la boucle n'apparaît que dans cette
+liste.
 
 ---
 
@@ -646,6 +733,30 @@ sont en français, et celle d'un défaut variateur reprend le libellé français
 défaut) :
 `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking`.
 Elle n'est affichée que sur les pages Seance et Securite.
+
+**Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`.** La page le dit en français, sur toutes
+les pages, dans un bandeau orange en haut, tant que c'est vrai :
+`REPRISE AUTOMATIQUE POSSIBLE` suivi de
+`l'avertissement <règle> tient la vitesse et n'est pas verrouille : il se leve seul, et la vitesse remonte alors sans aucun clic`
+(`baisse la vitesse` pour un `reduce`). Il est affiché quand, à la fois :
+
+- un `freeze` ou un `reduce` est en cours et n'est pas verrouillé ;
+- le mode est `SEANCE` ou `MANUEL` (pas `ARRET` ni `REPOS`) ;
+- la phase est `baseline`, `warmup` ou `hold` ;
+- en mode `MANUEL`, la cible appliquée est au-dessus de la consigne.
+
+Sur un bras manuel tenu à l'arrêt, la cible vaut 0 (section 6) : rien ne remontera, et
+le bandeau n'est pas affiché. Il ne l'est jamais derrière un verdict verrouillé, un
+arrêt, ni une séance qui se termine. Rejoué dans un navigateur, séance manuelle avec
+une personne à bord déclarée par l'API, bras en montée vers 12 tr/min, ECG coupé :
+bandeau `… hr_stale tient la vitesse …` à 10,1 s, `… baisse la vitesse …` à 30,2 s,
+bandeau disparu à 40,2 s, quand la baisse a ramené la consigne à 0 ; la séance s'est
+terminée au cycle suivant (`session_standstill`).
+
+Limite connue : sur un bras manuel tenu à l'arrêt par un avertissement non verrouillé,
+la phrase anglaise `NOT LATCHED …` figure encore dans le détail du verdict, alors que
+plus rien ne peut remonter. Le bandeau, lui, n'y est pas affiché. La phrase est
+ajoutée par le superviseur, qui ne connaît pas la cible manuelle.
 
 **Un bras arrêté en cours de séance ne repart jamais seul : `session_standstill`.**
 Une fois que le bras a tourné dans une séance, une consigne qui revient à 0 sans que
@@ -809,8 +920,9 @@ Rejoué en simulation, dans cet ordre :
 ## 13. Messages d'erreur typiques
 
 Les réponses HTTP (codes 4xx) s'affichent sous le bouton concerné. Les refus de la boucle
-arrivent comme événements `refused` dans la liste **Evenements** (page Seance), et
-seulement là : la note sous la carte MANUEL garde le texte de la réponse HTTP.
+arrivent comme événements `refused` dans la liste **Evenements** (page Seance). Ceux qui
+touchent une cible manuelle sont aussi écrits dans la note sous la carte Mode MANUEL,
+précédés de `refus de la machine (<heure>) :` (section 6).
 
 ### Refus immédiats (réponse HTTP)
 
@@ -883,9 +995,12 @@ le message, puis retaper la cible.
 | `cible de <n> tr/min moteur remise a 0 : le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison, puis redonner la cible` | le variateur n'a pas confirmé le premier pas (capsule vide comprise). Le pas est demandé une seule fois. Si la trame est arrivée et que seule sa réponse s'est perdue, le variateur l'a gardée un cycle, jusqu'au zéro suivant : lire la vitesse mesurée, vérifier le câble, retaper la cible |
 
 Ces messages sont vérifiés par les tests automatiques de la console en simulation
-(`raspberry-pi/tests/test_manual_target_held_console.py`), pas rejoués dans un
-navigateur. Les trois raisons de fréquence cardiaque ne concernent qu'une séance
-manuelle « personne à bord », que la page ne propose pas (section 6).
+(`raspberry-pi/tests/test_manual_target_held_console.py`). Trois ont été rejoués dans
+un navigateur le 7 octobre 2026, lus dans la note de la carte : le refus sous le
+verdict `hr_stale` non verrouillé, et les refus `pas de frequence cardiaque
+utilisable` et `la frequence cardiaque baisse trop vite`. Les trois raisons de
+fréquence cardiaque ne concernent qu'une séance manuelle « personne à bord », que la
+page ne propose pas (section 6).
 
 Reset défaut variateur (`describe_reset_refusal`) :
 
@@ -940,10 +1055,10 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/api/status` | tout ce que la mise en route demande : `run_state`, `estop_latched`, `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
+| GET | `/api/status` | tout ce que la mise en route demande : `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
 | GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
-| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `radius_m`, `gear_ratio`, `motor_max_rpm` ; `null` sans console | 200 |
+| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm` ; `null` sans console | 200 |
 | GET | `/api/camera` | `configured`, `camera`, `state`, `detail`, `latched_rule` | 200 |
 | GET | `/api/sensors` | chaque canal acquis : fenêtre, qualité, mesures (surveillance seulement) | 200 |
 
@@ -1005,22 +1120,31 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
   et le bandeau « LECTURE SEULE » de la page existent encore, mais ni l'un ni l'autre ne
   sont atteignables avec `src.local_panel`, qui construit la console avec
   `motion_enabled=True`.
-- Après `Appliquer`, la note de la carte MANUEL dit `cible envoyee … la machine y va aux
-  limites de mouvement` dès la réponse 202, même quand la boucle refuse ensuite la cible
-  ou la remet à 0 (section 6). Le refus n'apparaît que dans la liste **Evenements** de la
-  page Seance, et la remise à 0 n'a pas d'autre signal qu'une ligne d'événement et la
-  `cible appliquee` revenue à `0.00`.
-- Rien n'indique, avant de taper une cible, que la fréquence cardiaque retient une
-  montée (séance manuelle « personne à bord »). La revue indépendante d'ANH-178
-  recommande un indicateur visible.
-- La phrase ajoutée aux avertissements non verrouillés (section 11) est en anglais et
-  n'apparaît que sur les pages Seance et Securite. Aucun bandeau ne dit en permanence, en
-  français, qu'une vitesse maintenue ou baissée peut remonter seule.
+- Après un démarrage manuel, un démarrage de programme ou un reset de défaut, la note
+  du bouton dit `accepte : …` ou `reset demande : …` dès la réponse 202, même quand la
+  boucle refuse ensuite la demande : ce refus n'apparaît que dans la liste
+  **Evenements** de la page Seance. Pour une cible manuelle, la note suit maintenant la
+  réponse de la boucle (section 6).
+- La phrase anglaise ajoutée aux avertissements non verrouillés (section 11) figure
+  encore dans le détail du verdict d'un bras manuel tenu à l'arrêt, où plus rien ne
+  peut remonter. Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`, lui, suit la cible.
 - Un acquittement de `session_standstill` (ou de `session_overrun`) donné avant le
   retour du mode à `REPOS` répond 200 puis est repris, sans que la page dise quand il
   tiendra (section 11).
-- Ces quatre points relèvent de la page et sont l'objet du ticket
-  [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178).
+- Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas limites : après un
+  redémarrage de la console suivi de `go_silent`, un bandeau affiché avant le
+  redémarrage reste jusqu'au rechargement de la page ; après un acquittement très
+  rapide, une réponse de statut tardive peut le faire revenir 5 s au plus ; l'ordre de
+  deux réponses de statut est jugé à l'envoi des demandes, pas à leur traitement.
+- La note `nothing is latched to acknowledge` reste sous le bouton Acquitter après un
+  nouveau verrou ; l'onglet de la page d'un capteur porte le type seul (`RESP -
+  AnHeart`) alors que la page titre `RESP · Respiration` ; la hauteur du pied de page
+  déclarée dans la feuille de style est plus petite que sa hauteur réelle.
+- Ces points relèvent de la page. Ils viennent du ticket
+  [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178),
+  qui a traité la note de la cible manuelle, l'encadré de la fréquence cardiaque, la
+  demande E-STOP sans réponse, le verrou d'arrêt d'urgence dans `/api/status`, le
+  bandeau de reprise automatique, les pastilles barrées et `perime` en orange.
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
   tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).

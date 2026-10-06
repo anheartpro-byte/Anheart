@@ -109,7 +109,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle. Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
-| `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino). | Porte 100 %. |
+| `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
 | `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
@@ -298,6 +298,13 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   se stabilise ne mettent donc le bras en mouvement. Une cible de 0 est
   toujours acceptée. Décisions du 6 octobre 2026, mesures et coûts dans
   [securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178).
+
+  La page affiche ces trois raisons avant qu'une cible soit tapée.
+  `TrainingRuntime.manual_rise_hold()` rend la réponse de la garde
+  (`_heart_rate_hold`) à l'instant de l'appel, comme le fait le refus : `None`
+  hors séance manuelle en cours, et toujours avec une capsule vide. La console
+  la publie dans `/api/panel` (`manual_rise_hold`). La garde n'est énoncée
+  qu'à cet endroit : la page ne la recalcule pas.
 * **Rien ne change pour un bras qui tourne.** Une cible tapée pendant qu'un
   FREEZE, un REDUCE, la garde de la FC (pas de FC utilisable, tendance inconnue
   ou en baisse rapide) ou un variateur qui ne confirme pas retiennent la
