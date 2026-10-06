@@ -1,11 +1,21 @@
 import { convexTest } from "convex-test";
+import { internal } from "./_generated/api";
 import schema from "./schema";
 
 export const now = 1_800_000_000_000;
 
+/**
+ * A deployment as it was before organisations existed: no row carries an
+ * organisation, no token carries an organisation claim, and Clerk
+ * Organizations is not configured (`ANHEART_ORG_ID` unset). The
+ * multi-organisation migration (ANH-114) then runs once, as an operator would
+ * run it, so these suites prove that the single-organisation behaviour they
+ * describe is unchanged after it.
+ */
 export async function trainingFixture(
   modules: Record<string, () => Promise<unknown>>,
 ) {
+  delete process.env.ANHEART_ORG_ID;
   const t = convexTest(schema, modules);
   const ids = await t.run(async (ctx) => {
     const users = await Promise.all(
@@ -120,5 +130,6 @@ export async function trainingFixture(
       live,
     };
   });
+  await t.mutation(internal.migrations.multiOrganization.attachExistingRowsToAnheart, {});
   return { t, ...ids };
 }

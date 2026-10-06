@@ -5,6 +5,10 @@
  * the cell's actor, and asserts the behaviour (effect or returned data), not
  * the implementation. Cells marked as a known harmless defect run with
  * `it.fails`, asserting the intended policy so they flip the day it is fixed.
+ *
+ * ANH-114: the world holds three organisations and every actor carries the
+ * organisation claims of a Clerk token, so each cell also proves that its
+ * function answers inside the caller's organisation only.
  */
 import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
@@ -98,7 +102,7 @@ describe("matrix identities", () => {
     ).toThrow(/anonymous/);
   });
 
-  it.each(["subject", "issuer", "tokenIdentifier"])(
+  it.each(["subject", "issuer", "tokenIdentifier", "org_id", "org_role"])(
     "refuses a claim that replaces the actor's %s",
     async (claim) => {
       const w = await seedWorld(modules);
@@ -224,6 +228,7 @@ describe("users.linkPatientToClerk verified-address rule", () => {
       ctx.db.insert("users", {
         clerkId: record.clerkId,
         role: "user" as const,
+        organizationId: w.orgA,
         firstName: "Pre",
         lastName: "Created",
         email: record.email,

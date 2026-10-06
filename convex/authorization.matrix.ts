@@ -10,10 +10,13 @@
  * derived from `docs/convex.md` section 3 and the helpers in
  * `convex/lib/auth.ts`, not from whatever each function happens to do.
  *
- * Roles that exist today: "admin", "gestionnaire", "user", plus the anonymous
- * caller. There is no organisation dimension yet (ANH-114). The named actors
- * below carry both role and relationship so an organisation column can be added
- * later as more named actors without rewriting the table.
+ * Roles: "admin" (admin of the Anheart organisation, every organisation),
+ * "org_admin" (admin of one client organisation), "gestionnaire", "user", plus
+ * the anonymous caller. The named actors carry organisation, role and
+ * relationship (ANH-114): the world holds Anheart and two client centres, A and
+ * B. Every entry has at least one cell where an actor of centre B aims at a
+ * resource of centre A by direct identifier (scope "foreign") or lists from
+ * centre B; `completeness.test.ts` fails if an entry has none.
  *
  * Error codes: the code has NO stable numeric/string error codes. Training
  * functions throw `ConvexError(message)`; users/machines/sessions/ecg throw
@@ -28,12 +31,19 @@ import type { Id } from "./_generated/dataModel";
 import {
   addSession,
   NOW,
+  ROLE_OF,
   type Actor,
   type Claims,
   type World,
 } from "./test.setup";
 
-export type Scope = "self" | "own" | "other" | "none";
+/**
+ * - "self": the caller's own account or data.
+ * - "own": a resource the caller is linked to, in their organisation.
+ * - "other": a resource of the SAME organisation the caller is not linked to.
+ * - "foreign": a resource of ANOTHER organisation, named by its identifier.
+ */
+export type Scope = "self" | "own" | "other" | "foreign" | "none";
 
 export type Expectation =
   | { outcome: "refuse"; message?: RegExp }
@@ -103,15 +113,33 @@ const UNAUTHORIZED = /Unauthorized/;
 function userId(w: World, actor: Actor): Id<"users"> {
   const map: Partial<Record<Actor, Id<"users">>> = {
     admin: w.admin,
+    orgAdmin: w.orgAdmin,
     manager: w.manager,
     otherManager: w.otherManager,
     patient: w.patient,
     otherPatient: w.otherPatient,
     stranger: w.stranger,
+    orgBAdmin: w.orgBAdmin,
+    orgBManager: w.orgBManager,
+    orgBPatient: w.orgBPatient,
   };
   const id = map[actor];
   if (!id) throw new Error(`No user id for actor ${actor}`);
   return id;
+}
+
+/** The organisation an actor belongs to. */
+function organizationOf(w: World, actor: Actor): Id<"organizations"> {
+  if (actor === "admin") return w.anheartOrg;
+  return actor.startsWith("orgB") ? w.orgB : w.orgA;
+}
+
+/** Fail unless `seen` holds exactly `expected`, in any order. */
+function expectExactly(seen: string[], expected: unknown[], what: string) {
+  const want = expected.map(String).sort();
+  const got = [...seen].sort();
+  if (got.length !== want.length || got.some((id, i) => id !== want[i]))
+    throw new Error(`${what}: expected ${want.length} rows, got ${got.length}`);
 }
 
 function asArray(res: unknown): unknown[] {
@@ -122,6 +150,26 @@ function asArray(res: unknown): unknown[] {
 function ids(res: unknown): string[] {
   return asArray(res).map((row) => String((row as { _id: unknown })._id));
 }
+
+/** The riders named by a list of sessions (each actor's name is unique). */
+function riders(res: unknown): string[] {
+  return asArray(res).map((row) =>
+    String((row as { patientName: unknown }).patientName),
+  );
+}
+
+/**
+ * With one completed session per machine (`machine` for `patient`,
+ * `otherMachine` for `otherPatient`, `orgBMachine` for `orgBPatient`), the
+ * riders each actor is listed.
+ */
+const SESSION_RIDERS_SEEN_BY: Partial<Record<Actor, string[]>> = {
+  manager: ["patient Synthetic"],
+  patient: ["patient Synthetic"],
+  orgAdmin: ["patient Synthetic", "otherPatient Synthetic"],
+  orgBAdmin: ["orgBPatient Synthetic"],
+  orgBManager: ["orgBPatient Synthetic"],
+};
 
 async function recentEcgBatch(w: World, sessionId: Id<"sessions">) {
   await w.t.run((ctx) =>
@@ -153,6 +201,8 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "returns the existing row" },
       { actor: "manager", expect: ok, note: "returns the existing row" },
       { actor: "patient", expect: ok, note: "returns the existing row" },
+      { actor: "orgAdmin", expect: ok, note: "returns the existing row" },
+      { actor: "orgBManager", expect: ok, note: "returns their own row, in their own organisation" },
     ],
   },
   {
@@ -161,8 +211,17 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async () => ({}),
     onSuccess: (res, w, actor) => {
-      if (String((res as { _id: Id<"users"> })._id) !== String(userId(w, actor)))
+      const me = res as {
+        _id: Id<"users">;
+        role: string;
+        organization: { _id: Id<"organizations"> } | null;
+      };
+      if (String(me._id) !== String(userId(w, actor)))
         throw new Error("Did not return the caller");
+      if (me.role !== ROLE_OF[actor])
+        throw new Error("Role is not the one of the call");
+      if (String(me.organization?._id) !== String(organizationOf(w, actor)))
+        throw new Error("Organisation is not the one of the call");
     },
     cases: [
       {
@@ -173,22 +232,38 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "own account" },
       { actor: "manager", expect: ok, note: "own account" },
       { actor: "patient", expect: ok, note: "own account" },
+      { actor: "orgAdmin", expect: ok, note: "own account, as admin of centre A only" },
+      { actor: "orgBManager", expect: ok, note: "own account, in centre B" },
     ],
   },
   {
     id: "users.updateUserRole",
     ref: api.users.updateUserRole,
     kind: "mutation",
+    // Once Clerk Organizations carries the roles (the world of this matrix),
+    // a role is a read-only mirror: nobody changes it here. The transition
+    // before that is covered by `organizations.test.ts`.
     build: async (w) => ({ userId: w.stranger, role: "gestionnaire" }),
-    onSuccess: async (_res, w) => {
-      const row = await w.t.run((ctx) => ctx.db.get(w.stranger));
-      if (row?.role !== "gestionnaire") throw new Error("Role not changed");
-    },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
-      { actor: "admin", expect: ok, note: "admin promotes a user" },
+      {
+        actor: "admin",
+        expect: refuse(/Roles are managed in Clerk Organizations/),
+        note: "roles are a read-only mirror of Clerk",
+      },
+      {
+        actor: "orgAdmin",
+        expect: refuse(UNAUTHORIZED),
+        note: "an organisation admin is not the Anheart admin",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "an organisation admin is not the Anheart admin",
+      },
     ],
   },
   {
@@ -206,35 +281,60 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "edits own profile" },
       { actor: "manager", expect: ok, note: "edits own profile" },
       { actor: "patient", expect: ok, note: "edits own profile" },
+      { actor: "orgBManager", expect: ok, note: "edits own profile" },
     ],
   },
   {
     id: "users.listUsers",
     ref: api.users.listUsers,
     kind: "query",
-    build: async () => ({}),
+    // By direct identifier: a gestionnaire of another organisation as the filter.
+    build: async (w, _actor, scope) =>
+      scope === "foreign" ? { gestionnaireId: w.manager } : {},
     onSuccess: (res, w) => {
-      if (!ids(res).includes(String(w.otherPatient)))
-        throw new Error("Admin should see every account");
+      const seen = ids(res);
+      if (
+        !seen.includes(String(w.otherPatient)) ||
+        !seen.includes(String(w.orgBPatient))
+      )
+        throw new Error("Admin should see every account, in every organisation");
     },
     onFiltered: (res, w, actor) => {
       const seen = ids(res);
-      if (actor === "manager") {
-        if (!seen.includes(String(w.patient)))
-          throw new Error("Manager must see their patient");
-        if (seen.includes(String(w.otherPatient)) || seen.includes(String(w.stranger)))
-          throw new Error("Manager must not see unrelated users");
-      } else {
-        // user: only themselves
-        if (seen.length !== 1 || seen[0] !== String(userId(w, actor)))
-          throw new Error("A user must see only themselves");
-      }
+      const expected: Partial<Record<Actor, Id<"users">[]>> = {
+        manager: [w.patient],
+        orgBManager: [w.orgBPatient],
+        orgAdmin: [
+          w.orgAdmin,
+          w.manager,
+          w.otherManager,
+          w.patient,
+          w.otherPatient,
+          w.stranger,
+        ],
+        orgBAdmin: [w.orgBAdmin, w.orgBManager, w.orgBPatient],
+      };
+      // user: only themselves
+      expectExactly(
+        seen,
+        expected[actor] ?? [userId(w, actor)],
+        `Accounts listed to ${actor}`,
+      );
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "every account" },
       { actor: "manager", expect: filtered, note: "only their patients" },
       { actor: "patient", expect: filtered, scope: "self", note: "only self" },
+      { actor: "orgAdmin", expect: filtered, note: "the members of centre A, nobody else" },
+      { actor: "orgBAdmin", expect: filtered, note: "the members of centre B, nobody of centre A" },
+      { actor: "orgBManager", expect: filtered, note: "only their patient of centre B" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] when filtering on a gestionnaire of another organisation",
+      },
     ],
   },
   {
@@ -246,15 +346,33 @@ export const MATRIX: Entry[] = [
       lastName: "Patient",
       email: `np-${actor}@example.invalid`,
     }),
-    onSuccess: async (res, w) => {
-      const row = await w.t.run((ctx) => ctx.db.get(res as Id<"users">));
+    onSuccess: async (res, w, actor) => {
+      const created = res as Id<"users">;
+      const { row, memberships } = await w.t.run(async (ctx) => ({
+        row: await ctx.db.get(created),
+        memberships: await ctx.db
+          .query("memberships")
+          .withIndex("by_user", (q) => q.eq("userId", created))
+          .collect(),
+      }));
       if (row?.role !== "user") throw new Error("Did not create a patient");
+      const organizationId = organizationOf(w, actor);
+      if (
+        row.organizationId !== organizationId ||
+        memberships.length !== 1 ||
+        memberships[0].organizationId !== organizationId ||
+        memberships[0].role !== "user" ||
+        !memberships[0].active
+      )
+        throw new Error("Patient not created in the caller's organisation");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot create patients" },
       { actor: "manager", expect: ok, note: "manager creates and self-links" },
       { actor: "admin", expect: ok, note: "admin creates" },
+      { actor: "orgAdmin", expect: ok, note: "creates in centre A" },
+      { actor: "orgBManager", expect: ok, note: "creates in centre B, never elsewhere" },
     ],
   },
   {
@@ -277,6 +395,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this patient",
       },
       { actor: "admin", expect: ok, note: "admin edits anyone" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the patient's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to edit this patient/),
+        note: "a patient of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to edit this patient/),
+        note: "a patient of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -308,6 +439,19 @@ export const MATRIX: Entry[] = [
         note: "null for a patient they do not manage",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin reads anyone" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a patient of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a patient of another organisation",
+      },
     ],
   },
   {
@@ -337,6 +481,19 @@ export const MATRIX: Entry[] = [
         note: "not this patient's manager",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin deletes a user" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "removes a patient of their organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to delete this user/),
+        note: "a patient of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to delete this user/),
+        note: "a patient of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -352,6 +509,7 @@ export const MATRIX: Entry[] = [
         ctx.db.insert("users", {
           clerkId: "",
           role: "user" as const,
+          organizationId: w.orgA,
           firstName: "Pre",
           lastName: "Created",
           email: "link-target@example.invalid",
@@ -363,10 +521,11 @@ export const MATRIX: Entry[] = [
     },
     claims: (_w, actor, scope) => {
       if (actor === "anonymous") return null;
-      // self: the caller's verified address is the record's; other: it is not.
+      // self: the caller's verified address is the record's; other: it is not;
+      // foreign: it is, but the record is another organisation's.
       return {
         email:
-          scope === "self"
+          scope === "self" || scope === "foreign"
             ? "link-target@example.invalid"
             : "link-other@example.invalid",
         emailVerified: true,
@@ -390,6 +549,12 @@ export const MATRIX: Entry[] = [
         scope: "other",
         expect: empty,
         note: "null when the caller's verified email is not the record's, as when no record exists",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a record of another organisation, even with its verified address",
       },
     ],
   },
@@ -419,7 +584,7 @@ export const MATRIX: Entry[] = [
         actor: "manager",
         scope: "self",
         expect: ok,
-        note: "a gestionnaire may attach themselves (cross-patient isolation is ANH-114)",
+        note: "a gestionnaire may attach themselves to a patient of their organisation",
       },
       {
         actor: "otherManager",
@@ -428,6 +593,19 @@ export const MATRIX: Entry[] = [
         note: "a gestionnaire cannot assign another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation assigns" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Can only assign gestionnaires to patients/),
+        note: "the patient is not one of their organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Can only assign gestionnaires to patients/),
+        note: "the patient is not one of their organisation",
+      },
     ],
   },
   {
@@ -467,6 +645,19 @@ export const MATRIX: Entry[] = [
         note: "cannot remove another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation removes" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/is not assigned to this patient/),
+        note: "a link of another organisation does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/can only remove themselves/),
+        note: "cannot remove another gestionnaire, here of another organisation",
+      },
     ],
   },
   {
@@ -486,6 +677,19 @@ export const MATRIX: Entry[] = [
       { actor: "stranger", scope: "other", expect: empty, note: "[] for an unrelated patient" },
       { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       { actor: "admin", scope: "other", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a patient of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a patient of another organisation",
+      },
     ],
   },
   {
@@ -494,15 +698,27 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async () => ({}),
     onSuccess: (res, w) => {
-      const seen = ids(res);
-      if (!seen.includes(String(w.manager)) || !seen.includes(String(w.otherManager)))
-        throw new Error("Admin should see every gestionnaire");
+      expectExactly(
+        ids(res),
+        [w.manager, w.otherManager, w.orgBManager],
+        "Gestionnaires listed to the Anheart admin",
+      );
+    },
+    onFiltered: (res, w, actor) => {
+      expectExactly(
+        ids(res),
+        actor === "orgAdmin" ? [w.manager, w.otherManager] : [w.orgBManager],
+        `Gestionnaires listed to ${actor}`,
+      );
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a non-admin" },
       { actor: "manager", expect: empty, note: "[] for a non-admin" },
       { actor: "admin", expect: ok, note: "all gestionnaires" },
+      { actor: "orgAdmin", expect: filtered, note: "the gestionnaires of centre A only" },
+      { actor: "orgBAdmin", expect: filtered, note: "the gestionnaires of centre B only" },
+      { actor: "orgBManager", expect: empty, note: "[] for a non-admin" },
     ],
   },
   {
@@ -526,6 +742,14 @@ export const MATRIX: Entry[] = [
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin replaces the list" },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation replaces the list" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Target user is not a gestionnaire/),
+        note: "the gestionnaire is not one of their organisation",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
     ],
   },
   {
@@ -550,6 +774,19 @@ export const MATRIX: Entry[] = [
         note: "[] when asking for another gestionnaire's patients",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin reads any gestionnaire" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the gestionnaire's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a gestionnaire of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a gestionnaire of another organisation",
+      },
     ],
   },
 
@@ -566,12 +803,24 @@ export const MATRIX: Entry[] = [
       if (!r.apiKey.startsWith("anh1.")) throw new Error("No one-time key issued");
       const m = await w.t.run((ctx) => ctx.db.get(r.machineId));
       if (m?.status !== "offline") throw new Error("New machine should be offline");
+      if (m.organizationId !== w.anheartOrg)
+        throw new Error("New machine should belong to the admin's organisation");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin creates" },
+      {
+        actor: "orgAdmin",
+        expect: refuse(UNAUTHORIZED),
+        note: "machines are created by the Anheart admin only",
+      },
+      {
+        actor: "orgBAdmin",
+        expect: refuse(UNAUTHORIZED),
+        note: "machines are created by the Anheart admin only",
+      },
     ],
   },
   {
@@ -598,6 +847,14 @@ export const MATRIX: Entry[] = [
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin assigns" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation assigns" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Machine not found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
     ],
   },
   {
@@ -665,6 +922,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin regenerates" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -683,6 +953,19 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
     ],
   },
   {
@@ -691,16 +974,21 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async () => ({}),
     onSuccess: (res, w) => {
-      const seen = ids(res);
-      if (!seen.includes(String(w.machine)) || !seen.includes(String(w.otherMachine)))
-        throw new Error("Admin should see every machine");
+      expectExactly(
+        ids(res),
+        [w.machine, w.otherMachine, w.orgBMachine],
+        "Machines listed to the Anheart admin",
+      );
     },
     onFiltered: (res, w, actor) => {
-      const seen = ids(res);
-      const mine = actor === "manager" ? w.machine : w.otherMachine;
-      const theirs = actor === "manager" ? w.otherMachine : w.machine;
-      if (!seen.includes(String(mine)) || seen.includes(String(theirs)))
-        throw new Error("A gestionnaire should see only their machines");
+      const expected: Partial<Record<Actor, Id<"machines">[]>> = {
+        manager: [w.machine],
+        otherManager: [w.otherMachine],
+        orgAdmin: [w.machine, w.otherMachine],
+        orgBAdmin: [w.orgBMachine],
+        orgBManager: [w.orgBMachine],
+      };
+      expectExactly(ids(res), expected[actor] ?? [], `Machines listed to ${actor}`);
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -708,6 +996,9 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: filtered, note: "only their machines" },
       { actor: "otherManager", scope: "own", expect: filtered, note: "only their machines" },
       { actor: "admin", expect: ok, note: "every machine" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the machines of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the machines of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "only their machine of centre B" },
     ],
   },
   {
@@ -734,6 +1025,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin updates" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -760,6 +1064,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin deletes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -786,6 +1103,13 @@ export const MATRIX: Entry[] = [
         note: "restore is admin-only, even for the machine's manager",
       },
       { actor: "admin", expect: ok, note: "admin restores" },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "restore is reserved to the Anheart admin" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "restore is reserved to the Anheart admin",
+      },
     ],
   },
   {
@@ -810,6 +1134,19 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
     ],
   },
   {
@@ -839,6 +1176,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -852,6 +1202,7 @@ export const MATRIX: Entry[] = [
       if (actor !== "otherManager")
         await w.t.run((ctx) =>
           ctx.db.insert("machine_gestionnaires", {
+            organizationId: w.orgA,
             machineId: w.machine,
             gestionnaireId: w.otherManager,
             isOwner: false,
@@ -886,6 +1237,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine (removing the owner)",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to manage this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -903,6 +1267,19 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
     ],
   },
   {
@@ -926,6 +1303,19 @@ export const MATRIX: Entry[] = [
         note: "[] when asking for another gestionnaire's machines",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin reads any gestionnaire" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the gestionnaire's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a gestionnaire of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a gestionnaire of another organisation",
+      },
     ],
   },
 
@@ -959,6 +1349,25 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
     ],
   },
   {
@@ -978,6 +1387,14 @@ export const MATRIX: Entry[] = [
         status: "completed",
         kind: "auto",
       });
+      await addSession(w, {
+        machineId: w.orgBMachine,
+        userId: w.orgBPatient,
+        status: "completed",
+        kind: "auto",
+      });
+      // By direct identifier: a machine of another organisation as the filter.
+      if (scope === "foreign") return { machineId: w.machine };
       if (scope === "other") {
         // Three newer sessions for another rider push the caller's own out of a
         // small page: limit is applied BEFORE access filtering (docs section 5).
@@ -993,19 +1410,21 @@ export const MATRIX: Entry[] = [
       return {};
     },
     onSuccess: (res) => {
-      if (asArray(res).length < 2) throw new Error("Admin should see all sessions");
+      if (asArray(res).length !== 3)
+        throw new Error("Admin should see all sessions, in every organisation");
     },
     onFiltered: (res, _w, actor, scope) => {
-      const n = asArray(res).length;
       if (scope === "other") {
         // Intended policy: the caller still sees their own session.
-        if (n !== 1) throw new Error("Caller should still see their own session");
+        if (asArray(res).length !== 1)
+          throw new Error("Caller should still see their own session");
         return;
       }
-      if (actor === "manager" && n !== 1)
-        throw new Error("Manager should see only their machine's session");
-      if (actor === "patient" && n !== 1)
-        throw new Error("A user should see only their own session");
+      expectExactly(
+        riders(res),
+        SESSION_RIDERS_SEEN_BY[actor] ?? [],
+        `Sessions listed to ${actor}`,
+      );
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -1021,6 +1440,15 @@ export const MATRIX: Entry[] = [
           intended: filtered,
           ticket: "harmless: under-returns, never exposes another user's data",
         },
+      },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their machine's sessions, in centre B" },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] when filtering on a machine of another organisation",
       },
     ],
   },
@@ -1043,6 +1471,19 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
     ],
   },
   {
@@ -1064,19 +1505,38 @@ export const MATRIX: Entry[] = [
         status: "completed",
         kind: "auto",
       });
+      await addSession(w, {
+        machineId: w.orgBMachine,
+        userId: w.orgBPatient,
+        status: "completed",
+        kind: "auto",
+      });
       return {};
     },
     onSuccess: (res) => {
-      if (asArray(res).length < 2)
-        throw new Error("Admin should see all completed sessions");
+      if (asArray(res).length !== 3)
+        throw new Error(
+          "Admin should see all completed sessions, in every organisation",
+        );
     },
     onFiltered: (res, _w, actor) => {
-      if (actor === "manager" && asArray(res).length !== 1)
-        throw new Error("Manager should see only their machine's completed session");
+      expectExactly(
+        riders(res),
+        SESSION_RIDERS_SEEN_BY[actor] ?? [],
+        `Completed sessions listed to ${actor}`,
+      );
     },
     cases: [
       { actor: "admin", expect: ok, note: "all completed sessions" },
       { actor: "manager", scope: "own", expect: filtered, note: "their machine's completed sessions" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre B only" },
+      {
+        actor: "orgBManager",
+        scope: "own",
+        expect: filtered,
+        note: "their machine's completed sessions, in centre B",
+      },
     ],
   },
 
@@ -1092,6 +1552,7 @@ export const MATRIX: Entry[] = [
         // A patient the manager manages but who has no right yet.
         await w.t.run((ctx) =>
           ctx.db.insert("user_gestionnaires", {
+            organizationId: w.orgA,
             userId: w.stranger,
             gestionnaireId: w.manager,
             createdAt: NOW,
@@ -1137,6 +1598,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin grants" },
+      { actor: "orgAdmin", expect: ok, note: "admin of the machine's organisation grants" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Only an admin or a manager of this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Only an admin or a manager of this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -1170,6 +1644,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin revokes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation revokes" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Only an admin or a manager of this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Only an admin or a manager of this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -1188,6 +1675,19 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
     ],
   },
   {
@@ -1219,6 +1719,19 @@ export const MATRIX: Entry[] = [
         note: "does not manage this patient",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin sets" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/do not manage this user/),
+        note: "a patient of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/do not manage this user/),
+        note: "a patient of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -1236,6 +1749,25 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
     ],
   },
   {
@@ -1244,14 +1776,26 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async () => ({}),
     onSuccess: (res, w) => {
-      if (!ids(res).includes(String(w.machine)) || !ids(res).includes(String(w.otherMachine)))
-        throw new Error("Admin should see every machine");
+      expectExactly(
+        ids(res),
+        [w.machine, w.otherMachine, w.orgBMachine],
+        "Machines the Anheart admin may launch on",
+      );
     },
     onFiltered: (res, w, actor) => {
-      const seen = ids(res);
-      const mine = actor === "manager" ? w.machine : w.machine; // patient holds right on w.machine
-      if (!seen.includes(String(mine)) || seen.includes(String(w.otherMachine)))
-        throw new Error("Should list only machines the caller may launch on");
+      const expected: Partial<Record<Actor, Id<"machines">[]>> = {
+        manager: [w.machine],
+        patient: [w.machine], // holds the right on w.machine
+        orgAdmin: [w.machine, w.otherMachine],
+        orgBAdmin: [w.orgBMachine],
+        orgBManager: [w.orgBMachine],
+        orgBPatient: [w.orgBMachine],
+      };
+      expectExactly(
+        ids(res),
+        expected[actor] ?? [],
+        `Machines ${actor} may launch on`,
+      );
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -1259,6 +1803,15 @@ export const MATRIX: Entry[] = [
       { actor: "stranger", expect: empty, note: "[] without any launch right" },
       { actor: "manager", scope: "own", expect: filtered, note: "machines they manage" },
       { actor: "admin", expect: ok, note: "every machine" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the machines of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the machines of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "the machine they manage, in centre B" },
+      {
+        actor: "orgBPatient",
+        scope: "own",
+        expect: filtered,
+        note: "the machine they hold the right on, in centre B",
+      },
     ],
   },
   {
@@ -1269,7 +1822,7 @@ export const MATRIX: Entry[] = [
       const base = { machineId: w.machine, profileId: w.profileId };
       if (actor === "patient")
         return scope === "other" ? { ...base, userId: w.otherPatient } : base;
-      if (actor === "stranger") return base; // for self, no right
+      if (actor === "stranger" || actor === "orgBPatient") return base; // for self, no right
       if (actor === "manager")
         return {
           ...base,
@@ -1312,6 +1865,30 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", scope: "own", expect: ok, note: "admin launches for a rider" },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "admin of the machine's organisation launches for a rider",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to use this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to use this machine/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/have not been given the right/),
+        note: "no launch right reaches a machine of another organisation",
+      },
     ],
   },
   {
@@ -1351,6 +1928,25 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin stops" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation stops" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Not authorized to stop this session/),
+        note: "a session of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/Not authorized to stop this session/),
+        note: "a session of another organisation, by identifier",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/Not authorized to stop this session/),
+        note: "a session of another organisation, by identifier",
+      },
     ],
   },
   {
@@ -1367,6 +1963,25 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a machine of another organisation",
+      },
     ],
   },
   {
@@ -1384,6 +1999,7 @@ export const MATRIX: Entry[] = [
       });
       await w.t.run((ctx) =>
         ctx.db.insert("training_telemetry", {
+          organizationId: w.orgA,
           sessionId,
           machineId: w.machine,
           t: NOW,
@@ -1407,6 +2023,31 @@ export const MATRIX: Entry[] = [
       { actor: "patient", scope: "own", expect: ok, note: "the rider" },
       { actor: "stranger", scope: "other", expect: empty, note: "[] for an unrelated user" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: ok,
+        note: "manages this machine",
+      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a session of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a session of another organisation",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "[] for a session of another organisation",
+      },
     ],
   },
   {
@@ -1436,6 +2077,25 @@ export const MATRIX: Entry[] = [
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "null for a session of another organisation",
+      },
     ],
   },
 
@@ -1487,6 +2147,10 @@ export const MATRIX: Entry[] = [
         { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
         { actor: "otherManager", scope: "other", expect: empty, note: "empty for an unrelated machine" },
         { actor: "admin", expect: ok, note: "admin reads" },
+        { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+        { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
+        { actor: "orgBManager", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
+        { actor: "orgBPatient", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
       ],
     }),
   ),
@@ -1620,6 +2284,10 @@ function summaryCases(brokenReturn = false): Case[] {
     { actor: "manager", scope: "own", expect: ok, note: "manages this machine", ...defect },
     { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
     { actor: "admin", expect: ok, note: "admin reads", ...defect },
+    { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation", ...defect },
+    { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+    { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+    { actor: "orgBPatient", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
   ];
 }
 

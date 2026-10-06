@@ -103,6 +103,14 @@ change. Le 1er octobre 2026 elle a ajouté sept index (`machine_profiles`,
 
 `npm run dev` fait la même chose en continu, à côté de `next dev`.
 
+Depuis le multi-organisation (ANH-114), un déploiement qui contient déjà des
+données doit recevoir **une fois** la migration, juste après le code :
+`npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'`. Tant qu'elle n'a
+pas tourné, les fonctions liées à une organisation refusent. Elle n'a encore
+été lancée sur aucun déploiement. Procédure complète, variable
+`ANHEART_ORG_ID` et réglages Clerk :
+[convex.md](convex.md#activer-le-multi-organisation).
+
 ### 3.2 Vérifier un déploiement sans navigateur
 
 ```sh
@@ -156,6 +164,11 @@ Avant de le lancer :
 4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
+6. Lancer la migration multi-organisation aussitôt après le déploiement, puis
+   suivre la [procédure d'activation](convex.md#activer-le-multi-organisation).
+   `users.getCurrentUser` renvoie deux informations de plus (`organization`, et
+   le rôle `org_admin`) : à vérifier sur une préversion du site, comme le
+   point 2.
 
 ### 3.4 Ordre de mise à jour : les consoles d'abord, Convex ensuite
 

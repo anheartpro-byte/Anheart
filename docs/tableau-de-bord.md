@@ -61,7 +61,11 @@ Sommaire :
 
 ## 2. Rôles et accès
 
-Trois rôles, stockés dans Convex (`users.role`). Les libellés affichés sont
+Trois rôles. Un rôle se tient **dans une organisation** (un client) : Convex le
+lit dans le jeton Clerk ou, tant que Clerk Organizations n'est pas configuré,
+dans l'appartenance du compte (table `memberships`) ; `users.role` n'en est
+qu'un miroir pour l'affichage (voir
+[convex.md §3](convex.md#3-règles-dautorisation)). Les libellés affichés sont
 « Administrateur », « Gestionnaire », « Patient ».
 
 | Rôle | Peut |
@@ -81,16 +85,28 @@ patient ────────────► personne
 Le droit n'est donné qu'à un compte de rôle `user` ; admins et gestionnaires
 l'ont déjà par leur rôle.
 
+**Organisations.** Tout ce tableau vaut **à l'intérieur d'une organisation** :
+un gestionnaire ne voit ni machine, ni patient, ni séance d'un autre client,
+et un patient ne reçoit un droit que sur une machine de sa propre
+organisation. Le rôle **admin** ci-dessus est celui de l'organisation Anheart,
+la seule qui voit tous les clients. Convex connaît aussi l'admin d'une
+organisation cliente, qui gère tout dans la sienne sauf créer ou restaurer une
+machine. Sur un déploiement à un seul client, rien ne change à l'écran. Le
+site n'a pas encore de sélecteur d'organisation ni de page de membres : ils
+arrivent avec la suite du multi-organisation.
+
 **Protection des pages.** `proxy.ts` (middleware Clerk + next-intl) exige une
 connexion pour `/{locale}/dashboard/...`. Les contrôles par rôle se font dans
 Convex : une page ouverte sans le bon rôle reçoit des listes vides ou un refus.
 Quelques pages affichent aussi un message « accès refusé » (voir §4).
 
-**Premier compte.** À la première connexion, un compte reçoit le rôle `user`.
+**Premier compte.** À la première connexion, un compte reçoit le rôle `user`
+(ou, quand son jeton Clerk porte une organisation, le rôle qu'il y tient).
 La ligne Convex n'est créée que lorsque l'utilisateur connecté passe par la
-**page d'accueil** (bouton « Accéder au tableau de bord »). Il n'y a pas
-d'amorçage automatique du premier admin : il faut le nommer dans le tableau de
-bord Convex (voir [convex.md §8](convex.md#8-déployer)).
+**page d'accueil** (bouton « Accéder au tableau de bord »). Tant que Clerk
+Organizations n'est pas configuré, il n'y a pas d'amorçage automatique du
+premier admin : il faut le nommer dans le tableau de bord Convex (voir
+[convex.md §8](convex.md#8-déployer)).
 
 **Version du site.** Le pied de page de l'accueil et de la FAQ affiche la
 version du site, par exemple `web-0.1.0` (`web-0.0.0-dev` tant qu'aucune release
