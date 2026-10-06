@@ -274,8 +274,9 @@ cohorte de 30 personnes : 350 courses) a été rejouée avant et après.
   cause ends, and the speed then follows the programme or the manual target
   again, upwards too, with nobody clicking ». Elle n'est pas ajoutée sur une
   séance qui se termine ou qui est finie, ni reprise dans un refus de départ.
-  Elle est en anglais, comme toutes les phrases de verdict, et n'apparaît que
-  sur les pages Séance et Sécurité. Elle reste affichée, telle quelle, sur un
+  Elle est en anglais, comme les phrases de verdict du superviseur (celles des
+  règles caméra sont en français), et n'apparaît que sur les pages Séance et
+  Sécurité. Elle reste affichée, telle quelle, sur un
   bras tenu à l'arrêt en séance manuelle : la cible qu'elle dit « suivie de
   nouveau » y vaut alors 0 (voir 7.6), donc rien n'y remonte sans une nouvelle
   cible. Elle en dit là plus qu'il n'y a à craindre, jamais moins.

@@ -17,10 +17,11 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > (variateur simulé, BITalino simulé, caméra simulée, sans tableau de bord).
 > La page n'a pas été vérifiée sur la machine réelle avec une personne à bord :
 > la séance « personne à bord » reste refusée par configuration (jalon M6).
-> Les passages sur les avertissements non verrouillés, la règle `session_standstill`
-> et la cible manuelle refusée ou remise à 0 (sections 6, 11 et 13, ajoutés le
-> 6 octobre 2026) viennent du code et des tests automatiques sur la console en
-> simulation ; ils n'ont pas été rejoués dans un navigateur.
+> Les passages sur les avertissements non verrouillés, la règle `session_standstill`,
+> STOP sous un `freeze` et la cible manuelle refusée ou remise à 0 (sections 4, 5, 6,
+> 11 et 13, ajoutés le 6 octobre 2026) viennent du code, des tests automatiques et de
+> rejeux par l'API sur la console en simulation ; ils n'ont pas été rejoués dans un
+> navigateur.
 
 ---
 
@@ -182,7 +183,7 @@ Les modes :
 | `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
 | `SEANCE` | une séance programmée (AUTO) déroule son programme |
-| `ARRET` | une séance se termine, jusqu'à ce que l'étage de sortie soit retiré. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro : **pas** « arrêté », lire la vitesse mesurée. Après la règle `session_standstill` (section 11), la consigne et la vitesse mesurée valent déjà 0 quand `ARRET` s'affiche |
+| `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro ; sous un `freeze`, elle ne descend même pas tant que le gel tient (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
 
 Les états `run_state` (vue « intention » de la surface de commande) :
 
@@ -219,8 +220,21 @@ s'arrête au mode : `liaison ouverte · repos`.
 - Termine la séance **sur la rampe mise en service** (pas plus vite) : une décélération
   plus rapide que la rampe du variateur déclenche une surtension (ObF) et met la
   machine en roue libre, ce qui allonge l'arrêt.
-- En manuel, après STOP la cible repasse à 0. Une fois l'étage de sortie coupé à
-  l'arrêt mesuré, le mode revient à `REPOS`. Repartir demande un nouveau démarrage.
+- **Sous un `freeze`, STOP ne fait pas baisser la vitesse.** Tant que la pastille
+  **Securite** dit `freeze`, la demande est enregistrée (réponse 202, mode `ARRET`) mais
+  la consigne reste gelée : elle ne descend qu'une fois le gel levé ou devenu `reduce`.
+  Un gel qui apparaît pendant une descente demandée par STOP la fige de la même façon.
+  `ARRET` ne prouve donc ni une baisse de la consigne ni l'arrêt du bras. Rejoué sur la
+  console en simulation : STOP 12 s après une perte de l'ECG en séance programmée, la
+  consigne est restée inchangée pendant environ 17 s, et le bras s'est arrêté au même
+  instant que sans STOP ; avec E-STOP au même moment, consigne à 0 au cycle suivant.
+  Pour un arrêt immédiat : le coup de poing câblé, et E-STOP. C'est le comportement
+  actuel du logiciel, décrit dans
+  [raspberry-pi.md](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt).
+- En manuel, après STOP la cible repasse à 0. En séance manuelle de banc, une fois
+  l'étage de sortie coupé à l'arrêt mesuré, le mode revient à `REPOS` ; pour un
+  programme, `REPOS` ne revient qu'après la phase `recovery`. Repartir demande un
+  nouveau démarrage.
 - Refus : une boîte d'alerte `STOP refuse : …` (par exemple
   `the machine is already stopping` si un arrêt est déjà en cours, ou
   `there is no session to end (the machine is idle)`).
@@ -600,7 +614,9 @@ avant 120 s, `hr_rate`, `current_high` au niveau d'alerte) disparaît quand sa c
 disparaît. Tant que le bras tourne, la consigne suit alors de nouveau la régulation ou
 la cible, **vers le haut aussi, sans aucun clic**. Tant que la séance peut encore
 prendre de la vitesse, la ligne `detail` de ces verdicts se termine par cette phrase,
-en anglais comme toutes les phrases de verdict :
+en anglais comme les phrases de verdict du superviseur (celles des règles caméra
+sont en français, et celle d'un défaut variateur reprend le libellé français du
+défaut) :
 `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking`.
 Elle n'est affichée que sur les pages Seance et Securite.
 
@@ -610,10 +626,17 @@ personne l'ait demandé (amenée par un `reduce`, ou par la régulation cardiaqu
 elle-même) termine la séance au cycle suivant : `ramp_down` verrouillé, règle
 `session_standstill`, mode `ARRET` puis `REPOS`. Le détail nomme la cause :
 `the arm came to a standstill inside the session (the warning hr_stale brought the setpoint to zero): the session has ended, and a stopped arm never restarts by itself. To be acknowledged by a named operator once the session is over; moving again takes a new start`
-(ou `the heart-rate regulation brought the setpoint to zero`). Le bras est déjà à
-l'arrêt quand ce verdict s'affiche, et il n'en repart pas quand la cause disparaît
+(ou `the heart-rate regulation brought the setpoint to zero`). Quand ce verdict
+s'affiche, c'est la **consigne** qui vaut déjà 0 : la règle juge la consigne confirmée
+par le variateur, pas une mesure. La vitesse mesurée suit. Sur la console en simulation,
+elle valait encore 27 tr/min moteur (pastille Rotation `EN ROTATION`) à l'instantané où
+le verdict et `ARRET` sont apparus, et 0 à l'instantané suivant, 0,2 s après ; ce délai
+n'a pas été mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le
+bras est arrêté (section 3, règle 2). Le bras ne repart pas quand la cause disparaît
 (électrode remise, par exemple). Il faut acquitter par son nom une fois la séance
-finie, puis demander un nouveau départ ; un acquittement donné plus tôt est repris au
+finie, c'est-à-dire quand **Mode** affiche `REPOS` (pour un programme, après la phase
+`recovery` : environ 5 minutes avec le profil standard), puis demander un nouveau
+départ. Avant `REPOS`, l'acquittement répond 200 mais le verdict est de nouveau là au
 cycle suivant. Ne sont pas concernés : un STOP, une cible manuelle que l'opérateur met
 lui-même à 0 alors qu'aucun avertissement ne tient, le retour au calme d'un programme.
 En séance manuelle, capsule vide comprise, la règle vaut aussi. Décisions et mesures :
@@ -710,7 +733,10 @@ Rejoué en simulation, dans cet ordre :
 3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
    `RAMPE EN COURS` s'affiche jusqu'à l'arrivée.
 4. Surveiller **Vitesse mesuree** (pas la consigne).
-5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`.
+5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`. Si la pastille
+   **Securite** dit `freeze` à ce moment, STOP est enregistré mais la vitesse ne baisse
+   pas tant que le gel tient (section 5) : pour un arrêt immédiat, coup de poing câblé
+   et E-STOP.
 6. En cas d'urgence : `E-STOP`, puis, une fois la machine arrêtée et le coup de poing
    réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter`.
 
@@ -922,11 +948,14 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
   `cible appliquee` revenue à `0.00`.
 - Rien n'indique, avant de taper une cible, que la fréquence cardiaque retient une
   montée (séance manuelle « personne à bord »). La revue indépendante d'ANH-178
-  recommande un indicateur visible ; la correction de la page est prévue dans un ticket
-  séparé.
+  recommande un indicateur visible.
 - La phrase ajoutée aux avertissements non verrouillés (section 11) est en anglais et
   n'apparaît que sur les pages Seance et Securite. Aucun bandeau ne dit en permanence, en
   français, qu'une vitesse maintenue ou baissée peut remonter seule.
+- Un acquittement de `session_standstill` donné avant le retour du mode à `REPOS`
+  répond 200 puis est repris, sans que la page dise quand il tiendra (section 11).
+- Ces quatre points relèvent de la page et sont l'objet du ticket
+  [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178).
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
   tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).
