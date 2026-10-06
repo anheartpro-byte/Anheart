@@ -17,6 +17,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > (variateur simulé, BITalino simulé, caméra simulée, sans tableau de bord).
 > La page n'a pas été vérifiée sur la machine réelle avec une personne à bord :
 > la séance « personne à bord » reste refusée par configuration (jalon M6).
+> Les passages sur les avertissements non verrouillés, la règle `session_standstill`
+> et la cible manuelle refusée ou remise à 0 (sections 6, 11 et 13, ajoutés le
+> 6 octobre 2026) viennent du code et des tests automatiques sur la console en
+> simulation ; ils n'ont pas été rejoués dans un navigateur.
 
 ---
 
@@ -168,7 +172,7 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 | **Etat** | `idle`, `starting`, `running`, `stopping` (rouge si E-STOP verrouillé) | `/api/status` (`run_state`) |
 | **Liaison** | `en direct`, `donnees figees`, `hors ligne` | la fraîcheur du WebSocket |
 | **Rotation** | `a l'arret`, `EN ROTATION`, `VITESSE INCONNUE` | vitesse mesurée |
-| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge) | l'instantané |
+| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 
 Les modes :
@@ -178,7 +182,7 @@ Les modes :
 | `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
 | `SEANCE` | une séance programmée (AUTO) déroule son programme |
-| `ARRET` | une séance se termine, la consigne descend vers zéro. **Pas** « arrêté » : lire la vitesse mesurée |
+| `ARRET` | une séance se termine, jusqu'à ce que l'étage de sortie soit retiré. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro : **pas** « arrêté », lire la vitesse mesurée. Après la règle `session_standstill` (section 11), la consigne et la vitesse mesurée valent déjà 0 quand `ARRET` s'affiche |
 
 Les états `run_state` (vue « intention » de la surface de commande) :
 
@@ -312,11 +316,32 @@ Règles de la cible :
 - Une valeur hors domaine envoyée quand même est **refusée, pas arrondie**. Le refus
   arrive comme événement :
   `consigne refusee : 27.00 tr/min de sortie hors de 0 ou [55, 300] tr/min moteur`.
-- Après n'importe quel arrêt (STOP, E-STOP, verdict), le brouillon est effacé et la cible
-  vaut 0.
+- Après n'importe quelle fin de séance (STOP, E-STOP, verdict d'arrêt), la cible vaut 0,
+  et le brouillon est effacé quand le mode revient à `REPOS`.
+- **Aucune cible n'attend sur un bras à l'arrêt.** Tant que quelque chose retient une
+  montée et que la consigne appliquée vaut 0, une cible non nulle est **refusée** par la
+  boucle ; une cible déjà acceptée, que quelque chose vient retenir avant le premier pas,
+  est **remise à 0**. Ce qui retient : un verdict en cours, verrouillé ou non ; avec une
+  personne à bord, une fréquence cardiaque inutilisable (aucune lecture fiable depuis
+  plus de 4 s), de tendance inconnue (moins de 5 lectures) ou en baisse de plus de
+  20 bpm/min ; un premier pas que le variateur n'a pas confirmé. Le bras ne part donc ni
+  quand un avertissement se lève, ni après un acquittement, ni quand la fréquence
+  cardiaque revient : il faut retaper la cible. Une cible de 0 est toujours acceptée, et
+  rien ne change pour un bras qui tourne (la cible y est gardée, puis suivie). Les
+  messages sont en section 13, la règle et ses mesures dans
+  [securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178).
+- **Ce que la page montre dans ce cas.** Le refus et la remise à 0 arrivent comme
+  événements `refused` dans la liste **Evenements** de la page Seance, et nulle part
+  ailleurs. `cible appliquee` reste ou revient à `0.00`, le brouillon reste affiché en
+  orange, et `rampe` dit `cible atteinte`. La note sous la carte, elle, dit encore
+  `cible envoyee … la machine y va aux limites de mouvement` : elle est écrite dès que
+  la console a reçu la demande (202), avant que la boucle ne la juge. Rien n'indique non
+  plus, avant de taper, que la fréquence cardiaque retient une montée. Ces deux défauts
+  de la page sont connus (section 15).
 
 Messages sous la carte : `accepte : manual_start bench (cible 0)`,
-`cible envoyee : 5.00 output rpm - la machine y va aux limites de mouvement`, ou l'erreur.
+`cible envoyee : 5.00 output rpm - la machine y va aux limites de mouvement`, ou l'erreur
+de la réponse HTTP. Un refus de la boucle n'y apparaît pas.
 
 ### Carte « Frequence cardiaque (regulation) »
 
@@ -515,8 +540,10 @@ zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
 
 Types d'événements : `start_requested`, `fault_reset_requested`, `end_requested`,
 `emergency_stop`, `acknowledged`, `attested`, `session_running`, `session_idle`,
-`refused`. Les refus de la boucle (cible hors domaine, reset refusé, démarrage refusé)
-arrivent **uniquement** comme événements `refused` : la route HTTP a déjà répondu 202.
+`refused`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
+l'arrêt, reset refusé, démarrage refusé) arrivent **uniquement** comme événements
+`refused` : la route HTTP a déjà répondu 202. Une cible manuelle que la machine a
+remise à 0 arrive de la même façon, sans nom d'opérateur : personne ne l'a demandé.
 
 ---
 
@@ -556,12 +583,41 @@ pour retard), `ecg` (fréquence et seq), `profils`, `revision` du stock de profi
 - Pastille de l'action de sécurité en cours.
 - Grille : `regle`, `detail`, `verrouille` (oui/non), `depuis` (s) ; ou
   `aucune demande`.
-- **Verdicts retenus** : `e-stop verrouille`, `verdict retenu` (règle / action),
-  `plancher verrouille` (le verdict verrouillé le plus sévère), `regles actives`,
+- **Verdicts retenus** : `e-stop verrouille` (l'arrêt d'urgence de l'opérateur ou de
+  la caméra, tenu à part), `verdict retenu` (règle / action : le verdict en vigueur, le
+  plus sévère de l'arrêt d'urgence, du plancher verrouillé et des règles actives ; il
+  n'est pas forcément verrouillé), `plancher verrouille` (le verdict
+  verrouillé le plus sévère du superviseur, quelle que soit la règle : défaut variateur,
+  fréquence cardiaque, `session_standstill`, caméra…), `regles actives`,
   `accompagnant vu`. Puis la liste des règles actives (`action règle détail [verrouille]`).
 
 Les règles elles-mêmes (identifiants, seuils, actions) sont décrites dans
 [raspberry-pi.md](raspberry-pi.md).
+
+**Un avertissement non verrouillé se lève seul.** Un `freeze` ou un `reduce` dont la
+ligne `verrouille` dit `non` (par exemple `hr_stale` avant 60 s, `attendant_absent`
+avant 120 s, `hr_rate`, `current_high` au niveau d'alerte) disparaît quand sa cause
+disparaît. Tant que le bras tourne, la consigne suit alors de nouveau la régulation ou
+la cible, **vers le haut aussi, sans aucun clic**. Tant que la séance peut encore
+prendre de la vitesse, la ligne `detail` de ces verdicts se termine par cette phrase,
+en anglais comme toutes les phrases de verdict :
+`; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking`.
+Elle n'est affichée que sur les pages Seance et Securite.
+
+**Un bras arrêté en cours de séance ne repart jamais seul : `session_standstill`.**
+Une fois que le bras a tourné dans une séance, une consigne qui revient à 0 sans que
+personne l'ait demandé (amenée par un `reduce`, ou par la régulation cardiaque
+elle-même) termine la séance au cycle suivant : `ramp_down` verrouillé, règle
+`session_standstill`, mode `ARRET` puis `REPOS`. Le détail nomme la cause :
+`the arm came to a standstill inside the session (the warning hr_stale brought the setpoint to zero): the session has ended, and a stopped arm never restarts by itself. To be acknowledged by a named operator once the session is over; moving again takes a new start`
+(ou `the heart-rate regulation brought the setpoint to zero`). Le bras est déjà à
+l'arrêt quand ce verdict s'affiche, et il n'en repart pas quand la cause disparaît
+(électrode remise, par exemple). Il faut acquitter par son nom une fois la séance
+finie, puis demander un nouveau départ ; un acquittement donné plus tôt est repris au
+cycle suivant. Ne sont pas concernés : un STOP, une cible manuelle que l'opérateur met
+lui-même à 0 alors qu'aucun avertissement ne tient, le retour au calme d'un programme.
+En séance manuelle, capsule vide comprise, la règle vaut aussi. Décisions et mesures :
+[securite.md](securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques).
 
 ### Acquittement
 
@@ -637,7 +693,9 @@ figée → ralentissement ; aucune reprise automatique.
 
 Il n'y a pas de bouton : tant qu'un onglet de la console est ouvert, la page envoie
 `POST /api/presence` toutes les 5 s. La règle `attendant_absent` gèle la consigne
-(`FREEZE`) après 60 s sans signal, puis termine la séance (`RAMP_DOWN`) après 120 s.
+(`FREEZE`) après 60 s sans signal, puis termine la séance (`RAMP_DOWN`, verrouillé)
+après 120 s. Le gel n'est pas verrouillé : si un onglet redonne le signal avant 120 s,
+il se lève seul et la consigne suit de nouveau la cible ou la régulation.
 Cela prouve qu'un onglet est ouvert et joignable, **pas** qu'un humain regarde.
 
 ---
@@ -661,8 +719,8 @@ Rejoué en simulation, dans cet ordre :
 ## 13. Messages d'erreur typiques
 
 Les réponses HTTP (codes 4xx) s'affichent sous le bouton concerné. Les refus de la boucle
-arrivent comme événements `refused` dans la liste **Evenements** (page Seance) et, pour le
-manuel, sous la carte.
+arrivent comme événements `refused` dans la liste **Evenements** (page Seance), et
+seulement là : la note sous la carte MANUEL garde le texte de la réponse HTTP.
 
 ### Refus immédiats (réponse HTTP)
 
@@ -715,6 +773,29 @@ Cible manuelle (`describe_target_refusal`) :
 | `consigne refusee : pas de session manuelle (<état>)` | plus de séance manuelle |
 | `consigne refusee : <détail>` | la séance manuelle se termine |
 | `consigne refusee : <x> tr/min de sortie hors de 0 ou [<min>, <plafond>] tr/min moteur` | hors domaine : ni arrondie ni bornée |
+| `consigne refusee : le verdict <règle> tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible` | un avertissement non verrouillé tient le bras à l'arrêt : attendre qu'il se lève, retaper la cible |
+| `consigne refusee : le verdict <règle> tient le bras a l'arret. L'acquitter une fois sa cause levee, puis redonner la cible` | un verdict verrouillé tient le bras à l'arrêt : traiter la cause, acquitter (page Securite), retaper la cible |
+| `consigne refusee : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable, puis redonner la cible` | personne à bord, aucune lecture fiable depuis plus de 4 s, aucun verdict : vérifier les électrodes, attendre la lecture, retaper la cible |
+| `consigne refusee : tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture, puis redonner la cible` | personne à bord, moins de 5 lectures depuis le début de l'ECG (ou depuis un saut confirmé) : attendre quelques secondes, retaper la cible |
+| `consigne refusee : la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise, puis redonner la cible` | personne à bord, baisse de plus de 20 bpm/min sur 5 lectures (garde vasovagale) : attendre, retaper la cible |
+
+Cible manuelle remise à 0 par la machine (`describe_withdrawn_target`, événement
+`refused` sans nom d'opérateur). La cible avait été acceptée ; quelque chose est venu
+retenir le bras à l'arrêt avant le premier pas. Dans tous les cas : traiter ce que dit
+le message, puis retaper la cible.
+
+| Message | Sens |
+|---|---|
+| `cible de <n> tr/min moteur remise a 0 : le verdict <règle> tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible` (ou `L'acquitter une fois sa cause levee`) | un verdict est apparu avant le premier pas |
+| `cible de <n> tr/min moteur remise a 0 : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable, puis redonner la cible` | la lecture est devenue trop vieille avant le premier pas |
+| `cible de <n> tr/min moteur remise a 0 : tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture, puis redonner la cible` | l'historique de la fréquence cardiaque vient de recommencer (saut confirmé) |
+| `cible de <n> tr/min moteur remise a 0 : la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise, puis redonner la cible` | une lecture a fermé la garde vasovagale avant le premier pas |
+| `cible de <n> tr/min moteur remise a 0 : le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison, puis redonner la cible` | le variateur n'a pas confirmé le premier pas (capsule vide comprise). Le pas est demandé une seule fois. Si la trame est arrivée et que seule sa réponse s'est perdue, le variateur l'a gardée un cycle, jusqu'au zéro suivant : lire la vitesse mesurée, vérifier le câble, retaper la cible |
+
+Ces messages sont vérifiés par les tests automatiques de la console en simulation
+(`raspberry-pi/tests/test_manual_target_held_console.py`), pas rejoués dans un
+navigateur. Les trois raisons de fréquence cardiaque ne concernent qu'une séance
+manuelle « personne à bord », que la page ne propose pas (section 6).
 
 Reset défaut variateur (`describe_reset_refusal`) :
 
@@ -829,15 +910,23 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 ## 15. Écarts connus entre le code, la page et les README
 
-- **`raspberry-pi/README.md` décrit encore le jalon M1 « lecture seule »** (« toute route
-  de mouvement répond 403 »). Le code actuel construit la console avec
-  `motion_enabled=True` : le mode MANUEL de banc fonctionne (jalon M3), et les séances
-  programmées sont prêtes derrière `PROGRAMS_ENABLED` (jalon M5). Le README évoque
-  pourtant plus bas la liaison au tableau de bord et les séances AUTO, ce qui le rend
-  contradictoire.
-- Le message 403 de mouvement désactivé (`MOTION_DISABLED_DETAIL`, `routes.py`) cite
-  toujours « jalon M1 », et le bandeau « LECTURE SEULE » de la page existe encore, mais ni
-  l'un ni l'autre ne sont atteignables avec `src.local_panel` tel qu'il est construit.
+- Le message 403 de mouvement désactivé (`MOTION_DISABLED_DETAIL`, `routes.py` :
+  `mouvement desactive : cette console est en lecture seule. STOP, E-STOP, acquittement et lectures restent disponibles.`)
+  et le bandeau « LECTURE SEULE » de la page existent encore, mais ni l'un ni l'autre ne
+  sont atteignables avec `src.local_panel`, qui construit la console avec
+  `motion_enabled=True`.
+- Après `Appliquer`, la note de la carte MANUEL dit `cible envoyee … la machine y va aux
+  limites de mouvement` dès la réponse 202, même quand la boucle refuse ensuite la cible
+  ou la remet à 0 (section 6). Le refus n'apparaît que dans la liste **Evenements** de la
+  page Seance, et la remise à 0 n'a pas d'autre signal qu'une ligne d'événement et la
+  `cible appliquee` revenue à `0.00`.
+- Rien n'indique, avant de taper une cible, que la fréquence cardiaque retient une
+  montée (séance manuelle « personne à bord »). La revue indépendante d'ANH-178
+  recommande un indicateur visible ; la correction de la page est prévue dans un ticket
+  séparé.
+- La phrase ajoutée aux avertissements non verrouillés (section 11) est en anglais et
+  n'apparaît que sur les pages Seance et Securite. Aucun bandeau ne dit en permanence, en
+  français, qu'une vitesse maintenue ou baissée peut remonter seule.
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
   tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).

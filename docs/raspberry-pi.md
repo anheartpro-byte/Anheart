@@ -286,9 +286,13 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
     vasovagale) : `la frequence cardiaque baisse trop vite, rien ne monte
     depuis l'arret. Attendre qu'elle se stabilise` ;
   * le variateur n'a pas confirmé l'écriture du premier pas : `le variateur
-    n'a pas confirme la consigne, le bras reste a l'arret. Verifier la
+    n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la
     liaison`. Ce cas ne peut pas être refusé à la saisie : la cible est
-    acceptée, le pas est demandé une fois, puis elle est retirée.
+    acceptée, le pas est demandé une fois, puis elle est retirée. Le message
+    ne dit pas que le bras est resté à l'arrêt : si la trame est arrivée et
+    que seule sa réponse s'est perdue, le variateur garde ce pas pendant un
+    tic, jusqu'au zéro du maintien de liaison suivant, et le runtime ne peut
+    pas distinguer les deux cas.
 
   Les trois raisons de FC (`RiseHold`) ne sont pas des verdicts : rien n'est à
   acquitter, l'opérateur attend ce que dit le message et retape sa cible. Ni

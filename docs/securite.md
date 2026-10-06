@@ -339,7 +339,9 @@ anglaise ci-dessus est un palliatif.
 Le reste de cette section (mesures, application, limites, coûts) est de
 l'auteur du changement. Il a appliqué le même principe à une troisième retenue
 trouvée à la lecture du code, le premier pas que le variateur ne confirme pas ;
-c'est signalé comme tel plus bas.
+c'est signalé comme tel plus bas. Le coordinateur a accepté cette troisième
+retenue le 6 octobre 2026, capsule vide comprise, après la revue indépendante
+de la PR #18.
 
 **Ce qui se passait.** Une cible est une destination ; tant qu'une montée est
 retenue, elle n'est pas suivie. Tapée sur un bras à l'arrêt, elle attendait, et
@@ -352,7 +354,7 @@ avant ANH-178) :
 | Séquence | Avant | Maintenant |
 |---|---|---|
 | L'opérateur met la cible à 0, le bras s'arrête, la séance continue. La FC est perdue (FREEZE `hr_stale`). Il tape 200 tr/min moteur. | Cible acceptée. Trente secondes sans mouvement, la FC revient : première consigne non nulle 0,2 s plus tard, sans clic à cet instant. | Cible refusée, le refus nomme `hr_stale`. La FC revient : rien ne bouge. |
-| Séance manuelle qui n'a pas encore bougé, même avertissement, même cible. | Acceptée ; premier mouvement 3,2 s après le retour de la FC. | Refusée ; rien ne bouge. |
+| Séance manuelle qui n'a pas encore bougé, même avertissement, même cible. | Acceptée ; premier mouvement 3,2 s après le retour de la FC pour une séance démarrée sur une seule lecture de FC (le cas mesuré alors), 0,2 s quand six lectures précèdent le départ. | Refusée ; rien ne bouge. |
 | FREEZE verrouillé (`loop_stall`) sur un bras que l'opérateur a arrêté ; une cible est tapée, puis le verdict est acquitté. | Acceptée ; le bras part 0,4 s après l'acquittement : acquitter relançait. | Refusée ; l'acquittement ne met rien en mouvement. |
 
 *Sans aucun verdict* (mesures de l'auteur ; « avant » = la première version de
@@ -395,7 +397,12 @@ Liste établie en lisant toutes les conditions sous lesquelles
 | Personne à bord, pas de FC utilisable (aucune lecture fiable depuis plus de 4 s) | oui | oui | « pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable » |
 | Personne à bord, tendance de la FC inconnue (moins de 5 lectures depuis le début de l'historique : premières secondes de l'ECG, ou après un saut confirmé) | oui | oui | « tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture » |
 | Personne à bord, FC en baisse de plus de 20 bpm/min sur les 5 dernières lectures (garde vasovagale) | oui | oui | « la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise » |
-| Le variateur n'a pas confirmé l'écriture du premier pas (troisième retenue, trouvée à la lecture du code) | non : rien ne permet de le prévoir | oui, au cycle où le pas est demandé | « le variateur n'a pas confirme la consigne, le bras reste a l'arret. Verifier la liaison » |
+| Le variateur n'a pas confirmé l'écriture du premier pas (troisième retenue, trouvée à la lecture du code) | non : rien ne permet de le prévoir | oui, au cycle où le pas est demandé | « le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison » |
+
+Le message du variateur ne dit pas que le bras est resté à l'arrêt : si la
+trame est arrivée et que seule sa réponse s'est perdue, le variateur garde ce
+pas pendant un cycle (0,2 s), jusqu'au zéro du maintien de liaison suivant. Le
+runtime ne peut pas distinguer les deux cas.
 
 Ne sont pas des retenues : une séance qui se termine (cible refusée, comme
 avant) ; une cible hors domaine (refusée, comme avant) ; le profil de
@@ -477,7 +484,8 @@ la montée.
   elle refuse la cible, que l'opérateur retape. Estimation, pas mesure : FC
   stable plus un bruit gaussien indépendant à chaque lecture, arrondi au
   battement, la garde est fermée 3 % du temps pour un écart-type de 0,5 bpm,
-  14 % pour 1 bpm, 29 % pour 2 bpm. Sur l'ECG synthétique de la simulation
+  14 % pour 1 bpm, 29 % pour 2 bpm (la revue indépendante retrouve 2,7 %,
+  14,2 % et 29,0 % avec le tracker du runtime). Sur l'ECG synthétique de la simulation
   passé par le vrai traitement (trace du scénario `auto_jog_150_dsp`, une
   lecture par seconde), elle n'est jamais fermée au repos, où ce signal n'a
   aucune variabilité, et elle l'est sur 6 lectures sur 116 (5 %) pendant le

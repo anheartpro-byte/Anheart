@@ -15,6 +15,11 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > simulée, sans tableau de bord distant. Rien dans ce guide n'a été rejoué sur la
 > vraie machine. Les parties qui concernent le vrai Pi sont tirées du code et de
 > `.env.example`, et sont signalées comme telles.
+>
+> Les ajouts du 6 octobre 2026 (les avertissements qui se lèvent seuls et la règle
+> `session_standstill` en §11, la cible manuelle refusée ou remise à 0 en §13.11)
+> viennent du code et des tests automatiques, qui pilotent la vraie console en
+> simulation. Ils n'ont pas été rejoués dans un navigateur et n'ont pas de capture.
 
 ---
 
@@ -73,8 +78,8 @@ dans un navigateur. Elle fonctionne sans internet.
 * arrêter la machine : **STOP** (arrêt en douceur) ou **E-STOP** (arrêt d'urgence
   logiciel) ;
 * surveiller en continu des règles de sécurité (variateur en défaut, fréquence
-  cardiaque trop haute, onglet fermé, caméra) et arrêter la machine si l'une se
-  déclenche ;
+  cardiaque trop haute, onglet fermé, caméra) et, selon la règle qui se déclenche,
+  geler la vitesse, la baisser ou arrêter la machine ;
 * garder une trace nommée : chaque démarrage, arrêt, acquittement porte le nom de
   l'opérateur.
 
@@ -310,7 +315,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 | **Mode** | `REPOS` | rien n'est commandé ; le variateur est seulement lu |
 | | `MANUEL` (orange) | séance manuelle en cours |
 | | `SEANCE` (orange) | séance programmée en cours |
-| | `ARRET` (rouge) | une séance se termine, la consigne descend. **Pas** « arrêté » : regardez Rotation |
+| | `ARRET` (rouge) | une séance se termine. Le plus souvent la consigne descend encore : **pas** « arrêté », regardez Rotation. Si une règle a déjà amené le bras à l'arrêt (règle `session_standstill`, §11), la consigne et la vitesse mesurée sont déjà à 0 quand `ARRET` s'affiche. Le mode revient à `REPOS` une fois la séance finie |
 | **Etat** | `idle` | rien de demandé. Seul état où l'on peut démarrer |
 | | `starting` | un démarrage vient d'être accepté |
 | | `running` (orange) | une séance tourne |
@@ -322,8 +327,8 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `EN ROTATION` (orange) | le bras tourne |
 | | `VITESSE INCONNUE` (rouge) | le variateur n'a pas été lu récemment : **ne jamais lire « arrêté »** |
 | **Securite** | `none` (vert) | aucune règle ne demande rien |
-| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse |
-| | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle arrête la machine (en douceur, en urgence, ou définitivement pour ce processus) |
+| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse. Si elle n'est pas verrouillée (ligne `verrouille` à `non`, page Securite), elle **se lève seule** quand sa cause disparaît, et la vitesse **remonte alors sans aucun clic** vers la cible ou vers ce que demande le programme, tant que le bras tourne. Si un `reduce` amène le bras jusqu'à l'arrêt, la séance est terminée (`session_standstill`, §11) : rien ne repart |
+| | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle termine la séance : arrêt en douceur (`ramp_down`), arrêt d'urgence (`quick_stop`), ou arrêt définitif pour ce processus (`go_silent`). Avec le `ramp_down` de la règle `session_standstill`, le bras est déjà à l'arrêt quand la pastille passe au rouge |
 | **Console** | `mouvement actif` (orange) | la console peut commander le moteur (cas normal aujourd'hui) |
 | | `LECTURE SEULE` | la console refuse tout mouvement (n'arrive pas avec la console actuelle) |
 
@@ -405,6 +410,20 @@ Règles de la cible :
 * Les boutons gardent le brouillon dans le domaine permis : ils ne dépassent jamais le
   plafond, et sautent directement au minimum de rotation en montant depuis 0.
 * Après n'importe quel arrêt (STOP, E-STOP, règle de sécurité), la cible vaut 0.
+* **Sur un bras à l'arrêt, une cible n'attend jamais.** Si quelque chose empêche la
+  vitesse de monter au moment où vous l'envoyez (une règle de sécurité en cours, même
+  un simple gel ; avec une personne à bord, une fréquence cardiaque absente, lue depuis
+  trop peu de temps, ou qui baisse vite), la machine **refuse** la cible. Si
+  l'empêchement arrive juste après, avant le premier mouvement, ou si le variateur ne
+  confirme pas ce premier mouvement, elle **remet la cible à 0**. Dans les deux cas le
+  bras ne partira pas tout seul plus tard : il faut renvoyer la cible une fois la cause
+  disparue (§13.11). Sur un bras qui tourne, rien de cela : la cible est gardée, et
+  suivie dès que plus rien ne retient la vitesse.
+* **La note sous la grille ne dit pas tout.** Après **Appliquer**, elle affiche
+  `cible envoyee : ... - la machine y va aux limites de mouvement` dès que la console a
+  reçu la demande, même si la machine la refuse ensuite. Le refus n'apparaît que dans
+  la liste **Evenements** de la page Seance. Vérifiez toujours la ligne
+  `cible appliquee` : si elle est restée ou revenue à `0.00`, la machine n'y va pas.
 * Une séance manuelle dure au plus 60 minutes (compteur `restant` visible sur la page
   Seance).
 
@@ -660,6 +679,10 @@ Important : une demande « acceptée » (démarrage, cible, reset) veut seulemen
 cette liste (et parfois dans la note de la carte). Après chaque action, jetez un œil
 aux événements.
 
+Cas particulier : une ligne `refused` **sans nom**, qui commence par
+`cible de ... tr/min moteur remise a 0`, n'est pas la réponse à un clic. La machine
+prévient qu'elle a repris une cible manuelle qu'elle avait acceptée (§13.11).
+
 ## 10. Visite guidée : page Configuration
 
 ![Page Configuration](img/console-06-configuration.png)
@@ -744,22 +767,53 @@ Repères :
 | Ligne | Sens |
 |---|---|
 | `regle` | la règle qui agit (`operator_estop`, `drive_fault`, `attendant_absent`, `presence_intrusion`...) |
-| `detail` | la phrase explicative |
-| `verrouille` | `oui` : ne s'efface que par un acquittement nommé |
+| `detail` | la phrase explicative, en anglais. Pour un avertissement non verrouillé, tant que la séance peut encore prendre de la vitesse, elle se termine par `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` (voir plus bas) |
+| `verrouille` | `oui` : ne s'efface que par un acquittement nommé. `non` : se lève seul quand sa cause disparaît |
 | `depuis` | depuis combien de secondes |
 | `e-stop verrouille` | un arrêt d'urgence est verrouillé : E-STOP de la page ou d'un autre écran, ou arrêt déclenché par la caméra. Quand la ligne dit `OUI`, l'acquittement exige la case du coup de poing |
-| `verdict retenu` | le verdict qui attend un acquittement |
-| `plancher verrouille` | le verdict verrouillé le plus sévère d'une source secondaire (par exemple la caméra) |
+| `verdict retenu` | le verdict en vigueur en ce moment : le plus sévère de l'arrêt d'urgence, du plancher verrouillé et des règles actives. S'il est verrouillé, il attend un acquittement |
+| `plancher verrouille` | le verdict verrouillé le plus sévère, quelle que soit la règle qui l'a posé (défaut variateur, fréquence cardiaque, `session_standstill`, caméra...). L'arrêt d'urgence de l'opérateur est suivi à part, par la ligne `e-stop verrouille` : après un E-STOP seul, cette ligne dit `aucun` |
 | `regles actives` | nombre de règles qui se déclenchent en ce moment, listées en dessous |
 | `accompagnant vu` | voir ci-dessous |
+
+### Un avertissement se lève seul ; un bras arrêté ne repart pas seul
+
+Deux choses à savoir avant de s'approcher du bras.
+
+**Un avertissement non verrouillé peut laisser la vitesse remonter.** Un `freeze`
+(vitesse gelée) ou un `reduce` (vitesse baissée) dont la ligne `verrouille` dit `non`
+disparaît dès que sa cause disparaît : une fréquence cardiaque relue, un onglet
+rouvert. Tant que le bras tourne, la vitesse suit alors de nouveau la cible ou le
+programme, **vers le haut aussi, sans que personne clique**. La phrase
+`NOT LATCHED ...` à la fin de la ligne `detail` le rappelle, en anglais, sur les pages
+Seance et Securite seulement. Un bras ralenti n'est pas un bras qui s'arrête.
+
+**Un bras qui s'est arrêté en cours de séance ne repart jamais seul.** Si un `reduce`,
+ou la régulation cardiaque d'une séance programmée, ramène la vitesse commandée à 0
+sans que personne l'ait demandé, la séance est **terminée** au cycle suivant : règle
+`session_standstill`, action `ramp_down`, verrouillée. Le mode passe à `ARRET` puis à
+`REPOS`, le bras étant déjà à l'arrêt. Même si la cause disparaît (électrode remise,
+fréquence cardiaque revenue), rien ne repart. Pour continuer : attendez la fin de la
+séance, acquittez par votre nom (§13.6), puis redémarrez une séance. Un acquittement
+donné avant la fin de la séance est repris aussitôt : refaites-le. Cela vaut pour une
+séance programmée comme pour une séance manuelle, capsule vide comprise. Ne terminent
+pas la séance de cette façon : votre STOP, votre propre cible à 0 quand aucun
+avertissement n'est en cours, et le retour au calme normal d'un programme.
+
+Ce qui reste possible sans clic : le premier mouvement d'une séance programmée, après
+sa phase `baseline`, même si un avertissement s'est levé entre-temps. En séance
+manuelle, une cible n'attend jamais sur un bras à l'arrêt (§13.11). Décisions et
+mesures : [securite.md](../securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques).
 
 ### La présence de l'accompagnant
 
 Il n'y a pas de bouton : tant qu'un onglet de la console est ouvert, la page envoie
 toutes les 5 s un signal « je suis là ». Si plus aucun signal n'arrive, la règle
 `attendant_absent` **gèle** la vitesse après 60 s, puis **termine la séance** après
-120 s. Cela prouve qu'un onglet est ouvert, **pas** qu'un humain regarde. Ne fermez
-pas l'onglet pendant une séance.
+120 s. Le gel n'est pas verrouillé : si un onglet redonne le signal avant 120 s, il se
+lève seul et la vitesse suit de nouveau la cible ou le programme. Cela prouve qu'un
+onglet est ouvert, **pas** qu'un humain regarde. Ne fermez pas l'onglet pendant une
+séance.
 
 ### La carte Camera / presence
 
@@ -866,7 +920,7 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
 10. Surveillez **Vitesse mesuree** jusqu'à 27,09 et `rampe : cible atteinte`
     (capture `console-09-manuel-27-atteint.png`).
 11. Regardez la liste **Evenements** (page Seance) pour vérifier qu'aucun refus n'est
-    apparu.
+    apparu. Si `cible appliquee` est restée ou revenue à `0.00`, voir §13.11.
 
 Pour changer de vitesse en cours de route : composez un nouveau brouillon avec les
 boutons, puis **Appliquer**. Pour ralentir jusqu'à l'arrêt, le mieux est **STOP**
@@ -945,6 +999,14 @@ Pas à pas :
     En simulation, la phase `baseline` (3 min) se passe à l'arrêt, puis la rotation
     commence doucement en `warmup`.
 12. La séance se termine seule à la fin du programme. Pour l'arrêter avant : **STOP**.
+    Elle se termine aussi avant sa fin si une règle de sécurité l'arrête, et en
+    particulier si la vitesse commandée revient à 0 sans que personne l'ait demandé
+    (un avertissement qui la baisse jusqu'à l'arrêt, ou la régulation elle-même quand
+    la fréquence cardiaque reste au-dessus de la zone) : règle `session_standstill`,
+    verrouillée. Le bras ne repart alors pas, même si la cause disparaît ; il faut
+    acquitter et redémarrer une séance (§11). En revanche, tant que le bras tourne,
+    une vitesse seulement gelée ou baissée par un avertissement non verrouillé
+    **remonte seule** quand il se lève.
 
 Âge du passager, constaté : sans âge,
 `demarrage refuse : age du passager requis pour une seance programmee` ; à 15 ans,
@@ -1120,11 +1182,23 @@ Repères :
 
 Que faire :
 
-1. En séance programmée (le cœur commande la vitesse) : faites **STOP** si la
-   fréquence ne revient pas rapidement. Les règles cardiaques du superviseur
-   réagissent à une fréquence périmée ; ce cas précis n'a pas été rejoué pour ce guide.
+1. En séance programmée (le cœur commande la vitesse), la règle `hr_stale` réagit
+   seule à une fréquence périmée : après 10 s la vitesse est gelée (`freeze`), après
+   30 s elle baisse (`reduce`), après 60 s la séance est terminée (`ramp_down`
+   verrouillé). Si la fréquence revient pendant que le bras tourne encore,
+   l'avertissement se lève seul et la vitesse **remonte sans clic**. Si la baisse a
+   amené le bras jusqu'à l'arrêt, la séance est **terminée** à cet instant (règle
+   `session_standstill`, verrouillée), même si la fréquence revient ensuite : le bras
+   ne repart pas. Faites **STOP** sans attendre si la fréquence ne revient pas
+   rapidement ; après l'arrêt, acquittez (§13.6) et redémarrez une séance. Ce cas n'a
+   pas été rejoué dans la page pour ce guide : il est vérifié par les tests
+   automatiques sur la console en simulation
+   (`raspberry-pi/tests/test_standstill_console.py`).
 2. En séance manuelle : décidez s'il faut continuer sans surveillance cardiaque.
-   Sans passager (banc), ce n'est pas un problème de sécurité.
+   Sans passager (banc), ce n'est pas un problème de sécurité. Avec une personne à
+   bord (séance manuelle par l'API seulement, jalon M6), `hr_stale` s'applique comme
+   en séance programmée, et une cible envoyée sur un bras à l'arrêt sans fréquence
+   cardiaque fiable est refusée (§13.11).
 3. Vérifiez le boîtier : allumé, batterie, distance, appairage Bluetooth
    (`/dev/rfcomm0` sur le Pi).
 4. La console se reconnecte d'elle-même dès que le boîtier redevient joignable
@@ -1244,6 +1318,60 @@ processus ne prouve alors l'arrêt de l'arbre ; aucune séance ne reprend seule.
 **Coupure secteur du variateur** : au retour, le variateur peut afficher `USF`
 (sous tension, réarmable) ; suivez §13.9.
 
+### 13.11 La cible manuelle est refusée, ou revient à 0
+
+Sur un bras **à l'arrêt**, la machine ne prend une cible que si rien n'empêche la
+vitesse de monter à cet instant. Sinon le bras partirait plus tard, tout seul, quand
+l'empêchement disparaît, avec peut-être quelqu'un à côté.
+
+Ce que vous voyez :
+
+1. Vous cliquez **Appliquer**. La note dit `cible envoyee : ...` : elle le dit dès que la
+   console a reçu la demande, avant que la machine ne l'ait jugée.
+2. `cible appliquee` reste à `0.00`, ou y revient ; le grand nombre reste orange ; le
+   bandeau **RAMPE EN COURS** n'apparaît pas. Le bras ne bouge pas.
+3. Dans la liste **Evenements** (page Seance), une ligne orange `refused` donne la
+   raison :
+   * `consigne refusee : ...` : la cible a été refusée ;
+   * `cible de <n> tr/min moteur remise a 0 : ...` (sans nom) : la cible avait été
+     acceptée, puis la machine l'a reprise avant le premier mouvement.
+
+Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
+`puis redonner la cible` : une fois la cause traitée, **renvoyez la cible**.
+
+| Le message dit | Ce qui retient le bras | Quoi faire avant de renvoyer la cible |
+|---|---|---|
+| `le verdict <règle> tient le bras a l'arret. Attendre qu'il soit leve` | un avertissement non verrouillé (par exemple `attendant_absent` : onglet resté sans signal ; `hr_stale` : plus de fréquence cardiaque fiable) | traiter la cause, attendre que la pastille Securite revienne à `none` |
+| `le verdict <règle> tient le bras a l'arret. L'acquitter une fois sa cause levee` | un verdict verrouillé (par exemple `loop_stall`) | traiter la cause, acquitter (§13.6) |
+| `pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable` | personne à bord : aucune lecture fiable depuis plus de 4 s | vérifier les électrodes et le BITalino, attendre que la fréquence soit affichée, non barrée |
+| `tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture` | personne à bord : l'ECG vient de commencer (moins de 5 lectures) | attendre quelques secondes |
+| `la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise` | personne à bord : la fréquence baisse de plus de 20 bpm/min. Elle redescend après un effort, ou elle a simplement perdu deux battements en cinq secondes | attendre quelques secondes ; si le refus se répète, attendre que la fréquence se stabilise |
+| `le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison` | le variateur n'a pas confirmé le premier pas (capsule vide comprise) | regarder **Vitesse mesuree** et la carte **Variateur** (état, `lectures / echecs`, `derniere erreur`), vérifier le câble |
+
+À savoir :
+
+* Rien n'est à acquitter pour les trois messages de fréquence cardiaque ni pour celui du
+  variateur : ce ne sont pas des verdicts.
+* La machine ne retente rien d'elle-même. Tant que vous ne renvoyez pas la cible, le
+  bras reste à l'arrêt, même si l'avertissement se lève, si vous acquittez, ou si la
+  fréquence cardiaque revient.
+* Une cible de 0 est toujours acceptée.
+* Sur un bras **qui tourne**, rien de cela ne s'applique : une cible plus haute est
+  acceptée et gardée, la vitesse reste où elle est tant que quelque chose la retient,
+  puis elle monte **sans nouveau clic** quand l'empêchement disparaît.
+* La garde sur la baisse de la fréquence cardiaque est sensible. La fréquence réelle de
+  ces refus n'a pas été mesurée sur un vrai ECG (voir
+  [securite.md](../securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178)).
+* Rien, sur la page, n'annonce avant d'envoyer une cible que la fréquence cardiaque
+  retient une montée : c'est un défaut connu de la page.
+
+> **Non rejoué dans la page.** Ces messages viennent du code et des tests automatiques,
+> qui pilotent la vraie console en simulation par son API
+> (`raspberry-pi/tests/test_manual_target_held_console.py`). Aucune capture n'a été
+> prise. Les trois messages de fréquence cardiaque ne concernent qu'une séance manuelle
+> avec une personne à bord, que la page ne propose pas et que la configuration refuse
+> aujourd'hui (jalon M6).
+
 ## 14. Message affiché, ce qu'il veut dire, quoi faire
 
 Où chercher : sous le bouton concerné (note rouge), dans une fenêtre d'alerte (STOP,
@@ -1302,6 +1430,9 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `consigne refusee : 32.00 tr/min de sortie hors de 0 ou [55, 1380] tr/min moteur` | cible hors domaine, ni arrondie ni bornée | choisir une cible entre le minimum et le plafond |
 | `consigne refusee : pas de session manuelle (<état>)` | plus de séance manuelle | redémarrer une séance |
 | `consigne refusee : <détail>` | la séance manuelle se termine | attendre la fin, redémarrer |
+| `consigne refusee : le verdict <règle> tient le bras a l'arret. ...` | une règle de sécurité tient le bras à l'arrêt : la cible n'est pas prise, pour que le bras ne parte pas seul plus tard | §13.11 |
+| `consigne refusee : pas de frequence cardiaque utilisable ...`, `... tendance de la frequence cardiaque pas encore connue ...`, `... la frequence cardiaque baisse trop vite ...` | personne à bord : la fréquence cardiaque ne permet pas de monter depuis l'arrêt (aucun verdict) | §13.11 |
+| `cible de <n> tr/min moteur remise a 0 : ...` (sans nom d'opérateur) | la machine a repris une cible qu'elle avait acceptée, avant le premier mouvement : règle de sécurité, fréquence cardiaque, ou variateur qui n'a pas confirmé | §13.11 |
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante | §13.1 |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
@@ -1339,7 +1470,9 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `la capsule est vue vide alors qu'une PERSONNE A BORD est declaree : arret controle` | caméra | arrêt contrôlé |
 | `le harnais du passager est vu detache : arret controle` | caméra | arrêt contrôlé |
 | `un membre du passager est vu hors de la capsule : arret controle` | caméra | arrêt contrôlé |
-| `attendant_absent` | onglet fermé ou injoignable | gel après 60 s, arrêt contrôlé après 120 s |
+| `attendant_absent` | onglet fermé ou injoignable | gel après 60 s (il se lève seul si un onglet redonne le signal), arrêt contrôlé verrouillé après 120 s |
+| `the arm came to a standstill inside the session (<cause> brought the setpoint to zero): the session has ended, and a stopped arm never restarts by itself. ...` | `session_standstill` | séance terminée, verrouillé ; le bras est déjà à l'arrêt et ne repart pas (§11) |
+| `...; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` | fin de phrase ajoutée à toute règle non verrouillée (`freeze`, `reduce`), tant que la séance peut encore prendre de la vitesse | la règle se lèvera seule ; tant que le bras tourne, la vitesse pourra remonter sans clic (§11) |
 
 ## 15. FAQ et pièges
 
@@ -1352,8 +1485,20 @@ Normal : c'est un brouillon (nombre orange). Cliquez **Appliquer**.
 
 **J'ai cliqué sur Appliquer, la page dit « cible envoyee », mais la cible n'a pas
 changé.**
-La machine a refusé après coup. Regardez la liste **Evenements** (page Seance) : un
-`refused` orange dit pourquoi.
+La machine a refusé après coup, ou a remis la cible à 0. La note « cible envoyee »
+veut seulement dire que la console a reçu la demande. Regardez la liste **Evenements**
+(page Seance) : un `refused` orange dit pourquoi (§13.11).
+
+**Le bras s'est arrêté pendant la séance, la cause a disparu, et rien ne repart.**
+C'est voulu. Un bras qui s'arrête en cours de séance sans que personne l'ait demandé
+termine la séance (règle `session_standstill`, verrouillée) : il ne repart jamais seul.
+Acquittez (§13.6), puis redémarrez une séance ; en manuel, la nouvelle séance repart
+d'une cible à 0.
+
+**La vitesse a été gelée ou baissée par une alerte. Puis-je m'approcher du bras ?**
+Non, pas tant qu'il tourne. Un avertissement non verrouillé (`verrouille` à `non`) se
+lève seul quand sa cause disparaît, et la vitesse remonte alors sans aucun clic (§11).
+Faites **STOP** et attendez `a l'arret` avant d'approcher.
 
 **Je ne peux pas dépasser 6 tr/min.**
 Le plafond par défaut est `MOTOR_MAX_RPM=300` (tr/min moteur). Relevez-le par paliers
@@ -1460,7 +1605,14 @@ Pour être clair sur ce que ce guide garantit :
 * **Démarrage sur le Pi** (§3.4) : tiré de la configuration et du fichier
   `scripts/anheart.service`, non rejoué ; le service n'a pas été installé ni activé
   pour ce guide.
-* **Perte de l'ECG en séance programmée** : non rejouée pour ce guide.
+* **Perte de l'ECG en séance programmée** : non rejouée dans la page pour ce guide. Ce
+  que décrit §13.8 vient du code et des tests automatiques sur la console en
+  simulation.
+* **Avertissements qui se lèvent seuls, règle `session_standstill`** (§11) **et cible
+  manuelle refusée ou remise à 0** (§13.11) : décrits d'après le code et les tests
+  automatiques sur la console en simulation. Aucune capture, rien de rejoué dans un
+  navigateur. La fréquence réelle des refus liés à la fréquence cardiaque n'a pas été
+  mesurée sur un vrai ECG.
 * **Reconnexion d'un vrai BITalino** : non rejouée (le simulateur utilisé ici reste
   déconnecté).
 * **Durées** (montée à 27 tr/min en environ 1 min 45, arrêt en environ 1 min 40,
