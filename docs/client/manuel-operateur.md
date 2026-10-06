@@ -204,7 +204,8 @@ chose est en cours. Rouge : problème ou arrêt.
 | | « SEANCE » | Une séance programmée est en cours. |
 | | « ARRET » | Un arrêt est enregistré et n'est pas terminé, par exemple une fin de séance en cours. Cela ne dit pas que le bras est arrêté, ni même qu'il ralentit : regardez **Rotation** et **Vitesse mesuree**. Tant que « ARRET » est affiché, aucun démarrage n'est accepté. |
 | **Etat** | « idle » | Aucune séance n'est ouverte. C'est le seul état où un démarrage est accepté, mais cela ne suffit pas : il peut être refusé pour une autre raison. |
-| | « starting », « running », « stopping » | Un démarrage vient d'être accepté, une séance est ouverte, un arrêt a été demandé. Affichée en rouge : un arrêt d'urgence est verrouillé. **Etat** ne suit pas toujours **Mode** : voir sous ce tableau. |
+| | « starting », « running », « stopping » | Un démarrage vient d'être accepté, une séance est ouverte, un arrêt a été demandé. **Etat** ne suit pas toujours **Mode** : voir sous ce tableau. |
+| | n'importe laquelle de ces valeurs, en rouge | Un arrêt d'urgence est verrouillé. Cela vaut aussi pour « idle ». |
 | **Liaison** | « en direct » | L'écran reçoit des données fraîches. |
 | | « donnees figees », « hors ligne » | L'écran ne reçoit plus rien. Ne croyez plus les nombres. |
 | **Rotation** | « a l'arret » | À cet instant, la vitesse mesurée est inférieure à 0,05 tr/min. Cela ne dit pas que le bras va rester à l'arrêt : voir les règles 5 et 6 ([section 2](#2-les-huit-règles-à-retenir)). |
@@ -222,14 +223,17 @@ mené à son terme, parce qu'un défaut du variateur survient au repos
 alors que tout démarrage est refusé. Pour savoir où en est la machine, lisez
 **Mode**, **Rotation** et **Securite**, pas **Etat**.
 
-### Les deux bandeaux rouges
+### Les bandeaux en haut de l'écran
 
-Ils s'affichent tout en haut, sur toutes les pages.
+Ils s'affichent tout en haut, sur toutes les pages. Trois sont rouges, un est
+orange. Plusieurs peuvent être affichés en même temps.
 
 | Bandeau | Ce que cela veut dire |
 |---|---|
 | « NO LIVE DATA » | L'écran ne reçoit plus de données. Les nombres affichés sont anciens : voir la [section 9.3](#93-bandeau-rouge-no-live-data). |
+| « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». La demande reste en attente : si elle aboutit, ce bandeau est remplacé par le suivant ([section 8](#8-arrêter-la-machine)). |
 | « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « REPRISE AUTOMATIQUE POSSIBLE » (orange) | La console garde ou baisse la vitesse à cause d'une alerte qui n'est pas verrouillée. Quand cette alerte disparaîtra, la vitesse remontera seule, sans aucun clic ([section 9.2](#92-la-console-agit-seule)). |
 
 ### Les pages
 
@@ -937,7 +941,7 @@ Vous le voyez à ces signes :
 - la pastille « deconnecte » dans la carte **BITalino** (le capteur
   cardiaque), page **Tableau de bord** ;
 - dans le menu, les points placés devant les capteurs deviennent creux et
-  gris.
+  orange.
 
 ![Capteur cardiaque déconnecté](../guides/img/console-17-bitalino-deconnecte.png)
 
