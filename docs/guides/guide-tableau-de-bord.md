@@ -564,13 +564,21 @@ pendant 2 s) et gardez la en lieu sûr. Une fois la fenêtre fermée, **personne
 pourra la relire**, pas même un administrateur. Elle doit être recopiée dans le
 fichier de configuration du Raspberry Pi (voir [procédure P5](#p5-enregistrer-une-machine-et-installer-sa-clé)).
 
-> **Attention (gestionnaire qui modifie une machine).** Le bouton **Enregistrer**
-> applique bien le nom, le lieu et la configuration, puis tente de réécrire la
-> liste des gestionnaires de la machine, ce qui est réservé aux
-> administrateurs. Résultat probable : un message d'erreur rouge en haut de la
-> fenêtre (« Unauthorized. Required roles: admin. Your role: gestionnaire »),
-> **alors que les changements sont déjà enregistrés**. Fermez la fenêtre et
-> vérifiez la carte Configuration.
+**Après « Enregistrer »** (modification), la fenêtre se ferme et la carte
+Configuration du détail affiche « Machine mise à jour avec succès ». Un
+gestionnaire enregistre ainsi le nom et le lieu de sa machine sans erreur. La
+liste **Assigner aux Gestionnaires** n'est envoyée au serveur que par un
+administrateur, et seulement s'il a changé les cases. Si le serveur refuse,
+son message s'affiche en rouge en haut de la fenêtre, qui reste ouverte.
+
+> **Attention (gestionnaire qui modifie une machine) : corrigé dans le code le
+> 6 octobre 2026, pas encore en production.** Tant que le redéploiement n'a
+> pas eu lieu, le site en ligne garde l'ancien comportement : le bouton
+> **Enregistrer** applique bien le nom, le lieu et la configuration, puis
+> affiche un message d'erreur rouge en haut de la fenêtre (« Unauthorized.
+> Required roles: admin. Your role: gestionnaire »), **alors que les
+> changements sont déjà enregistrés**. Fermez la fenêtre et vérifiez la carte
+> Configuration.
 
 ### 4.6 Détail d'une machine
 
@@ -2146,7 +2154,7 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
 | « Birth year gives an implausible age » | Âge hors de 10 à 100 ans. | Corriger. |
 | « Email already in use by an existing ... account (...) » | Adresse déjà utilisée. | Retrouver la fiche existante. |
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
-| « Unauthorized. Required roles: admin. Your role: gestionnaire » | Action réservée à l'administrateur (par exemple à la fin de **Modifier** une machine par un gestionnaire, voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
+| « Unauthorized. Required roles: admin. Your role: gestionnaire » | Action réservée à l'administrateur. Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, ce message s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
 | « Not authorized to manage this machine » | Machine non attribuée à vous. | P6. |
 | « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (souvent sans affichage, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Cannot delete your own account » | Tentative de suppression de soi. | Demander à un autre administrateur. |
@@ -2298,7 +2306,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 1 | (Corrigé dans le code le 1er octobre 2026, à vérifier au redéploiement.) La lecture de « l'utilisateur connecté » ne déclarait ni FC max ni année de naissance. | Aurait bloqué le tableau de bord de tout compte dont la physiologie est saisie. | Vérifier après le redéploiement avec un patient dont la physiologie est saisie. |
 | 2 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) **Assigner des Machines** (fiche gestionnaire) remplaçait tous les gestionnaires de chaque machine cochée, et ne retirait rien quand on décochait. | Des gestionnaires perdaient l'accès sans le savoir. | Jusqu'au redéploiement : passer par **Modifier** sur le détail de la machine (P6). |
 | 3 | **Nouvelle session** crée un enregistrement ECG en attente que la console d'entraînement ne prend jamais, et que le site ne sait pas annuler. | La machine devient **inlançable** et **non supprimable**. | Ne pas utiliser ce bouton. Nettoyage via la console Convex. |
-| 4 | Un gestionnaire qui **Modifie** une machine reçoit une erreur alors que la modification est enregistrée. | Confusion. | Vérifier la carte Configuration. |
+| 4 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) Un gestionnaire qui **Modifiait** une machine recevait une erreur alors que la modification était enregistrée. | Confusion. | Jusqu'au redéploiement : vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |
 | 7 | Une séance **en attente** n'expire jamais côté serveur. | Si la machine revient en ligne des heures après, elle peut tenter de démarrer une séance oubliée. | Toujours annuler une séance en attente inutile. |
