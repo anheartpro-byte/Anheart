@@ -41,6 +41,7 @@ var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this l
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
+var LOOP_ANSWER_S = 1;          // the loop empties its mailbox every 0.2 s: past this, on its clock, no answer is coming
 var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator"];
 
 var state = {
@@ -71,6 +72,8 @@ var state = {
   sensorOrder: [],       // kinds, in configuration order
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
+  manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
+  manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
   dirty: {},             // canvas id -> true when it needs a redraw
 };
 
@@ -545,6 +548,7 @@ function renderSnapshot(snapshot) {
   renderMode(snapshot);
   renderConsole(snapshot);
   renderManual(snapshot);
+  settleManualTarget(snapshot);
   renderEstopBanner();
 
   /* --- heart rate, with its age carried alongside --------------------- */
@@ -887,16 +891,101 @@ function doManualStart() {
     });
 }
 
+/*
+  What became of a manual target. "Appliquer" is answered 202 as soon as the
+  mailbox holds the target: the loop judges it on its next tick, and may
+  refuse it, or take it and put it back to 0 before the first step. A note
+  that said "the machine is going there" at the 202 said it of a target the
+  machine never took.
+
+  So the note is written from what the machine reports, three times:
+
+  - at the 202: sent, not taken yet;
+  - a `refused` event is the loop's answer, and the note becomes that refusal
+    word for word. An event reaches this screen before the frame of the same
+    tick, and now and then before the 202 itself: a refusal already shown for
+    this command is not overwritten by it;
+  - the first frame taken after the command whose applied target is the one
+    sent says the machine took it. When a second of the machine's own clock
+    has gone by with neither, the target was not taken and the reason did not
+    reach this screen (a socket that reconnects loses its events).
+
+  A target the machine takes back later, and a refusal answered to another
+  screen, are `refused` events too. With a manual session on screen they go to
+  this note as well: they are about the target this card shows.
+*/
+function manualOnScreen() {
+  var snapshot = state.snapshot;
+  return Boolean(snapshot && snapshot.mode !== "repos" && snapshot.manual);
+}
+
+/*
+  Whether the applied target is `rpm`, in the motor rpm the machine counts in:
+  it rounds a target to a whole motor rpm, so the two differ by half of one at
+  most. The ratio is read off the ceiling, which is never 0 in a session.
+*/
+function holdsTarget(manual, rpm) {
+  var ceiling = manual.ceiling;
+  if (!ceiling.output_rpm) {
+    return false;
+  }
+  return Math.abs(manual.target.motor_rpm - (rpm * ceiling.motor_rpm) / ceiling.output_rpm) < 0.501;
+}
+
+function noteLoopRefusal(event) {
+  var sent = state.manualSent;
+  var answers = Boolean(sent && event.at >= sent.at);
+  if (!answers && !manualOnScreen()) {
+    return;
+  }
+  if (answers) {
+    state.manualSent = null;
+  }
+  state.manualRefusedAt = event.at;
+  problem(
+    el("manual-note"),
+    "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail
+  );
+}
+
+function settleManualTarget(snapshot) {
+  var sent = state.manualSent;
+  if (!sent || snapshot.at <= sent.at) {
+    return;
+  }
+  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
+  if (manual && holdsTarget(manual, sent.rpm)) {
+    ok(el("manual-note"), "cible prise par la machine : " + sent.detail + " (suivie aux limites de mouvement)");
+  } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
+    return;
+  } else if (manual) {
+    problem(
+      el("manual-note"),
+      "cible NON prise par la machine : la cible appliquee est " + num(manual.target.output_rpm, 2) +
+        " tr/min de sortie. La raison n'est pas arrivee a cet ecran."
+    );
+  } else {
+    problem(el("manual-note"), "cible NON prise par la machine : la seance manuelle est terminee.");
+  }
+  state.manualSent = null;
+}
+
 function doManualApply() {
   var note = el("manual-note");
+  var rpm = state.manualDraft || 0;
   api("/api/manual/target", {
     method: "POST",
-    body: { output_rpm: state.manualDraft || 0, operator: operatorName() },
+    body: { output_rpm: rpm, operator: operatorName() },
   })
     .then(function (command) {
-      ok(note, "cible envoyee : " + command.detail + " - la machine y va aux limites de mouvement");
+      if (state.manualRefusedAt !== null && state.manualRefusedAt >= command.at) {
+        return;
+      }
+      state.manualSent = { at: command.at, rpm: rpm, detail: command.detail };
+      ok(note, "cible envoyee : " + command.detail + " - pas encore prise par la machine");
     })
     .catch(function (error) {
+      state.manualSent = null;
       problem(note, error);
     });
 }
@@ -958,6 +1047,9 @@ function renderZoneBand(bpm) {
 }
 
 function addEvent(event) {
+  if (event.kind === "refused") {
+    noteLoopRefusal(event);
+  }
   state.events.unshift(event);
   state.events = state.events.slice(0, 40);
   var list = el("events");

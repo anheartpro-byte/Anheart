@@ -794,3 +794,189 @@ test("the tab is titled after the page it shows", () => {
   context.showView("sensor", "RESP");
   assert.equal(context.document.title, "RESP - AnHeart");
 });
+
+/* ======================= what the loop made of a manual target ======================= */
+
+const RATIO = 49.79;
+
+// One speed as the API renders it, from the whole motor rpm the machine counts in.
+const turning = (motor) => ({ motor_rpm: motor, output_rpm: motor / RATIO, hertz: motor / 27.6, g_load: 0, resultant_g: 1 });
+
+function manualRow(target = 0, overrides = {}) {
+  return {
+    occupancy: "bench",
+    occupancy_label: "BANC - personne a bord : NON",
+    target: turning(target),
+    ceiling: turning(300),
+    min_run: turning(55),
+    ramping: false,
+    ramp_eta_s: null,
+    ...overrides,
+  };
+}
+
+// A manual session as one frame shows it, the applied target in motor rpm.
+const manualFrame = (at, target = 0, overrides = {}) =>
+  snapshot({ at, mode: "manuel", phase: "hold", manual: manualRow(target), ...overrides });
+
+// What the loop publishes when it refuses a command, or takes a target back (no operator then).
+const refusal = (at, detail, operator = "op") => ({ kind: "refused", at, wall_clock: 0, operator, detail });
+
+const HELD = "consigne refusee : le verdict hr_stale tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible";
+const TAKEN_BACK =
+  "cible de 249 tr/min moteur remise a 0 : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. " +
+  "Attendre une frequence cardiaque fiable, puis redonner la cible";
+
+// The operator composes `rpm` and presses "Appliquer"; the console takes the target into its mailbox at `at`.
+async function apply(context, rpm, at) {
+  context.state.manualDraft = rpm;
+  context.api = (path, options) =>
+    path === "/api/manual/target"
+      ? Promise.resolve({ kind: "manual_target", operator: "op", detail: options.body.output_rpm.toFixed(2) + " output rpm", at })
+      : new Promise(() => undefined);
+  context.doManualApply();
+  await settle();
+}
+
+test("the 202 of Appliquer says the target is sent, not that the machine is on its way", async () => {
+  // Given a manual session at standstill, and a target the console has only put in its mailbox.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // Then the note claims nothing the loop has not said yet.
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  // And a frame taken before the command changes nothing: it cannot speak about it.
+  frame(manualFrame(59.9));
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+});
+
+test("a target the loop refuses turns the note into that refusal", async () => {
+  // Given a target sent over an arm that a verdict holds at standstill.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8, 0, verdict("freeze", "hr_stale", false)));
+  await apply(context, 5, 60);
+  // When the loop refuses it on its next tick, as an event.
+  context.addEvent(refusal(60.1, HELD));
+  // Then the note is the refusal, in red, word for word, and no longer says "sent".
+  const note = node("manual-note");
+  assert.ok(note.textContent.includes(HELD), note.textContent);
+  assert.ok(note.textContent.startsWith("refus de la machine"), note.textContent);
+  assert.equal(note.textContent.includes("cible envoyee"), false);
+  assert.ok(note.classes.has("note-bad"));
+  // And the frames that follow, target still at 0, leave it there.
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(manualFrame(60 + tick * 0.2, 0, verdict("freeze", "hr_stale", false)));
+  }
+  assert.ok(note.textContent.includes(HELD), note.textContent);
+});
+
+test("a refusal that reaches the screen before the 202 is not overwritten by it", async () => {
+  // Given a refusal the socket delivered first: it is stamped after the command it answers.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  context.addEvent(refusal(60.1, HELD));
+  // When the 202 of that command arrives.
+  await apply(context, 5, 60);
+  // Then the note still says refused, and nothing is awaited any more.
+  assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
+  assert.equal(context.state.manualSent, null);
+  // And a later target is not taken for answered by that older refusal.
+  await apply(context, 4, 70);
+  assert.equal(node("manual-note").textContent, "cible envoyee : 4.00 output rpm - pas encore prise par la machine");
+});
+
+test("the note says the machine took the target once a frame shows it applied", async () => {
+  // Given a target sent: 5.00 tr/min at the arm is 249 tr/min at the motor.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the first frame taken after the command shows that target applied.
+  frame(manualFrame(60.2, 249));
+  // Then the note says so, from the machine's own report.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  assert.equal(context.state.manualSent, null);
+});
+
+test("an applied target one motor rpm away from the one sent is not read as taken", async () => {
+  // Given a turning arm holding 249 tr/min moteur, and 5.02 tr/min sent (250 at the motor).
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8, 249));
+  await apply(context, 5.02, 60);
+  // When the frames keep showing 249: the new target was not taken.
+  frame(manualFrame(60.2, 249));
+  // Then the note does not say it was.
+  assert.equal(node("manual-note").textContent.includes("prise par la machine :"), false, node("manual-note").textContent);
+  frame(manualFrame(60.4, 250));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"), node("manual-note").textContent);
+});
+
+test("a target the machine takes back is written in the note of every screen showing the session", async () => {
+  for (const clicked of [true, false]) {
+    // Given a target the machine took, on the screen that sent it and on one that did not.
+    const { context, frame, node } = panel();
+    frame(manualFrame(59.8));
+    if (clicked) await apply(context, 5, 60);
+    frame(manualFrame(60.2, 249));
+    // When the machine puts it back to 0 before the first step: nobody's command, no operator.
+    context.addEvent(refusal(60.4, TAKEN_BACK, ""));
+    frame(manualFrame(60.4));
+    // Then both notes say so, in red.
+    const note = node("manual-note");
+    assert.ok(note.textContent.includes(TAKEN_BACK), `clicked=${clicked}: ${note.textContent}`);
+    assert.ok(note.classes.has("note-bad"));
+  }
+});
+
+test("with no word from the loop for a second of its clock, the note says the target was not taken", async () => {
+  // Given a target sent, and a refusal that never reached this screen (its socket reconnected).
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // While the loop may still answer, the note waits.
+  frame(manualFrame(60.8));
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  // When more than a second of the machine's clock has passed and the applied target is still 0.
+  frame(manualFrame(61.2));
+  // Then the note stops waiting, and says what the machine holds instead.
+  const note = node("manual-note");
+  assert.ok(note.textContent.startsWith("cible NON prise par la machine"), note.textContent);
+  assert.ok(note.textContent.includes("0.00 tr/min de sortie"), note.textContent);
+  assert.ok(note.classes.has("note-bad"));
+});
+
+test("a target still unanswered when the session is over is said not taken", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the machine is back at rest with no manual session, a second later.
+  frame(snapshot({ at: 61.2 }));
+  assert.equal(node("manual-note").textContent, "cible NON prise par la machine : la seance manuelle est terminee.");
+  assert.ok(node("manual-note").classes.has("note-bad"));
+});
+
+test("a refusal that is not about a manual target is left to the event list", () => {
+  // Given a machine at rest: no manual session on screen, no target awaited.
+  const { context, frame, node } = panel();
+  frame(snapshot());
+  // When the loop refuses a programme somebody asked for.
+  context.addEvent(refusal(51, "demarrage refuse : age du passager requis pour une seance programmee"));
+  // Then the manual card says nothing about it, and the event is listed as before.
+  assert.equal(node("manual-note").textContent, "");
+  assert.equal(node("events").children.length, 1);
+});
+
+test("an Appliquer the console refuses outright shows that answer and awaits nothing", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the next click is refused by the route itself (409).
+  context.api = () => Promise.reject(new Error("the machine is already stopping"));
+  context.doManualApply();
+  await settle();
+  // Then the note is that answer, and no frame rewrites it with the fate of the earlier target.
+  assert.equal(node("manual-note").textContent, "the machine is already stopping");
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, "the machine is already stopping");
+});
