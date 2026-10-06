@@ -525,7 +525,12 @@ async def _occupied() -> Rig:
     rig = _rig()
     rig.fed_bpm = Bpm(80)
     rig.feed(Bpm(80))
-    return await _manual(rig, occupancy=Occupancy.OCCUPIED)
+    started = await _manual(rig, occupancy=Occupancy.OCCUPIED)
+    # Six more seconds of readings, so the heart rate's trend is known, as it
+    # is on a console whose ECG has been running. With a single reading the
+    # first target is refused since ANH-178: it used to be accepted and to wait.
+    await started.run(6.0)
+    return started
 
 
 async def test_occupied_needs_a_heart_rate_and_never_rises_without_one() -> None:

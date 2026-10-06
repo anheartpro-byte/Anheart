@@ -142,6 +142,7 @@ from src.training.runtime import (
     DriveUnavailable,
     FaultResetRefusal,
     HeldAtStandstill,
+    Holding,
     LimitsMismatch,
     ManualEnding,
     ManualTargetRefusal,
@@ -153,6 +154,7 @@ from src.training.runtime import (
     ResetForbidden,
     ResetUndelivered,
     ResetWhileCommanded,
+    RiseHold,
     RuntimeLimits,
     RuntimeState,
     SafetyStanding,
@@ -1143,29 +1145,52 @@ def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
                 f"consigne refusee : {requested:.2f} tr/min de sortie hors de 0 ou "
                 f"[{low}, {high}] tr/min moteur"
             )
-        case HeldAtStandstill(verdict=verdict):
-            return (
-                f"consigne refusee : le verdict {verdict.rule} tient le bras a l'arret. "
-                f"{_once_nothing_stands(verdict)}, puis redonner la cible"
-            )
+        case HeldAtStandstill(by=by):
+            return f"consigne refusee : {_held_by(by)}, puis redonner la cible"
         case _ as unreachable:
             assert_never(unreachable)
 
 
 def describe_withdrawn_target(withdrawn: WithdrawnTarget) -> str:
     """One line for a manual target the runtime took back (see ``WithdrawnTarget``)."""
-    verdict = withdrawn.verdict
     return (
-        f"cible de {withdrawn.target} tr/min moteur remise a 0 : le verdict {verdict.rule} "
-        f"tient le bras a l'arret. {_once_nothing_stands(verdict)}, puis redonner la cible"
+        f"cible de {withdrawn.target} tr/min moteur remise a 0 : {_held_by(withdrawn.by)}, "
+        "puis redonner la cible"
     )
 
 
-def _once_nothing_stands(verdict: SafetyVerdict) -> str:
-    """What the operator has to wait for, or do, before a target is taken again."""
-    if verdict.latched:
-        return "L'acquitter une fois sa cause levee"
-    return "Attendre qu'il soit leve"
+def _held_by(by: Holding) -> str:
+    """What holds the arm at standstill, then what has to happen before a target is taken again.
+
+    Exhaustive over a verdict and every :class:`~src.training.runtime.RiseHold`:
+    a hold added later has no words until somebody writes them here.
+    """
+    match by:
+        case SafetyVerdict(rule=rule, latched=latched):
+            wait = "L'acquitter une fois sa cause levee" if latched else "Attendre qu'il soit leve"
+            return f"le verdict {rule} tient le bras a l'arret. {wait}"
+        case RiseHold.NO_HEART_RATE:
+            return (
+                "pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. "
+                "Attendre une frequence cardiaque fiable"
+            )
+        case RiseHold.TREND_UNKNOWN:
+            return (
+                "tendance de la frequence cardiaque pas encore connue, rien ne monte depuis "
+                "l'arret. Attendre quelques secondes de lecture"
+            )
+        case RiseHold.HEART_RATE_FALLING:
+            return (
+                "la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. "
+                "Attendre qu'elle se stabilise"
+            )
+        case RiseHold.WRITE_UNACKNOWLEDGED:
+            return (
+                "le variateur n'a pas confirme la consigne, le bras reste a l'arret. "
+                "Verifier la liaison"
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
