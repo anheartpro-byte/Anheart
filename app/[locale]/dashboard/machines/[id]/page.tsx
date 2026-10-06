@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
@@ -69,9 +70,11 @@ export default function MachineDetailPage({
   const [restoring, setRestoring] = useState(false);
   const [showLaunchModal, setShowLaunchModal] = useState(false);
 
-  const deleteMachine = useMutation(api.machines.deleteMachine);
-  const regenerateApiKey = useMutation(api.machines.regenerateApiKey);
-  const restoreMachine = useMutation(api.machines.restoreMachine);
+  const deleteMachine = useMutationWithFeedback(api.machines.deleteMachine);
+  const regenerateApiKey = useMutationWithFeedback(
+    api.machines.regenerateApiKey,
+  );
+  const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
   const statusLabel = useMachineStatusLabel();
@@ -80,33 +83,31 @@ export default function MachineDetailPage({
   const isAdmin = user?.role === "admin";
 
   const handleDelete = async () => {
-    try {
-      await deleteMachine({ machineId });
-      router.push("/dashboard/machines");
-    } catch (err) {
-      console.error(err);
-    }
+    const result = await deleteMachine(
+      { machineId },
+      { success: t("machines.deleteSuccess") },
+    );
+    if (result.ok) router.push("/dashboard/machines");
   };
 
   const handleRestore = async () => {
     setRestoring(true);
-    try {
-      await restoreMachine({ machineId });
-      setShowRestoreDialog(false);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRestoring(false);
-    }
+    const result = await restoreMachine(
+      { machineId },
+      { success: t("feedback.machineRestored") },
+    );
+    if (result.ok) setShowRestoreDialog(false);
+    setRestoring(false);
   };
 
   const handleRegenerate = async () => {
-    try {
-      const result = await regenerateApiKey({ machineId });
-      setNewApiKey(result.apiKey);
+    const result = await regenerateApiKey(
+      { machineId },
+      { success: t("feedback.apiKeyRegenerated") },
+    );
+    if (result.ok) {
+      setNewApiKey(result.value.apiKey);
       setShowRegenerateDialog(false);
-    } catch (err) {
-      console.error(err);
     }
   };
 

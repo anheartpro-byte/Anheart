@@ -1,13 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
-import {
-  Authenticated,
-  Unauthenticated,
-  useMutation,
-  useQuery,
-} from "convex/react";
+import { Authenticated, Unauthenticated, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { SignUpButton, SignInButton } from "@clerk/nextjs";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
@@ -113,7 +109,7 @@ function HeroSection() {
 function AuthenticatedHero() {
   const t = useTranslations("home");
   const user = useQuery(api.users.getCurrentUser);
-  const syncUser = useMutation(api.users.getOrCreateUser);
+  const syncUser = useMutationWithFeedback(api.users.getOrCreateUser);
 
   useEffect(() => {
     if (user === null) {

@@ -751,11 +751,11 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
 | **Régénérer** (ligne « Régénérer la clé », « Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner. ») | Fenêtre de confirmation (« La clé API actuelle sera invalidée immédiatement. La machine devra être reconfigurée avec la nouvelle clé. »), **Annuler** / **Confirmer**. Après **Confirmer**, la nouvelle clé s'affiche **une seule fois** comme à la création. **La machine cesse aussitôt de communiquer** jusqu'à ce que la nouvelle clé soit installée sur son Raspberry Pi. |
 | **Supprimer** (ligne « Désactiver cette machine. Peut être restaurée par un admin. ») | Grisé si la machine est **En session**. Fenêtre « Supprimer cette machine? », « Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire. », **Annuler** / **Supprimer**. En cas de succès, retour à la liste des machines. |
 
-> **Attention : les refus de suppression sont muets.** Si le serveur refuse
-> (séance en attente sur la machine, par exemple), la fenêtre reste ouverte et
-> **aucun message ne s'affiche** (l'erreur part seulement dans la console du
-> navigateur). Si **Supprimer** ne fait rien, cherchez une séance « En attente »
-> sur cette machine dans **Sessions**, annulez la, puis recommencez.
+> **Refus de suppression.** Si le serveur refuse (séance en attente sur la
+> machine, par exemple), la fenêtre reste ouverte et un **message d'échec**
+> s'affiche en bas à droite de l'écran (depuis ANH-156 ; avant, rien ne
+> s'affichait). Cherchez alors une séance « En attente » sur cette machine dans
+> **Sessions**, annulez la, puis recommencez.
 
 ### 4.7 Mes machines
 
@@ -1277,7 +1277,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 | Bloc | Contenu et actions |
 |---|---|
 | En tête | Flèche retour vers **Patients**, nom, adresse, bouton **Modifier** (fenêtre du [§4.13](#413-patients-liste-et-fenêtres-patient)). |
-| **Informations patient** | Nom, badge de rôle, adresse, langue, date de création. Bouton **Supprimer** : fenêtre « Êtes-vous sûr de vouloir supprimer cet utilisateur? », texte anglais « This action cannot be undone... », **Annuler** / **Supprimer**. La suppression est **définitive** ; en cas de refus, rien ne s'affiche. |
+| **Informations patient** | Nom, badge de rôle, adresse, langue, date de création. Bouton **Supprimer** : fenêtre « Êtes-vous sûr de vouloir supprimer cet utilisateur? », texte anglais « This action cannot be undone... », **Annuler** / **Supprimer**. La suppression est **définitive** ; en cas de refus, un message d'échec s'affiche en bas à droite de l'écran. |
 | **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. Action : **Voir en direct** (active), **Voir le rapport** (terminée, ouvre le détail), « - » sinon. Une séance échouée ou en attente s'ouvre depuis **Sessions**. |
 | **Physiologie** | Voir ci dessous. |
 
@@ -1486,7 +1486,7 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 | Carte | Contenu |
 |---|---|
 | **Votre Compte** | Vos nom, adresse, rôle, langue. Lecture seule. |
-| **Gestion des Rôles** | **Sélectionner un Utilisateur** (tous les comptes sauf vous, « Nom - Rôle »), **Nouveau Rôle** (Administrateur, Gestionnaire, Patient), bouton **Mettre à jour le Rôle** (« Chargement... » pendant l'envoi). En cas de succès, les deux listes se vident. **Aucun message de confirmation ni d'erreur** ne s'affiche : vérifiez dans **Utilisateurs**. |
+| **Gestion des Rôles** | **Sélectionner un Utilisateur** (tous les comptes sauf vous, « Nom - Rôle »), **Nouveau Rôle** (Administrateur, Gestionnaire, Patient), bouton **Mettre à jour le Rôle** (« Chargement... » pendant l'envoi). En cas de succès, les deux listes se vident et le message « Rôle mis à jour. » s'affiche en bas à droite de l'écran ; en cas d'échec, un message d'échec s'affiche au même endroit. |
 | **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version, langues, « Délai d'expiration du heartbeat: 90s ». |
 
 Il n'y a **aucun autre réglage** sur le site : ni notifications, ni mot de passe
@@ -1539,7 +1539,8 @@ administrateur existe.
 5. **Nouveau Rôle** : **Gestionnaire** (ou **Administrateur**, ou **Patient**).
 6. Il clique **Mettre à jour le Rôle**.
 
-**Ce que vous devez voir** : les deux listes se vident. Dans **Utilisateurs**,
+**Ce que vous devez voir** : les deux listes se vident et le message « Rôle mis
+à jour. » s'affiche en bas à droite de l'écran. Dans **Utilisateurs**,
 la personne porte le nouveau badge. La personne, en rechargeant, voit le menu
 de son rôle.
 
@@ -1547,7 +1548,7 @@ de son rôle.
 
 - la personne n'apparaît pas dans la liste : elle n'est pas passée par la page
   d'accueil après l'inscription (étape 2) ;
-- rien ne change et aucun message ne s'affiche : l'envoi a échoué en silence ;
+- un message d'échec s'affiche en bas à droite de l'écran : l'envoi a échoué ;
   rechargez **Paramètres** et recommencez ; vérifiez que vous êtes bien
   administrateur.
 
@@ -1599,8 +1600,8 @@ administrateur, il n'est rattaché à personne (faites [P4](#p4-rattacher-des-pa
 **Ce que vous devez voir** : « N patients assignés » et la liste à jour. Le
 gestionnaire voit ces patients dans **Patients**.
 
-**Si ça ne marche pas** : la fenêtre reste ouverte sans message (échec
-silencieux). Rechargez la page et recommencez.
+**Si ça ne marche pas** : la fenêtre reste ouverte et un message d'échec
+s'affiche en bas à droite de l'écran. Rechargez la page et recommencez.
 
 Un patient peut avoir plusieurs gestionnaires : cochez le chez chacun.
 
@@ -2107,7 +2108,9 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 
 ### 7.2 Messages du serveur (en anglais, affichés tels quels)
 
-Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
+Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée
+et, depuis ANH-156, dans un message d'échec en bas à droite de l'écran (le seul
+affichage pour les actions sans encadré : suppressions, rôle, assignations).
 
 | Message | Signification | Quoi faire |
 |---|---|---|
@@ -2141,7 +2144,7 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
 | « Unauthorized. Required roles: admin. Your role: gestionnaire » | Action réservée à l'administrateur. Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, ce message s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
 | « Not authorized to manage this machine » | Machine non attribuée à vous. | P6. |
-| « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (souvent sans affichage, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
+| « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Cannot delete your own account » | Tentative de suppression de soi. | Demander à un autre administrateur. |
 | « User not found in database. Please complete registration. » | Votre fiche n'existe pas encore. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
 | « Not authenticated » | Session Clerk expirée. | Se reconnecter. |
@@ -2149,9 +2152,10 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
 > **En production**, Convex peut masquer le texte des erreurs qui ne sont pas
 > déclarées comme messages destinés à l'utilisateur. Les messages du
 > lancement, de l'arrêt, des droits et de la physiologie restent lisibles ; les
-> autres (création de patient, machines, rôles) risquent de n'afficher qu'une
-> ligne technique du genre « [CONVEX M(...)] [Request ID: ...] Server Error ».
-> Non vérifié, faute de déploiement.
+> autres (création de patient, machines, rôles) perdent alors leur texte :
+> depuis ANH-156 le site affiche à la place « L'action a échoué. Réessayez.
+> Référence à transmettre si le problème persiste : … », la référence étant
+> l'identifiant de requête Convex. Non vérifié, faute de déploiement.
 
 ### 7.3 Motifs de refus envoyés par la machine
 
@@ -2292,8 +2296,8 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |
 | 7 | Une séance **en attente** n'expire jamais côté serveur. | Si la machine revient en ligne des heures après, elle peut tenter de démarrer une séance oubliée. | Toujours annuler une séance en attente inutile. |
-| 8 | Plusieurs actions échouent **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur.) | L'utilisateur croit que rien ne se passe. | Recharger et vérifier. |
-| 9 | Messages du serveur en anglais, et peut être masqués en production. | Messages peu compréhensibles. | Tableau du §7.2. |
+| 8 | Plusieurs actions échouaient **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur. Corrigé par ANH-156 pour les autres : chaque action qui écrit dans la base affiche un message de succès ou d'échec en bas à droite de l'écran. Non vérifié dans un navigateur.) | L'utilisateur croyait que rien ne se passait. | Jusqu'au redéploiement : recharger et vérifier. |
+| 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | Listes des patients et gestionnaires : le serveur prend les 50 à 100 séances **les plus récentes de toute la base**, puis filtre. | Sur une base active, un patient ou un gestionnaire peut ne pas voir ses séances plus anciennes. | Aucun. |
 | 12 | (Retirés avec l'ancien mode d'enregistrement ECG.) Le rapport PDF, sans télémétrie, et les cartes ECG, inutiles sur les séances d'entraînement, n'existent plus. Il n'y a pas encore de rapport pour une séance d'entraînement. | Pas de fichier à télécharger. | Utiliser le détail de la séance. |
@@ -2317,8 +2321,8 @@ Pour le mainteneur de la documentation technique :
 - son encadré d'en tête dit le site en production avec une version précédente
   de Convex, mais son tableau du §8 indique encore « Déploiement Convex /
   Clerk : Pas fait » ;
-- elle ne signale pas les actions qui échouent sans message (§9.2 n°8), ni
-  l'absence d'expiration d'une séance en attente (n°7).
+- elle ne signale pas l'absence d'expiration d'une séance en attente (§9.2
+  n°7).
 
 ### 9.4 Ce que les vrais écrans ont montré (2 octobre 2026)
 

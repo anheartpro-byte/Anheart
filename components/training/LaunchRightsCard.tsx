@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { format } from "date-fns";
@@ -32,7 +33,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { KeyRound, Loader2, Plus, UserMinus } from "lucide-react";
-import { convexErrorMessage } from "@/lib/training";
 
 /**
  * Who may launch auto sessions on this machine. Only rendered for admins and
@@ -59,8 +59,8 @@ export function LaunchRightsCard({
     api.users.getPatientsForGestionnaire,
     isAdmin ? "skip" : {},
   );
-  const grant = useMutation(api.training.grantLaunchRight);
-  const revoke = useMutation(api.training.revokeLaunchRight);
+  const grant = useMutationWithFeedback(api.training.grantLaunchRight);
+  const revoke = useMutationWithFeedback(api.training.revokeLaunchRight);
 
   const [selected, setSelected] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -78,29 +78,26 @@ export function LaunchRightsCard({
     if (!selected) return;
     setBusy(true);
     setError(null);
-    try {
-      await grant({ machineId, userId: selected as Id<"users"> });
-      setSelected("");
-    } catch (err) {
-      setError(convexErrorMessage(err, t("common.error")));
-    } finally {
-      setBusy(false);
-    }
+    const result = await grant(
+      { machineId, userId: selected as Id<"users"> },
+      { success: t("feedback.launchRightGranted") },
+    );
+    if (result.ok) setSelected("");
+    else setError(result.message);
+    setBusy(false);
   };
 
   const handleRevoke = async () => {
     if (!toRevoke) return;
     setBusy(true);
     setError(null);
-    try {
-      await revoke({ machineId, userId: toRevoke.userId });
-      setToRevoke(null);
-    } catch (err) {
-      setError(convexErrorMessage(err, t("common.error")));
-      setToRevoke(null);
-    } finally {
-      setBusy(false);
-    }
+    const result = await revoke(
+      { machineId, userId: toRevoke.userId },
+      { success: t("feedback.launchRightRevoked") },
+    );
+    if (!result.ok) setError(result.message);
+    setToRevoke(null);
+    setBusy(false);
   };
 
   return (
