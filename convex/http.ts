@@ -139,6 +139,7 @@ http.route({
     if ("error" in authResult) {
       return authResult.error;
     }
+    const machineId = authResult.machine._id as Id<"machines">;
 
     // Parse body
     let body: { sessionId?: string };
@@ -160,6 +161,7 @@ http.route({
 
     try {
       await ctx.runMutation(internal.sessions.startSession, {
+        machineId,
         sessionId: body.sessionId as Parameters<
           typeof ctx.runMutation<typeof internal.sessions.startSession>
         >[1]["sessionId"],
@@ -192,6 +194,7 @@ http.route({
     if ("error" in authResult) {
       return authResult.error;
     }
+    const machineId = authResult.machine._id as Id<"machines">;
 
     // Parse body
     let body: { sessionId?: string; reason?: string; failed?: boolean };
@@ -215,6 +218,7 @@ http.route({
       if (body.failed) {
         // Session failed
         await ctx.runMutation(internal.sessions.failSession, {
+          machineId,
           sessionId: body.sessionId as Parameters<
             typeof ctx.runMutation<typeof internal.sessions.failSession>
           >[1]["sessionId"],
@@ -223,6 +227,7 @@ http.route({
       } else {
         // Session completed normally
         await ctx.runMutation(internal.sessions.endSessionInternal, {
+          machineId,
           sessionId: body.sessionId as Parameters<
             typeof ctx.runMutation<typeof internal.sessions.endSessionInternal>
           >[1]["sessionId"],
@@ -256,6 +261,7 @@ http.route({
     if ("error" in authResult) {
       return authResult.error;
     }
+    const machineId = authResult.machine._id as Id<"machines">;
 
     // Get session ID from query parameter
     const url = new URL(req.url);
@@ -271,6 +277,7 @@ http.route({
     const sessionStatus = await ctx.runQuery(
       internal.sessions.getSessionStatus,
       {
+        machineId,
         sessionId: sessionId as Parameters<
           typeof ctx.runQuery<typeof internal.sessions.getSessionStatus>
         >[1]["sessionId"],

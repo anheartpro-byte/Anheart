@@ -206,15 +206,15 @@ F6, F5 · Site/Convex · S, E, I · Critique, personne indirectement via lanceme
 ## MEN-08 Fonction Convex publique sans contrôle suffisant
 
 - Status: OPEN
-- Issues: [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat), [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation), [ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site)
+- Issues: [ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17), [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat), [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation), [ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site)
 
 F4, F5 · Convex · S, T, I, E · Critique, personne indirectement.
 
 **Scénario.** Une fonction exposée oublie la garde ou contrôle l'identité sans contrôler la ressource ; le client appelle directement l'API en contournant le site.
 
-**Existant vérifié dans le source.** [`requireAuth` / `canAccessUser`](../convex/lib/auth.ts) existent mais doivent être appelés par chaque endpoint. [`getSessionTelemetry`](../convex/training.ts) vérifie passager ou machine. Les anciennes routes `/api/machine/session/start`, `/end`, `/status` dans [`http.ts`](../convex/http.ts) authentifient la machine sans transmettre son identifiant aux mutations/queries de séance : leur liaison ressource-machine n'est pas démontrée. Voir aussi MEN-17.
+**Existant vérifié dans le source.** [`requireAuth` / `canAccessUser`](../convex/lib/auth.ts) existent mais doivent être appelés par chaque endpoint. [`getSessionTelemetry`](../convex/training.ts) vérifie passager ou machine. Huit routes de [`http.ts`](../convex/http.ts) lisent ou modifient une séance désignée par son identifiant : `/api/machine/session/start`, `/session/end`, `/session/status`, `/data`, `/training/start`, `/training/end`, `/training/status` et `/training/telemetry`. Chacune transmet la machine authentifiée à sa fonction interne (`startSession`, `endSessionInternal`, `failSession`, `getSessionStatus` dans [`sessions.ts`](../convex/sessions.ts) ; `storeEcgBatch` dans [`ecgData.ts`](../convex/ecgData.ts) ; `markTrainingStarted`, `endTrainingSession`, `getTrainingStatus`, `storeTelemetry` dans [`training.ts`](../convex/training.ts)), qui vérifie d'abord que la séance appartient à cette machine. Pour ces huit routes, une séance d'une autre machine reçoit exactement la réponse d'une séance inconnue (statut, en-têtes et corps), quel que soit l'état de la séance, et ni la séance, ni sa machine, ni les mesures enregistrées ne changent ; [`httpRoutes.test.ts`](../convex/httpRoutes.test.ts) compare les deux réponses pour chaque route ([ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17)). Voir aussi MEN-17.
 
-**Manquant.** [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) exige la matrice de toutes les fonctions publiques et routes ; [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation) porte les défauts fonctionnels documentés à corriger ; [ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site) l'isolation par organisation. La matrice seule ne corrige pas les défauts ; ouvrir une sous-tâche précise si le périmètre de correction l'exige.
+**Manquant.** [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) couvre la matrice de toutes les fonctions publiques et routes ; [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation) les défauts fonctionnels documentés ; [ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site) l'isolation par organisation. Le contrôle d'[ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17) existe dans le source intégré ; son effet sur le service rendu dépend du redéploiement [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en). Le retrait complet des routes héritées relève d'[ANH-135](https://linear.app/anheart/issue/ANH-135/retirer-lancien-mode-enregistrement-ecg-srcmain-routes-sessiondata).
 
 **Preuve de fermeture attendue.** Appel anonyme et identifiant de ressource d'une autre machine/organisation refusés pour chaque fonction ; export public ajouté sans cas de matrice fait échouer la gate.
 
@@ -341,15 +341,15 @@ F7 · Livraison/site/Convex · S, T, R, E · Critique, personne indirectement vi
 ## MEN-17 Liaison d'une fiche patient à un compte usurpateur
 
 - Status: OPEN
-- Issues: [ANH-157](https://linear.app/anheart/issue/ANH-157/site-invitations-par-clerk-organizations-liaison-dun-patient-pre-cree), [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat)
+- Issues: [ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17), [ANH-157](https://linear.app/anheart/issue/ANH-157/site-invitations-par-clerk-organizations-liaison-dun-patient-pre-cree), [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat)
 
 F5, F6 · Convex/site · S, I, E · Haute, identité et santé ; personne indirectement.
 
 **Scénario.** Un utilisateur connecté fournit l'e-mail d'un autre patient précréé pour récupérer sa fiche et ses droits sans prouver qu'il contrôle cet e-mail.
 
-**Existant vérifié dans le source.** [`users.linkPatientToClerk`](../convex/users.ts) exige `requireAuth`, mais recherche `args.email` puis écrit `identity.subject` sans comparer l'e-mail vérifié de cette identité. L'absence actuelle de bouton appelant cette mutation ne ferme pas son API publique.
+**Existant vérifié dans le source.** [`users.linkPatientToClerk`](../convex/users.ts) exige `requireAuth`, puis ne lie un dossier que si l'e-mail vérifié de l'identité de l'appelant (claims `email` et `email_verified`) est celui du dossier ; la comparaison ignore la casse des lettres ASCII seulement. L'argument `email` ne fait pas autorité, une identité sans e-mail vérifié est refusée, un dossier déjà lié n'est jamais relié, et aucune réponse ne distingue « aucun dossier » de « e-mail différent » ([ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17)).
 
-**Manquant.** [ANH-157](https://linear.app/anheart/issue/ANH-157/site-invitations-par-clerk-organizations-liaison-dun-patient-pre-cree) remplace la liaison par invitation et webhook Clerk signé, dans la bonne organisation ; [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) doit couvrir l'appel direct hostile de cette fonction, pas seulement le parcours du site.
+**Manquant.** [ANH-157](https://linear.app/anheart/issue/ANH-157/site-invitations-par-clerk-organizations-liaison-dun-patient-pre-cree) remplace la liaison par une invitation et un webhook Clerk signés, dans la bonne organisation ; [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) couvre l'appel direct de cette fonction. Le contrôle d'[ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17) existe dans le source intégré ; son effet sur le service rendu dépend du redéploiement [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en).
 
 **Preuve de fermeture attendue.** Compte synthétique A ne peut lier la fiche non revendiquée B en fournissant son e-mail ; invitation signée autorisée et rejeu webhook idempotent.
 
@@ -373,7 +373,8 @@ Le validateur échoue sur catalogue absent, doublon, référence inconnue, statu
 invalide, ticket absent du registre ou lien ne correspondant pas au ticket.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
-`get_issue` le 2026-10-05. Aucun jeton Linear n'est requis en CI.
+`get_issue`. Chaque ligne porte sa date de lecture : 2026-10-05 pour le lot
+initial, 2026-10-06 pour ANH-177. Aucun jeton Linear n'est requis en CI.
 Ce snapshot atteste **l'existence au jour de lecture**, pas le statut actuel,
 l'achèvement d'une mesure ou la présence d'un backlink dans le ticket.
 

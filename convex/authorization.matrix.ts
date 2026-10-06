@@ -29,6 +29,7 @@ import {
   addSession,
   NOW,
   type Actor,
+  type Claims,
   type World,
 } from "./test.setup";
 
@@ -64,6 +65,13 @@ export type Entry = {
     actor: Actor,
     scope: Scope,
   ) => Promise<Record<string, unknown>>;
+  /**
+   * JWT claims the cell adds to its actor's identity. Every cell acts as its
+   * own actor (subject = actor); a function whose rule reads claims (e.g. the
+   * caller's verified email) supplies them here. Claims never replace the
+   * subject, and the anonymous actor carries none: `as` refuses both.
+   */
+  claims?: (w: World, actor: Actor, scope: Scope) => Claims | null;
   /** Assert the effect/returned data for a "success" cell (behaviour, not code). */
   onSuccess?: (
     res: unknown,
@@ -335,26 +343,39 @@ export const MATRIX: Entry[] = [
     id: "users.linkPatientToClerk",
     ref: api.users.linkPatientToClerk,
     kind: "mutation",
-    // A pre-created record (empty clerkId) with the caller's own address, which
-    // is the ordinary self-link path.
-    build: async (w, actor) => {
-      const email = `${actor}-precreated@example.invalid`;
+    // The record linked is the one whose address is the caller's verified email
+    // (identity claims `email` and `email_verified`). The `email` argument is
+    // not authoritative. Whenever nothing is linked the result is null. Each
+    // cell adds the email claims to its actor's identity.
+    build: async (w) => {
       await w.t.run((ctx) =>
         ctx.db.insert("users", {
           clerkId: "",
           role: "user" as const,
           firstName: "Pre",
           lastName: "Created",
-          email,
+          email: "link-target@example.invalid",
           language: "en" as const,
           createdAt: NOW,
         }),
       );
-      return { email };
+      return { email: "link-target@example.invalid" };
+    },
+    claims: (_w, actor, scope) => {
+      if (actor === "anonymous") return null;
+      // self: the caller's verified address is the record's; other: it is not.
+      return {
+        email:
+          scope === "self"
+            ? "link-target@example.invalid"
+            : "link-other@example.invalid",
+        emailVerified: true,
+      };
     },
     onSuccess: async (res, w, actor) => {
       const row = await w.t.run((ctx) => ctx.db.get(res as Id<"users">));
-      if (row?.clerkId !== actor) throw new Error("Pre-created row not linked");
+      if (row?.email !== "link-target@example.invalid" || row.clerkId !== actor)
+        throw new Error("Record not linked to the caller");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -362,7 +383,13 @@ export const MATRIX: Entry[] = [
         actor: "stranger",
         scope: "self",
         expect: ok,
-        note: "links a pre-created record issued for the caller's own address",
+        note: "links the record whose address is the caller's verified email",
+      },
+      {
+        actor: "stranger",
+        scope: "other",
+        expect: empty,
+        note: "null when the caller's verified email is not the record's, as when no record exists",
       },
     ],
   },
@@ -869,9 +896,9 @@ export const MATRIX: Entry[] = [
     id: "sessions.createSession",
     ref: api.sessions.createSession,
     kind: "mutation",
-    build: async (w) => ({
+    build: async (w, _actor, scope) => ({
       machineId: w.machine,
-      userId: w.patient,
+      userId: scope === "other" ? w.otherPatient : w.patient,
       channels: ["ECG"],
     }),
     onSuccess: async (res, w) => {
@@ -883,6 +910,12 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot create sessions" },
       { actor: "manager", scope: "own", expect: ok, note: "manages machine and patient" },
+      {
+        actor: "manager",
+        scope: "other",
+        expect: refuse(/Not authorized to create session for this patient/),
+        note: "manages the machine but not this rider",
+      },
       {
         actor: "otherManager",
         scope: "other",

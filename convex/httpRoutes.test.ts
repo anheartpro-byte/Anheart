@@ -71,7 +71,7 @@ async function seedPendingAuto(w: MachineWorld, machineId: Id<"machines">) {
 async function seedSession(
   w: MachineWorld,
   machineId: Id<"machines">,
-  status: "pending" | "active",
+  status: "pending" | "active" | "completed" | "failed",
   kind: "recording" | "auto",
 ) {
   return await w.t.run((ctx) =>
@@ -342,8 +342,10 @@ describe("ANH-132 /api/machine/profiles", () => {
 describe("ANH-132 legacy /api/machine/session/poll", () => {
   it("returns a pending recording session, never an auto one", async () => {
     const w = await world();
-    const recording = await seedSession(w, w.machine, "pending", "recording");
+    // The auto session is older, so a filter that just took the first pending
+    // row would return it: the recording-only filter is what keeps it out.
     await seedPendingAuto(w, w.machine);
+    const recording = await seedSession(w, w.machine, "pending", "recording");
     const response = await send(w, w.machineKey, "GET", "/api/machine/session/poll");
     expect(response.status).toBe(200);
     const payload = (await response.json()) as { session: { id: string } | null };
@@ -415,19 +417,20 @@ describe("ANH-132 legacy /api/machine/data", () => {
     expect(response.status).toBe(200);
   });
 
-  it("refuses a batch for a session on another machine (400)", async () => {
+  it("refuses a batch for this machine's session that is not active (400)", async () => {
     const w = await world();
-    const foreign = await seedSession(w, w.otherMachine, "active", "recording");
+    const sessionId = await seedSession(w, w.machine, "pending", "recording");
     const response = await send(
       w,
       w.machineKey,
       "POST",
       "/api/machine/data",
-      batch(foreign, Date.now()),
+      batch(sessionId, Date.now()),
     );
     expect(response.status).toBe(400);
     const payload = (await response.json()) as { error?: string };
-    expect(payload.error).toMatch(/does not belong/);
+    expect(payload.error).toMatch(/not active/);
+    expect(await w.t.run((ctx) => ctx.db.query("ecg_data").collect())).toEqual([]);
   });
 
   it.each([
@@ -467,5 +470,237 @@ describe("ANH-132 legacy /api/machine/data", () => {
       samples: [{ channel: "ECG", values: [1] }],
     });
     expect(response.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ANH-177: a session must belong to the authenticated machine.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every route that reads or changes a session designated by its identifier
+ * (eight routes, two of them with two body forms), called by the first machine
+ * for `sessionId`, with the status it answers for a session it does not know.
+ */
+const sessionRoutes: Array<{
+  route: string;
+  unknownStatus: 400 | 404;
+  call: (w: MachineWorld, sessionId: string) => Promise<Response>;
+}> = [
+  {
+    route: "session/start",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/session/start", { sessionId }),
+  },
+  {
+    route: "session/end",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/session/end", { sessionId }),
+  },
+  {
+    route: "session/end (failed)",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/session/end", {
+        sessionId,
+        failed: true,
+        reason: "synthetic reason",
+      }),
+  },
+  {
+    route: "session/status",
+    unknownStatus: 404,
+    call: (w, sessionId) =>
+      send(
+        w,
+        w.machineKey,
+        "GET",
+        `/api/machine/session/status?sessionId=${sessionId}`,
+      ),
+  },
+  {
+    route: "data",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/data", {
+        sessionId,
+        timestamp: Date.now(),
+        sampleRate: 250,
+        samples: [{ channel: "ECG", values: [1, 2, 3], unit: "mV" }],
+      }),
+  },
+  {
+    route: "training/start",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/training/start", { sessionId }),
+  },
+  {
+    route: "training/end",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/training/end", {
+        sessionId,
+        failed: false,
+        reason: "programme_complete",
+      }),
+  },
+  {
+    route: "training/end (failed)",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/training/end", {
+        sessionId,
+        failed: true,
+        reason: "synthetic reason",
+      }),
+  },
+  {
+    route: "training/status",
+    unknownStatus: 404,
+    call: (w, sessionId) =>
+      send(
+        w,
+        w.machineKey,
+        "GET",
+        `/api/machine/training/status?sessionId=${sessionId}`,
+      ),
+  },
+  {
+    route: "training/telemetry",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/training/telemetry", {
+        sessionId,
+        points: [
+          {
+            t: NOW,
+            elapsedS: 1,
+            phase: "hold",
+            bpm: 140,
+            motorRpm: 1000,
+            outputRpm: 20,
+            setpointMotorRpm: 1000,
+            gLoad: 1.1,
+            safetyAction: "none",
+          },
+        ],
+      }),
+  },
+];
+
+const sessionStates = ["pending", "active", "completed", "failed"] as const;
+const sessionKinds = ["recording", "auto"] as const;
+
+/** Status, headers and body: everything the caller can observe. */
+async function fullResponse(response: Response) {
+  const headers: Array<[string, string]> = [];
+  response.headers.forEach((value, key) => {
+    headers.push([key, value]);
+  });
+  return {
+    status: response.status,
+    headers: headers.sort(),
+    body: await response.text(),
+  };
+}
+
+describe("ANH-177 a session of another machine is answered like an unknown session", () => {
+  const cases = sessionRoutes.flatMap((route) =>
+    sessionStates.flatMap((state) =>
+      sessionKinds.map((kind) => ({ ...route, state, kind })),
+    ),
+  );
+
+  it.each(cases)(
+    "$route: $state $kind session",
+    async ({ call, unknownStatus, state, kind }) => {
+      const w = await world();
+      const foreign = await seedSession(w, w.otherMachine, state, kind);
+      const unknown = await seedSession(w, w.otherMachine, state, kind);
+      await w.t.run((ctx) => ctx.db.delete(unknown));
+      const before = await w.t.run(async (ctx) => ({
+        session: await ctx.db.get(foreign),
+        machine: await ctx.db.get(w.otherMachine),
+      }));
+
+      const onForeign = await fullResponse(await call(w, foreign));
+      const onUnknown = await fullResponse(await call(w, unknown));
+
+      expect(onForeign).toEqual(onUnknown);
+      expect(onForeign.status).toBe(unknownStatus);
+      expect(JSON.parse(onForeign.body)).toEqual({ error: "Session not found" });
+      // The session, its machine and the stored measurements are unchanged.
+      const after = await w.t.run(async (ctx) => ({
+        session: await ctx.db.get(foreign),
+        machine: await ctx.db.get(w.otherMachine),
+        ecg: await ctx.db.query("ecg_data").collect(),
+        telemetry: await ctx.db.query("training_telemetry").collect(),
+      }));
+      expect(after.session).toEqual(before.session);
+      expect(after.machine).toEqual(before.machine);
+      expect(after.ecg).toEqual([]);
+      expect(after.telemetry).toEqual([]);
+    },
+  );
+});
+
+describe("ANH-177 legacy session routes for the owning machine", () => {
+  it("end with failed marks this machine's session failed (200)", async () => {
+    const w = await world();
+    const sessionId = await seedSession(w, w.machine, "active", "recording");
+    const response = await send(w, w.machineKey, "POST", "/api/machine/session/end", {
+      sessionId,
+      failed: true,
+      reason: "synthetic reason",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
+    const session = await w.t.run((ctx) => ctx.db.get(sessionId));
+    expect(session?.status).toBe("failed");
+    expect(session?.notes).toContain("synthetic reason");
+    expect((await w.t.run((ctx) => ctx.db.get(w.machine)))?.status).toBe("offline");
+  });
+
+  it("start refuses a session that is not pending (400)", async () => {
+    const w = await world();
+    const sessionId = await seedSession(w, w.machine, "active", "recording");
+    const response = await send(w, w.machineKey, "POST", "/api/machine/session/start", {
+      sessionId,
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/not pending/);
+  });
+});
+
+describe("ANH-177 roster is limited to this machine's riders", () => {
+  it("excludes a rider who only holds a right on another machine", async () => {
+    const w = await world();
+    const outsider = await w.t.run(async (ctx) => {
+      const id = await ctx.db.insert("users", {
+        clerkId: "roster-outsider",
+        role: "user" as const,
+        firstName: "Roster",
+        lastName: "Outsider",
+        email: "roster-outsider@example.invalid",
+        language: "en" as const,
+        createdAt: NOW,
+      });
+      await ctx.db.insert("machine_user_permissions", {
+        machineId: w.otherMachine,
+        userId: id,
+        grantedBy: w.adminId,
+        createdAt: NOW,
+      });
+      return id;
+    });
+    const response = await send(w, w.machineKey, "GET", "/api/machine/roster");
+    expect(response.status).toBe(200);
+    const riders = ((await response.json()) as { riders: Array<{ userId: string }> })
+      .riders.map((r) => r.userId);
+    expect(riders).toContain(w.patient);
+    expect(riders).not.toContain(outsider);
   });
 });

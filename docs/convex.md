@@ -228,6 +228,25 @@ Autres règles notables :
 - Un compte qui se connecte pour la première fois reçoit le rôle **`user`**. Il
   n'existe **aucun mécanisme d'amorçage** du premier admin : il faut modifier le
   champ `role` à la main dans le tableau de bord Convex.
+- **Lier un dossier patient à un compte Clerk** (`users.linkPatientToClerk`) :
+  la liaison exige l'adresse **vérifiée** de l'appelant. Elle n'aboutit que si
+  l'e-mail vérifié de l'identité (claims `email` et `email_verified`) est celui
+  du dossier ; la comparaison ignore la casse des lettres ASCII seulement, et
+  deux adresses qui diffèrent par un caractère non ASCII restent distinctes.
+  L'argument `email` ne fait pas autorité. Sans e-mail vérifié la liaison est
+  refusée, un dossier déjà lié n'est jamais relié, et la réponse ne distingue
+  pas « aucun dossier » de « e-mail différent ».
+- **Routes machine et appartenance de la séance** : huit routes de
+  `convex/http.ts` lisent ou modifient une séance désignée par son
+  identifiant. Sous `/api/machine/`, ce sont `session/start`, `session/end`,
+  `session/status`, `data`, `training/start`, `training/end`,
+  `training/status` et `training/telemetry`. Chacune passe la machine
+  authentifiée à sa fonction interne, qui vérifie d'abord que la séance
+  appartient à cette machine. Pour ces huit routes, une séance d'une autre
+  machine reçoit exactement la réponse d'une séance inconnue (statut, en-têtes
+  et corps), quel que soit l'état de la séance, et ni la séance, ni sa machine,
+  ni les mesures enregistrées ne changent ; `convex/httpRoutes.test.ts` compare
+  les deux réponses pour chaque route.
 
 ---
 
@@ -331,7 +350,7 @@ Résumé des fonctions les plus utilisées par le site.
 | `updatePatient` | admin, gestionnaire du patient | Modifie un patient. |
 | `getUserById` | `canAccessUser` | Profil, y compris `hrMax`, `birthYear` et `effectiveHrMax`. |
 | `deleteUser` | admin ; gestionnaire pour ses patients seulement | Suppression. Pas soi-même. |
-| `linkPatientToClerk` | connecté | Lie un patient pré-créé (même e-mail, `clerkId` vide) au compte Clerk. **Aucune page ne l'appelle aujourd'hui.** |
+| `linkPatientToClerk` | connecté, e-mail vérifié | Lie un patient pré-créé (`clerkId` vide) au compte Clerk, uniquement si l'e-mail **vérifié** de l'appelant est celui du dossier (voir [§3](#3-règles-dautorisation)). **Aucune page ne l'appelle aujourd'hui.** |
 | `assignGestionnaireToUser` / `removeGestionnaireFromUser` | admin ; un gestionnaire pour lui-même | Lien patient ↔ gestionnaire. |
 | `listGestionnaires`, `assignPatientsToGestionnaire` | admin | Gestion des gestionnaires. |
 | `getPatientsForGestionnaire`, `getGestionnairesForPatient` | admin / gestionnaire concerné | Lectures. |
@@ -456,10 +475,10 @@ Détails du contrat :
 |---|---|
 | `GET /api/machine/roster` | `{riders: [{userId, name, hrMax}]}` : patients ayant le droit sur la machine. **Aucun code du Pi ne l'appelle.** |
 | `GET /api/machine/session/poll` | Ancien mode : `{session: null}` ou `{session: {id, channels, config}}`. Ne renvoie **que** les séances `recording`, jamais une séance auto. |
-| `POST /api/machine/session/start` | Ancien mode : `{sessionId}`. |
-| `POST /api/machine/session/end` | Ancien mode : `{sessionId, reason?, failed?}`. |
-| `GET /api/machine/session/status?sessionId=` | Ancien mode : `{status, endedAt, active}`. |
-| `POST /api/machine/data` | Ancien mode : lot ECG `{sessionId, timestamp, sampleRate?, samples, metrics?, batchId?}`. Horodatage refusé s'il est à plus de 1 min dans le futur ou plus de 5 min dans le passé. La séance doit être `active` et appartenir à la machine. |
+| `POST /api/machine/session/start` | Ancien mode : `{sessionId}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
+| `POST /api/machine/session/end` | Ancien mode : `{sessionId, reason?, failed?}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
+| `GET /api/machine/session/status?sessionId=` | Ancien mode : `{status, endedAt, active}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
+| `POST /api/machine/data` | Ancien mode : lot ECG `{sessionId, timestamp, sampleRate?, samples, metrics?, batchId?}`. Horodatage refusé s'il est à plus de 1 min dans le futur ou plus de 5 min dans le passé. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue ; elle doit ensuite être `active`. |
 
 Ces routes « session » et « data » sont celles de `raspberry-pi/src/convex_client.py`
 (client hérité `python -m src.main`).
@@ -491,7 +510,10 @@ celles d'un projet **neuf**.
 3. Configurer Clerk : créer un modèle JWT nommé `convex` dans Clerk, puis
    définir `CLERK_JWT_ISSUER_DOMAIN` dans les variables d'environnement **du
    déploiement Convex** (`convex/auth.config.ts` le lit ; `applicationID` vaut
-   `convex`).
+   `convex`). Le jeton envoyé à Convex doit porter les revendications `email`
+   et `email_verified` : `users.linkPatientToClerk` y lit l'adresse vérifiée de
+   l'appelant, et sans ces deux revendications la liaison est refusée (la
+   mutation renvoie `null`).
 4. Production :
    ```bash
    npx convex deploy
@@ -617,6 +639,13 @@ les arguments, et une liste de `cases`. Une cellule est un acteur nommé
 Une cellule marquée `knownDefect` est un **défaut inoffensif connu** : le test
 affirme la politique **voulue** et tourne avec `it.fails`, donc il passe tant
 que le défaut existe et échoue bruyamment le jour où le comportement est corrigé.
+
+Chaque cellule agit sous l'identité de son acteur (sujet = acteur). Une fonction
+dont la règle lit une revendication du jeton (par exemple l'e-mail vérifié de
+l'appelant pour `users.linkPatientToClerk`) ajoute ces revendications par un
+`claims` optionnel sur l'entrée. Elles s'ajoutent à l'identité de l'acteur sans
+jamais remplacer son sujet, et l'acteur `anonymous` n'en porte aucune : `as`
+refuse les deux cas.
 
 Les rôles existants aujourd'hui sont `admin`, `gestionnaire` et `user`, plus
 l'appelant anonyme. Il n'y a pas encore de dimension organisation
