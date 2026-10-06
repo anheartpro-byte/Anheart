@@ -175,7 +175,8 @@ saisie du logiciel.
 
 *La fiche d'une patiente de démonstration, avec la carte Physiologie en bas à
 gauche. Capture du site d'essai, vue par un administrateur, prise avant la
-traduction : le chemin en haut de page y est encore en anglais.*
+traduction : le chemin en haut de page y est encore en anglais, et les statuts
+des séances y sont encore écrits au pluriel.*
 
 Ce que le logiciel contrôle ensuite, à chaque lancement :
 
@@ -293,7 +294,8 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
 
 *La fenêtre de lancement. Ici le pratiquant sélectionné n'a pas de FC max :
 l'encadré orange l'explique et le bouton Lancer est grisé. Capture du site
-d'essai.*
+d'essai, prise avant la traduction : à l'arrière-plan, l'état du variateur y
+est encore en anglais.*
 
 ### Si le bouton Lancer est grisé
 
@@ -383,8 +385,9 @@ Une vitesse à zéro ne veut pas toujours dire que la séance est finie : au
 début de la séance, le bras est à l'arrêt, puis il part de lui-même. Pendant
 la séance, la machine peut aussi ralentir le bras, puis le laisser réaccélérer
 quand la cause disparaît (par exemple une fréquence cardiaque qui redevient
-lisible). Si la machine ramène elle-même le bras jusqu'à l'arrêt avant la fin
-du programme, elle termine la séance : le bras ne repart pas, et quelqu'un
+lisible). Si la machine ramène elle-même la vitesse qu'elle commande (la
+« Consigne ») à zéro avant la fin du programme, elle termine la séance, même
+si le bras tourne encore à cet instant : le bras ne repart pas, et quelqu'un
 devra acquitter l'arrêt à la console avant toute nouvelle séance. La phase
 affichée ne prouve pas l'arrêt du bras : lisez **Vitesse du bras**.
 
@@ -407,8 +410,8 @@ panneau **Séance d'entraînement** compte. Pour la même raison, le badge
 
 | Vous voyez | Ce que cela veut dire | Quoi faire |
 |---|---|---|
-| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis ralentit, et termine la séance dès que le bras est à l'arrêt, au plus tard après 60 secondes. Si la fréquence revient alors que le bras tourne encore, la séance reprend seule. | Prévenez l'opérateur. |
-| « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine baisse sa vitesse et applique ses règles de sécurité. Si elle ramène le bras jusqu'à l'arrêt, elle termine la séance. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
+| Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis la baisse, et termine la séance dès que la vitesse qu'elle commande est revenue à zéro, au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, la séance reprend seule. | Prévenez l'opérateur. |
+| « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine baisse sa vitesse et applique ses règles de sécurité. Si elle ramène la vitesse qu'elle commande à zéro, elle termine la séance. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
 | La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Sa valeur dit laquelle : « Vitesse figée » (elle garde sa vitesse), « Réduction » (elle la baisse), « Décélération » (elle termine la séance), « Arrêt rapide (rampe du variateur) » (arrêt d'urgence logiciel), « Mise en silence (arrêt par le variateur) » (la console ne commande plus le moteur). Tant que « Vitesse figée » reste affichée, une demande d'arrêt envoyée depuis le site ne ralentit pas le bras. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
 | Les nombres remplacés par des tirets, plus de nouveaux points | La machine n'envoie plus rien : liaison Internet coupée, ou machine arrêtée. Le site ne peut plus rien lui demander. | Téléphonez à l'opérateur. |
 
@@ -439,7 +442,10 @@ séances annulées.
 
 ![La confirmation d'arrêt](../guides/img/site-13-arreter-la-seance.png)
 
-*La confirmation d'arrêt. Capture du site d'essai, machine simulée.*
+*La confirmation d'arrêt. Capture du site d'essai, machine simulée, prise
+avant la traduction : le haut de la page y est encore en anglais, et l'action
+de sécurité s'y lit « freeze », que le site affiche maintenant
+« Vitesse figée ».*
 
 Ensuite :
 

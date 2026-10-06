@@ -159,8 +159,9 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 > la séance, le bras est à l'arrêt, puis il se met à tourner de lui-même.
 > Pendant la séance, la machine peut ralentir, puis réaccélérer d'elle-même,
 > par exemple quand votre fréquence cardiaque redevient lisible. Si la machine
-> ramène elle-même le bras jusqu'à l'arrêt avant la fin du programme, elle
-> termine la séance : le bras ne repart pas sans une nouvelle séance.
+> ramène elle-même la vitesse qu'elle commande à zéro avant la fin du
+> programme, elle termine la séance. Le bras peut encore tourner à cet
+> instant. Il ne repart pas sans une nouvelle séance.
 
 Tant que l'opérateur ne vous a pas dit que la séance est terminée, restez
 installé et considérez que le bras peut tourner ou repartir. C'est lui qui lit
@@ -187,8 +188,9 @@ reliée à Internet. Ce n'est pas un arrêt d'urgence.
 
 **4. La machine décide seule.** Elle se surveille en permanence. Selon le cas,
 elle garde sa vitesse, elle ralentit, elle termine la séance en douceur, ou
-elle déclenche elle-même un arrêt d'urgence. Si elle ralentit jusqu'à l'arrêt
-du bras, la séance est terminée. Par exemple :
+elle déclenche elle-même un arrêt d'urgence. Si elle ramène la vitesse qu'elle
+commande à zéro, la séance est terminée, même si le bras tourne encore à cet
+instant. Par exemple :
 
 - votre fréquence cardiaque dépasse le seuil de sécurité du programme ;
 - votre fréquence cardiaque chute brutalement ;
@@ -251,7 +253,9 @@ Vous ne voyez que vos propres séances.
 
 *La page Mes machines vue par une patiente de démonstration : la machine où
 elle a le droit de lancement, et sa FC max en haut à droite. Capture d'un site
-d'essai, machine simulée. Les valeurs des programmes sont des valeurs d'essai.*
+d'essai, machine simulée, prise avant la traduction de cette page : l'état du
+variateur, sous « Action de sécurité », y est encore en anglais. Les valeurs
+des programmes sont des valeurs d'essai.*
 
 À savoir :
 
