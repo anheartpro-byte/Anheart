@@ -235,10 +235,15 @@ la gestion du compte Clerk (adresse, mot de passe).
 - Le champ « Langue » d'une fiche patient (FR ou EN) **ne change pas** la
   langue du site : il est seulement enregistré.
 
-> Certains textes restent en anglais quelle que soit la langue : ils sont
-> écrits en dur dans le code (par exemple « Danger Zone », « Session not
-> found », tout le bloc ECG de la vue en direct, le rapport PDF). Ils sont
-> signalés page par page.
+> Quelques textes restent en anglais quelle que soit la langue : les messages
+> du serveur, le nom « Unknown », certains libellés des fiches utilisateur et
+> gestionnaire. Ils sont signalés page par page. La fiche machine, les fiches
+> de séance, le bloc ECG de la vue en direct et le rapport PDF sont traduits
+> depuis ANH-123.
+>
+> **Les captures de ce guide datent du 2 octobre 2026, avant cette
+> traduction.** Quand une capture montre un ancien libellé anglais, le texte et
+> les schémas font foi ; une phrase le rappelle sous chaque capture concernée.
 
 ### 3.3 Le thème clair ou sombre
 
@@ -291,17 +296,18 @@ En haut de la zone principale, à côté du bouton de repli, un **fil d'Ariane**
 montre où vous êtes, par exemple :
 
 ```
-Tableau de bord  ›  Machines  ›  Details
-Tableau de bord  ›  Sessions  ›  Details  ›  Live
+Tableau de bord  ›  Machines  ›  Détails
+Tableau de bord  ›  Sessions  ›  Détails  ›  En direct
 ```
 
 Chaque élément sauf le dernier est cliquable. Particularités du code actuel :
 
-- un identifiant (machine, séance, compte) s'affiche **« Details »** (anglais) ;
-- la vue en direct s'affiche **« Live »** ;
-- la page Gestionnaires s'affiche **« gestionnaires »** (en minuscules, non
-  traduit) ;
+- un identifiant (machine, séance, compte) s'affiche **« Détails »** ;
+- la vue en direct s'affiche **« En direct »** ;
 - sur la page Tableau de bord elle même, le fil d'Ariane est caché.
+
+Les captures de ce guide, antérieures à la traduction, montrent encore
+« Details » et « Live », et « Details » à la place de « Gestionnaires ».
 
 ### 3.6 Tout se met à jour tout seul
 
@@ -343,7 +349,7 @@ affiche avec un tiret entre les deux nombres. Une valeur absente s'affiche
 ├───────────────────────────────────────────────────────────────────────┤
 │ LA GRAVITÉ POUR UNE VIE MEILLEURE                                     │
 │ Entraînez Votre Cœur Avec la Gravité Artificielle        (globe animé)│
-│ La machine Gaura recréée une force centrifuge ...                     │
+│ La machine Gaura recrée une force centrifuge ...                      │
 │ [ Commencer → ]  [ Se connecter ]                                     │
 │   (connecté : [ Accéder au tableau de bord → ])                       │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -362,11 +368,14 @@ affiche avec un tiret entre les deux nombres. Une valeur absente s'affiche
 | **Accéder au tableau de bord** (centre, connecté) | Va sur `/fr/dashboard`. Sa seule présence à l'écran crée votre fiche si elle manque. |
 | Avatar (connecté) | Menu Clerk : gérer le compte, se déconnecter. |
 
-> **Texte commercial à ne pas prendre pour une spécification.** L'accueil
-> annonce une gravité « jusqu'à 3 fois celle de la Terre » et « une intensité
-> de 1 à 3 G ». Le logiciel de la machine ne le permet pas : son plafond est la
+> **Texte commercial à ne pas prendre pour une spécification.** Depuis
+> ANH-123, l'accueil et la FAQ ne citent plus aucun chiffre d'intensité :
+> « L'intensité se règle par la vitesse de rotation, dans les limites fixées
+> par le logiciel de la machine. » Pour mémoire, le plafond du logiciel est la
 > vitesse nominale du moteur (environ 2,1 g au bout des jambes, à vide), et
 > un plafond provisoire de 1,2 g avec une personne à bord. Voir [securite.md](../securite.md).
+> La capture ci-dessus est antérieure à ce changement : elle montre encore
+> « jusqu'à 3 fois celle de la Terre ».
 
 **Sans configuration, rien ne s'affiche.** Sans `.env.local` (URL Convex et
 clés Clerk), le site lancé en local n'affiche aucune page, pas même l'accueil :
@@ -404,6 +413,8 @@ Ces pages ne demandent pas de connexion et n'ont aucune action.
 
 *Patient (Léa Dubois) : groupe « Ma Santé » seulement.* *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Captures antérieures à la traduction (ANH-123) : elles montrent encore les badges de statut au pluriel (« Actives », « Terminées », « Échouées »).*
+
 **Adresse** : `/fr/dashboard`. **Pour qui** : tous.
 
 ```
@@ -420,9 +431,9 @@ Ces pages ne demandent pas de connexion et n'ont aucune action.
 │                                                 gestionnaire : Patients)│
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ Sessions récentes                                                  │ │
-│ │ ∿ Marie Martin         (Actives)      🕑 il y a 3 minutes           │ │
+│ │ ∿ Marie Martin         (Active)       🕑 il y a 3 minutes           │ │
 │ │   Centrifugeuse Paris                                              │ │
-│ │ ∿ Paul Durand          (Terminées)    🕑 il y a 2 jours             │ │
+│ │ ∿ Paul Durand          (Terminée)     🕑 il y a 2 jours             │ │
 │ │   ...  (5 lignes au plus)                                          │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────┘
@@ -440,9 +451,12 @@ Badges de statut d'une séance, ici et dans toutes les listes :
 | Badge | Sens |
 |---|---|
 | **En attente** (contour) | Créée, pas encore démarrée par la machine. |
-| **Actives** (plein) | En cours. Le libellé est au pluriel même pour une seule séance. |
-| **Terminées** (gris) | Finie normalement. |
-| **Échouées** (rouge) | Refusée, annulée, ou finie sur un incident. |
+| **Active** (plein) | En cours. |
+| **Terminée** (gris) | Finie normalement. |
+| **Échouée** (rouge) | Refusée, annulée, ou finie sur un incident. |
+
+Les onglets de la page **Sessions** gardent le pluriel (Actives, Terminées,
+Échouées). Un statut que le site ne connaît pas s'afficherait tel quel.
 
 ### 4.4 Machines (liste)
 
@@ -498,16 +512,18 @@ l'administrateur, un second bouton **Nouvelle machine**.
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre encore la description en anglais et l'exemple « Room 101 ».*
+
 S'ouvre depuis **Machines** (bouton **Nouvelle machine**) ou depuis le détail
 d'une machine (bouton **Modifier** de la carte Configuration).
 
 ```
 ┌──────────────────────────────────────────────────┐
 │ Nouvelle machine                                  │
-│ Configure a new Raspberry Pi machine   (anglais)  │
+│ Configurer une nouvelle machine Raspberry Pi      │
 │                                                  │
 │ Nom de la machine *   <Raspberry Pi 1>           │
-│ Emplacement           <Room 101>                 │
+│ Emplacement           <Salle 101>                │
 │ Fréquence d'échantillonnage (Hz) <100>           │
 │ Intervalle de batch (ms)         <1000>          │
 │ Canaux *  [ECG] [EDA] [SpO2] [RESP] [EMG] [LUX]  │
@@ -521,11 +537,11 @@ d'une machine (bouton **Modifier** de la carte Configuration).
 
 | Champ | À savoir |
 |---|---|
-| **Nom de la machine** * | Obligatoire (message « Name is required », anglais, s'il est vide). |
+| **Nom de la machine** * | Obligatoire (message « Le nom est obligatoire » s'il est vide). |
 | **Emplacement** | Facultatif. Affiché sous le nom partout. |
 | **Fréquence d'échantillonnage (Hz)** | Hérité du mode enregistrement ECG. Entre 100 et 10 000. **Sans effet sur les séances d'entraînement.** Laissez la valeur proposée. |
 | **Intervalle de batch (ms)** | Idem, entre 100 et 5 000. Laissez la valeur proposée. |
-| **Canaux** * | Boutons à bascule. Au moins un (« Select at least one channel », anglais). Hérité du mode enregistrement. Laissez **ECG**. |
+| **Canaux** * | Boutons à bascule. Au moins un (« Sélectionnez au moins un canal »). Hérité du mode enregistrement. Laissez **ECG**. |
 | **Assigner aux Gestionnaires** | Cases à cocher, visibles seulement pour un administrateur et s'il existe des gestionnaires. **Le premier coché devient « Propriétaire ».** |
 
 Boutons : **Créer** (ou **Enregistrer** en modification), **Annuler**.
@@ -570,8 +586,10 @@ fichier de configuration du Raspberry Pi (voir [procédure P5](#p5-enregistrer-u
 
 *La même machine plus de 90 s après l'arrêt de sa console.* *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Captures antérieures à la traduction (ANH-123) : toutes trois montrent encore « Details » dans le fil d'Ariane, le statut brut (`online`, `offline`), « Created », « Danger Zone » et l'état brut du variateur.*
+
 **Adresse** : `/fr/dashboard/machines/{id}`. **Pour qui** : administrateur,
-gestionnaire de la machine. Sinon : « Machine not found » (anglais) et lien
+gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 **Retour**.
 
 ```
@@ -582,10 +600,10 @@ gestionnaire de la machine. Sinon : « Machine not found » (anglais) et lien
 │ Salle 2                                                                │
 │ ┌───────────────────────────────┐ ┌───────────────────────────────┐   │
 │ │ Configuration     [ ✎ Modifier ]│ │ Gestionnaires                 │   │
-│ │ Statut   online  Dernier signal│ │ Claire Petit   (Propriétaire) │   │
+│ │ Statut En ligne  Dernier signal│ │ Claire Petit   (Propriétaire) │   │
 │ │ Fréquence 1000 Hz Interv. 1000 ms│ │ Marc Roux                     │   │
 │ │ Canaux (ECG)                   │ └───────────────────────────────┘   │
-│ │ Created  1 octobre 2026        │                                     │
+│ │ Créée le 1 octobre 2026        │                                     │
 │ └───────────────────────────────┘                                     │
 │ ┌───────────────────────────────┐ ┌───────────────────────────────┐   │
 │ │ ⦿ État en direct   (● En direct)│ │ ☰ Programmes                  │   │
@@ -606,7 +624,7 @@ gestionnaire de la machine. Sinon : « Machine not found » (anglais) et lien
 │ │ <Choisir un patient ▾>                               [ + Accorder ]│ │
 │ └───────────────────────────────────────────────────────────────────┘ │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
-│ │ Danger Zone  (anglais)                                             │ │
+│ │ Zone de danger                                                     │ │
 │ │ Ces actions peuvent impacter le fonctionnement de la machine       │ │
 │ │ Régénérer la clé                                    [ ↻ Régénérer ]│ │
 │ │ Supprimer                                           [ 🗑 Supprimer ]│ │
@@ -632,9 +650,10 @@ programmes, ni droits, ni zone de danger.
 
 #### Carte « Configuration »
 
-Statut (valeur brute : `online`, `offline`, `in_session`), Dernier signal,
-Fréquence d'échantillonnage, Intervalle de batch (ms), Canaux, « Created »
-(date de création, libellé anglais). Bouton **Modifier** : fenêtre du
+Statut (« En ligne », « Hors ligne » ou « En session » ; une valeur que le
+site ne connaît pas s'afficherait telle quelle), Dernier signal,
+Fréquence d'échantillonnage, Intervalle de batch (ms), Canaux, « Créée le »
+(date de création). Bouton **Modifier** : fenêtre du
 [§4.5](#45-fenêtre-nouvelle-machine--modifier).
 
 #### Carte « Gestionnaires »
@@ -657,7 +676,7 @@ vient du Raspberry Pi, envoyé toutes les 10 s environ.
 | **Fréquence cardiaque** | En bpm, cœur rouge si la valeur est fraîche. Un tiret « - » à la place du nombre quand la machine n'a pas de fréquence cardiaque fiable : le site n'affiche jamais une vieille valeur comme actuelle. |
 | **Vitesse du bras** | tr/min du bras (une décimale). Dessous : « Moteur N tr/min · Consigne N » (la consigne est en tr/min moteur). |
 | **Charge** | En g, deux décimales. |
-| **Action de sécurité** | « Aucune » en temps normal. Sinon en orange avec un bouclier : Réduction, Décélération, ou une valeur brute (`freeze`, `quick_stop`, `go_silent`, non traduites). Dessous : « Variateur : ... » (état brut du variateur). |
+| **Action de sécurité** | « Aucune » en temps normal. Sinon en orange avec un bouclier : « Vitesse figée » (`freeze`), « Réduction » (`reduce`), « Décélération » (`ramp_down`), « Arrêt rapide (rampe du variateur) » (`quick_stop`), « Mise en silence (arrêt par le variateur) » (`go_silent`). Dessous : « Variateur : ... », l'état du variateur traduit (Non prêt, Mise en marche verrouillée, Prêt, Enclenché, En fonctionnement, Défaut, Communication perdue). Une valeur que le site ne connaît pas s'affiche telle quelle. |
 | « Mis à jour il y a ... » | Âge du dernier état. **Ce texte ne se rafraîchit qu'au prochain changement de donnée**, pas chaque seconde. |
 
 « La machine n'a encore rapporté aucun état. » : la machine n'a jamais envoyé
@@ -705,15 +724,15 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
   **Retirer**.
 - Une erreur du serveur s'affiche dans un encadré rouge en haut de la carte.
 
-<a id="carte-danger-zone-titre-en-anglais"></a>
+<a id="carte-zone-de-danger"></a>
 
-#### Carte « Danger Zone » (titre en anglais)
+#### Carte « Zone de danger »
 
 « Ces actions peuvent impacter le fonctionnement de la machine ».
 
 | Bouton | Effet |
 |---|---|
-| **Régénérer** (ligne « Régénérer la clé », « Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner. ») | Fenêtre de confirmation (texte anglais : « This will invalidate the current API key immediately... »), **Annuler** / **Confirmer**. Après **Confirmer**, la nouvelle clé s'affiche **une seule fois** comme à la création. **La machine cesse aussitôt de communiquer** jusqu'à ce que la nouvelle clé soit installée sur son Raspberry Pi. |
+| **Régénérer** (ligne « Régénérer la clé », « Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner. ») | Fenêtre de confirmation (« La clé API actuelle sera invalidée immédiatement. La machine devra être reconfigurée avec la nouvelle clé. »), **Annuler** / **Confirmer**. Après **Confirmer**, la nouvelle clé s'affiche **une seule fois** comme à la création. **La machine cesse aussitôt de communiquer** jusqu'à ce que la nouvelle clé soit installée sur son Raspberry Pi. |
 | **Supprimer** (ligne « Désactiver cette machine. Peut être restaurée par un admin. ») | Grisé si la machine est **En session**. Fenêtre « Supprimer cette machine? », « Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire. », **Annuler** / **Supprimer**. En cas de succès, retour à la liste des machines. |
 
 > **Attention : les refus de suppression sont muets.** Si le serveur refuse
@@ -866,11 +885,13 @@ sur la **vue en direct** de la nouvelle séance, au statut **en attente**.
 
 ![La liste des sessions : séances auto lancées du tableau de bord, séances manuelles démarrées à la machine, enregistrements ECG](img/site-09-sessions.png)
 
-*Les trois types de séance. Une séance démarrée à la machine apparaît avec le patient « Unknown ». Une séance annulée avant le départ apparaît « Échouées ».*
+*Les trois types de séance. Une séance démarrée à la machine apparaît avec le patient « Unknown ». Une séance annulée avant le départ apparaît au statut échoué.*
 
 ![La liste des sessions vue par un patient : ses propres séances seulement](img/site-29-patient-sessions.png)
 
 *La même page vue par un patient.* *Capture réelle, serveur de développement, 2 octobre 2026.*
+
+*Captures antérieures à la traduction (ANH-123) : elles montrent encore les statuts de ligne au pluriel (« Terminées », « Échouées ») ; ils s'affichent maintenant au singulier.*
 
 **Adresse** : `/fr/dashboard/sessions`. **Pour qui** : tous (chacun voit ce
 que ses droits permettent).
@@ -882,9 +903,9 @@ que ses droits permettent).
 │ [ Tous | Actives | Terminées | Échouées ]   🔍 <Rechercher>            │
 │ ┌────────────────────────────────────────────────────────────────────┐│
 │ │Patient │Machine │Type              │Statut     │Démarrée à │Durée │Actions││
-│ │Marie M.│Centri P│(Auto)(Tableau de bord)│(Actives)│1 oct. 10:02│12 minutes│[⦿ Voir en direct]││
-│ │Unknown │Centri P│(Manuel)(Machine) │(Terminées)│30 sept. 9:10│25m 3s│ 👁 ││
-│ │Paul D. │Centri L│(Enregistrement)  │(Échouées) │29 sept. 15:00│4s    │ 👁 ││
+│ │Marie M.│Centri P│(Auto)(Tableau de bord)│(Active) │1 oct. 10:02│12 minutes│[⦿ Voir en direct]││
+│ │Unknown │Centri P│(Manuel)(Machine) │(Terminée) │30 sept. 9:10│25m 3s│ 👁 ││
+│ │Paul D. │Centri L│(Enregistrement)  │(Échouée)  │29 sept. 15:00│4s    │ 👁 ││
 │ └────────────────────────────────────────────────────────────────────┘│
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -931,10 +952,12 @@ Veuillez d'abord créer un patient. ».
 ### 4.11 Vue en direct d'une séance
 
 **Adresse** : `/fr/dashboard/sessions/{id}/live`. **Pour qui** : le pratiquant,
-l'administrateur, le gestionnaire de la machine. Sinon « Session not found »
-(anglais) et **Retour**.
+l'administrateur, le gestionnaire de la machine. Sinon « Session introuvable »
+et **Retour**.
 
 La page a plusieurs visages selon le type et le statut de la séance.
+
+*Captures antérieures à la traduction (ANH-123) : celles de cette section montrent encore le fil d'Ariane « Details › Live », l'en-tête « Started ... ago », le badge « Connecting... » et le bloc ECG en anglais.*
 
 #### a) Séance auto en attente
 
@@ -972,8 +995,8 @@ serveur toutes les 3 s. S'il dure, voir [§6.3](#63-si-la-machine-est-hors-ligne
 
 **Annuler la séance** : fenêtre « Annuler la séance ? », « La séance n'a pas
 encore démarré sur la machine : elle sera annulée. », **Annuler** (ferme la
-fenêtre) ou **Annuler la séance** (confirme). La séance passe **Échouées**
-avec le motif « Cancelled before start by {nom} ».
+fenêtre) ou **Annuler la séance** (confirme). La séance passe au statut
+**Échouée** avec le motif « Cancelled before start by {nom} ».
 
 #### b) Séance auto ou manuelle active
 
@@ -994,8 +1017,8 @@ avec le motif « Cancelled before start by {nom} ».
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ Marie Martin                          (5s delay)(● Live)               │
-│ Centri Paris  Started 3 minutes ago (Auto)(Tableau de bord)            │
+│ Marie Martin                          (5s de délai)(● En direct)       │
+│ Centri Paris • Démarrée il y a 3 minutes (Auto)(Tableau de bord)       │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ ↻ Séance d'entraînement · 30 min              [ ⯃ Arrêter la séance ]│ │
 │ │ (Auto)(Tableau de bord) Cible 118 à 138 bpm · Opérateur Claire Petit│ │
@@ -1015,15 +1038,15 @@ avec le motif « Cancelled before start by {nom} ».
 │ │ Vitesse du bras                                                    │ │
 │ │   ┄┄┄┄ Consigne (tr/min)   ──── Mesurée (tr/min)                   │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ [bloc ECG hérité, en anglais, vide pour une séance d'entraînement]    │
+│ [bloc ECG hérité, vide pour une séance d'entraînement]                │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
 **En tête de page** : nom du pratiquant (ou « Pratiquant non précisé »),
-machine, « Started ... ago » (anglais), badges de type et d'origine. À droite :
-badge « 5s delay » pour un gestionnaire, et badge « Live » ou « Connecting... »
-(ces deux badges concernent **l'ECG brut** : pour une séance d'entraînement,
-il reste sur « Connecting... », c'est normal).
+machine, « Démarrée il y a ... », badges de type et d'origine. À droite :
+badge « 5s de délai » pour un gestionnaire, et badge « En direct » ou
+« Connexion... » (ces deux badges concernent **l'ECG brut** : pour une séance
+d'entraînement, il reste sur « Connexion... », c'est normal).
 
 **Panneau « Séance d'entraînement »** :
 
@@ -1052,8 +1075,8 @@ machine confirmera l'arrêt. », **Annuler** ou **Arrêter la séance**. Ensuite
 - le bouton devient grisé avec un sablier ;
 - un bandeau orange « **Arrêt demandé, décélération en cours…** » reste affiché ;
 - **le bras tourne encore** pendant la décélération ;
-- quand la machine confirme, la séance passe **Terminées** et le panneau
-  affiche « Séance terminée ».
+- quand la machine confirme, la séance passe au statut **Terminée** et le
+  panneau affiche « Séance terminée ».
 
 > **Ce bouton n'est pas un arrêt d'urgence.** En cas de danger, utilisez
 > l'arrêt d'urgence **sur la machine**.
@@ -1062,11 +1085,15 @@ machine confirmera l'arrêt. », **Annuler** ou **Arrêter la séance**. Ensuite
 console de la machine ». Elle peut être **arrêtée** depuis le site (la machine
 décélère), jamais démarrée.
 
-**Bloc ECG hérité (anglais)** sous le panneau : cartes « Signal Quality »,
-« Heart Rate (BPM) », « Duration », « Data Batches », « Total Samples », tracé
-ECG, encadré « Waiting for ECG Data » et « Understanding the ECG Data ». **Pour
-une séance d'entraînement, ce bloc reste vide** : la console d'entraînement
-n'envoie pas l'ECG brut au site, seulement la télémétrie. Ignorez le.
+**Bloc ECG hérité** sous le panneau : cartes « Qualité du signal »,
+« Fréquence cardiaque (BPM) », « Durée », « Lots de données », « Échantillons
+enregistrés », tracé ECG, encadrés « En attente des données ECG » et
+« Comprendre les données ECG ». Le nombre d'échantillons est compté sur les
+lots affichés (les 10 dernières secondes) et la carte le dit (« lots chargés
+sur ... ») ; tant que le serveur n'a pas donné le nombre de lots, elle affiche
+« - ». **Pour une séance d'entraînement, ce bloc reste vide** : la console
+d'entraînement n'envoie pas l'ECG brut au site, seulement la télémétrie.
+Ignorez le.
 
 #### c) Séance d'entraînement terminée ou échouée
 
@@ -1083,10 +1110,12 @@ Même en tête, bouton **Voir le détail**, et le panneau avec un bandeau :
 
 #### d) Séance d'enregistrement ECG
 
-Tracé ECG en direct, cartes en anglais, bouton **End Session** (administrateur,
-gestionnaire) avec la fenêtre « End Recording Session? » (anglais). Un
-gestionnaire voit les données avec 5 s de retard (badge « 5s delay »).
-Hors du statut actif : « Session is not active » et **View Session Details**.
+Tracé ECG en direct, cartes du bloc ECG, bouton **Terminer la session**
+(administrateur, gestionnaire) avec la fenêtre « Terminer la session
+d'enregistrement ? ». Un gestionnaire voit les données avec 5 s de retard
+(badge « 5s de délai »). Hors du statut actif : « La session n'est pas
+active » et **Voir le détail de la session**. Cette vue n'a pas été observée
+avec une session réellement active depuis la traduction.
 
 ### 4.12 Détail d'une séance
 
@@ -1094,18 +1123,20 @@ Hors du statut actif : « Session is not active » et **View Session Details**.
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre encore le badge « Completed », les cartes « Duration », « Data Batches », « Total Samples », « Sample Rate 1000 » et les titres « ECG Recording », « Patient Information », « Session Timing ».*
+
 **Adresse** : `/fr/dashboard/sessions/{id}`. **Pour qui** : comme la vue en
 direct.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ ← Marie Martin (Completed)(Auto)(Tableau de bord)   [⦿ View Live]*    │
+│ ← Marie Martin (Terminée)(Auto)(Tableau de bord)   [⦿ Voir en direct]*│
 │   Centri Paris • 1 octobre 2026                                        │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
-│ │ ⚠ Session Failed ... (si échouée : motif en police fixe)           │ │
-│ │ 🕑 Waiting for Device ... (si en attente)                          │ │
+│ │ ⚠ Session échouée ... (si échouée : motif en police fixe)          │ │
+│ │ 🕑 En attente de l'appareil ... (si en attente)                    │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ [Duration 30m 2s][Data Batches 0][Total Samples 0K][Channels 1][Sample Rate 1000]│
+│ [Durée 30m 2s][Lots de données 0][Échantillons 0][Canaux 1][Échantillonnage -]│
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ ◔ Entraînement      (Auto)(Tableau de bord)                        │ │
 │ │ Programme 30 min   Zone cible 118 à 138 bpm   Durée prévue 30 min  │ │
@@ -1113,31 +1144,31 @@ direct.
 │ │ Motif de fin : programme_complete                                  │ │
 │ │ Télémétrie : courbes Fréquence cardiaque et Vitesse du bras        │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ ECG Recording : No ECG data recorded for this session                 │
-│ Patient Information · Session Timing · Recording Device · Notes       │
+│ Enregistrement ECG : Aucune donnée ECG enregistrée pour cette session │
+│ Informations patient · Chronologie · Appareil d'enregistrement · Notes│
 └───────────────────────────────────────────────────────────────────────┘
- * « View Live » : si la séance est active, ou auto en attente.
+ * « Voir en direct » : si la séance est active, ou auto en attente.
 ```
 
 | Bloc | Contenu |
 |---|---|
-| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut **en anglais** (Active, Completed, Pending, Failed), badges de type et d'origine, machine et date. **View Live** si la séance est active (ou auto en attente). |
-| « Session Failed » (anglais) | Si échouée : texte générique et **motif précis** en police fixe. |
-| « Waiting for Device » (anglais) | Si en attente ; pour une séance d'entraînement, le texte est « En attente que la machine arme la séance… ». |
-| Cinq cartes (anglais) | Duration (« In progress » si non finie), Data Batches, Total Samples, Channels, Sample Rate (Hz). Héritées de l'ECG : **sans intérêt pour une séance d'entraînement** (souvent 0 ; « Sample Rate » affiche toujours 1000). |
+| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut (Active, Terminée, En attente, Échouée), badges de type et d'origine, machine et date. **Voir en direct** si la séance est active (ou auto en attente). |
+| « Session échouée » | Si échouée : texte générique et **motif précis** en police fixe. |
+| « En attente de l'appareil » | Si en attente ; pour une séance d'entraînement, le texte est « En attente que la machine arme la séance… ». |
+| Cinq cartes | Durée (« En cours » si non finie), Lots de données, Échantillons enregistrés, Canaux, Échantillonnage (Hz). Le nombre d'échantillons et la fréquence sont lus dans les lots chargés (200 au plus), jamais calculés à partir d'une constante. Au-delà de 200 lots, les cartes le disent (« lots chargés sur ... », « Hz, lots chargés »). Tant que le serveur n'a pas donné le nombre de lots, elles affichent « - ». Avec plusieurs canaux, le libellé précise « tous canaux confondus ». Héritées de l'ECG : **sans intérêt pour une séance d'entraînement** (0 lot, fréquence « - »). |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
-| « ECG Recording » (anglais) | Tracé ECG pour un enregistrement. Pour l'entraînement : « No ECG data recorded for this session ». |
-| « Patient Information », « Session Timing », « Recording Device », « Session Notes », « Recording Summary » (anglais) | Nom et adresse, début, durée, fin, « Started By », machine, canaux, notes. |
+| « Enregistrement ECG » | Tracé ECG pour un enregistrement, une carte par canal avec son nombre d'échantillons (« - » tant que le nombre de lots n'est pas connu). Pour l'entraînement : « Aucune donnée ECG enregistrée pour cette session ». |
+| « Informations patient », « Chronologie de la session », « Appareil d'enregistrement », « Notes de session », « Résumé de l'enregistrement » | Nom et adresse, début, durée, fin, « Démarrée par », machine (avec « Fréquence d'acquisition configurée : N Hz »), canaux, notes, puis le résumé des lots et des échantillons. |
 
 **Lire le motif de fin** (champ « Motif de fin ») :
 
 | Motif | Sens |
 |---|---|
-| `programme_complete` | Le programme est allé au bout. Séance **Terminées**. |
-| commence par `operator_stop` | Arrêt demandé (site ou console), suivi de la raison. **Terminées**. |
-| `emergency_stop` | Arrêt d'urgence. **Échouées**. |
-| commence par `safety_verdict` | La sécurité de la machine a arrêté la séance (variateur, communication, chute de FC, dépassement...). **Échouées**. |
-| `tick_exception`, `shutdown` | Erreur logicielle, ou arrêt de la console. **Échouées**. |
+| `programme_complete` | Le programme est allé au bout. Séance **Terminée**. |
+| commence par `operator_stop` | Arrêt demandé (site ou console), suivi de la raison. **Terminée**. |
+| `emergency_stop` | Arrêt d'urgence. **Échouée**. |
+| commence par `safety_verdict` | La sécurité de la machine a arrêté la séance (variateur, communication, chute de FC, dépassement...). **Échouée**. |
+| `tick_exception`, `shutdown` | Erreur logicielle, ou arrêt de la console. **Échouée**. |
 | « refusee par la machine : ... » | La machine a refusé le départ ; la suite dit pourquoi (voir [§7](#7-tableau-des-messages)). |
 | « la boucle n'a ni demarre ni refuse » | La machine a pris la demande mais n'a ni démarré ni refusé en 60 s. |
 | « Cancelled before start by {nom} » | Annulée depuis le site avant le départ. |
@@ -1204,6 +1235,8 @@ patient ») : mêmes champs, **Email** grisé (non modifiable), bouton
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre encore « Details » dans le fil d'Ariane et les statuts au pluriel (« Échouées », « Terminées »).*
+
 **Adresse** : `/fr/dashboard/patients/{id}`. **Pour qui** : administrateur,
 gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 
@@ -1215,9 +1248,9 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 │ │ 👤 Informations patient│ │ ∿ Sessions récentes                      │ │
 │ │ (◯) Marie Martin      │ │ 3 sessions                               │ │
 │ │     (Patient)         │ │ Machine │Statut │Démarrée à│Durée│Actions│ │
-│ │ ✉ marie@ex.fr         │ │ Centri P│(Actives)│1 oct.  │5 min│[Voir en direct]│ │
-│ │ 🌐 Francais           │ │ Centri P│(Terminées)│28 sept.│30m│[Voir le rapport]│ │
-│ │ 📅 Créé le: 28 sept.  │ │ Centri P│(Échouées)│27 sept.│0s │ -     │ │
+│ │ ✉ marie@ex.fr         │ │ Centri P│(Active) │1 oct.  │5 min│[Voir en direct]│ │
+│ │ 🌐 Francais           │ │ Centri P│(Terminée) │28 sept.│30m│[Voir le rapport]│ │
+│ │ 📅 Créé le: 28 sept.  │ │ Centri P│(Échouée) │27 sept.│0s │ -     │ │
 │ │ [ 🗑 Supprimer ]      │ └──────────────────────────────────────────┘ │
 │ └──────────────────────┘                                              │
 │ ┌──────────────────────┐                                              │
@@ -1259,6 +1292,8 @@ Pour **effacer** une valeur : videz le champ, puis **Enregistrer**.
 
 *Les adresses des comptes qui existaient avant l'essai sont masquées sur la capture.* *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre encore l'en-tête de colonne « Name ».*
+
 **Adresse** : `/fr/dashboard/users`. **Pour qui** : administrateur (menu
 Administration).
 
@@ -1268,7 +1303,7 @@ Administration).
 │ 14 utilisateurs                                                        │
 │ 🔍 <Rechercher>          <Tous ▾>  (Tous, Administrateur, Gestionnaire, Patient)│
 │ ┌────────────────────────────────────────────────────────────────────┐│
-│ │ Name (anglais) │ Email       │ Rôle            │ Langue │ Créé le │ 👁 ││
+│ │ Nom            │ Email       │ Rôle            │ Langue │ Créé le │ 👁 ││
 │ │ Jean Dupont    │ jean@ex.fr  │ (Administrateur)│ FR     │ ...     │ 👁 ││
 │ │ Claire Petit   │ claire@ex.fr│ (Gestionnaire)  │ FR     │ ...     │ 👁 ││
 │ │ Marie Martin   │ marie@ex.fr │ (Patient)       │ FR     │ ...     │ 👁 ││
@@ -1310,6 +1345,8 @@ différences :
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre « Details » dans le fil d'Ariane à la place de « Gestionnaires ».*
+
 **Adresse** : `/fr/dashboard/gestionnaires`. **Pour qui** : administrateur.
 Sinon : « Une erreur est survenue: Admin access required ».
 
@@ -1335,6 +1372,8 @@ Nombres de machines et de patients attribués. Clic : fiche du gestionnaire.
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre le fil d'Ariane « Details › Details » et le statut brut `online`.*
+
 **Adresse** : `/fr/dashboard/gestionnaires/{id}`. **Pour qui** :
 administrateur (sinon « Admin access required » ; identifiant inconnu :
 « Gestionnaire not found »).
@@ -1346,15 +1385,16 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 │ ┌──────────────────────────────┐ ┌──────────────────────────────────┐ │
 │ │ ▢ Machines       [ ✎ Modifier ]│ │ 👥 Patients         [ ✎ Modifier ]│ │
 │ │ 2 machines assignées          │ │ 5 patients assignés              │ │
-│ │ Centri Paris       (online)   │ │ Marie Martin      marie@ex.fr    │ │
-│ │ Centri Lyon        (offline)  │ │ ...                              │ │
+│ │ Centri Paris       (En ligne) │ │ Marie Martin      marie@ex.fr    │ │
+│ │ Centri Lyon       (Hors ligne)│ │ ...                              │ │
 │ └──────────────────────────────┘ └──────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Modifier** (Machines) : fenêtre **Assigner des Machines**, « Sélectionner
   les machines auxquelles ce gestionnaire peut accéder », une case par machine
-  (statut brut en anglais), **Annuler** / **Enregistrer**.
+  (avec son statut : En ligne, Hors ligne, En session), **Annuler** /
+  **Enregistrer**.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner
   les patients que ce gestionnaire peut gérer », une case par patient,
   **Annuler** / **Enregistrer**. La liste cochée **remplace** la précédente :
@@ -1378,6 +1418,8 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
+*Capture antérieure à la traduction (ANH-123) : elle montre encore la ligne « 126 data batches • 133s of recording • ~12600 samples », en anglais et avec un nombre d'échantillons faux.*
+
 **Adresse** : `/fr/dashboard/reports`. **Pour qui** : tous.
 
 ```
@@ -1396,9 +1438,16 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
 - **Télécharger PDF** : génère un PDF dans votre navigateur (« Génération en
-  cours... » pendant ce temps) et le télécharge. Le PDF est **en anglais**
-  (« ECG Session Report ») et contient seulement l'identité, les horaires, les
-  canaux, les notes et un aperçu ECG.
+  cours... » pendant ce temps) et le télécharge. Le bouton reste grisé tant
+  que les données de la séance ne sont pas chargées. Le PDF suit la langue de
+  l'interface (en français : « Rapport de session ECG », fichier
+  `Rapport_ECG_{identifiant}_{date}.pdf`) et contient l'identité, les horaires,
+  les canaux, les statistiques d'enregistrement, les notes et un aperçu ECG.
+- Sous la carte d'une séance qui a des données ECG : « N lots de données •
+  N s d'enregistrement • N échantillons ». Le nombre d'échantillons, comme la
+  fréquence d'échantillonnage du PDF, est lu dans les lots chargés pour le
+  rapport (50 au plus). Au-delà, la ligne et le PDF le disent : « sur les 50
+  lots chargés (N au total) ».
 - « Aucun rapport disponible pour le moment » si vide.
 
 > Pour une séance **d'entraînement**, le PDF ne contient **ni courbe de
@@ -1755,7 +1804,7 @@ patient (pour lui même, avec le droit de lancement).
   ([§4.8](#48-fenêtre-lancer-une-séance-auto)) ;
 - message rouge dans la fenêtre après **Lancer** : refus du serveur (en
   anglais, voir [§7](#7-tableau-des-messages)) ;
-- la séance passe **Échouées** avec « refusee par la machine : ... » : la
+- la séance passe **Échouée** avec « refusee par la machine : ... » : la
   machine a refusé ; lisez la suite du motif ([§7](#7-tableau-des-messages)) ;
 - la séance reste en attente plus d'une minute : voir
   [§6.3](#63-si-la-machine-est-hors-ligne) ; annulez la
@@ -1792,7 +1841,7 @@ patient (pour lui même, avec le droit de lancement).
 Séance **en attente** :
 
 1. Ouvrez sa **vue en direct** (depuis **Sessions**, onglet **Tous** →
-   ligne → détail → **View Live**).
+   ligne → détail → **Voir en direct**).
 2. **Annuler la séance** → confirmez **Annuler la séance**.
 
 **Ce que vous devez voir** : bandeau rouge « Séance échouée » et « Cancelled
@@ -1830,14 +1879,14 @@ commençant par `operator_stop`).
    prévue, FC max, opérateur, origine, **Motif de fin**, courbes.
 
 **Ce que vous devez voir** : les deux courbes de toute la séance. Les cartes
-ECG en anglais sont vides pour une séance d'entraînement : c'est normal.
+ECG sont vides pour une séance d'entraînement : c'est normal.
 
 Pour l'historique d'un seul patient : **Patients** → le patient → carte
 **Sessions récentes** (10 dernières).
 
 **Si ça ne marche pas** :
 
-- « Session not found » : vous n'avez pas accès à cette séance ;
+- « Session introuvable » : vous n'avez pas accès à cette séance ;
 - une séance démarrée à la machine apparaît avec « Unknown » en patient, et
   **n'apparaît pas** chez le patient : la machine n'envoie pas encore le
   pratiquant (voir [§6.4](#64-séances-démarrées-à-la-machine-manuelles-ou-auto)).
@@ -1850,7 +1899,7 @@ Pour l'historique d'un seul patient : **Patients** → le patient → carte
 2. Repérez la séance (nom, machine, date, durée).
 3. **Voir** pour ouvrir le détail, ou **Télécharger PDF**.
 
-**Ce que vous devez voir** : un fichier PDF « ECG Session Report » téléchargé.
+**Ce que vous devez voir** : un fichier PDF « Rapport de session ECG » téléchargé.
 
 **Limite** : pour une séance d'entraînement, le PDF n'a pas de courbe. Seul le
 détail (**Voir**) montre les courbes. Pour garder une trace, faites une capture
@@ -1878,7 +1927,7 @@ administrateur).
 
 Régénérer la clé (clé perdue ou compromise) :
 
-1. Détail de la machine → **Danger Zone** → **Régénérer** → **Confirmer**.
+1. Détail de la machine → **Zone de danger** → **Régénérer** → **Confirmer**.
 2. Copiez la nouvelle clé (**Copier**), **Fermer**.
 3. Installez la sur le Raspberry Pi (`MACHINE_API_KEY`) et redémarrez sa
    console.
@@ -1889,13 +1938,13 @@ l'installation. Entre les deux, elle est coupée du site.
 Supprimer :
 
 1. Vérifiez qu'aucune séance n'est **en attente** ou **active** sur la machine.
-2. **Danger Zone** → **Supprimer** → **Supprimer**.
+2. **Zone de danger** → **Supprimer** → **Supprimer**.
 
 **Ce que vous devez voir** : retour à la liste ; la machine n'y est plus (sauf
 avec **Afficher les machines supprimées**, administrateur).
 
 **Si ça ne marche pas** : bouton grisé (machine **En session**), ou rien ne se
-passe (séance en attente, refus muet ; voir [§4.6](#carte-danger-zone-titre-en-anglais)).
+passe (séance en attente, refus muet ; voir [§4.6](#carte-zone-de-danger)).
 
 Restaurer (administrateur) :
 
@@ -1944,7 +1993,7 @@ Internet, le site ne peut rien lui demander.**
 | Grands chiffres et courbes de la vue en direct | Machine (télémétrie) | Un point par seconde, envoyés par paquets toutes les 5 s : 5 à 10 s de retard. |
 | « Pas de fréquence cardiaque fiable » | Machine, ou site si aucun point depuis 20 s | Immédiat. |
 | Prise en compte de **Arrêter la séance** | Machine | La machine vérifie toutes les 3 s, puis décélère sur sa rampe (plusieurs secondes). |
-| Passage **Terminées** / **Échouées** | Machine | Quand la machine a fini (bras arrêté). |
+| Passage au statut **Terminée** / **Échouée** | Machine | Quand la machine a fini (bras arrêté). |
 
 Le site **ne recalcule rien** : il affiche ce que la machine envoie. Les seuls
 calculs du site sont des **vérifications à l'avance** (FC max, zone, âge) que le
@@ -1956,7 +2005,7 @@ serveur et la machine refont de toute façon.
 |---|---|---|
 | Machine hors ligne **avant** le lancement | Le bouton **Lancer une séance auto** est grisé (**Mes machines**), ou le serveur refuse (« Machine is offline »). | Vérifier l'alimentation, le réseau, et que la console de la machine tourne. |
 | Machine qui se coupe **pendant** l'attente | La séance reste **en attente** : personne ne la prend. | **L'annuler** ([P12](#p12-annuler-ou-arrêter-une-séance-à-distance)). **Ne la laissez pas traîner** : si la machine revient en ligne plus tard, elle la prendra et tentera de démarrer, même des heures après. |
-| Liaison perdue **pendant** une séance | La séance reste « Actives » sur le site ; les chiffres se figent puis sont remplacés par « - » au bout de 20 s ; l'état passe « Données périmées » puis « Hors ligne ». La machine, elle, continue selon ses propres règles de sécurité. Elle garde jusqu'à une heure de points et les renvoie au retour de la liaison. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
+| Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis sont remplacés par « - » au bout de 20 s ; l'état passe « Données périmées » puis « Hors ligne ». La machine, elle, continue selon ses propres règles de sécurité. Elle garde jusqu'à une heure de points et les renvoie au retour de la liaison. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
 | Arrêt demandé pendant une coupure | La demande attend sur le serveur ; la machine l'exécutera à son retour si la séance tourne encore. | Agir à la machine. |
 
 ### 6.4 Séances démarrées à la machine (manuelles ou auto)
@@ -1999,7 +2048,7 @@ démarrage de la console, l'absence d'alerte de sécurité en attente
 d'acquittement, que la console est libre, que les séances auto et « personne à
 bord » sont autorisées, que le programme respecte ses plafonds, la zone par
 rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
-**Échouées** avec « refusee par la machine : » suivi de la raison.
+**Échouée** avec « refusee par la machine : » suivi de la raison.
 
 ---
 
@@ -2084,7 +2133,7 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
 | « Unauthorized. Required roles: admin. Your role: gestionnaire » | Action réservée à l'administrateur (par exemple à la fin de **Modifier** une machine par un gestionnaire, voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
 | « Not authorized to manage this machine » | Machine non attribuée à vous. | P6. |
-| « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (souvent sans affichage, voir [§4.6](#carte-danger-zone-titre-en-anglais)). | Attendre la fin ou annuler la séance en attente. |
+| « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (souvent sans affichage, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Cannot delete your own account » | Tentative de suppression de soi. | Demander à un autre administrateur. |
 | « User not found in database. Please complete registration. » | Votre fiche n'existe pas encore. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
 | « Not authenticated » | Session Clerk expirée. | Se reconnecter. |
@@ -2114,7 +2163,7 @@ Ils suivent « refusee par la machine : » dans le motif d'une séance échouée
 |---|---|---|
 | Page blanche « Application error: a client-side exception has occurred » (ou écran d'erreur rouge en développement) | Une donnée demandée a été refusée par le serveur : fiche utilisateur absente (premier passage), ou autre refus inattendu. | Repasser par `/fr` ; si cela persiste, noter la page et l'heure et le signaler à l'équipe. |
 | « No address provided to ConvexReactClient » | Site lancé sans configuration Convex (développement). | Configurer `.env.local` (voir [convex.md](../convex.md)). |
-| « Machine not found », « Session not found » (texte seul, avec **Retour**) | Élément inexistant ou hors de vos droits. | **Retour** ; vérifier vos attributions. |
+| « Machine introuvable », « Session introuvable » (texte seul, avec **Retour**) | Élément inexistant ou hors de vos droits. | **Retour** ; vérifier vos attributions. |
 
 ---
 
@@ -2175,15 +2224,16 @@ Son gestionnaire la voit, avec « Unknown ».
 Le PDF ne sait lire que l'ECG, que la console d'entraînement n'envoie pas.
 Ouvrez le détail de la séance (**Voir**) : les courbes y sont.
 
-**Le badge dit « Connecting... » en permanence sur la vue en direct.**
+**Le badge dit « Connexion... » en permanence sur la vue en direct.**
 Ce badge concerne l'ancien flux ECG, pas l'entraînement. Regardez le panneau
 **Séance d'entraînement**.
 
 **Faut il recharger la page pour voir les nouvelles valeurs ?**
 Non, tout se met à jour seul. Les courbes avancent par paquets de 5 s.
 
-**Le fil d'Ariane affiche « Details », « Live », « gestionnaires ».**
-Libellés non traduits dans le code actuel ; sans conséquence.
+**Les captures montrent « Details » et « Live » dans le fil d'Ariane.**
+Elles sont antérieures à la traduction (ANH-123) : le site affiche maintenant
+« Détails », « En direct » et « Gestionnaires ».
 
 **Comment un gestionnaire saisit il sa propre FC max pour lancer « Moi-même » ?**
 Par sa propre fiche `/fr/dashboard/users/{son identifiant}` (carte
@@ -2241,9 +2291,9 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 9 | Messages du serveur en anglais, et peut être masqués en production. | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | Listes des patients et gestionnaires : le serveur prend les 50 à 100 séances **les plus récentes de toute la base**, puis filtre. | Sur une base active, un patient ou un gestionnaire peut ne pas voir ses séances plus anciennes. | Aucun. |
-| 12 | Rapport PDF sans télémétrie, en anglais ; cartes ECG inutiles et en anglais sur les séances d'entraînement ; « Sample Rate 1000 » affiché en dur ; « Total Samples » faux. | Rapports inexploitables pour l'entraînement. | Utiliser le détail de la séance. |
-| 13 | Textes non traduits : « Danger Zone », « Created », « Name », statut brut de la machine, fil d'Ariane, badges du détail de séance, fenêtres de régénération de clé et de suppression, vue ECG. | Site mi français mi anglais. | Aucun. |
-| 14 | Actions de sécurité `freeze`, `quick_stop`, `go_silent` affichées brutes ; motifs de fin bruts (`programme_complete`, `operator_stop`...). | Moins lisible. | Tableaux des §4.6 et §4.12. |
+| 12 | Rapport PDF sans télémétrie ; cartes ECG inutiles sur les séances d'entraînement. (Corrigé par ANH-123 : rapport et cartes traduits ; fréquence et nombre d'échantillons lus dans les lots enregistrés, avec une mention quand seuls certains lots sont chargés.) | Rapports inexploitables pour l'entraînement. | Utiliser le détail de la séance. |
+| 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
+| 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
 | 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. | Une machine muette paraît vivante un moment. | Regarder « Dernier signal » et le statut. |
 | 16 | La fenêtre **Nouvelle machine** propose 100 Hz par défaut alors que le serveur et **Paramètres** annoncent 1000 Hz. | Sans effet sur l'entraînement. | Aucun. |
 | 17 | Mutations sans écran : rattacher ou détacher un seul gestionnaire d'un patient ou d'une machine, modifier son propre profil. | Moins de souplesse. | Passer par les assignations complètes. |
@@ -2252,8 +2302,6 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 
 Pour le mainteneur de la documentation technique :
 
-- la référence parle de « Zone de danger » : le titre affiché est « Danger
-  Zone » (anglais) ;
 - elle ne signale pas le défaut de **Assigner des Machines** (§9.2 n°2), ni
   l'erreur affichée au gestionnaire qui modifie une machine (n°4), ni le
   blocage durable causé par **Nouvelle session** (n°3) ;
@@ -2291,6 +2339,10 @@ complète. Rien ici ne concerne une vraie machine.
 - L'état d'une machine dont la console est arrêtée passe « Hors ligne ».
 
 **Écarts et défauts visibles**
+
+Ces constats datent du 2 octobre 2026. Depuis, ANH-123 a corrigé les constats
+1 à 3 et les statuts au pluriel du constat 8 ; le constat 4 demeure, avec des
+libellés traduits (« Connexion... », « En attente des données ECG »).
 
 | # | Constat | Où |
 |---|---|---|
@@ -2330,5 +2382,7 @@ fidèlement. Voir [deploiement.md](../deploiement.md#4-essai-de-bout-en-bout-du-
 
 *Guide rédigé à partir du code de la branche `feat/pi-training-session`
 (1er octobre 2026), illustré de captures réelles prises le 2 octobre 2026 sur le
-serveur de développement. À relire ligne à ligne contre les écrans, et à
+serveur de développement. Texte et schémas mis à jour le 6 octobre 2026 pour
+ANH-123 (écrans traduits, statistiques ECG lues dans les données), sans
+nouvelle capture. À relire ligne à ligne contre les écrans, et à
 recapturer sur la production après le redéploiement (ANH-82, ANH-83).*

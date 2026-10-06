@@ -25,6 +25,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { SessionFormModal } from "@/components/modals/SessionFormModal";
 import { SessionKindCell } from "@/components/training/SessionKindCell";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import {
   useReactTable,
   getCoreRowModel,
@@ -293,7 +294,7 @@ export default function SessionsPage() {
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const statusLabel = useSessionStatusLabel();
 
   const variants: Record<
     string,
@@ -305,10 +306,9 @@ function SessionStatusBadge({ status }: { status: string }) {
     failed: "destructive",
   };
 
+  // Unknown statuses are shown as received rather than hidden.
   return (
-    <Badge variant={variants[status] || "outline"}>
-      {t(status as "active" | "completed" | "pending" | "failed")}
-    </Badge>
+    <Badge variant={variants[status] || "outline"}>{statusLabel(status)}</Badge>
   );
 }
 

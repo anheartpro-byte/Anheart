@@ -4,7 +4,7 @@ import { useState, use, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale, useFormatter } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,8 +30,14 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { fr, enUS } from "date-fns/locale";
 import { LiveSensorDisplay } from "@/components/charts/LiveSensorDisplay";
 import { type SignalQuality } from "@/lib/ecg";
+import {
+  formatSampleRates,
+  recordingCoverage,
+  summarizeRecording,
+} from "@/lib/ecg/stats";
 import { isTrainingKind } from "@/lib/training";
 import { TrainingPanel } from "@/components/training/TrainingPanel";
 import {
@@ -43,16 +49,14 @@ import {
  * ECG Live Session Page
  *
  * Data Flow:
- * 1. BITalino sensor captures ECG signal at 1000 Hz (1000 samples/second)
- * 2. Each sample is a 10-bit ADC value (0-1023)
- * 3. RPi client batches 1000 samples and sends to Convex every second
- * 4. This page queries the last 10 seconds of data and displays it
+ * 1. BITalino sensor captures the ECG signal at the machine's acquisition rate
+ * 2. The RPi client treats each batch (filter, mV, downsample) and sends it to
+ *    Convex with the rate it was resampled to
+ * 3. This page queries the last 10 seconds of data and displays it
  *
  * Chart Axes:
  * - X-axis: Time in seconds (0-5s window, scrolling)
- * - Y-axis: ADC value (0-1023) - represents voltage from ECG sensor
- *   - ~512 is the baseline (no signal)
- *   - Peaks above/below are the heart's electrical activity (P, QRS, T waves)
+ * - Y-axis: treated signal in its unit (mV); legacy raw sessions show ADC values
  */
 
 export default function LiveSessionPage({
@@ -62,6 +66,8 @@ export default function LiveSessionPage({
 }) {
   const { id } = use(params);
   const t = useTranslations();
+  const locale = useLocale();
+  const intl = useFormatter();
   const router = useRouter();
 
   const sessionId = id as Id<"sessions">;
@@ -109,6 +115,20 @@ export default function LiveSessionPage({
     return { signalQuality: quality, heartRate: bpm };
   }, [ecgData]);
 
+  // Unit of the treated ECG values (e.g. "mV"); absent on legacy raw sessions.
+  const ecgUnit = useMemo(() => {
+    for (const batch of ecgData ?? []) {
+      for (const sample of batch.samples) {
+        if (sample.channel.toUpperCase() === "ECG" && sample.unit) {
+          return sample.unit;
+        }
+      }
+    }
+    return undefined;
+  }, [ecgData]);
+
+  const dateLocale = locale === "fr" ? fr : enUS;
+
   // "Poor" groups the two actionable bad states (hum-dominated / noisy).
   const isPoorSignal =
     signalQuality === "mains_dominated" || signalQuality === "noisy";
@@ -132,7 +152,7 @@ export default function LiveSessionPage({
   if (session === null) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Session not found</p>
+        <p className="text-muted-foreground">{t("sessions.notFound")}</p>
         <Link
           href="/dashboard/sessions"
           className="text-primary hover:underline mt-2 inline-block"
@@ -182,9 +202,9 @@ export default function LiveSessionPage({
     return (
       <div className="text-center py-12 space-y-4">
         <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
-        <p className="text-lg">Session is not active</p>
+        <p className="text-lg">{t("sessionLive.notActive")}</p>
         <Link href={`/dashboard/sessions/${sessionId}`}>
-          <Button>View Session Details</Button>
+          <Button>{t("sessionLive.viewDetails")}</Button>
         </Link>
       </div>
     );
@@ -193,7 +213,19 @@ export default function LiveSessionPage({
   const hasData = ecgData && ecgData.length > 0;
   const totalBatches = stats?.totalBatches ?? 0;
   const durationSeconds = stats?.durationSeconds ?? 0;
-  const totalSamples = totalBatches * sampleRate; // ~1 batch per second
+
+  // Samples and rates are counted from the batches on screen (the last 10 s),
+  // so the count is flagged as partial instead of being extrapolated.
+  const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
+  const recordedRates = formatSampleRates(recording.sampleRates);
+  const coverage = recordingCoverage(ecgData?.length, stats?.totalBatches);
+  // No figure until the server's batch count is known: it decides the label.
+  const countsReady = coverage !== "unknown";
+  const countValues = {
+    channels: recording.channelCount,
+    loaded: recording.batchCount,
+    total: totalBatches,
+  };
 
   return (
     <div className="space-y-6">
@@ -203,8 +235,13 @@ export default function LiveSessionPage({
           <h1 className="text-2xl font-bold">{riderName}</h1>
           <p className="text-muted-foreground flex flex-wrap items-center gap-2">
             <span>
-              {session.machine.name} - Started{" "}
-              {formatDistanceToNow(session.startedAt, { addSuffix: true })}
+              {session.machine.name} •{" "}
+              {t("sessionLive.started", {
+                time: formatDistanceToNow(session.startedAt, {
+                  addSuffix: true,
+                  locale: dateLocale,
+                }),
+              })}
             </span>
             {isTraining && (
               <>
@@ -218,19 +255,19 @@ export default function LiveSessionPage({
           {isDelayed && (
             <Badge variant="secondary" className="gap-1">
               <AlertCircle className="h-3 w-3" />
-              5s delay
+              {t("ecg.delay")}
             </Badge>
           )}
           <Badge variant={hasData ? "default" : "secondary"} className="gap-1">
             {hasData ? (
               <>
                 <span className="h-2 w-2 bg-green-400 rounded-full animate-pulse" />
-                <span>Live</span>
+                <span>{t("ecg.live")}</span>
               </>
             ) : (
               <>
                 <Wifi className="h-3 w-3" />
-                <span>Connecting...</span>
+                <span>{t("sessionLive.connecting")}</span>
               </>
             )}
           </Badge>
@@ -240,7 +277,7 @@ export default function LiveSessionPage({
               onClick={() => setShowEndDialog(true)}
             >
               <StopCircle className="h-4 w-4 mr-2" />
-              End Session
+              {t("sessions.end")}
             </Button>
           )}
         </div>
@@ -258,21 +295,20 @@ export default function LiveSessionPage({
               <div>
                 <h3 className="font-semibold text-yellow-800 dark:text-yellow-200">
                   {signalQuality === "mains_dominated"
-                    ? "Signal Dominated by Electrical Interference - Check Electrode Contact"
-                    : "Poor Signal Quality - Check Electrode Connection"}
+                    ? t("sessionLive.mainsTitle")
+                    : t("sessionLive.poorTitle")}
                 </h3>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-                  The ECG signal is mostly powerline hum / noise rather than a
-                  heartbeat. This usually means:
+                  {t("sessionLive.warningDescription")}
                 </p>
                 <ul className="text-sm text-yellow-700 dark:text-yellow-300 mt-2 list-disc list-inside space-y-1">
-                  <li>ECG electrodes are not connected to the patient</li>
-                  <li>Electrodes have poor skin contact (try adding gel)</li>
-                  <li>Cables are loose or disconnected</li>
+                  <li>{t("sessionLive.cause1")}</li>
+                  <li>{t("sessionLive.cause2")}</li>
+                  <li>{t("sessionLive.cause3")}</li>
                 </ul>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-2">
-                  <strong>Tip:</strong> Connect Red→Right arm, Black→Left arm,
-                  White→Right leg
+                  <strong>{t("sessionLive.tipLabel")}</strong>{" "}
+                  {t("sessionLive.tipText")}
                 </p>
               </div>
             </div>
@@ -293,10 +329,16 @@ export default function LiveSessionPage({
                 <Wifi className="h-5 w-5 text-muted-foreground" />
               )}
               <span className="text-lg font-bold capitalize">
-                {isGoodSignal ? "Good" : isPoorSignal ? "Poor" : "---"}
+                {isGoodSignal
+                  ? t("sessionLive.qualityGood")
+                  : isPoorSignal
+                    ? t("sessionLive.qualityPoor")
+                    : "---"}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Signal Quality</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("sessionLive.signalQuality")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -308,7 +350,7 @@ export default function LiveSessionPage({
               <span className="text-2xl font-bold">{heartRate ?? "--"}</span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Heart Rate (BPM)
+              {t("sessionLive.heartRateBpm")}
             </p>
           </CardContent>
         </Card>
@@ -321,7 +363,9 @@ export default function LiveSessionPage({
                 {String(durationSeconds % 60).padStart(2, "0")}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Duration</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("sessions.duration")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -330,7 +374,9 @@ export default function LiveSessionPage({
               <Database className="h-5 w-5 text-green-500" />
               <span className="text-2xl font-bold">{totalBatches}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Data Batches</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t("recording.dataBatches")}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -338,10 +384,14 @@ export default function LiveSessionPage({
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-purple-500" />
               <span className="text-2xl font-bold">
-                {(totalSamples / 1000).toFixed(0)}K
+                {countsReady ? intl.number(recording.totalSamples) : "-"}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Total Samples</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {coverage === "partial"
+                ? t("recording.samplesPartial", countValues)
+                : t("recording.samples", countValues)}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -359,17 +409,19 @@ export default function LiveSessionPage({
         <Card className="border-dashed border-2">
           <CardContent className="py-12 text-center">
             <Activity className="h-16 w-16 mx-auto text-muted-foreground mb-4 animate-pulse" />
-            <h3 className="text-xl font-medium mb-2">Waiting for ECG Data</h3>
+            <h3 className="text-xl font-medium mb-2">
+              {t("sessionLive.waitingTitle")}
+            </h3>
             <p className="text-muted-foreground max-w-lg mx-auto mb-4">
-              Make sure the BITalino device is connected and the Raspberry Pi
-              client is running. Data should appear here within a few seconds.
+              {t("sessionLive.waitingDescription")}
             </p>
-            <div className="text-sm text-muted-foreground space-y-1">
-              <p>Expected data format:</p>
-              <p className="font-mono text-xs">
-                1000 samples/second @ 10-bit resolution (0-1023)
+            {session.sampleRate !== undefined && (
+              <p className="text-sm text-muted-foreground">
+                {t("recording.acquisitionRate", {
+                  rate: String(session.sampleRate),
+                })}
               </p>
-            </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -377,25 +429,39 @@ export default function LiveSessionPage({
       {/* Data Explanation Card */}
       <Card className="bg-muted/30">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Understanding the ECG Data</CardTitle>
+          <CardTitle className="text-sm">
+            {t("sessionLive.explainTitle")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p>
-            <strong>Y-axis (0-1023):</strong> Raw ADC values from the BITalino
-            sensor. This represents the electrical signal from the heart, not
-            the heart rate. Values around 512 are the baseline.
+            {ecgUnit ? (
+              <>
+                <strong>
+                  {t("sessionLive.yAxisLabelTreated", { unit: ecgUnit })}
+                </strong>{" "}
+                {t("sessionLive.yAxisTextTreated")}
+              </>
+            ) : (
+              <>
+                <strong>{t("sessionLive.yAxisLabelRaw")}</strong>{" "}
+                {t("sessionLive.yAxisTextRaw")}
+              </>
+            )}
           </p>
           <p>
-            <strong>X-axis (seconds):</strong> Time window showing the last 5
-            seconds of data. The graph scrolls as new data arrives.
+            <strong>{t("sessionLive.xAxisLabel")}</strong>{" "}
+            {t("sessionLive.xAxisText")}
           </p>
+          {recordedRates && (
+            <p>
+              <strong>{t("sessionLive.sampleRateLabel")}</strong>{" "}
+              {t("sessionLive.sampleRateText", { rate: recordedRates })}
+            </p>
+          )}
           <p>
-            <strong>Sample Rate:</strong> 1000 Hz means 1000 data points per
-            second. Each batch contains ~1000 samples.
-          </p>
-          <p>
-            <strong>Heart Rate:</strong> Estimated by detecting R-wave peaks in
-            the ECG signal.
+            <strong>{t("sessionLive.heartRateLabel")}</strong>{" "}
+            {t("sessionLive.heartRateText")}
           </p>
         </CardContent>
       </Card>
@@ -404,22 +470,21 @@ export default function LiveSessionPage({
       <Dialog open={showEndDialog} onOpenChange={setShowEndDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>End Recording Session?</DialogTitle>
+            <DialogTitle>{t("sessionLive.endDialogTitle")}</DialogTitle>
             <DialogDescription>
-              This will stop recording ECG data for patient {riderName}. The
-              recorded data will be saved and available for review.
+              {t("sessionLive.endDialogDescription", { name: riderName })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEndDialog(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
               onClick={handleEndSession}
               disabled={ending}
             >
-              {ending ? "Ending..." : "End Session"}
+              {ending ? t("sessionLive.ending") : t("sessions.end")}
             </Button>
           </DialogFooter>
         </DialogContent>

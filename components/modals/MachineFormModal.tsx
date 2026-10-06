@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -32,16 +32,21 @@ import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 // Available BITalino sensor channels (A1-A6)
 const AVAILABLE_CHANNELS = ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"];
 
-const machineSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100),
-  location: z.string().max(200).optional(),
-  sampleRate: z.number().min(100).max(10000),
-  batchInterval: z.number().min(100).max(5000),
-  channels: z.array(z.string()).min(1, "Select at least one channel"),
-  gestionnaireIds: z.array(z.string()).optional(),
-});
+// Validation messages are passed in so they follow the active locale.
+const createMachineSchema = (messages: {
+  nameRequired: string;
+  channelRequired: string;
+}) =>
+  z.object({
+    name: z.string().min(1, messages.nameRequired).max(100),
+    location: z.string().max(200).optional(),
+    sampleRate: z.number().min(100).max(10000),
+    batchInterval: z.number().min(100).max(5000),
+    channels: z.array(z.string()).min(1, messages.channelRequired),
+    gestionnaireIds: z.array(z.string()).optional(),
+  });
 
-type MachineFormValues = z.infer<typeof machineSchema>;
+type MachineFormValues = z.infer<ReturnType<typeof createMachineSchema>>;
 
 interface MachineFormModalProps {
   open: boolean;
@@ -82,6 +87,15 @@ export function MachineFormModal({
   const updateMachine = useMutation(api.machines.updateMachine);
   const assignMachineToGestionnaires = useMutation(
     api.machines.assignMachineToGestionnaires,
+  );
+
+  const machineSchema = useMemo(
+    () =>
+      createMachineSchema({
+        nameRequired: t("machines.form.nameRequired"),
+        channelRequired: t("machines.form.channelRequired"),
+      }),
+    [t],
   );
 
   const form = useForm<MachineFormValues>({
@@ -147,7 +161,7 @@ export function MachineFormModal({
       }
     } catch (error) {
       form.setError("root", {
-        message: error instanceof Error ? error.message : "An error occurred",
+        message: error instanceof Error ? error.message : t("common.error"),
       });
     }
   };
@@ -232,8 +246,8 @@ export function MachineFormModal({
           </DialogTitle>
           <DialogDescription>
             {isEditing
-              ? "Update machine configuration"
-              : "Configure a new Raspberry Pi machine"}
+              ? t("machines.form.editDescription")
+              : t("machines.form.createDescription")}
           </DialogDescription>
         </DialogHeader>
 
@@ -252,7 +266,10 @@ export function MachineFormModal({
                 <FormItem>
                   <FormLabel>{t("machines.name")} *</FormLabel>
                   <FormControl>
-                    <Input placeholder="Raspberry Pi 1" {...field} />
+                    <Input
+                      placeholder={t("machines.form.namePlaceholder")}
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -266,7 +283,10 @@ export function MachineFormModal({
                 <FormItem>
                   <FormLabel>{t("machines.location")}</FormLabel>
                   <FormControl>
-                    <Input placeholder="Room 101" {...field} />
+                    <Input
+                      placeholder={t("machines.form.locationPlaceholder")}
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

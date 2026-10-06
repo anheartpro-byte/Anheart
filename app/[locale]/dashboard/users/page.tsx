@@ -70,7 +70,7 @@ export default function UsersPage() {
     () => [
       {
         accessorKey: "firstName",
-        header: "Name",
+        header: t("common.name"),
         cell: ({ row }) => (
           <span className="font-medium">
             {row.original.firstName} {row.original.lastName}

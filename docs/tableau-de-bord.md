@@ -114,10 +114,13 @@ En haut : un fil d'Ariane, le sélecteur de langue et le thème clair / sombre.
 | `/fr/faq` | Questions fréquentes. |
 | `/fr/privacy`, `/fr/terms` | Confidentialité, conditions. |
 
-Le texte d'accueil annonce une gravité « jusqu'à 3 fois celle de la Terre ».
-**Le logiciel ne le permet pas** : le plafond logiciel est la vitesse nominale
-moteur (27,7 tr/min bras, environ 2,1 g au bout des jambes), et beaucoup moins
-avec une personne à bord. Voir [securite.md](securite.md).
+Le texte d'accueil et la FAQ ne citent aucun chiffre d'intensité : « L'intensité
+se règle par la vitesse de rotation, dans les limites fixées par le logiciel de
+la machine. » Pour mémoire, le plafond logiciel est la vitesse nominale moteur
+(27,7 tr/min bras, environ 2,1 g au bout des jambes), et beaucoup moins avec une
+personne à bord. Voir [securite.md](securite.md). Tout chiffre publié sur le site
+dépend de la décision médicale (ANH-98). La FAQ nomme les six canaux du
+logiciel : ECG, EDA, SpO2, RESP, EMG et LUX.
 
 ### Tableau de bord : `/fr/dashboard`
 
@@ -149,9 +152,9 @@ Admin et gestionnaire de la machine.
 |---|---|---|
 | Bandeau « Supprimée » | Date de suppression, bouton **Restaurer**. | admin |
 | Bouton **Lancer une séance auto** | Ouvre la fenêtre de lancement (§5). | admin, gestionnaire |
-| Configuration | Statut, dernier signal, fréquence, intervalle, canaux ; bouton Modifier. | admin, gestionnaire |
+| Configuration | Statut (« En ligne », « Hors ligne », « En session »), dernier signal, fréquence, intervalle, canaux, « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
-| **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » ; « Mis à jour il y a … ». | lecture |
+| **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » ; « Mis à jour il y a … ». L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | Zone de danger | **Régénérer la clé** (l'ancienne cesse de fonctionner ; la nouvelle s'affiche une fois) ; **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
@@ -188,12 +191,14 @@ locale ne la prend pas.
 - Séance d'entraînement **active** : le **panneau d'entraînement** (§6) avec
   gros indicateurs, courbes et bouton **Arrêter la séance**.
 - Sous le panneau, la page affiche aussi l'ancien bloc ECG (qualité du signal,
-  FC, durée, lots reçus). **Pour une séance d'entraînement, ce bloc reste vide**
-  (« Connecting... ») : la console locale n'envoie pas l'ECG brut au site,
-  seulement la télémétrie. Ce bloc est en anglais, non traduit.
-- Séance d'**enregistrement** : tracé ECG, badge « 5s delay » pour un
-  gestionnaire (Convex retarde ses données de 5 s), bouton **End Session**
-  (admin, gestionnaire).
+  FC, durée, lots de données, échantillons). **Pour une séance d'entraînement,
+  ce bloc reste vide** (« Connexion... ») : la console locale n'envoie pas l'ECG
+  brut au site, seulement la télémétrie. Ce bloc est traduit. Le nombre
+  d'échantillons est compté sur les lots affichés (les 10 dernières secondes)
+  et signalé comme partiel.
+- Séance d'**enregistrement** : tracé ECG, badge « 5s de délai » pour un
+  gestionnaire (Convex retarde ses données de 5 s), bouton **Terminer la
+  session** (admin, gestionnaire).
 
 ### Détail d'une séance : `/fr/dashboard/sessions/{id}`
 
@@ -202,6 +207,15 @@ d'échec avec la raison. Pour une séance d'entraînement, la carte
 **Entraînement** : type, origine, programme, zone cible, durée prévue, FC max du
 pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Pour une
 séance d'enregistrement : tracé ECG et résumé.
+
+Les cartes du haut donnent la durée, les lots de données, les échantillons
+enregistrés, les canaux et la fréquence d'échantillonnage. Le nombre
+d'échantillons et la fréquence sont **lus dans les lots chargés** (200 au plus
+sur cette page), jamais calculés à partir d'une constante. Quand la session
+compte plus de lots, les cartes l'indiquent (« lots chargés sur … ») ; tant que
+le serveur n'a pas donné le nombre de lots, elles affichent « - », y compris
+pour le comptage de chaque canal. Avec plusieurs canaux, le libellé précise
+« tous canaux confondus ».
 
 ### Patients : `/fr/dashboard/patients` et `/fr/dashboard/patients/{id}`
 
@@ -227,9 +241,13 @@ leurs nombres de machines et de patients. Fiche : **Assigner des machines** et
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur, avec **Télécharger PDF** (généré
-dans le navigateur par `lib/generatePdf.ts` à partir des données ECG). Pour une
-séance d'entraînement, il n'y a pas d'ECG sur le site : le rapport n'a pas de
-contenu ECG. **Non vérifié.**
+dans le navigateur par `lib/generatePdf.ts` à partir des données ECG). Le
+rapport suit la langue de l'interface : libellés, dates, nombres et nom du
+fichier (`Rapport_ECG_{identifiant}_{date}.pdf` en français). Sa fréquence
+d'échantillonnage et son nombre d'échantillons sont lus dans les lots chargés
+pour le rapport (50 au plus) ; au-delà, la liste et le PDF indiquent un
+comptage partiel. Pour une séance d'entraînement, il n'y a pas d'ECG sur le
+site : le rapport n'a pas de contenu ECG. **Ce dernier cas n'est pas vérifié.**
 
 ### Paramètres : `/fr/dashboard/settings`
 
@@ -339,7 +357,7 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 | **Enregistrement** | Ancienne séance ECG seule. |
 | **Tableau de bord** / **Machine** | Origine : lancée depuis le site, ou démarrée à la console. |
 | **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu il y a moins / plus de 90 s. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » |
-| Statut de séance | En attente, Actives, Terminées, Échouées. |
+| Statut de séance | En attente, Active, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |
 
 ### Panneau d'entraînement (vue en direct)
 
@@ -414,10 +432,12 @@ Pièges :
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP n'est testé que côté Pi, contre un faux transport. |
 | Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |
-| Libellés des actions de sécurité | `freeze`, `quick_stop`, `go_silent` s'affichent bruts (traductions prévues pour `hold`, `stop`, `estop`). |
+| Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
 | ECG et rapport PDF d'une séance d'entraînement | Pas d'ECG transmis par la console locale : bloc ECG vide, rapport sans ECG. |
-| Vue en direct : textes du bloc ECG | En anglais, non traduits. |
+| Vue en direct : textes du bloc ECG | Traduits. La vue en direct d'une session d'enregistrement réellement active n'a pas été observée dans un navigateur depuis la traduction. |
+| Nombre d'échantillons d'une longue session | Compté sur les lots chargés (200 sur la fiche, 50 pour un rapport, 10 s en direct) et signalé comme partiel au-delà. Un total exact demande un comptage côté serveur (`getSessionDataStats`, `convex/ecgData.ts`). |
+| Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, messages d'accès des pages Gestionnaires, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).
