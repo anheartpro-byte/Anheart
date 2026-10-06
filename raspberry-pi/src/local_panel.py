@@ -161,7 +161,7 @@ from src.training.runtime import (
     TargetOutOfRange,
     TrainingRuntime,
 )
-from src.training.safety import SafetyLimits
+from src.training.safety import SELF_CLEARING, SafetyLimits
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.web.app import build_server, create_app, serve
@@ -1066,7 +1066,13 @@ def build_panel(
 
 
 def describe_start_refusal(refusal: StartRefusal) -> str:
-    """One line for a refused start. Exhaustive over the runtime's closed union."""
+    """One line for a refused start. Exhaustive over the runtime's closed union.
+
+    A standing verdict is quoted without the sentence an unlatched one carries
+    on the live screen (:data:`~src.training.safety.SELF_CLEARING`): that
+    sentence is about a session that is running, and next to "start refused"
+    it only blurs why.
+    """
     reason: str
     match refusal:
         case AlreadyStarted(state=state):
@@ -1074,7 +1080,8 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
         case NotAttested():
             reason = "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
-            reason = f"verdict {verdict.rule} a acquitter ({verdict.detail})"
+            said = verdict.detail.removesuffix(SELF_CLEARING)
+            reason = f"verdict {verdict.rule} a acquitter ({said})"
         case LimitsMismatch(threshold=threshold):
             reason = f"seuil {threshold} different de celui du superviseur"
         case PlanUnusable(detail=detail) | DriveUnavailable(detail=detail):

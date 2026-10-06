@@ -99,8 +99,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/hr_control.py` | La loi de commande : filtre de FC (`HeartRateTracker`) et PI (`HeartRateController`). | Propose seulement ; n'a aucune autorité sur la sécurité. Porte 100 %. |
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
-| `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 17 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut. Limites actuelles : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)) et reprise après avertissement non verrouillé ([section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
+| `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 18 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). Limites actuelles : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)) ; une cible manuelle demandée pendant qu'un avertissement tient le bras à l'arrêt est suivie dès qu'il se lève ([5.1](#51-principes)). Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
@@ -204,6 +204,14 @@ L'action la plus sévère l'emporte (`max` sur `SafetyAction`).
 | `QUICK_STOP` | 4 | Consigne à 0 **tout de suite**, commande de marche **gardée** : le variateur décélère sur sa propre rampe mise en service (3-4 s). Ce n'est pas un arrêt « immédiat ». |
 | `GO_SILENT` | 5 | Consigne à 0 une dernière fois (synchrone), puis **plus aucune trame**, lectures comprises. Le ttO du variateur prend l'arrêt en charge. Sans retour : ni acquittement, ni nouvel armement ; il faut redémarrer le processus. |
 
+Un `FREEZE` ou un `REDUCE` qui n'est pas verrouillé se lève seul, et le runtime
+suit de nouveau la loi de commande ou la cible, sans clic (voir
+[5.1](#51-principes)). Cela vaut tant que le bras tourne. Une fois que le bras
+a tourné dans une séance, une consigne qui revient à 0 sans que personne l'ait
+demandé, sous `REDUCE` ou sous `NONE` par la loi de commande, termine la séance
+sur le verrou `session_standstill` (voir
+[5.2](#52-les-18-règles-du-superviseur)).
+
 ---
 
 ## 4. Les séances : manuelle et programmée
@@ -258,8 +266,10 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP,
   avec la limite actuelle sous FREEZE décrite en [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt).
 * Après une fin de séance, la cible vaut 0 : une nouvelle séance exige un
-  nouveau départ. Une consigne temporairement ramenée à 0 par un avertissement
-  non verrouillé n'est pas nécessairement une fin de séance (voir section 5).
+  nouveau départ. Une consigne ramenée à 0 par un avertissement termine la
+  séance sur le verrou `session_standstill`, capsule vide comprise (voir
+  section 5). Une cible que l'opérateur met lui-même à 0, sans avertissement,
+  ne la termine pas : il peut redonner une cible.
 
 ### 4.4 Séance programmée (AUTO)
 
@@ -288,7 +298,7 @@ est renvoyé comme séance échouée avec la raison.
 |---|---|
 | `BASELINE` | Moteur arrêté. La FC de repos est mesurée (dernière valeur fraîche et fiable). Si aucune n'est mesurée, la machine reste à l'arrêt : aucune FC de repos n'est inventée. |
 | `WARMUP` | La consigne monte vers la zone, plafonnée à `floor(max_rpm × warmup_rpm_ceiling_fraction)`. Se termine tôt dès que la FC atteint `zone_low_bpm`. |
-| `HOLD` | La loi de commande module la vitesse pour tenir la FC dans la zone. |
+| `HOLD` | La loi de commande module la vitesse pour tenir la FC dans la zone. Si elle ramène la consigne jusqu'à 0 (FC durablement au-dessus de la zone), la séance se termine sur le verrou `session_standstill` : elle ne se repose pas à 0 pour repartir ensuite (voir [5.2](#52-les-18-règles-du-superviseur)). |
 | `COOLDOWN` | Consigne vers 0 (fin normale ou verdict). Se termine sur arrêt confirmé, ou au bout de la durée de cooldown du profil. |
 | `RECOVERY` | Moteur arrêté, passager toujours à bord, **toutes les règles de FC restent actives** (phase au plus fort risque vasovagal). |
 | `DONE` | Programme terminé. Seules les règles de FC et `attendant_absent` s'arrêtent. |
@@ -333,9 +343,12 @@ scénarios de simulation. La console copie les profils livrés dans
 
 * **Il ne voit pas la demande de la loi de commande.** `SafetyObservation` ne
   contient ni vitesse désirée ni décision ; seulement des mesures (dont
-  `commanded_rpm`, ce qui a été écrit au variateur). Raison : lors d'un malaise
-  vasovagal la FC **baisse** ; la loi de commande y lit « sous la zone » et veut
-  accélérer.
+  `commanded_rpm`, ce qui a été écrit au variateur) et quelques constats du
+  runtime sur ce qu'il a lui-même écrit (la consigne est en rampe ; la consigne
+  est revenue à 0 sans que personne l'ait demandé, champ `stopped_by`). Aucun
+  de ces champs n'est une demande, et `stopped_by` ne peut qu'ajouter un
+  verdict. Raison : lors d'un malaise vasovagal la FC **baisse** ; la loi de
+  commande y lit « sous la zone » et veut accélérer.
 * **Il ne touche jamais le fil** : pas de Modbus, pas d'`await`. C'est une
   fonction pure des mesures et de son historique.
 * **Chaque règle est indépendante**, puis on garde la plus sévère.
@@ -347,12 +360,23 @@ scénarios de simulation. La console copie les profils livrés dans
   * **non verrouillé** : FREEZE ou REDUCE réévalué à chaque tic, qui disparaît
     quand sa cause disparaît (ex. une électrode qui revient). Raison écrite dans
     le code : si chaque coupure de 10 s exigeait un clic, l'opérateur cliquerait
-    par réflexe, y compris sur un défaut variateur.
-    Dans l'implémentation actuelle, si la séance est encore active, la
-    régulation reprend alors sans geste de l'opérateur, même après une consigne
-    ramenée à 0 sous REDUCE. Cette limite est suivie dans
-    [ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement) ;
-    aucune règle future de reprise n'est décrite ici comme acquise.
+    par réflexe, y compris sur un défaut variateur. **Quand il disparaît, si
+    la séance est encore active, la consigne suit de nouveau seule la
+    régulation ou la cible**, sans geste de l'opérateur : c'est voulu tant que
+    la vitesse a seulement été maintenue ou baissée, et la phrase du verdict le
+    dit à l'écran (`SELF_CLEARING` : « NOT LATCHED: it lifts by itself… »)
+    tant que la séance peut encore prendre de la vitesse. Cela s'arrête à
+    l'arrêt : une fois que le bras a tourné dans une séance, une consigne qui
+    revient à 0 sans que personne l'ait demandé, amenée par un REDUCE ou par la
+    régulation cardiaque elle-même, termine la séance sur le verrou
+    `session_standstill` (section 5.2). Ce sont les décisions des 5 et 6
+    octobre 2026
+    ([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement),
+    [securite.md](securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques)).
+    Ce que la règle ne couvre pas y est listé : le premier mouvement d'une
+    séance programmée, même après un avertissement pendant la BASELINE, et
+    une cible manuelle que l'opérateur a demandée pendant qu'un avertissement
+    tenait le bras à l'arrêt, suivie dès qu'il se lève.
 * **Acquittement** (`acknowledge`) : exige un nom ; refusé si rien n'est
   verrouillé ; **refusé pour GO_SILENT** (définitif) ; refusé tant que
   l'opérateur n'a pas déclaré le champignon d'arrêt d'urgence relâché
@@ -361,7 +385,7 @@ scénarios de simulation. La console copie les profils livrés dans
 * Les règles de FC (`hr_*`) ne jugent pas en phase `DONE` ni en occupation
   `bench`.
 
-### 5.2 Les 17 règles du superviseur
+### 5.2 Les 18 règles du superviseur
 
 Valeurs par défaut de `SafetyLimits`. Seuls `hard_max_bpm` et `critical_bpm`
 n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` /
@@ -386,6 +410,18 @@ n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` 
 | `loop_stall` | écart entre deux tics > 3 périodes ; > 15 périodes | 0,6 s → FREEZE ; 3,0 s → GO_SILENT | FREEZE ou GO_SILENT | oui (les deux) |
 | `attendant_absent` | aucun signe de présence de la page depuis… (mesuré depuis le départ s'il n'y en a jamais eu) | > 60 s FREEZE ; > 120 s RAMP_DOWN | FREEZE → RAMP_DOWN | seulement RAMP_DOWN |
 | `setpoint_unconfirmed` | LFRD relu ≠ LFRD écrit pendant 1 s | 1 s | RAMP_DOWN | oui |
+| `session_standstill` | le runtime constate (`stopped_by`) que, dans cette séance et après que le bras a tourné, la consigne est revenue à 0, écriture acquittée par le variateur, sans que personne l'ait demandé : par un REDUCE (`hr_stale`, `hr_rate`, `hr_unresponsive`, `current_high` au niveau d'alerte) ou par la régulation cardiaque | aucun délai | RAMP_DOWN : la séance se termine à l'arrêt, le détail nomme la cause | oui ; se redéclenche tant que la séance arrêtée n'est pas finie (phase `DONE`) |
+
+**`session_standstill` en détail.** La règle ne juge aucune mesure : elle lit
+le constat que le runtime fait à un seul endroit, à la fin de l'étape de
+commande du tic (`TrainingRuntime._note_standstill`), et le verdict tombe au
+tic suivant. Le runtime ne fait pas ce constat : si la séance se terminait
+déjà (STOP de l'opérateur, COOLDOWN ou RECOVERY du programme, verdict qui a
+terminé la séance) ; en séance manuelle, si aucun avertissement ne tient (la
+consigne ne suit alors que la cible de l'opérateur, qui a donc demandé ce 0) ;
+si la consigne n'a jamais quitté 0 (BASELINE). Séance `bench` ou `occupied`,
+c'est la même règle. Une cible 0 tapée pendant qu'un avertissement baisse la
+vitesse est comptée comme l'arrêt de l'avertissement.
 
 **`hr_drop` en détail** (la règle vasovagale). Seules les lectures dont le
 numéro de séquence a avancé et dont la qualité est `good` comptent.
@@ -545,6 +581,7 @@ Conséquences :
 | QUICK_STOP, E-STOP, arrêt de sortie du processus | LFRD = 0, commande de marche **gardée** : le variateur suit sa rampe dEC. |
 | STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; sans verdict prioritaire, le chemin ordinaire descend la consigne sur la rampe logicielle. Sous FREEZE, elle reste tenue dans le code actuel (limite ANH-175 ci-dessous). |
 | Verdict RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel aux limites de mouvement). |
+| Consigne revenue à 0 en cours de séance sans que personne l'ait demandé (`session_standstill`) | la consigne est déjà à 0 quand le verdict tombe, au tic suivant : rien de plus n'est écrit. La séance se termine comme sur tout RAMP_DOWN : marche gardée tant que l'arbre tourne, puis 7 et 6 à l'arrêt confirmé par RFRD. |
 | GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. |
 | Sortie normale du processus (`shutdown`) | LFRD = 0 synchrone, puis `close()` qui attend l'arrêt mesuré avant de retirer la marche. Si l'arrêt n'est pas confirmé, la marche reste et le ttO finit l'arrêt. |
 | Console sans séance, au repos confirmé ou liaison non acquise | libération du transport sans écriture ; l'absence de séance ne prouve pas l'arrêt physique. |
@@ -775,8 +812,10 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    commande ; mesures fraîches seulement ; keepalive en premier ; ne jamais
    supposer l'état du variateur au démarrage ; aucun réarmement automatique de
    défaut ; les verdicts verrouillés exigent un acquittement. Les avertissements
-   non verrouillés peuvent laisser la régulation reprendre seule (section 5) ;
-   rien ne bloque la boucle.
+   non verrouillés laissent la consigne suivre de nouveau seule la régulation
+   ou la cible tant que le bras tourne ; une consigne revenue à 0 en cours de
+   séance sans que personne l'ait demandé termine la séance (section 5) ; rien
+   ne bloque la boucle.
 
 Exceptions en cours (dans `pyproject.toml`, liste figée par
 `tests/test_typing_contract.py`) : `signal_processing.py`, `convex_client.py`,

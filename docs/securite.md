@@ -29,14 +29,14 @@ indépendante** du logiciel et du variateur.
 
 « Garanti » veut dire ici : écrit dans le code, couvert par des tests (100 % des
 branches sur la chaîne de sécurité, tests de propriétés `hypothesis`) et vérifié
-dans la simulation (60 scénarios, 199 pannes injectées, cohorte de 30
+dans la simulation (61 scénarios, 199 pannes injectées, cohorte de 30
 personnes). Pas sur la vraie machine avec une personne à bord.
 
 | Garantie | Où |
 |---|---|
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
-| **Rien ne redémarre seul.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut, aucune reprise automatique. GO_SILENT ne s'acquitte jamais dans le même processus. | `safety.py` |
+| **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). Restent possibles sans clic à cet instant : le premier mouvement d'une séance, et l'exécution d'une cible que l'opérateur a lui-même demandée ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec la liste exacte de ce que la règle ne couvre pas). | `safety.py`, `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -125,3 +125,190 @@ préalables :
 4. Faire signer toutes les valeurs [MED] par l'équipe médicale.
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
+
+## 7. Décisions des 5 et 6 octobre 2026 sur les reprises automatiques
+
+Ticket ANH-176. Les deux décisions ci-dessous sont celles du propriétaire du
+produit, reprises telles qu'il les a formulées. Les mesures, la façon de les
+appliquer et la liste de ce qui reste (7.2 à 7.5) sont de l'auteur du
+changement et de la revue indépendante : elles n'engagent pas le propriétaire
+du produit.
+
+### 7.1 Les décisions
+
+**5 octobre 2026.** Quand un avertissement non verrouillé a ramené la consigne
+à 0, la séance se termine. Deux options sont écartées : la reprise sur un geste
+de l'opérateur, et la reprise automatique bornée.
+
+**6 octobre 2026.**
+
+1. La règle s'étend à tout arrêt en cours de séance : « un bras arrêté ne
+   repart jamais seul ». Une fois que le bras a tourné dans une séance, tout
+   retour de la consigne à 0 termine la séance, sur un verrou, que ce soit un
+   avertissement ou la régulation cardiaque qui l'y ait amenée. Conséquence
+   acceptée : la régulation ne peut plus se reposer à 0 puis reprendre.
+2. Les séances manuelles capsule vide (`bench`) sont couvertes aussi.
+3. Un avertissement pendant la BASELINE, avant que le bras ait bougé, reste
+   hors de la règle : le premier mouvement après la BASELINE est le départ
+   normal du programme.
+
+### 7.2 Ce qui a été mesuré
+
+Tout est mesuré sur le banc d'essai logiciel (variateur factice, horloge
+manuelle, jamais sur le matériel), avec le profil livré `standard_30_min` et
+les limites de la console. « Avant » est la branche `develop` avant ANH-176.
+
+**L'électrode décollée.** La fréquence cardiaque (FC) est perdue pendant 50 s
+puis revient. Personne ne clique.
+
+| Temps depuis la perte de la FC | Avant, en tr/min moteur | Maintenant |
+|---|---|---|
+| 0 s | 164, séance en cours | 164, séance en cours |
+| 12 s | 164, FREEZE `hr_stale` | 164, FREEZE `hr_stale` |
+| 32 s | 122, REDUCE `hr_stale` | 122, REDUCE `hr_stale` |
+| 42 s | 0, mode toujours « SEANCE » | 0 ; au cycle suivant (0,2 s), séance terminée, verrou `session_standstill`, mode « ARRET » |
+| 50 s | la FC revient | la FC revient |
+| 95 s | 69 | 0 |
+| 170 s | 168 | 0 |
+
+L'opérateur voit le bras arrêté, va à la capsule remettre l'électrode, la FC
+revient, et le bras repartait à côté de lui.
+
+**Le dernier pas pris par la régulation.** Séquence trouvée par la revue
+indépendante de la première version de ce changement, qui ne la couvrait pas.
+Bras à 204 tr/min moteur en HOLD, FC à 128 dans sa zone (118 à 138). L'électrode
+se décolle, puis elle est remise au moment où la consigne est descendue à la
+vitesse minimale ; la FC lue vaut alors 140, soit 2 au-dessus de la zone.
+
+| Temps depuis la perte de la FC | Avant | Maintenant |
+|---|---|---|
+| 9,2 s | 204, FREEZE `hr_stale` | 204, FREEZE `hr_stale` |
+| 29,2 s | REDUCE `hr_stale`, la consigne descend | REDUCE `hr_stale`, la consigne descend |
+| 39,2 s | 55 (vitesse minimale) ; la FC revient à 140 | 55 ; la FC revient à 140 |
+| 39,4 s | plus aucun verdict à l'écran | plus aucun verdict à l'écran |
+| 44,2 s | 0, posé par la régulation ; mode « SEANCE », aucun verdict | 0, posé par la régulation ; au cycle suivant, séance terminée, verrou `session_standstill` |
+| 269 s | la FC est repassée sous la zone : 55, puis 203 deux minutes après | 0 |
+
+**La régulation seule, sans aucun avertissement.** La FC dérive de 100 à 145 à
+15 bpm/min et y reste : au-dessus de la zone, sous le palier dur (148), trop
+lentement pour `hr_rate`.
+
+| Moment | Avant | Maintenant |
+|---|---|---|
+| la FC passe 138 | 158 tr/min moteur | 158 tr/min moteur |
+| 117 s plus tard | 0 ; mode « SEANCE », aucun verdict, étage de sortie sous tension | 0 ; au cycle suivant, séance terminée, verrou `session_standstill`, étage de sortie retiré une fois l'arrêt lu |
+| la FC redescend 150 s après l'arrêt, à 15 bpm/min | le bras repart 300 s après l'arrêt : 55, puis 133 une minute après | 0 |
+
+**Capsule vide.** Les règles de FC sont désactivées en séance `bench` ; seul
+`current_high` peut y ramener la consigne à 0, et il se lève forcément à
+l'arrêt, puisque le courant retombe avec la vitesse. Mesuré avec un seuil
+d'alerte abaissé pour le banc d'essai (le variateur factice ne dépasse jamais
+2,4 A), cible 300 tr/min moteur : avant, REDUCE, arrêt, puis le bras remontait
+seul vers sa cible, et le cycle recommençait toutes les 40 s environ ;
+maintenant la séance se termine à l'arrêt, sur le verrou.
+
+**Les séances normales.** La batterie de simulation complète (61 scénarios,
+199 pannes injectées dont celles du traitement ECG réel, 90 séances de la
+cohorte de 30 personnes : 350 courses) a été rejouée avant et après.
+
+- Aucune séance nominale (sujet sain, aucune panne injectée) ne change : mêmes
+  fins, mêmes règles, mêmes vitesses de pointe, même temps passé en zone. Sur
+  ces séances la régulation ne ramène jamais la consigne à 0 en cours de
+  séance ; le seul retour à 0 hors fin de séance est une cible 0 demandée par
+  l'opérateur (`manual_ladder`), qui ne termine rien.
+- Huit courses existantes changent, toutes avec une panne ECG injectée : la
+  perte de FC y amène maintenant la séance sur le verrou `session_standstill`.
+  Six d'entre elles (`ecg_dsp_flat`, `_saturated`, `_mains`, `_stopped`,
+  `_corrupted`, `_gaps`) ne se terminaient pas avant : le bras repartait et la
+  course allait au bout du scénario (`shutdown`) ; leur vitesse de pointe passe
+  de 5,8 ou 6,5 tr/min au bras à 1,4 ou 1,7. Les deux autres
+  (`ecg_disconnect_warmup`, `fault_bitalino_disconnect_dsp`) se terminaient
+  déjà sur un verdict et gagnent seulement cette règle.
+- Un scénario est ajouté : `fault_ecg_electrode_refitted_standstill`.
+
+### 7.3 Comment c'est appliqué
+
+- **Un seul endroit voit le retour à 0.** À la fin de l'étape de commande du
+  cycle (`TrainingRuntime._command`), quel que soit le bras du verdict qui a
+  écrit la consigne : si elle était non nulle et que le variateur vient
+  d'acquitter un 0, le runtime note le fait et ce qui l'a produit
+  (`_note_standstill`). Un 0 seulement envoyé, non acquitté, ne termine rien :
+  le cycle suivant réessaie.
+- **Le verdict est celui du superviseur.** Au cycle suivant, la règle
+  `session_standstill` (RAMP_DOWN, verrouillée, sans délai) lit ce fait. Elle
+  est donc dans le plancher verrouillé du superviseur, comme la fin verrouillée
+  de `hr_stale` à 60 s : même affichage dans `/api/status` (`standing` et
+  `floor`), même refus immédiat d'un départ (409) à la console, même refus d'un
+  lancement venu du tableau de bord (renvoyé comme séance échouée), même
+  acquittement nominatif. Entre les deux cycles rien ne peut bouger : la
+  consigne est à 0, et le cycle qui pourrait la remonter est celui où le
+  verdict décide. Le verrou propre au runtime reste libre : un mot d'arrêt
+  refusé ensuite par le variateur est bien signalé (`disable_refused`).
+- **L'acquittement tient une fois la séance finie.** Tant que la séance arrêtée
+  n'est pas terminée (descente confirmée, puis récupération surveillée), la
+  règle reste vraie : un acquittement donné trop tôt est repris au cycle
+  suivant, comme pour `hr_stale` tant que la FC manque, et ici même si la cause
+  de l'avertissement a disparu entre-temps. Dans tous les cas il ne relance
+  rien, et il faut un nouveau départ.
+- **Ce qui amène la consigne à 0 sans que personne l'ait demandé** : un
+  REDUCE (`hr_stale` entre 30 et 60 s, `hr_rate`, `hr_unresponsive`,
+  `current_high` au niveau d'alerte), ou la régulation cardiaque quand la FC
+  est au-dessus de la zone. En séance programmée comme en séance manuelle, avec
+  ou sans personne déclarée à bord. La phrase du verdict nomme la cause.
+- **Ce qui n'est pas « seul »**, et ne lève donc pas ce verrou : un STOP de
+  l'opérateur ; une cible manuelle mise à 0 par l'opérateur alors qu'aucun
+  avertissement ne tient ; le retour au calme et la récupération du programme.
+  Une séance déjà en train de se terminer garde sa propre raison de fin.
+- **Lecture prudente retenue** : si l'opérateur tape une cible 0 pendant qu'un
+  avertissement est en train de baisser la vitesse, l'arrêt est compté comme
+  celui de l'avertissement et la séance se termine. Cela coûte un acquittement.
+- **Ce qui continue de reprendre seul**, parce que le bras ne s'est pas
+  arrêté : une vitesse seulement maintenue (FREEZE) ou baissée sans atteindre 0
+  (REDUCE en cours de descente), et la régulation, qui baisse et remonte
+  toujours la vitesse d'un bras qui tourne.
+- **Aucun seuil, aucun délai d'une règle existante n'a changé.**
+- **La phrase à l'écran.** Tant qu'un avertissement non verrouillé tient et que
+  la séance peut encore prendre de la vitesse, la phrase du verdict affichée
+  par la console se termine par : « NOT LATCHED: it lifts by itself when its
+  cause ends, and the speed then follows the programme or the manual target
+  again, upwards too, with nobody clicking ». Elle n'est pas ajoutée sur une
+  séance qui se termine ou qui est finie, ni reprise dans un refus de départ.
+  Elle est en anglais, comme toutes les phrases de verdict, et n'apparaît que
+  sur les pages Séance et Sécurité.
+
+### 7.4 Ce que la règle ne couvre pas
+
+Dans ces cas le bras peut encore quitter l'arrêt sans clic à cet instant.
+
+1. **Avant le premier mouvement d'une séance programmée** (décision du 6
+   octobre, point 3). Mesuré : aucune FC pendant les 45 premières secondes de
+   BASELINE (électrodes pas encore posées) donne FREEZE à 10 s puis REDUCE à
+   30 s, la consigne étant à 0 depuis le départ. La FC arrive, l'avertissement
+   se lève, le programme continue, et le bras fait son premier mouvement
+   pendant WARMUP (81 tr/min moteur à 285 s). La phrase ci-dessus reste
+   affichée tant que l'avertissement dure.
+2. **Une cible que l'opérateur a demandée et qui a dû attendre.** En séance
+   manuelle, l'opérateur ramène lui-même le bras à 0 (la séance continue),
+   puis un avertissement tient la consigne où elle est, donc à 0. S'il tape une
+   cible pendant ce temps, rien ne bouge tant que l'avertissement tient ; quand
+   il se lève, la consigne monte vers cette cible. Le mouvement a été demandé
+   par l'opérateur, mais il commence sans clic à cet instant. Comportement
+   inchangé, figé par un test, laissé au propriétaire du produit.
+
+**Le bandeau à l'écran reste à faire.** Dire clairement et en permanence, en
+français et sur toutes les pages, qu'une reprise automatique reste possible
+demande de modifier la page web, ce que ce changement ne fait pas. La phrase
+anglaise ci-dessus est un palliatif.
+
+### 7.5 Ce que cela coûte
+
+- Près de la vitesse minimale, quelques secondes d'un REDUCE suffisent à
+  terminer la séance : la descente n'a plus que le dernier pas à faire.
+- Une FC qui reste au-dessus de la zone assez longtemps pour que la régulation
+  ramène la consigne à 0 (environ deux minutes dans la mesure ci-dessus)
+  termine la séance, alors qu'avant le bras attendait à l'arrêt que la FC
+  redescende. C'est la conséquence acceptée le 6 octobre. Aucune des 90 séances
+  de la cohorte simulée ni aucun scénario nominal n'est dans ce cas, mais ces
+  séances sont simulées : la fréquence réelle de ce cas reste à observer.
+- Chaque fin de ce type demande un acquittement nominatif avant le départ
+  suivant.

@@ -565,11 +565,19 @@ def _ecg_cases() -> list[FailureCase]:
                 name=name,
                 category=Category.ECG,
                 description=f"Real ECG path, WARMUP: {what} for 40 s. No false heart rate may "
-                "be reported; the rate goes stale instead.",
+                "be reported; the rate goes stale instead, its warning walks the arm to a "
+                "standstill and the session ends there (ANH-176).",
                 document=_dsp(name, signal),
-                end_reasons=frozenset({"safety_verdict", "shutdown"}),
-                rules=("hr_stale",),
-                messages=("hr_stale",),
+                # One ending only since ANH-176. Forty seconds without a rate are
+                # enough for hr_stale's REDUCE to bring the setpoint to zero, and a
+                # stopped arm never restarts by itself: the session ends on the
+                # latched session_standstill. "shutdown" was accepted here while
+                # the arm restarted when the rate came back and the run simply
+                # reached the end of the scenario; accepting it again would let
+                # that restart come back unnoticed.
+                end_reasons=VERDICT,
+                rules=("hr_stale", "session_standstill"),
+                messages=("hr_stale", "session_standstill"),
                 silent=False,
                 at=DSP_AT_S,
                 phase="warmup",
