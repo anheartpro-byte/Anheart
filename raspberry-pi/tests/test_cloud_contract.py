@@ -68,6 +68,7 @@ from tests.test_cloud_sync import (
     Rig,
     config_of,
     launch_answer,
+    manual,
     ok,
     rig,
     transport_answering,
@@ -275,24 +276,12 @@ async def test_ex5_a_refused_start_is_logged_with_its_code(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING, logger="src.cloud_sync")
-    r, _watcher = attested(tmp_path)
-    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r = rig(tmp_path)
     r.dashboard.answer(
         "/api/machine/training/start",
         Err(Refused(400, "Session is not pending", ErrorCode("session_not_pending"))),
     )
-    await r.step()
-    pending = r.panel.surface.take_command()
-    assert isinstance(pending, StartSession)
-    r.sync.session_started(
-        cloud_sync.StartedSession(
-            kind=cloud_sync.SessionKind.AUTO,
-            operator=pending.operator,
-            started_at=r.clock.unix_millis(),
-            subject_id=pending.subject_id,
-            cloud_session_id=pending.cloud_session_id,
-        )
-    )
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
     assert (
         "dashboard refused the start "
