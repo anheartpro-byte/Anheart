@@ -994,7 +994,7 @@ Les jobs sont parallèles :
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `pi-gate` | gate Pi complète, couverture de branches à 100 % sur la chaîne de sécurité ; `coverage.xml` |
+| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
 | `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
 | `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
@@ -1042,6 +1042,163 @@ squash, le déplacement de ligne et le refus d'une autre valeur, d'un autre
 chemin ou d'un secret voisin ; les autres détecteurs restent actifs.
 Ces faux positifs ne sont pas des secrets réels. Aucun audit n'est désactivé.
 
+### Gate Pi en parallèle (ANH-72)
+
+L'exigence EX-5 d'ANH-72 demande une gate Pi sous 25 minutes en CI. En série,
+le job `pi-gate` prenait 30 min 38 s (run 37330679190 du 5 octobre 2026), dont
+29 min 55 s de pytest : ruff, basedpyright et mypy ne pèsent que 22 s à eux
+trois. Un seul test paramétré,
+`test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic` (67 cas
+d'environ 10 s chacun), représente 39 % de ce temps.
+
+Le job lance toujours `bash raspberry-pi/scripts/check.sh`, qui reste la seule
+définition de la gate. Il lui passe `PI_GATE_PROCESSES`, égal au nombre de CPU
+du runner : quatre sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux
+fils chacun). Avec cette variable, l'étape de tests de `check.sh` n'est plus un
+seul pytest : `scripts/ci/pi_gate_parallel.py` lance autant de processus
+`python -m pytest` indépendants, sans aucune dépendance supplémentaire. Sans
+la variable, `check.sh` se comporte exactement comme avant.
+
+Chaque processus collecte toute la suite, comme en série, puis ne garde que
+les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
+avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 67 cas lourds, qui
+se suivent, sont ainsi distribués à tour de rôle entre tous les processus.
+Chaque processus mesure sa propre couverture.
+
+La gate ne passe que si ces trois vérifications réussissent :
+
+* **chaque processus se termine de lui-même avec le code 0.** Un test en
+  échec, une erreur de collecte, un processus tué en plein test ou un plantage
+  pendant l'arrêt de l'interpréteur, après le dernier test, font échouer la
+  gate. Un processus qui a fini ses tests mais ne s'arrête pas (fil non démon
+  resté bloqué, bibliothèque native) est tué au bout de 300 s et fait échouer
+  la gate avec un message. En série, pytest ne rendrait jamais la main et le
+  job mourrait à sa limite de 60 minutes. Ces 300 s ne commencent qu'après le
+  dernier test et l'enregistrement de la couverture : il ne reste alors que
+  l'arrêt de l'interpréteur, qui prend moins d'une seconde quand rien n'est
+  bloqué. Un processus bloqué avant la fin de ses tests n'est pas chronométré :
+  comme en série, le job attend sa propre limite ;
+* **la preuve de partition.** Chaque processus écrit la liste des tests qu'il
+  a collectés et celle des tests qu'il a exécutés. La gate exige que toutes
+  les collectes soient identiques, identifiant par identifiant, et que chaque
+  test collecté ait été exécuté par un processus et un seul. Cette
+  vérification ignore la règle de partage : elle ne compare que les listes. Le
+  journal l'affiche (`[gate] partition proven`), avec le nombre de tests de
+  chaque processus et le total des verdicts ;
+* **le seuil de couverture, une seule fois, sur les seules mesures de cette
+  exécution.** Le lanceur réunit lui-même la mesure de chaque processus, une
+  par processus : une mesure absente, illisible ou vide fait échouer la gate,
+  là où `coverage combine` se contenterait d'un avertissement. Le total est
+  écrit dans un fichier privé, seul dans un dossier créé pour l'exécution, et
+  le journal affiche `[gate] coverage data merged from 4 of 4 processes`.
+  `coverage report --fail-under=100` s'applique ensuite à ce fichier, avec la
+  même liste `include` de `pyproject.toml` et la même fonction de décision
+  que `pytest --cov-fail-under=100`. Ce fichier privé compte : `coverage
+  report` fusionne d'abord tout fichier `.coverage.*` voisin de son fichier de
+  données, si bien qu'un fichier resté dans `raspberry-pi/` après une
+  exécution interrompue aurait pu combler un vrai trou. Il n'est plus lu.
+
+`check.sh` exécute d'abord les tests du lanceur lui-même
+(`scripts/ci/test_pi_gate_parallel.py`). Sur un projet jetable, ils vérifient
+qu'un test en échec, un trou dans la couverture (avec ou sans mesure périmée
+dans le dossier), un processus tué à l'arrêt de l'interpréteur, un processus
+qui ne s'arrête pas, un processus sans enregistrement ou sans mesure
+utilisable et des identifiants différents d'un processus à l'autre font bien
+échouer la gate. Ils vérifient aussi que les tests voient le même
+environnement et le même chemin d'import qu'en série (voir plus bas). Dans les
+deux modes, `check.sh` soumet aussi le lanceur, son
+greffon et leurs tests aux quatre vérificateurs statiques du Pi, avec les
+règles de `raspberry-pi/pyproject.toml` (`scripts/ci/pyproject.toml` ne fait
+qu'y renvoyer) ; le fichier de tests reçoit les exemptions de
+`raspberry-pi/tests/**`.
+
+Ce qui reste identique à la gate en série : les tests collectés (aucun filtre
+ni marqueur n'est ajouté ; dans le résumé de chaque processus, `deselected`
+compte les tests confiés aux autres processus), la mesure de branches, le
+seuil, ruff, basedpyright et mypy avant les tests, les réglages Hypothesis,
+les variables d'environnement et le chemin d'import vus par les tests. Ce qui
+diffère : l'ordre et le voisinage des tests dans chaque processus,
+l'occupation de tous les CPU pendant les tests, la ligne de commande de
+pytest, sa sortie (un tube lu par le lanceur, qui préfixe chaque ligne par
+`[p0]` à `[p3]`) et l'absence de `.pytest_cache`, que plusieurs processus
+écraseraient et qu'aucun test ne lit.
+
+**Le lanceur ne laisse rien dans l'environnement des tests.** Une variable
+ajoutée à un processus pytest est héritée par tout processus qu'un test
+démarre, et peut en changer le comportement. La première version exportait
+`PYTHONUNBUFFERED=1` pour afficher la sortie plus tôt. Avec cette variable,
+`print("OPEN", flush=True)` écrit `OPEN` puis le saut de ligne en deux appels
+système au lieu d'un : les tests de verrou du variateur (ANH-74), qui lisent
+la ligne `OPEN` de leur processus auxiliaire en une seule lecture, ont échoué
+6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis,
+le lanceur transmet ses réglages au greffon par des options de ligne de
+commande (`--pi-gate-share`, `--pi-gate-evidence`). Il ne peut pas démarrer
+pytest sans deux variables : `PYTHONPATH`, pour que le greffon soit trouvé, et
+`COVERAGE_FILE`, lu une fois par pytest-cov au démarrage de la mesure. Le
+greffon leur rend la valeur qu'elles avaient, ou les retire, et retire son
+dossier de `sys.path`, avant l'import du premier `conftest.py`. La sortie
+reste lisible au fil de l'eau : pytest la vide lui-même après chaque test.
+Une conséquence à connaître : la couverture n'est mesurée que dans les
+processus pytest, comme aujourd'hui en série. Si la mesure des sous-processus
+était activée un jour (`patch = ["subprocess"]` dans la configuration de
+coverage), leurs mesures ne rejoindraient pas le total du lanceur : la gate
+échouerait par manque de couverture, sans jamais passer à tort, et le lanceur
+serait à adapter.
+
+Deux limites à connaître :
+
+* **la preuve de partition est relative.** Elle compare les processus entre
+  eux, pas avec une collecte en série. Un test que tous les processus écartent
+  de la même façon (un `-k` ou un `-m` dans `PYTEST_ADDOPTS`, un test marqué
+  `hardware`) passe inaperçu, exactement comme en série : rien ne fixe le
+  nombre de tests, seul le seuil de couverture rattrape un test manquant ;
+* **le voisinage des tests dépend du nombre de CPU.** Avec N processus,
+  chacun exécute un test sur N. Un test qui n'échoue qu'à côté de certains
+  voisins peut échouer avec quatre processus et passer avec deux ou en série.
+  Pour reproduire un échec de CI, reprendre le nombre affiché par la ligne
+  `Runner:` du journal.
+
+La durée se lit dans chaque journal : la ligne `Runner:` donne le nombre de
+CPU et le modèle du processeur, chaque processus affiche son résumé
+(`[p0] ... passed ... in ...s`) et ses 25 tests les plus lents
+(`--durations=25`). Elle dépend d'abord du processeur attribué au runner, qui
+change d'un job à l'autre. Les mesures de référence sont consignées dans la
+PR #7.
+
+Trois règles gardent la gate stable. Les enfreindre fait le plus souvent
+échouer un test sans raison. Un état partagé entre deux tests peut aussi
+satisfaire une assertion à tort, en série comme en parallèle : la gate ne le
+détecte pas, d'où la deuxième règle.
+
+* **identifiants stables.** L'identifiant d'un cas paramétré ne doit contenir
+  ni adresse mémoire (`ids=str` sur une lambda) ni ordre dépendant du hachage.
+  Sinon les processus ne collectent pas les mêmes identifiants et la gate
+  échoue (`did not collect the same tests`) ;
+* **isolement.** Fichiers sous `tmp_path`, aucun chemin ni port fixe partagé
+  entre deux tests, aucun état laissé au test suivant : l'ordre et le
+  voisinage des tests ne sont plus ceux de la série. Exception connue : deux
+  tests ouvrent réellement le port fixe 8099,
+  `tests/test_web_api.py::test_the_server_serves_and_stops_without_touching_the_signal_handlers`
+  et `tests/test_local_panel.py::test_the_production_web_runner_binds_and_exits`.
+  Ils sont nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`) et vont
+  toujours dans le même processus, qui les exécute l'un après l'autre. Si
+  l'un d'eux est renommé, la gate échoue jusqu'à la mise à jour de cette
+  liste. Deux gates lancées en même temps sur une même machine peuvent
+  toujours se disputer ce port ;
+* **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
+  les CPU du runner sont occupés pendant toute la durée des tests.
+
+En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ce
+mode. Pour reproduire le job avec ses quatre processus :
+
+```sh
+PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
+```
+
+Hors CI, Hypothesis garde son profil par défaut et sa limite de 200 ms par
+exemple : sous cette charge, un test par propriétés sans `deadline=None` peut
+échouer. La CI utilise le profil `ci`, sans limite de temps.
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
@@ -1058,6 +1215,10 @@ courant est requis (`agent-review/R1`), selon la décision utilisateur du
 5 octobre 2026. Les autres checks restent obligatoires, sans contournement
 administrateur. La PR ANH-71 avait deux avis : son historique de revue reste
 inchangé. Un check d'agent n'est pas une approbation humaine fictive.
+
+Un test de la gate Pi qui échoue en parallèle et passe en série révèle un
+défaut d'isolement ou une borne de temps trop serrée : le signaler et le
+corriger, ne pas relancer jusqu'au vert.
 
 ### Régression ECG du navigateur (ANH-71)
 
