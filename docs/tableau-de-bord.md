@@ -10,6 +10,8 @@ ne parle **jamais** directement au Raspberry Pi.
 > - Le code se compile : `npx tsc --noEmit -p .` ne signale aucune erreur.
 > - Les fonctions ECG du site ont des tests numériques synthétiques :
 >   `npm run test:ecg` ([portée et limites](framework-de-test.md#régression-ecg-du-navigateur-anh-71)).
+>   La même commande exécute les tests unitaires des règles de `lib/`
+>   extraites des fenêtres du site.
 >   La suite navigateur de bout en bout du tableau de bord reste ANH-83.
 >   Le 2 octobre 2026, toutes les pages du tableau de bord
 >   ont été **ouvertes à la main dans un navigateur**, en local, contre le
@@ -238,6 +240,18 @@ Admin seulement (sinon message d'accès refusé). Liste des gestionnaires avec
 leurs nombres de machines et de patients. Fiche : **Assigner des machines** et
 **Assigner des patients**.
 
+**Assigner des machines** : une case par machine non supprimée, cochée si le
+gestionnaire la gère déjà. **Enregistrer** applique exactement les cases à ce
+gestionnaire, par `machines.setGestionnaireMachines` : cocher ajoute le lien,
+décocher le retire. Les autres gestionnaires d'une machine gardent leur lien,
+et un lien déjà présent n'est pas modifié (il garde son badge
+« Propriétaire »). Une machine supprimée n'a pas de case : son lien n'est pas
+retiré. La fenêtre s'ouvre toujours sur les machines actuelles du
+gestionnaire. Après l'enregistrement, la fiche confirme, par exemple
+« Machines enregistrées : 1 ajoutée, 1 retirée. » ; en cas de refus, le
+message du serveur s'affiche dans la fenêtre, qui reste ouverte. La règle des
+cases est dans `lib/gestionnaireMachines.ts`.
+
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur, avec **Télécharger PDF** (généré
@@ -428,7 +442,7 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | **Aucun.** |
+| Tests du site | Unitaires seulement : `npm run test:ecg` (fonctions ECG et règles de `lib/` extraites des fenêtres). **Aucun test dans un navigateur** (ANH-83). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
 | Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |

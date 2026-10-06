@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
 import { useMachineStatusLabel } from "@/components/dashboard/statusLabels";
+import { machineIdsToSave } from "@/lib/gestionnaireMachines";
+import { convexErrorMessage } from "@/lib/training";
 
 export default function GestionnaireDetailPage({
   params,
@@ -52,14 +54,20 @@ export default function GestionnaireDetailPage({
     { gestionnaireId },
   );
 
-  const assignMachines = useMutation(api.machines.assignMachineToGestionnaires);
+  const setGestionnaireMachines = useMutation(
+    api.machines.setGestionnaireMachines,
+  );
   const assignPatients = useMutation(api.users.assignPatientsToGestionnaire);
 
   const [showMachineDialog, setShowMachineDialog] = useState(false);
   const [showPatientDialog, setShowPatientDialog] = useState(false);
-  const [selectedMachines, setSelectedMachines] = useState<string[]>([]);
+  const [selectedMachines, setSelectedMachines] = useState<Id<"machines">[]>(
+    [],
+  );
   const [selectedPatients, setSelectedPatients] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [machinesError, setMachinesError] = useState<string | null>(null);
+  const [machinesSaved, setMachinesSaved] = useState<string | null>(null);
 
   const gestionnaire = gestionnaires?.find((g) => g._id === gestionnaireId);
 
@@ -108,24 +116,38 @@ export default function GestionnaireDetailPage({
     );
   }
 
+  // The machines the window shows a box for.
+  const listedMachines = allMachines.filter((m) => !m.isDeleted);
+
+  const openMachineDialog = () => {
+    // The window always opens on the gestionnaire's current machines, never on
+    // boxes left from a cancelled edit.
+    if (!gestionnaireMachines) return;
+    setSelectedMachines(gestionnaireMachines.map((m) => m._id));
+    setMachinesError(null);
+    setMachinesSaved(null);
+    setShowMachineDialog(true);
+  };
+
   const handleSaveMachines = async () => {
+    if (!gestionnaireMachines) return;
     setSaving(true);
+    setMachinesError(null);
     try {
-      // For each selected machine, ensure this gestionnaire is assigned
-      // This is a simplified approach - ideally we'd have a bulk update
-      for (const machineId of selectedMachines) {
-        const machine = allMachines.find((m) => m._id === machineId);
-        if (machine) {
-          // Get current gestionnaires and add this one if not present
-          await assignMachines({
-            machineId: machineId as Id<"machines">,
-            gestionnaireIds: [gestionnaireId],
-          });
-        }
-      }
+      // The server sets this gestionnaire's list exactly and touches no other
+      // gestionnaire's link.
+      const result = await setGestionnaireMachines({
+        gestionnaireId,
+        machineIds: machineIdsToSave({
+          checked: selectedMachines,
+          listed: listedMachines.map((m) => m._id),
+          linked: gestionnaireMachines.map((m) => m._id),
+        }),
+      });
       setShowMachineDialog(false);
+      setMachinesSaved(t("gestionnaires.machinesSaved", result));
     } catch (error) {
-      console.error(error);
+      setMachinesError(convexErrorMessage(error, t("common.error")));
     } finally {
       setSaving(false);
     }
@@ -185,14 +207,23 @@ export default function GestionnaireDetailPage({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowMachineDialog(true)}
+                onClick={openMachineDialog}
+                disabled={gestionnaireMachines === undefined}
               >
                 <Pencil className="h-4 w-4 mr-2" />
                 {t("common.edit")}
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            {machinesSaved && (
+              <div
+                role="status"
+                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
+              >
+                {machinesSaved}
+              </div>
+            )}
             {gestionnaireMachines && gestionnaireMachines.length > 0 ? (
               <div className="space-y-2">
                 {gestionnaireMachines.map((m) => (
@@ -276,44 +307,48 @@ export default function GestionnaireDetailPage({
               {t("gestionnaires.assignMachinesDesc")}
             </DialogDescription>
           </DialogHeader>
+          {machinesError && (
+            <div
+              role="alert"
+              className="bg-destructive/10 text-destructive p-3 rounded-md text-sm"
+            >
+              {machinesError}
+            </div>
+          )}
           <div className="max-h-64 overflow-y-auto space-y-2 py-4">
-            {allMachines
-              .filter((m) => !m.isDeleted)
-              .map((machine) => (
-                <div key={machine._id} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`machine-${machine._id}`}
-                    checked={selectedMachines.includes(machine._id)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        setSelectedMachines([...selectedMachines, machine._id]);
-                      } else {
-                        setSelectedMachines(
-                          selectedMachines.filter((id) => id !== machine._id),
-                        );
-                      }
-                    }}
-                  />
-                  <label
-                    htmlFor={`machine-${machine._id}`}
-                    className="flex-1 cursor-pointer"
-                  >
-                    <span className="font-medium">{machine.name}</span>
-                    {machine.location && (
-                      <span className="text-muted-foreground ml-2">
-                        ({machine.location})
-                      </span>
-                    )}
-                  </label>
-                  <Badge
-                    variant={
-                      machine.status === "online" ? "default" : "outline"
+            {listedMachines.map((machine) => (
+              <div key={machine._id} className="flex items-center space-x-2">
+                <Checkbox
+                  id={`machine-${machine._id}`}
+                  checked={selectedMachines.includes(machine._id)}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      setSelectedMachines([...selectedMachines, machine._id]);
+                    } else {
+                      setSelectedMachines(
+                        selectedMachines.filter((id) => id !== machine._id),
+                      );
                     }
-                  >
-                    {statusLabel(machine.status)}
-                  </Badge>
-                </div>
-              ))}
+                  }}
+                />
+                <label
+                  htmlFor={`machine-${machine._id}`}
+                  className="flex-1 cursor-pointer"
+                >
+                  <span className="font-medium">{machine.name}</span>
+                  {machine.location && (
+                    <span className="text-muted-foreground ml-2">
+                      ({machine.location})
+                    </span>
+                  )}
+                </label>
+                <Badge
+                  variant={machine.status === "online" ? "default" : "outline"}
+                >
+                  {statusLabel(machine.status)}
+                </Badge>
+              </div>
+            ))}
           </div>
           <DialogFooter>
             <Button

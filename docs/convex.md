@@ -198,6 +198,7 @@ Fonctions de `convex/lib/auth.ts` :
 | `canAccessUser(cible)` | admin ; ou soi-même ; ou gestionnaire lié à la cible dans `user_gestionnaires`. |
 | `canAccessMachine(m)` | admin ; ou gestionnaire lié à `m` dans `machine_gestionnaires`. **Un `user` n'a jamais accès par cette règle.** |
 | `canManageMachine(m)` | Identique à `canAccessMachine`. |
+| `requireGestionnaireAdmin(g)` | admin, et `g` est un compte de rôle `gestionnaire` (sinon « Gestionnaire not found » ou « Target user is not a gestionnaire »). Le rôle de l'appelant est vérifié avant toute lecture de `g`. C'est la seule règle à étendre le jour où un rôle limité à une organisation administre les gestionnaires de la sienne ([ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site)). |
 
 Règles propres aux séances d'entraînement (`convex/training.ts`) :
 
@@ -365,7 +366,8 @@ Résumé des fonctions les plus utilisées par le site.
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu, config. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin | Annule la suppression. |
-| `assignMachineToGestionnaires` | admin | Liste des gestionnaires d'une machine. |
+| `assignMachineToGestionnaires` | admin | Remplace la liste complète des gestionnaires d'**une machine**. |
+| `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire** : compare la liste demandée à ses lignes `machine_gestionnaires`, insère les liens manquants (`isOwner: false`) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire sont lues et écrites : les liens des autres gestionnaires ne bougent pas, et un lien déjà présent n'est pas modifié. Une machine inconnue fait refuser l'appel sans rien écrire. Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. |
 | `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. |
 
@@ -620,6 +622,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71). |
+| `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). |
 
 ### Lire la matrice
 

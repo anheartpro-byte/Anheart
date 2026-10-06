@@ -1394,22 +1394,29 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 - **Modifier** (Machines) : fenêtre **Assigner des Machines**, « Sélectionner
   les machines auxquelles ce gestionnaire peut accéder », une case par machine
   (avec son statut : En ligne, Hors ligne, En session), **Annuler** /
-  **Enregistrer**.
+  **Enregistrer**. Les cases cochées deviennent la liste des machines de ce
+  gestionnaire : cocher une machine la lui attribue, la décocher la lui
+  retire. Les autres gestionnaires de ces machines gardent leur accès. La
+  fiche confirme ensuite, par exemple « Machines enregistrées : 1 ajoutée,
+  1 retirée. ». Si le serveur refuse, son message s'affiche en rouge dans la
+  fenêtre, qui reste ouverte.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner
   les patients que ce gestionnaire peut gérer », une case par patient,
   **Annuler** / **Enregistrer**. La liste cochée **remplace** la précédente :
   décocher un patient le retire à ce gestionnaire.
 - « Aucune machine assignée », « Aucun patient assigné » si vide.
 
-> **Attention : la fenêtre « Assigner des Machines » est défectueuse.**
+> **Attention : corrigé dans le code le 6 octobre 2026, pas encore en
+> production.** Tant que le redéploiement n'a pas eu lieu, la fenêtre
+> **Assigner des Machines** en ligne garde son ancien comportement :
 > 1. Pour **chaque** machine cochée, **Enregistrer** remplace **tous** les
 >    gestionnaires de cette machine par ce seul gestionnaire : les autres
 >    gestionnaires de la machine **perdent leur accès**, sans avertissement.
 > 2. **Décocher** une machine ne retire **rien**.
 >
-> En attendant une correction, attribuez les machines par la fenêtre
-> **Modifier** du **détail de la machine** (cases « Assigner aux
-> Gestionnaires », qui gèrent correctement la liste complète). Voir
+> D'ici là, attribuez les machines par la fenêtre **Modifier** du **détail de
+> la machine** (cases « Assigner aux Gestionnaires », qui gèrent correctement
+> la liste complète). Voir
 > [procédure P6](#p6-attribuer-des-machines-à-un-gestionnaire).
 
 ### 4.19 Rapports
@@ -1649,9 +1656,15 @@ Méthode **sûre** (recommandée) :
 **Ce que vous devez voir** : la carte **Gestionnaires** du détail liste
 exactement les personnes cochées.
 
-> N'utilisez pas la fenêtre **Assigner des Machines** de la fiche du
-> gestionnaire : elle retire leur accès aux autres gestionnaires des machines
-> cochées et ne sait pas retirer une machine (voir [§4.18](#418-fiche-dun-gestionnaire)).
+Autre méthode, depuis la fiche du gestionnaire : **Gestionnaires** → le
+gestionnaire → carte **Machines** → **Modifier**, cochez les machines qu'il
+doit gérer, décochez les autres, puis **Enregistrer**. Seul ce gestionnaire
+change : les autres gestionnaires de ces machines gardent leur accès.
+
+> Tant que le redéploiement n'a pas eu lieu, n'utilisez pas cette seconde
+> méthode sur le site en ligne : la fenêtre **Assigner des Machines** y retire
+> encore leur accès aux autres gestionnaires des machines cochées et ne sait
+> pas retirer une machine (voir [§4.18](#418-fiche-dun-gestionnaire)).
 
 ### P7. Renseigner la FC max et l'année de naissance
 
@@ -2283,13 +2296,13 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | # | Défaut | Effet pour l'utilisateur | Contournement |
 |---|---|---|---|
 | 1 | (Corrigé dans le code le 1er octobre 2026, à vérifier au redéploiement.) La lecture de « l'utilisateur connecté » ne déclarait ni FC max ni année de naissance. | Aurait bloqué le tableau de bord de tout compte dont la physiologie est saisie. | Vérifier après le redéploiement avec un patient dont la physiologie est saisie. |
-| 2 | **Assigner des Machines** (fiche gestionnaire) remplace tous les gestionnaires de chaque machine cochée, et ne retire rien quand on décoche. | Des gestionnaires perdent l'accès sans le savoir. | Passer par **Modifier** sur le détail de la machine (P6). |
+| 2 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) **Assigner des Machines** (fiche gestionnaire) remplaçait tous les gestionnaires de chaque machine cochée, et ne retirait rien quand on décochait. | Des gestionnaires perdaient l'accès sans le savoir. | Jusqu'au redéploiement : passer par **Modifier** sur le détail de la machine (P6). |
 | 3 | **Nouvelle session** crée un enregistrement ECG en attente que la console d'entraînement ne prend jamais, et que le site ne sait pas annuler. | La machine devient **inlançable** et **non supprimable**. | Ne pas utiliser ce bouton. Nettoyage via la console Convex. |
 | 4 | Un gestionnaire qui **Modifie** une machine reçoit une erreur alors que la modification est enregistrée. | Confusion. | Vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |
 | 7 | Une séance **en attente** n'expire jamais côté serveur. | Si la machine revient en ligne des heures après, elle peut tenter de démarrer une séance oubliée. | Toujours annuler une séance en attente inutile. |
-| 8 | Plusieurs actions échouent **sans message** : suppression de machine, suppression de compte, changement de rôle, assignations. | L'utilisateur croit que rien ne se passe. | Recharger et vérifier. |
+| 8 | Plusieurs actions échouent **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur.) | L'utilisateur croit que rien ne se passe. | Recharger et vérifier. |
 | 9 | Messages du serveur en anglais, et peut être masqués en production. | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | Listes des patients et gestionnaires : le serveur prend les 50 à 100 séances **les plus récentes de toute la base**, puis filtre. | Sur une base active, un patient ou un gestionnaire peut ne pas voir ses séances plus anciennes. | Aucun. |
@@ -2304,9 +2317,9 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 
 Pour le mainteneur de la documentation technique :
 
-- elle ne signale pas le défaut de **Assigner des Machines** (§9.2 n°2), ni
-  l'erreur affichée au gestionnaire qui modifie une machine (n°4), ni le
-  blocage durable causé par **Nouvelle session** (n°3) ;
+- elle ne signale pas l'erreur affichée au gestionnaire qui modifie une
+  machine (§9.2 n°4), ni le blocage durable causé par **Nouvelle session**
+  (n°3) ;
 - elle dit que la fenêtre bloque le lancement pour un pratiquant de moins de 18
   ans : ce contrôle ne vaut que pour un patient choisi dans la liste, pas pour
   « Moi-même » ;

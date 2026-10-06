@@ -1555,6 +1555,14 @@ la priorité. Ce contrôle de composant avec données synthétiques ne prouve ni
 la connexion Clerk/Convex, ni la validité clinique, ni la chaîne de commande du
 Pi, ni le traitement des données en mV privées de leurs métriques.
 
+### Règles des fenêtres du site, sans navigateur
+
+`npm run test:ecg` exécute tous les fichiers `lib/**/*.test.ts`. En plus des
+fonctions ECG, il couvre donc les règles qu'une fenêtre du site applique avant
+d'appeler Convex, extraites en fonctions pures dans `lib/` pour être testées
+sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
+reste à prouver par la suite navigateur (ANH-83).
+
 ### Infrastructure encore dépendante d'autres tickets
 
 Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
