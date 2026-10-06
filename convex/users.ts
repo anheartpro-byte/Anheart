@@ -461,7 +461,23 @@ export const deleteUser = mutation({
 });
 
 /**
+ * Lowercase the ASCII letters of an address and nothing else, so that two
+ * addresses that differ by a non-ASCII character never compare equal.
+ */
+function asciiLowerCase(value: string): string {
+  return value.replace(/[A-Z]/g, (letter) =>
+    String.fromCharCode(letter.charCodeAt(0) + 32),
+  );
+}
+
+/**
  * Link patient to Clerk account (called when patient accepts invitation)
+ *
+ * The record is selected by the caller's verified email address, read from the
+ * identity (JWT claims `email` and `email_verified`). The `email` argument is
+ * not authoritative: it must designate that same address. Addresses match
+ * case-insensitively for ASCII letters only. Whenever nothing is linked the
+ * result is null, and a record that is already linked is never linked again.
  */
 export const linkPatientToClerk = mutation({
   args: {
@@ -471,11 +487,19 @@ export const linkPatientToClerk = mutation({
   handler: async (ctx, args) => {
     const identity = await requireAuth(ctx);
 
-    // Find user by email with empty clerkId
+    // Linking requires the caller's verified address
+    if (!identity.email || identity.emailVerified !== true) {
+      return null;
+    }
+    const verifiedEmail = asciiLowerCase(identity.email);
+    if (asciiLowerCase(args.email) !== verifiedEmail) {
+      return null;
+    }
+
+    // Find user by verified email with empty clerkId
     const users = await ctx.db.query("users").collect();
     const user = users.find(
-      (u) =>
-        u.email.toLowerCase() === args.email.toLowerCase() && u.clerkId === "",
+      (u) => asciiLowerCase(u.email) === verifiedEmail && u.clerkId === "",
     );
 
     if (!user) {

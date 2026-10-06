@@ -50,20 +50,15 @@ export const storeEcgBatch = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    // Validate session exists
+    // The session must exist and belong to the authenticated machine
     const session = await ctx.db.get(args.sessionId);
-    if (!session) {
+    if (!session || session.machineId !== args.machineId) {
       throw new Error("Session not found");
     }
 
     // Validate session is active
     if (session.status !== "active") {
       throw new Error(`Session is not active (status: ${session.status})`);
-    }
-
-    // Validate session belongs to this machine
-    if (session.machineId !== args.machineId) {
-      throw new Error("Session does not belong to this machine");
     }
 
     // Store the treated data batch

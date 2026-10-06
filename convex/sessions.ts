@@ -85,12 +85,14 @@ export const createSession = mutation({
  */
 export const startSession = internalMutation({
   args: {
+    machineId: v.id("machines"),
     sessionId: v.id("sessions"),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // The session must belong to the authenticated machine.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) {
+    if (!session || session.machineId !== args.machineId) {
       throw new Error("Session not found");
     }
     if (session.status !== "pending") {
@@ -169,12 +171,14 @@ export const endSession = mutation({
  */
 export const endSessionInternal = internalMutation({
   args: {
+    machineId: v.id("machines"),
     sessionId: v.id("sessions"),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // The session must belong to the authenticated machine.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) {
+    if (!session || session.machineId !== args.machineId) {
       throw new Error("Session not found");
     }
 
@@ -209,13 +213,15 @@ export const endSessionInternal = internalMutation({
  */
 export const failSession = internalMutation({
   args: {
+    machineId: v.id("machines"),
     sessionId: v.id("sessions"),
     reason: v.string(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // The session must belong to the authenticated machine.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) {
+    if (!session || session.machineId !== args.machineId) {
       throw new Error("Session not found");
     }
 
@@ -515,6 +521,7 @@ export const getPendingSessionForMachine = internalQuery({
  */
 export const getSessionStatus = internalQuery({
   args: {
+    machineId: v.id("machines"),
     sessionId: v.id("sessions"),
   },
   returns: v.union(
@@ -525,8 +532,9 @@ export const getSessionStatus = internalQuery({
     v.null(),
   ),
   handler: async (ctx, args) => {
+    // The session must belong to the authenticated machine.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) return null;
+    if (!session || session.machineId !== args.machineId) return null;
 
     return {
       status: session.status,
