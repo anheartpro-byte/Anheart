@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import { generateApiKey, hashApiKey, verifyApiKey } from "./lib/crypto";
-import { machineFixture } from "./machineAuth.fixtures";
+import { machineFixture, machineHeaders } from "./machineAuth.fixtures";
 
 const modules = import.meta.glob([
   "./**/*.ts",
@@ -96,7 +96,7 @@ describe("ANH-121 salted credential storage and migration", () => {
     });
     const newResponse = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
-      headers: { Authorization: `Bearer ${replacement.apiKey}` },
+      headers: machineHeaders(replacement.apiKey),
     });
     expect(oldResponse.status).toBe(401);
     expect(newResponse.status).toBe(200);

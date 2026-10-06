@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 
 export async function machineFixture(
   modules: Record<string, () => Promise<unknown>>,
@@ -22,6 +23,14 @@ export async function machineFixture(
     name: "Synthetic authentication machine",
   });
   return { t, admin, ...created };
+}
+
+/** What an accepted machine request carries: its key and the contract it speaks. */
+export function machineHeaders(apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    [CONTRACT_HEADER]: CONTRACT_VERSION,
+  };
 }
 
 export const machineRoutes = [

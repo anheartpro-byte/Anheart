@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
+import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 
 const world = () => seedMachineWorld(modules);
 type MachineWorld = Awaited<ReturnType<typeof world>>;
@@ -27,6 +28,7 @@ function send(
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
+      [CONTRACT_HEADER]: CONTRACT_VERSION,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -44,6 +46,7 @@ function sendRaw(
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
+      [CONTRACT_HEADER]: CONTRACT_VERSION,
     },
     body: raw,
   });
@@ -193,8 +196,12 @@ describe("ANH-132 /api/machine/training/start", () => {
       sessionId,
     });
     expect(response.status).toBe(400);
-    const payload = (await response.json()) as { error?: string };
-    expect(payload.error).toMatch(/not pending/);
+    const payload = (await response.json()) as {
+      error?: string;
+      message?: string;
+    };
+    expect(payload.error).toBe("session_not_pending");
+    expect(payload.message).toMatch(/not pending/);
   });
 });
 
@@ -266,8 +273,12 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
       points: [point],
     });
     expect(response.status).toBe(400);
-    const payload = (await response.json()) as { error?: string };
-    expect(payload.error).toMatch(/Session not found/);
+    const payload = (await response.json()) as {
+      error?: string;
+      message?: string;
+    };
+    expect(payload.error).toBe("session_not_found");
+    expect(payload.message).toBe("Session not found");
   });
 });
 
@@ -438,7 +449,7 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
 
   it.each(cases)(
     "$route: $state $kind session",
-    async ({ call, unknownStatus, state, kind }) => {
+    async ({ route, call, unknownStatus, state, kind }) => {
       const w = await world();
       const foreign = await seedSession(w, w.otherMachine, state, kind);
       const unknown = await seedSession(w, w.otherMachine, state, kind);
@@ -453,7 +464,12 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
 
       expect(onForeign).toEqual(onUnknown);
       expect(onForeign.status).toBe(unknownStatus);
-      expect(JSON.parse(onForeign.body)).toEqual({ error: "Session not found" });
+      // The training routes answer with a stable code (ANH-133).
+      expect(JSON.parse(onForeign.body)).toEqual(
+        route.startsWith("training/")
+          ? { error: "session_not_found", message: "Session not found" }
+          : { error: "Session not found" },
+      );
       // The session, its machine and the stored measurements are unchanged.
       const after = await w.t.run(async (ctx) => ({
         session: await ctx.db.get(foreign),
