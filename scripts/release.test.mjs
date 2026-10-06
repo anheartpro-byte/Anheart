@@ -276,6 +276,39 @@ test("EX-1 tag refuses while main does not carry the release", (t) => {
   assert.equal(git(fx.origin, "tag", "-l"), "");
 });
 
+test("EX-1 tag refuses a main that was squashed instead of merged", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  git(fx.work, "switch", "--quiet", "main");
+  git(fx.work, "merge", "--quiet", "--squash", "develop");
+  git(fx.work, "commit", "--quiet", "-m", "Release (#9)");
+  git(fx.work, "push", "--quiet", "origin", "main");
+  git(fx.work, "switch", "--quiet", "develop");
+
+  refuses(fx.run(["tag"]), /fusionnée par commit de fusion, pas en squash/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+});
+
+test("EX-1 tag keeps no local tag when origin refuses them", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  fx.mergeIntoMain();
+  const hook = join(fx.origin, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+  chmodSync(hook, 0o755);
+
+  refuses(fx.run(["tag"]), /les tags n'ont pas pu être poussés/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+
+  rmSync(hook);
+  assert.equal(fx.run(["tag"]).status, 0);
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+});
+
 test("EX-1 tag has nothing to do once every version has its tag", (t) => {
   const fx = released(t);
   refuses(fx.run(["tag"]), /rien à faire/);
@@ -527,6 +560,7 @@ for (const level of ["bench", "auto_validated", "occupied_validated"]) {
 for (const [name, args, message] of [
   ["a Pi version without a validation level", ["--pi", "0.1.0"], /une version du Pi exige --pi-validation/],
   ["an unknown validation level", ["--pi", "0.1.0", "--pi-validation", "validated"], /niveau de validation inconnu : 'validated'/],
+  ["two validation levels in one", ["--pi", "0.1.0", "--pi-validation", "bench auto_validated"], /niveau de validation inconnu/],
   ["a validation level without a Pi version", ["--web", "0.1.0", "--pi-validation", "bench"], /--pi-validation ne s'applique qu'avec --pi/],
 ]) {
   test(`EX-4 prepare refuses ${name}`, (t) => {

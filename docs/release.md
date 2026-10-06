@@ -164,7 +164,7 @@ relancer.
 |---|---|---|---|
 | `prepare` | `origin/develop` et sa CI | une branche `release/…` (fichiers de version, `CHANGELOG.md`), une PR vers `develop` | `develop` n'est pas vert ; une version n'est pas `X.Y.Z` ou n'est pas supérieure à la version courante ; son tag existe déjà ; la version courante n'a pas son tag ; `--pi` sans `--pi-validation` ; l'arbre de travail a des modifications |
 | `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` |
-| `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` |
+| `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash) |
 
 « Vert » veut dire : toutes les vérifications GitHub du commit sont terminées,
 aucune n'a échoué ni n'a été annulée, et au moins une a réussi. Un commit sans
@@ -306,6 +306,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Envoyer la version dans le heartbeat | ANH-133 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
+| Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
 | Déployer Convex et le site à la fusion dans `main` | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 

@@ -15,7 +15,6 @@ REMOTE=origin
 DEVELOP="${RELEASE_DEVELOP:-develop}"
 MAIN="${RELEASE_MAIN:-main}"
 COMPONENTS="pi cloud web"
-LEVELS="bench auto_validated occupied_validated"
 MARKER='<!-- release.sh : nouvelles sections sous cette ligne -->'
 VERSIONS_SLOT='<!-- release.sh : versions -->'
 CHANGELOG_SLOT='<!-- release.sh : changelog -->'
@@ -111,7 +110,7 @@ matches() {
 }
 
 is_level() {
-  case " $LEVELS " in *" $1 "*) return 0 ;; esac
+  case "$1" in bench | auto_validated | occupied_validated) return 0 ;; esac
   return 1
 }
 
@@ -487,12 +486,24 @@ cmd_pr() {
   gh pr create --base "$MAIN" --head "$DEVELOP" --title "$title" --body-file "$TMP/pr-release.md"
 }
 
+drop_local_tags() {
+  local c v
+  while read -r c v _; do
+    git tag -d "$c-$v" >/dev/null 2>&1 || true
+  done <"$TMP/released"
+}
+
 cmd_tag() {
-  local ref sha c v level refs now
+  local ref sha c v level refs now prepared
   start tag
   ref="$REMOTE/$MAIN"
   sha="$(sha_of "$ref")"
   collect_pending "$ref"
+  # Une fusion en squash couperait main de l'historique de develop : le
+  # changelog suivant, calculé depuis ces tags, reprendrait tout depuis le début.
+  prepared="$(git log -1 --first-parent --format=%H "$REMOTE/$DEVELOP" -- CHANGELOG.md)"
+  { [ -n "$prepared" ] && git merge-base --is-ancestor "$prepared" "$ref"; } ||
+    die "$ref ne contient pas le commit de $REMOTE/$DEVELOP qui a écrit CHANGELOG.md (${prepared:-introuvable}) : la PR de release doit être fusionnée par commit de fusion, pas en squash"
   require_green "$sha" "$MAIN"
 
   printf 'Cible : %s @ %s\nCI : %s\n' "$ref" "$sha" "$CI_SUMMARY"
@@ -507,7 +518,7 @@ cmd_tag() {
   printf 'git push %s%s\n' "$REMOTE" "$refs"
 
   now="$(date +%s)000"
-  heading "Reste à faire à la main (docs/release.md, étape 6)"
+  heading "Reste à faire à la main (docs/release.md, section 6)"
   printf 'Enregistrer chaque version dans Convex, mutation admin softwareReleases:recordRelease :\n'
   while read -r c v level; do
     if [ "$c" = pi ]; then
@@ -518,16 +529,19 @@ cmd_tag() {
   done <"$TMP/released"
 
   [ "$DRY_RUN" -eq 0 ] || return 0
+  # Tout ou rien : un tag resté en local ferait croire à la release suivante
+  # que cette version est publiée.
   while read -r c v _; do
-    git tag -a --cleanup=whitespace -F "$TMP/tag-$c.txt" "$c-$v" "$sha"
+    git tag -a --cleanup=whitespace -F "$TMP/tag-$c.txt" "$c-$v" "$sha" || {
+      drop_local_tags
+      die "le tag $c-$v n'a pas pu être créé : aucun tag n'est conservé"
+    }
   done <"$TMP/released"
   # shellcheck disable=SC2086
-  if ! git push --quiet "$REMOTE" $refs; then
-    while read -r c v _; do
-      git tag -d "$c-$v" >/dev/null
-    done <"$TMP/released"
+  git push --quiet "$REMOTE" $refs || {
+    drop_local_tags
     die "les tags n'ont pas pu être poussés : aucun n'est conservé en local"
-  fi
+  }
   heading "Fait"
   printf 'Tags poussés :%s\n' "$refs"
 }
