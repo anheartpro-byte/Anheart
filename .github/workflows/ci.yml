@@ -99,14 +99,21 @@ jobs:
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           PI_GATE_PROCESSES="$(nproc)" bash raspberry-pi/scripts/check.sh
-      - name: Publish coverage
+      # The same list of paths in `pi-gate` and in `simulation-gate`, as when
+      # one job published both: it is what keeps each file under its full
+      # path inside the artifact (raspberry-pi/coverage.xml, simulation/...).
+      - name: Publish coverage and synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: pi-gate-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: error
-          path: raspberry-pi/coverage.xml
+          path: |
+            raspberry-pi/coverage.xml
+            simulation/coverage.xml
+            simulation/out/ci/report.json
+            simulation/out/ci/report.html
 
   # The scenario battery of the simulation gate, cut into SIMULATION_SHARES
   # shares, one pytest process each. Share 0 is the cohort, which uses every
@@ -295,6 +302,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: |
+            raspberry-pi/coverage.xml
             simulation/coverage.xml
             simulation/out/ci/report.json
             simulation/out/ci/report.html

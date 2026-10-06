@@ -230,6 +230,13 @@ puis `pytest --cov --cov-branch`. Le seuil est **100 % de branches** sur tout
 `simulation/pyproject.toml`). Les arguments supplémentaires sont passés à
 pytest.
 
+Sans variable d'environnement, la batterie reste ce seul pytest : c'est la
+référence, et la façon de lancer la gate en local. La CI coupe la batterie en
+parts exécutées par plusieurs jobs, avec deux variables que `check.sh` lit
+(`SIMULATION_GATE_SHARES` et `SIMULATION_GATE_COMBINE`, plus
+`SIMULATION_GATE_EVIDENCE`) : voir
+[Gate de simulation répartie](#gate-de-simulation-répartie-anh-184).
+
 Mesure réelle (Mac Apple silicon, 1er octobre 2026) : `GATE PASSED`,
 **984 passés, 1 xfail** (S07, section 12), 100 % de branches (2955
 instructions, 716 branches), **environ 33 minutes** (1951 s, dont 1941 s de
@@ -990,25 +997,41 @@ Le workflow `.github/workflows/ci.yml` s'exécute sur les PR vers `main` et
 `develop`, sur les push de ces branches, et à la demande depuis
 **Actions → CI → Run workflow**. Le déclenchement nocturne à 01:17 UTC devient
 actif lorsque le workflow est présent sur la branche par défaut de GitHub.
-Les jobs sont parallèles :
+Les jobs sont parallèles. Six noms sont exigés par la protection de branche
+de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
+`docs`.
 
 | Job | Contrôles et artefacts |
 |---|---|
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle et ceux du workflow |
 | `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
-| `simulation-gate` | gate simulation complète, reproductibilité CAO via Git LFS et l'extracteur OCCT, `simulation.quick --all` ; couverture et `report.json` / `report.html` |
-| `convex-tests` | vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
+| `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
+| `simulation (report)` | `simulation.quick --all`, rejeu nocturne des scénarios réels ; artefact `simulation-report` |
+| `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
+| `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 
-Les actions de checkout, d'installation de Node et de publication des artefacts
-utilisent le runtime Node.js 24, avec des commits complets épinglés dans le
-workflow. Elles demandent un runner GitHub Actions au moins en version 2.327.1 ;
-les jobs utilisent les runners hébergés `ubuntu-24.04`, pas un runner local.
-Les entrées existantes restent inchangées : aucune persistance des identifiants
-Git, LFS pour la CAO, historique complet pour l'audit et cache npm explicite.
-Les artefacts gardent leurs chemins, leur rétention de 14 jours et l'échec si
-aucun fichier attendu n'est produit ; les fichiers cachés restent exclus.
+`npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
+réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
+ses propres réglages : une erreur de type visible seulement avec eux passait
+la CI. `convex-tests` lance maintenant ce second contrôle avant les tests.
+
+Les actions de checkout, d'installation de Node, de publication et de
+récupération des artefacts utilisent le runtime Node.js 24, avec des commits
+complets épinglés dans le workflow. Elles demandent un runner GitHub Actions au
+moins en version 2.327.1 ; les jobs utilisent les runners hébergés
+`ubuntu-24.04`, pas un runner local. Les entrées existantes restent inchangées :
+aucune persistance des identifiants Git, LFS pour la CAO, historique complet
+pour l'audit et cache npm explicite. Les artefacts publiés (`pi-gate-N` et
+`simulation-gate-N`, N étant le numéro de tentative) gardent leurs chemins,
+leur rétention de 14 jours et l'échec si aucun fichier attendu n'est produit ;
+les fichiers cachés en restent exclus. Les artefacts intermédiaires
+`simulation-evidence-*` font exception : ils portent la mesure de couverture de
+chaque part, un fichier nommé `.coverage`, et sont donc publiés avec leurs
+fichiers cachés. Ils ne contiennent que le dossier d'enregistrements créé par
+le lanceur.
 
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
 artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
@@ -1016,12 +1039,13 @@ rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
 ANH-131 aura fourni les fichiers autorisés ; leur absence est signalée dans le
 journal, jamais présentée comme un rejeu réussi.
 
-Le budget d'exécution du job `simulation-gate` est de 90 minutes ; celui de
-`pi-gate` reste de 60 minutes. La batterie complète a pris 57 min 32 s sur un
-runner GitHub, avant la génération du rapport : une limite de 60 minutes pour
-l'ensemble annulait ce dernier. Ce budget concerne le job CI, pas les délais
-de sûreté du moteur. Aucun scénario, seuil de couverture ou contrôle n'est
-retiré ; la génération et la publication du rapport restent obligatoires.
+Budgets d'exécution : 60 minutes pour `pi-gate`, 45 minutes pour chaque job de
+la batterie de simulation, 90 minutes pour `simulation (report)` (le budget de
+l'ancien job unique, gardé pour le rapport nocturne avec `--dsp`) et 15 minutes
+pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
+sûreté du moteur. Aucun scénario, seuil de couverture ou contrôle n'est
+retiré ; la génération et la publication du rapport restent obligatoires :
+`simulation-gate` échoue si `simulation (report)` échoue.
 
 L'audit Python résout d'abord les dépendances transitives pour Python 3.12 avec
 `uv pip compile --generate-hashes`, puis audite cette liste entièrement épinglée
@@ -1199,6 +1223,208 @@ Hors CI, Hypothesis garde son profil par défaut et sa limite de 200 ms par
 exemple : sous cette charge, un test par propriétés sans `deadline=None` peut
 échouer. La CI utilise le profil `ci`, sans limite de temps.
 
+### Gate de simulation répartie (ANH-184)
+
+En un seul job, `simulation-gate` prenait de 49 à 66 minutes (runs 37502103415
+et 37516988940 du 6 octobre 2026 sur `develop`). Sur le second : 13 s de ruff,
+basedpyright et mypy, **59 min 50 s de pytest** (1023 tests passés, 1 xfail),
+puis 5 min 6 s pour le rapport `simulation.quick --all`. Tout le temps est dans
+la batterie, exécutée par un seul processus sur un runner de quatre CPU.
+
+La batterie est maintenant coupée en 13 parts. Le lanceur et le greffon sont
+ceux de la gate Pi (`scripts/ci/pi_gate_parallel.py` et
+`scripts/ci/pi_gate_shard.py`, voir la section précédente) : chaque part est un
+processus pytest indépendant qui collecte toute la suite, n'exécute que ses
+tests, écrit ce qu'il a collecté et exécuté, et mesure sa propre couverture.
+Deux choses changent par rapport à la gate Pi : les parts sont exécutées par
+plusieurs jobs, et la règle de partage est celle de la simulation.
+
+| Job | Parts | Ce qu'il exécute |
+|---|---|---|
+| `simulation (cohort)` | 0 | `tests/test_cohort.py` en entier, seul sur son runner |
+| `simulation (battery 1)` à `simulation (battery 3)` | 1 à 4, 5 à 8, 9 à 12 | le reste de la batterie, quatre processus par runner |
+| `simulation (report)` | aucune | le rapport `simulation.quick --all` |
+| `simulation-gate` | aucune | le verdict sur les 13 parts |
+
+`simulation/scripts/check.sh` reste la définition de la gate. Deux variables
+d'environnement choisissent l'étape :
+
+* `SIMULATION_GATE_SHARES=5-8/13` avec `SIMULATION_GATE_EVIDENCE=<dossier>` :
+  ruff, basedpyright et mypy comme d'habitude, puis seulement les parts 5 à 8
+  d'une batterie coupée en 13 (`pi_gate_parallel.py --suite simulation
+  --shares 5-8/13 --evidence <dossier>`). L'étape échoue si un processus
+  plante, même à l'arrêt de l'interpréteur, s'il ne s'arrête pas 300 s après
+  son dernier test, si un test échoue, si un test a tourné deux fois parmi ces
+  parts, ou si un enregistrement ou une mesure de couverture manque. Elle ne
+  dit rien des autres parts : ni preuve de partition, ni seuil ;
+* `SIMULATION_GATE_COMBINE=13` avec le même dossier, que le job
+  `simulation-gate` remplit avec les artefacts des quatre jobs de la
+  batterie : aucun test de la batterie n'est relancé. `check.sh` exécute les
+  tests du lanceur lui-même, puis `pi_gate_parallel.py --combine 13` : la
+  preuve de partition sur les 13 parts (collectes identiques, chaque test
+  exécuté par une part et une seule), la fusion des 13 mesures (une mesure
+  absente, illisible ou vide est une erreur) et `coverage report
+  --fail-under=100`, une seule fois, sur le total.
+
+Le job `simulation-gate` exige d'abord que les cinq jobs dont il dépend aient
+réussi : les codes de sortie des processus sont jugés là où ils ont tourné. Il
+juge ensuite les enregistrements même si l'un de ces jobs a échoué, pour
+montrer tous les dégâts d'un coup, et reste alors en échec. Les
+enregistrements d'un test en échec font de toute façon échouer `--combine`.
+
+Les tests du lanceur (`scripts/ci/test_pi_gate_parallel.py`) couvrent ce mode
+sur un projet jetable. Des parts exécutées par des appels séparés sont
+prouvées ensemble, dans n'importe quel ordre. Font échouer l'appel concerné
+ou le verdict : une part qu'aucun appel n'a exécutée, deux appels qui n'ont
+pas coupé la suite de la même façon (un test deux fois, un autre jamais), un
+test en échec, un processus tué à l'arrêt de l'interpréteur, un processus qui
+ne s'arrête pas, une mesure manquante, un trou de couverture, et un
+enregistrement resté d'un appel précédent dans le même dossier. Une batterie
+jetable vérifie aussi que chaque exécution partagée n'est faite qu'une fois
+et que la cohorte a son processus.
+
+**La règle de partage de la simulation** (`simulation_owners` dans
+`pi_gate_shard.py`) ne sert qu'à gagner du temps : la preuve de partition ne
+la connaît pas et vaut quelle que soit la règle. Les tests de la simulation
+réutilisent des exécutions que chaque processus garde en mémoire. Distribués
+un par un, comme ceux du Pi, ils referaient ces exécutions dans chaque
+processus.
+
+* `tests/test_cohort.py` va en entier à la part 0, qui ne reçoit rien d'autre.
+  Le premier test de cohorte qui a besoin d'un résultat lance toute la cohorte
+  (90 séances) sur tous les CPU de la machine ; les 180 tests paramétrés
+  lisent ensuite ce résultat. La part 0 a donc un runner pour elle seule. Le
+  fichier est nommé dans `ALONE_IN_PROCESS_ZERO` : si plus aucun test n'en est
+  collecté, la gate échoue jusqu'à la mise à jour de cette liste ;
+* ailleurs, les tests d'un même fichier qui portent le même identifiant de
+  paramètre vont à la même part : les trois tests de `test_battery.py` sur un
+  scénario, les deux tests de `test_failures.py` sur un cas. L'exécution
+  qu'ils partagent n'est faite qu'une fois ;
+* chaque groupe va à la part qui a le moins de travail jusque-là, parmi les
+  parts 1 à 12 : d'abord les groupes les plus lents, du plus lent au moins
+  lent, puis les autres dans l'ordre de collecte. Les groupes lents sont
+  nommés dans `SLOW_SECONDS`, avec leur durée mesurée en CI : les quatre
+  scénarios `dsp` de la batterie, les deux tests de `test_quick.py` qui
+  passent par le vrai traitement du signal, les six cas `ecg_dsp_*` de la
+  matrice de pannes et trois tests par propriétés. À eux quinze, ils pèsent
+  autant que tout le reste. Distribués à tour de rôle, comme dans la première
+  version, ils laissaient une part avec 15 minutes de travail et une autre
+  avec 3 (run 37539316521).
+
+Limites à connaître :
+
+* les exécutions partagées entre fichiers (`run_file` de `conftest.py`, appelé
+  par plusieurs fichiers de tests) peuvent être refaites dans plusieurs parts ;
+* `SLOW_SECONDS` ne sert qu'à équilibrer. Un nom qui n'est plus collecté est
+  ignoré ; un nouveau test lent qui n'y figure pas est distribué comme les
+  autres. Dans les deux cas la gate reste juste et devient moins équilibrée.
+  Le signe se lit dans le journal : chaque processus affiche sa durée et ses
+  15 tests les plus lents (`--durations=15`). Pour rééquilibrer, reporter ces
+  durées dans la table ;
+* un nouveau test qui calculerait un résultat pour tout un fichier, comme la
+  cohorte, ralentirait la gate sans la fausser, et se lirait au même endroit ;
+* le nombre de parts est écrit dans le workflow (`SIMULATION_SHARES`), pas
+  déduit du nombre de CPU : le voisinage des tests ne dépend pas du runner.
+  Si une part manque, ou si deux jobs n'ont pas coupé la batterie de la même
+  façon, la preuve de partition échoue ;
+* le test de reproductibilité CAO est « skipped » sans l'extracteur. Chaque
+  job de la batterie installe donc l'extracteur : aucun ne sait d'avance
+  lequel recevra ce test ;
+* les limites de la gate Pi valent ici aussi : la preuve de partition compare
+  les processus entre eux, pas avec une collecte en série, et les règles
+  d'identifiants stables et d'isolement des tests s'appliquent ;
+* relancer un job de la batterie (« Re-run failed jobs ») remplace son
+  artefact : `simulation-gate` juge la dernière exécution de chaque job.
+  Relancer `simulation-gate` seul après l'expiration des artefacts (14 jours)
+  échoue : il faut alors tout relancer.
+
+Pour reproduire la CI sur une seule machine, avec le même découpage :
+
+```sh
+SIMULATION_GATE_SHARES=0-12/13 SIMULATION_GATE_EVIDENCE=/tmp/parts bash simulation/scripts/check.sh
+SIMULATION_GATE_COMBINE=13 SIMULATION_GATE_EVIDENCE=/tmp/parts bash simulation/scripts/check.sh
+```
+
+Pour une seule part en échec, la 7 par exemple : `SIMULATION_GATE_SHARES=7-7/13`.
+
+### Gates lancées selon les fichiers changés (ANH-184)
+
+Sur une PR, le job `changes` liste les fichiers que la PR change et les donne
+à `scripts/ci/gates-for-changes.mjs`. La liste vient de `git diff --name-only
+--no-renames` entre la branche de base et le commit de fusion que la CI
+teste : un renommage compte sous ses deux noms, une suppression comme une
+modification. Le script répond deux choses : `python` pour `pi-gate` et
+`simulation-gate`, `node` pour `web` et `convex-tests`. `docs` et `audit`
+tournent toujours.
+
+Une gate n'est sautée que si **tous** les fichiers changés sont d'une sorte
+listée comme ne pouvant pas l'affecter :
+
+| Sorte | Fichiers | `pi-gate`, `simulation-gate` | `web`, `convex-tests` |
+|---|---|---|---|
+| documentation | tout fichier `.md` ; sous `docs/`, les fichiers `.md`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp` et `.pdf` | sautées | sautées |
+| site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json`, `vitest.convex.config.mts`, `vitest.ecg.config.mts` | sautées | lancées |
+| Convex | `convex/` | sautées | lancées |
+| Python | sous `raspberry-pi/` ou `simulation/`, les fichiers `.py` et `.pyi`, et eux seuls | lancées | sautées |
+
+Passent avant ces listes et lancent tout :
+
+* `.github/` et `scripts/ci/` ;
+* les manifestes et verrous de dépendances : `package.json`,
+  `package-lock.json`, `bun.lock`, `requirements.txt` et `pyproject.toml` à la
+  racine, ainsi que les `requirements*.txt` et `pyproject.toml` de
+  `raspberry-pi/`, `simulation/` et `deploy/` ;
+* les fichiers de la console testés des deux côtés :
+  `raspberry-pi/src/web/static/` et `raspberry-pi/tests/web/`, lus par la gate
+  Pi et par `web`.
+
+Lancent tout aussi : un fichier d'aucune sorte listée (un scénario JSON,
+`raspberry-pi/config/`, un Dockerfile, la CAO, `deploy/`, un fichier de
+configuration à la racine), une PR sans aucun fichier changé, un chemin que le
+script ne sait pas lire, et tout événement qui n'est pas une PR.
+
+**Chaque push sur `develop` ou `main`, l'exécution nocturne et les lancements
+manuels lancent toutes les gates sans consulter la règle** : la condition des
+jobs ne regarde la réponse de `changes` que pour l'événement `pull_request`.
+Une erreur de classement est donc vue au plus tard à la fusion.
+
+Une gate sautée apparaît « Skipped » dans la PR. GitHub compte un job sauté
+par sa propre condition comme réussi pour une vérification obligatoire
+(documentation GitHub, « Handling skipped but required checks »). Trois
+précautions du workflow en dépendent ; `scripts/ci/ci-workflow.test.mjs` les
+vérifie à chaque exécution :
+
+* la condition de chaque gate est `!cancelled() && (github.event_name !=
+  'pull_request' || needs.changes.outputs.<réponse> != 'false')`. Si
+  `changes` échoue ou ne répond rien, la gate tourne. Sans `!cancelled()`,
+  GitHub sauterait une gate dont la dépendance a échoué et la compterait
+  réussie ;
+* chaque nom exigé est celui d'un job simple, jamais d'une matrice : un job
+  de matrice sauté est rapporté sous un autre nom, et la vérification
+  resterait en attente ;
+* le workflow n'a aucun filtre `paths` : un workflow non déclenché laisse ses
+  vérifications obligatoires en attente.
+
+Limites à connaître :
+
+* les listes décrivent ce que les gates lisent aujourd'hui. Un test Python qui
+  ouvrirait un fichier de `docs/` ou du site, ou un module du site qui
+  importerait un fichier Python, rendrait une liste fausse sans toucher au
+  script. Le passage complet sur `develop` et la nuit est le filet ;
+* le script et le workflow appliqués sont ceux de la PR elle-même. Une PR qui
+  les modifie lance tout, mais selon sa propre version : toute modification de
+  `.github/` ou de `scripts/ci/` doit être relue ;
+* la règle ne lit que les noms de fichiers, pas leur contenu : un fichier
+  `.md` ne lance aucune gate lourde, même sous `raspberry-pi/` ;
+* `convex/` et le Pi partagent un contrat (routes HTTP, format
+  d'enregistrement) qu'aucune gate ne teste des deux côtés à la fois. Sauter
+  `pi-gate` sur une PR Convex ne retire donc aucun contrôle existant, et n'en
+  ajoute aucun.
+
+Le journal du job `changes` donne la raison, par exemple `path rule: python
+gates run: raspberry-pi/src/units.py (python)` ou `path rule: python gates
+skipped: none of the 3 changed files can affect them`.
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
@@ -1218,7 +1444,19 @@ inchangé. Un check d'agent n'est pas une approbation humaine fictive.
 
 Un test de la gate Pi qui échoue en parallèle et passe en série révèle un
 défaut d'isolement ou une borne de temps trop serrée : le signaler et le
-corriger, ne pas relancer jusqu'au vert.
+corriger, ne pas relancer jusqu'au vert. Il en va de même pour un test de la
+batterie de simulation qui échoue dans sa part et passe en série.
+
+Quand `simulation-gate` est rouge, sa première étape dit lequel de ses jobs a
+échoué : ouvrir d'abord ce job (`simulation (battery 2)` par exemple), dont
+chaque ligne de sortie est préfixée par le numéro de la part (`[p5]` à
+`[p8]`). Si tous ont réussi, l'échec vient du verdict lui-même : lire les
+lignes `[gate]` de l'étape « Simulation gate, every test once and combined
+coverage ».
+
+Une vérification marquée « Skipped » n'a pas tourné : la règle de chemins a
+jugé qu'aucun fichier de la PR ne pouvait l'affecter. Le job `changes` en
+donne la raison.
 
 ### Régression ECG du navigateur (ANH-71)
 

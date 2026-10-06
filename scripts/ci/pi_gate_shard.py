@@ -83,6 +83,41 @@ which nothing is collected any more stops the run: the cost of a stale entry
 (every process running the cohort) would otherwise only show as a slow gate.
 """
 
+SLOW_SECONDS: Final[Mapping[str, int]] = {
+    "tests/test_battery.py[fault_ecg_mains_burst_dsp]": 390,
+    "tests/test_battery.py[fault_ecg_electrode_off_dsp]": 380,
+    "tests/test_quick.py[fault_ecg_mains_burst_dsp]": 310,
+    "tests/test_quick.py[fault_ecg_electrode_off_dsp]": 240,
+    "tests/test_battery.py[auto_jog_150_dsp]": 220,
+    "tests/test_failures.py[ecg_dsp_corrupted]": 120,
+    "tests/test_properties.py::test_any_heart_rate_the_sensor_reports_keeps_every_invariant": 120,
+    "tests/test_failures.py[ecg_dsp_mains]": 105,
+    "tests/test_battery.py[fault_bitalino_disconnect_dsp]": 90,
+    "tests/test_failures.py[ecg_dsp_stopped]": 85,
+    "tests/test_properties.py::test_any_plausible_subject_keeps_every_invariant_in_a_programme": 80,
+    "tests/test_failures.py[ecg_dsp_saturated]": 80,
+    "tests/test_failures.py[ecg_dsp_flat]": 80,
+    "tests/test_failures.py[ecg_dsp_gaps]": 55,
+    (
+        "tests/test_properties.py"
+        "::test_every_ending_at_any_moment_of_a_manual_session_stops_the_motor"
+    ): 45,
+}
+"""The slowest runs of the simulation battery, by ``shared_run``, in seconds.
+
+Measured on CI (run 37539316521 of 6 October 2026, four processes on a 4-CPU
+runner): the runs through the real signal processing and the property tests.
+A handful of them weigh as much as everything else, so dealing the tests out
+in turn left one process with fifteen minutes of work and another with three.
+These numbers only steer the dealing. A name that is no longer collected is
+ignored, a slow run that is not listed is dealt like any other: both show as
+an unbalanced gate, in the ``--durations`` each process prints, never as a
+wrong verdict. To refresh the table, read those lines.
+"""
+
+OTHER_SECONDS: Final[int] = 6
+"""What a run that is not in ``SLOW_SECONDS`` is taken to cost, on average."""
+
 _SEVERITY: Final[Mapping[str, int]] = {
     "passed": 0,
     "skipped": 1,
@@ -123,22 +158,26 @@ def simulation_owners(nodeids: Sequence[str], count: int) -> Sequence[int]:
     * the files of ``ALONE_IN_PROCESS_ZERO`` go whole to process 0;
     * elsewhere, the tests of one ``shared_run`` go to the same process, so
       that the run they share is made once;
-    * those groups are dealt out in turn, in the order they are first met, to
-      every process but 0 (to process 0 too when it is the only one). A long
-      run of slow scenarios is thereby spread over all of them.
+    * each of those groups goes to the process that has the least to do so
+      far, among every process but 0 (process 0 too when it is the only one):
+      first the groups of ``SLOW_SECONDS``, slowest first, then the others in
+      the order they are first met. With nothing slow this is dealing them
+      out in turn.
     """
     dealt_to = range(1, count) if count > 1 else range(1)
+    alone = [file_of(nodeid) in ALONE_IN_PROCESS_ZERO for nodeid in nodeids]
+    dealt = [nodeid for nodeid, apart in zip(nodeids, alone, strict=True) if not apart]
+    met = dict.fromkeys(shared_run(nodeid) for nodeid in dealt)
+    load = dict.fromkeys(dealt_to, 0)
     owner_of: dict[str, int] = {}
-    owners: list[int] = []
-    for nodeid in nodeids:
-        if file_of(nodeid) in ALONE_IN_PROCESS_ZERO:
-            owners.append(0)
-            continue
-        group = shared_run(nodeid)
-        if group not in owner_of:
-            owner_of[group] = dealt_to[len(owner_of) % len(dealt_to)]
-        owners.append(owner_of[group])
-    return owners
+    # sorted() keeps the order of equal keys: the groups that are not slow stay as first met.
+    for group in sorted(met, key=lambda group: -SLOW_SECONDS.get(group, 0)):
+        owner_of[group] = min(dealt_to, key=lambda process: (load[process], process))
+        load[owner_of[group]] += SLOW_SECONDS.get(group, OTHER_SECONDS)
+    return [
+        0 if apart else owner_of[shared_run(nodeid)]
+        for nodeid, apart in zip(nodeids, alone, strict=True)
+    ]
 
 
 @dataclass(frozen=True, slots=True)

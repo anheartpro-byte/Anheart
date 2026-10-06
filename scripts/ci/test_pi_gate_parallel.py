@@ -51,7 +51,9 @@ from pi_gate_parallel import (
 )
 from pi_gate_shard import (
     ALONE_IN_PROCESS_ZERO,
+    OTHER_SECONDS,
     SAME_PROCESS,
+    SLOW_SECONDS,
     Share,
     Suite,
     given,
@@ -640,6 +642,35 @@ def test_the_cohort_has_process_zero_to_itself() -> None:
     owners = simulation_owners(SIMULATION_IDS, 4)
     for nodeid, owner in zip(SIMULATION_IDS, owners, strict=True):
         assert (owner == 0) == nodeid.startswith(COHORT), nodeid
+
+
+def a_test_of(group: str) -> str:
+    """A test id whose ``shared_run`` is ``group``, as the table of slow runs names it."""
+    file, bracket, parameter = group.partition("[")
+    return f"{file}::test_it[{parameter}" if bracket else group
+
+
+def test_the_slowest_simulation_runs_are_dealt_first_and_weighed() -> None:
+    """Collected last, after sixty light runs: they still open the dealing, slowest first."""
+    slowest_first = sorted(SLOW_SECONDS, key=lambda group: -SLOW_SECONDS[group])
+    for group in slowest_first:
+        assert shared_run(a_test_of(group)) == group, "not the name of a group of tests"
+        assert SLOW_SECONDS[group] > OTHER_SECONDS
+    light = [f"tests/test_failures.py::test_handled[light{n}]" for n in range(60)]
+    nodeids = [*light, *(a_test_of(group) for group in slowest_first)]
+
+    owners = dict(zip(nodeids, simulation_owners(nodeids, 4), strict=True))
+
+    assert [owners[a_test_of(group)] for group in slowest_first[:3]] == [1, 2, 3]
+    work: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    runs: dict[int, int] = {1: 0, 2: 0, 3: 0}
+    for nodeid, owner in owners.items():
+        work[owner] += SLOW_SECONDS.get(shared_run(nodeid), OTHER_SECONDS)
+        runs[owner] += 1
+    # The light runs fill what the slow ones left uneven, to within one of them.
+    assert max(work.values()) - min(work.values()) <= OTHER_SECONDS
+    # Dealt in turn, as before this table, every process would have had 25 runs.
+    assert max(runs.values()) > min(runs.values())
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 4, 13])
