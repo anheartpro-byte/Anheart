@@ -96,6 +96,35 @@ Quel patient (`userId`) peut lancer **lui-même** une séance auto sur quelle
 machine (`machineId`). `grantedBy`, `createdAt`. Index `by_machine`, `by_user`,
 `by_machine_and_user`. Voir [§3](#3-règles-dautorisation).
 
+### `software_releases` : versions publiées
+
+Une ligne par version publiée d'un composant. Écrite seulement par un admin
+(`softwareReleases.recordRelease`), à la fin d'une release
+([release.md](release.md#6-enregistrer-la-version-dans-convex)).
+
+| Champ | Sens |
+|---|---|
+| `component` | `pi` (Raspberry Pi), `cloud` (Convex) ou `web` (site) |
+| `version` | le tag de la version, par exemple `pi-0.1.0` : la même chaîne que le Pi annoncera dans son heartbeat (ANH-133) |
+| `validationLevel` | pour une version du Pi seulement : `bench`, `auto_validated` (M5) ou `occupied_validated` (M6) |
+| `releasedAt` | date de la release, ms Unix |
+| `notes` | texte libre ; obligatoire quand le niveau d'une version déjà enregistrée change |
+| `recordedBy`, `updatedAt` | l'admin qui a écrit la ligne, et quand |
+
+Index `by_component_and_version`.
+
+**Règle portée par `validationLevel`.** Une machine validée pour les séances
+programmées (M5) ne reçoit qu'une version `auto_validated` ou
+`occupied_validated` ; une machine validée pour une personne à bord (M6) ne
+reçoit qu'une version `occupied_validated`. La règle est codée dans
+`convex/lib/releaseValidation.ts` (`releaseAllowedOnMachine`) et testée, mais
+**aucune fonction ne l'appelle encore** : l'état de validation d'une machine
+n'existe pas dans le schéma. Le registre machine (ANH-147) et la mise à jour à
+distance (ANH-116, ANH-168) l'appliqueront. Détail dans
+[release.md](release.md#2-le-niveau-de-validation-dune-version-du-pi).
+
+Cette table n'est déployée sur aucun déploiement.
+
 ### `machine_profiles` : programmes synchronisés depuis le Pi
 
 Copie en lecture seule du `ProfileStore` du Pi. **Remplacée en bloc** à chaque
@@ -390,6 +419,22 @@ Lectures de l'ECG des séances d'enregistrement (`getRecentEcgData`,
 Autorisation : pratiquant, admin ou accès à la machine. `getRecentEcgData`
 applique un **retard de 5 s** aux gestionnaires sur une séance active.
 
+### `softwareReleases.ts` (registre des versions publiées)
+
+Aucune page du site n'appelle encore ces fonctions.
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `recordRelease` (mutation) | admin | Enregistre une version publiée dans `software_releases`, ou corrige la ligne d'une version déjà connue (une seule ligne par composant et version). Refuse une version qui n'est pas `<composant>-X.Y.Z`, une version du Pi sans niveau de validation, un niveau sur une version `cloud` ou `web`, une date invalide, des notes de plus de 2000 caractères, et un changement de niveau sans `notes`. Erreurs en `ConvexError(message)`. |
+| `listReleases` (query) | admin | Les versions enregistrées, la plus récente d'abord ; filtre `component` optionnel. |
+
+`deployedCloudVersion` est une query **interne** : elle répond la constante
+`CLOUD_VERSION` de `convex/cloudVersion.ts`, donc la version du code déployé
+(`cloud-0.0.0-dev` tant qu'aucune release n'a été faite). On la lit avec
+`npx convex run softwareReleases:deployedCloudVersion`. `scripts/release.sh`
+écrit cette constante en même temps que `convex/VERSION`, et
+`convex/cloudVersion.test.ts` échoue si les deux diffèrent.
+
 ---
 
 ## 6. Routes HTTP machine (`convex/http.ts`)
@@ -624,6 +669,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71). |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). |
+| `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
+| `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |
 
 ### Lire la matrice
 

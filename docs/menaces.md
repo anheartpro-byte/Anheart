@@ -332,9 +332,9 @@ F7 · Livraison/site/Convex · S, T, R, E · Critique, personne indirectement vi
 
 **Scénario.** Un contributeur, compte GitHub/Vercel compromis ou runner altéré vole des credentials de déploiement, livre un commit non revu ou substitue l'artefact après les tests.
 
-**Existant vérifié dans le source.** [`ci.yml`](../.github/workflows/ci.yml) déclare `contents: read`, actions par SHA et `persist-credentials: false`; les gates auditées ne constituent pas un déploiement Vercel/Convex authentifié. Le workflow de déploiement automatique prévu n'est pas présent ; protections des branches, variables hébergées et paramètres SaaS n'ont pas été inspectés ici.
+**Existant vérifié dans le source.** [`ci.yml`](../.github/workflows/ci.yml) déclare `contents: read`, actions par SHA et `persist-credentials: false`; les gates auditées ne constituent pas un déploiement Vercel/Convex authentifié. Le workflow de déploiement automatique prévu n'est pas présent ; protections des branches, variables hébergées et paramètres SaaS n'ont pas été inspectés ici. [`scripts/release.sh`](../scripts/release.sh) refuse de préparer une release, d'ouvrir la PR `develop` vers `main` ou de poser un tag quand une vérification CI du commit visé n'est pas terminée et réussie, et chaque composant porte une version lisible ([release.md](release.md)) ; ce contrôle tourne sur le poste du responsable de release et ne relie pas encore l'artefact déployé au commit tagué.
 
-**Manquant.** [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) lie aperçu et production aux gates ; [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) inventaire/rotation des secrets et audit ; [ANH-134](https://linear.app/anheart/issue/ANH-134/processus-de-release-versions-semantiques-pi-convex-site-changelog) version, changelog et revue de release. L'identité de l'artefact testé doit être celle livrée.
+**Manquant.** [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) lie aperçu et production aux gates ; [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) inventaire/rotation des secrets et audit ; [ANH-134](https://linear.app/anheart/issue/ANH-134/processus-de-release-versions-semantiques-pi-convex-site-changelog) a écrit le processus (version, changelog, check-list), la première release réelle reste à faire. L'identité de l'artefact testé doit être celle livrée.
 
 **Preuve de fermeture attendue.** Échec de gate empêche livraison ; PR non fiable sans secret de production ; SHA et empreinte de l'artefact livré reliés au rapport et au reviewer.
 
@@ -418,5 +418,6 @@ applicable et une revue.
    un périmètre et une échéance/revue. Faute de cette preuve, garder OPEN et son
    ticket. Une signature technique d'agent ne vaut pas acceptation humaine.
 5. La [check-list de release](release-threat-review.md) impose ces preuves.
-   [ANH-134](https://linear.app/anheart/issue/ANH-134/processus-de-release-versions-semantiques-pi-convex-site-changelog) intégrera ce contrôle au processus automatisé ; cette page
-   ne déclare ni sa pipeline réalisée, ni la release autorisée.
+   Le [processus de release](release.md) ([ANH-134](https://linear.app/anheart/issue/ANH-134/processus-de-release-versions-semantiques-pi-convex-site-changelog)) en fait une ligne de la check-list de la PR
+   `develop` vers `main` ; cette page ne déclare aucune release faite ni
+   autorisée.

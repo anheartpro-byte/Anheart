@@ -41,6 +41,20 @@ export const sessionKindValidator = v.union(
   v.literal("manual"), // operator-set speed; ONLY ever started at the machine
 );
 
+/** A separately versioned part of the product (ANH-134). */
+export const softwareComponentValidator = v.union(
+  v.literal("pi"), // Raspberry Pi client, tags pi-X.Y.Z
+  v.literal("cloud"), // Convex backend, tags cloud-X.Y.Z
+  v.literal("web"), // site, tags web-X.Y.Z
+);
+
+/** How far a Pi version has been validated, lowest first (ANH-134). */
+export const validationLevelValidator = v.union(
+  v.literal("bench"), // bench, empty capsule (M3)
+  v.literal("auto_validated"), // programmed sessions (M5)
+  v.literal("occupied_validated"), // a person on board (M6)
+);
+
 export default defineSchema({
   // Users - Extended Clerk user data with roles and relationships
   users: defineTable({
@@ -105,6 +119,22 @@ export default defineSchema({
     .index("by_machine", ["machineId"])
     .index("by_user", ["userId"])
     .index("by_machine_and_user", ["machineId", "userId"]),
+
+  // Released software versions (ANH-134), one row per component version,
+  // written only by an admin (`softwareReleases.recordRelease`). The rule that
+  // reads `validationLevel` is `lib/releaseValidation.ts`: a machine validated
+  // for programmed sessions only receives a Pi version that is
+  // `auto_validated` or higher, and a machine validated for a person on board
+  // only an `occupied_validated` one.
+  software_releases: defineTable({
+    component: softwareComponentValidator,
+    version: v.string(), // the tag of the version, e.g. "pi-0.1.0"
+    validationLevel: v.optional(validationLevelValidator), // Pi versions only
+    releasedAt: v.number(),
+    notes: v.optional(v.string()),
+    recordedBy: v.id("users"),
+    updatedAt: v.number(),
+  }).index("by_component_and_version", ["component", "version"]),
 
   // Training presets, mirrored from each Pi. The Pi is the authority; this
   // table is replaced wholesale on every sync.

@@ -1,6 +1,7 @@
 "use client";
 
 import { Link } from "@/i18n/navigation";
+import { WEB_VERSION } from "@/lib/version";
 import { useTranslations } from "next-intl";
 
 export function Footer() {
@@ -117,6 +118,7 @@ export function Footer() {
             >
               {t("terms")}
             </Link>
+            <span className="font-mono text-xs self-center">{WEB_VERSION}</span>
           </div>
         </div>
       </div>
