@@ -141,6 +141,8 @@ from src.training.runtime import (
     DrivePrecommanded,
     DriveUnavailable,
     FaultResetRefusal,
+    HeldAtStandstill,
+    Holding,
     LimitsMismatch,
     ManualEnding,
     ManualTargetRefusal,
@@ -152,6 +154,7 @@ from src.training.runtime import (
     ResetForbidden,
     ResetUndelivered,
     ResetWhileCommanded,
+    RiseHold,
     RuntimeLimits,
     RuntimeState,
     SafetyStanding,
@@ -160,9 +163,10 @@ from src.training.runtime import (
     Subject,
     TargetOutOfRange,
     TrainingRuntime,
+    WithdrawnTarget,
 )
 from src.training.safety import SELF_CLEARING, SafetyLimits
-from src.training.types import Occupancy, TelemetrySnapshot
+from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
@@ -536,7 +540,11 @@ class LocalPanel:
         2. the mailbox is emptied and its command handed to the runtime; what
            the runtime refuses goes back to the page as an event;
         3. in simulation, the plant is advanced and the subject told the speed;
-        4. the runtime ticks (reads only, while idle);
+        4. the runtime ticks (reads only, while idle); a manual target it took
+           back on that tick, because something came to hold the arm at
+           standstill (a verdict, the heart rate of a person on board, or a
+           first step the drive did not acknowledge), goes back to the page
+           as an event, like a refusal;
         5. the snapshot is published to the surface and, through it, the hub,
            and the surface learns whether a session is running.
         """
@@ -556,6 +564,10 @@ class LocalPanel:
             sim_ecg.set_motor_rpm(self._last_measured)
         snapshot = await self._runtime.tick(now)
         self._last_measured = snapshot.measured.motor_rpm
+        withdrawn = self._runtime.take_withdrawn_target()
+        if withdrawn is not None:
+            # Nobody's command: the machine took back a target it had accepted.
+            self._surface.note_refused("", describe_withdrawn_target(withdrawn))
         self._surface.publish(snapshot)
         match self._runtime.state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
@@ -1134,6 +1146,53 @@ def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
             return (
                 f"consigne refusee : {requested:.2f} tr/min de sortie hors de 0 ou "
                 f"[{low}, {high}] tr/min moteur"
+            )
+        case HeldAtStandstill(by=by):
+            return f"consigne refusee : {_held_by(by)}, puis redonner la cible"
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def describe_withdrawn_target(withdrawn: WithdrawnTarget) -> str:
+    """One line for a manual target the runtime took back (see ``WithdrawnTarget``)."""
+    return (
+        f"cible de {withdrawn.target} tr/min moteur remise a 0 : {_held_by(withdrawn.by)}, "
+        "puis redonner la cible"
+    )
+
+
+def _held_by(by: Holding) -> str:
+    """What holds the arm at standstill, then what has to happen before a target is taken again.
+
+    Exhaustive over a verdict and every :class:`~src.training.runtime.RiseHold`:
+    a hold added later has no words until somebody writes them here.
+    """
+    match by:
+        case SafetyVerdict(rule=rule, latched=latched):
+            wait = "L'acquitter une fois sa cause levee" if latched else "Attendre qu'il soit leve"
+            return f"le verdict {rule} tient le bras a l'arret. {wait}"
+        case RiseHold.NO_HEART_RATE:
+            return (
+                "pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. "
+                "Attendre une frequence cardiaque fiable"
+            )
+        case RiseHold.TREND_UNKNOWN:
+            return (
+                "tendance de la frequence cardiaque pas encore connue, rien ne monte depuis "
+                "l'arret. Attendre quelques secondes de lecture"
+            )
+        case RiseHold.HEART_RATE_FALLING:
+            return (
+                "la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. "
+                "Attendre qu'elle se stabilise"
+            )
+        case RiseHold.WRITE_UNACKNOWLEDGED:
+            # Not "the arm stays stopped": when the frame landed and only its
+            # answer was lost, the drive holds the step until the next tick's
+            # keepalive writes zero again, and nothing here can tell which.
+            return (
+                "le variateur n'a pas confirme la consigne, elle n'est pas redemandee. "
+                "Verifier la liaison"
             )
         case _ as unreachable:
             assert_never(unreachable)

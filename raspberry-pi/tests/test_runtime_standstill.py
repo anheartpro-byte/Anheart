@@ -59,6 +59,7 @@ from src.training.runtime import (
     AlreadyStarted,
     Ending,
     EndReason,
+    HeldAtStandstill,
     ManualEnding,
     RuntimeState,
     SafetyStanding,
@@ -281,11 +282,27 @@ async def _stopped_by_a_lost_heart_rate() -> Rig:
     return rig
 
 
+def _read_before_the_start(rig: Rig, bpm: int) -> None:
+    """Six readings of ``bpm``, a second apart, before anything is armed.
+
+    As on a console whose ECG is running when the operator starts: the
+    tracker holds more readings than its short trend needs, so the first
+    target of a session with a person on board is taken at once. ANH-178
+    refuses it while the trend is unknown; it used to be accepted and to
+    wait. No tick here: an idle console only reads, and the fake drive's ttO,
+    stricter than the real one, latches on two seconds without a write.
+    """
+    rig.fed_bpm = Bpm(bpm)
+    for _ in range(5):
+        rig.feed(Bpm(bpm))
+        rig.clock.advance(Seconds(1.0))
+    rig.feed(Bpm(bpm))
+
+
 async def _manual(occupancy: Occupancy, target: int = 200) -> Rig:
     """A manual session at ``target`` motor rpm, a heart rate on the wire either way."""
     rig = _rig(motion=DEFAULT_MOTION_LIMITS)
-    rig.fed_bpm = Bpm(80)
-    rig.feed(Bpm(80))
+    _read_before_the_start(rig, 80)
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await rig.runtime.start_manual(occupancy, OPERATOR, MANUAL_CEILING))
     wanted = motor_to_output_rpm(MotorRpm(target), GEOMETRY.ratio)
@@ -1320,17 +1337,21 @@ async def test_a_warning_during_baseline_before_the_arm_has_moved_ends_nothing()
     assert _rules_shown(blind + later) == {RULE_HR_STALE}
 
 
-async def test_a_target_typed_while_a_warning_holds_a_stopped_arm_is_followed_later() -> None:
-    """OPEN QUESTION for the product owner: an operator's command that had to wait.
+# --- no longer left as it was: the waiting target (ANH-178) ----------------
+
+
+async def test_a_target_typed_while_a_warning_holds_a_stopped_arm_is_refused() -> None:
+    """The open question ANH-176 left here, closed by ANH-178: such a target is refused.
 
     MANUEL, occupied. The operator brings the arm to zero (their own command,
     so the session goes on), the heart rate is lost, and the warning holds the
     setpoint where it is: at zero. The operator types 200 rpm during the hold.
-    Nothing moves while the warning stands; when the heart rate is back the
-    setpoint climbs to that target, and nobody clicks at that moment. The
-    motion was asked for by the operator, so it is not "by itself" in the
-    sense of the decision, and it is unchanged by ANH-176: this test passes on
-    ``develop`` too.
+    Until ANH-178 this test pinned the opposite: the target was accepted, it
+    waited, and when the heart rate was back the setpoint climbed to it with
+    nobody clicking at that moment. Now it is refused in the warning's name,
+    nothing moves when the warning lifts, and the session simply goes on at
+    standstill until a target is typed with nothing standing. The whole rule
+    is in ``tests/test_manual_target_held.py``.
     """
     rig = await _occupied_manual(200)
     assert rig.runtime.set_manual_target(OutputRpm(0.0)) == Ok(MotorRpm(0))
@@ -1341,16 +1362,25 @@ async def test_a_target_typed_while_a_warning_holds_a_stopped_arm_is_followed_la
     await rig.run(12.0, feed=False)
     assert _demand(rig) == (RULE_HR_STALE, SafetyAction.FREEZE, False)
     wanted = motor_to_output_rpm(MotorRpm(200), GEOMETRY.ratio)
-    assert rig.runtime.set_manual_target(wanted) == Ok(MotorRpm(200))
+    refused = rig.runtime.set_manual_target(wanted)
+    assert isinstance(refused, Err), "the target was accepted: it waits for the warning to lift"
+    assert isinstance(refused.error, HeldAtStandstill)
+    assert isinstance(refused.error.by, SafetyVerdict), refused.error.by
+    assert refused.error.by.rule == RULE_HR_STALE
     held = await rig.run(6.0, feed=False)
     assert set(_setpoints(held)) == {0}, "the hold did not hold"
     assert _rules_shown(held) == {RULE_HR_STALE}
 
     back = await rig.run(60.0)
     assert _standing(rig) is None
-    assert _applied(rig) == 200, "the waiting target was not followed: update this test"
+    assert not _moved(back), f"the arm left when the warning lifted: {_moved(back)[:3]}"
     assert _end(rig) is None
+    assert rig.state() is RuntimeState.RUNNING
     assert RULE_SESSION_STANDSTILL not in _rules_shown(held + back)
+
+    assert rig.runtime.set_manual_target(wanted) == Ok(MotorRpm(200))
+    await rig.run(40.0)
+    assert _applied(rig) == 200, "a target typed with nothing standing was not followed"
 
 
 # =========================================================================

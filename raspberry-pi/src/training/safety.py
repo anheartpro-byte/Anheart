@@ -60,11 +60,12 @@ outlives its evidence:
   latched ``session_standstill``
   (:meth:`SafetySupervisor._rule_session_standstill`; product decisions of
   2026-10-05 and 2026-10-06, ``docs/securite.md``): a stopped arm never
-  restarts by itself. Two things are left as they were, and that document
-  lists them: the first motion of a session (a warning during ``BASELINE`` is
-  followed by the programme's normal start), and a manual target the operator
-  typed while a warning held the arm at zero, which is followed when the
-  warning lifts.
+  restarts by itself. One thing is left as it was, and that document says so:
+  the first motion of a programme (a warning during ``BASELINE`` is followed
+  by the programme's normal start). In a manual session nothing waits behind
+  a verdict either: the runtime refuses a non-zero target, and takes back one
+  already entered, for as long as any verdict stands over a setpoint of zero
+  (ANH-178), so there the manual target that is followed again is zero.
 
 Both levels exist on purpose, and the reason is a real failure mode rather than
 convenience. If a ten-second electrode dropout required an operator click, the
