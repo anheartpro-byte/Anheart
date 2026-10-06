@@ -541,8 +541,10 @@ class LocalPanel:
            the runtime refuses goes back to the page as an event;
         3. in simulation, the plant is advanced and the subject told the speed;
         4. the runtime ticks (reads only, while idle); a manual target it took
-           back on that tick, because a verdict came to hold the arm at
-           standstill, goes back to the page as an event, like a refusal;
+           back on that tick, because something came to hold the arm at
+           standstill (a verdict, the heart rate of a person on board, or a
+           first step the drive did not acknowledge), goes back to the page
+           as an event, like a refusal;
         5. the snapshot is published to the surface and, through it, the hub,
            and the surface learns whether a session is running.
         """
@@ -1185,8 +1187,11 @@ def _held_by(by: Holding) -> str:
                 "Attendre qu'elle se stabilise"
             )
         case RiseHold.WRITE_UNACKNOWLEDGED:
+            # Not "the arm stays stopped": when the frame landed and only its
+            # answer was lost, the drive holds the step until the next tick's
+            # keepalive writes zero again, and nothing here can tell which.
             return (
-                "le variateur n'a pas confirme la consigne, le bras reste a l'arret. "
+                "le variateur n'a pas confirme la consigne, elle n'est pas redemandee. "
                 "Verifier la liaison"
             )
         case _ as unreachable:

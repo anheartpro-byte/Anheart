@@ -75,7 +75,7 @@ WORDS: Final[dict[RiseHold, str]] = {
         "Attendre qu'elle se stabilise"
     ),
     RiseHold.WRITE_UNACKNOWLEDGED: (
-        "le variateur n'a pas confirme la consigne, le bras reste a l'arret. Verifier la liaison"
+        "le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison"
     ),
 }
 """What the operator reads for each hold that is not a verdict: the reason, then what to do."""

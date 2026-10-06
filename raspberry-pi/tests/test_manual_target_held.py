@@ -10,7 +10,9 @@ when the hold went. Measured by the independent review of ANH-176, on
   thirty seconds with nothing moving; the heart rate returns, and the first
   non-zero setpoint is written 0.2 s later with nobody clicking;
 * the same in a manual session that had not moved yet, first motion 3.2 s
-  after the heart rate returns;
+  after the heart rate returns when the session had been started on a
+  single reading (the case measured then; 0.2 s with six readings before
+  the start);
 * with a LATCHED verdict (a recovered ``loop_stall``) over an arm the operator
   stopped, the target waited for the acknowledgement and the arm moved 0.4 s
   after it: acknowledging was what started motion.
@@ -384,7 +386,12 @@ async def test_a_target_typed_while_a_warning_holds_an_arm_the_operator_stopped_
 async def test_a_target_typed_while_a_warning_holds_a_session_that_has_not_moved_is_refused(
     occupancy: Occupancy,
 ) -> None:
-    """The second measured sequence. On ``develop``: first motion 3.2 s after the warning."""
+    """The second measured sequence. On ``develop`` the arm made its first motion alone.
+
+    3.2 s after the heart rate returned for a session started on a single
+    reading, which is what was measured then; 0.2 s for this rig, which reads
+    six before the start.
+    """
     rig = await _not_moved_yet(occupancy)
     hold = HOLDS[occupancy]
     await _warn(rig, occupancy)
