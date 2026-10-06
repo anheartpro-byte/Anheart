@@ -252,12 +252,11 @@ fréquence cardiaque du pratiquant dans la zone cible du programme.
   programme.
 - La physiologie du pratiquant est renseignée
   ([section 4.2](#42-renseigner-la-physiologie)).
-- **Aucune alerte n'attend à la console.** À la date de ce brouillon, la
-  console verrouille d'elle-même une alerte quelque temps après une séance
-  ([manuel opérateur, section 9.2](manuel-operateur.md#92-la-console-agit-seule)).
-  Tant qu'une alerte attend, la machine refuse tout lancement : votre séance
-  prend le statut « Échouée », avec un motif qui commence par « refusee par la
-  machine ». Voyez alors avec l'opérateur.
+- **Aucune alerte n'attend à la console.** Tant qu'une alerte attend
+  ([manuel opérateur, section 9.1](manuel-operateur.md#91-un-arrêt-de-sécurité-est-verrouillé)),
+  la machine refuse tout lancement : votre séance prend le statut
+  « Échouée », avec un motif qui commence par « refusee par la machine ».
+  Voyez alors avec l'opérateur.
 - **Un opérateur est à côté de la machine, console prête, et le pratiquant est
   installé.** Le site ne voit pas la machine. La machine prend votre demande
   d'elle-même, sans aucune action de l'opérateur à la console : en quelques

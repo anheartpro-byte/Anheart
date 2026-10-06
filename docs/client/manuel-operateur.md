@@ -161,8 +161,10 @@ est gardé pour cet onglet seulement.
 >   tant que le variateur reste en défaut
 >   ([section 9.5](#95-le-variateur-passe-en-défaut)) ; ou jusqu'au
 >   redémarrage de la console avec « go_silent ». Il peut aussi repasser de
->   « REPOS » à « ARRET » après une séance, sans que rien ne soit commandé
->   (alerte « session_overrun », [section 9.2](#92-la-console-agit-seule)).
+>   « REPOS » à « ARRET » après un programme mené à son terme, sans que rien
+>   ne soit commandé : si une alerte se verrouille à ce moment-là, par exemple
+>   après un clic sur **E-STOP** ou un défaut du variateur, **Mode** affiche
+>   « ARRET » pendant la durée d'une phase « recovery ».
 > - La console ne voit pas l'arrêt d'urgence câblé. À lui seul, il peut ne
 >   rien verrouiller dans le logiciel, et la console peut garder une vitesse
 >   commandée ([Après un arrêt d'urgence câblé](#après-un-arrêt-durgence-câblé)).
@@ -213,10 +215,11 @@ chose est en cours. Rouge : problème ou arrêt.
 
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
-affiche « ARRET ». Et quand **Mode** repasse à « ARRET » après une séance
-(alerte « session_overrun », [section 9.2](#92-la-console-agit-seule)),
-**Etat** affiche « idle » alors que tout démarrage est refusé. Pour savoir où
-en est la machine, lisez **Mode**, **Rotation** et **Securite**, pas **Etat**.
+affiche « ARRET ». Et quand **Mode** repasse à « ARRET » après un programme
+mené à son terme, parce qu'un défaut du variateur survient au repos
+([section 9.5](#95-le-variateur-passe-en-défaut)), **Etat** affiche « idle »
+alors que tout démarrage est refusé. Pour savoir où en est la machine, lisez
+**Mode**, **Rotation** et **Securite**, pas **Etat**.
 
 ### Les deux bandeaux rouges
 
@@ -392,13 +395,12 @@ l'écran.*
   faut acquitter une fois **Mode** revenu à « REPOS », puis démarrer une
   nouvelle séance ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 - Une séance manuelle s'arrête seule au bout de 60 minutes, comme après un
-  STOP.
+  STOP. Si **Mode** affiche encore « ARRET » 30 secondes après cet arrêt
+  automatique, parce que le bras ralentit depuis une vitesse élevée, l'alerte
+  « session_overrun » se verrouille
+  ([section 9.2](#92-la-console-agit-seule)).
 - Après toute fin de séance, la cible revient à 0. Pour repartir, il faut
   redémarrer une séance.
-- Un peu plus de 60 minutes après le départ d'une séance manuelle, même
-  arrêtée depuis longtemps, une alerte « session_overrun » apparaît
-  d'elle-même si aucune autre séance n'a démarré entre-temps
-  ([section 9.2](#92-la-console-agit-seule)).
 
 ## 6. Séance programmée, avec un passager
 
@@ -511,9 +513,11 @@ pas ([section 9.2](#92-la-console-agit-seule)).
 La séance se termine seule à la fin du programme. Pour l'arrêter avant :
 **STOP** ([section 8](#8-arrêter-la-machine)).
 
-Après la séance, une alerte « session_overrun » apparaît d'elle-même, environ
-30 secondes après la fin d'un programme mené à son terme. Lisez la
-[section 9.2](#92-la-console-agit-seule) avant d'enchaîner une autre séance.
+À la date de ce brouillon, un **STOP** donné dans les dernières minutes d'un
+programme, pendant sa phase « recovery », relance une phase « recovery »
+complète. Si la séance dure alors plus de 30 secondes au-delà de la durée
+prévue, l'alerte « session_overrun » se verrouille pendant cette phase
+([section 9.2](#92-la-console-agit-seule)).
 
 ## 7. Séance lancée depuis le site
 
@@ -681,10 +685,10 @@ acquitter, par son nom.
      la vitesse suit de nouveau le programme ou la cible appliquée, vers le
      haut aussi, sans aucun autre clic
      ([section 9.2](#92-la-console-agit-seule)).
-   - Il peut ne pas tenir. C'est le cas pour la règle « session_standstill » :
-     la console répond qu'elle l'a pris, mais l'alerte est de nouveau là
-     aussitôt, et il faut acquitter de nouveau une fois **Mode** revenu à
-     « REPOS ».
+   - Il peut ne pas tenir. C'est le cas pour les règles « session_standstill »
+     et « session_overrun » : la console répond qu'elle l'a pris, mais
+     l'alerte est de nouveau là aussitôt, et il faut acquitter de nouveau une
+     fois **Mode** revenu à « REPOS ».
 
    Après une séance programmée, **Mode** ne revient à « REPOS » qu'une fois la
    phase « recovery » terminée. En fonctionnement normal, cette phase est
@@ -738,10 +742,9 @@ simulation.*
 
 Si la même alerte revient juste après un acquittement donné alors que **Mode**
 affichait « REPOS », sa cause est toujours là. N'insistez pas : appelez le
-support. Deux cas à part : l'alerte « session_standstill » acquittée avant
-« REPOS », qui revient parce que la séance n'est pas finie (étape 1), et
-l'alerte « session_overrun », décrite à la
-[section 9.2](#92-la-console-agit-seule).
+support. Un cas à part : une alerte « session_standstill » ou
+« session_overrun » acquittée avant « REPOS », qui revient parce que la séance
+n'est pas finie (étape 1).
 
 ### 9.2 La console agit seule
 
@@ -824,35 +827,40 @@ Les règles que vous verrez le plus souvent sur la ligne « regle » :
 | « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». Pour ce « freeze » verrouillé, lisez l'avertissement au-dessus de ce tableau avant d'acquitter. |
 | « drive_fault » | Le variateur est en défaut. | Fin de séance. Voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
 | « comms_lost » | La console ne parvient plus à parler au variateur. | « go_silent ». |
-| « session_overrun » | La durée prévue de la dernière séance est dépassée de 30 secondes. | Fin de séance verrouillée. Cette alerte apparaît aussi après une séance déjà finie : voir ci-dessous. |
+| « session_overrun » | Une séance en cours dure depuis plus de 30 secondes au-delà de sa durée prévue. | Fin de séance verrouillée. Voir sous ce tableau. |
 
 Les délais de ce tableau sont ceux du logiciel à la date de ce brouillon. Ce
 ne sont pas des recommandations médicales. Pour toute autre règle : arrêtez la
 séance et appelez le support.
 
-**L'alerte « session_overrun » après une séance.** À la date de ce brouillon,
-la console continue de compter le temps depuis le départ de la dernière
-séance, même quand cette séance est finie. Quand ce temps dépasse de
+**L'alerte « session_overrun ».** La console compte le temps depuis le départ
+de la séance. Tant que la séance n'est pas finie, si ce temps dépasse de
 30 secondes la durée prévue (celle du programme, ou 60 minutes pour une séance
 manuelle), elle verrouille l'alerte « session_overrun » : **Securite** affiche
-« ramp_down ». Ce que vous verrez :
+« ramp_down ». Une fois la séance finie, la console ne déclenche plus cette
+alerte, quel que soit le temps passé à « REPOS ». Vous pouvez la voir dans
+trois cas :
 
-- après un programme mené à son terme, l'alerte apparaît environ 30 secondes
-  après le retour à « REPOS ». **Mode** peut alors repasser à « ARRET »
-  pendant la durée d'une phase « recovery ». La console ne commande aucun
-  mouvement pendant ce temps ;
-- après une séance arrêtée plus tôt, l'alerte apparaît plus tard, console au
-  repos ;
-- si une nouvelle séance démarre avant, le compte repart de ce nouveau départ.
+- après un **STOP** donné tard dans une séance programmée. À la date de ce
+  brouillon, un STOP relance une phase « recovery » complète, même si le
+  programme était déjà dans sa propre phase « recovery », bras à l'arrêt. Si
+  cette phase se termine plus de 30 secondes après la durée prévue, l'alerte
+  apparaît pendant qu'elle dure, alors que **Mode** affiche « ARRET ». Avec
+  les deux programmes fournis par défaut à la date de ce brouillon, c'est le
+  cas d'un STOP donné dans les quatre dernières minutes et demie environ ;
+- quand un « freeze » verrouillé garde la vitesse au-delà de la durée
+  prévue : la console ramène alors la vitesse commandée à zéro, malgré ce
+  « freeze » ;
+- en séance manuelle, si **Mode** affiche encore « ARRET » 30 secondes après
+  l'arrêt automatique des 60 minutes, parce que le bras ralentit depuis une
+  vitesse élevée.
 
-Cette alerte ne se lève pas comme les autres. Dans les essais sur modèle, elle
-revient aussitôt après l'acquittement, et tout démarrage reste refusé, à la
-console comme depuis le site. D'après ces essais et la lecture du logiciel, la
-console n'offre aucun moyen de l'effacer sans être redémarrée.
-
-> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
-> quand l'alerte « session_overrun » apparaît après une séance, et la façon
-> d'enchaîner deux séances tant que la console se comporte ainsi.
+Cette alerte se lève comme les autres, une fois la séance finie : attendez
+**Mode** « REPOS », puis acquittez
+([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Un acquittement
+donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt. Ces
+comportements ont été vérifiés en simulation et dans des essais sur modèle
+seulement.
 
 > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
 > auprès du passager quand la console arrête la séance pour une raison
