@@ -1437,8 +1437,9 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   plus parmi les 100 plus récentes. Titre : « Rapport de session » et les 8
   derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
-- **Télécharger PDF** : génère un PDF dans votre navigateur (« Génération en
-  cours... » pendant ce temps) et le télécharge. Le bouton reste grisé tant
+- **Télécharger PDF** : génère un PDF dans votre navigateur et le télécharge
+  (le bouton garde son libellé et affiche une icône qui tourne pendant ce
+  temps). Le bouton reste grisé tant
   que les données de la séance ne sont pas chargées. Le PDF suit la langue de
   l'interface (en français : « Rapport de session ECG », fichier
   `Rapport_ECG_{identifiant}_{date}.pdf`) et contient l'identité, les horaires,
@@ -1446,8 +1447,9 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 - Sous la carte d'une séance qui a des données ECG : « N lots de données •
   N s d'enregistrement • N échantillons ». Le nombre d'échantillons, comme la
   fréquence d'échantillonnage du PDF, est lu dans les lots chargés pour le
-  rapport (50 au plus). Au-delà, la ligne et le PDF le disent : « sur les 50
-  lots chargés (N au total) ».
+  rapport (50 au plus). Au-delà, la ligne le dit : « sur les 50 lots chargés
+  (N au total) ». Le PDF le dit avec ses propres mots : « comptés sur 50 lots
+  chargés, N au total ».
 - « Aucun rapport disponible pour le moment » si vide.
 
 > Pour une séance **d'entraînement**, le PDF ne contient **ni courbe de
