@@ -911,6 +911,36 @@ test("the note says the machine took the target once a frame shows it applied", 
   assert.equal(context.state.manualSent, null);
 });
 
+test("the note stops saying the machine follows a target once the machine has dropped it", async () => {
+  // Given a target the machine took, the arm on its way to it.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249, { setpoint: turning(60), measured: turning(58) }));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"));
+  // While the machine holds it, the note stays.
+  frame(manualFrame(62, 249, { setpoint: turning(120), measured: turning(118) }));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"));
+  // When the operator presses STOP: the target is 0 from the next frame, the arm still turning.
+  frame(manualFrame(62.2, 0, { mode: "arret", phase: "cooldown", setpoint: turning(119), measured: turning(120) }));
+  // Then the card no longer says that the machine took 5 tr/min and follows it.
+  assert.equal(node("manual-note").textContent, "");
+});
+
+test("wiping a taken note leaves alone what was written there since", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249));
+  // The route refuses a later click: its answer replaces the note.
+  context.api = () => Promise.reject(new Error("the machine is running, not idle"));
+  context.doManualApply();
+  await settle();
+  // When the machine then drops the target, that answer is not the note to wipe.
+  frame(manualFrame(62.2, 0, { mode: "arret", phase: "cooldown" }));
+  assert.equal(node("manual-note").textContent, "the machine is running, not idle");
+});
+
 test("an applied target one motor rpm away from the one sent is not read as taken", async () => {
   // Given a turning arm holding 249 tr/min moteur, and 5.02 tr/min sent (250 at the motor).
   const { context, frame, node } = panel();

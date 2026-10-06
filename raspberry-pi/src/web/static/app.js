@@ -79,6 +79,7 @@ var state = {
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
   manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
+  manualTaken: null,     // the target the note says the machine took, and that note: {rpm, text}
   manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
   dirty: {},             // canvas id -> true when it needs a redraw
 };
@@ -1088,6 +1089,11 @@ function doManualStart() {
   A target the machine takes back later, and a refusal answered to another
   screen, are `refused` events too. With a manual session on screen they go to
   this note as well: they are about the target this card shows.
+
+  And "taken" is true only for as long as the machine holds that target. Once
+  the applied target is another one (a STOP, a verdict, another screen), the
+  note is wiped rather than left to say that the machine follows a target it
+  has dropped.
 */
 function manualOnScreen() {
   var snapshot = state.snapshot;
@@ -1124,13 +1130,25 @@ function noteLoopRefusal(event) {
 }
 
 function settleManualTarget(snapshot) {
+  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
+  var taken = state.manualTaken;
+  if (taken && !(manual && holdsTarget(manual, taken.rpm))) {
+    // The machine no longer holds the target the note says it took (a STOP, a
+    // verdict, another screen): the note would go on saying "taken, followed".
+    // It is wiped, unless something else has been written there since.
+    state.manualTaken = null;
+    if (el("manual-note").textContent === taken.text) {
+      ok(el("manual-note"), "");
+    }
+  }
   var sent = state.manualSent;
   if (!sent || snapshot.at <= sent.at) {
     return;
   }
-  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
   if (manual && holdsTarget(manual, sent.rpm)) {
-    ok(el("manual-note"), "cible prise par la machine : " + sent.detail + " (suivie aux limites de mouvement)");
+    var said = "cible prise par la machine : " + sent.detail + " (suivie aux limites de mouvement)";
+    ok(el("manual-note"), said);
+    state.manualTaken = { rpm: sent.rpm, text: said };
   } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
     return;
   } else if (manual) {
