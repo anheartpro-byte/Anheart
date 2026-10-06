@@ -67,9 +67,27 @@ export const USER_ACTORS = [
 
 export type World = Awaited<ReturnType<typeof seedWorld>>;
 
-/** A `t` scoped to the actor's Clerk identity, or anonymous for the raw `t`. */
-export function as(t: World["t"], actor: Actor) {
-  return actor === "anonymous" ? t : t.withIdentity({ subject: actor });
+/** Extra JWT claims a cell adds to its actor's identity (e.g. `email`). */
+export type Claims = Parameters<World["t"]["withIdentity"]>[0];
+
+/** The claims that say who the caller is: a cell never sets them itself. */
+const IDENTITY_CLAIMS = ["subject", "issuer", "tokenIdentifier"] as const;
+
+/**
+ * A `t` scoped to the actor's Clerk identity, or anonymous for the raw `t`.
+ *
+ * `claims` adds JWT claims to that identity. The subject is always the actor:
+ * claims cannot replace it, and the anonymous actor carries no claim at all.
+ */
+export function as(t: World["t"], actor: Actor, claims?: Claims | null) {
+  if (actor === "anonymous") {
+    if (claims) throw new Error("The anonymous actor carries no claims");
+    return t;
+  }
+  if (claims && IDENTITY_CLAIMS.some((claim) => claim in claims)) {
+    throw new Error("Claims cannot replace the actor's identity");
+  }
+  return t.withIdentity({ ...claims, subject: actor });
 }
 
 const MACHINE_CONFIG = {

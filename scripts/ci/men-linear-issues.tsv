@@ -1,4 +1,4 @@
-# Verified by read-only Linear get_issue on 2026-10-05. See docs/menaces.md.
+# Verified by read-only Linear get_issue; each row carries its own read date (verifiedOn). See docs/menaces.md.
 # identifier	uuid	verifiedOn	url
 ANH-74	09c371a3-5c65-4c1e-a028-4bb92a144199	2026-10-05	https://linear.app/anheart/issue/ANH-74/verrou-unique-sur-le-cable-variateur-console-bench-console
 ANH-80	4e814857-6300-4e32-a998-b5109e9f136f	2026-10-05	https://linear.app/anheart/issue/ANH-80/valider-les-6-capteurs-bitalino-reels-fonctions-de-transfert-gains
@@ -28,3 +28,4 @@ ANH-167	2c714a43-13ad-49eb-ac60-5c8e0fe57b57	2026-10-05	https://linear.app/anhea
 ANH-168	cec2ff1c-d800-49f0-b057-016c89c1105a	2026-10-05	https://linear.app/anheart/issue/ANH-168/ota-paquets-de-version-signes-par-la-ci-verification-de-signature-sur
 ANH-170	bf7e71d5-dab8-419b-8ab4-26bbb2034a3d	2026-10-05	https://linear.app/anheart/issue/ANH-170/ota-jamais-pendant-une-seance-installation-seulement-machine-au-repos
 ANH-171	3ec43438-e77e-4bf8-81c2-b4f0b27272b6	2026-10-05	https://linear.app/anheart/issue/ANH-171/ota-essai-de-retour-arriere-volontaire-et-procedure-documentee
+ANH-177	905dafed-c047-4ec6-991e-3c752bea004e	2026-10-06	https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17
