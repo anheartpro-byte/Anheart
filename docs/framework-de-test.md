@@ -1034,7 +1034,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow et ceux du workflow CodeQL |
 | `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
-| `simulation (report)` | `simulation.quick --all`, rejeu nocturne des scénarios réels ; artefact `simulation-report` |
+| `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
@@ -1104,9 +1104,9 @@ le lanceur.
 
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
 artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
-rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
-ANH-131 aura fourni les fichiers autorisés ; leur absence est signalée dans le
-journal, jamais présentée comme un rejeu réussi.
+rapport synthétique. Les séances enregistrées de `simulation/scenarios/real/`
+n'ont pas d'étape nocturne à part : `test_real_records.py` les rejoue dans la
+batterie, à chaque exécution (voir [16.5](#165-la-bibliothèque-simulationscenariosreal)).
 
 Budgets d'exécution : 60 minutes pour `pi-gate` (dont, la nuit, 35 minutes au
 plus pour l'étape d'endurance de l'enregistrement), 45 minutes pour chaque job de

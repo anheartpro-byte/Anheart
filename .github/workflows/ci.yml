@@ -232,17 +232,6 @@ jobs:
             args+=(--dsp)
           fi
           raspberry-pi/.venv/bin/python -m simulation.quick "${args[@]}"
-      - name: Replay committed real scenarios
-        if: ${{ github.event_name == 'schedule' }}
-        run: |
-          shopt -s nullglob
-          scenarios=(simulation/scenarios/real/*.json)
-          if (( ${#scenarios[@]} == 0 )); then
-            echo 'Real replay fixtures pending ANH-131; no real replay executed.'
-          fi
-          for scenario in "${scenarios[@]}"; do
-            raspberry-pi/.venv/bin/python -m simulation.run "$scenario" --out "$RUNNER_TEMP/real-replay" >/dev/null 2>&1
-          done
       - name: Keep the synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
