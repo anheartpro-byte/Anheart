@@ -55,6 +55,12 @@
   Between the two, the E-STOP this page asked for and has no proof of: the
   request went out and nothing came back. An operator must not be left
   waiting for an answer that is not coming.
+
+  Last, in amber because it is a warning and not an alarm: a speed that is
+  held or lowered by a warning which is NOT latched. Such a warning lifts by
+  itself, and the speed then climbs again with nobody clicking. A held speed
+  reads as "stopped for good" to somebody about to walk up to the arm, so
+  this is said on every page, in French, for as long as it is true.
 -->
 <div id="banners" class="banners">
   <div id="banner" class="banner hidden" role="alert" aria-live="assertive">
@@ -68,6 +74,10 @@
   <div id="estop-banner" class="banner hidden" role="alert" aria-live="assertive">
     <strong>ARRET D'URGENCE VERROUILLE</strong>
     <span>surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete</span>
+  </div>
+  <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
+    <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
+    <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>
   </div>
 </div>
 

@@ -73,6 +73,9 @@ body {
 
 .banner strong { font-size: 1.15rem; }
 
+/* A warning, not an alarm: amber and steady, so that red and pulsing keeps meaning "stop". */
+.banner-warn { background: var(--warn); color: #1a1205; animation: none; }
+
 @keyframes pulse {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.35); }

@@ -443,6 +443,52 @@ function estopSeenLatched(opinion) {
 }
 
 /*
+  A speed held or lowered by a warning that is NOT latched can climb again
+  with nobody clicking: the warning lifts when its cause ends, and the loop
+  then follows the programme or the manual target again, upwards too. To
+  somebody about to walk up to the arm, a held speed reads as "stopped for
+  good". So it is said in a banner, on every page, for as long as it is true.
+
+  True means: a freeze or a reduce that is not latched, in a session that is
+  running (a programme or a manual one, not one that is ending) and in a
+  phase that can still be asked for speed. In manual it also takes a target
+  above the setpoint: over a manual arm held at standstill the target is 0,
+  nothing is waiting, and nothing will climb.
+
+  A latched verdict never shows it: nothing resumes behind one.
+*/
+var CAN_STILL_MOVE = { baseline: true, warmup: true, hold: true };
+
+function resumePossible(snapshot) {
+  var safety = snapshot.safety;
+  if (!safety || safety.latched || (safety.action !== "freeze" && safety.action !== "reduce")) {
+    return false;
+  }
+  if (!CAN_STILL_MOVE[snapshot.phase]) {
+    return false;
+  }
+  if (snapshot.mode === "seance") {
+    return true;
+  }
+  return snapshot.mode === "manuel" && Boolean(snapshot.manual) &&
+    snapshot.manual.target.motor_rpm > snapshot.setpoint.motor_rpm;
+}
+
+function renderResumeBanner(snapshot) {
+  var possible = resumePossible(snapshot);
+  var reworded = false;
+  if (possible) {
+    var detail = el("resume-banner-detail");
+    var notice = "l'avertissement " + snapshot.safety.rule + " " +
+      (snapshot.safety.action === "reduce" ? "baisse" : "tient") +
+      " la vitesse et n'est pas verrouille : il se leve seul, et la vitesse remonte alors sans aucun clic";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  showBanner(el("resume-banner"), possible, reworded);
+}
+
+/*
   The banners take room at the top of the page, and the emergency-stop one
   stays for as long as a stop is latched. The stylesheet starts the sidebar
   and the mobile bar under them, at --banners-h: this keeps that height current.
@@ -602,6 +648,7 @@ function renderSnapshot(snapshot) {
   renderManualHold();
   estopSeenLatched(estopOpinion(snapshot.safety, false));
   renderEstopBanner();
+  renderResumeBanner(snapshot);
 
   /* --- heart rate, with its age carried alongside --------------------- */
   var hr = snapshot.heart_rate;

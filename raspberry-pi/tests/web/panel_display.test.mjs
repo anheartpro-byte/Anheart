@@ -1296,3 +1296,90 @@ test("an E-STOP answered in time never shows the unanswered notice", async () =>
   context.refreshLiveness();
   assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
 });
+
+/* ================= a speed that can come back up with nobody clicking ================= */
+
+const RESUME = "REPRISE AUTOMATIQUE POSSIBLE";
+
+// A programme under way at 200 tr/min moteur, as one frame shows it.
+const programmeFrame = (at, phase, overrides = {}) =>
+  snapshot({ at, mode: "seance", phase, setpoint: turning(200), measured: turning(200), ...overrides });
+
+test("a programme whose speed an unlatched warning holds says the speed can climb again by itself", () => {
+  // Given a programme in its warm-up, and a banner stack that takes no room.
+  const { frame, announced, published, stack } = panel();
+  frame(programmeFrame(60, "warmup"));
+  assert.equal(announced(RESUME), false);
+  // When a warning that is not latched holds the speed.
+  frame(programmeFrame(60.2, "warmup", verdict("freeze", "hr_stale", false)));
+  // Then a banner says so in French, names the warning, and the page makes room for it.
+  assert.equal(announced(RESUME), true);
+  assert.equal(announced("l'avertissement hr_stale tient la vitesse et n'est pas verrouille"), true);
+  assert.equal(announced("la vitesse remonte alors sans aucun clic"), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And when the warning lowers the speed instead, it says that.
+  frame(programmeFrame(60.4, "warmup", verdict("reduce", "hr_stale", false)));
+  assert.equal(announced("l'avertissement hr_stale baisse la vitesse et n'est pas verrouille"), true);
+  // It goes with the warning.
+  frame(programmeFrame(60.6, "warmup"));
+  assert.equal(announced(RESUME), false);
+  assert.equal(published.get("--banners-h"), "0px");
+});
+
+test("the banner is shown in the phases that can still be asked for speed, and in no other", () => {
+  const { frame, announced } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  for (const [phase, expected] of [
+    ["baseline", true],
+    ["warmup", true],
+    ["hold", true],
+    ["cooldown", false],
+    ["recovery", false],
+    ["done", false],
+  ]) {
+    frame(programmeFrame(60, phase, held));
+    assert.equal(announced(RESUME), expected, phase);
+  }
+});
+
+test("nothing is said to resume behind a latched verdict, a stop, or a session that is ending", () => {
+  const { frame, announced } = panel();
+  // Latched: it stands until a named operator clears it.
+  frame(programmeFrame(60, "hold", verdict("freeze", "loop_stall", true)));
+  assert.equal(announced(RESUME), false);
+  frame(programmeFrame(60.2, "hold", verdict("reduce", "hr_stale", true)));
+  assert.equal(announced(RESUME), false);
+  // A stop ends the session, latched or not.
+  frame(programmeFrame(60.4, "hold", verdict("ramp_down", "drive_fault", false)));
+  assert.equal(announced(RESUME), false);
+  // Ending, or at rest: the speed follows nothing upwards from there.
+  frame(programmeFrame(60.6, "hold", { mode: "arret", ...verdict("freeze", "hr_stale", false) }));
+  assert.equal(announced(RESUME), false);
+  frame(programmeFrame(60.8, "hold", { mode: "repos", ...verdict("freeze", "hr_stale", false) }));
+  assert.equal(announced(RESUME), false);
+});
+
+test("in manual the banner takes a target above the setpoint: a held arm at standstill has none", () => {
+  const { frame, announced } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  // A turning arm whose rise towards 249 tr/min moteur is held at 120: it will climb when the warning lifts.
+  frame(manualFrame(60, 249, { setpoint: turning(120), measured: turning(120), ...held }));
+  assert.equal(announced(RESUME), true);
+  // A reduce walking the setpoint down under the target: the same.
+  frame(manualFrame(60.2, 249, { setpoint: turning(90), measured: turning(95), ...verdict("reduce", "hr_stale", false) }));
+  assert.equal(announced(RESUME), true);
+  // An arm at its target: nothing above it to climb to.
+  frame(manualFrame(60.4, 120, { setpoint: turning(120), measured: turning(120), ...held }));
+  assert.equal(announced(RESUME), false);
+  // An arm held at standstill: its target is 0, nothing waits, nothing will move.
+  frame(manualFrame(60.6, 0, held));
+  assert.equal(announced(RESUME), false);
+});
+
+test("the resume banner is part of the stack every page shows, and is not an alarm", () => {
+  const banner = banners.find((entry) => entry.id === "resume-banner");
+  assert.ok(banner, "the banner is not in the stack above the pages");
+  const stackMarkup = /<div id="banners"[\s\S]*?\n<\/div>/.exec(html)[0];
+  assert.ok(stackMarkup.includes('id="resume-banner"'));
+  assert.ok(/id="resume-banner" class="banner banner-warn hidden"/.test(html));
+});
