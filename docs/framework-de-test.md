@@ -1018,6 +1018,43 @@ réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
 ses propres réglages : une erreur de type visible seulement avec eux passait
 la CI. `convex-tests` lance maintenant ce second contrôle avant les tests.
 
+**Durées mesurées le 6 octobre 2026.** « Avant » : les cinq push sur `develop`
+de la journée (runs 37476229651, 37495298240, 37502103415, 37516988940 et
+37528383420). « Après » : les deux exécutions de la PR #27, qui lance toutes
+les gates parce qu'elle modifie `.github/`.
+
+| Vérification obligatoire | Avant | Après |
+|---|---|---|
+| `simulation-gate` (du lancement du run au verdict) | 65 min 38 s à 66 min 46 s sur quatre runs, 49 min 02 s sur le cinquième | 17 min 29 s (run 37539316521, première version, parts distribuées à tour de rôle), puis 13 min 10 s (run 37542166047, parts équilibrées) |
+| `pi-gate` | 10 min 21 s à 19 min 21 s | inchangée par ce travail : 18 min 16 s (run 37539316521). C'est maintenant la vérification la plus longue |
+| `web` | 0 min 53 s à 1 min 19 s | 1 min 13 s et 1 min 16 s |
+| `convex-tests` | 0 min 27 s à 0 min 31 s | 0 min 35 s et 0 min 36 s, contrôle des types compris |
+| `audit` | 0 min 50 s à 1 min 27 s | 1 min 08 s et 1 min 03 s |
+| `docs` | 0 min 07 s à 0 min 10 s | 0 min 07 s et 0 min 09 s |
+
+Détail de `simulation-gate` sur le run 37542166047 (parts équilibrées) :
+
+| Job | Durée | Processeur du runner |
+|---|---|---|
+| `simulation (cohort)` | 6 min 25 s | AMD EPYC 7763 |
+| `simulation (battery 1)` | 5 min 25 s | AMD EPYC 9V45 |
+| `simulation (battery 2)` | 10 min 44 s | AMD EPYC 7763 |
+| `simulation (battery 3)` | 7 min 56 s | Intel Xeon Platinum 8573C |
+| `simulation (report)` | 3 min 56 s | non affiché par ce job |
+| `simulation-gate` (le verdict seul) | 1 min 14 s | non affiché par ce job |
+
+Les trois jobs de la batterie ont à peu près le même travail : l'écart vient
+du processeur attribué au runner, qui change d'un job à l'autre. Avec la
+première version, `simulation (battery 3)` prenait 15 min 28 s à elle seule
+(voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)).
+
+Ce qu'une PR attend dépend maintenant de ce qu'elle touche. Une PR de
+documentation seule n'attend que `docs` et `audit`, une PR du site ou de Convex
+y ajoute `web` et `convex-tests` : environ une à deux minutes dans les deux
+cas, à confirmer sur la première PR de chaque sorte fusionnée après celle-ci.
+Une PR qui touche le Pi ou la simulation attend `pi-gate` et
+`simulation-gate`.
+
 Les actions de checkout, d'installation de Node, de publication et de
 récupération des artefacts utilisent le runtime Node.js 24, avec des commits
 complets épinglés dans le workflow. Elles demandent un runner GitHub Actions au
@@ -1230,6 +1267,9 @@ et 37516988940 du 6 octobre 2026 sur `develop`). Sur le second : 13 s de ruff,
 basedpyright et mypy, **59 min 50 s de pytest** (1023 tests passés, 1 xfail),
 puis 5 min 6 s pour le rapport `simulation.quick --all`. Tout le temps est dans
 la batterie, exécutée par un seul processus sur un runner de quatre CPU.
+Répartie comme décrit ci-dessous, la gate rend son verdict 13 min 10 s après
+le lancement du run (run 37542166047 ; le détail par job est dans le tableau
+des durées, au début de cette section 15).
 
 La batterie est maintenant coupée en 13 parts. Le lanceur et le greffon sont
 ceux de la gate Pi (`scripts/ci/pi_gate_parallel.py` et
@@ -1271,6 +1311,15 @@ réussi : les codes de sortie des processus sont jugés là où ils ont tourné.
 juge ensuite les enregistrements même si l'un de ces jobs a échoué, pour
 montrer tous les dégâts d'un coup, et reste alors en échec. Les
 enregistrements d'un test en échec font de toute façon échouer `--combine`.
+
+Cette première étape tourne quoi qu'il soit arrivé au run, annulation
+comprise (`always()` sur le job et sur l'étape). Un job de la batterie annulé,
+en échec, arrêté par sa limite de temps ou sauté alors qu'il ne devait pas
+l'être laisse donc `simulation-gate` en échec. Avec `!cancelled()`, comme sur
+les autres gates, un run annulé pendant la batterie aurait sauté ce job, et
+GitHub compte un job sauté comme réussi pour une vérification obligatoire.
+Sur un run annulé, les étapes suivantes (récupération des artefacts, verdict)
+ne tournent pas.
 
 Les tests du lanceur (`scripts/ci/test_pi_gate_parallel.py`) couvrent ce mode
 sur un projet jetable. Des parts exécutées par des appels séparés sont
@@ -1362,8 +1411,8 @@ listée comme ne pouvant pas l'affecter :
 
 | Sorte | Fichiers | `pi-gate`, `simulation-gate` | `web`, `convex-tests` |
 |---|---|---|---|
-| documentation | tout fichier `.md` ; sous `docs/`, les fichiers `.md`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp` et `.pdf` | sautées | sautées |
-| site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json`, `vitest.convex.config.mts`, `vitest.ecg.config.mts` | sautées | lancées |
+| documentation | tout fichier `.md`, sauf `CHANGELOG.md` (voir plus bas) ; sous `docs/`, les fichiers `.md`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp` et `.pdf` | sautées | sautées |
+| site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json` et les configurations Vitest `vitest.<suite>.config.mts` | sautées | lancées |
 | Convex | `convex/` | sautées | lancées |
 | Python | sous `raspberry-pi/` ou `simulation/`, les fichiers `.py` et `.pyi`, et eux seuls | lancées | sautées |
 
@@ -1376,7 +1425,12 @@ Passent avant ces listes et lancent tout :
   `raspberry-pi/`, `simulation/` et `deploy/` ;
 * les fichiers de la console testés des deux côtés :
   `raspberry-pi/src/web/static/` et `raspberry-pi/tests/web/`, lus par la gate
-  Pi et par `web`.
+  Pi et par `web` ;
+* `contracts/` : ce sur quoi le Pi et le cloud s'accordent, quelle que soit
+  l'extension du fichier. Chaque côté a ses propres tests contre ce contrat ;
+* `CHANGELOG.md`, où qu'il soit : c'est du Markdown, mais l'outillage de
+  release et ses tests le lisent. Il lance tout tant qu'on ne sait pas quelle
+  gate est seule à le lire.
 
 Lancent tout aussi : un fichier d'aucune sorte listée (un scénario JSON,
 `raspberry-pi/config/`, un Dockerfile, la CAO, `deploy/`, un fichier de
@@ -1390,7 +1444,7 @@ Une erreur de classement est donc vue au plus tard à la fusion.
 
 Une gate sautée apparaît « Skipped » dans la PR. GitHub compte un job sauté
 par sa propre condition comme réussi pour une vérification obligatoire
-(documentation GitHub, « Handling skipped but required checks »). Trois
+(documentation GitHub, « Handling skipped but required checks »). Quatre
 précautions du workflow en dépendent ; `scripts/ci/ci-workflow.test.mjs` les
 vérifie à chaque exécution :
 
@@ -1399,6 +1453,11 @@ vérifie à chaque exécution :
   `changes` échoue ou ne répond rien, la gate tourne. Sans `!cancelled()`,
   GitHub sauterait une gate dont la dépendance a échoué et la compterait
   réussie ;
+* `simulation-gate`, qui attend d'autres jobs, porte `always()` à la place de
+  `!cancelled()` : un run annulé le laisse en échec, jamais sauté (voir
+  [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)). Le
+  test exécute l'étape telle qu'elle est écrite dans le workflow, pour chaque
+  façon dont un job attendu peut finir ;
 * chaque nom exigé est celui d'un job simple, jamais d'une matrice : un job
   de matrice sauté est rapporté sous un autre nom, et la vérification
   resterait en attente ;
@@ -1414,6 +1473,17 @@ Limites à connaître :
 * le script et le workflow appliqués sont ceux de la PR elle-même. Une PR qui
   les modifie lance tout, mais selon sa propre version : toute modification de
   `.github/` ou de `scripts/ci/` doit être relue ;
+* un run annulé pendant les quelques secondes du job `changes` laisse
+  `pi-gate`, `web` et `convex-tests` « Skipped » sur ce commit, sans que la
+  règle l'ait décidé : leur condition, `!cancelled()`, est alors fausse.
+  `always()` ne leur convient pas : chaque run annulé par un nouveau push
+  lancerait quand même ces gates jusqu'au bout. `audit`, lancé en même temps
+  que `changes`, est alors annulé lui aussi et bloque la fusion ; relancer le
+  run relance tout. Une fois démarrée, une gate annulée est rapportée
+  « cancelled », ce qui bloque ;
+* avec `always()`, le job `simulation-gate` d'un run annulé demande encore un
+  runner, quelques secondes, pour échouer. Ce coût est payé à chaque run
+  annulé, y compris quand un nouveau push sur la PR annule le run précédent ;
 * la règle ne lit que les noms de fichiers, pas leur contenu : un fichier
   `.md` ne lance aucune gate lourde, même sous `raspberry-pi/` ;
 * `convex/` et le Pi partagent un contrat (routes HTTP, format
@@ -1454,9 +1524,11 @@ chaque ligne de sortie est préfixée par le numéro de la part (`[p5]` à
 lignes `[gate]` de l'étape « Simulation gate, every test once and combined
 coverage ».
 
-Une vérification marquée « Skipped » n'a pas tourné : la règle de chemins a
-jugé qu'aucun fichier de la PR ne pouvait l'affecter. Le job `changes` en
-donne la raison.
+Une vérification marquée « Skipped » n'a pas tourné. Le plus souvent, la règle
+de chemins a jugé qu'aucun fichier de la PR ne pouvait l'affecter : le job
+`changes` a alors réussi et en donne la raison. Si `changes` est lui-même
+annulé ou absent, le run a été annulé dans ses premières secondes et rien n'a
+été jugé : relancer le run.
 
 ### Régression ECG du navigateur (ANH-71)
 

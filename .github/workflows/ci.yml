@@ -29,12 +29,19 @@ env:
 # Which gates run (docs/framework-de-test.md, section CI).
 #
 # `changes` reads the files a pull request changes (scripts/ci/gates-for-changes.mjs).
-# The four jobs that depend on it carry the same condition: they are skipped
-# only on a pull request, and only when `changes` answered an explicit 'false'.
+# The jobs that depend on it carry the same condition: they are skipped only
+# on a pull request, and only when `changes` answered an explicit 'false'.
 # A push, the nightly run, a manual run, a `changes` job that failed or said
 # nothing: every gate runs. `!cancelled()` is what lets a gate run when
 # `changes` failed; without it GitHub would skip the gate and report the
 # required check as passed. `docs` and `audit` never depend on `changes`.
+#
+# `simulation-gate` says `always()` where the others say `!cancelled()`: it
+# waits for other jobs, so a run cancelled while they work would otherwise
+# skip it, and a skipped job passes a required check. It starts instead, and
+# fails because a part did not succeed. The others do not wait for the work
+# of another job: cancelled while they run, they report "cancelled". Only a
+# run cancelled during the few seconds of `changes` leaves them skipped.
 #
 # The names `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` and
 # `docs` are required by branch protection: each must stay the name of one
@@ -242,13 +249,17 @@ jobs:
   # with 100 % of branches covered once their measures are merged.
   simulation-gate:
     needs: [changes, simulation-battery, simulation-report]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       PYTHONPATH: .:raspberry-pi
     steps:
+      # Runs whatever happened to the run, cancelled included: a part that was
+      # cancelled, that failed, that ran out of time or that was skipped when
+      # it should not have been must leave this required check failed.
       - name: Every part of the gate succeeded
+        if: ${{ always() }}
         env:
           BATTERY: ${{ needs.simulation-battery.result }}
           REPORT: ${{ needs.simulation-report.result }}
@@ -258,6 +269,7 @@ jobs:
           [[ "$BATTERY" == success && "$REPORT" == success ]]
       # The steps below run even when a part failed: what did run is still
       # judged and shown, and the job stays failed because of the step above.
+      # They do not run when the run was cancelled.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: ${{ !cancelled() }}
         with:

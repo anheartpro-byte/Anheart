@@ -35,6 +35,32 @@ test("the site and Convex run their own gates and spare the Python ones", () => 
   assert.deepEqual(gates([...SITE, ...CONVEX, ...DOCS]), NODE_ONLY);
 });
 
+test("a Vitest configuration at the root belongs to the site, whatever its suite", () => {
+  for (const path of ["vitest.convex.config.mts", "vitest.ecg.config.mts", "vitest.site.config.mts"]) {
+    assert.deepEqual(classify(path), { kind: "site", ...NODE_ONLY }, path);
+  }
+  for (const path of [
+    "vitest.config.mts",
+    "vitest.site.config.mts.orig",
+    "vitest.SITE.config.mts",
+    "vitest.site.config.ts",
+    "raspberry-pi/vitest.site.config.mts",
+    "simulation/vitest.site.config.mts",
+  ]) {
+    assert.deepEqual(gates([path]), EVERYTHING, path);
+  }
+});
+
+test("the changelog is not documentation: the release tooling and its tests read it", () => {
+  for (const path of ["CHANGELOG.md", "raspberry-pi/CHANGELOG.md", "docs/CHANGELOG.md", "Changelog.md"]) {
+    assert.deepEqual(gates([path]), EVERYTHING, path);
+    assert.deepEqual(gates([...DOCS, path]), EVERYTHING, path);
+    assert.notEqual(classify(path).kind, "documentation", path);
+  }
+  // Only that name: other release pages are documentation like any page.
+  assert.deepEqual(gates(["docs/release.md", "docs/CHANGELOG-notes.md", "NOT-A-CHANGELOG.md"]), NOTHING);
+});
+
 test("Python sources of the Pi and of the simulation run the Python gates and spare the site ones", () => {
   assert.deepEqual(gates(PYTHON), PYTHON_ONLY);
   assert.deepEqual(gates([...PYTHON, ...DOCS]), PYTHON_ONLY);
@@ -92,6 +118,8 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     "raspberry-pi/src/web/static/index.html",
     "raspberry-pi/src/web/static/notes.md",
     "raspberry-pi/tests/web/panel_manual.test.mjs",
+    "contracts/machine-api.json",
+    "contracts/README.md",
   ];
   for (const path of forced) {
     const { kind, ...needed } = classify(path);

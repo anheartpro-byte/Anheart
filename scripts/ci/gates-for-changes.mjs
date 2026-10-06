@@ -46,6 +46,18 @@ export const EVERYTHING = [
     name: "console files tested on both sides",
     test: (path) => path.startsWith("raspberry-pi/src/web/static/") || path.startsWith("raspberry-pi/tests/web/"),
   },
+  {
+    // What the Pi and the cloud agree on, whatever its extension (Markdown
+    // included): each side has tests of its own against it.
+    name: "contract shared by the Pi and the cloud",
+    test: (path) => path.startsWith("contracts/"),
+  },
+  {
+    // Markdown, but not documentation: the release tooling reads it, and its
+    // tests with it. Until a gate is known to be the only one that does, all run.
+    name: "changelog read by the release tooling",
+    test: (path) => /(^|\/)changelog\.md$/i.test(path),
+  },
 ];
 
 const DOCUMENT_EXTENSIONS = [".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"];
@@ -57,9 +69,9 @@ const SITE_FILES = [
   "eslint.config.mjs",
   "postcss.config.mjs",
   "components.json",
-  "vitest.convex.config.mts",
-  "vitest.ecg.config.mts",
 ];
+/** The Vitest configurations of the site and of Convex, at the root: vitest.<suite>.config.mts. */
+const SITE_TEST_CONFIGURATION = /^vitest\.[a-z0-9-]+\.config\.mts$/;
 const PYTHON_DIRECTORIES = ["raspberry-pi/", "simulation/"];
 const PYTHON_EXTENSIONS = [".py", ".pyi"];
 
@@ -75,8 +87,8 @@ const isUnder = (path, directories) => directories.some((directory) => path.star
  */
 export const KINDS = [
   {
-    // Markdown anywhere, and the images of docs/. No gate reads them: the docs
-    // job does, and it always runs.
+    // Markdown anywhere (the changelog apart, see above), and the images of
+    // docs/. No gate reads them: the docs job does, and it always runs.
     kind: "documentation",
     python: false,
     node: false,
@@ -87,7 +99,8 @@ export const KINDS = [
     kind: "site",
     python: false,
     node: true,
-    test: (path) => isUnder(path, SITE_DIRECTORIES) || SITE_FILES.includes(path),
+    test: (path) =>
+      isUnder(path, SITE_DIRECTORIES) || SITE_FILES.includes(path) || SITE_TEST_CONFIGURATION.test(path),
   },
   {
     // Convex functions and their tests. The Pi and the simulation read nothing from them.
