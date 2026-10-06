@@ -1554,6 +1554,21 @@ class SafetySupervisor:
         return self._floor
 
     @property
+    def estop(self) -> SafetyVerdict | None:
+        """The emergency stop held in its own slot, whoever latched it, or ``None``.
+
+        Not :attr:`standing`: a more severe verdict takes that over.
+        ``GO_SILENT`` outranks ``QUICK_STOP`` and refuses every
+        acknowledgement, so a stop latched before it is still latched behind
+        it, and neither :attr:`standing` nor :attr:`floor` shows it any more.
+        A screen opened at that moment must still be able to say so. Set by
+        :meth:`latch_estop` for any caller, the operator's button and the
+        camera alike, and cleared by :meth:`acknowledge` alone, which demands
+        ``estop_released`` for as long as this is not ``None``. Pure.
+        """
+        return self._estop
+
+    @property
     def live(self) -> tuple[SafetyVerdict, ...]:
         """Every rule that was firing at the last :meth:`evaluate`, latched or not.
 

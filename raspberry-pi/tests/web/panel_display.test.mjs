@@ -182,6 +182,7 @@ function status(overrides = {}) {
   return {
     run_state: "idle",
     estop_latched: false,
+    supervisor_estop: null,
     attested: true,
     attestation: null,
     attestation_statement: "",
@@ -1075,4 +1076,69 @@ test("with nobody on board the heart rate holds nothing, answered or not", () =>
     frame(manualFrame(60 + tick * 0.2));
   }
   assert.equal(shown("manual-hold"), false);
+});
+
+/* ============ a stop the camera latched, on a page opened once go_silent stands ============ */
+
+// What /api/status answers when the camera latched a stop and the link to the drive was then lost:
+// go_silent is the standing verdict and the floor, and the stop shows in the supervisor's slot alone.
+const cameraStopBehindSilence = () =>
+  status({
+    estop_latched: false,
+    supervisor_estop: verdict("quick_stop", "operator_estop").safety,
+    standing: silent().safety,
+    floor: silent().safety,
+  });
+
+test("a page opened once go_silent stands announces the stop the camera latched behind it", async () => {
+  // Given a page just opened: it never saw the stop latched, and every frame it gets says go_silent.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(cameraStopBehindSilence());
+  frame(snapshot({ at: 70, mode: "arret", ...silent() }));
+  await settle();
+  // Then the banner is up, from the status alone, and the frames that follow do not take it down.
+  assert.equal(shown("estop-banner"), true);
+  for (let tick = 1; tick <= 5; tick += 1) {
+    frame(snapshot({ at: 70 + tick * 0.2, mode: "arret", ...silent() }));
+    assert.equal(shown("estop-banner"), true, `hidden after ${tick} frames`);
+  }
+});
+
+test("go_silent with no stop latched behind it raises no emergency-stop banner", async () => {
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(status({ standing: silent().safety, floor: silent().safety }));
+  frame(snapshot({ at: 70, mode: "arret", ...silent() }));
+  await settle();
+  assert.equal(shown("estop-banner"), false);
+});
+
+for (const id of ["verdicts-grid", "system-grid"]) {
+  test(`#${id} reports the e-stop latched when go_silent hides the stop the camera latched`, async () => {
+    const { context, node } = panel();
+    context.api = () => Promise.resolve(cameraStopBehindSilence());
+    await context.loadStatus();
+    // The standing verdict no longer names it: only the supervisor's slot does.
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "comms_lost / go_silent");
+    assert.equal(rows(node(id))["e-stop verrouille"].textContent, "OUI");
+  });
+}
+
+test("the state chip is red for a latched emergency stop whoever latched it", async () => {
+  const { context, node } = panel();
+  // A stop latched by the camera leaves the interface idle: the chip read "idle", in grey.
+  context.api = () =>
+    Promise.resolve(
+      status({ supervisor_estop: verdict("quick_stop", "operator_estop").safety, standing: verdict("quick_stop", "operator_estop").safety }),
+    );
+  await context.loadStatus();
+  assert.equal(node("run-state").textContent, "idle");
+  assert.ok(node("run-state").classes.has("pill-bad"));
+  // Behind go_silent as well.
+  context.api = () => Promise.resolve(cameraStopBehindSilence());
+  await context.loadStatus();
+  assert.ok(node("run-state").classes.has("pill-bad"));
+  // And grey again once nothing is latched.
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  assert.equal(node("run-state").classes.has("pill-bad"), false);
 });

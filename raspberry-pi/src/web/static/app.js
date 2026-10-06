@@ -332,8 +332,10 @@ function refreshLiveness() {
   verdict, so a report whose standing verdict is go_silent hides any stop
   latched behind it. It also refuses every acknowledgement: a stop that was
   latched when go_silent took over is still latched, and no report can say
-  otherwise for as long as go_silent stands. Only the interface's own flag,
-  in /api/status, still shows through it.
+  otherwise for as long as go_silent stands. Two fields of /api/status still
+  show through it, and a page opened at that moment has nothing else to go
+  by: the supervisor's own emergency-stop slot (`supervisor_estop`, whoever
+  latched it, the camera included) and the interface's flag (`estop_latched`).
 */
 function estopOpinion(standing, flagged) {
   if (flagged || (standing && standing.latched && standing.action === "quick_stop")) {
@@ -373,7 +375,7 @@ function renderEstopBanner() {
   var snapshot = state.snapshot;
   var status = state.status;
   var frame = snapshot ? estopOpinion(snapshot.safety, false) : null;
-  var polled = status ? estopOpinion(status.standing, status.estop_latched) : null;
+  var polled = status ? estopOpinion(status.standing, estopLatched(status)) : null;
   if (state.estopReceipt && snapshot && frame !== "silent" && snapshot.at >= state.estopReceipt.at) {
     state.estopReceipt = null;
   }
@@ -1714,12 +1716,14 @@ function loadCamera() {
   Whether the emergency-stop latch is set, from /api/status. `estop_latched`
   is the interface's own flag: it stays false for a stop the camera latched,
   although that is the same latch and its acknowledgement demands the same
-  "mushroom released" confirmation. The standing verdict names the latch
-  whoever set it.
+  "mushroom released" confirmation. `supervisor_estop` is the latch itself,
+  whoever set it, and it still shows when go_silent has taken the standing
+  verdict over. The standing verdict is read as well: it names the latch too,
+  and it is all an answer without that field has.
 */
 function estopLatched(status) {
   var standing = status.standing;
-  return status.estop_latched ||
+  return status.estop_latched || Boolean(status.supervisor_estop) ||
     Boolean(standing && standing.latched && standing.rule === "operator_estop");
 }
 
@@ -1737,10 +1741,11 @@ function loadStatus() {
       state.estopReceipt = null;
     }
     renderEstopBanner();
+    // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
       el("run-state"),
       status.run_state,
-      status.estop_latched ? "bad" : status.run_state === "running" ? "warn" : ""
+      estopLatched(status) ? "bad" : status.run_state === "running" ? "warn" : ""
     );
     text(
       el("bind"),

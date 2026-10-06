@@ -1098,6 +1098,16 @@ class StatusRow:
 
     run_state: str
     estop_latched: bool
+    """The interface's own flag: set by its E-STOP route, by nothing else."""
+
+    supervisor_estop: SafetyRow | None
+    """The emergency stop the supervisor holds latched, whoever latched it, or ``None``.
+
+    The camera's stop never sets ``estop_latched``, and ``GO_SILENT`` takes
+    ``standing`` and ``floor`` over: this is then the only field that still
+    shows the stop, and the one a page opened afterwards announces it from.
+    """
+
     attested: bool
     attestation: AttestationRow | None
     attestation_statement: str
