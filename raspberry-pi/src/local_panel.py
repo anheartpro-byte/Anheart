@@ -141,6 +141,7 @@ from src.training.runtime import (
     DrivePrecommanded,
     DriveUnavailable,
     FaultResetRefusal,
+    HeldAtStandstill,
     LimitsMismatch,
     ManualEnding,
     ManualTargetRefusal,
@@ -160,9 +161,10 @@ from src.training.runtime import (
     Subject,
     TargetOutOfRange,
     TrainingRuntime,
+    WithdrawnTarget,
 )
 from src.training.safety import SELF_CLEARING, SafetyLimits
-from src.training.types import Occupancy, TelemetrySnapshot
+from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
@@ -536,7 +538,9 @@ class LocalPanel:
         2. the mailbox is emptied and its command handed to the runtime; what
            the runtime refuses goes back to the page as an event;
         3. in simulation, the plant is advanced and the subject told the speed;
-        4. the runtime ticks (reads only, while idle);
+        4. the runtime ticks (reads only, while idle); a manual target it took
+           back on that tick, because a verdict came to hold the arm at
+           standstill, goes back to the page as an event, like a refusal;
         5. the snapshot is published to the surface and, through it, the hub,
            and the surface learns whether a session is running.
         """
@@ -556,6 +560,10 @@ class LocalPanel:
             sim_ecg.set_motor_rpm(self._last_measured)
         snapshot = await self._runtime.tick(now)
         self._last_measured = snapshot.measured.motor_rpm
+        withdrawn = self._runtime.take_withdrawn_target()
+        if withdrawn is not None:
+            # Nobody's command: the machine took back a target it had accepted.
+            self._surface.note_refused("", describe_withdrawn_target(withdrawn))
         self._surface.publish(snapshot)
         match self._runtime.state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
@@ -1135,8 +1143,29 @@ def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
                 f"consigne refusee : {requested:.2f} tr/min de sortie hors de 0 ou "
                 f"[{low}, {high}] tr/min moteur"
             )
+        case HeldAtStandstill(verdict=verdict):
+            return (
+                f"consigne refusee : le verdict {verdict.rule} tient le bras a l'arret. "
+                f"{_once_nothing_stands(verdict)}, puis redonner la cible"
+            )
         case _ as unreachable:
             assert_never(unreachable)
+
+
+def describe_withdrawn_target(withdrawn: WithdrawnTarget) -> str:
+    """One line for a manual target the runtime took back (see ``WithdrawnTarget``)."""
+    verdict = withdrawn.verdict
+    return (
+        f"cible de {withdrawn.target} tr/min moteur remise a 0 : le verdict {verdict.rule} "
+        f"tient le bras a l'arret. {_once_nothing_stands(verdict)}, puis redonner la cible"
+    )
+
+
+def _once_nothing_stands(verdict: SafetyVerdict) -> str:
+    """What the operator has to wait for, or do, before a target is taken again."""
+    if verdict.latched:
+        return "L'acquitter une fois sa cause levee"
+    return "Attendre qu'il soit leve"
 
 
 def describe_reset_refusal(refusal: FaultResetRefusal) -> str:

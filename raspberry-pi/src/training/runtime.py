@@ -121,11 +121,17 @@ states the fact (:meth:`TrainingRuntime._note_standstill`) and leaves the
 verdict to the supervisor's ``session_standstill`` rule, so that this ending is
 reported, refused against and acknowledged like every other latched one. Not a
 standstill "by itself": an operator's stop, an operator's manual target of zero
-with no warning standing, the programme's own cooldown. Left as they were: a
+with no warning standing, the programme's own cooldown. Left as it was: a
 warning before the arm has moved at all (BASELINE), where the motion that
-follows is the programme's normal start; and a manual target the operator
-typed while a warning held the arm at zero, which is followed when the warning
-lifts.
+follows is the programme's normal start.
+
+The same goes for an arm the OPERATOR stopped, or that has not moved yet, in a
+manual session: no verdict may hold a target in waiting over it (ANH-178).
+While any verdict stands over a setpoint of zero, a non-zero manual target is
+refused (:meth:`TrainingRuntime.set_manual_target`), and one already entered
+is taken back (:meth:`TrainingRuntime._withdraw_waiting_target`). The operator
+asks again once nothing stands, so neither a warning that lifts nor an
+acknowledgement ever starts the arm.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -971,8 +977,42 @@ class TargetOutOfRange:
     ceiling: MotorRpm
 
 
-type ManualTargetRefusal = NoManualSession | ManualEnding | TargetOutOfRange
+@dataclass(frozen=True, slots=True)
+class HeldAtStandstill:
+    """A verdict holds the arm at standstill: a speed asked for now would wait for it.
+
+    The target would be accepted, nothing would move, and the arm would leave
+    by itself the moment the verdict cleared or was acknowledged, with nobody
+    clicking at that instant (ANH-178). So a non-zero target is refused for as
+    long as ANY verdict stands, latched or not, over a setpoint of zero, and
+    the operator asks again once nothing stands. A target of zero is never
+    refused on this ground, and neither is any target while the arm turns.
+    """
+
+    verdict: SafetyVerdict
+    """The verdict standing when the target was asked for; its rule is named to the operator."""
+
+
+type ManualTargetRefusal = NoManualSession | ManualEnding | TargetOutOfRange | HeldAtStandstill
 """Every way :meth:`TrainingRuntime.set_manual_target` can refuse. Closed."""
+
+
+@dataclass(frozen=True, slots=True)
+class WithdrawnTarget:
+    """A manual target this runtime took back before the arm had left standstill for it.
+
+    Not a refusal: the target HAD been accepted, with nothing standing. Then a
+    verdict came to hold the arm at zero before the first step towards it, and
+    a target left in place would have been followed when that verdict went
+    (see :meth:`TrainingRuntime._withdraw_waiting_target`). Reported once, so
+    the console can say that the target on its screen is no longer in force.
+    """
+
+    target: MotorRpm
+    """What the operator had asked for, motor rpm. Never zero."""
+
+    verdict: SafetyVerdict
+    """The verdict that held the arm at standstill when the target was taken back."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1112,6 +1152,7 @@ class TrainingRuntime:
         "_tracker",
         "_unknown_episode",
         "_warmup_satisfied",
+        "_withdrawn",
     )
 
     def __init__(
@@ -1196,9 +1237,12 @@ class TrainingRuntime:
         self._resting_bpm: Bpm | None = None
         # A manual session instead of a programme; at most one of the two.
         self._manual: ManualSession | None = None
-        # What the operator asked for. Zeroed by every ending, never raised by
-        # anything but set_manual_target.
+        # What the operator asked for. Zeroed by every ending, and by a verdict
+        # that comes to hold the arm at standstill; never raised by anything
+        # but set_manual_target.
         self._manual_target: MotorRpm = MotorRpm(0)
+        # The last target taken back that way, until the console has read it.
+        self._withdrawn: WithdrawnTarget | None = None
         # Since when the motion profiler's allowance accrues (see motion.py).
         self._motion_from: Monotonic | None = None
         # An operator's fault reset between its two words, or None.
@@ -1637,6 +1681,15 @@ class TrainingRuntime:
         or ``[min_run, ceiling]`` at the motor shaft; anything else is refused
         rather than clamped. Refused once the session is ending: a target then
         would be a resumption nobody asked for.
+
+        Refused too, when it is not zero, while a verdict stands over a
+        setpoint of zero (:class:`HeldAtStandstill`): the arm would not move
+        now, and would move later, when the verdict lifted or was acknowledged,
+        with nobody clicking at that moment. Judged on what the last tick left
+        in force, which is all there is between two ticks: a verdict that is
+        about to lift still refuses, and one that is about to appear is dealt
+        with by the tick that sees it (:meth:`_withdraw_waiting_target`). An
+        arm that is turning takes a target as it always has, verdict or not.
         """
         manual = self._manual
         if manual is None:
@@ -1649,9 +1702,23 @@ class TrainingRuntime:
         motor = output_to_motor_rpm(target, self._geometry.ratio)
         if motor != 0 and not minimum <= motor <= manual.ceiling:
             return Err(TargetOutOfRange(requested=target, min_run=minimum, ceiling=manual.ceiling))
+        standing = self.standing
+        if motor != 0 and self._applied_rpm == 0 and standing is not None:
+            return Err(HeldAtStandstill(standing))
         self._manual_target = motor
         _logger.info("manual target set to %d motor rpm (%.2f output rpm)", motor, target)
         return Ok(motor)
+
+    def take_withdrawn_target(self) -> WithdrawnTarget | None:
+        """The manual target taken back since the last call, or ``None``. Read once.
+
+        For the console: a target it showed as accepted is no longer in force,
+        and the operator has to be told why (:class:`WithdrawnTarget`). Reading
+        it forgets it, so one withdrawal is said once.
+        """
+        withdrawn = self._withdrawn
+        self._withdrawn = None
+        return withdrawn
 
     async def fault_reset(self) -> Result[None, FaultResetRefusal]:
         """Reset a drive fault, on an operator's explicit request. Never called automatically.
@@ -1764,6 +1831,7 @@ class TrainingRuntime:
         self._controller = None
         self._manual = None
         self._manual_target = MotorRpm(0)
+        self._withdrawn = None
         self._motion_from = None
         self._fault_reset_at = None
         self._started_at = None
@@ -2658,6 +2726,56 @@ class TrainingRuntime:
         # (`_applied_rpm` advances on an acknowledged write and on nothing else).
         if before != 0 and self._applied_rpm == 0:
             self._note_standstill(standing)
+        self._withdraw_waiting_target(standing)
+
+    def _withdraw_waiting_target(self, standing: SafetyVerdict | None) -> None:
+        """A verdict holds the arm at standstill: take back the manual target that waits.
+
+        A manual target is a destination, and under a verdict it is not
+        followed upwards. Left in place over a setpoint of zero it WAITED: the
+        operator's own zero, then a lost heart rate, then 200 rpm typed at the
+        console; thirty seconds with nothing moving; the heart rate back, and
+        the first non-zero setpoint 0.2 s later with nobody clicking. With a
+        latched verdict it was the acknowledgement that started the arm
+        (ANH-178, measured by the independent review of ANH-176).
+
+        So, at the end of every command step: if a verdict stands, the setpoint
+        is zero and a target is waiting, the target goes back to zero. Together
+        with the refusal in :meth:`set_manual_target` this leaves one way for
+        a stopped arm to be given a speed: a target entered while nothing
+        stands. ONE test for every verdict and every arm: latched or not,
+        FREEZE or REDUCE, already standing or appearing on this very tick, and
+        the tick a REDUCE has just walked the setpoint to zero.
+
+        The console is told (:meth:`take_withdrawn_target`), so that the
+        operator knows to ask again, with one exception: on the tick a warning
+        itself has just stopped the arm, the session ends on the next one
+        (:meth:`_note_standstill`), there is no asking again, and the ending
+        says everything there is to say. The target is zeroed all the same.
+
+        Nothing here touches an arm that is turning: its setpoint is not zero,
+        so its target is kept and followed when the verdict lifts, as before.
+        And an ending needs nothing from this: it has already zeroed the target
+        (:meth:`_begin_ending`). A programme never has a manual target.
+
+        One wait is left, and it is not a verdict's: with a person on board,
+        :meth:`_follow_manual` lets nothing rise without a usable heart rate,
+        nor while the rate falls fast. A target accepted with nothing standing
+        can be held by that gate alone, and is followed when it opens
+        (``docs/securite.md`` 7.6). No verdict stands then, so there is nothing
+        for this method to judge.
+        """
+        target = self._manual_target
+        if standing is None or self._applied_rpm != 0 or target == 0:
+            return
+        self._manual_target = MotorRpm(0)
+        if self._stopped_by is None:
+            self._withdrawn = WithdrawnTarget(target=target, verdict=standing)
+        _logger.warning(
+            "manual target of %d motor rpm withdrawn: %s holds the arm at standstill",
+            target,
+            standing.rule,
+        )
 
     def _note_standstill(self, standing: SafetyVerdict | None) -> None:
         """The setpoint has just come back to zero: was that by itself? If so, say it.
