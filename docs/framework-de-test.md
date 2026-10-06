@@ -27,6 +27,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 13. [La géométrie extraite de la CAO](#13-la-géométrie-extraite-de-la-cao)
 14. [Pièges connus](#14-pièges-connus)
 15. [CI](#15-ci)
+16. [Rejouer une séance enregistrée](#16-rejouer-une-séance-enregistrée)
 
 ---
 
@@ -213,6 +214,10 @@ PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m pytest simulation/tes
 (La configuration pytest de `simulation/pyproject.toml` affiche un compte par
 fichier au lieu d'un total.)
 
+Le tableau est l'instantané du 1er octobre 2026. Les tests du rejeu
+(`test_replay*.py`, `test_real_records.py`) sont venus après : ils sont
+décrits en [section 16](#16-rejouer-une-séance-enregistrée).
+
 ### 4.2 Commandes
 
 ```sh
@@ -251,7 +256,10 @@ chiffre est dépassé aujourd'hui.
 ## 5. Lancer un scénario : `simulation.run`
 
 ```text
-usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT] [scenario]
+usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT]
+                                [--replay RECORD] [--json]
+                                [--export-real [NAME ...]] [--library LIBRARY]
+                                [scenario]
 ```
 
 | Option | Effet |
@@ -261,6 +269,10 @@ usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT] [scena
 | `--all` | lance tous les scénarios et écrit `simulation/out/summary.md` |
 | `--csv` | écrit aussi un CSV des lignes de la trace |
 | `--out DIR` | dossier de sortie (défaut `simulation/out/`, ignoré par git) |
+| `--replay RECORD` | rejoue un enregistrement (dossier, ou son `.tar.gz`) contre le runtime et compare : [section 16](#16-rejouer-une-séance-enregistrée) |
+| `--json` | avec `--replay` : le rapport en une ligne de JSON |
+| `--export-real [NAME ...]` | refait les enregistrements de la bibliothèque rejouée en CI ; sans nom, tous ceux qui viennent de la simulation |
+| `--library DIR` | dossier de la bibliothèque (défaut `simulation/scenarios/real/`) |
 
 ```sh
 $PY -m simulation.run --list
@@ -1848,3 +1860,250 @@ journée simulée de séances avec l'écrivain actif, sans le calcul de
 l'acquisition. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
 Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni
 ces tickets dépendants.
+
+## 16. Rejouer une séance enregistrée
+
+### 16.1 Ce que c'est
+
+Un enregistrement de séance au schéma 2 ([enregistrement.md](enregistrement.md))
+contient ce que le runtime a reçu pendant la séance : l'instant de chaque tic,
+ce que le variateur a répondu, l'ECG brut, et ce qu'on lui a demandé. Le rejeu
+redonne tout cela, dans l'ordre et aux instants enregistrés, à un **vrai**
+`TrainingRuntime` neuf :
+
+* le variateur est un « magnétophone » (`simulation/replay_tape.py`) qui répond
+  à chaque appel ce que `drive_frames.jsonl` a enregistré, et qui vérifie
+  d'abord que l'appel est bien celui qui a été enregistré ;
+* l'ECG repasse bloc par bloc dans le vrai DSP et le vrai `EcgBridge` ;
+* les commandes de `events.jsonl` sont redonnées à leurs instants ;
+* l'horloge est une `ManualClock` qui avance par les intervalles enregistrés.
+
+À chaque tic, ce que le runtime **décide** (consigne, action de sécurité,
+règle, phase) est comparé à ce que l'enregistrement dit qu'il avait décidé.
+Une séance enregistrée devient ainsi un test de non-régression : le runtime
+d'aujourd'hui doit décider, sur les mêmes entrées, ce que celui du jour de la
+séance a décidé.
+
+> **Limite.** Aujourd'hui, seuls les enregistrements produits par la
+> simulation sont rejouables. La console n'écrit pas encore d'enregistrement,
+> et les échanges Modbus du pilote réel ne sont pas rejoués (section 16.8).
+
+### 16.2 Commande
+
+```sh
+$PY -m simulation.run auto_jog_150_dsp                 # écrit simulation/out/<dossier>
+$PY -m simulation.run --replay simulation/out/<dossier>
+$PY -m simulation.run --replay simulation/scenarios/real/fault_bitalino_disconnect_dsp.tar.gz
+$PY -m simulation.run --replay <dossier> --json        # le même rapport, une ligne de JSON
+```
+
+Sortie réelle de la troisième commande (environ 17 s) :
+
+```text
+replay of record 16625e1dba93469ca69ed1ed10263f53: MATCH
+  ticks: 1348 recorded, 1348 replayed
+  tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
+  tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
+```
+
+| Code de sortie | Sens |
+|---|---|
+| 0 | `MATCH` : chaque décision rejouée est celle qui a été enregistrée |
+| 1 | `DIFFERENCE` ou `DIVERGENCE` : le runtime ne décide plus la même chose. C'est un constat sur le runtime, pas un échec de l'outil |
+| 2 | rejeu impossible : l'enregistrement ne peut pas être rejoué du tout. La raison est écrite sur la sortie d'erreur |
+
+Le rapport ne recopie aucun texte libre de l'enregistrement : des nombres, des
+valeurs d'énumération du code, et les noms de règles quand ce sont de simples
+identifiants. Il peut donc être publié dans un journal de CI.
+
+### 16.3 Ce qui est comparé, et les tolérances
+
+| Quantité | Règle |
+|---|---|
+| consigne (`setpoint_motor_rpm`) | égale à ± 1 tr/min moteur |
+| action de sécurité et règle (`safety_action`, `safety_rule`) | les transitions sont appariées une à une, dans l'ordre ; chacune peut tomber un tic plus tôt ou plus tard ; aucune ne peut manquer, être ajoutée ou changer de nature |
+| phase | exacte, tic pour tic |
+| appels au variateur | même appel, dans le même ordre ; mot de commande exact ; vitesse écrite à ± 1 tr/min ; demandé à moins d'un tic (0,2 s) de son instant enregistré |
+
+Les deux tolérances chiffrées sont `SETPOINT_TOLERANCE_RPM` et
+`VERDICT_TOLERANCE_TICKS` dans `simulation/replay_report.py`. Elles existent
+pour les séances réelles, dont les instants sont connus à la milliseconde. Un
+enregistrement de la simulation se rejoue exactement : la ligne `tolerated`
+du rapport reste à zéro.
+
+### 16.4 Les trois issues
+
+* **`MATCH`.** Rien à faire.
+* **`DIFFERENCE`.** Le runtime a posé au variateur les questions enregistrées,
+  et a décidé autre chose. Le rapport donne le premier écart : sa nature
+  (`setpoint`, `phase`, `transition_timing`, `transition_state`,
+  `transition_count`, `safety_state`), son instant, et les deux décisions.
+* **`DIVERGENCE`.** Le runtime a demandé au variateur une trame que
+  l'enregistrement ne contient pas à cet endroit. Les réponses enregistrées ne
+  correspondent plus aux questions posées : le rejeu **s'arrête**, et dit
+  l'instant, ce qui a été demandé et ce que l'enregistrement contient. Les tics
+  d'avant restent comparés. Un code rejoué qui lève une exception sur des
+  entrées enregistrées est rapporté de la même façon.
+
+Sorties réelles, sur une séance manuelle de 9 s dont on a modifié à la main,
+à `t = 3 s`, la consigne d'un tic (+2 tr/min), puis la vitesse d'une trame
+(+5 tr/min). La dernière ligne signale que le fichier ne correspond plus à sa
+somme de contrôle :
+
+```text
+replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIFFERENCE
+  ticks: 95 recorded, 95 replayed
+  tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
+  first difference: setpoint at t=3.000 s
+    tick index 64
+    recorded: setpoint 81 motor rpm, phase hold, safety NONE
+    replayed: setpoint 79 motor rpm, phase hold, safety NONE
+  failed checks by kind: setpoint 1
+  tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
+  integrity warning: ticks.csv: checksum_mismatch
+```
+
+```text
+replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIVERGENCE
+  ticks: 95 recorded, 64 replayed
+  tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
+  tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
+  divergence at t=3.000 s, after 64 ticks: the runtime requested speed 77 motor rpm; the record holds speed 82 motor rpm at t=3.000 s
+    the replay stopped there: later recorded answers fit no question
+  integrity warning: drive_frames.jsonl: checksum_mismatch
+```
+
+« Rejeu impossible » (code 2) n'est pas une issue du rejeu : l'outil n'a rien
+à juger. Les causes sont listées dans
+[enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué) :
+pas de tics d'avant le départ, événement d'entrée qui n'est pas une commande,
+fréquence cardiaque sans ECG brut, échanges Modbus natifs, phase ou action
+inconnue de cette version.
+
+### 16.5 La bibliothèque `simulation/scenarios/real/`
+
+Un fichier par séance : `<nom>.tar.gz`, l'archive d'un dossier
+d'enregistrement fermé. Le dossier lui-même n'est pas versionné : une séance
+de treize minutes contient environ 4000 blocs d'ECG.
+
+`simulation/tests/test_real_records.py` rejoue **chaque archive présente dans
+le dossier**. Une archive ajoutée est donc rejouée par la gate suivante, et ne
+peut pas être fusionnée si elle ne passe pas. Pour chacune, la gate exige :
+
+1. un enregistrement fermé et intact : le reader ne signale aucun
+   avertissement (tous les fichiers sont dans `checksums.sha256` et leur
+   correspondent) ;
+2. un manifeste anonyme : `subject_id` et `session_id` à `null`,
+   `organization_id` valant `synthetic` (simulation) ou `anonymized` ;
+3. un rejeu conforme à ce que la bibliothèque déclare : `MATCH`, ou l'écart
+   accepté décrit en 16.7.
+
+Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
+`--export-real`, comme preuve de fonctionnement avant toute séance réelle :
+
+| Archive | Ce qu'elle couvre | Tics | Taille | Rejeu |
+|---|---|---|---|---|
+| `auto_jog_150_dsp.tar.gz` | un programme complet, la fréquence cardiaque pilote la vitesse, plusieurs `hr_stale` | 4000 | 1,9 Mo | ≈ 75 s |
+| `fault_bitalino_disconnect_dsp.tar.gz` | le BITalino se déconnecte en WARMUP, fin sur verdict | 1348 | 0,3 Mo | ≈ 17 s |
+| `fault_ecg_electrode_off_dsp.tar.gz` | une électrode décollée 30 s, `hr_stale` puis reprise | 4000 | 1,8 Mo | ≈ 75 s |
+
+Ce sont les scénarios en `ecg.mode: dsp` : le mode `direct` injecte des bpm
+sans acquisition, et ne laisse pas d'ECG brut à rejouer.
+
+Pour regarder une archive dans le visualiseur, l'extraire sous `simulation/out/`
+puis ouvrir `?trace=out/<dossier>` (section 7).
+
+### 16.6 Ajouter un enregistrement
+
+**Un scénario de la simulation.**
+
+```sh
+$PY -m simulation.run --export-real <nom_du_scénario>
+```
+
+La commande lance le scénario, retire `subject_id`, rejoue l'enregistrement
+produit et n'écrit l'archive que si ce rejeu est `MATCH`.
+
+**Une séance réelle.** Pas encore possible de bout en bout : il manque
+l'enregistrement par la console et le rejeu des échanges Modbus natifs
+(section 16.8). La marche à suivre, le jour où ils existent :
+
+1. récupérer l'archive `.tar.gz` de la séance ;
+2. anonymiser le manifeste (`subject_id` et `session_id` à `null`,
+   `organization_id` à `anonymized`), puis recalculer `checksums.sha256` ;
+3. vérifier `python -m simulation.run --replay <archive>` ;
+4. déposer l'archive dans `simulation/scenarios/real/` sous un nom qui ne
+   désigne ni une personne ni un lieu, et ouvrir la PR. La gate fait le reste.
+
+### 16.7 Un écart de rejeu : la règle
+
+> **Un écart de rejeu non expliqué ouvre un ticket.** On ne régénère pas un
+> enregistrement, on n'accepte pas un écart et on n'élargit pas une tolérance
+> pour faire passer la gate tant que la cause n'est pas connue.
+
+Quand `test_real_records.py` échoue, ou quand `--replay` sort en 1 :
+
+1. **Lire le rapport** : l'instant, la nature de l'écart, les deux décisions.
+2. **Chercher la cause** : quel changement du runtime, du DSP ou de la
+   configuration livrée (`raspberry-pi/config/`) explique qu'à cet instant la
+   décision ne soit plus la même.
+3. **Conclure**, d'une des quatre façons :
+
+| Conclusion | Ce qu'on fait |
+|---|---|
+| c'est une régression | on corrige le code. L'enregistrement ne change pas |
+| c'est un changement voulu, et l'enregistrement vient de la simulation | on le **régénère** : `$PY -m simulation.run --export-real` (sans nom : tous les enregistrements simulés). La PR qui change le comportement contient les archives régénérées et dit, dans sa description, quel écart elle a constaté (archive, instant, nature) et quel ticket le justifie |
+| c'est un changement voulu, et l'enregistrement est une séance réelle | une séance réelle ne se refait pas. On **documente l'écart accepté** : un fichier `<nom>.accepted.json` à côté de l'archive (ci-dessous) |
+| la cause n'est pas trouvée | on ouvre un ticket avec le rapport JSON. Rien n'est régénéré ni accepté |
+
+Un écart accepté est un fichier à côté de l'archive :
+
+```json
+{"ticket": "ANH-000", "reason": "une phrase : ce qui a changé et pourquoi c'est voulu",
+ "outcome": "divergence", "t": 312.4}
+```
+
+`outcome` vaut `difference` ou `divergence` ; `t` est l'instant du premier
+écart, ou de la divergence, tel que le rapport le donne. La gate exige alors
+**cet** écart : même nature, même instant à la milliseconde. Un autre écart
+échoue, et le jour où l'écart disparaît la gate échoue aussi, jusqu'à ce que
+le fichier soit retiré.
+
+Un écart accepté affaiblit l'enregistrement : après une divergence, la suite
+de la séance n'est plus rejouée. Si elle arrive tôt, l'enregistrement ne
+protège presque plus rien, et il vaut mieux le retirer de la bibliothèque, par
+un ticket qui le dit.
+
+On ne modifie jamais un enregistrement à la main. La gate le verrait
+(`checksum_mismatch`), et c'est voulu.
+
+### 16.8 Limites connues
+
+* **Séances réelles.** Le magnétophone rejoue les observations d'appel du
+  variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
+  Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
+  qui en contient est refusé (code 2).
+* **Mode `direct`.** Les scénarios qui injectent des bpm ne sont pas
+  rejouables : seuls les quatre scénarios `*_dsp` de la batterie le sont.
+* **Exactitude.** Un enregistrement de la simulation est rejoué sur les mêmes
+  nombres flottants que l'original, donc exactement. Une séance réelle est
+  connue à la milliseconde : une décision prise à moins d'une milliseconde
+  d'un seuil peut tomber un tic plus tôt ou plus tard, ce que les tolérances
+  absorbent pour un verdict, pas pour une phase.
+* **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec,
+  le courant à mieux que 0,1 A, une exception levée dans le tic d'origine, un
+  saut de l'horloge murale pendant l'acquisition. Détail dans
+  [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué).
+* **Coût.** Rejouer la bibliothèque prend environ trois minutes dans la gate
+  de la simulation, et ses trois archives pèsent 4 Mo dans le dépôt. Chaque
+  régénération ajoute ce poids à l'historique.
+
+### 16.9 Les tests du rejeu
+
+| Fichier | Ce qu'il vérifie |
+|---|---|
+| `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart, écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés, ligne de commande |
+| `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
+| `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
+| `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées |
+| `test_real_records.py` | la gate de la bibliothèque, les archives, l'anonymat, l'écart accepté, l'export |
