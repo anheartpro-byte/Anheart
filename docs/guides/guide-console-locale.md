@@ -354,7 +354,9 @@ Repères de la capture (barre latérale, de haut en bas) :
   un STOP donné dans les quatre dernières minutes et demie fait donc durer la séance
   plus de 30 s au-delà de sa durée prévue : la règle `session_overrun` se verrouille à
   1830 s, pendant cette récupération. Rien ne bouge. Attendez `REPOS`, puis acquittez
-  (§11, §13.6).
+  (§11, §13.6). Un arrêt demandé depuis le site passe par ce même STOP. Un E-STOP, ou
+  un arrêt décidé par une règle, donnés aussi tard, relancent la même récupération et
+  mènent au même verdict (§11).
 * **Pendant un gel, STOP ne fait pas baisser la vitesse.** Tant que la pastille
   **Securite** dit `freeze`, STOP est enregistré (le mode passe à `ARRET`) mais la
   vitesse reste gelée, jusqu'à ce que le gel se lève ou devienne `reduce`. Pour un arrêt
@@ -843,26 +845,36 @@ l'attestation du câblage, §13.1).
 Ce n'était pas le cas avant le 6 octobre 2026 (ticket ANH-181). La règle
 `session_overrun`, qui arrête une séance durant plus de 30 s au-delà de sa durée
 prévue, continuait de compter après la fin de la séance. Elle se verrouillait seule
-au repos : 30 s après la fin d'un programme allé à son terme, 1831 s après le départ
-du profil standard même arrêté tôt, 3631 s après le départ d'une séance manuelle.
+au repos : 30 s après la fin d'un programme allé à son terme, 1830,2 s après le départ
+du profil standard même arrêté tôt, 3630,2 s après le départ d'une séance manuelle.
 L'acquittement était accepté puis repris, tout départ était refusé, et il fallait
 redémarrer la console. La règle ne juge plus qu'une séance **en cours**.
 
 Vous pouvez encore voir ce verdict (`ramp_down`, verrouillé, détail
 `the session has run 1830 s against a programme of 1800 s plus 30 s of grace: the phase machine has lost track`)
-**pendant** une séance, dans trois cas :
+**pendant** une séance :
 
 * un gel verrouillé que personne n'acquitte tient le bras en vitesse après la fin du
   programme : la règle fait alors descendre la vitesse, c'est son rôle ;
-* un STOP donné tard dans un programme (§5) : la récupération qu'il relance dépasse la
-  durée prévue de plus de 30 s. Le bras est déjà arrêté ;
+* une fin de séance ouverte tard dans un programme (§5) : un STOP, à la console ou
+  demandé depuis le site, un E-STOP, ou un arrêt décidé par une règle. Toute fin de
+  séance relance une récupération complète ; si elle dépasse la durée prévue de plus
+  de 30 s, le verdict vient pendant cette récupération. Le bras est déjà arrêté ;
 * une séance manuelle qui atteint sa limite d'une heure à grande vitesse et descend
   encore 30 s plus tard. La descente n'est pas modifiée.
 
-Dans les trois cas, faites comme pour tout verdict verrouillé : attendez que **Mode**
+Dans tous ces cas, faites comme pour tout verdict verrouillé : attendez que **Mode**
 affiche `REPOS`, acquittez par votre nom (§13.6), puis redémarrez une séance.
 L'acquittement tient. Donné avant `REPOS`, il est accepté par la page mais le verdict
-revient au cycle suivant : refaites-le une fois `REPOS` affiché. Mesures et limites :
+revient au cycle suivant : refaites-le une fois `REPOS` affiché.
+
+Deux précisions sur ce que vous lirez. Après un E-STOP donné tard, `session_overrun` se
+verrouille derrière l'arrêt d'urgence : acquittés à `REPOS`, les deux se lèvent en une
+fois ; si l'E-STOP est acquitté avant `REPOS`, la pastille Securite affiche ensuite
+`ramp_down` (règle `session_overrun`), et il faut acquitter de nouveau une fois `REPOS`
+affiché. Après un arrêt décidé par une règle, c'est cette règle qui reste affichée :
+`session_overrun` n'apparaît que dans la liste des règles actives, et un seul
+acquittement à `REPOS` suffit. Mesures et limites :
 [securite.md](../securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
 
 ### La présence de l'accompagnant
@@ -1063,8 +1075,8 @@ Pas à pas :
     (si la pastille Securite dit `freeze`, STOP ne fait pas baisser la vitesse tant que
     le gel tient : voir §13.5). Dans les quatre dernières minutes et demie du profil
     standard de 30 minutes, le bras est déjà arrêté et la séance surveille la
-    récupération : un STOP à ce moment relance 5 minutes de récupération et se termine
-    par un verdict `session_overrun` à acquitter (§5, §11).
+    récupération : un STOP ou un E-STOP à ce moment relance 5 minutes de récupération
+    et se termine par un verdict `session_overrun` à acquitter (§5, §11).
     Elle se termine aussi avant sa fin si une règle de sécurité l'arrête, et en
     particulier si la vitesse commandée revient à 0 sans que personne l'ait demandé
     (un avertissement qui la baisse jusqu'à l'arrêt, ou la régulation elle-même quand
@@ -1592,9 +1604,10 @@ que nécessaire : rien ne se verrouille seul, et la séance suivante démarre no
 (§11). Ne redémarrez pas la console sans raison : il faudrait refaire l'attestation.
 
 **Un verdict `session_overrun` est affiché.**
-La séance en cours a dépassé sa durée prévue de plus de 30 s. Le plus souvent : un STOP
-donné dans les dernières minutes d'un programme, qui relance 5 minutes de récupération
-(§5). Attendez que le mode revienne à `REPOS`, acquittez (§13.6), puis redémarrez une
+La séance en cours a dépassé sa durée prévue de plus de 30 s. Le plus souvent : une
+fin de séance ouverte dans les dernières minutes d'un programme (STOP, E-STOP ou arrêt
+décidé par une règle), qui relance 5 minutes de récupération (§5, §11). Attendez que le
+mode revienne à `REPOS`, acquittez (§13.6), puis redémarrez une
 séance. Si ce verdict apparaît alors que le mode affichait déjà `REPOS` depuis un
 moment, ce n'est plus le comportement attendu : notez l'heure et signalez-le.
 
@@ -1723,7 +1736,8 @@ Pour être clair sur ce que ce guide garantit :
   des refus liés à la fréquence cardiaque n'a pas été mesurée sur un vrai ECG, ni le
   délai réel entre une vitesse commandée à 0 et l'arrêt mesuré du bras.
 * **Règle `session_overrun`** (§11) : le repos sans verdict après une séance, le départ
-  suivant sans redémarrage et le verdict après un STOP tardif sont décrits d'après le
+  suivant sans redémarrage et le verdict après une fin de séance ouverte tard sont
+  décrits d'après le
   code, les tests automatiques sur la console en simulation et des mesures sur le banc
   d'essai logiciel. Aucune capture, rien de rejoué dans un navigateur ni sur la vraie
   machine.

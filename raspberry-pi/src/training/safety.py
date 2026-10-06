@@ -912,12 +912,13 @@ class SafetyObservation:
     a drive switched off) opens an ending of its own, and the phase reads
     ``RECOVERY`` again over a machine whose session finished minutes ago.
 
-    ``session_overrun`` is the only rule that reads it, and unlike every other
-    statement in this record it makes a rule QUIETER. So it is two facts and
-    not one - the rule stays armed for as long as any speed is commanded,
-    whatever the phase machine believes - and it defaults to ``False``, the
-    fail-safe direction: an observation that does not say its session is over
-    is judged as a session in progress, exactly as before this field existed.
+    ``session_overrun`` is the only rule that reads it, and what it does there
+    is make that rule QUIETER: once said, the rule stops judging. So it is two
+    facts and not one - the rule stays armed for as long as any speed is
+    commanded, whatever the phase machine believes - and it defaults to
+    ``False``, the fail-safe direction: an observation that does not say its
+    session is over is judged as a session in progress, exactly as before this
+    field existed.
     """
 
 
@@ -2563,9 +2564,9 @@ class SafetySupervisor:
         (:attr:`SafetyObservation.session_over`). The time since the start goes
         on counting after a session has ended, until the next start, so without
         that test this rule latched over a machine at rest with nothing left to
-        outlive: 30 s after a programme had completed by itself, 1831 s after
+        outlive: 30 s after a programme had completed by itself, 1830.2 s after
         the start of the shipped programme however early it had been stopped,
-        3631 s after the start of any manual session. Its condition then stayed
+        3630.2 s after the start of any manual session. Its condition then stayed
         true for good, every acknowledgement was taken back on the next tick,
         no start was accepted while it stood, and the console had to be
         restarted (ANH-181).
@@ -2575,10 +2576,10 @@ class SafetySupervisor:
         caught while a session ran, it still catches, at the same instant: a
         phase that never advanced, a descent that never finished (a latched
         ``FREEZE`` holds the setpoint past the end of the timeline, and this
-        ``RAMP_DOWN`` outranks it), a recovery pushed past the deadline by a
-        late STOP. A verdict raised then is acknowledged once that session is
-        over, and the acknowledgement holds, because the condition is no
-        longer true.
+        ``RAMP_DOWN`` outranks it), a recovery pushed past the deadline by an
+        ending opened late (a STOP, an e-stop, a verdict that stops). A verdict
+        raised then is acknowledged once that session is over, and the
+        acknowledgement holds, because the condition is no longer true.
         """
         limits = self._limits
         deadline = Seconds(observation.total_duration + limits.overrun_grace)

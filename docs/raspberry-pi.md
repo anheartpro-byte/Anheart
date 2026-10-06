@@ -406,10 +406,10 @@ scénarios de simulation. La console copie les profils livrés dans
   la consigne est revenue à 0 sans que personne l'ait demandé, champ
   `stopped_by` ; la séance est finie, champ `session_over`). Aucun de ces
   champs n'est une demande, et `stopped_by` ne peut qu'ajouter un verdict.
-  `session_over` est le seul constat qui fait taire une règle, et il n'en fait
-  taire qu'une, `session_overrun` : il réunit deux faits (la séance a atteint
-  la phase `DONE` depuis son départ, et la consigne en vigueur est 0) et vaut
-  « non » par défaut. Raison de la première phrase : lors d'un malaise
+  `session_over` ne fait taire qu'une règle, `session_overrun` : il réunit
+  deux faits (la séance a atteint la phase `DONE` depuis son départ, et la
+  consigne en vigueur est 0) et vaut « non » par défaut. Raison de la
+  première phrase : lors d'un malaise
   vasovagal la FC **baisse** ; la loi de commande y lit « sous la zone » et
   veut accélérer.
 * **Il ne touche jamais le fil** : pas de Modbus, pas d'`await`. C'est une
@@ -501,8 +501,8 @@ fin de la séance, jusqu'au départ suivant. La règle ne juge donc qu'une séan
 **en cours**
 ([ANH-181](https://linear.app/anheart/issue/ANH-181/la-regle-session-overrun-se-verrouille-apres-la-fin-dune-seance-et)).
 Avant ce correctif elle se verrouillait sur une machine au repos : 30 s après
-la fin d'un programme allé à son terme, 1831 s après le départ du profil
-standard même arrêté tôt, 3631 s après le départ d'une séance manuelle ;
+la fin d'un programme allé à son terme, 1830,2 s après le départ du profil
+standard même arrêté tôt, 3630,2 s après le départ d'une séance manuelle ;
 l'acquittement ne tenait pas, tout départ était refusé et il fallait
 redémarrer la console.
 
@@ -522,9 +522,10 @@ redémarrer la console.
   verrou, au même instant. La règle arrête toujours un bras qu'un FREEZE
   verrouillé tient en vitesse au-delà de la fin du programme (RAMP_DOWN
   l'emporte sur FREEZE). Elle se déclenche toujours quand la fin de la séance
-  elle-même dépasse l'échéance, bras déjà arrêté ou en descente : un STOP donné
-  tard dans un programme rouvre une `RECOVERY` complète (avec le profil
-  standard, tout STOP après 1530 s environ mène au verdict à 1830 s), et une
+  elle-même dépasse l'échéance, bras déjà arrêté ou en descente : toute fin de
+  séance ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt)
+  rouvre une `RECOVERY` complète (avec le profil standard, une fin ouverte
+  après 1530 s environ mène au verdict à 1830,2 s), et une
   séance manuelle qui atteint ses 3600 s à grande vitesse descend encore 30 s
   plus tard (mesuré sur le banc d'essai logiciel : depuis 1344 tr/min moteur,
   descente d'environ 104 s et verdict à la limite + 30 s ; depuis 300 tr/min

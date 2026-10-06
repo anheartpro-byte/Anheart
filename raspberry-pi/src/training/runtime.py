@@ -2599,7 +2599,7 @@ class TrainingRuntime:
         ``stopped_by`` is a fact about the applied setpoint too (it came back
         to zero, and nobody had asked): see :meth:`_note_standstill`.
 
-        ``session_over`` is the one statement that makes a rule quieter
+        ``session_over`` makes one rule quieter and no other
         (``session_overrun`` stops judging a session that has ended), so it is
         made of two facts and both must hold: this session's phase machine has
         reached ``DONE`` (:meth:`_advance_phase`), and the setpoint in force is

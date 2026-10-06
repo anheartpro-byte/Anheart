@@ -513,10 +513,11 @@ pas ([section 9.2](#92-la-console-agit-seule)).
 La séance se termine seule à la fin du programme. Pour l'arrêter avant :
 **STOP** ([section 8](#8-arrêter-la-machine)).
 
-À la date de ce brouillon, un **STOP** donné dans les dernières minutes d'un
+À la date de ce brouillon, un arrêt enregistré dans les dernières minutes d'un
 programme, pendant sa phase « recovery », relance une phase « recovery »
-complète. Si la séance dure alors plus de 30 secondes au-delà de la durée
-prévue, l'alerte « session_overrun » se verrouille pendant cette phase
+complète : un **STOP**, un **E-STOP**, ou un arrêt décidé par la console. Si
+la séance dure alors plus de 30 secondes au-delà de la durée prévue, l'alerte
+« session_overrun » se déclenche pendant cette phase
 ([section 9.2](#92-la-console-agit-seule)).
 
 ## 7. Séance lancée depuis le site
@@ -838,16 +839,18 @@ de la séance. Tant que la séance n'est pas finie, si ce temps dépasse de
 30 secondes la durée prévue (celle du programme, ou 60 minutes pour une séance
 manuelle), elle verrouille l'alerte « session_overrun » : **Securite** affiche
 « ramp_down ». Une fois la séance finie, la console ne déclenche plus cette
-alerte, quel que soit le temps passé à « REPOS ». Vous pouvez la voir dans
-trois cas :
+alerte, quel que soit le temps passé à « REPOS ». Elle se déclenche dans les
+cas suivants :
 
-- après un **STOP** donné tard dans une séance programmée. À la date de ce
-  brouillon, un STOP relance une phase « recovery » complète, même si le
-  programme était déjà dans sa propre phase « recovery », bras à l'arrêt. Si
-  cette phase se termine plus de 30 secondes après la durée prévue, l'alerte
-  apparaît pendant qu'elle dure, alors que **Mode** affiche « ARRET ». Avec
-  les deux programmes fournis par défaut à la date de ce brouillon, c'est le
-  cas d'un STOP donné dans les quatre dernières minutes et demie environ ;
+- après un arrêt enregistré tard dans une séance programmée : un **STOP**, à
+  la console ou demandé depuis le site, un **E-STOP**, ou un arrêt décidé par
+  la console. À la date de ce brouillon, un tel arrêt relance une phase
+  « recovery » complète, même si le programme était déjà dans sa propre phase
+  « recovery », bras à l'arrêt. Si cette phase se termine plus de 30 secondes
+  après la durée prévue, l'alerte se déclenche pendant qu'elle dure, alors que
+  **Mode** affiche « ARRET ». Avec les deux programmes fournis par défaut à
+  la date de ce brouillon, c'est le cas d'un arrêt enregistré dans les quatre
+  dernières minutes et demie environ ;
 - quand un « freeze » verrouillé garde la vitesse au-delà de la durée
   prévue : la console ramène alors la vitesse commandée à zéro, malgré ce
   « freeze » ;
@@ -858,8 +861,23 @@ trois cas :
 Cette alerte se lève comme les autres, une fois la séance finie : attendez
 **Mode** « REPOS », puis acquittez
 ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Un acquittement
-donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt. Ces
-comportements ont été vérifiés en simulation et dans des essais sur modèle
+donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt.
+
+Après un arrêt enregistré tard, ce que vous lirez sur la ligne « regle »
+dépend de ce qui a arrêté la séance :
+
+- après un STOP, elle affiche « session_overrun » ;
+- après un E-STOP, elle affiche d'abord « operator_estop ». Acquittés une fois
+  **Mode** revenu à « REPOS », l'arrêt d'urgence et l'alerte
+  « session_overrun » se lèvent ensemble. Si l'arrêt d'urgence est acquitté
+  avant « REPOS », l'alerte « session_overrun » reste, ou apparaît dès que la
+  durée prévue est dépassée de 30 secondes : **Securite** affiche
+  « ramp_down », et il faut acquitter de nouveau une fois **Mode** revenu à
+  « REPOS » ;
+- après un arrêt décidé par la console, elle garde la règle qui a arrêté la
+  séance, et un seul acquittement à « REPOS » suffit.
+
+Ces comportements ont été vérifiés en simulation et dans des essais sur modèle
 seulement.
 
 > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir

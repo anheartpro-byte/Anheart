@@ -530,13 +530,14 @@ verrouillée à tort après chaque séance habitue à acquitter par réflexe.
 Tout est mesuré sur le banc d'essai logiciel (variateur factice, horloge
 manuelle) et sur la console réelle en simulation, reliée à un tableau de bord
 scripté ; jamais sur le matériel. « Avant » est la branche `develop` au commit
-`d652990`. Les temps sont comptés depuis le départ de la séance.
+`d652990`. Les temps sont comptés depuis le départ de la séance, au cycle
+près (0,2 s).
 
 | Séquence | Avant | Maintenant |
 |---|---|---|
-| Profil livré de 1800 s mené à son terme, puis personne ne touche à rien. | `REPOS` à 1801 s. À 1831 s, `session_overrun` verrouillé : retour au mode `ARRET` et à la phase `recovery` pendant 300 s, puis `REPOS` avec le verdict. Acquittement accepté, verdict revenu au cycle suivant. Départ refusé. | `REPOS` à 1801 s et plus rien : aucun verdict à aucun cycle pendant une heure de repos, deux fois la durée prévue. Rien à acquitter. Départ accepté. |
-| Même programme, STOP à 420 s. | `REPOS` à 733 s. Verdict à 1831 s. | `REPOS` à 733 s. Aucun verdict (suivi jusqu'à 2620 s). |
-| Séance manuelle capsule vide, STOP à 60 s. | `REPOS` à 69 s. Verdict à 3631 s. Départ refusé ; acquittement accepté, départ refusé de nouveau. | Aucun verdict (suivi jusqu'à 3760 s). Départ accepté. |
+| Profil livré de 1800 s mené à son terme, puis personne ne touche à rien. | `REPOS` à 1800,2 s. À 1830,2 s, `session_overrun` verrouillé : retour au mode `ARRET` et à la phase `recovery` pendant 300 s, puis `REPOS` à 2130,6 s avec le verdict. Acquittement accepté, verdict revenu au cycle suivant. Départ refusé. | `REPOS` à 1800,2 s et plus rien : aucun verdict à aucun cycle pendant une heure de repos, deux fois la durée prévue. Rien à acquitter. Départ accepté. |
+| Même programme, STOP à 420 s. | `REPOS` à 732,8 s. Verdict à 1830,2 s. | `REPOS` à 732,8 s. Aucun verdict (suivi jusqu'à 2620 s). |
+| Séance manuelle capsule vide, STOP à 60 s. | `REPOS` à 68,4 s. Verdict à 3630,2 s. Départ refusé ; acquittement accepté, départ refusé de nouveau. | Aucun verdict (suivi jusqu'à 3760 s). Départ accepté. |
 | Console reliée, programme de 1400 s lancé depuis le site et mené à son terme. | `REPOS` à 1400,4 s. Verdict à 1430,4 s, mode `ARRET` pendant 305 s, puis `REPOS` avec le verdict. Deux acquittements acceptés, chacun repris au cycle suivant. Départ d'un programme, départ manuel et lancement du site refusés, ce dernier renvoyé au site comme séance échouée (« refusee par la machine : verdict de securite session_overrun a acquitter a la console »). Pareil dix minutes plus tard. | `REPOS` à 1400,4 s. Aucun changement de mode, de phase ni de verdict pendant 2800 s de repos. Un lancement du site est accepté et confirmé au site ; après un STOP, un programme démarré à la console est accepté ; après un autre STOP, une séance manuelle aussi. La console n'est jamais redémarrée. |
 | Fin par `session_standstill` (électrode détachée, profil livré), verdict laissé sans acquittement. | À 1830,2 s, `session_overrun` s'ajoutait et ne s'effaçait plus : il fallait redémarrer la console. | `session_standstill` reste le seul verdict ; un acquittement nominatif le lève, il ne revient pas, et le départ est accepté. |
 
@@ -589,9 +590,9 @@ Pourquoi ces deux faits, et pas un critère plus simple :
   en roue libre à ce moment (variateur en défaut) n'est pas ralenti par cette
   règle, avant comme après : elle n'ajoutait qu'un verrou à celui qui a
   terminé la séance.
-- **Le constat vaut « non » par défaut.** C'est le seul constat du runtime qui
-  fait taire une règle ; une observation qui ne le porte pas est jugée comme
-  une séance en cours.
+- **Le constat vaut « non » par défaut, et ne fait taire que cette règle.**
+  Une observation qui ne le porte pas est jugée comme une séance en cours, et
+  aucune autre règle ne le lit.
 
 ### 8.4 Ce qui ne change pas
 
@@ -617,20 +618,34 @@ est accepté. Avant, ils ne s'effaçaient plus.
 
 ### 8.5 Ce que le correctif ne couvre pas
 
-- **Un STOP donné tard dans un programme mène encore au verdict.** Un STOP
-  rouvre une surveillance de récupération complète (300 s avec le profil
-  livré), même donné pendant la `recovery` du programme, bras déjà arrêté. Si
-  elle dépasse l'échéance, la règle se déclenche pendant cette récupération.
-  Mesuré sur le profil livré de 1800 s : STOP à 1520 s, `REPOS` à 1820,4 s et
-  aucun verdict ; STOP à 1540 s ou à 1600 s, `session_overrun` à 1830,2 s
-  pendant la `recovery`, `REPOS` à 1840,4 s ou 1900,4 s. Un STOP donné dans les
-  quatre dernières minutes et demie de ce programme se termine donc par un
-  verdict à acquitter une fois `REPOS` affiché. Le mouvement n'est pas
+- **Une fin de séance ouverte tard dans un programme mène encore au
+  verdict.** Toute fin de séance rouvre une surveillance de récupération
+  complète (300 s avec le profil livré) : un STOP, à la console ou demandé
+  depuis le site, un E-STOP, ou un verdict d'arrêt, même pendant la `recovery`
+  du programme, bras déjà arrêté. Si cette récupération dépasse l'échéance, la
+  règle se déclenche pendant qu'elle dure. Mesuré sur le profil livré de
+  1800 s :
+  - STOP à 1520 s : `REPOS` à 1820,4 s, aucun verdict. STOP à 1540 s ou à
+    1600 s : `session_overrun` à 1830,2 s pendant la `recovery`, `REPOS` à
+    1840,4 s ou 1900,4 s ;
+  - E-STOP à 1600 s : `session_overrun` à 1830,2 s, verrouillé derrière
+    l'arrêt d'urgence, `REPOS` à 1900,4 s ; un seul acquittement donné à
+    `REPOS` lève les deux. Si l'E-STOP est acquitté avant `REPOS`,
+    `session_overrun` reste (ou apparaît à 1830,2 s) comme verdict en vigueur,
+    et se lève par un second acquittement à `REPOS` ;
+  - fréquence cardiaque perdue à partir de 1700 s : `hr_stale` termine la
+    séance à 1760,0 s, `session_overrun` se déclenche à 1830,2 s, `REPOS` à
+    2060,4 s. Le plancher verrouillé garde `hr_stale`, le premier des deux
+    verdicts de même niveau : `session_overrun` n'apparaît que parmi les
+    règles actives, et un seul acquittement à `REPOS` suffit.
+
+  Toute fin de séance ouverte dans les quatre dernières minutes et demie de
+  ce programme se termine donc par ce verdict. Le mouvement n'est pas
   concerné : le bras est déjà arrêté. C'est le comportement d'avant, gardé
   parce que la séance est encore en cours ; seule la suite change
-  (l'acquittement tient). Faut-il qu'un STOP pendant la `recovery` rouvre une
-  récupération complète, ou que l'échéance suive une fin déjà engagée : la
-  question n'est pas tranchée ici.
+  (l'acquittement tient à `REPOS`). Faut-il qu'une fin ouverte pendant la
+  `recovery` rouvre une récupération complète, ou que l'échéance suive une fin
+  déjà engagée : la question n'est pas tranchée ici.
 - **Une séance manuelle qui atteint ses 3600 s à grande vitesse.** Le runtime
   demande alors la fin de séance et la consigne descend aux limites de
   mouvement. Si la descente dure plus de 30 s, la règle se verrouille pendant
