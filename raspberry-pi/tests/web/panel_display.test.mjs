@@ -1490,6 +1490,62 @@ test("every element the liveness check strikes exists in the page", () => {
   }
 });
 
+/* ============================ "perime", in the colour of stale data ============================ */
+
+const sensorRow = (overrides = {}) => ({
+  kind: "RESP",
+  channel: 3,
+  label: "Respiration",
+  unit: "%",
+  description: "",
+  display_rate: 50,
+  at: null,
+  waveform: [],
+  quality: "good",
+  detail: "",
+  metrics: [],
+  ...overrides,
+});
+
+for (const id of ["console-hr-quality", "hr-quality"]) {
+  test(`#${id} shows a stale heart rate in amber before any verdict speaks about it`, () => {
+    // Given a reading 6 s old: stale since 4 s, and no warning before 10 s.
+    const { frame, node } = panel();
+    frame(snapshot({ heart_rate: { bpm: 72, quality: "good", age_s: 6, stale: true, seq: 423 }, live_bpm: null }));
+    // Then the card is not left without a colour: its chip is amber, the page's colour for stale data.
+    assert.equal(node(id).textContent, "perime");
+    assert.ok(node(id).classes.has("pill-warn"), node(id).className);
+    assert.equal(node("safety-action").textContent, "none");
+  });
+}
+
+test("a stale sensor says perime in amber on its card, on its page and in the menu", () => {
+  // Given a sensor channel that has delivered nothing: its reading is stale.
+  const { context, node } = panel();
+  context.api = () => new Promise(() => undefined);
+  context.renderSensors([sensorRow()]);
+  const entry = context.state.sensors.RESP;
+  assert.equal(entry.card.badge.textContent, "perime");
+  assert.ok(entry.card.badge.classes.has("pill-warn"), entry.card.badge.className);
+  // On its own page, the chip of the title.
+  context.showView("sensor", "RESP");
+  assert.equal(node("sensor-quality").textContent, "perime");
+  assert.ok(node("sensor-quality").classes.has("pill-warn"), node("sensor-quality").className);
+  // In the menu its dot is the stale one, which the stylesheet draws as an amber ring.
+  assert.ok(entry.nav.dot.classes.has("dot-stale"));
+  assert.ok(/\.dot-stale\s*\{[^}]*var\(--warn\)/.test(css));
+});
+
+test("a sensor that delivers again leaves amber for its own grade", () => {
+  const { context, clock } = panel();
+  context.renderSensors([sensorRow({ at: 10 })]);
+  clock.now += 1000;
+  context.renderSensors([sensorRow({ at: 11 })]);
+  const badge = context.state.sensors.RESP.card.badge;
+  assert.equal(badge.textContent, "bon signal");
+  assert.ok(badge.classes.has("pill-good"));
+});
+
 test("the resume banner is part of the stack every page shows, and is not an alarm", () => {
   const banner = banners.find((entry) => entry.id === "resume-banner");
   assert.ok(banner, "the banner is not in the stack above the pages");

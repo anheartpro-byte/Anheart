@@ -631,14 +631,16 @@ function safetyKind(rank) {
 /*
   The grade of the heart rate, or "perime" once the reading is stale. The
   grade belongs to the last sample: when nothing new is measured it would go
-  on saying "good" about a signal that is no longer there. "perime" is grey
-  here as on a stale sensor card: one word, one look.
+  on saying "good" about a signal that is no longer there. "perime" is amber
+  here as on a stale sensor card, one word, one look: amber is this page's
+  colour for stale data, and in grey nothing on the card was coloured between
+  the reading going stale (4 s) and the first verdict about it (10 s).
 */
 function renderHrQuality(node, hr) {
   if (!hr) {
     pill(node, "pas de signal", "bad");
   } else if (hr.stale) {
-    pill(node, "perime", "");
+    pill(node, "perime", "warn");
   } else {
     pill(node, hr.quality, hr.quality === "good" ? "good" : "bad");
   }
@@ -1460,7 +1462,7 @@ function updateSensorCard(entry) {
   var row = entry.row;
   var card = entry.card;
   var kind = qualityKind(entry);
-  pill(card.badge, entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "" : kind);
+  pill(card.badge, entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "warn" : kind);
   text(
     card.unit,
     channelName(row.channel) + " · " + row.unit + " · " + row.display_rate + " ech/s" +
@@ -1523,7 +1525,7 @@ function refreshSensorStaleness() {
 function renderSensorHeader(entry) {
   var row = entry.row;
   var kind = qualityKind(entry);
-  pill(el("sensor-quality"), entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "" : kind);
+  pill(el("sensor-quality"), entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "warn" : kind);
   el("sensor-detail").classList.toggle("note-bad", entry.stale);
   if (entry.stale) {
     text(el("sensor-detail"), "Lecture figee : aucune nouvelle fenetre depuis " + ageText(entry) + ". Derniere qualite connue : " + qualityText(row.quality) + ".");

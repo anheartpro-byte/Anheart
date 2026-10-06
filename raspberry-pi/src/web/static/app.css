@@ -156,12 +156,13 @@ body {
 .nav-sensor { padding: 0.35rem 0.6rem; font-size: 0.88rem; }
 .nav-channel { margin-left: auto; color: var(--ink-faint); font-family: var(--mono); font-size: 0.72rem; }
 
-/* The quality dot: the same three colours as everything else, grey when stale. */
+/* The quality dot: the same three colours as everything else. Stale is a hollow amber ring:
+   amber like every stale value, hollow so that it is not taken for a noisy signal. */
 .dot { flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--ink-faint); }
 .dot-good { background: var(--good); }
 .dot-warn { background: var(--warn); }
 .dot-bad { background: var(--bad); }
-.dot-stale { background: transparent; border: 2px solid var(--ink-faint); }
+.dot-stale { background: transparent; border: 2px solid var(--warn); }
 
 .mobilebar {
   display: none;
