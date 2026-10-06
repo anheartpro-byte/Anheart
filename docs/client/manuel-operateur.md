@@ -101,13 +101,13 @@ est gardé pour cet onglet seulement.
    « a l'arret ».
 6. **Un bras que la console a arrêté ne repart pas seul, mais une nouvelle
    séance peut démarrer sans vous.** Si la console ramène elle-même la vitesse
-   commandée à zéro avant la fin d'une séance, elle termine la séance :
-   **Mode** passe à « ARRET », et rien ne repart sans un acquittement à votre
-   nom, puis un nouveau démarrage. À cet instant, le bras peut encore
-   tourner : c'est **Rotation** qui dit s'il est arrêté, pas **Mode**. Tant
-   que « ARRET » est affiché, la console n'accepte aucun démarrage. À
-   « REPOS », en revanche, un démarrage peut venir du site web, sans aucune
-   action à la console
+   commandée à zéro en cours de séance, en dehors de la fin prévue d'un
+   programme (phase « cooldown »), elle termine la séance : **Mode** passe à
+   « ARRET », et rien ne repart sans un acquittement à votre nom, puis un
+   nouveau démarrage. À cet instant, le bras peut encore tourner : c'est
+   **Rotation** qui dit s'il est arrêté, pas **Mode**. Tant que « ARRET » est
+   affiché, la console n'accepte aucun démarrage. À « REPOS », en revanche,
+   un démarrage peut venir du site web, sans aucune action à la console
    ([section 7](#7-séance-lancée-depuis-le-site)). Ce manuel ne dit pas à
    partir de quand on peut s'approcher du bras ou de la capsule : lisez
    l'avertissement *Avant de s'approcher du bras ou de la capsule*, sous ces
@@ -147,7 +147,7 @@ est gardé pour cet onglet seulement.
 >
 > | **Mode** affiche | Ce que fait le logiciel |
 > |---|---|
-> | « SEANCE » | Le bras peut partir seul : au début du programme, il est à l'arrêt, puis la console le met en rotation d'elle-même. Un bras seulement ralenti peut réaccélérer seul. Si la console ramène elle-même la vitesse commandée à zéro avant la fin du programme, elle termine la séance et **Mode** passe à « ARRET ». |
+> | « SEANCE » | Le bras peut partir seul : au début du programme, il est à l'arrêt, puis la console le met en rotation d'elle-même. Un bras seulement ralenti peut réaccélérer seul. Si la console ramène elle-même la vitesse commandée à zéro avant la phase « cooldown » du programme, elle termine la séance et **Mode** passe à « ARRET ». |
 > | « MANUEL » | Le bras suit la cible appliquée. À l'arrêt, il part dès qu'une cible est acceptée, depuis n'importe quelle page de console ouverte. Un bras seulement ralenti peut réaccélérer seul vers la cible. |
 > | « ARRET » | Un arrêt est enregistré. Une fois qu'elle a ramené la vitesse commandée à zéro, la console ne la remonte pas. Elle n'accepte aucun démarrage, ni à la console ni depuis le site web. Mais le bras peut encore tourner : lisez **Rotation**. |
 > | « REPOS » | Aucune séance n'est en cours. Un démarrage peut être accepté : à la console, ou depuis le site web sans aucune action à la console, même si aucune page de console n'est ouverte ([section 7](#7-séance-lancée-depuis-le-site)). La console refuse tout démarrage tant que l'attestation n'est pas faite, et tant que **Securite** n'affiche pas « none ». |
@@ -375,6 +375,12 @@ l'écran.*
   ([section 9.2](#92-la-console-agit-seule)). Sur un bras qui tourne, une
   cible appliquée pendant ce temps est gardée, puis suivie sans autre clic
   quand « freeze » disparaît.
+- **Acquitter un « freeze » verrouillé pendant que le bras tourne relâche la
+  vitesse.** Un « freeze » verrouillé ne disparaît pas seul : c'est
+  l'acquittement qui le lève. Donné alors que **Mode** affiche « MANUEL », cet
+  acquittement ne termine pas la séance : le bras rejoint la cible appliquée,
+  vers le haut aussi, sans aucun autre clic
+  ([section 9.2](#92-la-console-agit-seule)).
 - Si la console a seulement gardé ou baissé la vitesse et que la cause
   disparaît, elle ramène seule le bras vers la cible appliquée. Elle ne le
   fait pas si une fin de séance a été enregistrée entre-temps
@@ -668,17 +674,32 @@ nouveau démarrage est refusé. Rien ne se débloque seul : quelqu'un doit
 acquitter, par son nom.
 
 1. Attendez la fin complète de la séance : **Rotation** « a l'arret » et
-   **Mode** « REPOS ». Après une séance programmée, **Mode** ne revient à
-   « REPOS » qu'une fois la phase « recovery » terminée. Sa durée est celle du
-   programme : 5 minutes pour les deux programmes fournis par défaut à la date
-   de ce brouillon, qui ne sont pas des valeurs validées pour vos séances. Un
-   acquittement donné plus tôt peut ne pas tenir. C'est le cas pour la règle
-   « session_standstill » : la console répond qu'elle l'a pris, mais l'alerte
-   est de nouveau là aussitôt, et il faut acquitter de nouveau une fois
-   **Mode** revenu à « REPOS ». **Exception : le variateur est en
-   défaut** (pastille « fault » dans la carte **Variateur**). **Mode** peut
-   alors rester sur « ARRET » tant que le variateur reste en défaut.
-   N'attendez pas « REPOS » : suivez la
+   **Mode** « REPOS ». Un acquittement donné plus tôt peut avoir deux effets :
+   - **Un « freeze » verrouillé, acquitté pendant que le bras tourne, ne
+     retient plus la vitesse.** Tant que **Mode** affiche « SEANCE » ou
+     « MANUEL », l'acquittement lève ce « freeze » sans terminer la séance :
+     la vitesse suit de nouveau le programme ou la cible appliquée, vers le
+     haut aussi, sans aucun autre clic
+     ([section 9.2](#92-la-console-agit-seule)).
+   - Il peut ne pas tenir. C'est le cas pour la règle « session_standstill » :
+     la console répond qu'elle l'a pris, mais l'alerte est de nouveau là
+     aussitôt, et il faut acquitter de nouveau une fois **Mode** revenu à
+     « REPOS ».
+
+   Après une séance programmée, **Mode** ne revient à « REPOS » qu'une fois la
+   phase « recovery » terminée. En fonctionnement normal, cette phase est
+   comptée à partir de l'arrêt du bras, et sa durée est celle du programme :
+   avec les deux programmes fournis par défaut à la date de ce brouillon,
+   « ARRET » dure alors au moins 5 minutes après l'arrêt du bras. Cette durée
+   n'est pas une valeur validée pour vos séances. L'écran peut afficher
+   « recovery » plus longtemps, par exemple après un STOP donné sous
+   « freeze » : la phase reste affichée tant que la vitesse commandée n'est pas
+   revenue à zéro, et **Mode** peut ensuite revenir à « REPOS » sans ces
+   5 minutes.
+
+   **Exception : le variateur est en défaut** (pastille « fault » dans la
+   carte **Variateur**). **Mode** peut alors rester sur « ARRET » tant que le
+   variateur reste en défaut. N'attendez pas « REPOS » : suivez la
    [section 9.5](#95-le-variateur-passe-en-défaut), qui dit quand réarmer et
    quand acquitter.
 2. Cliquez **Securite**. Dans la carte **Verdict en cours**, lisez les lignes
@@ -686,6 +707,9 @@ acquitter, par son nom.
    La ligne « detail » est en anglais pour la plupart des règles. Pour les
    règles de la caméra
    ([section 9.8](#98-quelquun-sapproche-du-bras)), elle est en français.
+   Pour un défaut du variateur (règle « drive_fault »), elle commence en
+   anglais, puis reprend le libellé français du défaut quand son code a été
+   lu.
 3. Trouvez la cause et supprimez-la. Si vous ne la comprenez pas, n'acquittez
    pas : appelez le support.
 4. Si un arrêt d'urgence câblé a été utilisé, suivez d'abord
@@ -726,7 +750,7 @@ la pastille **Securite** change.
 
 | **Securite** affiche | Ce que fait la console | Ce que vous faites |
 |---|---|---|
-| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas et ne la baisse pas, même après un STOP. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Tant que « freeze » est affiché, STOP ne ralentit pas le bras : des deux boutons, seul **E-STOP** le ralentit. |
+| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas et ne la baisse pas, même après un STOP. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Tant que « freeze » est affiché, STOP ne ralentit pas le bras : des deux boutons, seul **E-STOP** le ralentit. Avant d'acquitter un « freeze » verrouillé, lisez l'avertissement sous ce tableau. |
 | « reduce » | Elle baisse la vitesse commandée. Si elle la ramène à zéro, elle termine la séance, même si le bras tourne encore à cet instant : **Securite** passe à « ramp_down », avec la règle « session_standstill ». | Cherchez la cause. Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. |
 | « ramp_down » | Elle termine la séance : elle ramène progressivement la vitesse commandée à zéro. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | « quick_stop » | Arrêt d'urgence logiciel : elle met tout de suite la vitesse commandée à zéro, et la machine décélère. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
@@ -738,25 +762,40 @@ la pastille **Securite** change.
 > rouverte), la console reprend la séance d'elle-même, sans aucun clic, si
 > aucune fin de séance n'a été enregistrée entre-temps.
 >
+> **Acquitter un « freeze » verrouillé pendant que le bras tourne relâche la
+> vitesse.** Un « freeze » est verrouillé quand la ligne « verrouille » de la
+> carte **Verdict en cours** affiche « oui ». Il ne disparaît pas seul : c'est
+> l'acquittement qui le lève. Donné alors que **Mode** affiche « SEANCE » ou
+> « MANUEL », cet acquittement ne termine pas la séance : la vitesse suit de
+> nouveau le programme ou la cible appliquée, vers le haut aussi, sans aucun
+> autre clic. En séance programmée, un bras qui n'avait pas encore fait son
+> premier mouvement peut alors le faire de lui-même. Si une fin de séance est
+> déjà enregistrée (**Mode** « ARRET », par exemple après un STOP), c'est
+> l'inverse : la console ramène alors la vitesse commandée à zéro. Ces
+> comportements ont été vérifiés en simulation seulement.
+>
 > **Un bras que la console a ramené à l'arrêt ne repart pas.** Une fois que le
 > bras a tourné, dès que la vitesse commandée revient à zéro en cours de
-> séance sans que vous l'ayez demandé, la console termine la séance et
-> verrouille l'arrêt (règle « session_standstill »). Cela vaut pour une
-> alerte, pour le réglage de la vitesse sur la fréquence cardiaque, et aussi
-> capsule vide. La cause peut disparaître ensuite : rien ne repart sans
-> acquittement et nouveau démarrage.
+> séance sans que vous l'ayez demandé, ni que le programme l'ait prévu, la
+> console termine la séance et verrouille l'arrêt (règle
+> « session_standstill »). Cela vaut pour une alerte, pour le réglage de la
+> vitesse sur la fréquence cardiaque, et aussi capsule vide. La cause peut
+> disparaître ensuite : rien ne repart sans acquittement et nouveau démarrage.
 >
 > Cette règle regarde la vitesse commandée, pas la vitesse mesurée. Quand
 > **Mode** passe à « ARRET » et que l'alerte apparaît, le bras peut donc
 > encore tourner : c'est **Rotation** qui dit s'il est arrêté. Le délai entre
 > les deux n'a pas été mesuré sur une machine réelle.
 >
-> Deux cas restent en dehors de cette règle :
+> Trois cas restent en dehors de cette règle :
 >
 > - le premier mouvement d'une séance programmée. Un « freeze » ou un
 >   « reduce » qui survient pendant « baseline », avant que le bras ait bougé,
 >   ne termine pas à lui seul la séance : s'il disparaît, le programme continue
 >   et le bras peut encore faire son premier mouvement de lui-même ;
+> - la fin prévue d'un programme. Pendant la phase « cooldown », la console
+>   ramène la vitesse commandée à zéro comme le programme le prévoit : **Mode**
+>   reste sur « SEANCE », et cette règle ne verrouille rien ;
 > - en séance manuelle, un arrêt que vous avez demandé vous-même par une cible
 >   de 0 ([section 5](#5-séance-manuelle-capsule-vide)).
 >
@@ -765,19 +804,24 @@ la pastille **Securite** change.
 > suite, lisez les règles 5 et 6 et l'avertissement *Avant de s'approcher du
 > bras ou de la capsule* ([section 2](#2-les-huit-règles-à-retenir)).
 
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand un « freeze » verrouillé garde la vitesse d'un bras qui tourne, en
+> particulier avec un passager à bord : quel arrêt utiliser, et quand
+> acquitter.
+
 Les règles que vous verrez le plus souvent sur la ligne « regle » :
 
 | Règle affichée | En clair | Ce que fait la console |
 |---|---|---|
 | « operator_estop » | Quelqu'un a cliqué E-STOP. | Arrêt d'urgence logiciel. |
-| « session_standstill » | La console a ramené elle-même la vitesse commandée à zéro en cours de séance. | Fin de séance verrouillée. Le bras peut encore tourner quand l'alerte apparaît : lisez **Rotation**. Il ne repart pas. |
+| « session_standstill » | La console a ramené elle-même la vitesse commandée à zéro en cours de séance, en dehors de la fin prévue d'un programme. | Fin de séance verrouillée. Le bras peut encore tourner quand l'alerte apparaît : lisez **Rotation**. Il ne repart pas. |
 | « attendant_absent » | Plus aucune page de la console n'est ouverte. | « freeze » après 60 secondes, fin de séance après 120 secondes. Si une page est rouverte avant, la séance reprend seule. |
 | « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | « freeze » après 10 secondes, « reduce » après 30 secondes. Fin de séance dès que la vitesse commandée est revenue à zéro, et au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, donc tant que la console n'a pas ramené la vitesse commandée à zéro, la séance reprend seule. |
 | « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». | Fin de séance en douceur. |
 | « hr_critical » | La fréquence cardiaque atteint le seuil « critique ». | Arrêt d'urgence logiciel. |
 | « hr_drop » | La fréquence cardiaque chute brutalement. | Fin de séance en douceur. |
 | « hr_rate » | La fréquence cardiaque monte trop vite. | « reduce ». Quand la montée cesse, la séance reprend seule, sauf si la vitesse commandée est revenue à zéro entre-temps : la séance est alors terminée. |
-| « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». |
+| « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». Pour ce « freeze » verrouillé, lisez l'avertissement au-dessus de ce tableau avant d'acquitter. |
 | « drive_fault » | Le variateur est en défaut. | Fin de séance. Voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
 | « comms_lost » | La console ne parvient plus à parler au variateur. | « go_silent ». |
 | « session_overrun » | La durée prévue de la dernière séance est dépassée de 30 secondes. | Fin de séance verrouillée. Cette alerte apparaît aussi après une séance déjà finie : voir ci-dessous. |
@@ -1066,7 +1110,7 @@ voyez.
 | Un message contenant « demarrage refuse : passager de » | Le passager est plus jeune que l'âge minimum réglé sur la machine. | Pas de séance. |
 | Un message contenant « demarrage refuse : programme inadapte a ce passager » | Le programme ne convient pas à ce passager, d'après les contrôles du logiciel. | Pas de séance avec ce programme. Voyez avec le gestionnaire. |
 | Un message contenant « demarrage refuse : variateur en defaut » | Le variateur est en défaut. | [Section 9.5](#95-le-variateur-passe-en-défaut). |
-| En séance manuelle, dans **Evenements**, une ligne contenant « consigne refusee » et « tient le bras a l'arret » | Ce n'est pas un démarrage qui est refusé, mais une cible : quelque chose retient le bras à l'arrêt. La ligne nomme la règle, et dit s'il faut attendre ou acquitter. | Si la ligne dit d'attendre : attendez que **Securite** revienne à « none ». Si elle dit d'acquitter : l'alerte est verrouillée et ne disparaît pas seule. Supprimez sa cause, puis acquittez par les étapes 2 à 7 de la [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé), et vérifiez que **Securite** revient à « none ». N'attendez pas « REPOS » comme le demande l'étape 1 : la séance manuelle n'est pas terminée, et **Mode** reste sur « MANUEL ». Dans les essais sur modèle, cet acquittement a tenu et n'a rien fait partir : le bras est resté à l'arrêt jusqu'à la cible suivante. Autre voie : terminer d'abord la séance par **STOP**, suivre la section 9.1 en entier, puis démarrer une nouvelle séance. Dans les deux cas, c'est à vous de redonner la cible ensuite ([section 5](#5-séance-manuelle-capsule-vide)). |
+| En séance manuelle, dans **Evenements**, une ligne contenant « consigne refusee » et « tient le bras a l'arret » | Ce n'est pas un démarrage qui est refusé, mais une cible : quelque chose retient le bras à l'arrêt. La ligne nomme la règle, et dit s'il faut attendre ou acquitter. | Si la ligne dit d'attendre : attendez que **Securite** revienne à « none ». Si elle dit d'acquitter : l'alerte est verrouillée et ne disparaît pas seule. Supprimez sa cause, puis acquittez par les étapes 2 à 7 de la [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé), et vérifiez que **Securite** revient à « none ». N'attendez pas « REPOS » comme le demande l'étape 1 : la séance manuelle n'est pas terminée, et **Mode** reste sur « MANUEL ». **Cette dispense ne vaut que pour cette ligne, qui dit que l'alerte tient un bras à l'arrêt.** Sur un bras qui tourne, acquitter un « freeze » verrouillé relâche la vitesse : le bras rejoint la cible appliquée, vers le haut aussi, sans aucun autre clic ([section 9.2](#92-la-console-agit-seule)). Dans les essais sur modèle, l'acquittement donné sur un bras à l'arrêt a tenu et n'a rien fait partir : le bras est resté à l'arrêt jusqu'à la cible suivante. Autre voie : terminer d'abord la séance par **STOP**, suivre la section 9.1 en entier, puis démarrer une nouvelle séance. Dans les deux cas, c'est à vous de redonner la cible ensuite ([section 5](#5-séance-manuelle-capsule-vide)). |
 | En séance manuelle, dans **Evenements**, une ligne contenant « remise a 0 » | Une cible déjà appliquée a été retirée. Soit pour la même raison : la ligne nomme alors la règle. Soit parce que le variateur n'a pas confirmé le premier pas de vitesse : la ligne contient alors « le variateur n'a pas confirme la consigne ». Dans ce second cas, il peut n'y avoir aucune alerte, et **Securite** peut afficher « none ». | Si la ligne nomme une règle : comme pour la ligne précédente. Si elle parle du variateur : la console ne redemande pas cette vitesse, mais le variateur peut avoir reçu ce premier pas. Lisez **Rotation** et **Vitesse mesuree**. La ligne demande de vérifier la liaison avec le variateur : si elle revient à la cible suivante, n'insistez pas et appelez le support. |
 | Tout autre message | | Notez le texte exact. N'insistez pas. Appelez le support. |
 

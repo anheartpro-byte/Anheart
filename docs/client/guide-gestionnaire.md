@@ -386,10 +386,11 @@ début de la séance, le bras est à l'arrêt, puis il part de lui-même. Pendan
 la séance, la machine peut aussi ralentir le bras, puis le laisser réaccélérer
 quand la cause disparaît (par exemple une fréquence cardiaque qui redevient
 lisible). Si la machine ramène elle-même la vitesse qu'elle commande (la
-« Consigne ») à zéro avant la fin du programme, elle termine la séance, même
-si le bras tourne encore à cet instant : le bras ne repart pas, et quelqu'un
-devra acquitter l'arrêt à la console avant toute nouvelle séance. La phase
-affichée ne prouve pas l'arrêt du bras : lisez **Vitesse du bras**.
+« Consigne ») à zéro avant la phase « Retour au calme » prévue par le
+programme, elle termine la séance, même si le bras tourne encore à cet
+instant : le bras ne repart pas, et quelqu'un devra acquitter l'arrêt à la
+console avant toute nouvelle séance. La phase affichée ne prouve pas l'arrêt
+du bras : lisez **Vitesse du bras**.
 
 Les valeurs arrivent par paquets, toutes les 5 secondes environ. L'écran a
 donc toujours plusieurs secondes de retard.

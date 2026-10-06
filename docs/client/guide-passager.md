@@ -159,9 +159,10 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 > la séance, le bras est à l'arrêt, puis il se met à tourner de lui-même.
 > Pendant la séance, la machine peut ralentir, puis réaccélérer d'elle-même,
 > par exemple quand votre fréquence cardiaque redevient lisible. Si la machine
-> ramène elle-même la vitesse qu'elle commande à zéro avant la fin du
-> programme, elle termine la séance. Le bras peut encore tourner à cet
-> instant. Il ne repart pas sans une nouvelle séance.
+> ramène elle-même la vitesse qu'elle commande à zéro avant l'étape
+> « Retour au calme » prévue par le programme, elle termine la séance. Le bras
+> peut encore tourner à cet instant. Il ne repart pas sans une nouvelle
+> séance.
 
 Tant que l'opérateur ne vous a pas dit que la séance est terminée, restez
 installé et considérez que le bras peut tourner ou repartir. C'est lui qui lit
