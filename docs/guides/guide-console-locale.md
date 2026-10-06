@@ -748,6 +748,7 @@ Les types d'événements :
 | `session_idle` | retour au repos |
 | `refused` (orange) | la machine a refusé une demande. Hors séance manuelle, pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
 | `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici |
+| `recording` | l'enregistrement de séance sur le disque du Pi se dégrade (`enregistrement de seance degrade : …`) ou redevient normal (`enregistrement de seance retabli`). La séance et la sécurité continuent dans les deux cas. Non vu pendant la préparation de ce guide : ajouté après les captures, voir la [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale) |
 
 Important : une demande « acceptée » (démarrage, cible, reset) veut seulement dire
 « reçue ». La machine vérifie ensuite. Pour une **cible manuelle**, sa réponse
@@ -787,6 +788,10 @@ Repères :
    trouve` (normal : le câble Schneider n'y crée pas de port, il passe par
    `ftdi://`). Sur le Pi, `/dev/ttyUSB0` et `/dev/rfcomm0` devraient apparaître (non
    vérifié).
+6. Carte **Enregistrements de seance** (ajoutée après la capture, non vue dans un
+   navigateur) : le bouton **Exporter l'enregistrement** télécharge l'archive `.tar.gz`
+   du dernier enregistrement de séance, machine au repos uniquement. Détails dans la
+   [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale).
 
 Si un jeton est exigé et que celui saisi est faux, toutes les pages affichent des
 erreurs `a valid x-anheart-token header is required`.
@@ -1700,6 +1705,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux de `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` | corriger le profil ou la configuration (décision médicale) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | le variateur tournait déjà (ancien programme mort) | attendre l'arrêt, acquitter |
 | `demarrage refuse : variateur en defaut (<code>, LFT <n>)` | défaut variateur présent | §13.9 |
+| `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sur le disque du Pi pour enregistrer la séance | exporter les enregistrements utiles, puis libérer de la place sur le Pi ([référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)) |
+| `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement du Pi est inutilisable | faire vérifier le disque et les droits du dossier par la personne qui administre le Pi |
 | ✔ `demarrage refuse : age du passager requis pour une seance programmee` | âge vide | saisir l'âge |
 | ✔ `demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)` | passager trop jeune | refus voulu (décision médicale pour changer) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) | enregistrer le profil sur le Pi |
