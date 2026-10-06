@@ -121,11 +121,21 @@ states the fact (:meth:`TrainingRuntime._note_standstill`) and leaves the
 verdict to the supervisor's ``session_standstill`` rule, so that this ending is
 reported, refused against and acknowledged like every other latched one. Not a
 standstill "by itself": an operator's stop, an operator's manual target of zero
-with no warning standing, the programme's own cooldown. Left as they were: a
+with no warning standing, the programme's own cooldown. Left as it was: a
 warning before the arm has moved at all (BASELINE), where the motion that
-follows is the programme's normal start; and a manual target the operator
-typed while a warning held the arm at zero, which is followed when the warning
-lifts.
+follows is the programme's normal start.
+
+The same goes for an arm the OPERATOR stopped, or that has not moved yet, in a
+manual session: nothing may hold a target in waiting over it (ANH-178,
+decisions of 2026-10-06). While anything holds a rise over a setpoint of zero
+- any verdict, or with a person on board a heart rate that is not usable, whose
+trend is unknown or that falls fast (:class:`RiseHold`) - a non-zero manual
+target is refused (:meth:`TrainingRuntime.set_manual_target`), and one already
+entered is taken back (:meth:`TrainingRuntime._withdraw_waiting_target`), as is
+one whose first step the drive did not acknowledge. The operator asks again
+once nothing holds, so neither a warning that lifts, nor an acknowledgement,
+nor a heart rate that settles ever starts the arm. A rise held the same way
+over an arm that is TURNING waits and resumes, as it always has.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -971,8 +981,77 @@ class TargetOutOfRange:
     ceiling: MotorRpm
 
 
-type ManualTargetRefusal = NoManualSession | ManualEnding | TargetOutOfRange
+@unique
+class RiseHold(Enum):
+    """Why a manual setpoint may not rise although NO verdict stands.
+
+    A verdict is not the only thing that holds a rise. With a person on board
+    the heart rate has a say of its own, below any rule of the supervisor, and
+    a drive can decline the write. None of these shows as a verdict, so a
+    target entered over a stopped arm used to wait behind them exactly as it
+    waited behind a verdict (ANH-178): ninety seconds, measured, on a heart
+    rate coming down after an effort, and then the arm left with nobody
+    clicking. String values because they are logged.
+    """
+
+    NO_HEART_RATE = "no_heart_rate"
+    """Person on board, and no fresh, trustworthy heart rate to rise on."""
+
+    TREND_UNKNOWN = "trend_unknown"
+    """Person on board, and too few readings to say whether the rate is falling.
+
+    Fewer than ``RuntimeLimits.trend_samples`` since the tracker began its
+    history: the first seconds of an ECG, or those after a confirmed jump.
+    """
+
+    HEART_RATE_FALLING = "heart_rate_falling"
+    """Person on board, and the rate falling faster than ``RuntimeLimits.falling_trend``."""
+
+    WRITE_UNACKNOWLEDGED = "write_unacknowledged"
+    """The drive did not acknowledge the step written to it: from standstill, the first step."""
+
+
+type Holding = SafetyVerdict | RiseHold
+"""What holds an arm at standstill against a manual target: a verdict, or a :class:`RiseHold`."""
+
+
+@dataclass(frozen=True, slots=True)
+class HeldAtStandstill:
+    """Something holds the arm at standstill: a speed asked for now would wait for it.
+
+    The target would be accepted, nothing would move, and the arm would leave
+    by itself the moment the hold went, with nobody clicking at that instant
+    (ANH-178). So a non-zero target is refused for as long as ANY verdict
+    stands, latched or not, over a setpoint of zero, and for as long as the
+    heart rate of a person on board lets nothing rise (:class:`RiseHold`). The
+    operator asks again once nothing holds. A target of zero is never refused
+    on this ground, and neither is any target while the arm turns.
+    """
+
+    by: Holding
+    """What held the arm when the target was asked for; it is named to the operator."""
+
+
+type ManualTargetRefusal = NoManualSession | ManualEnding | TargetOutOfRange | HeldAtStandstill
 """Every way :meth:`TrainingRuntime.set_manual_target` can refuse. Closed."""
+
+
+@dataclass(frozen=True, slots=True)
+class WithdrawnTarget:
+    """A manual target this runtime took back before the arm had left standstill for it.
+
+    Not a refusal: the target HAD been accepted, with nothing holding. Then
+    something came to hold the arm at zero before the first step towards it,
+    and a target left in place would have been followed when that hold went
+    (see :meth:`TrainingRuntime._withdraw_waiting_target`). Reported once, so
+    the console can say that the target on its screen is no longer in force.
+    """
+
+    target: MotorRpm
+    """What the operator had asked for, motor rpm. Never zero."""
+
+    by: Holding
+    """What held the arm at standstill when the target was taken back."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1099,6 +1178,7 @@ class TrainingRuntime:
         "_program",
         "_recovery_from",
         "_resting_bpm",
+        "_rise_held",
         "_safety_limits",
         "_setpoint_changed_at",
         "_shutdown",
@@ -1112,6 +1192,7 @@ class TrainingRuntime:
         "_tracker",
         "_unknown_episode",
         "_warmup_satisfied",
+        "_withdrawn",
     )
 
     def __init__(
@@ -1196,9 +1277,17 @@ class TrainingRuntime:
         self._resting_bpm: Bpm | None = None
         # A manual session instead of a programme; at most one of the two.
         self._manual: ManualSession | None = None
-        # What the operator asked for. Zeroed by every ending, never raised by
-        # anything but set_manual_target.
+        # What the operator asked for. Zeroed by every ending, and by anything
+        # that comes to hold the arm at standstill; never raised by anything
+        # but set_manual_target.
         self._manual_target: MotorRpm = MotorRpm(0)
+        # The last target taken back that way, until the console has read it.
+        self._withdrawn: WithdrawnTarget | None = None
+        # What, other than a verdict, kept a manual setpoint from rising on the
+        # last tick that followed the target: _follow_manual's own account. It
+        # is read on such a tick only, after _follow_manual has rewritten it,
+        # so nothing ever resets it.
+        self._rise_held: RiseHold | None = None
         # Since when the motion profiler's allowance accrues (see motion.py).
         self._motion_from: Monotonic | None = None
         # An operator's fault reset between its two words, or None.
@@ -1637,6 +1726,18 @@ class TrainingRuntime:
         or ``[min_run, ceiling]`` at the motor shaft; anything else is refused
         rather than clamped. Refused once the session is ending: a target then
         would be a resumption nobody asked for.
+
+        Refused too, when it is not zero, while anything holds a setpoint of
+        zero (:class:`HeldAtStandstill`): a verdict, or the heart rate of a
+        person on board (:meth:`_heart_rate_hold`). The arm would not move
+        now, and would move later, when the hold went or the verdict was
+        acknowledged, with nobody clicking at that moment. A verdict is judged
+        on what the last tick left in force, which is all there is between two
+        ticks: one that is about to lift still refuses, and one that is about
+        to appear is dealt with by the tick that sees it
+        (:meth:`_withdraw_waiting_target`). The heart rate is read as it is at
+        this instant, and the tick judges it again before the first step. An
+        arm that is turning takes a target as it always has.
         """
         manual = self._manual
         if manual is None:
@@ -1649,9 +1750,48 @@ class TrainingRuntime:
         motor = output_to_motor_rpm(target, self._geometry.ratio)
         if motor != 0 and not minimum <= motor <= manual.ceiling:
             return Err(TargetOutOfRange(requested=target, min_run=minimum, ceiling=manual.ceiling))
+        if motor != 0 and self._applied_rpm == 0:
+            held: Holding | None = self.standing
+            if held is None:
+                held = self._heart_rate_hold(self._clock.monotonic())
+            if held is not None:
+                return Err(HeldAtStandstill(held))
         self._manual_target = motor
         _logger.info("manual target set to %d motor rpm (%.2f output rpm)", motor, target)
         return Ok(motor)
+
+    def _heart_rate_hold(self, now: Monotonic) -> RiseHold | None:
+        """Why the heart rate lets a manual setpoint rise no further at ``now``, or ``None``.
+
+        The one statement of the gate, read by :meth:`_follow_manual` in the
+        tick and by :meth:`set_manual_target` at the console, so that what is
+        refused and what is held cannot drift apart. Nobody on board: no gate.
+        A person on board: no rise without a fresh, trustworthy heart rate,
+        nor while the vasovagal gate is closed (:meth:`_increase_permitted`,
+        the very test a programme's rise passes). The DECISION is those two
+        tests and nothing else, exactly as before this method had a name; the
+        trend is read a second time only to say which of its two ways the
+        gate is closed. None of this is a verdict.
+        """
+        if not self._occupied():
+            return None
+        if self._tracker.usable(now) is None:
+            return RiseHold.NO_HEART_RATE
+        if self._increase_permitted():
+            return None
+        trend = self._tracker.recent_rate(self._limits.trend_samples)
+        return RiseHold.TREND_UNKNOWN if trend is None else RiseHold.HEART_RATE_FALLING
+
+    def take_withdrawn_target(self) -> WithdrawnTarget | None:
+        """The manual target taken back since the last call, or ``None``. Read once.
+
+        For the console: a target it showed as accepted is no longer in force,
+        and the operator has to be told why (:class:`WithdrawnTarget`). Reading
+        it forgets it, so one withdrawal is said once.
+        """
+        withdrawn = self._withdrawn
+        self._withdrawn = None
+        return withdrawn
 
     async def fault_reset(self) -> Result[None, FaultResetRefusal]:
         """Reset a drive fault, on an operator's explicit request. Never called automatically.
@@ -1764,6 +1904,7 @@ class TrainingRuntime:
         self._controller = None
         self._manual = None
         self._manual_target = MotorRpm(0)
+        self._withdrawn = None
         self._motion_from = None
         self._fault_reset_at = None
         self._started_at = None
@@ -2658,6 +2799,65 @@ class TrainingRuntime:
         # (`_applied_rpm` advances on an acknowledged write and on nothing else).
         if before != 0 and self._applied_rpm == 0:
             self._note_standstill(standing)
+        self._withdraw_waiting_target(standing)
+
+    def _withdraw_waiting_target(self, standing: SafetyVerdict | None) -> None:
+        """Something holds the arm at standstill: take back the manual target that waits.
+
+        A manual target is a destination, and while a rise is held it is not
+        followed. Left in place over a setpoint of zero it WAITED: the
+        operator's own zero, then a lost heart rate, then 200 rpm typed at the
+        console; thirty seconds with nothing moving; the heart rate back, and
+        the first non-zero setpoint 0.2 s later with nobody clicking. With a
+        latched verdict it was the acknowledgement that started the arm. And
+        with no verdict at all, behind the heart rate of a person on board: a
+        rate coming down after an effort held a target for ninety seconds, and
+        the arm left when the fall ended (ANH-178, decisions of 2026-10-06,
+        ``docs/securite.md`` 7.6).
+
+        So, at the end of every command step: if the setpoint is zero, a target
+        is waiting and anything holds the rise, the target goes back to zero.
+        "Anything" is the standing verdict, whatever it is - latched or not,
+        FREEZE or REDUCE, already standing or appearing on this very tick, and
+        the tick a REDUCE has just walked the setpoint to zero - or, with no
+        verdict, what :meth:`_follow_manual` found on this tick
+        (:class:`RiseHold`): the heart rate, or a drive that did not
+        acknowledge the first step. Together with the refusal in
+        :meth:`set_manual_target` this leaves one way for a stopped arm to be
+        given a speed: a target entered while nothing holds it. After every
+        tick: setpoint zero and a rise held, then target zero.
+
+        The console is told (:meth:`take_withdrawn_target`), so that the
+        operator knows to ask again, with one exception: on the tick a warning
+        itself has just stopped the arm, the session ends on the next one
+        (:meth:`_note_standstill`), there is no asking again, and the ending
+        says everything there is to say. The target is zeroed all the same.
+
+        Nothing here touches an arm that is turning: its setpoint is not zero,
+        so its target is kept and followed when the hold goes, as before. And
+        an ending needs nothing from this: it has already zeroed the target
+        (:meth:`_begin_ending`). A programme never has a manual target.
+
+        What is NOT a hold: the motion profiler earning its first step. It
+        depends on nothing but time. With the shipped limits and a 0.2 s tick
+        the passage from zero is written on the first tick that follows the
+        target, or on the second when the profiler has no time base yet (a
+        session's first tick, the tick after a FREEZE).
+        """
+        target = self._manual_target
+        if self._applied_rpm != 0 or target == 0:
+            return
+        held: Holding | None = standing if standing is not None else self._rise_held
+        if held is None:
+            return
+        self._manual_target = MotorRpm(0)
+        if self._stopped_by is None:
+            self._withdrawn = WithdrawnTarget(target=target, by=held)
+        _logger.warning(
+            "manual target of %d motor rpm withdrawn: the arm is held at standstill (%s)",
+            target,
+            held.rule if isinstance(held, SafetyVerdict) else held.value,
+        )
 
     def _note_standstill(self, standing: SafetyVerdict | None) -> None:
         """The setpoint has just come back to zero: was that by itself? If so, say it.
@@ -2819,8 +3019,13 @@ class TrainingRuntime:
         Under REDUCE the verdict's descent (``cap``) IS the setpoint: the
         target no longer matters when the only direction allowed is down. With
         nobody asking for anything, the setpoint steps towards the target -
-        which is 0 once the session is ending - and it may not rise while a
-        person on board has no usable heart rate.
+        which is 0 once the session is ending - and it may not rise while the
+        heart rate of a person on board holds it (:meth:`_heart_rate_hold`).
+
+        What kept the setpoint from rising on this tick, if anything did, is
+        left in ``_rise_held`` for :meth:`_withdraw_waiting_target`: the heart
+        rate's hold, or a drive that did not acknowledge the write. Every
+        frame sent is exactly the one sent before that account was kept.
         """
         self._decision = None
         if cap is not None:
@@ -2828,12 +3033,17 @@ class TrainingRuntime:
             return
         target = MotorRpm(0) if self._ending is not None else self._manual_target
         moved = self._motion_step(now, target)
-        heart_rate_allows = not self._occupied() or (
-            self._tracker.usable(now) is not None and self._increase_permitted()
-        )
-        if not (allow_increase and heart_rate_allows) and moved > self._applied_rpm:
-            moved = self._applied_rpm
+        held = self._heart_rate_hold(now)
+        before = self._applied_rpm
+        if not (allow_increase and held is None) and moved > before:
+            moved = before
         await self._apply_setpoint(now, moved)
+        if self._applied_rpm != moved:
+            # Asked of the drive and not acknowledged: the setpoint in force is
+            # still the old one, and the next tick would ask again. Only a
+            # first step matters to the target; a turning arm keeps its own.
+            held = RiseHold.WRITE_UNACKNOWLEDGED
+        self._rise_held = held
 
     def _increase_permitted(self) -> bool:
         """Whether the heart rate allows the setpoint to RISE this tick: the vasovagal gate.
