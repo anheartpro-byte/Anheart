@@ -63,6 +63,7 @@ function panel() {
   );
   const clock = { now: 1000 };
   const published = new Map();
+  const listeners = [];
   const context = vm.createContext({
     document: {
       title: /<title>([^<]*)<\/title>/.exec(html)[1],
@@ -71,7 +72,7 @@ function panel() {
       createElement: () => new Element(),
     },
     window: {
-      addEventListener: () => undefined,
+      addEventListener: (name, listener) => listeners.push([name, listener]),
       sessionStorage: { getItem: () => null, setItem: () => undefined },
     },
     performance: { now: () => clock.now },
@@ -91,11 +92,26 @@ function panel() {
     banner.inner
       .replace(/<[a-z]+ id="([^"]+)"[^>]*>[^<]*<\/[a-z]+>/g, (whole, id) => nodes.get(id).textContent)
       .replace(/<[^>]+>/g, " ");
+  // A crude layout, so that a height measured too early is a wrong height: a banner on screen takes
+  // one line per `screen.columns` characters it reads, and the stack is the sum of what is shown.
+  const screen = { columns: 40 };
+  const stack = () =>
+    banners
+      .filter((banner) => !nodes.get(banner.id).classes.has("hidden"))
+      .map((banner) => said(banner).replace(/\s+/g, " ").trim().length)
+      .reduce((height, length) => height + 27 + 27 * Math.ceil(length / screen.columns), 0);
+  if (nodes.has("banners")) {
+    Object.defineProperty(nodes.get("banners"), "offsetHeight", { get: stack });
+  }
   return {
     context,
     clock,
     node,
     published,
+    screen,
+    stack,
+    // What the browser does on a window event: call whoever listens to it.
+    fire: (name) => listeners.filter((entry) => entry[0] === name).forEach((entry) => entry[1]()),
     shown: (id) => !node(id).classes.has("hidden"),
     // Whether a banner saying `phrase` is on screen, whichever element carries it.
     announced: (phrase) =>
@@ -444,6 +460,25 @@ test("with no frame to say so, a status asked after the click speaks for the rec
   assert.equal(shown("estop-banner"), false);
 });
 
+test("a status asked before the click does not take over from the receipt", async () => {
+  // Given frames that have stopped, and a status request still in flight when E-STOP is pressed.
+  const { context, clock, frame, shown } = panel();
+  frame(snapshot({ at: 59.9 }));
+  context.state.connected = false;
+  clock.now += 5000;
+  context.refreshLiveness();
+  const early = deferred();
+  context.api = () => early.promise;
+  const asked = context.loadStatus();
+  await pressEstop(context);
+  // When that request is answered after the receipt, with what the machine said before the latch.
+  early.resolve(status());
+  await asked;
+  // Then it is older than the latch: the receipt keeps the banner up.
+  assert.equal(shown("estop-banner"), true);
+  assert.notEqual(context.state.estopReceipt, null);
+});
+
 test("a frame saying released against a status saying latched asks again instead of deciding", async () => {
   // Given a latched stop known from the frames and from the status.
   const { context, frame, shown } = panel();
@@ -499,11 +534,20 @@ test("losing the machine keeps the last latched stop on screen, next to NO LIVE 
   assert.equal(shown("estop-banner"), true);
 });
 
+// The page wired as on load, with no network and no timers behind it.
+function wire(context) {
+  context.document.querySelector = () => new Element();
+  context.window.setInterval = () => undefined;
+  context.window.requestAnimationFrame = () => undefined;
+  context.boot = () => undefined;
+  context.loadCamera = () => undefined;
+  context.start();
+}
+
 test("what sticks below the banners is told the room they take", () => {
   // Given the page wired as on load, in a browser that reports element resizes.
-  const { context, node, published } = panel();
+  const { context, frame, node, published, screen, stack } = panel();
   const observers = [];
-  context.document.querySelector = () => new Element();
   context.window.ResizeObserver = class {
     constructor(callback) {
       this.callback = callback;
@@ -512,32 +556,65 @@ test("what sticks below the banners is told the room they take", () => {
       observers.push([target, this.callback]);
     }
   };
-  context.window.setInterval = () => undefined;
-  context.window.requestAnimationFrame = () => undefined;
-  context.boot = () => undefined;
-  context.loadCamera = () => undefined;
-  context.start();
-  // When a banner appears and the stack grows.
+  wire(context);
   assert.equal(observers.length, 1);
   assert.equal(observers[0][0], node("banners"));
-  node("banners").offsetHeight = 54;
+  frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
+  const wide = stack();
+  // When the banner wraps onto more lines with nothing shown or hidden, and the browser reports it.
+  screen.columns = 20;
+  assert.ok(stack() > wide);
   observers[0][1]();
-  // Then the sidebar and the mobile bar are given that height to start under.
-  assert.equal(published.get("--banners-h"), "54px");
+  // Then the sidebar and the mobile bar are given the new height to start under.
+  assert.equal(published.get("--banners-h"), stack() + "px");
 });
 
 test("without ResizeObserver the banner stack is still measured when a banner appears or goes", () => {
-  // Given a browser with no ResizeObserver, and a stack that is 54 px tall with one banner in it.
-  const { frame, node, published } = panel();
-  node("banners").offsetHeight = 54;
+  // Given a browser with no ResizeObserver.
+  const { frame, published, stack } = panel();
   // When the emergency-stop banner appears.
   frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
-  // Then the height is published for the sidebar and the mobile bar.
-  assert.equal(published.get("--banners-h"), "54px");
+  // Then the height published for the sidebar and the mobile bar is that of the stack with it in.
+  assert.ok(stack() > 0);
+  assert.equal(published.get("--banners-h"), stack() + "px");
   // And again when it goes.
-  node("banners").offsetHeight = 0;
   frame(snapshot({ at: 51 }));
   assert.equal(published.get("--banners-h"), "0px");
+});
+
+test("without ResizeObserver the NO LIVE DATA banner is measured as it reads, its sentence included", () => {
+  // Given a latched stop on screen, in a browser with no ResizeObserver, on a narrow screen.
+  const { context, clock, frame, published, screen, shown, stack } = panel();
+  screen.columns = 30;
+  frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
+  const one = stack();
+  // When frames stop: NO LIVE DATA appears above it, with a sentence longer than the markup's.
+  clock.now += 5000;
+  context.refreshLiveness();
+  // Then the height published is that of the two banners as they now read.
+  assert.equal(shown("banner"), true);
+  assert.ok(stack() > one);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And it follows the sentence when it changes while the banner stays up.
+  const open = stack();
+  context.state.connected = false;
+  context.refreshLiveness();
+  assert.notEqual(stack(), open);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+});
+
+test("without ResizeObserver the banner stack is measured again when the window is resized", () => {
+  // Given the page wired as on load in a browser with no ResizeObserver, a banner on screen.
+  const { context, fire, frame, published, screen, stack } = panel();
+  wire(context);
+  frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
+  const wide = stack();
+  // When the window narrows and the banner wraps onto more lines.
+  screen.columns = 20;
+  fire("resize");
+  // Then the new height is published.
+  assert.ok(stack() > wide);
+  assert.equal(published.get("--banners-h"), stack() + "px");
 });
 
 /* -------------------------------------------- the heart-rate grade (2) */

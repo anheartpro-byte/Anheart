@@ -241,7 +241,11 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
   **Configuration** (voir §10). Sans jeton assez long, la console refuse de démarrer.
 
 Ne lancez **jamais** en même temps la console et `scripts/bench_console.py` sur le
-même câble : deux programmes parleraient au variateur.
+même câble. Sur un même ordinateur, un seul programme à la fois possède la liaison
+avec le variateur : le second lancé est refusé avant toute ouverture du câble
+(`drive cable already owned`, suivi du numéro de processus de celui qui la tient) et
+n'a aucune liaison tant que le premier la tient. Fermez le premier avant de lancer
+l'autre (voir §14).
 
 > Le fichier `scripts/anheart.service` (démarrage automatique par systemd) lance
 > la console `src.local_panel`. Son installation et son activation restent
@@ -1261,6 +1265,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `configuration: SENSORS: ECG obligatoire : la frequence cardiaque pilote le moteur` | ECG retiré de la liste | remettre `ECG` |
 | `configuration: HR_CRITICAL_BPM: <n> bpm doit etre au-dessus de HR_HARD_MAX_BPM` | paliers cardiaques incohérents | décision médicale : corriger les deux valeurs |
 | `configuration: CONVEX_URL: ... attendu https://<deploiement>.convex.site avec MACHINE_API_KEY` | clé du tableau de bord sans adresse valable | vider `MACHINE_API_KEY` ou corriger l'URL (`.convex.site`) |
+| `drive cable already owned`, suivi du numéro de processus (PID) du programme qui tient la liaison | un autre programme de cet ordinateur possède déjà la liaison avec le variateur : celui lancé en second est refusé avant toute ouverture du câble. `scripts/probe_atv320.py` et `scripts/scan_modbus.py` l'écrivent après `REFUS:` et s'arrêtent, `scripts/bench_console.py` après `liaison NON etablie:` ; la console le répète dans la ligne `derniere erreur` de sa carte Variateur | fermer le programme qui tient la liaison, puis relancer |
 
 ### Dans la page : réponses immédiates
 
@@ -1288,7 +1293,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `... demanded GO_SILENT, which is one-way: ...` | verdict définitif pour ce processus | vérifier l'arrêt, redémarrer la console |
 | `a valid x-anheart-token header is required` | jeton absent ou faux | page Configuration, saisir le bon jeton |
 | `la demande d'arret d'urgence a echoue : ... - UTILISEZ L'ARRET CABLE` | l'E-STOP n'a pas atteint la console | **coup de poing** |
-| `mouvement desactive : cette console est en lecture seule (jalon M1). ...` | console en lecture seule | n'arrive pas avec la console actuelle |
+| `mouvement desactive : cette console est en lecture seule. STOP, E-STOP, acquittement et lectures restent disponibles.` | console en lecture seule | n'arrive pas avec la console actuelle |
 
 ### Dans la liste Evenements (`refused`) : refus de la machine
 
@@ -1424,7 +1429,9 @@ de commande. Vérifiez `tableau de bord: aucun` dans la ligne de résumé.
 Vous avez lancé depuis la racine du dépôt. Faites `cd raspberry-pi` d'abord.
 
 **Je lance aussi `scripts/bench_console.py` pour vérifier.**
-Jamais en même temps que la console sur le même câble.
+Jamais en même temps que la console sur le même câble. Le second programme lancé est
+refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : fermez
+la console d'abord (voir §3.4 et §14).
 
 **Le coup de poing a été frappé, mais la page ne le montre pas.**
 Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous

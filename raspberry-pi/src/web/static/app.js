@@ -285,17 +285,19 @@ function closeNav() {
 */
 function refreshLiveness() {
   var fresh = state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
-  showBanner(el("banner"), !fresh);
+  var reworded = false;
   if (!fresh) {
-    text(
-      el("banner-detail"),
-      state.connected
-        ? "la liaison est ouverte mais aucune donnee depuis " +
-          Math.round((performance.now() - state.lastFrameAt) / 1000) +
-          " s - la machine tourne peut-etre encore"
-        : "la liaison avec la machine est coupee - la machine tourne peut-etre encore"
-    );
+    var detail = el("banner-detail");
+    var notice = state.connected
+      ? "la liaison est ouverte mais aucune donnee depuis " +
+        Math.round((performance.now() - state.lastFrameAt) / 1000) +
+        " s - la machine tourne peut-etre encore"
+      : "la liaison avec la machine est coupee - la machine tourne peut-etre encore";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
   }
+  // After its text: the banner is measured as it reads, not as it read last time.
+  showBanner(el("banner"), !fresh, reworded);
   ["hr", "measured-output", "setpoint-output", "console-hr", "console-output"].forEach(function (id) {
     el(id).classList.toggle("stale", !fresh);
   });
@@ -397,14 +399,16 @@ function fitBanners() {
 }
 
 /*
-  Show or hide one banner, and measure the stack when that changes it. The
-  ResizeObserver set up in start() does the same and also sees a banner
-  re-wrap; this is what a browser without one still gets.
+  Show or hide one banner, and measure the stack when that changes its height:
+  the banner appears, goes, or stays with a text that was just `reworded` and
+  may wrap differently. Measured after the change, never before. The
+  ResizeObserver set up in start() sees the same changes; this is what a
+  browser without one still gets.
 */
-function showBanner(node, visible) {
+function showBanner(node, visible, reworded) {
   var changes = node.classList.contains("hidden") === visible;
   show(node, visible);
-  if (changes) {
+  if (changes || (visible && reworded)) {
     fitBanners();
   }
 }
