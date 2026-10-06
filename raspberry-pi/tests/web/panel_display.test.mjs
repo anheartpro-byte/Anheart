@@ -1376,6 +1376,120 @@ test("in manual the banner takes a target above the setpoint: a held arm at stan
   assert.equal(announced(RESUME), false);
 });
 
+/* ================== chips that go on vouching for a machine gone quiet ================== */
+
+const css = readFileSync(new URL("app.css", assets), "utf8");
+
+// The chips of the cards that the frames colour, with what a healthy machine at rest makes them say.
+const FRAME_CHIPS = {
+  "console-hr-quality": "good",
+  "hr-quality": "good",
+  "console-motion": "a l'arret",
+  motion: "a l'arret",
+  "setpoint-confirmed": "confirmee par le variateur",
+  "safety-action": "none",
+  "run-safety-action": "none",
+};
+
+test("under NO LIVE DATA the green chips of the cards are struck with the numbers beside them", () => {
+  // Given a live page on a healthy machine: the chips of its cards are green.
+  const { context, clock, frame, node, shown } = panel();
+  frame(snapshot());
+  for (const [id, label] of Object.entries(FRAME_CHIPS)) {
+    assert.equal(node(id).textContent, label, id);
+    assert.ok(node(id).classes.has("pill-good"), `#${id} is not green on a healthy machine`);
+    assert.equal(node(id).classes.has("stale"), false, id);
+  }
+  // When the frames stop.
+  clock.now += 5000;
+  context.refreshLiveness();
+  // Then every one of them is struck, like the large numbers and the chips of the sidebar.
+  assert.equal(shown("banner"), true);
+  for (const id of [...Object.keys(FRAME_CHIPS), "console-drive-state", "drive-state", "phase", "manual-state"]) {
+    assert.ok(node(id).classes.has("stale"), `#${id} still vouches for the machine under NO LIVE DATA`);
+  }
+  for (const id of ["console-hr", "console-output", "side-motion", "side-safety", "run-mode"]) {
+    assert.ok(node(id).classes.has("stale"), id);
+  }
+  // And they come back with the frames.
+  frame(snapshot({ at: 56 }));
+  for (const id of Object.keys(FRAME_CHIPS)) {
+    assert.equal(node(id).classes.has("stale"), false, id);
+    assert.ok(node(id).classes.has("pill-good"), id);
+  }
+});
+
+test("a struck chip loses its colour: the stylesheet takes the green away", () => {
+  // The chips keep their colour class when struck; this rule, placed after them, is what greys them.
+  const colours = css.indexOf(".pill-good {");
+  const struck = /\.pill\.stale\s*\{([^}]*)\}/.exec(css);
+  assert.ok(struck, "no rule for a struck chip");
+  assert.ok(struck.index > colours, "the rule comes before the colours it has to override");
+  assert.ok(/background:\s*var\(--panel-2\)/.test(struck[1]), struck[1]);
+  assert.ok(/border-color:\s*var\(--line\)/.test(struck[1]), struck[1]);
+});
+
+test("the chips fed by the link panel are struck when the panel stops answering, and only then", () => {
+  // Given a BITalino acquiring: its chip is green.
+  const { context, clock, frame, node } = panel();
+  context.renderPanel(panelRow());
+  frame(snapshot());
+  assert.equal(node("console-ecg-link").textContent, "acquisition");
+  assert.ok(node("console-ecg-link").classes.has("pill-good"));
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+  // When the frames stop but the panel still answers over HTTP: its chips are current.
+  clock.now += 3000;
+  context.renderPanel(panelRow());
+  context.refreshLiveness();
+  assert.ok(node("console-motion").classes.has("stale"));
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+  assert.equal(node("console-mode").classes.has("stale"), false);
+  // When the panel has not answered for 3.5 s, frames or no frames.
+  for (let tick = 1; tick <= 18; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  // Then "acquisition" no longer stands in green for a link nobody has heard of.
+  assert.equal(node("console-motion").classes.has("stale"), false);
+  assert.ok(node("console-ecg-link").classes.has("stale"));
+  assert.ok(node("console-mode").classes.has("stale"));
+  // And the next answer brings them back.
+  context.renderPanel(panelRow());
+  context.refreshLiveness();
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+});
+
+test("the chips fed by the status are struck when the status stops answering", async () => {
+  const { context, clock, node } = panel();
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  context.refreshLiveness();
+  assert.equal(node("attest-state").textContent, "atteste");
+  assert.ok(node("attest-state").classes.has("pill-good"));
+  assert.equal(node("attest-state").classes.has("stale"), false);
+  // One refresh missed is not yet silence.
+  clock.now += 9000;
+  context.refreshLiveness();
+  assert.equal(node("attest-state").classes.has("stale"), false);
+  // Two are: "atteste" and the state no longer stand for the present.
+  clock.now += 3000;
+  context.refreshLiveness();
+  assert.ok(node("attest-state").classes.has("stale"));
+  assert.ok(node("run-state").classes.has("stale"));
+  await context.loadStatus();
+  context.refreshLiveness();
+  assert.equal(node("attest-state").classes.has("stale"), false);
+});
+
+test("every element the liveness check strikes exists in the page", () => {
+  const { context, node } = panel();
+  const lists = vm.runInContext("[FRAME_FED, PANEL_FED, STATUS_FED]", context);
+  assert.equal(lists.length, 3);
+  for (const ids of lists) {
+    assert.ok(ids.length > 0);
+    for (const id of ids) node(id);
+  }
+});
+
 test("the resume banner is part of the stack every page shows, and is not an alarm", () => {
   const banner = banners.find((entry) => entry.id === "resume-banner");
   assert.ok(banner, "the banner is not in the stack above the pages");

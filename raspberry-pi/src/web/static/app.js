@@ -36,6 +36,7 @@ var RECONNECT_MS = 1500;        // socket retry interval
 var ESTOP_ANSWER_MS = 2000;     // an E-STOP request with no answer for this long is said so, loudly
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
+var STATUS_STALE_MS = 12000;    // two refreshes missed: what the status last said is not the present
 var PANEL_MS = 1000;            // console link panel refresh
 var PANEL_STALE_MS = 3500;      // no /api/panel answer for this long: what it last said is not the present
 var SENSORS_MS = 1000;          // /api/sensors poll
@@ -63,6 +64,7 @@ var state = {
   panel: null,           // the last /api/panel answer
   panelAt: 0,            // performance.now() when it came
   status: null,          // the last /api/status answer
+  statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
   statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
   estopReceipt: null,    // this page's own E-STOP, until a frame or a status taken after it takes over
@@ -285,6 +287,34 @@ function closeNav() {
 /* -------------------------------------------------------- the loud banner */
 
 /*
+  What each source feeds: the large numbers, and every chip that goes green,
+  amber or red on its word. When a source goes quiet, all it fed is struck
+  and greyed together. A number struck next to a chip still saying "good",
+  "a l'arret" or "acquisition" in green is a page that still vouches for the
+  machine.
+
+  The frames feed most of it. The link panel and the status are asked over
+  HTTP, each at its own pace, and are judged on their own answers: with the
+  socket down they may still be current, and with the socket up they may not.
+*/
+var FRAME_FED = [
+  "hr", "measured-output", "setpoint-output", "console-hr", "console-output",
+  "run-mode", "side-motion", "side-safety", "mobile-mode", "mobile-motion",
+  "console-hr-quality", "hr-quality", "console-motion", "motion",
+  "console-drive-state", "drive-state", "setpoint-confirmed",
+  "safety-action", "run-safety-action", "phase", "manual-state",
+  "console-ecg-state", "ecg-state",
+];
+var PANEL_FED = ["console-mode", "console-ecg-link"];
+var STATUS_FED = ["run-state", "attest-state"];
+
+function markStale(ids, stale) {
+  ids.forEach(function (id) {
+    el(id).classList.toggle("stale", stale);
+  });
+}
+
+/*
   The socket dropping, or the frames stopping, is shown as a full-width red
   banner and every live number is struck through at the same time. Both, not
   one: the banner says "the page is not live", the struck values say which
@@ -306,12 +336,9 @@ function refreshLiveness() {
   // After its text: the banner is measured as it reads, not as it read last time.
   showBanner(el("banner"), !fresh, reworded);
   renderEstopUnanswered();
-  ["hr", "measured-output", "setpoint-output", "console-hr", "console-output"].forEach(function (id) {
-    el(id).classList.toggle("stale", !fresh);
-  });
-  ["run-mode", "side-motion", "side-safety", "mobile-mode", "mobile-motion"].forEach(function (id) {
-    el(id).classList.toggle("stale", !fresh);
-  });
+  markStale(FRAME_FED, !fresh);
+  markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
+  markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
   if (fresh) {
     pill(el("link-state"), "en direct", "good");
   } else {
@@ -1830,6 +1857,7 @@ function loadStatus() {
     }
     state.statusShown = sent;
     state.status = status;
+    state.statusAt = performance.now();
     if (state.estopReceipt && sent > state.estopReceiptSent) {
       // Asked after the E-STOP was latched: this answer carries it from here on.
       state.estopReceipt = null;

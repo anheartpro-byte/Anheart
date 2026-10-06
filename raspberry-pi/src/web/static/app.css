@@ -281,6 +281,13 @@ main { flex: 1 1 auto; min-width: 0; padding: 1rem; }
 .pill-warn { background: rgba(245, 165, 36, 0.18); border-color: var(--warn); color: #f7c778; }
 .pill-bad { background: rgba(229, 72, 77, 0.2); border-color: var(--bad); color: #ff9ea1; }
 
+/*
+  A chip whose source has gone quiet. Struck like every stale value, and its
+  colour taken away as well: a green chip, struck or not, still reads as green.
+  After the three colours above, so that it wins over them.
+*/
+.pill.stale { background: var(--panel-2); border-color: var(--line); }
+
 /* --- zone band ---------------------------------------------------------- */
 
 /*
