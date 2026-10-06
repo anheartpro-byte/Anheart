@@ -27,6 +27,7 @@
   --good: #30a46c;
   --accent: #6ea8fe;
   --footer-h: 5.5rem;
+  --banners-h: 0px;  /* the height of the banner stack, kept current by app.js */
   --mono: ui-monospace, "DejaVu Sans Mono", "Courier New", monospace;
 }
 
@@ -42,12 +43,22 @@ body {
 
 .hidden { display: none !important; }
 
-/* --- the disconnection banner ------------------------------------------ */
+/* --- the banners -------------------------------------------------------- */
 
-.banner {
+/*
+  One sticky stack, so "no live data" and a latched stop show together, never
+  one over the other. A latched stop keeps its banner until it is acknowledged,
+  so what sticks below the stack (the sidebar, the mobile bar) starts under it,
+  at --banners-h: a banner that stays must not push the navigation under the
+  footer, nor cover the menu button.
+*/
+.banners {
   position: sticky;
   top: 0;
   z-index: 40;
+}
+
+.banner {
   display: flex;
   gap: 0.75rem;
   align-items: baseline;
@@ -81,14 +92,14 @@ body {
   narrow screens. The footer is outside the shell entirely: nothing here can
   cover it.
 */
-.shell { display: flex; align-items: flex-start; min-height: calc(100vh - var(--footer-h)); }
+.shell { display: flex; align-items: flex-start; min-height: calc(100vh - var(--footer-h) - var(--banners-h)); }
 
 .sidebar {
   position: sticky;
-  top: 0;
+  top: var(--banners-h);
   flex: 0 0 15.5rem;
   width: 15.5rem;
-  height: calc(100vh - var(--footer-h));
+  height: calc(100vh - var(--footer-h) - var(--banners-h));
   overflow-y: auto;
   padding: 1rem 0.8rem;
   background: var(--panel);
@@ -152,7 +163,7 @@ body {
 .mobilebar {
   display: none;
   position: sticky;
-  top: 0;
+  top: var(--banners-h);
   z-index: 36;
   gap: 0.6rem;
   align-items: center;
@@ -537,7 +548,7 @@ canvas.wave-large { height: 320px; }
   .mobilebar .pill { font-size: 0.68rem; }
   .sidebar {
     position: fixed;
-    top: 0;
+    top: var(--banners-h);
     left: 0;
     bottom: var(--footer-h);
     height: auto;

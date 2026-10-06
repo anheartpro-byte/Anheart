@@ -102,7 +102,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeau rouge en haut | `NO LIVE DATA`, visible dès que les données ne sont plus fraîches |
+| Bandeaux rouges en haut | `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). La barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, six pastilles d'état de la machine, la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
@@ -143,8 +143,9 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
    (bras), fréquence variateur (Hz), Gc (g centripète) et Gr (g résultant ressenti).
    Le rapport de réduction est 49,79 : un seul de ces nombres masquerait une erreur d'un
    facteur 50. Voir [glossaire](glossaire.md) pour Gc et Gr.
-4. **Une fréquence cardiaque périmée est barrée.** Elle est affichée avec son âge et sa
-   qualité. Un capteur dont la fenêtre n'avance plus depuis 3,5 s est marqué `perime`.
+4. **Une fréquence cardiaque périmée est barrée.** Elle est affichée avec son âge, et sa
+   pastille de qualité dit `perime` (grise) au lieu de la dernière note reçue. Un capteur
+   dont la fenêtre n'avance plus depuis 3,5 s est marqué `perime` de la même façon.
 5. **L'E-STOP ne demande rien** : ni confirmation, ni nom, ni raison.
 
 L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`) vaut :
@@ -196,13 +197,16 @@ Sous les pastilles, une ligne indique l'adresse d'écoute, par exemple
 `Tableau de bord`, `Capteurs` (avec, en dessous, une entrée par capteur acquis : nom,
 canal `A1`…`A6` et une pastille de couleur selon la qualité), `Seance`, `Configuration`,
 `Securite`. Changer de page ne recharge rien : aucune navigation ne peut figer un nombre.
+Le titre de l'onglet suit la page affichée : `Tableau de bord - AnHeart`,
+`Securite - AnHeart`, et le type du capteur pour la page d'un capteur (`ECG - AnHeart`).
 
 ---
 
 ## 5. Pied de page : STOP et E-STOP
 
 Présent sur **toutes** les pages. À gauche, un résumé : `liaison ouverte · manuel · hold`
-(mode et phase de l'instantané).
+(mode et phase de l'instantané). Au repos, aucune phase n'est en cours et le résumé
+s'arrête au mode : `liaison ouverte · repos`.
 
 ### STOP : « rampe controlee »
 
@@ -222,8 +226,25 @@ Présent sur **toutes** les pages. À gauche, un résumé : `liaison ouverte · 
 - Envoie `POST /api/session/estop` **au premier clic**, sans confirmation, sans nom exigé.
 - Le verrou est posé **avant** la réponse (code 200), sans attendre la boucle de
   contrôle. À la tick suivante, la boucle met la consigne à zéro (`QUICK_STOP`).
-- La page affiche dans le bandeau :
-  `ARRET D'URGENCE VERROUILLE (quick_stop) - surveillez la vitesse MESUREE : la machine decelere, elle n'est pas arretee`.
+- La page affiche en haut un bandeau rouge qui lui est propre, distinct de `NO LIVE DATA` :
+  `ARRET D'URGENCE VERROUILLE` suivi de
+  `surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete`.
+  Il ne dit pas que la machine est arrêtée : seule la vitesse mesurée le dit.
+- Ce bandeau ne dépend pas du clic. Un écran le lève dès qu'une de ses trois sources
+  dit qu'un arrêt d'urgence est verrouillé : la réponse à son propre clic, les
+  instantanés du WebSocket (verdict `quick_stop` verrouillé), ou `/api/status`
+  (`estop_latched`, ou verdict retenu `quick_stop` verrouillé). Il apparaît donc aussi
+  sur un écran qui n'a pas cliqué, après un arrêt posé par la caméra, et pour le
+  `quick_stop` verrouillé d'une règle de sécurité (`reverse_rotation` par exemple ; la
+  ligne `e-stop verrouille` dit alors `non`).
+- Il ne se baisse que sur une donnée plus récente qui montre le verdict levé ; dans le
+  doute il reste, sur toutes les pages. Un verdict `go_silent` prend la place d'un arrêt
+  d'urgence comme verdict retenu et refuse tout acquittement : un bandeau déjà affiché
+  reste alors jusqu'au redémarrage de la console. Si le WebSocket tombe, il reste à
+  côté de `NO LIVE DATA`.
+- Limite : un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict retenu
+  ne peut pas savoir qu'un arrêt posé par la caméra est verrouillé derrière lui, car
+  aucune réponse de la console ne le dit. Il affiche `go_silent`, sans ce bandeau.
 - Ce que l'E-STOP web **n'est pas** : un arrêt de sécurité. Il dépend du navigateur,
   du réseau, du serveur web et du processus. Le STO est ponté sur cette machine : même
   l'arrêt d'urgence le plus rapide est une rampe (voir [securite.md](securite.md)).
@@ -301,9 +322,10 @@ Messages sous la carte : `accepte : manual_start bench (cible 0)`,
 
 La fréquence cardiaque **qui commande** la machine en séance AUTO (celle des pages
 Capteurs n'est que de la surveillance). Grand nombre en bpm, pastille de qualité
-(`good`, `noisy`, `mains_dominated`, `no_signal`, ou `pas de signal`), et :
+(`good`, `noisy`, `mains_dominated`, `no_signal`, `perime`, ou `pas de signal`), et :
 `age` (en s, barré si périmé), `brut` (dernière valeur), `seq` (numéro de la mesure).
-Une fréquence périmée (plus de 4 s) est barrée.
+Une fréquence périmée (plus de 4 s) est barrée, et sa pastille passe à `perime`
+(grise) : la dernière note reçue ne dit plus rien du signal.
 
 ### Carte « Vitesse mesuree »
 
@@ -325,7 +347,9 @@ Grille : `age du statut`, `LFT brut` (code défaut brut ou `aucun`), `liaison`
 `derniere erreur`, `rayon / rapport` (ex. `1.50 m / i = 49.79`), `plafond moteur`.
 
 En cas de défaut, un encadré rouge :
-`DEFAUT <mnémonique> (LFT brut <code>) : <signification>, <message>`.
+`DEFAUT <mnémonique> (LFT brut <code>) : <signification>`.
+Pour un code absent de la table, l'encadré reprend le message du pilote tel quel :
+`DEFAUT code de defaut inconnu <code> (0x<code en hexadécimal>) : <signification>`.
 La table des 66 codes LFT est dans [raspberry-pi.md](raspberry-pi.md).
 
 Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
@@ -441,8 +465,10 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
-Dans ce dernier cas la note dit :
+Dans ce dernier cas une note dit :
 `seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL`.
+Elle a sa propre ligne : le résultat d'une prévisualisation s'affiche sous elle, sans
+être effacé.
 
 Pour qu'une séance programmée puisse partir, **toutes** ces conditions doivent tenir
 (dans l'ordre où la console les vérifie, `LocalPanel._start_programme`) :
@@ -478,8 +504,8 @@ zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
 
 | Carte | Contenu |
 |---|---|
-| **Frequence cardiaque** | bpm en grand (barré si périmé), qualité, bande de zone avec un curseur, `cible`, `age`, `brut`, temps `dans la zone`, `au-dessus`, `en dessous` |
-| **Phase** | pastille de phase (`baseline`, `warmup`, `hold`, `cooldown`, `recovery`, `done`), barre de progression, `ecoule`, `restant`, `securite` |
+| **Frequence cardiaque** | bpm en grand (barré si périmé), qualité (`perime` si périmée), bande de zone avec un curseur, `cible`, `age`, `brut`, temps `dans la zone`, `au-dessus`, `en dessous` |
+| **Phase** | pastille de phase (`baseline`, `warmup`, `hold`, `cooldown`, `recovery`, `done` ; `-` au repos, où aucune phase n'est en cours), barre de progression, `ecoule`, `restant`, `securite` |
 | **Mesure** | vitesse de sortie **mesurée** en grand, pastille de rotation, les cinq grandeurs et le courant |
 | **Consigne** | la consigne commandée (plus petite, grisée), pastille `confirmee par le variateur` ou `non confirmee` (écho LFRD) |
 | **Variateur** | état, `age du statut`, `courant`, `mesure` (tr/min moteur), encadré de défaut |
@@ -812,8 +838,6 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 - Le message 403 de mouvement désactivé (`MOTION_DISABLED_DETAIL`, `routes.py`) cite
   toujours « jalon M1 », et le bandeau « LECTURE SEULE » de la page existe encore, mais ni
   l'un ni l'autre ne sont atteignables avec `src.local_panel` tel qu'il est construit.
-- Le titre de l'onglet reste `Console du banc - AnHeart` et le README parle d'un
-  « onglet **Console** » : la barre latérale nomme cette page **Tableau de bord**.
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
   tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).
