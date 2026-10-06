@@ -90,17 +90,19 @@ export function summarizeRecording(
 /**
  * How much of the recording the batches at hand cover.
  *
- * - `unknown`: the server has not said how many batches exist, so a count over
- *   the loaded ones cannot be called the session total yet;
+ * - `unknown`: the batches are still loading, or the server has not said how
+ *   many exist, so no count can be called total or partial yet. Screens show
+ *   a placeholder for every count, per channel as well as overall;
  * - `partial`: the server holds more batches than were loaded;
  * - `complete`: every batch the server counted was loaded.
  */
 export type RecordingCoverage = "unknown" | "partial" | "complete";
 
 export function recordingCoverage(
-  loadedBatches: number,
+  loadedBatches: number | undefined | null,
   totalBatches: number | undefined | null,
 ): RecordingCoverage {
+  if (loadedBatches === undefined || loadedBatches === null) return "unknown";
   if (totalBatches === undefined || totalBatches === null) return "unknown";
   return totalBatches > loadedBatches ? "partial" : "complete";
 }

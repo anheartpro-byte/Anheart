@@ -218,9 +218,9 @@ export default function LiveSessionPage({
   // so the count is flagged as partial instead of being extrapolated.
   const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
   const recordedRates = formatSampleRates(recording.sampleRates);
-  const coverage = recordingCoverage(recording.batchCount, stats?.totalBatches);
+  const coverage = recordingCoverage(ecgData?.length, stats?.totalBatches);
   // No figure until the server's batch count is known: it decides the label.
-  const countsReady = ecgData !== undefined && coverage !== "unknown";
+  const countsReady = coverage !== "unknown";
   const countValues = {
     channels: recording.channelCount,
     loaded: recording.batchCount,

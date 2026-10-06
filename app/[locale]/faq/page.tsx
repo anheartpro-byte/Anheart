@@ -63,7 +63,7 @@ const faqData = {
         {
           question: "What channels does the ECG monitoring system track?",
           answer:
-            "Our ECG monitoring system can track multiple channels including ECG, EMG, EDA, EEG, ACC, and LUX. This comprehensive monitoring ensures safe and effective training sessions with real-time feedback.",
+            "Our ECG monitoring system can track six channels: ECG, EDA, SpO2, RESP, EMG, and LUX. This comprehensive monitoring ensures safe and effective training sessions with real-time feedback.",
         },
       ],
     },
@@ -132,7 +132,7 @@ const faqData = {
         {
           question: "Quels canaux le système de surveillance ECG suit-il?",
           answer:
-            "Notre système de surveillance ECG peut suivre plusieurs canaux, notamment ECG, EMG, EDA, EEG, ACC et LUX. Cette surveillance complète garantit des sessions d'entraînement sûres et efficaces avec un retour en temps réel.",
+            "Notre système de surveillance ECG peut suivre six canaux : ECG, EDA, SpO2, RESP, EMG et LUX. Cette surveillance complète garantit des sessions d'entraînement sûres et efficaces avec un retour en temps réel.",
         },
       ],
     },

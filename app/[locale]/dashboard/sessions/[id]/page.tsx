@@ -132,11 +132,12 @@ export default function SessionDetailPage({
   // Only part of a long recording is loaded here, so the count says when it is partial.
   const recording = summarizeRecording(ecgData ?? [], session.sampleRate);
   const recordedRates = formatSampleRates(recording.sampleRates);
-  const coverage = recordingCoverage(recording.batchCount, stats?.totalBatches);
+  const coverage = recordingCoverage(ecgData?.length, stats?.totalBatches);
   const isPartial = coverage === "partial";
   // Until the batches and the server's batch count are both in, a count over
-  // the loaded batches cannot be labelled total or partial: show a placeholder.
-  const countsReady = ecgData !== undefined && coverage !== "unknown";
+  // the loaded batches cannot be labelled total or partial: every count,
+  // per channel included, shows a placeholder.
+  const countsReady = coverage !== "unknown";
   const countValues = {
     channels: recording.channelCount,
     loaded: recording.batchCount,
@@ -321,9 +322,11 @@ export default function SessionDetailPage({
                   {t("sessionDetail.channelTitle", { channel })}
                 </CardTitle>
                 <CardDescription>
-                  {t("sessionDetail.samplesRecorded", {
-                    count: ecgSamples[channel]?.length ?? 0,
-                  })}
+                  {countsReady
+                    ? t("sessionDetail.samplesRecorded", {
+                        count: ecgSamples[channel]?.length ?? 0,
+                      })
+                    : "-"}
                 </CardDescription>
               </CardHeader>
               <CardContent>

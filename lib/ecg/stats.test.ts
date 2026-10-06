@@ -210,6 +210,17 @@ describe("ANH-123 partial recordings are flagged, not passed off as totals", () 
     },
   );
 
+  it.each([undefined, null])(
+    "does not call a count ready while the batches themselves are %s",
+    (loadedBatches) => {
+      // Given the server's batch count already known but the batches still loading.
+      // Then no count is ready yet, per channel or overall: the screen waits.
+      expect(recordingCoverage(loadedBatches, 126)).toBe("unknown");
+      expect(recordingCoverage(loadedBatches, 0)).toBe("unknown");
+      expect(recordingCoverage(loadedBatches, undefined)).toBe("unknown");
+    },
+  );
+
   it("accepts a recording that stored no batch at all", () => {
     // Given a session the server counted zero batches for.
     expect(recordingCoverage(0, 0)).toBe("complete");
