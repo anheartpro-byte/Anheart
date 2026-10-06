@@ -24,13 +24,6 @@ export const createMachine = mutation({
   args: {
     name: v.string(),
     location: v.optional(v.string()),
-    config: v.optional(
-      v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    ),
     gestionnaireIds: v.optional(v.array(v.id("users"))), // Gestionnaires to assign this machine to
   },
   returns: v.object({
@@ -50,11 +43,6 @@ export const createMachine = mutation({
       status: "offline",
       lastHeartbeat: 0,
       location: args.location,
-      config: args.config ?? {
-        sampleRate: 1000,
-        channels: ["ECG"],
-        batchInterval: 1000,
-      },
       createdAt: now,
     });
 
@@ -254,11 +242,6 @@ export const getMachine = query({
       ),
       lastHeartbeat: v.number(),
       location: v.optional(v.string()),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
       createdAt: v.number(),
       isDeleted: v.optional(v.boolean()),
       deletedAt: v.optional(v.number()),
@@ -319,7 +302,6 @@ export const getMachine = query({
       status: machine.status,
       lastHeartbeat: machine.lastHeartbeat,
       location: machine.location,
-      config: machine.config,
       createdAt: machine.createdAt,
       isDeleted: machine.isDeleted,
       deletedAt: machine.deletedAt,
@@ -401,20 +383,13 @@ export const listMachines = query({
 });
 
 /**
- * Update machine configuration
+ * Update a machine's name or location
  */
 export const updateMachine = mutation({
   args: {
     machineId: v.id("machines"),
     name: v.optional(v.string()),
     location: v.optional(v.string()),
-    config: v.optional(
-      v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -431,7 +406,6 @@ export const updateMachine = mutation({
     const updates: Record<string, unknown> = {};
     if (args.name !== undefined) updates.name = args.name;
     if (args.location !== undefined) updates.location = args.location;
-    if (args.config !== undefined) updates.config = args.config;
 
     if (Object.keys(updates).length > 0) {
       await ctx.db.patch(args.machineId, updates);
@@ -518,39 +492,6 @@ export const restoreMachine = mutation({
     });
 
     return null;
-  },
-});
-
-/**
- * Get machine by ID (internal use)
- */
-export const getMachineById = internalQuery({
-  args: {
-    machineId: v.id("machines"),
-  },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    const machine = await ctx.db.get(args.machineId);
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
   },
 });
 

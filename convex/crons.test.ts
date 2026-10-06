@@ -11,8 +11,6 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import { modules, NOW } from "./test.setup";
 
-const CONFIG = { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 };
-
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -31,7 +29,6 @@ describe("ANH-132 check-offline-machines cron", () => {
           apiKey: "synthetic-hash",
           status,
           lastHeartbeat,
-          config: CONFIG,
           createdAt: NOW,
         });
       return {
@@ -59,7 +56,6 @@ describe("ANH-132 check-offline-machines cron", () => {
         apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW - 90_000, // cutoff is `< now - 90000`, so this is kept
-        config: CONFIG,
         createdAt: NOW,
       }),
     );

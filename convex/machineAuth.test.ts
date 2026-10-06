@@ -160,9 +160,6 @@ describe("ANH-121 machine authentication", () => {
     const reads = [
       await f.admin.query(api.machines.getMachine, { machineId: f.machineId }),
       await f.admin.query(api.machines.listMachines, {}),
-      await f.t.query(internal.machines.getMachineById, {
-        machineId: f.machineId,
-      }),
       await f.t.query(internal.machines.getMachineByApiKey, {
         apiKey: replacement.apiKey,
       }),

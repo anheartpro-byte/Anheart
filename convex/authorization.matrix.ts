@@ -933,75 +933,6 @@ export const MATRIX: Entry[] = [
   // sessions.ts
   // =========================================================================
   {
-    id: "sessions.createSession",
-    ref: api.sessions.createSession,
-    kind: "mutation",
-    build: async (w, _actor, scope) => ({
-      machineId: w.machine,
-      userId: scope === "other" ? w.otherPatient : w.patient,
-      channels: ["ECG"],
-    }),
-    onSuccess: async (res, w) => {
-      const s = await w.t.run((ctx) => ctx.db.get(res as Id<"sessions">));
-      if (s?.status !== "pending" || s.machineId !== w.machine)
-        throw new Error("Recording session not created");
-    },
-    cases: [
-      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
-      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot create sessions" },
-      { actor: "manager", scope: "own", expect: ok, note: "manages machine and patient" },
-      {
-        actor: "manager",
-        scope: "other",
-        expect: refuse(/Not authorized to create session for this patient/),
-        note: "manages the machine but not this rider",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: refuse(/Not authorized to use this machine/),
-        note: "does not manage this machine",
-      },
-      { actor: "admin", expect: ok, note: "admin creates" },
-    ],
-  },
-  {
-    id: "sessions.endSession",
-    ref: api.sessions.endSession,
-    kind: "mutation",
-    build: async (w) => {
-      const sessionId = await addSession(w, {
-        machineId: w.machine,
-        userId: w.patient,
-        status: "active",
-        kind: "recording",
-      });
-      return { sessionId };
-    },
-    onSuccess: async (_res, w) => {
-      const rows = await w.t.run((ctx) =>
-        ctx.db
-          .query("sessions")
-          .withIndex("by_machine", (q) => q.eq("machineId", w.machine))
-          .collect(),
-      );
-      if (!rows.some((s) => s.status === "completed"))
-        throw new Error("Session not ended");
-    },
-    cases: [
-      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
-      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot end sessions" },
-      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: refuse(/Not authorized to manage this session/),
-        note: "does not manage this machine",
-      },
-      { actor: "admin", expect: ok, note: "admin ends" },
-    ],
-  },
-  {
     id: "sessions.getSession",
     ref: api.sessions.getSession,
     kind: "query",
@@ -1146,38 +1077,6 @@ export const MATRIX: Entry[] = [
     cases: [
       { actor: "admin", expect: ok, note: "all completed sessions" },
       { actor: "manager", scope: "own", expect: filtered, note: "their machine's completed sessions" },
-    ],
-  },
-  {
-    id: "sessions.cancelSession",
-    ref: api.sessions.cancelSession,
-    kind: "mutation",
-    build: async (w) => {
-      const sessionId = await addSession(w, {
-        machineId: w.machine,
-        userId: w.patient,
-        status: "pending",
-        kind: "recording",
-      });
-      return { sessionId };
-    },
-    onSuccess: async (_res, w, _actor, _scope, args) => {
-      const s = await w.t.run((ctx) =>
-        ctx.db.get((args as { sessionId: Id<"sessions"> }).sessionId),
-      );
-      if (s !== null) throw new Error("Pending session not cancelled");
-    },
-    cases: [
-      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
-      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot cancel" },
-      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: refuse(/Not authorized to manage this session/),
-        note: "does not manage this machine",
-      },
-      { actor: "admin", expect: ok, note: "admin cancels" },
     ],
   },
 
@@ -1541,7 +1440,7 @@ export const MATRIX: Entry[] = [
   },
 
   // =========================================================================
-  // ecgData.ts  (identical access rule across the five readers)
+  // ecgData.ts  (read-only history; identical access rule across the five readers)
   // =========================================================================
   ...(
     [
@@ -1654,7 +1553,7 @@ export const MATRIX: Entry[] = [
   },
 
   // =========================================================================
-  // sessionSummaries.ts
+  // sessionSummaries.ts  (read-only history)
   // =========================================================================
   {
     id: "sessionSummaries.getSummary",
@@ -1736,11 +1635,6 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   tests: string;
 }> = [
   { method: "POST", path: "/api/machine/heartbeat", tests: "machineAuth.test.ts; httpRoutes.test.ts" },
-  { method: "GET", path: "/api/machine/session/poll", tests: "httpRoutes.test.ts (recording only)" },
-  { method: "POST", path: "/api/machine/session/start", tests: "httpRoutes.test.ts" },
-  { method: "POST", path: "/api/machine/session/end", tests: "httpRoutes.test.ts" },
-  { method: "GET", path: "/api/machine/session/status", tests: "httpRoutes.test.ts" },
-  { method: "POST", path: "/api/machine/data", tests: "httpRoutes.test.ts (body, timestamp, machine binding)" },
   { method: "GET", path: "/api/machine/training/poll", tests: "httpRoutes.test.ts (auto, this machine)" },
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
