@@ -2102,7 +2102,7 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 
 | Fichier | Ce qu'il vérifie |
 |---|---|
-| `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart, écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés, ligne de commande |
+| `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés, ligne de commande |
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées |

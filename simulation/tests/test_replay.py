@@ -20,14 +20,22 @@ from simulation.replay_tape import NO_FURTHER
 from simulation.scenario import (
     SCENARIO_DIR,
     Acknowledge,
+    Action,
     AttendantLeaves,
+    BitalinoDisconnect,
+    BitalinoSignal,
+    CommsLoss,
     EmergencyStop,
     Expectation,
+    InjectDriveFault,
+    LoopStall,
     ManualTarget,
     OperatorFaultReset,
     OperatorStop,
     RemoteStop,
+    SignalFault,
     StartAgain,
+    TickException,
 )
 from simulation.tests.conftest import document, load, num, obj, run
 from simulation.tests.replay_support import (
@@ -42,6 +50,7 @@ from simulation.tests.replay_support import (
     short,
     tick_at,
 )
+from src.motor.drive import DriveFault
 from src.record.codec import Privacy
 from src.record.reader import read
 from src.record.schema import EventKind
@@ -163,6 +172,52 @@ def test_ex1_a_recorded_programme_replays_with_its_heart_rate(programme: Path) -
     assert "start_programme" in {event.detail for event in loaded.value.events}
     assert loaded.value.manifest.profile is not None
     assert replayed(programme).matches
+
+
+TARGETED = ManualTarget(Seconds(1.0), TARGET, Expectation.ACCEPTED)
+
+
+@pytest.mark.parametrize(
+    "trouble",
+    [
+        LoopStall(Seconds(3.0), Seconds(2.6)),
+        LoopStall(Seconds(3.0), Seconds(4.0)),
+        CommsLoss(Seconds(3.0), Seconds(2.0)),
+        InjectDriveFault(Seconds(3.0), DriveFault.OVERCURRENT),
+        BitalinoSignal(Seconds(2.0), SignalFault.GAPS, Seconds(3.0)),
+        BitalinoDisconnect(Seconds(3.0)),
+    ],
+    ids=["stall", "stall_past_silence", "comms_loss", "drive_fault", "ecg_gaps", "ecg_gone"],
+)
+def test_ex1_a_session_that_went_wrong_replays_as_exactly_as_one_that_did_not(
+    trouble: Action, tmp_path: Path
+) -> None:
+    # A stalled loop (ticks missing, ECG arriving in a backlog), a silent drive,
+    # a faulted drive, a lossy or lost ECG: what the PLANT did is in the record
+    # as frames, blocks and tick instants, so nothing has to be injected again.
+    folder = record(short("manual_27_rpm", duration=12.0, actions=(TARGETED, trouble)), tmp_path)
+    loaded = read(folder)
+    assert isinstance(loaded, Ok)
+    assert any(event.detail.startswith("simulation: ") for event in loaded.value.events)
+    report = replayed(folder)
+    assert report.matches, report.to_text()
+    assert report.comparison.tolerated_rpm == (0, 0)
+    assert report.comparison.shifted_transitions == (0, 0)
+
+
+def test_a_tick_that_raised_in_the_original_is_a_divergence_at_its_instant(tmp_path: Path) -> None:
+    # A known limit: the record keeps no trace of an exception raised inside a
+    # tick, so the replay cannot raise it again. It is reported where it was.
+    actions = (TARGETED, TickException(Seconds(3.0)))
+    folder = record(short("manual_27_rpm", duration=12.0, actions=actions), tmp_path)
+    report = replayed(folder)
+    assert report.outcome is Outcome.DIVERGENCE
+    divergence = report.divergence
+    assert divergence is not None
+    assert divergence.t == pytest.approx(3.0)
+    assert divergence.requested == "emergency_zero"
+    assert report.comparison.matches
+    assert report.comparison.actual_ticks == report.recorded_ticks
 
 
 def test_ex1_the_heart_rate_reaches_the_runtime_through_the_recorded_ecg_only(
