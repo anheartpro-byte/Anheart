@@ -2,8 +2,14 @@
 
 Ce guide couvre l'installation et le lancement de chaque partie **sans aucun
 matériel** : la console locale du Pi en simulation complète, le site, la
-simulation 2D et le mode instantané. Les commandes ci-dessous ont été lancées sur
-un Mac (Apple silicon, Python 3.12, Node 22), sauf mention contraire.
+simulation 2D et le mode instantané. Les commandes utilisent un shell Unix
+(macOS ou Linux). La console simulée et le visualiseur fonctionnent hors ligne ;
+le site nécessite des services de développement déjà configurés.
+
+Commencer chaque section depuis la **racine du dépôt** (celle qui contient
+`package.json`, `raspberry-pi/` et `simulation/`). Les parenthèses des commandes
+Python isolent le changement de dossier : à leur sortie, le terminal reste à
+la racine. Dans un nouveau terminal, revenir à cette racine avant de continuer.
 
 [Retour au sommaire](README.md) · termes : [glossaire](glossaire.md)
 
@@ -11,22 +17,23 @@ un Mac (Apple silicon, Python 3.12, Node 22), sauf mention contraire.
 
 ## 1. Prérequis
 
-| Outil | Version constatée | Pour quoi |
+| Outil | Version de référence | Pour quoi |
 |---|---|---|
 | Python | 3.12 (le code vise 3.12 : `pythonVersion = "3.12"` dans `raspberry-pi/pyproject.toml`) | le Pi et la simulation |
-| Node.js | 22 | le site Next.js et la CLI Convex |
+| Node.js | 24 (comme la CI dans `.github/workflows/ci.yml`) | le site Next.js et la CLI Convex |
 | npm ou bun | npm 10+ / bun 1.x (les deux fichiers de verrou existent : `package-lock.json` et `bun.lock`) | installer le site |
 | libusb | `brew install libusb` | seulement pour le vrai câble RS485 Schneider sur Mac |
-| Un compte Convex et un compte Clerk | - | seulement pour faire tourner le site |
+| Configuration Convex et Clerk de développement | fournie par l'équipe | seulement pour faire tourner le site ; voir section 4 |
 
 Il n'y a **qu'un seul environnement Python**, `raspberry-pi/.venv`. La simulation
 l'utilise aussi.
 
 ## 2. Installer l'environnement Python
 
-Depuis `raspberry-pi/` :
+Depuis la racine du dépôt (une seule installation) :
 
 ```sh
+(
 cd raspberry-pi
 python3.12 -m venv .venv
 .venv/bin/pip install --upgrade pip
@@ -34,6 +41,7 @@ python3.12 -m venv .venv
 # le module bitalino n'est pas dans requirements-dev.txt (voir la note du fichier) :
 .venv/bin/pip install pyserial
 .venv/bin/pip install --no-deps bitalino
+)
 ```
 
 `requirements-dev.txt` inclut `requirements-base.txt` et ajoute pytest,
@@ -42,12 +50,14 @@ hypothesis, basedpyright, mypy et ruff. C'est aussi ce que demande la
 
 ## 3. Lancer la console locale en simulation complète
 
-Depuis `raspberry-pi/` (et **pas** depuis la racine) :
+Depuis la racine du dépôt, entrer dans `raspberry-pi/` pour lancer le module :
 
 ```sh
+(
 cd raspberry-pi
 MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 UI_PORT=8090 MACHINE_API_KEY= \
   .venv/bin/python -m src.local_panel
+)
 ```
 
 Puis ouvrir <http://127.0.0.1:8090/>. Ctrl-C arrête proprement.
@@ -65,9 +75,12 @@ Ce que fait chaque variable :
 Options utiles pour voir plus de choses :
 
 ```sh
-MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 MACHINE_API_KEY= \
+(
+cd raspberry-pi
+MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 UI_PORT=8090 MACHINE_API_KEY= \
   SENSORS=ECG,EDA,SpO2,RESP,EMG,LUX PRESENCE_SOURCE=sim_empty \
   .venv/bin/python -m src.local_panel
+)
 ```
 
 `SENSORS` affiche les six voies du BITalino (seul l'ECG pilote quoi que ce soit) ;
@@ -85,7 +98,9 @@ S'il manque une clé obligatoire, la console refuse de démarrer, liste **tous**
 les problèmes d'un coup et sort avec le code 2.
 
 Pour un premier essai dans la page : attester le câblage E-STOP (deux cases),
-démarrer une séance **manuelle banc**, demander 5 tr/min, puis STOP. Chaque écran
+démarrer une séance **manuelle banc**, augmenter la cible avec « +1 tr/min »,
+cliquer « Appliquer », puis STOP. Le premier incrément rejoint le minimum de
+rotation affiché. Chaque écran
 est décrit dans [console-locale.md](console-locale.md).
 
 > Avec le plafond par défaut `MOTOR_MAX_RPM=300` (≈ 6 tr/min au bras), une cible de
@@ -94,21 +109,27 @@ est décrit dans [console-locale.md](console-locale.md).
 
 ## 4. Lancer le site (tableau de bord distant)
 
-> **État honnête** : une version précédente du site et de Convex est en
-> production. Le code actuel (nouveau schéma, `convex/training.ts`, nouvelles
-> pages) est déployé sur le Convex de **développement** depuis le 1er octobre
-> 2026 et ses fonctions y ont été testées ; ses pages ont été ouvertes dans un
-> navigateur, en local, le 2 octobre 2026. Le `.env.local` de ce dépôt vise le
-> développement.
-> Environnements, clés et commandes : [deploiement.md](deploiement.md).
+### Frontend local, services de développement déjà configurés
+
+Demander à l'équipe une configuration **de développement** compatible avec la
+branche, puis renseigner les trois variables du site ci-dessous dans
+`.env.local`, à la racine. Ce fichier local n'est pas fourni par un clone et ne
+doit pas être commité. Vérifier l'environnement visé avec l'équipe : les essais
+des 1er et 2 octobre 2026 consignés dans [deploiement.md](deploiement.md) ne
+garantissent ni la configuration de votre clone ni l'état du backend actuel.
 
 Depuis la racine du dépôt :
 
 ```sh
 npm install              # ou : bun install
-npx convex dev --once    # pousse convex/ vers le déploiement de développement (clé dans .env.local)
-npm run dev              # next dev + convex dev en parallèle
+npm run dev:frontend     # Next.js uniquement ; aucun déploiement Convex
 ```
+
+Ouvrir <http://localhost:3000/> (ou le port annoncé par Next.js si 3000 est
+occupé). La page d'accueil doit s'afficher ; les pages protégées demandent une
+connexion Clerk. Si une variable manque, demander sa valeur de développement
+à l'équipe avant de poursuivre. Aucun compte ni aucune machine ne doit être
+créé pour simplement vérifier la page d'accueil.
 
 Les scripts de `package.json` :
 
@@ -121,14 +142,20 @@ Les scripts de `package.json` :
 | `build` / `start` | `next build` / `next start` |
 | `lint` | `eslint .` |
 
-`npx convex dev` et `predev` parlent au service Convex en ligne : il faut un compte
-et une connexion réseau.
+### Configuration ou mise à jour du backend : opération distincte
+
+**Ne pas utiliser `npm run dev` comme simple lancement local** : son `predev`
+déploie les fonctions Convex, puis `dev:backend` surveille et déploie les
+changements. `npx convex dev --once` déploie aussi. Ces commandes nécessitent
+un environnement cible vérifié et l'accord de l'équipe pour le modifier ;
+suivre alors [deploiement.md](deploiement.md). Elles ne sont pas nécessaires
+pour ouvrir le frontend avec des services déjà configurés.
 
 Variables nécessaires :
 
 | Où | Variable | Rôle |
 |---|---|---|
-| `.env.local` (site) | `NEXT_PUBLIC_CONVEX_URL` | URL `.convex.cloud` du déploiement ; écrite par `npx convex dev`. La seule lue par le code du site (`components/ConvexClientProvider.tsx`) |
+| `.env.local` (site) | `NEXT_PUBLIC_CONVEX_URL` | URL `.convex.cloud` du déploiement de développement existant, lue par `components/ConvexClientProvider.tsx` |
 | `.env.local` (site) | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | clés standard de `@clerk/nextjs` |
 | variables du déploiement Convex | `CLERK_JWT_ISSUER_DOMAIN` | domaine émetteur des jetons Clerk (`convex/auth.config.ts`, `applicationID: "convex"`) ; il faut un modèle JWT Clerk nommé `convex` |
 | `raspberry-pi/.env` (Pi) | `CONVEX_URL`, `MACHINE_API_KEY` | pour relier une console : l'hôte **`.convex.site`** (pas `.convex.cloud`) et la clé de 64 caractères affichée une seule fois à la création de la machine |
@@ -197,9 +224,12 @@ Tous les paramètres d'URL et les options sont dans
 ## 6. Vérifier que tout passe (les gates)
 
 ```sh
-cd raspberry-pi && ./scripts/check.sh        # la gate du Pi : ruff, basedpyright, mypy, tests + 100 % de branches
-simulation/scripts/check.sh                  # la gate de la simulation (depuis n'importe où)
+bash raspberry-pi/scripts/check.sh          # depuis la racine : gate du Pi
+bash simulation/scripts/check.sh            # depuis la racine : gate de la simulation
 ```
+
+Ces scripts se placent eux-mêmes dans leur dossier ; le terminal reste à la
+racine. Ils exécutent ruff, basedpyright, mypy et les tests avec couverture.
 
 `raspberry-pi/scripts/check.sh` est suivi avec le mode exécutable `100755` ;
 `./scripts/check.sh` et `bash scripts/check.sh` lancent la même gate.

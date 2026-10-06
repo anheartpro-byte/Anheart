@@ -11,9 +11,8 @@ Il existe deux sortes de séance :
   zone, par exemple « jog » 145-155 bpm.
 - **MANUELLE** : l'opérateur fixe la vitesse, **uniquement depuis la machine**.
 
-> **État réel.** Tout le logiciel du Pi est testé en simulation (3187 tests, 100 %
-> des branches sur la chaîne de sécurité, 60 scénarios, 199 pannes, cohorte de
-> 30 personnes). Le variateur réel a seulement été lu au banc. **Aucune séance
+> **Repères historiques (1er et 2 octobre 2026).** Le logiciel du Pi a été testé
+> en simulation. Le variateur réel avait seulement été lu au banc. **Aucune séance
 > avec une personne à bord n'a eu lieu.** Le nouveau code Convex est déployé sur
 > le déploiement de **développement** et y a été testé de bout en bout avec une
 > console en simulation (1er octobre 2026) ; la **production est inchangée**.
@@ -21,6 +20,8 @@ Il existe deux sortes de séance :
 > contre ce déploiement de développement (2 octobre 2026) : les captures du
 > [guide du tableau de bord](guides/guide-tableau-de-bord.md) sont réelles.
 > Détails dans [deploiement.md](deploiement.md) et [securite.md](securite.md).
+> Ces constats ne garantissent pas l'état d'un clone ou d'un déploiement actuel :
+> consulter les résultats de validation de la révision utilisée.
 
 ## Sommaire
 
@@ -90,7 +91,7 @@ flowchart LR
 | Décision | Qui | Comment |
 |---|---|---|
 | Faire tourner, accélérer, ralentir, arrêter | **le Pi**, seul | superviseur de sécurité puis régulateur, à chaque cycle |
-| Arrêter en dernier recours | **le variateur** | si le Pi cesse d'écrire, son délai ttO arrête le moteur sur rampe |
+| Réagir à une perte de communication | **le variateur** | le simulateur suppose un arrêt sur rampe après ttO. Sur le matériel, la réaction dépend de ttO et SLL, non relus par le logiciel : un mauvais réglage peut laisser le moteur commandé ou en roue libre. Voir [l'arrêt physique](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt). |
 | Lancer une séance MANUELLE | **l'opérateur, à la console** | aucun chemin ne le permet depuis le site |
 | Lancer une séance AUTO | l'opérateur à la console, **ou** un utilisateur autorisé sur le site | Convex vérifie les droits, la FC max et l'âge ; le Pi **revérifie tout** et peut refuser |
 | Qui a le droit de lancer | admin et gestionnaire, sur le site | voir [tableau-de-bord.md](tableau-de-bord.md) |
@@ -127,8 +128,14 @@ et [convex.md](convex.md).
 ## Par où commencer
 
 - Voir la machine tourner sans matériel : [demarrage-rapide.md](demarrage-rapide.md), section 3.
+- Ouvrir le visualiseur 2D hors ligne : [demarrage-rapide.md](demarrage-rapide.md), section 5.
+- Ouvrir le frontend avec les services de développement déjà configurés :
+  [demarrage-rapide.md](demarrage-rapide.md), section 4 (`npm run dev:frontend`).
 - Comprendre pourquoi la machine s'est arrêtée : [console-locale.md](console-locale.md) et
   la table des règles dans [raspberry-pi.md](raspberry-pi.md#5-le-superviseur-de-sécurité).
 - Modifier du code Python : lire d'abord le contrat strict
   (`.claude/skills/anheart-strict-python/SKILL.md`, résumé dans
   [raspberry-pi.md](raspberry-pi.md#13-le-contrat-de-code-strict-et-la-gate)) et passer la gate.
+
+Toute PR qui change un comportement met à jour les pages concernées de `docs/`
+et indique les commandes ou scénarios vérifiés.
