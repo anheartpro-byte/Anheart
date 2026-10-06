@@ -896,6 +896,30 @@ class SafetyObservation:
     ``None``: an observation built without saying so ends no session.
     """
 
+    session_over: bool = False
+    """Whether this observation's session has run to its end and commands nothing.
+
+    The runtime's statement, like :attr:`stopped_by`, of two facts together:
+    since the last start the session's phase machine has reached ``DONE`` (its
+    timeline finished, or its ending's descent and monitored recovery are
+    complete), AND the setpoint in force is zero. From there nothing commands a
+    speed until a new start, which begins a new session and a new count. It is
+    a statement about what is commanded, not about the measured speed:
+    ``session_overrun`` can only bring a setpoint down, and there is none left.
+
+    ``phase`` alone cannot say it. A verdict that arrives at rest after a
+    programme completed by itself (an e-stop pressed while the rider gets out,
+    a drive switched off) opens an ending of its own, and the phase reads
+    ``RECOVERY`` again over a machine whose session finished minutes ago.
+
+    ``session_overrun`` is the only rule that reads it, and unlike every other
+    statement in this record it makes a rule QUIETER. So it is two facts and
+    not one - the rule stays armed for as long as any speed is commanded,
+    whatever the phase machine believes - and it defaults to ``False``, the
+    fail-safe direction: an observation that does not say its session is over
+    is judged as a session in progress, exactly as before this field existed.
+    """
+
 
 # =========================================================================
 # Out-of-band inputs and operator records
@@ -2534,11 +2558,32 @@ class SafetySupervisor:
         replaced, a clock that stepped. The machine is then running to no plan
         at all, and the only safe response to "nobody is deciding what this
         should be doing" is to stop deciding to continue.
+
+        Judged only while a session is in progress
+        (:attr:`SafetyObservation.session_over`). The time since the start goes
+        on counting after a session has ended, until the next start, so without
+        that test this rule latched over a machine at rest with nothing left to
+        outlive: 30 s after a programme had completed by itself, 1831 s after
+        the start of the shipped programme however early it had been stopped,
+        3631 s after the start of any manual session. Its condition then stayed
+        true for good, every acknowledgement was taken back on the next tick,
+        no start was accepted while it stood, and the console had to be
+        restarted (ANH-181).
+
+        "In progress" means: until the session's phase machine has reached
+        ``DONE`` with a setpoint of zero in force. So everything this rule
+        caught while a session ran, it still catches, at the same instant: a
+        phase that never advanced, a descent that never finished (a latched
+        ``FREEZE`` holds the setpoint past the end of the timeline, and this
+        ``RAMP_DOWN`` outranks it), a recovery pushed past the deadline by a
+        late STOP. A verdict raised then is acknowledged once that session is
+        over, and the acknowledgement holds, because the condition is no
+        longer true.
         """
         limits = self._limits
         deadline = Seconds(observation.total_duration + limits.overrun_grace)
         firing = self._trackers[RULE_SESSION_OVERRUN].update(
-            condition=observation.elapsed > deadline,
+            condition=not observation.session_over and observation.elapsed > deadline,
             now=observation.now,
             dwell=NO_DWELL,
         )
