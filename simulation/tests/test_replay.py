@@ -643,6 +643,52 @@ def test_an_event_that_is_no_command_is_refused_by_instant_and_kind(
     assert "PassengerSentinel" not in reason
 
 
+def test_events_that_are_not_inputs_are_never_read_as_commands(bench: Path, tmp_path: Path) -> None:
+    # What the console says about itself (a refusal, a fault, news of its link
+    # with the dashboard, kept as a warning prefixed "dashboard:") is prose,
+    # and stays prose: only the three input kinds are commands.
+    folder = copy(bench, tmp_path)
+    told: list[Line] = [
+        {"t": 1.2, "kind": "warning", "detail": "dashboard: contract 3 refused", "actor": "system"},
+        {"t": 1.4, "kind": "warning", "detail": "bitalino_loss: 12 samples", "actor": "system"},
+        {"t": 1.6, "kind": "refusal", "detail": "stop", "actor": "system"},
+        {"t": 1.8, "kind": "drive_fault", "detail": "estop", "actor": "system"},
+        {"t": 2.0, "kind": "preflight", "detail": "shutdown", "actor": "system"},
+        {"t": 2.2, "kind": "verdict", "detail": "manual_target output_rpm=1.0", "actor": "system"},
+    ]
+    edit_lines(folder, "events.jsonl", lambda lines: [*lines, *told])
+    report = replayed(folder)
+    assert report.matches
+    assert report.comparison.deviating_ticks == 0
+
+
+def test_every_reason_a_record_is_not_replayable_is_given_at_once(
+    bench: Path, tmp_path: Path
+) -> None:
+    # A record with nothing of what the drive answered is refused, not replayed
+    # into a divergence at its first tick.
+    silent = copy(bench, tmp_path / "silent")
+    edit_lines(silent, "drive_frames.jsonl", lambda _lines: [])
+    no_exchange = "the record holds no drive exchange: nothing says what the drive answered"
+    assert refused(silent) == no_exchange
+    # And one that lacks several things says all of them, in one refusal.
+    bare = copy(bench, tmp_path / "bare")
+    edit_lines(bare, "drive_frames.jsonl", lambda _lines: [])
+    prose: Line = {"t": 0.0, "kind": "operator_action", "detail": "session started", "actor": "op"}
+    edit_lines(bare, "events.jsonl", lambda lines: [*lines, prose])
+
+    def drop(manifest: Line) -> None:
+        manifest["geometry"] = None
+
+    edit_manifest(bare, drop)
+    assert refused(bare).split("; ") == [
+        "the operator_action event at t=0.000 s is not replayable: "
+        "not a command of the replay vocabulary",
+        no_exchange,
+        "the manifest holds no geometry: the runtime cannot be built as it was",
+    ]
+
+
 def test_a_start_programme_without_a_programme_is_refused(bench: Path, tmp_path: Path) -> None:
     folder = copy(bench, tmp_path)
     start: Line = {"t": 0.0, "kind": "operator_action", "detail": "start_programme", "actor": "op"}

@@ -248,7 +248,10 @@ rejouable, et le rejeu le dit : une commande ignorée en silence donnerait le
 rejeu d'une autre séance. Ce que la simulation fait au modèle (défaut
 variateur injecté, perte de liaison, électrode décollée) n'est pas une commande
 au runtime : c'est un événement `warning` d'acteur `system`, préfixé
-`simulation:`.
+`simulation:`. Il en va de même de ce que la console dit d'elle-même sous les
+autres kinds (pertes du BITalino, nouvelles du lien avec le tableau de bord
+préfixées `dashboard:`, refus, défauts) : le rejeu ne lit comme commandes que
+les trois kinds d'entrée, et jamais un autre événement, quel que soit son texte.
 
 ## Observations du variateur
 
@@ -427,9 +430,22 @@ ce que l'enregistrement contient :
 | Entrée du runtime | Où elle est | Ce qu'il faut |
 | --- | --- | --- |
 | l'horloge de chaque tic | `ticks.csv`, colonne `t` | tous les tics, y compris ceux du repos avant le départ (`t ≤ 0`) : la scrutation du variateur au repos et la fenêtre du DSP font partie de l'état au départ |
-| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), depuis le premier tic |
+| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), depuis le premier tic. Un fichier vide est refusé : rien ne dit ce que le variateur a répondu |
 | l'ECG | `ecg_raw/` | les blocs bruts depuis au moins 8 s avant le départ (la fenêtre du DSP), chacun avec `t_received` |
 | les demandes | `events.jsonl` | les commandes du tableau ci-dessus, pour les trois kinds d'entrée |
+
+Il faut aussi la géométrie du manifeste (`geometry`) : le runtime rejoué est
+construit avec elle. Quand il manque plusieurs de ces choses, le refus les
+donne ensemble, séparées par « ; ».
+
+**L'enregistrement que la console du Pi écrit aujourd'hui (ANH-128) est
+refusé**, pour trois raisons que le rejeu énonce : ses événements d'entrée
+sont du texte (`manual session started`, `end_requested: done`) et non des
+commandes du tableau ci-dessus ; son `drive_frames.jsonl` est vide ; son
+manifeste n'a pas de géométrie. Il n'a pas non plus les tics du repos (son
+premier tic est à `t = 0`) ni `t_received` sur ses blocs. Même structure ne
+veut donc pas encore dire rejouable : `test_record_console_parity.py` vérifie
+les deux.
 
 À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'au
 départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les

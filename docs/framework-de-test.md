@@ -1886,8 +1886,10 @@ d'aujourd'hui doit décider, sur les mêmes entrées, ce que celui du jour de la
 séance a décidé.
 
 > **Limite.** Aujourd'hui, seuls les enregistrements produits par la
-> simulation sont rejouables. La console n'écrit pas encore d'enregistrement,
-> et les échanges Modbus du pilote réel ne sont pas rejoués (section 16.8).
+> simulation sont rejouables. La console écrit un enregistrement au même
+> format depuis ANH-128, mais il ne contient pas encore ce qu'un rejeu doit
+> redonner au runtime : le rejeu le refuse et dit ce qui manque. Et les
+> échanges Modbus du pilote réel ne sont pas rejoués (section 16.8).
 
 ### 16.2 Commande
 
@@ -1901,7 +1903,7 @@ $PY -m simulation.run --replay <dossier> --json        # le même rapport, une l
 Sortie réelle de la troisième commande (environ 17 s) :
 
 ```text
-replay of record 16625e1dba93469ca69ed1ed10263f53: MATCH
+replay of record b67725bd54a16d6a0349d3600bf5793b: MATCH
   ticks: 1348 recorded, 1348 replayed
   tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
   tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
@@ -1938,13 +1940,16 @@ du rapport reste à zéro.
 * **`DIFFERENCE`.** Le runtime a posé au variateur les questions enregistrées,
   et a décidé autre chose. Le rapport donne le premier écart : sa nature
   (`setpoint`, `phase`, `transition_timing`, `transition_state`,
-  `transition_count`, `safety_state`), son instant, et les deux décisions.
+  `transition_count`, `safety_state`), son instant, et les deux décisions. Il
+  compte les autres par nature, puis dit combien de tics ne sont pas rejoués
+  à l'identique et donne leur empreinte (section 16.7).
 * **`DIVERGENCE`.** Le runtime a demandé au variateur une trame que
   l'enregistrement ne contient pas à cet endroit. Les réponses enregistrées ne
   correspondent plus aux questions posées : le rejeu **s'arrête**, et dit
   l'instant, ce qui a été demandé et ce que l'enregistrement contient. Les tics
-  d'avant restent comparés. Un code rejoué qui lève une exception sur des
-  entrées enregistrées est rapporté de la même façon.
+  d'avant restent comparés ; ceux d'après ne sont pas rejoués, et comptent
+  parmi les tics « non atteints » de l'empreinte. Un code rejoué qui lève une
+  exception sur des entrées enregistrées est rapporté de la même façon.
 
 Sorties réelles, sur une séance manuelle de 9 s dont on a modifié à la main,
 à `t = 3 s`, la consigne d'un tic (+2 tr/min), puis la vitesse d'une trame
@@ -1952,7 +1957,7 @@ Sorties réelles, sur une séance manuelle de 9 s dont on a modifié à la main,
 somme de contrôle :
 
 ```text
-replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIFFERENCE
+replay of record 148716e4b06f4998bab0370bbcbac63a: DIFFERENCE
   ticks: 95 recorded, 95 replayed
   tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
   first difference: setpoint at t=3.000 s
@@ -1961,14 +1966,16 @@ replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIFFERENCE
     replayed: setpoint 79 motor rpm, phase hold, safety NONE
   failed checks by kind: setpoint 1
   tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
+  ticks that differ or were not reached: 1 (fingerprint 47fc37e33d0fd417)
   integrity warning: ticks.csv: checksum_mismatch
 ```
 
 ```text
-replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIVERGENCE
+replay of record 148716e4b06f4998bab0370bbcbac63a: DIVERGENCE
   ticks: 95 recorded, 64 replayed
   tolerances: setpoint +/-1 motor rpm, verdict instant +/-1 tick, phase and rule exact
   tolerated: 0 setpoints one rpm apart, 0 verdicts one tick apart
+  ticks that differ or were not reached: 31 (fingerprint 022d07a8743235fc)
   divergence at t=3.000 s, after 64 ticks: the runtime requested speed 77 motor rpm; the record holds speed 82 motor rpm at t=3.000 s
     the replay stopped there: later recorded answers fit no question
   integrity warning: drive_frames.jsonl: checksum_mismatch
@@ -1978,8 +1985,10 @@ replay of record 2f3ef78c51ab47a189de09c96fb7ed62: DIVERGENCE
 à juger. Les causes sont listées dans
 [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué) :
 pas de tics d'avant le départ, événement d'entrée qui n'est pas une commande,
-fréquence cardiaque sans ECG brut, échanges Modbus natifs, phase ou action
-inconnue de cette version.
+aucun échange du variateur, manifeste sans géométrie, fréquence cardiaque sans
+ECG brut, échanges Modbus natifs, phase ou action inconnue de cette version.
+Quand il en manque plusieurs, le message les donne ensemble, séparées par
+« ; » : c'est le cas d'un enregistrement écrit par la console (section 16.8).
 
 ### 16.5 La bibliothèque `simulation/scenarios/real/`
 
@@ -2005,15 +2014,26 @@ exigences n'est pas tenue :
    | `organization_id` | `synthetic` | `anonymized` |
    | `operator` | `sim-operator` | `anonymized` |
    | `actor` de chaque événement | `system`, `remote` ou `sim-operator` | `system`, `remote` ou `anonymized` |
-   | `record_id`, `local_ref` | ceux de la simulation | ceux de la bibliothèque, dérivés du nom de l'archive (`library_identity`) : les identifiants d'origine ramèneraient à la séance |
+   | `record_id`, `local_ref` | ceux de la bibliothèque, dérivés du nom de l'archive (`library_identity`) | les mêmes : les identifiants d'origine ramèneraient à la séance |
    | nom du dossier dans l'archive | se termine par `_<local_ref>` | se termine par `_<local_ref>` |
 
 3. un rejeu conforme à ce que la bibliothèque déclare : `MATCH`, ou l'écart
    accepté décrit en 16.7.
 
+Les identifiants de la bibliothèque sont exigés sous les deux formes : un
+enregistrement de la bibliothèque ne porte jamais ceux sous lesquels sa
+source le connaît, quelle que soit la forme qu'il déclare.
+
 La date de la séance reste dans le manifeste et dans le nom du dossier : pour
 une séance réelle, c'est à l'outil d'anonymisation de la traiter (il n'existe
 pas encore, section 16.6).
+
+Une archive est le fichier de quelqu'un d'autre. Elle est extraite membre par
+membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
+écrits, uniquement sous le dossier d'extraction. Un membre au nom absolu ou
+qui remonte d'un dossier, un lien (symbolique ou physique), un périphérique,
+ou un membre qu'un lien déjà présent ferait écrire ailleurs, arrête
+l'extraction : la gate échoue sur cette archive et dit pourquoi.
 
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 `--export-real`, comme preuve de fonctionnement avant toute séance réelle :
@@ -2043,7 +2063,8 @@ $PY -m simulation.run --export-real <nom_du_scénario>
 ```
 
 La commande lance le scénario, retire `subject_id`, rejoue l'enregistrement
-produit et n'écrit l'archive que si ce rejeu est `MATCH`.
+produit et n'écrit l'archive que si ce rejeu est `MATCH`. Le nom est celui
+d'un scénario de la batterie (lettres, chiffres, `_`) : un chemin est refusé.
 
 L'export est reproductible : `record_id` et `local_ref` sont dérivés du nom du
 scénario, les dates viennent de l'horloge du harness, et `software_version`
@@ -2054,9 +2075,10 @@ réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
 comparaison porte sur le contenu lu, pas sur les octets, parce que deux
 versions de zlib ne compriment pas pareil.
 
-**Une séance réelle.** Pas encore possible de bout en bout : il manque
-l'enregistrement par la console et le rejeu des échanges Modbus natifs
-(section 16.8). La marche à suivre, le jour où ils existent :
+**Une séance réelle.** Pas encore possible de bout en bout :
+l'enregistrement que la console écrit n'est pas encore rejouable, et les
+échanges Modbus natifs ne sont pas rejoués (section 16.8). La marche à suivre,
+le jour où c'est possible :
 
 1. récupérer l'archive `.tar.gz` de la séance ;
 2. l'anonymiser sous la forme « séance réelle » du tableau de 16.5 (manifeste,
@@ -2097,15 +2119,16 @@ la raison, et **le rapport JSON du rejeu tout entier**, tel que
  "reason": "une phrase : ce qui a changé et pourquoi c'est voulu",
  "report": {
   "comparison": {
-   "actual_ticks": 64, "counts": {}, "expected_ticks": 64, "first": null,
-   "matches": true, "shifted_transitions": [0, 0], "tolerated_rpm": [0, 0]
+   "actual_ticks": 64, "counts": {}, "deviating_ticks": 31, "expected_ticks": 64,
+   "fingerprint": "022d07a8743235fc361e9dad25c54d8122e9295a05d56e90fadac1ce72b5e64a",
+   "first": null, "matches": true, "shifted_transitions": [0, 0], "tolerated_rpm": [0, 0]
   },
   "divergence": {
    "recorded": "speed 82 motor rpm at t=3.000 s",
    "requested": "speed 77 motor rpm", "t": 3.0, "tick": 64
   },
   "integrity": [], "outcome": "divergence",
-  "record": "2f3ef78c51ab47a189de09c96fb7ed62", "recorded_ticks": 95,
+  "record": "148716e4b06f4998bab0370bbcbac63a", "recorded_ticks": 95,
   "tolerances": {"setpoint_motor_rpm": 1, "verdict_ticks": 1}
  }
 }
@@ -2114,13 +2137,39 @@ la raison, et **le rapport JSON du rejeu tout entier**, tel que
 La gate exige alors **ce rapport, et aucun autre** : le même premier écart
 (nature, tic, les deux décisions), le même décompte de chaque nature d'écart,
 les mêmes tolérances consommées, la même divergence (ce qui est demandé, ce
-que l'enregistrement contient, l'instant, le nombre de tics rejoués avant).
-Un écart de plus n'importe où dans la séance, ou un de moins, et la gate
-échoue en disant quelle partie du rapport diffère (`comparison`, `divergence`,
+que l'enregistrement contient, l'instant, le nombre de tics rejoués avant),
+et la même **empreinte** (`fingerprint`).
+
+L'empreinte est ce qui empêche un écart d'en cacher un autre. Le rapport ne
+détaille que le premier écart et compte les suivants par nature : sans elle,
+deux rejeux différents pourraient donner le même rapport. C'est un SHA-256
+calculé sur :
+
+* chaque tic dont la décision rejouée n'est pas **identique** à la décision
+  enregistrée, qu'il soit compté comme un écart ou absorbé par une tolérance :
+  son rang, puis l'instant, la consigne, la phase, l'action et la règle de
+  chacune des deux décisions ;
+* chaque tic enregistré que le rejeu n'a pas atteint, après une divergence ;
+* le nombre de tics de chaque côté.
+
+`deviating_ticks` est le nombre de ces tics. Le rapport texte montre les 16
+premiers chiffres de l'empreinte, le JSON les 64. Les noms de règles entrent
+dans le calcul et n'en sortent pas : l'empreinte ne recopie rien.
+
+Deux rapports égaux disent donc que les deux rejeux s'écartent de leur
+enregistrement aux mêmes tics, de la même décision enregistrée vers la même
+décision rejouée, et laissent les mêmes tics non rejoués. Un écart de plus ou
+de moins, un écart remplacé par un autre de même nature, déplacé d'un tic ou
+d'une autre ampleur, une règle renommée autrement, un tr/min toléré qui change
+de tic, un enregistrement différent après la divergence : la gate échoue, et
+dit quelle partie du rapport diffère (`comparison`, `divergence`,
 `outcome`...). Un écart accepté ne peut donc pas en couvrir un autre, ni avant
-ni après lui. Le jour où le rejeu redevient `MATCH`, la gate échoue aussi,
-jusqu'à ce que le fichier soit retiré. Un rapport `match` n'est pas un écart :
-le fichier est refusé.
+ni après lui. L'empreinte ne dit rien des tics rejoués à l'identique : ceux-là
+sont ce que l'enregistrement contient.
+
+Le jour où le rejeu redevient `MATCH`, la gate échoue aussi, jusqu'à ce que le
+fichier soit retiré. Un rapport `match` n'est pas un écart : le fichier est
+refusé.
 
 Un écart accepté affaiblit l'enregistrement : après une divergence, la suite
 de la séance n'est plus rejouée. Si elle arrive tôt, l'enregistrement ne
@@ -2132,7 +2181,16 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 
 ### 16.8 Limites connues
 
-* **Séances réelles.** Le magnétophone rejoue les observations d'appel du
+* **Séances réelles.** La console écrit un enregistrement au format commun
+  (ANH-128), que le rejeu refuse aujourd'hui (code 2) en donnant ses trois
+  raisons : ses événements d'entrée sont du texte (`manual session started`,
+  `end_requested: done`) et non les commandes du vocabulaire ; son
+  `drive_frames.jsonl` est vide ; son manifeste n'a pas de géométrie. Il lui
+  manque aussi les tics du repos et `t_received` sur les blocs d'ECG.
+  `test_record_console_parity.py` construit cet enregistrement avec la vraie
+  console et vérifie ce refus : le jour où la console écrit ce qu'il faut, ce
+  test échoue, et se remplace par un rejeu.
+* **Échanges natifs.** Le magnétophone rejoue les observations d'appel du
   variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
   Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
   qui en contient est refusé (code 2).
@@ -2161,8 +2219,9 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 
 | Fichier | Ce qu'il vérifie |
 |---|---|
-| `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés, ligne de commande |
+| `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés (toutes les raisons à la fois), événements qui ne sont pas des entrées jamais lus comme des commandes, ligne de commande |
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
-| `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées |
-| `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences, les archives, les deux formes d'anonymat, l'écart accepté (un second écart derrière lui est refusé, de même qu'un fichier accepté à côté d'un enregistrement de la simulation), l'export reproductible |
+| `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |
+| `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
+| `test_record_console_parity.py` | écrit pour ANH-128 (même structure sur la console et en simulation) ; il vérifie aussi que le rejeu refuse l'enregistrement de la console en donnant ses raisons, et que `t_received` est la seule clé d'en-tête de bloc que la simulation écrit en plus |

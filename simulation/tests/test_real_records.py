@@ -8,6 +8,7 @@ anonymous, and replays as the library declares.
 
 from __future__ import annotations
 
+import io
 import json
 import tarfile
 from collections.abc import Callable, Mapping
@@ -45,7 +46,9 @@ from simulation.scenario import EmergencyStop, Expectation, ManualTarget
 from simulation.tests.replay_support import (
     Cells,
     Line,
+    as_library,
     as_real,
+    at,
     copy,
     edit_lines,
     edit_manifest,
@@ -150,6 +153,107 @@ def test_ex5_what_is_not_the_archive_of_one_record_is_refused(
     assert not (tmp_path / "outside").exists()
 
 
+LEAVES = "the archive holds a member whose name is absolute or leaves its folder"
+NOT_A_FILE = "the archive holds a link or a device: a record is files in folders"
+OUTSIDE = "the archive holds a member that cannot be written inside its folder"
+
+
+def _member(
+    name: str, kind: bytes = tarfile.REGTYPE, link: str = "", true_name: str | None = None
+) -> tarfile.TarInfo:
+    """One archive member, named exactly ``name`` (``tar.add`` would tidy the name).
+
+    ``true_name`` goes in the extended header, which a reader believes over
+    the plain one and which can hold what the plain one cannot.
+    """
+    info = tarfile.TarInfo(name)
+    info.type = kind
+    info.linkname = link
+    if true_name is not None:
+        info.pax_headers = {"path": true_name}
+    info.size = len(PAYLOAD) if kind == tarfile.REGTYPE else 0
+    return info
+
+
+PAYLOAD = b"planted"
+
+
+@pytest.mark.parametrize(
+    ("planted", "refused"),
+    [
+        (_member("/planted.txt"), LEAVES),
+        (_member("/etc/planted.txt"), LEAVES),
+        (_member("\\planted.txt"), LEAVES),
+        (_member("../planted.txt"), LEAVES),
+        (_member("record/../../planted.txt"), LEAVES),
+        (_member("record/sub/../../../planted.txt"), LEAVES),
+        (_member("record\\..\\..\\planted.txt"), LEAVES),
+        (_member("record/planted.txt", tarfile.SYMTYPE, "/etc/hosts"), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.SYMTYPE, "../../planted.txt"), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.SYMTYPE, "manifest.json"), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.LNKTYPE, "record/manifest.json"), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.LNKTYPE, "/etc/hosts"), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.FIFOTYPE), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.CHRTYPE), NOT_A_FILE),
+        (_member("record/planted.txt", tarfile.BLKTYPE), NOT_A_FILE),
+        (_member(".", tarfile.DIRTYPE), OUTSIDE),
+        (_member("record/planted.txt", true_name="record/planted\x00.txt"), OUTSIDE),
+        (_member("record/planted.txt", true_name="../planted.txt"), LEAVES),
+    ],
+    ids=[
+        "absolute",
+        "absolute_nested",
+        "backslash_root",
+        "parent",
+        "parent_through_folder",
+        "parent_deeper",
+        "parent_with_backslashes",
+        "symlink_to_absolute",
+        "symlink_to_parent",
+        "symlink_inside",
+        "hardlink_inside",
+        "hardlink_to_absolute",
+        "fifo",
+        "character_device",
+        "block_device",
+        "the_folder_itself",
+        "nul_in_extended_name",
+        "parent_in_extended_name",
+    ],
+)
+def test_ex5_extraction_writes_plain_files_inside_its_folder_and_nothing_else(
+    session: Path, tmp_path: Path, planted: tarfile.TarInfo, refused: str
+) -> None:
+    # Given a record's archive with one more member, placed first.
+    archive = tmp_path / "planted.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.addfile(planted, io.BytesIO(PAYLOAD) if planted.isreg() else None)
+        tar.add(session, arcname="record")
+    into = tmp_path / "into"
+    # When / Then the extraction stops at that member and says why...
+    assert unpack(archive, into) == Err(refused)
+    # ...and nothing of it exists, inside the folder or anywhere above it.
+    assert [path for path in tmp_path.rglob("*") if "planted" in path.name] == [archive]
+    assert not any(path.is_symlink() for path in into.rglob("*"))
+
+
+def test_ex5_a_link_already_under_the_folder_does_not_lead_the_extraction_out(
+    session: Path, tmp_path: Path
+) -> None:
+    # Given a destination where "record" is already a link to somewhere else.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    into = tmp_path / "into"
+    into.mkdir()
+    (into / "record").symlink_to(elsewhere, target_is_directory=True)
+    archive = tmp_path / "one.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(session, arcname="record")
+    # Then nothing is written through the link.
+    assert unpack(archive, into) == Err(OUTSIDE)
+    assert list(elsewhere.iterdir()) == []
+
+
 def test_ex1_a_record_replays_the_same_from_its_folder_and_from_its_archive(
     session: Path, tmp_path: Path
 ) -> None:
@@ -171,28 +275,38 @@ def test_ex1_a_record_replays_the_same_from_its_folder_and_from_its_archive(
 
 
 def test_ex5_a_record_of_the_simulation_must_name_the_simulation_and_nobody_else(
-    session: Path,
+    session: Path, tmp_path: Path
 ) -> None:
-    recording = loaded(session)
-    folder = session.name
+    # As the simulation writes it: the passenger pseudonym, identifiers drawn at random.
+    written = loaded(session)
+    assert identifying(written, "manual_27_rpm", session.name) == "subject_id"
+    drawn = replace(written, manifest=replace(written.manifest, subject_id=None))
+    assert identifying(drawn, "manual_27_rpm", session.name) == "record_id"
+    # As the export leaves it: nobody, and the identifiers of the library.
+    folder = as_library(copy(session, tmp_path), "manual_27_rpm")
+    recording = loaded(folder)
+    manifest = recording.manifest
+    identity = library_identity("manual_27_rpm")
+    assert (manifest.record_id, manifest.local_ref) == (identity, identity[:LOCAL_REF_LENGTH])
+    assert identifying(recording, "manual_27_rpm", folder.name) is None
 
-    def names(manifest: Manifest) -> str | None:
-        return identifying(replace(recording, manifest=manifest), "any_name", folder)
+    def names(changed: Manifest) -> str | None:
+        return identifying(replace(recording, manifest=changed), "manual_27_rpm", folder.name)
 
-    # As the simulation writes it, the passenger pseudonym is still there.
-    assert names(recording.manifest) == "subject_id"
-    anonymous = replace(recording.manifest, subject_id=None)
-    assert names(anonymous) is None
-    assert names(replace(anonymous, session_id="convex-session-1")) == "session_id"
-    assert names(replace(anonymous, organization_id="org-3")) == "organization_id"
-    assert names(replace(anonymous, organization_id=ANONYMIZED)) == "organization_id"
-    assert names(replace(anonymous, operator="op-7")) == "operator"
+    assert names(replace(manifest, session_id="convex-session-1")) == "session_id"
+    assert names(replace(manifest, organization_id="org-3")) == "organization_id"
+    assert names(replace(manifest, organization_id=ANONYMIZED)) == "organization_id"
+    assert names(replace(manifest, operator="op-7")) == "operator"
+    # A real session relabelled "simulation" would keep the identifiers its
+    # source knows it by: this form must carry the library's too.
+    assert names(replace(manifest, record_id="5f2c9a7e41d04b6c8a3e9d1f0b7c2a55")) == "record_id"
+    assert names(replace(manifest, local_ref="5f2c9a7e41d04b6c")) == "local_ref"
+    assert identifying(recording, "another_scenario", folder.name) == "record_id"
     spoken = replace(recording.events[0], actor="op-7")
-    by_somebody = replace(recording, manifest=anonymous, events=(*recording.events, spoken))
-    assert identifying(by_somebody, "any_name", folder) == "actor"
+    by_somebody = replace(recording, events=(*recording.events, spoken))
+    assert identifying(by_somebody, "manual_27_rpm", folder.name) == "actor"
     # The folder is the writer's: named after the local_ref the manifest declares.
-    unnamed = replace(recording, manifest=anonymous)
-    assert identifying(unnamed, "any_name", "2026-10-07T101112Z_some-session-id") == "folder"
+    assert identifying(recording, "manual_27_rpm", "2026-10-07T101112Z_some-session") == "folder"
 
 
 def test_ex5_a_real_session_must_name_nobody_and_carry_the_librarys_identifiers(
@@ -242,14 +356,24 @@ RECORDED = tuple(
 def _report(
     *,
     setpoint_off_at: tuple[float, ...] = (),
+    setpoint_far_off_at: tuple[float, ...] = (),
+    setpoint_one_off_at: tuple[float, ...] = (),
     phase_off_at: tuple[float, ...] = (),
     divergence_at: float | None = None,
 ) -> ReplayReport:
     """A replay report whose replayed side differs from four recorded ticks as asked."""
+
+    def setpoint(row: Decision) -> MotorRpm:
+        if row.t in setpoint_far_off_at:
+            return MotorRpm(190)
+        if row.t in setpoint_off_at:
+            return MotorRpm(150)
+        return MotorRpm(101) if row.t in setpoint_one_off_at else row.setpoint
+
     replayed = tuple(
         replace(
             row,
-            setpoint=MotorRpm(150) if row.t in setpoint_off_at else row.setpoint,
+            setpoint=setpoint(row),
             phase=Phase.COOLDOWN if row.t in phase_off_at else row.phase,
         )
         for row in RECORDED
@@ -325,6 +449,50 @@ def test_ex6_an_accepted_divergence_does_not_cover_a_difference_before_it() -> N
     )
     assert refusal(_report(divergence_at=3.0), accepted) == (
         "the replay is not the accepted one: it differs in divergence"
+    )
+
+
+def test_ex6_an_accepted_report_pins_every_difference_not_only_the_first() -> None:
+    # Given an accepted report that already holds two differences.
+    accepted = _accepting(_report(setpoint_off_at=(2.0, 3.0)))
+    assert refusal(_report(setpoint_off_at=(2.0, 3.0)), accepted) is None
+    # A person reads how many ticks the fingerprint covers, and its first digits.
+    fingerprint = _report(setpoint_off_at=(2.0, 3.0)).comparison.fingerprint
+    assert (
+        f"  ticks that differ or were not reached: 2 (fingerprint {fingerprint[:16]})\n"
+        in _report(setpoint_off_at=(2.0, 3.0)).to_text()
+    )
+    assert "fingerprint" not in _report().to_text()
+    # When the second one is replaced by another of its kind, the first, the
+    # counts by kind and the tolerances all stay what they were...
+    moved = _report(setpoint_off_at=(2.0, 4.0))
+    larger = _report(setpoint_off_at=(2.0,), setpoint_far_off_at=(3.0,))
+    for other in (moved, larger):
+        assert as_json(other)["outcome"] == accepted.report["outcome"]
+        assert _pinned_before_the_fingerprint(other) == _pinned_before_the_fingerprint(
+            _report(setpoint_off_at=(2.0, 3.0))
+        )
+        # ...and the gate refuses it all the same.
+        assert refusal(other, accepted) == (
+            "the replay is not the accepted one: it differs in comparison"
+        )
+    # A tolerated rpm that moves to another tick is another replay too.
+    tolerated = _accepting(_report(setpoint_off_at=(2.0,), setpoint_one_off_at=(3.0,)))
+    assert refusal(_report(setpoint_off_at=(2.0,), setpoint_one_off_at=(3.0,)), tolerated) is None
+    assert refusal(_report(setpoint_off_at=(2.0,), setpoint_one_off_at=(4.0,)), tolerated) == (
+        "the replay is not the accepted one: it differs in comparison"
+    )
+
+
+def _pinned_before_the_fingerprint(report: ReplayReport) -> tuple[object, ...]:
+    """What a report said of its differences before it carried a fingerprint of them all."""
+    comparison = report.comparison
+    return (
+        comparison.first,
+        comparison.counts,
+        comparison.tolerated_rpm,
+        comparison.shifted_transitions,
+        report.divergence,
     )
 
 
@@ -440,6 +608,44 @@ def test_ex6_the_gate_refuses_a_second_difference_behind_an_accepted_one(
     assert "failed checks by kind:" in refused
 
 
+def test_ex6_the_gate_refuses_a_difference_swapped_for_another_of_its_kind(
+    session: Path, tmp_path: Path
+) -> None:
+    # Given a real session whose accepted replay already holds two differences:
+    # a setpoint at 2 s, and the rule of a verdict renamed on the tick at 4 s.
+    shelf = tmp_path / "real"
+    folder = as_real(copy(session, tmp_path), "session_e")
+    edit_ticks(folder, _nudge("setpoint_motor_rpm", 2.0, lambda rpm: str(int(rpm) + 2)))
+    edit_ticks(folder, _nudge("safety_rule", 4.0, lambda _rule: "hr_stalled"))
+    archive = _shelve(folder, shelf, "session_e")
+    accepted = _accept(archive)
+    assert judge(archive, tmp_path / "0") is None
+    # When the second difference becomes another one of the same kind: the rule
+    # renamed otherwise on the same tick, then the same rename one tick later.
+    for step, (restore, rename) in enumerate(
+        (
+            (_nudge("safety_rule", 4.0, lambda _rule: "hr_other"), None),
+            (
+                _nudge("safety_rule", 4.0, lambda _rule: "operator_estop"),
+                _nudge("safety_rule", 4.2, lambda _rule: "hr_stalled"),
+            ),
+        )
+    ):
+        edit_ticks(folder, restore)
+        if rename is not None:
+            edit_ticks(folder, rename)
+        archive = _shelve(folder, shelf, "session_e")
+        again = _replayed(archive)
+        # Then everything the report details or counts is unchanged...
+        assert _pinned_before_the_fingerprint(again) == _pinned_before_the_fingerprint(accepted)
+        assert again.comparison.deviating_ticks == accepted.comparison.deviating_ticks
+        # ...and the gate still refuses: it is another replay.
+        assert again.comparison.fingerprint != accepted.comparison.fingerprint
+        refused = judge(archive, tmp_path / str(step + 1))
+        assert refused is not None
+        assert refused.startswith("the replay is not the accepted one: it differs in comparison\n")
+
+
 def test_ex6_the_gate_refuses_a_difference_before_an_accepted_divergence(
     session: Path, tmp_path: Path
 ) -> None:
@@ -466,17 +672,49 @@ def test_ex6_the_gate_refuses_a_difference_before_an_accepted_divergence(
     assert "first difference: setpoint at t=2.000 s" in refused
 
 
+def test_ex6_an_accepted_divergence_pins_the_ticks_the_replay_does_not_reach(
+    session: Path, tmp_path: Path
+) -> None:
+    # Given a real session whose replay stops two seconds in (one recorded speed
+    # is not the one the runtime writes), and that divergence accepted.
+    shelf = tmp_path / "real"
+    folder = as_real(copy(session, tmp_path), "session_f")
+
+    def other_speed(lines: list[Line]) -> list[Line]:
+        frame = next(line for line in lines if line["kind"] == "speed" and at(line) >= 2.0)
+        value = frame["value"]
+        assert isinstance(value, int)
+        frame["value"] = value + 5
+        return lines
+
+    edit_lines(folder, "drive_frames.jsonl", other_speed)
+    archive = _shelve(folder, shelf, "session_f")
+    accepted = _accept(archive)
+    assert accepted.outcome is Outcome.DIVERGENCE
+    assert accepted.comparison.matches
+    unreached = accepted.recorded_ticks - accepted.comparison.actual_ticks
+    assert unreached > 0
+    assert accepted.comparison.deviating_ticks == unreached
+    assert judge(archive, tmp_path / "0") is None
+    # When the record is another one behind the divergence, where nothing is replayed.
+    edit_ticks(folder, _nudge("setpoint_motor_rpm", 5.0, lambda rpm: str(int(rpm) + 50)))
+    archive = _shelve(folder, shelf, "session_f")
+    again = _replayed(archive)
+    # Then the divergence, the findings and the counts are the accepted ones...
+    assert _pinned_before_the_fingerprint(again) == _pinned_before_the_fingerprint(accepted)
+    assert again.recorded_ticks == accepted.recorded_ticks
+    # ...and the gate refuses: this is not the record whose replay was accepted.
+    refused = judge(archive, tmp_path / "1")
+    assert refused is not None
+    assert refused.startswith("the replay is not the accepted one: it differs in comparison\n")
+
+
 def test_ex6_the_gate_refuses_an_accepted_file_next_to_a_record_of_the_simulation(
     session: Path, tmp_path: Path
 ) -> None:
-    # Given a record of the simulation, anonymous as the export makes it.
+    # Given a record of the simulation, as the export makes it.
     shelf = tmp_path / "real"
-    folder = copy(session, tmp_path)
-
-    def anonymous(manifest: Line) -> None:
-        manifest["subject_id"] = None
-
-    edit_manifest(folder, anonymous)
+    folder = as_library(copy(session, tmp_path), "manual_27_rpm")
     assert judge(_shelve(folder, shelf, "manual_27_rpm"), tmp_path / "0") is None
     # When its replay differs, and somebody excuses it instead of exporting it again.
     edit_ticks(folder, _nudge("setpoint_motor_rpm", 2.0, lambda rpm: str(int(rpm) + 2)))
@@ -657,6 +895,25 @@ def test_ex5_a_scenario_is_exported_only_if_it_replays_green(
     assert isinstance(refused, Err)
     assert refused.error.startswith("short_direct is not replayable: ")
     assert not (shelf / "short_direct.tar.gz").exists()
+
+    # A scenario is named, never located: a path is refused before any file is read,
+    # and nothing is read or written through a link that leads out of either directory.
+    named_by_a_path = "a scenario is named by letters, digits and underscores, not by a path"
+    for name in ("../scenarios/short_bench", "/etc/passwd", "short_bench.json", "a b", ""):
+        assert export(name, shelf, scenarios) == Err(named_by_a_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "linked.json").write_text(json.dumps(SHORT_SCENARIO), encoding="utf-8")
+    (scenarios / "linked.json").symlink_to(elsewhere / "linked.json")
+    assert export("linked", shelf, scenarios) == Err(
+        "linked would be read or written through a link that leaves its directory"
+    )
+    (shelf / "short_direct.tar.gz").symlink_to(elsewhere / "written.tar.gz")
+    assert export("short_direct", shelf, scenarios) == Err(
+        "short_direct would be read or written through a link that leaves its directory"
+    )
+    (shelf / "short_direct.tar.gz").unlink()
+    assert list(elsewhere.iterdir()) == [elsewhere / "linked.json"]
 
     # A record whose own replay is not green is never written.
     def not_green(_folder: Path) -> Ok[ReplayReport] | Err[ReplayError]:

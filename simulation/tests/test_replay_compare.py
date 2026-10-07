@@ -1,5 +1,6 @@
 """Independent decision fixtures; no runtime outputs are used as their own oracle."""
 
+import hashlib
 from dataclasses import replace
 from typing import Final
 
@@ -205,8 +206,9 @@ def test_determinism_canonical_empty_report() -> None:
         first.to_json()
         == second.to_json()
         == (
-            '{"actual_ticks":0,"counts":{},"expected_ticks":0,"first":null,'
-            '"matches":true,"shifted_transitions":[0,0],"tolerated_rpm":[0,0]}\n'
+            '{"actual_ticks":0,"counts":{},"deviating_ticks":0,"expected_ticks":0,'
+            '"fingerprint":"2ce220d8d046f85fd648a70bc8e4b330562a745e56a371ee36e2596a39f56a37",'
+            '"first":null,"matches":true,"shifted_transitions":[0,0],"tolerated_rpm":[0,0]}\n'
         )
     )
     assert first.to_text() == second.to_text()
@@ -226,6 +228,13 @@ def test_determinism_uses_independent_expected_and_actual_summaries() -> None:
         "counts": {"setpoint": 1, "phase": 1, "safety_state": 1},
         "tolerated_rpm": (0, 0),
         "shifted_transitions": (0, 0),
+        "deviating_ticks": 1,
+        # SHA-256 of "1|1\n" then the JSON line of tick 0, recorded then replayed.
+        "fingerprint": hashlib.sha256(
+            b"1|1\n"
+            b'[0, [3.75, 111, "hold", "FREEZE", "ecg_stale"], '
+            b'[3.75, 222, "recovery", "REDUCE", "hr_high"]]\n'
+        ).hexdigest(),
         "first": {
             "code": "setpoint",
             "index": 0,
@@ -295,3 +304,75 @@ def test_a_recorded_rule_is_shown_only_when_it_is_a_plain_identifier(
     rule: str | None, shown: str | None
 ) -> None:
     assert printable_rule(rule) == shown
+
+
+def _hold(*setpoints: int, rule: str | None = None, at: int = -1) -> tuple[Decision, ...]:
+    """Ticks under FREEZE at the given setpoints; ``rule`` renames the rule at tick ``at``."""
+    return tuple(
+        Decision(
+            Seconds(i / 5),
+            MotorRpm(setpoint),
+            Phase.HOLD,
+            SafetyDecision(SafetyAction.FREEZE, RuleKey(rule)) if i == at and rule else FREEZE,
+        )
+        for i, setpoint in enumerate(setpoints)
+    )
+
+
+def test_the_fingerprint_tells_two_replays_apart_when_the_counts_cannot() -> None:
+    # Given a record of six ticks, and replays that differ from it in the same
+    # NUMBER of ways of the same kinds, with the same first difference.
+    recorded = _hold(150, 150, 150, 150, 150, 150)
+    replays = {
+        "second difference at tick 3": _hold(150, 160, 150, 160, 150, 150),
+        "second difference at tick 4": _hold(150, 160, 150, 150, 160, 150),
+        "second difference of 40 rpm": _hold(150, 160, 150, 190, 150, 150),
+    }
+    reports = {name: compare_decisions(recorded, replay) for name, replay in replays.items()}
+    # Then nothing the report details or counts tells them apart...
+    seen = {(r.first, r.counts, r.tolerated_rpm, r.deviating_ticks) for r in reports.values()}
+    assert len(seen) == 1
+    # ...and the fingerprint does.
+    assert len({r.fingerprint for r in reports.values()}) == len(reports)
+    # The same replay has the same fingerprint, and a match deviates nowhere.
+    again = compare_decisions(recorded, replays["second difference at tick 3"])
+    assert again.fingerprint == reports["second difference at tick 3"].fingerprint
+    assert compare_decisions(recorded, recorded).deviating_ticks == 0
+
+
+def test_the_fingerprint_covers_what_the_tolerances_let_through_and_the_rule_names() -> None:
+    recorded = _hold(150, 150, 150, 150)
+    # One rpm off is tolerated wherever it falls: only the fingerprint says where.
+    early = compare_decisions(recorded, _hold(151, 150, 150, 150))
+    late = compare_decisions(recorded, _hold(150, 150, 151, 150))
+    assert early.matches
+    assert late.matches
+    assert (early.tolerated_rpm, early.deviating_ticks) == (late.tolerated_rpm, 1)
+    assert early.fingerprint != late.fingerprint
+    # Behind a first difference at tick 0, a rule renamed one way or another on
+    # the same later tick: same findings, same counts, another replay.
+    one = compare_decisions(recorded, _hold(160, 150, 150, 150, rule="hr_stalled", at=2))
+    other = compare_decisions(recorded, _hold(160, 150, 150, 150, rule="hr_other", at=2))
+    assert not one.matches
+    assert (one.first, one.counts) == (other.first, other.counts)
+    assert one.fingerprint != other.fingerprint
+    # The rule names are in the digest, never in the report.
+    assert "hr_stalled" not in one.to_json()
+    # A tick more or fewer on one side is another replay too...
+    stopped = compare_decisions(recorded, recorded[:2])
+    assert stopped.deviating_ticks == 2
+    assert stopped.fingerprint != compare_decisions(recorded, recorded).fingerprint
+    # ...and so is another record behind the first tick the replay did not reach.
+    other_end = compare_decisions(_hold(150, 150, 150, 190), recorded[:2])
+    assert (other_end.first, other_end.counts) == (stopped.first, stopped.counts)
+    assert other_end.fingerprint != stopped.fingerprint
+    assert compare_decisions(recorded[:2], recorded).fingerprint != stopped.fingerprint
+    # What a replay that stopped did not reach is compared to nothing: no
+    # finding, the same counts, a comparison that still matches. It is pinned.
+    reached = compare_decisions(recorded[:2], recorded[:2], unreached=recorded[2:])
+    assert reached.matches
+    assert (reached.expected_ticks, reached.actual_ticks, reached.deviating_ticks) == (2, 2, 2)
+    assert reached.fingerprint == stopped.fingerprint
+    other_rest = compare_decisions(recorded[:2], recorded[:2], unreached=_hold(150, 190))
+    assert other_rest.matches
+    assert other_rest.fingerprint != reached.fingerprint

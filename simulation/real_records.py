@@ -29,10 +29,13 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
+import os
+import re
+import shutil
 import tarfile
 from collections.abc import Mapping
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Final
 
@@ -65,6 +68,9 @@ UNVERSIONED: Final[str] = "unversioned"
 """``software_version`` of an exported record: never read from the environment."""
 
 LOCAL_REF_LENGTH: Final[int] = 16
+
+SCENARIO_NAME: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_]+")
+"""A battery scenario, as its file is named: never a path."""
 
 
 def library_identity(name: str) -> str:
@@ -110,12 +116,76 @@ def pack(record: Path, archive: Path) -> None:
                 tar.addfile(info, content)
 
 
+def _inside(root: Path, name: str) -> Path | None:
+    """The path ``name`` designates under ``root``, or ``None`` if it is not inside it.
+
+    Two controls, each sufficient alone, as ``src.record.export.locate`` does:
+
+    * the name is joined to the root and normalised, and refused unless the
+      result is still under the root: no parent reference gets out;
+    * with every link resolved, the result must still be under the resolved
+      root: a link planted under the root does not lead out of it either.
+
+    The normalised path is the only one returned, so the only one a caller can
+    touch. The root itself is not "inside" the root, and a name no file can
+    bear (a NUL in it) designates nothing.
+    """
+    if "\x00" in name:
+        return None
+    base = os.path.normpath(root)
+    inside = base + os.sep
+    candidate = os.path.normpath(inside + name)
+    if not candidate.startswith(inside):
+        return None
+    path = Path(candidate)
+    if not path.resolve().is_relative_to(Path(base).resolve()):
+        return None
+    return path
+
+
+def _place(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> str | None:
+    """Write one member of an archive under ``into``. Why it is refused, or ``None``.
+
+    An archive is somebody else's file. A record folder holds plain files in
+    plain folders and nothing else, so nothing else is written: no link, no
+    device, and no member whose name is absolute or climbs out of the folder
+    it is extracted into. The content is copied to the path :func:`_inside`
+    returns, and to no other.
+    """
+    name = member.name
+    if name.startswith(("/", "\\")) or ".." in PurePosixPath(name.replace("\\", "/")).parts:
+        return "the archive holds a member whose name is absolute or leaves its folder"
+    target = _inside(into, name)
+    if target is None:
+        return "the archive holds a member that cannot be written inside its folder"
+    if member.isdir():
+        target.mkdir(parents=True, exist_ok=True)
+        return None
+    # Only a regular file has content of its own: a link's would be another
+    # member's, or a file of this machine's.
+    content = tar.extractfile(member) if member.isreg() else None
+    if content is None:
+        return "the archive holds a link or a device: a record is files in folders"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with content, target.open("wb") as written:
+        shutil.copyfileobj(content, written)
+    return None
+
+
 def unpack(archive: Path, into: Path) -> Result[Path, str]:
-    """Extract one archived record under ``into``; the record folder, or why there is none."""
+    """Extract one archived record under ``into``; the record folder, or why there is none.
+
+    Member by member, each one checked (:func:`_place`): nothing is ever written
+    outside ``into``, and the first member that is not a plain file or folder
+    inside it ends the extraction.
+    """
     try:
         into.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive, mode="r:gz") as tar:
-            tar.extractall(into, filter="data")
+            for member in tar:
+                refused = _place(tar, member, into)
+                if refused is not None:
+                    return Err(refused)
     except (OSError, EOFError, tarfile.TarError):
         return Err("the archive cannot be read as a .tar.gz of a record folder")
     folders = [path for path in sorted(into.iterdir()) if (path / "manifest.json").is_file()]
@@ -153,10 +223,12 @@ def identifying(recording: Recording, name: str, folder: str) -> str | None:  # 
 
     Two closed forms, and nothing in between. A record of the simulation names
     the simulation everywhere. Any other record names nobody: ``anonymized``
-    for the machine, the organisation, the operator and every event actor, and
-    the identifiers of the library (:func:`library_identity`) instead of its own.
-    Either way the folder is named after the manifest's ``local_ref``, as the
-    writer names it, and so cannot carry an identifier the manifest dropped.
+    for the machine, the organisation, the operator and every event actor.
+    Either way the identifiers are the library's (:func:`library_identity`),
+    never the record's own: a real session relabelled ``simulation`` would
+    otherwise keep the identifiers its source knows it by. And the folder is
+    named after the manifest's ``local_ref``, as the writer names it, so it
+    cannot carry an identifier the manifest dropped.
     """
     manifest = recording.manifest
     if manifest.subject_id is not None:
@@ -172,9 +244,9 @@ def identifying(recording: Recording, name: str, folder: str) -> str | None:  # 
     if manifest.operator != operator:
         return "operator"
     identity = library_identity(name)
-    if not simulation and manifest.record_id != identity:
+    if manifest.record_id != identity:
         return "record_id"
-    if not simulation and manifest.local_ref != identity[:LOCAL_REF_LENGTH]:
+    if manifest.local_ref != identity[:LOCAL_REF_LENGTH]:
         return "local_ref"
     if any(event.actor not in {SYSTEM, REMOTE, operator} for event in recording.events):
         return "actor"
@@ -318,7 +390,7 @@ def _same(record: Path, archive: Path, work: Path) -> bool:
     return isinstance(held, Ok) and isinstance(made, Ok) and held.value == made.value
 
 
-def export(
+def export(  # noqa: PLR0911  # one return per refusal
     name: str, directory: Path = REAL_DIR, scenarios: Path = SCENARIO_DIR
 ) -> Result[Exported, str]:
     """Run the battery scenario ``name``, and put its record in the library.
@@ -330,7 +402,13 @@ def export(
     And an archive that already holds exactly this record is left alone, so
     that remaking the library costs the repository only what really changed.
     """
-    loaded = load_scenario(scenarios / f"{name}.json")
+    if SCENARIO_NAME.fullmatch(name) is None:
+        return Err("a scenario is named by letters, digits and underscores, not by a path")
+    scenario = _inside(scenarios, f"{name}.json")
+    archive = _inside(directory, f"{name}{ARCHIVE_SUFFIX}")
+    if scenario is None or archive is None:
+        return Err(f"{name} would be read or written through a link that leaves its directory")
+    loaded = load_scenario(scenario)
     if isinstance(loaded, Err):
         return Err(f"{name} is not a scenario of the battery")
     trace = asyncio.run(run_scenario(loaded.value)).trace
@@ -342,7 +420,6 @@ def export(
         local_ref=identity[:LOCAL_REF_LENGTH],
         software_version=UNVERSIONED,
     )
-    archive = directory / f"{name}{ARCHIVE_SUFFIX}"
     with TemporaryDirectory(prefix="anheart-export-") as work:
         record = replace(trace, manifest=manifest).write_record(Path(work) / "made", Privacy())
         report = replay(record)

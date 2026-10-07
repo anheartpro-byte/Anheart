@@ -24,6 +24,9 @@ SETPOINT_TOLERANCE_RPM: Final[int] = 1
 VERDICT_TOLERANCE_TICKS: Final[int] = 1
 """EX-2: a safety transition this many recorded ticks early or late is the same."""
 
+FINGERPRINT_SHOWN: Final[int] = 16
+"""Hexadecimal digits of the fingerprint the text report shows; the JSON has all 64."""
+
 _RULE: Final = re.compile(r"[a-z][a-z0-9_]{0,47}")
 UNPRINTABLE_RULE: Final[str] = "<unprintable>"
 
@@ -123,6 +126,8 @@ class ComparisonDocument(TypedDict):
     counts: dict[str, int]
     tolerated_rpm: tuple[int, int]
     shifted_transitions: tuple[int, int]
+    deviating_ticks: int
+    fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +144,13 @@ class ComparisonReport:
     counts: tuple[tuple[DifferenceCode, int], ...]
     tolerated_rpm: tuple[int, int]
     shifted_transitions: tuple[int, int]
+    deviating_ticks: int
+    """Ticks whose replayed decision is not identical to the recorded one, tolerated or
+    not, and recorded ticks a replay that stopped did not reach."""
+
+    fingerprint: str
+    """A digest of every one of those ticks (``replay_compare._deviations``): what makes
+    a report stand for ONE replay, and what an accepted difference is pinned by."""
 
     @property
     def matches(self) -> bool:
@@ -153,6 +165,8 @@ class ComparisonReport:
             "counts": {code.value: count for code, count in self.counts},
             "tolerated_rpm": self.tolerated_rpm,
             "shifted_transitions": self.shifted_transitions,
+            "deviating_ticks": self.deviating_ticks,
+            "fingerprint": self.fingerprint,
         }
 
     def to_json(self) -> str:
@@ -298,6 +312,11 @@ class ReplayReport:
             f"  tolerated: {lower + upper} setpoints one rpm apart, "
             f"{earlier + later} verdicts one tick apart"
         )
+        if comparison.deviating_ticks:
+            lines.append(
+                f"  ticks that differ or were not reached: {comparison.deviating_ticks} "
+                f"(fingerprint {comparison.fingerprint[:FINGERPRINT_SHOWN]})"
+            )
         divergence = self.divergence
         if divergence is not None:
             lines.append(

@@ -115,6 +115,24 @@ def reseal(folder: Path) -> None:
     )
 
 
+def as_library(folder: Path, name: str) -> Path:
+    """A simulated record folder, as :func:`simulation.real_records.export` leaves it.
+
+    No passenger pseudonym, the library's identifiers for ``name``, the folder
+    renamed after them, the checksums written again.
+    """
+    identity = library_identity(name)
+    local_ref = identity[:LOCAL_REF_LENGTH]
+
+    def identify(manifest: Line) -> None:
+        manifest.update(subject_id=None, record_id=identity, local_ref=local_ref)
+
+    edit_manifest(folder, identify)
+    reseal(folder)
+    stamp = folder.name.partition("_")[0]
+    return folder.rename(folder.with_name(f"{stamp}_{local_ref}"))
+
+
 def as_real(folder: Path, name: str) -> Path:
     """A simulated record folder, rewritten as the anonymous form of a real session ``name``.
 

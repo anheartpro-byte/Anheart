@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from simulation.replay import replay
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import document, load, obj, run
 from src.bitalino_client import SampleBatch
@@ -28,7 +29,7 @@ from src.record.codec import Privacy
 from src.record.journal import Journal
 from src.record.reader import read
 from src.record.schema import EventKind
-from src.result import Ok
+from src.result import Err, Ok
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Monotonic, OutputRpm, Seconds, UnixMillis
@@ -185,6 +186,29 @@ def _assert_same_structure(console: Path, simulation: Path) -> None:
         assert loaded.value.events[-1].kind is EventKind.END
 
 
+def test_anh131_a_record_the_console_writes_today_is_refused_by_the_replay_with_its_reasons(
+    tmp_path: Path,
+) -> None:
+    """Same structure is not yet "replayable": the replay says what is missing, all of it.
+
+    The console writes what it was ASKED in prose, records nothing of what the
+    drive answered, and has no full geometry to give. The replay refuses such a
+    record (exit code 2 on the command line) instead of replaying half of it
+    into a difference nobody could explain.
+    """
+    for programme in (False, True):
+        home = tmp_path / ("programme" if programme else "manual")
+        home.mkdir()
+        refused = replay(asyncio.run(_console_record(home, programme=programme)))
+        assert isinstance(refused, Err), refused
+        assert refused.error.detail.split("; ") == [
+            "the operator_action event at t=0.000 s is not replayable: "
+            "not a command of the replay vocabulary",
+            "the record holds no drive exchange: nothing says what the drive answered",
+            "the manifest holds no geometry: the runtime cannot be built as it was",
+        ]
+
+
 def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simulation(
     tmp_path: Path,
 ) -> None:
@@ -203,9 +227,12 @@ def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_pat
     ours, theirs = _manifest(console), _manifest(simulation)
     assert (ours["kind"], theirs["kind"]) == ("auto", "auto")
     assert _keys(ours["profile"]) == _keys(theirs["profile"])
-    block_keys = {("channels", "n_samples", "sample_rate", "seq", "t_first")}
-    assert _block_header_keys(console) == block_keys
-    assert _block_header_keys(simulation) == block_keys
+    block_keys = ("channels", "n_samples", "sample_rate", "seq", "t_first")
+    assert _block_header_keys(console) == {block_keys}
+    # The harness also says when each block reached the DSP (ANH-131): an
+    # optional key of the shared header, which a replay needs and which the
+    # console does not write yet. It is the only key the two do not share.
+    assert _block_header_keys(simulation) == {(*block_keys, "t_received")}
     console_rows = read(console)
     assert isinstance(console_rows, Ok)
     assert console_rows.value.sensors, "the console wrote the 1 Hz sensor stream too"

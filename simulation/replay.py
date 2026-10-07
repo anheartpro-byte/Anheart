@@ -82,7 +82,7 @@ from src.geometry import MachineGeometry
 from src.record import commands
 from src.record.reader import Recording, read
 from src.record.rows import Row
-from src.record.schema import Manifest, Profile
+from src.record.schema import GeometrySnapshot, Manifest, Profile
 from src.result import Err, Ok, Result
 from src.sensors import ecg as typed_ecg
 from src.sensors.base import SensorReading
@@ -174,6 +174,7 @@ class _Plan:
     exchanges: tuple[Exchange, ...]
     blocks: tuple[Delivery, ...]
     origin: Monotonic
+    geometry: GeometrySnapshot
 
 
 def _position(step: _Step) -> tuple[float, int]:
@@ -282,16 +283,37 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
 
 
 def _plan(recording: Recording) -> Result[_Plan, str]:
-    """Everything a replay needs from the record, or why the record is not replayable."""
+    """Everything a replay needs from the record, or EVERY reason it is not replayable.
+
+    All of them, not the first: a record the console writes today lacks several
+    things at once (commands in prose, no drive exchange, no geometry), and
+    whoever closes that gap needs the whole list.
+    """
+    problems: list[str] = []
     expected = _decisions(recording.rows)
-    if isinstance(expected, Err):
-        return expected
     orders = _orders(recording)
-    if isinstance(orders, Err):
-        return orders
     exchanges = parse_frames(recording.frames)
-    if isinstance(exchanges, Err):
-        return exchanges
+    problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
+    if not recording.frames:
+        problems.append("the record holds no drive exchange: nothing says what the drive answered")
+    geometry = recording.manifest.geometry
+    if geometry is None:
+        problems.append("the manifest holds no geometry: the runtime cannot be built as it was")
+    if not recording.raw and any(
+        row.hr_raw is not None or row.hr_quality != NO_SIGNAL for row in recording.rows
+    ):
+        problems.append(
+            "the ticks show a heart rate and the record holds no raw ECG: the runtime "
+            "was given readings a replay cannot give back"
+        )
+    if (
+        isinstance(expected, Err)
+        or isinstance(orders, Err)
+        or isinstance(exchanges, Err)
+        or geometry is None
+        or problems
+    ):
+        return Err("; ".join(problems))
     ticks = tuple(
         _Tick(Seconds(round(row.t, 3)), row.t, index) for index, row in enumerate(recording.rows)
     )
@@ -302,13 +324,6 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
             "drive exchanges were recorded before the first tick or command: the record "
             "does not hold the idle ticks that made them (t <= 0)"
         )
-    if not recording.raw and any(
-        row.hr_raw is not None or row.hr_quality != NO_SIGNAL for row in recording.rows
-    ):
-        return Err(
-            "the ticks show a heart rate and the record holds no raw ECG: the runtime "
-            "was given readings a replay cannot give back"
-        )
     origin = Monotonic(recording.manifest.clocks.monotonic_start)
     return Ok(
         _Plan(
@@ -317,6 +332,7 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
             exchanges=exchanges.value,
             blocks=deliveries(recording.raw, origin),
             origin=origin,
+            geometry=geometry,
         )
     )
 
@@ -348,13 +364,9 @@ async def _confirm_inline(
 
 
 def _runtime(
-    manifest: Manifest, clock: ManualClock, drive: TapeDrive
+    geometry: GeometrySnapshot, profile: Profile | None, clock: ManualClock, drive: TapeDrive
 ) -> Result[TrainingRuntime, str]:
     """The runtime as the producer built it: the record's geometry, this checkout's limits."""
-    geometry = manifest.geometry
-    if geometry is None:
-        return Err("the manifest holds no geometry: the runtime cannot be built as it was")
-    profile = manifest.profile
     safety = (
         PANEL_SAFETY
         if profile is None
@@ -533,17 +545,22 @@ async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayE
     # rebuilt, and why the producer does not round the stamp of its first command.
     clock = ManualClock(start=Monotonic(plan.value.origin + plan.value.steps[0].at))
     tape = TapeDrive(plan.value.exchanges, clock, plan.value.origin)
-    runtime = _runtime(recording.manifest, clock, tape)
+    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, tape)
     if isinstance(runtime, Err):
         return Err(ReplayError(runtime.error))
     session = _Session(plan.value, recording.manifest, runtime.value, clock)
     replayed = await _run(plan.value, session, tape, Pace(clock, plan.value.steps[0].t))
     expected = plan.value.expected
+    reached = len(replayed.decisions)
     return Ok(
         ReplayReport(
             record=recording.manifest.record_id,
             recorded_ticks=len(expected),
-            comparison=compare_decisions(expected[: len(replayed.decisions)], replayed.decisions),
+            # What a replay that stopped did not reach is compared to nothing,
+            # and still pinned by the report's fingerprint.
+            comparison=compare_decisions(
+                expected[:reached], replayed.decisions, unreached=expected[reached:]
+            ),
             divergence=replayed.divergence,
             integrity=tuple(integrity_line(w.file, w.code) for w in recording.warnings),
         )

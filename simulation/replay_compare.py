@@ -1,7 +1,10 @@
 """Pure comparison of independently supplied, already parsed decision sequences."""
 
+import hashlib
+import json
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from itertools import zip_longest
 from types import MappingProxyType
 from typing import NewType
 
@@ -109,8 +112,45 @@ def _align_safety(
     return _SafetyAlignment(MappingProxyType(boundaries), (shifts[0], shifts[1]))
 
 
+type _Cells = tuple[float, int, str, str, str | None]
+
+
+def _cells(row: Decision | None) -> _Cells | None:
+    if row is None:
+        return None
+    return (row.t, row.setpoint, row.phase.value, row.safety.action.name, row.safety.rule)
+
+
+def _deviations(expected: tuple[Decision, ...], actual: tuple[Decision, ...]) -> tuple[int, str]:
+    """How many ticks are not identical on both sides, and a digest of every one of them.
+
+    The report details the FIRST difference and counts the others by kind. That
+    leaves room: a second difference can be swapped for another of its kind, a
+    tolerated rpm can move to another tick, and the counts do not notice. The
+    digest does: it takes the tick, the recorded decision and the replayed one,
+    for every tick where the two are not equal, tolerated or not, and the
+    number of ticks on each side. A tick one side has and the other has not
+    (the record goes on after a replay stopped) is such a tick, with nothing
+    on the side that lacks it. Two replays with the same digest departed from
+    their record at the same ticks, from the same recorded decisions to the
+    same replayed ones, and left the same recorded ticks unreached. Rule names
+    go into the digest whole and come out of it as hexadecimal: nothing of the
+    record is printed.
+    """
+    digest = hashlib.sha256(f"{len(expected)}|{len(actual)}\n".encode())
+    deviating = 0
+    for index, (left, right) in enumerate(zip_longest(expected, actual)):
+        if left != right:
+            deviating += 1
+            digest.update((json.dumps([index, _cells(left), _cells(right)]) + "\n").encode())
+    return deviating, digest.hexdigest()
+
+
 def compare_decisions(
-    expected: tuple[Decision, ...], actual: tuple[Decision, ...]
+    expected: tuple[Decision, ...],
+    actual: tuple[Decision, ...],
+    *,
+    unreached: tuple[Decision, ...] = (),
 ) -> ComparisonReport:
     """Compare exact entry grids/phases, ±1 motor rpm, and ordinal transitions.
 
@@ -118,6 +158,12 @@ def compare_decisions(
     transition, including clearing, has exactly one ordinal partner. Only that
     pair's one-index boundary can excuse its precise before/after tuple mismatch.
     Input parsing, causal completeness and transport failures belong to callers.
+
+    ``unreached`` is what the record holds after ``expected``, when the caller
+    stopped before it (a replay that diverged). Nothing is compared to it and
+    no finding comes from it: it only counts among the ticks not replayed as
+    recorded, and goes into their fingerprint, so that a report also stands
+    for the part of the record it could not replay.
     """
     counts: dict[DifferenceCode, int] = {}
     first: _Finding | None = None
@@ -166,6 +212,7 @@ def compare_decisions(
             expected_transition=first.expected_transition,
             actual_transition=first.actual_transition,
         )
+    deviating, fingerprint = _deviations((*expected, *unreached), actual)
     return ComparisonReport(
         len(expected),
         len(actual),
@@ -173,4 +220,6 @@ def compare_decisions(
         tuple((code, counts[code]) for code in DifferenceCode if code in counts),
         (tolerated[0], tolerated[1]),
         alignment.shifts,
+        deviating,
+        fingerprint,
     )
