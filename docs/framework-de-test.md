@@ -1388,8 +1388,9 @@ processus.
   nommés dans `SLOW_SECONDS`, avec leur durée mesurée en CI : les quatre
   scénarios `dsp` de la batterie, les deux tests de `test_quick.py` qui
   passent par le vrai traitement du signal, les six cas `ecg_dsp_*` de la
-  matrice de pannes et trois tests par propriétés. À eux quinze, ils pèsent
-  autant que tout le reste. Distribués à tour de rôle, comme dans la première
+  matrice de pannes, trois tests par propriétés et, depuis ANH-131, les deux
+  longs rejeux de séances enregistrées de `test_real_records.py`. Les quinze
+  premiers pèsent autant que tout le reste. Distribués à tour de rôle, comme dans la première
   version, ils laissaient une part avec 15 minutes de travail et une autre
   avec 3 (run 37539316521).
 
@@ -2001,11 +2002,15 @@ peut pas être fusionnée si elle ne passe pas. Pour chacune, la gate exige :
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 `--export-real`, comme preuve de fonctionnement avant toute séance réelle :
 
-| Archive | Ce qu'elle couvre | Tics | Taille | Rejeu |
+| Archive | Ce qu'elle couvre | Tics | Taille | Rejeu (Mac, puis CI) |
 |---|---|---|---|---|
-| `auto_jog_150_dsp.tar.gz` | un programme complet, la fréquence cardiaque pilote la vitesse, plusieurs `hr_stale` | 4000 | 1,9 Mo | ≈ 75 s |
-| `fault_bitalino_disconnect_dsp.tar.gz` | le BITalino se déconnecte en WARMUP, fin sur verdict | 1348 | 0,3 Mo | ≈ 17 s |
-| `fault_ecg_electrode_off_dsp.tar.gz` | une électrode décollée 30 s, `hr_stale` puis reprise | 4000 | 1,8 Mo | ≈ 75 s |
+| `auto_jog_150_dsp.tar.gz` | un programme complet, la fréquence cardiaque pilote la vitesse, plusieurs `hr_stale` | 4000 | 1,9 Mo | ≈ 75 s, 224 s |
+| `fault_bitalino_disconnect_dsp.tar.gz` | le BITalino se déconnecte en WARMUP, fin sur verdict | 1348 | 0,3 Mo | ≈ 17 s, 23 s |
+| `fault_ecg_electrode_off_dsp.tar.gz` | une électrode décollée 30 s, `hr_stale` puis reprise | 4000 | 1,8 Mo | ≈ 75 s, 155 s |
+
+Les durées en CI sont celles du run 37548774542 (7 octobre 2026, runner à
+4 CPU, quatre processus pytest en même temps). Les archives ont été produites
+sur un Mac et se rejouent sans écart sur le runner Linux.
 
 Ce sont les scénarios en `ecg.mode: dsp` : le mode `direct` injecte des bpm
 sans acquisition, et ne laisse pas d'ECG brut à rejouer.
@@ -2094,9 +2099,15 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
   le courant à mieux que 0,1 A, une exception levée dans le tic d'origine, un
   saut de l'horloge murale pendant l'acquisition. Détail dans
   [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué).
-* **Coût.** Rejouer la bibliothèque prend environ trois minutes dans la gate
-  de la simulation, et ses trois archives pèsent 4 Mo dans le dépôt. Chaque
-  régénération ajoute ce poids à l'historique.
+* **Coût.** Rejouer la bibliothèque prend environ trois minutes sur un Mac et
+  près de sept minutes de calcul en CI, réparties sur trois parts de la
+  batterie (les deux longs rejeux sont dans `SLOW_SECONDS`). Ses trois
+  archives pèsent 4 Mo dans le dépôt, et chaque régénération ajoute ce poids
+  à l'historique.
+* **Dépendances numériques.** Le rejeu repasse l'ECG dans le DSP : une
+  nouvelle version de numpy, scipy ou BioSPPy qui changerait une fréquence
+  cardiaque calculée se verrait ici comme un écart. Ces dépendances ne sont
+  pas épinglées (`>=` dans `raspberry-pi/requirements-base.txt`).
 
 ### 16.9 Les tests du rejeu
 
