@@ -29,7 +29,7 @@ indépendante** du logiciel et du variateur.
 
 « Garanti » veut dire ici : écrit dans le code, couvert par des tests (100 % des
 branches sur la chaîne de sécurité, tests de propriétés `hypothesis`) et vérifié
-dans la simulation (61 scénarios, 199 pannes injectées, cohorte de 30
+dans la simulation (62 scénarios, 199 pannes injectées, cohorte de 30
 personnes). Pas sur la vraie machine avec une personne à bord.
 
 | Garantie | Où |
@@ -37,6 +37,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
 | **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend sur un bras à l'arrêt : tant que quelque chose y retient une montée (un verdict, verrouillé ou non ; avec une personne à bord, une fréquence cardiaque inutilisable, de tendance inconnue ou en baisse rapide ; un premier pas que le variateur n'a pas confirmé), une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève, ni un acquittement, ni une fréquence cardiaque qui revient ou se stabilise ne mettent le bras en mouvement. Reste possible sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 la liste exacte de ce que les règles ne couvrent pas et en 7.6 la règle des cibles manuelles). | `safety.py`, `runtime.py` |
+| **Une séance qui dépasse sa durée est arrêtée ; une séance finie n'est plus jugée.** `session_overrun` termine, sur un verrou, une séance encore en cours 30 s après sa durée prévue. Une fois la séance finie, la règle ne juge plus, aussi longtemps que la console reste au repos : rien ne se verrouille seul après une séance, et un nouveau départ ne demande pas de redémarrer la console ([section 8](#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)). | `safety.py`, `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -500,3 +501,168 @@ la montée.
   donnent le même résultat avant et après (mêmes fins, mêmes règles, mêmes
   vitesses de pointe), y compris les deux scénarios manuels avec une personne
   à bord.
+
+## 8. Une séance finie n'est plus jugée sur sa durée (ANH-181)
+
+Ticket
+[ANH-181](https://linear.app/anheart/issue/ANH-181/la-regle-session-overrun-se-verrouille-apres-la-fin-dune-seance-et),
+6 octobre 2026. C'est la correction d'un défaut, pas une décision de produit :
+aucun seuil, aucune action, aucun verrou ne change. La définition de « séance
+en cours » donnée en 8.3 est celle de l'auteur du changement ; la revue
+indépendante la juge.
+
+### 8.1 Ce qui se passait
+
+La règle `session_overrun` arrête une séance qui dure plus que son programme :
+durée prévue plus 30 s, ou 3600 s plus 30 s en séance manuelle. Elle mesure le
+temps écoulé depuis le départ, et ce temps continue de courir après la fin de
+la séance, jusqu'au départ suivant. La règle se verrouillait donc sur une
+machine au repos, séance finie, sans que personne touche à rien. Sa condition
+restait ensuite vraie pour de bon : chaque acquittement était accepté puis
+repris au cycle suivant, tout départ était refusé (programme, séance manuelle,
+lancement depuis le site), et il fallait redémarrer la console, ce qui efface
+aussi l'attestation du câblage. Rien ne bougeait : la consigne valait 0 et
+l'étage de sortie était retiré. Le risque était indirect : une console
+verrouillée à tort après chaque séance habitue à acquitter par réflexe.
+
+### 8.2 Ce qui a été mesuré
+
+Tout est mesuré sur le banc d'essai logiciel (variateur factice, horloge
+manuelle) et sur la console réelle en simulation, reliée à un tableau de bord
+scripté ; jamais sur le matériel. « Avant » est la branche `develop` au commit
+`d652990`. Les temps sont comptés depuis le départ de la séance, au cycle
+près (0,2 s).
+
+| Séquence | Avant | Maintenant |
+|---|---|---|
+| Profil livré de 1800 s mené à son terme, puis personne ne touche à rien. | `REPOS` à 1800,2 s. À 1830,2 s, `session_overrun` verrouillé : retour au mode `ARRET` et à la phase `recovery` pendant 300 s, puis `REPOS` à 2130,6 s avec le verdict. Acquittement accepté, verdict revenu au cycle suivant. Départ refusé. | `REPOS` à 1800,2 s et plus rien : aucun verdict à aucun cycle pendant une heure de repos, deux fois la durée prévue. Rien à acquitter. Départ accepté. |
+| Même programme, STOP à 420 s. | `REPOS` à 732,8 s. Verdict à 1830,2 s. | `REPOS` à 732,8 s. Aucun verdict (suivi jusqu'à 2620 s). |
+| Séance manuelle capsule vide, STOP à 60 s. | `REPOS` à 68,4 s. Verdict à 3630,2 s. Départ refusé ; acquittement accepté, départ refusé de nouveau. | Aucun verdict (suivi jusqu'à 3760 s). Départ accepté. |
+| Console reliée, programme de 1400 s lancé depuis le site et mené à son terme. | `REPOS` à 1400,4 s. Verdict à 1430,4 s, mode `ARRET` pendant 305 s, puis `REPOS` avec le verdict. Deux acquittements acceptés, chacun repris au cycle suivant. Départ d'un programme, départ manuel et lancement du site refusés, ce dernier renvoyé au site comme séance échouée (« refusee par la machine : verdict de securite session_overrun a acquitter a la console »). Pareil dix minutes plus tard. | `REPOS` à 1400,4 s. Aucun changement de mode, de phase ni de verdict pendant 2800 s de repos. Un lancement du site est accepté et confirmé au site ; après un STOP, un programme démarré à la console est accepté ; après un autre STOP, une séance manuelle aussi. La console n'est jamais redémarrée. |
+| Fin par `session_standstill` (électrode détachée, profil livré), verdict laissé sans acquittement. | À 1830,2 s, `session_overrun` s'ajoutait et ne s'effaçait plus : il fallait redémarrer la console. | `session_standstill` reste le seul verdict ; un acquittement nominatif le lève, il ne revient pas, et le départ est accepté. |
+
+La batterie de simulation (62 scénarios, 199 pannes injectées, 90 séances de
+la cohorte : 351 courses) a été rejouée avant et après. Les 350 courses
+existantes donnent le même résultat : mêmes fins, mêmes règles, mêmes vitesses
+de pointe, même temps en zone. Aucune ne laissait la console au repos au-delà
+de l'échéance, donc aucune ne voyait le défaut. Le scénario ajouté,
+`auto_rest_after_end_then_start_again` (programme de 1400 s, 2830 s de repos,
+puis un départ), échoue avant (la règle se déclenche à 1430 s, le départ à
+4230 s est refusé) et passe maintenant.
+
+### 8.3 Ce que « séance en cours » veut dire
+
+Une séance est **en cours** depuis son départ et jusqu'à ce que le runtime la
+constate finie. Il la constate finie quand deux faits sont vrais ensemble :
+
+1. depuis le départ, la machine à phases de cette séance a atteint `DONE` au
+   moins une fois (le programme est allé au bout, ou la descente et la
+   surveillance de récupération qui suivent un STOP ou un verdict sont
+   terminées) ; ce constat est gardé jusqu'au départ suivant ;
+2. la consigne en vigueur est 0.
+
+Le runtime le dit au superviseur dans son observation (`session_over`), et la
+règle ne juge que tant que ce n'est pas dit. Le temps écoulé, lui, continue de
+courir comme avant.
+
+Pourquoi ces deux faits, et pas un critère plus simple :
+
+- **La phase seule ne garde pas le fait.** Un verdict qui arrive au repos
+  après un programme allé à son terme (E-STOP pendant que le passager
+  descend, variateur éteint qui passe en défaut) rouvre une fin de séance, et
+  la phase repasse par `recovery` sur une séance finie depuis longtemps. Une
+  règle qui ne lirait que la phase se verrouillerait là.
+- **Le mode `REPOS` arrive trop tard dans un cas.** Avec un variateur en
+  défaut, la fin de séance attend le réarmement par l'opérateur : le mode reste
+  `ARRET`, bras arrêté, consigne à 0, phase `DONE`. La séance y est finie ; une
+  règle qui attendrait `REPOS` se verrouillerait sur cette machine à l'arrêt si
+  l'opérateur revient après l'échéance.
+- **« Étage de sortie retiré » changerait le comportement pendant la
+  séance** : il l'est pendant toute la phase `recovery`, où la règle juge
+  aujourd'hui.
+- **La consigne à 0 garde la règle armée tant qu'une vitesse est commandée**,
+  quoi que dise la machine à phases. Un runtime devenu silencieux atteint
+  `DONE` avec une consigne qu'il ne peut plus reprendre : la règle continue de
+  juger, comme avant.
+- **Le constat porte sur la consigne, pas sur la vitesse mesurée.** La seule
+  action de la règle est de ramener la consigne à 0 ; quand elle y est déjà et
+  que la séance est finie, la règle n'a plus rien à commander. Un arbre encore
+  en roue libre à ce moment (variateur en défaut) n'est pas ralenti par cette
+  règle, avant comme après : elle n'ajoutait qu'un verrou à celui qui a
+  terminé la séance.
+- **Le constat vaut « non » par défaut, et ne fait taire que cette règle.**
+  Une observation qui ne le porte pas est jugée comme une séance en cours, et
+  aucune autre règle ne le lit.
+
+### 8.4 Ce qui ne change pas
+
+Tout ce que la règle arrêtait pendant une séance, elle l'arrête encore, au
+même instant, avec la même action et le même verrou. Mesuré avant et après,
+résultats identiques jusqu'au verdict :
+
+- **Un bras tenu en vitesse au-delà de la fin du programme.** Programme de
+  130 s du banc d'essai, FREEZE verrouillé à 40 s et jamais acquitté : la
+  consigne reste à 276 tr/min moteur après la fin du programme, la phase ne
+  passe pas à `DONE` sur un bras qui tourne, et `session_overrun` se déclenche
+  à 160,0 s. RAMP_DOWN l'emporte sur FREEZE : consigne à 0 à 164,2 s. C'est
+  cette règle qui arrête une descente qui ne finit pas, et elle le fait
+  toujours.
+- **Une fin de séance qui dépasse l'échéance.** Voir 8.5.
+- **Un acquittement donné avant la fin de la séance** est accepté et le verdict
+  revient au cycle suivant, comme pour toute règle dont la cause est encore
+  là.
+
+Ce qui change pour ces verdicts légitimes : une fois la séance finie (mode
+`REPOS`), un acquittement nominatif les lève et **tient**, et le départ suivant
+est accepté. Avant, ils ne s'effaçaient plus.
+
+### 8.5 Ce que le correctif ne couvre pas
+
+- **Une fin de séance ouverte tard dans un programme mène encore au
+  verdict.** Toute fin de séance rouvre une surveillance de récupération
+  complète (300 s avec le profil livré) : un STOP, à la console ou demandé
+  depuis le site, un E-STOP, ou un verdict d'arrêt, même pendant la `recovery`
+  du programme, bras déjà arrêté. Si cette récupération dépasse l'échéance, la
+  règle se déclenche pendant qu'elle dure. Mesuré sur le profil livré de
+  1800 s :
+  - STOP à 1520 s : `REPOS` à 1820,4 s, aucun verdict. STOP à 1540 s ou à
+    1600 s : `session_overrun` à 1830,2 s pendant la `recovery`, `REPOS` à
+    1840,4 s ou 1900,4 s ;
+  - E-STOP à 1600 s : `session_overrun` à 1830,2 s, verrouillé derrière
+    l'arrêt d'urgence, `REPOS` à 1900,4 s ; un seul acquittement donné à
+    `REPOS` lève les deux. Si l'E-STOP est acquitté avant `REPOS`,
+    `session_overrun` reste (ou apparaît à 1830,2 s) comme verdict en vigueur,
+    et se lève par un second acquittement à `REPOS` ;
+  - fréquence cardiaque perdue à partir de 1700 s : `hr_stale` termine la
+    séance à 1760,0 s, `session_overrun` se déclenche à 1830,2 s, `REPOS` à
+    2060,4 s. Le plancher verrouillé garde `hr_stale`, le premier des deux
+    verdicts de même niveau : `session_overrun` n'apparaît que parmi les
+    règles actives, et un seul acquittement à `REPOS` suffit.
+
+  Toute fin de séance ouverte dans les quatre dernières minutes et demie de
+  ce programme se termine donc par ce verdict. Le mouvement n'est pas
+  concerné : le bras est déjà arrêté. C'est le comportement d'avant, gardé
+  parce que la séance est encore en cours ; seule la suite change
+  (l'acquittement tient à `REPOS`). Faut-il qu'une fin ouverte pendant la
+  `recovery` rouvre une récupération complète, ou que l'échéance suive une fin
+  déjà engagée : la question n'est pas tranchée ici.
+- **Une séance manuelle qui atteint ses 3600 s à grande vitesse.** Le runtime
+  demande alors la fin de séance et la consigne descend aux limites de
+  mouvement. Si la descente dure plus de 30 s, la règle se verrouille pendant
+  la descente, sans changer la rampe. Mesuré sur le banc d'essai avec une
+  limite raccourcie : depuis 1344 tr/min moteur (27 tr/min au bras), descente
+  d'environ 104 s, verdict 30 s après la limite ; depuis 300 tr/min moteur (le
+  plafond par défaut), descente de 20 s, aucun verdict. Comportement d'avant,
+  gardé pour la même raison.
+- **Un verdict qui arrive au repos après un programme allé à son terme**
+  (E-STOP, défaut variateur) rouvre toujours une fin de séance : mode `ARRET`
+  et phase `recovery` pendant la durée de récupération du profil, règles de
+  fréquence cardiaque de nouveau actives. Mesuré sur le profil livré : E-STOP
+  65 s après la fin, électrodes retirées 5 s plus tôt ; `hr_stale` monte
+  jusqu'au RAMP_DOWN verrouillé 60 s après la dernière lecture, et `REPOS`
+  revient 300 s après l'E-STOP. Après une séance terminée par un STOP, la fin
+  est déjà enregistrée et rien n'est rouvert : le mode reste `REPOS` (vu sur
+  la console en simulation, séance programmée et séance manuelle).
+  `session_overrun` ne s'y ajoute plus ; le reste est le comportement d'avant,
+  hors de ce ticket.
+- **Rien n'a été mesuré sur la vraie machine**, ni avec le vrai variateur.

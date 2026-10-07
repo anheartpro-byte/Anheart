@@ -1180,6 +1180,7 @@ class TrainingRuntime:
         "_resting_bpm",
         "_rise_held",
         "_safety_limits",
+        "_session_over",
         "_setpoint_changed_at",
         "_shutdown",
         "_silent",
@@ -1270,9 +1271,7 @@ class TrainingRuntime:
         self._end_reason: EndReason | None = None
         self._recovery_from: Monotonic | None = None
         self._stop_requested: str | None = None
-        # What brought this session's arm to a standstill by itself, in words,
-        # or None: stated once by _note_standstill, read by the supervisor.
-        self._stopped_by: str | None = None
+        self._initialise_session_statements()
         self._warmup_satisfied: bool = False
         self._resting_bpm: Bpm | None = None
         # A manual session instead of a programme; at most one of the two.
@@ -1334,6 +1333,19 @@ class TrainingRuntime:
         # end a session that never started.
         self._initialise_idle_observation()
         self._snapshot: TelemetrySnapshot = self._build_snapshot(clock.monotonic())
+
+    def _initialise_session_statements(self) -> None:
+        """What this runtime states to the supervisor about the session itself.
+
+        Facts only the runtime knows, each stated once and kept until the next
+        start (:meth:`_reset_session`).
+        """
+        # What brought this session's arm to a standstill by itself, in words,
+        # or None: stated once by _note_standstill, read by the supervisor.
+        self._stopped_by: str | None = None
+        # Whether THIS session's phase machine has reached DONE: stated once by
+        # _advance_phase, read (with the setpoint in force) by session_overrun.
+        self._session_over: bool = False
 
     def _initialise_idle_observation(self) -> None:
         self._idle_link: IdleLink = IdleLink()
@@ -1914,6 +1926,7 @@ class TrainingRuntime:
         self._recovery_from = None
         self._stop_requested = None
         self._stopped_by = None
+        self._session_over = False
         self._warmup_satisfied = False
         self._resting_bpm = None
         self._decision = None
@@ -2460,6 +2473,14 @@ class TrainingRuntime:
         An operator stop is honoured here rather than in :meth:`request_stop`, so
         the ending begins on a tick boundary with a real instant and the
         controller sees ``COOLDOWN`` for the whole of it.
+
+        This is also where a session is seen to be OVER: the first tick on
+        which its phase machine says ``DONE``. That fact is kept until the next
+        start, because the phase does not keep it: a verdict arriving at rest
+        after a programme completed by itself opens an ending
+        (:meth:`_begin_ending`), and the phase is ``RECOVERY`` again over a
+        session that finished minutes ago. Only a started session can be over,
+        so a tick that falls while a start is still arming states nothing.
         """
         if self._stop_requested is not None:
             self._begin_ending(now, EndReason.OPERATOR_STOP, None)
@@ -2470,6 +2491,8 @@ class TrainingRuntime:
             self._phase = self._nominal_phase(now, self._program)
         elif self._manual is not None:
             self._phase = self._manual_phase(now)
+        if self._phase is Phase.DONE and self._started_at is not None:
+            self._session_over = True
         self._latch_resting_rate(now)
 
     def _manual_phase(self, now: Monotonic) -> Phase:
@@ -2576,6 +2599,14 @@ class TrainingRuntime:
         ``stopped_by`` is a fact about the applied setpoint too (it came back
         to zero, and nobody had asked): see :meth:`_note_standstill`.
 
+        ``session_over`` makes one rule quieter and no other
+        (``session_overrun`` stops judging a session that has ended), so it is
+        made of two facts and both must hold: this session's phase machine has
+        reached ``DONE`` (:meth:`_advance_phase`), and the setpoint in force is
+        zero. ``elapsed`` goes on counting from the start until the next start;
+        it is this statement, not a stopped clock, that says there is no
+        session left to outlive its programme (ANH-181).
+
         ``measured_rpm`` and ``current`` go to ``None`` the moment the status is
         stale, never to a fabricated zero - a made-up 0 rpm is exactly the lie
         that would make ``no_load`` and ``reverse_rotation`` judge a machine that
@@ -2606,6 +2637,7 @@ class TrainingRuntime:
             envelope=envelope,
             heart_rate_supervised=self._occupied(),
             stopped_by=self._stopped_by,
+            session_over=self._session_over and self._applied_rpm == 0,
         )
 
     def _envelope(self, now: Monotonic) -> SpeedEnvelope | None:
