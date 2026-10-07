@@ -36,6 +36,7 @@ Il existe deux sortes de séance :
 | [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi (Docker) ; ce qui a été vérifié |
 | [securite.md](securite.md) | tout le monde | ce qui est garanti, ce qui ne l'est pas, défauts corrigés, résiduel |
 | [menaces.md](menaces.md) | développeur, reviewer, responsable de jalon | modèle STRIDE, protections vérifiées dans le source, menaces ouvertes et tickets Linear |
+| [release.md](release.md) | responsable de release, développeur | versions `pi`, `cloud` et `web`, `scripts/release.sh`, changelog, check-list de release, version validée par machine |
 | [release-threat-review.md](release-threat-review.md) | responsable de release | preuve de revue du modèle exigée à chaque jalon, release et avant pilote |
 | [glossaire.md](glossaire.md) | tout le monde | LFT, ETA, LFRD, ttO, STO, CiA402, verdict, latch, xfail… |
 | [roadmap.md](roadmap.md) | équipe | jalons et suivi (document tenu à part, rattaché au projet Linear) |

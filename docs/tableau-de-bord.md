@@ -90,6 +90,11 @@ La ligne Convex n'est créée que lorsque l'utilisateur connecté passe par la
 d'amorçage automatique du premier admin : il faut le nommer dans le tableau de
 bord Convex (voir [convex.md §8](convex.md#8-déployer)).
 
+**Version du site.** Le pied de page de l'accueil et de la FAQ affiche la
+version du site, par exemple `web-0.1.0` (`web-0.0.0-dev` tant qu'aucune release
+n'a été faite). Elle vient du champ `version` de `package.json`, figé à la
+construction : voir [release.md](release.md#1-les-trois-composants-et-leur-version).
+
 ---
 
 ## 3. Navigation

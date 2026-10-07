@@ -1593,6 +1593,67 @@ export const MATRIX: Entry[] = [
   ),
 
   // =========================================================================
+  // softwareReleases.ts  (ANH-134: the register of released versions)
+  // =========================================================================
+  {
+    id: "softwareReleases.recordRelease",
+    ref: api.softwareReleases.recordRelease,
+    kind: "mutation",
+    build: async () => ({
+      component: "pi",
+      version: "pi-0.1.0",
+      validationLevel: "bench",
+      releasedAt: NOW,
+    }),
+    onSuccess: async (res, w) => {
+      const row = await w.t.run((ctx) =>
+        ctx.db.get(res as Id<"software_releases">),
+      );
+      if (row?.version !== "pi-0.1.0" || row.validationLevel !== "bench")
+        throw new Error("Release not recorded");
+      if (row.recordedBy !== w.admin)
+        throw new Error("Release not attributed to the admin");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      { actor: "admin", expect: ok, note: "admin records a version" },
+    ],
+  },
+  {
+    id: "softwareReleases.listReleases",
+    ref: api.softwareReleases.listReleases,
+    kind: "query",
+    build: async (w) => {
+      await w.t.run((ctx) =>
+        ctx.db.insert("software_releases", {
+          component: "pi",
+          version: "pi-0.1.0",
+          validationLevel: "bench",
+          releasedAt: NOW,
+          recordedBy: w.admin,
+          updatedAt: NOW,
+        }),
+      );
+      return {};
+    },
+    onSuccess: (res) => {
+      const versions = asArray(res).map(
+        (row) => (row as { version: string }).version,
+      );
+      if (versions.join() !== "pi-0.1.0")
+        throw new Error("Expected the recorded version");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      { actor: "admin", expect: ok, note: "admin reads the register" },
+    ],
+  },
+
+  // =========================================================================
   // sessionSummaries.ts
   // =========================================================================
   {
