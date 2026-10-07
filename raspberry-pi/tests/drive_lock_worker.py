@@ -22,35 +22,8 @@ from src.motor.drive_process_lock import DriveOwnershipError
 from src.motor.ftdi_link import ConfigurableFtdi, DeviceFactory, open_ftdi_port
 from src.result import Err, Ok
 from src.units import Seconds
+from tests.test_drive_lock_transports import SyntheticSerial, hold_failed_master
 from tests.test_ftdi_link import FRAME, ConfigurableChip, FakeChip, Sleeps
-
-
-class SyntheticSerial:
-    def __init__(self, *, fail_setup: bool = False, fail_close: bool = False) -> None:
-        self.fail_setup: bool = fail_setup
-        self.fail_close: bool = fail_close
-        self.closed: bool = False
-        self.successful_closes: int = 0
-
-    @property
-    def inter_byte_timeout(self) -> float | None:
-        return None
-
-    @inter_byte_timeout.setter
-    def inter_byte_timeout(self, value: float | None) -> None:
-        del value
-        if self.fail_setup:
-            raise OSError("synthetic configuration failed with a live handle")
-
-    def close(self) -> None:
-        if self.fail_close:
-            raise OSError("synthetic close failed; handle remains live")
-        if not self.closed:
-            self.successful_closes += 1
-        self.closed = True
-
-    def is_closed(self) -> bool:
-        return self.closed
 
 
 class Backend(StrEnum):
@@ -157,8 +130,6 @@ def main() -> int:
     patch.setattr("serial.serial_for_url", create_serial)
     match backend:
         case Backend.FAILED_SERIAL | Backend.FAILED_FTDI | Backend.FAILED_FTDI_CLOSE:
-            from tests.test_drive_process_lock import hold_failed_master  # noqa: PLC0415
-
             failed_backends: dict[Backend, tuple[Literal["serial", "ftdi"], bool]] = {
                 Backend.FAILED_SERIAL: ("serial", False),
                 Backend.FAILED_FTDI: ("ftdi", False),

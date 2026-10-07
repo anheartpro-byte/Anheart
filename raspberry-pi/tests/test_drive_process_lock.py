@@ -7,50 +7,10 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal
 
 import pytest
 
-
-def hold_failed_master(
-    backend: Literal["serial", "ftdi"], patch: pytest.MonkeyPatch, after_open: bool
-) -> int:
-    from tests.test_drive_lock_transports import broken_open_master, refused_open  # noqa: PLC0415
-
-    master, handle, opens = broken_open_master(backend, patch)
-    try:
-        if after_open:
-            handle.fail_setup = False
-            handle.fail_close = False
-            assert master.connect()
-            handle.fail_close = True
-            with pytest.raises(OSError, match="synthetic close failed"):
-                master.close()
-        else:
-            refused_open(master)
-        assert not handle.is_closed()
-        assert len(opens) == 1
-        print("OPEN", flush=True)  # noqa: T201 - live-handle readiness handshake
-        sys.stdin.read(1)
-    finally:
-        handle.fail_close = False
-        master.close()
-    return 0
-
-
-def run_contender(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - fixed synthetic fixture
-        [
-            sys.executable,
-            str(Path(__file__).with_name("drive_lock_worker.py")),
-            str(root),
-            "attempt",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+from tests.test_drive_lock_transports import broken_open_master, refused_open, run_contender
 
 
 def wait_until_open(owner: subprocess.Popen[str]) -> None:
@@ -138,8 +98,6 @@ def test_process_exit_releases_drive_lock(tmp_path: Path, crash: bool, backend: 
 def test_failed_ftdi_close_cannot_reuse_the_cached_live_socket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from tests.test_drive_lock_transports import broken_open_master, refused_open  # noqa: PLC0415
-
     master, handle, opens = broken_open_master("ftdi", monkeypatch)
     handle.fail_setup = False
     handle.fail_close = False

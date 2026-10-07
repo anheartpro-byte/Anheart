@@ -25,7 +25,7 @@ from src.motor.drive_process_lock import (
 from src.motor.ftdi_link import open_ftdi_port
 from src.result import Err, Ok
 from src.units import Seconds
-from tests.test_drive_process_lock import run_contender
+from tests.test_drive_lock_transports import run_contender
 from tests.test_ftdi_link import FRAME, ConfigurableChip, FakeChip, Sleeps
 
 
