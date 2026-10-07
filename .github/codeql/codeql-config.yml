@@ -1,0 +1,24 @@
+# What CodeQL leaves out (.github/workflows/codeql.yml). Everything else in
+# the repository is analysed, the tests included.
+#
+# Left out: code that is generated or installed, not written here, and the
+# CAD file, which is not code. Most of these directories do not exist in the
+# checkout the workflow analyses (nothing is installed there): they are named
+# so that the same file gives the same scope on a developer's machine.
+name: Anheart
+
+paths-ignore:
+  # Written by `convex codegen`.
+  - convex/_generated
+  # Installed dependencies.
+  - '**/node_modules'
+  - '**/.venv'
+  - '**/.venv-*'
+  - '**/venv'
+  # Build outputs of the site and reports written by the simulation.
+  - .next
+  - out
+  - build
+  - simulation/out
+  # The CAD assembly (a STEP file kept in Git LFS).
+  - CAO

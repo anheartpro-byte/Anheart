@@ -61,6 +61,33 @@ test("the changelog is not documentation: the release tooling and its tests read
   assert.deepEqual(gates(["docs/release.md", "docs/CHANGELOG-notes.md", "NOT-A-CHANGELOG.md"]), NOTHING);
 });
 
+test("the scope of the SonarQube Cloud analysis runs no gate, alone or next to other files", () => {
+  const scope = "sonar-project.properties";
+  assert.deepEqual(classify(scope), { kind: "static analysis scope", ...NOTHING });
+  assert.deepEqual(gates([scope]), NOTHING);
+  assert.deepEqual(gates([...DOCS, scope]), NOTHING);
+  // It takes no gate away from the files changed with it.
+  assert.deepEqual(gates([...SITE, scope]), NODE_ONLY);
+  assert.deepEqual(gates([...PYTHON, scope]), PYTHON_ONLY);
+  assert.deepEqual(gates(["raspberry-pi/Dockerfile", scope]), EVERYTHING);
+  // That name at the root, and no other: a properties file is not a kind.
+  for (const path of [
+    "raspberry-pi/sonar-project.properties",
+    "simulation/sonar-project.properties",
+    "config/sonar-project.properties",
+    "sonar-project.properties.orig",
+    "Sonar-Project.properties",
+    "sonar.properties",
+    "gradle.properties",
+  ]) {
+    assert.deepEqual(gates([path]), EVERYTHING, path);
+  }
+  // The workflows that analyse and the CodeQL scope live under .github/: they run everything.
+  for (const path of [".github/workflows/sonar.yml", ".github/workflows/codeql.yml", ".github/codeql/codeql-config.yml"]) {
+    assert.deepEqual(classify(path), { kind: "CI definition", ...EVERYTHING }, path);
+  }
+});
+
 test("Python sources of the Pi and of the simulation run the Python gates and spare the site ones", () => {
   assert.deepEqual(gates(PYTHON), PYTHON_ONLY);
   assert.deepEqual(gates([...PYTHON, ...DOCS]), PYTHON_ONLY);
@@ -241,5 +268,23 @@ test("no tracked file is skipped by a kind it does not belong to", { skip: files
     if (kind === "site") assert.doesNotMatch(path, /\.(py|pyi)$/, path);
     if (kind === "convex") assert.match(path, /^convex\//, path);
     if (kind === "documentation") assert.match(path, /(\.md$|^docs\/)/, path);
+    if (kind === "static analysis scope") assert.equal(path, "sonar-project.properties");
+  }
+});
+
+test("nothing a gate runs names the scope of the SonarQube Cloud analysis", { skip: files.length === 0 }, () => {
+  // That scope skips every gate because no gate opens it. The day a test or a
+  // tool of a gate names the file, this fails: classify the file again first.
+  const scope = "sonar-project.properties";
+  const naming = spawnSync("git", ["grep", "-l", "-z", "-F", "-e", scope], { cwd: root, encoding: "utf8" });
+  assert.ok(naming.status === 0 || naming.status === 1, naming.stderr);
+  const readers = [
+    "scripts/ci/gates-for-changes.mjs",
+    "scripts/ci/gates-for-changes.test.mjs",
+    "scripts/ci/analysis-workflows.test.mjs",
+  ];
+  for (const path of naming.stdout.split("\0").filter(Boolean)) {
+    const known = path === scope || path.startsWith(".github/") || readers.includes(path) || classify(path).kind === "documentation";
+    assert.ok(known, `${path} names ${scope}: does a gate read it now?`);
   }
 });

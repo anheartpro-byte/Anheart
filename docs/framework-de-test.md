@@ -1013,6 +1013,10 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 
+Deux autres workflows, `codeql.yml` et `sonar.yml`, font analyser le dépôt par
+CodeQL et par SonarQube Cloud sans être des gates : voir
+[Analyse statique externe](#analyse-statique-externe--codeql-et-sonarqube-cloud-anh-196).
+
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
 ses propres réglages : une erreur de type visible seulement avec eux passait
@@ -1415,6 +1419,15 @@ listée comme ne pouvant pas l'affecter :
 | site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json` et les configurations Vitest `vitest.<suite>.config.mts` | sautées | lancées |
 | Convex | `convex/` | sautées | lancées |
 | Python | sous `raspberry-pi/` ou `simulation/`, les fichiers `.py` et `.pyi`, et eux seuls | lancées | sautées |
+| périmètre d'analyse statique | `sonar-project.properties`, à la racine et sous ce nom seulement | sautées | sautées |
+
+`sonar-project.properties` est classé à part, et non laissé parmi les fichiers
+de configuration de la racine qui lancent tout : son seul lecteur est le
+scanner du workflow `sonar.yml`, qui démarre quoi que réponde la règle et teste
+d'abord ce fichier (voir
+[Analyse statique externe](#analyse-statique-externe--codeql-et-sonarqube-cloud-anh-196)).
+Aucune gate ne l'ouvre. Un test de la règle échoue le jour où un fichier lu par
+une gate le nomme : il faudra alors le reclasser.
 
 Passent avant ces listes et lancent tout :
 
@@ -1495,6 +1508,143 @@ Le journal du job `changes` donne la raison, par exemple `path rule: python
 gates run: raspberry-pi/src/units.py (python)` ou `path rule: python gates
 skipped: none of the 3 changed files can affect them`.
 
+### Analyse statique externe : CodeQL et SonarQube Cloud (ANH-196)
+
+Deux workflows séparés de `ci.yml` font analyser le dépôt par des outils
+externes, en plus des gates. **Ce ne sont pas des gates** : aucun de leurs jobs
+n'est une vérification obligatoire, et ils ne remplacent ni ruff, ni
+basedpyright, ni mypy, ni ESLint, ni l'audit des dépendances.
+
+| | CodeQL (GitHub) | SonarQube Cloud |
+|---|---|---|
+| Workflow | `.github/workflows/codeql.yml` | `.github/workflows/sonar.yml` |
+| Ce qui est cherché | des failles de sécurité, avec la suite de requêtes par défaut de GitHub | qualité et sécurité : bugs probables, duplication, complexité, points chauds de sécurité |
+| Ce qui est lu | les sources Python et JavaScript/TypeScript, tests compris | tout le dépôt moins les exclusions ; le code de test est déclaré comme tel |
+| Périmètre réglé dans | `.github/codeql/codeql-config.yml` | `sonar-project.properties` |
+| Quand | PR vers `develop` ou `main`, push sur ces branches, chaque lundi à 04:37 UTC, à la demande | PR vers `develop` ou `main`, push sur ces branches, à la demande |
+| Jobs | `codeql (python)` et `codeql (javascript-typescript)` | `sonar-config` puis `sonar` |
+| Où lire les résultats | onglet **Security → Code scanning** du dépôt | tableau de bord du projet sur [sonarcloud.io](https://sonarcloud.io) |
+| Compte ou secret | aucun | un projet SonarQube Cloud et le secret `SONAR_TOKEN` |
+
+**Périmètre commun.** Les deux outils laissent de côté ce qui est généré,
+installé, ou n'est pas du code : `convex/_generated`, `node_modules`, les
+environnements virtuels (`.venv`, `.venv-*`, `venv`), `.next`, `out`, `build`,
+`simulation/out` et `CAO/`. SonarQube Cloud exclut en plus les deux verrous de
+dépendances (`package-lock.json`, `bun.lock`), les captures d'écran des guides
+(`docs/**/img/`), les dumps de capture bruts (`SESSION_*.txt`,
+`Session_data.txt`) et les enregistrements de séances réelles
+(`simulation/scenarios/real/`). Tout le reste est analysé : un nouveau dossier
+l'est sans avoir à être déclaré. Aucun des deux workflows n'installe de
+dépendance ni n'exécute de code du dépôt, sauf le test décrit plus bas.
+
+**CodeQL.** Un job par langage, sans compilation (`build-mode: none`). Seul ce
+job reçoit la permission `security-events: write`, qui sert à publier les
+résultats ; aucun autre job du dépôt n'a de permission d'écriture. Les alertes
+se lisent dans **Security → Code scanning**, en choisissant la branche
+(`develop`) ou la PR dans les filtres : la vue par défaut montre la branche par
+défaut du dépôt, `main`, qui n'est analysée qu'une fois le workflow fusionné
+dans `main`. Il en va de même du passage hebdomadaire : comme le déclenchement
+nocturne de `ci.yml`, GitHub ne le lance que depuis la branche par défaut.
+
+**SonarQube Cloud.** L'analyse a besoin du secret `SONAR_TOKEN`. Un job ne
+peut pas lire un secret dans sa propre condition : `sonar-config` le lit dans
+l'environnement d'une seule étape et dit seulement s'il est présent. Sans lui,
+`sonar-config` réussit, écrit « SONAR_TOKEN is not set for this run » dans son
+résumé, et `sonar` apparaît « Skipped » : rien n'échoue. C'est le cas tant que
+le secret n'existe pas, et pour toute PR venue d'un fork, à laquelle GitHub ne
+donne aucun secret ; la condition de `sonar` refuse en plus explicitement une
+PR dont la branche vient d'un autre dépôt. Les clés de l'organisation et du
+projet sont écrites à un seul endroit, en tête de `sonar-project.properties` :
+`anheartpro-byte` et `anheartpro-byte_Anheart`. **Ce sont des valeurs par
+défaut, écrites avant la création du projet : elles doivent être exactement
+celles que SonarQube Cloud affiche pour le projet.**
+
+**Couverture : non importée.** `pi-gate` et `simulation-gate` produisent bien
+`raspberry-pi/coverage.xml` et `simulation/coverage.xml`, mais ces rapports ne
+sont pas envoyés à SonarQube Cloud. Trois raisons, constatées sur les artefacts
+du run 37587401283 :
+
+* leurs chemins sont relatifs à `raspberry-pi/src` et à `simulation/`, pas à la
+  racine du dépôt (`bitalino_client.py`, `harness.py`) : SonarQube Cloud ne
+  retrouverait aucun fichier ;
+* ils ne listent que ce que chaque gate mesure (69 fichiers de la chaîne de
+  sécurité du Pi, 21 de la simulation). Tous les autres fichiers Python et tout
+  le TypeScript apparaîtraient couverts à 0 %, ce qui est faux ;
+* ils n'existent que dans le run de `ci.yml`, et seulement quand les gates
+  Python ont tourné, donc pas sur une PR du site ou de documentation. Les
+  récupérer depuis un autre workflow demande l'événement `workflow_run`, que
+  GitHub ne déclenche que depuis la branche par défaut (`main`) : rien ne
+  pourrait en être vérifié avant la prochaine release.
+
+`sonar-project.properties` exclut donc tous les fichiers du calcul de
+couverture (`sonar.coverage.exclusions=**/*`) : SonarQube Cloud n'affiche
+aucune couverture plutôt qu'un 0 % faux, et sa porte de qualité ne juge pas le
+nouveau code sur ce chiffre. La mesure réelle reste celle des gates. La suite
+proposée, hors de ce ticket : écrire les rapports avec des chemins depuis la
+racine dans `scripts/ci/pi_gate_parallel.py`, lancer l'analyse dans `ci.yml`
+après `pi-gate` et `simulation-gate` (`needs`), limiter le calcul de couverture
+aux fichiers que les gates mesurent, puis retirer l'exclusion.
+
+**Ce que ces analyses bloquent.** Rien dans une PR : ni `codeql (...)`, ni
+`sonar-config`, ni `sonar` ne sont dans la protection de branche de `develop`.
+Les rendre obligatoires est un réglage du dépôt, décidé par le chef de projet
+après un premier passage. Le job `sonar` n'attend pas la porte de qualité de
+SonarQube Cloud, et un job CodeQL n'échoue pas parce qu'il trouve une alerte :
+ils n'échouent que si l'analyse elle-même échoue. Les workflows n'ont aucun
+filtre `paths` : s'ils deviennent obligatoires un jour, un workflow non
+déclenché laisserait ses vérifications en attente. Aucun de leurs jobs ne peut
+porter le nom d'un job de `ci.yml`.
+
+Une exception à connaître avant une release. L'outil de release d'ANH-134
+(`scripts/release.sh`, en revue dans la PR #26 au 7 octobre 2026) ne lit pas la
+protection de branche : il lit toutes les vérifications du commit de tête de
+`develop`, obligatoires ou non, et refuse la release si l'une a échoué, a été
+annulée ou n'est pas terminée. Un job `codeql (...)`, `sonar-config` ou `sonar`
+rouge ou encore en cours sur ce commit bloquera donc une release ; un job
+« Skipped » ne compte ni pour ni contre. SonarQube Cloud pose aussi sa propre
+vérification, « SonarCloud Code Analysis », sur le commit qu'il analyse
+(constaté sur un autre dépôt public, à confirmer ici au premier passage) : si
+elle est rouge parce que la porte de qualité échoue, elle bloquera de même.
+
+**Tests.** `scripts/ci/analysis-workflows.test.mjs`, lancé par `sonar-config`
+à chaque exécution (`node --test`, sans installation), vérifie ce qu'une
+modification pourrait casser sans qu'aucun job ne rougisse : actions épinglées
+par commit complet, permissions, déclencheurs, étape du jeton exécutée telle
+qu'elle est écrite (avec et sans jeton), et les deux périmètres confrontés aux
+fichiers suivis par Git (chaque fichier de test est déclaré test, aucun fichier
+source n'est exclu, aucun fichier n'est à la fois source et test).
+
+**Reste à faire à la main, par le chef de projet.** Tant que ces étapes ne
+sont pas faites, `sonar` reste « Skipped » :
+
+1. se connecter à [sonarcloud.io](https://sonarcloud.io) avec GitHub, choisir
+   « Analyze new project » et sélectionner `anheartpro-byte/Anheart` (cela
+   installe l'application SonarQube Cloud sur l'organisation GitHub), avec
+   l'offre gratuite pour dépôt public ;
+2. désactiver l'« Automatic Analysis » dans l'administration du projet : elle
+   est incompatible avec l'analyse lancée par la CI ;
+3. créer un jeton et l'ajouter au dépôt GitHub comme secret `SONAR_TOKEN` ;
+4. comparer les deux clés affichées par SonarQube Cloud avec celles de
+   `sonar-project.properties`, et les corriger dans ce fichier si elles
+   diffèrent ;
+5. relancer le workflow « SonarQube Cloud » sur `develop` (ou attendre le push
+   suivant) et lire la première analyse ;
+6. décider ensuite si l'une de ces vérifications devient obligatoire.
+
+**Limites.**
+
+* Aucune analyse SonarQube Cloud n'a encore tourné : le projet et le secret
+  n'existent pas. `sonar-project.properties` est vérifié par des tests, pas par
+  le scanner. La première analyse dira si une exclusion manque ou si une clé
+  est fausse.
+* Ne pas activer le « Default setup » de CodeQL dans les réglages du dépôt :
+  GitHub refuserait alors les résultats envoyés par ce workflow.
+* Les deux workflows ne se déclenchent que pour les PR vers `develop` ou
+  `main`, comme `ci.yml` : une PR empilée sur une autre branche n'est analysée
+  qu'une fois redirigée vers `develop`.
+* Les constats remontés par ces outils ne sont pas corrigés par ce ticket : ils
+  feront l'objet de tickets après le premier passage.
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
@@ -1528,7 +1678,14 @@ Une vérification marquée « Skipped » n'a pas tourné. Le plus souvent, la r�
 de chemins a jugé qu'aucun fichier de la PR ne pouvait l'affecter : le job
 `changes` a alors réussi et en donne la raison. Si `changes` est lui-même
 annulé ou absent, le run a été annulé dans ses premières secondes et rien n'a
-été jugé : relancer le run.
+été jugé : relancer le run. Le job `sonar` fait exception : il est « Skipped »
+tant que le secret `SONAR_TOKEN` n'existe pas (voir
+[Analyse statique externe](#analyse-statique-externe--codeql-et-sonarqube-cloud-anh-196)).
+
+Un job `codeql (...)` ou `sonar` rouge signale une panne de l'analyse (service,
+réseau, configuration), pas un constat de l'outil : lire le journal du job.
+Les constats eux-mêmes se lisent dans **Security → Code scanning** et sur
+sonarcloud.io, et ne font pas rougir ces jobs.
 
 ### Tests unitaires du site
 
