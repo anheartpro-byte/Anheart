@@ -1,4 +1,11 @@
-import { query, internalMutation, internalQuery } from "./_generated/server";
+/**
+ * ECG batches of the retired recording mode: read-only history.
+ *
+ * The table `ecg_data` was filled by the ECG recorder, which no longer exists.
+ * No function writes to it any more; the queries below only read what was
+ * stored, under the same access rule as the session they belong to.
+ */
+import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
 
@@ -33,93 +40,7 @@ const batchValidator = v.object({
 });
 
 // ============================================
-// Internal Functions (for HTTP endpoints)
-// ============================================
-
-/**
- * Store a batch of ECG data from RPi
- */
-export const storeEcgBatch = internalMutation({
-  args: {
-    machineId: v.id("machines"),
-    sessionId: v.id("sessions"),
-    timestamp: v.number(),
-    sampleRate: v.optional(v.number()),
-    samples: v.array(sampleValidator),
-    metrics: v.optional(metricsValidator),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    // The session must exist and belong to the authenticated machine
-    const session = await ctx.db.get(args.sessionId);
-    if (!session || session.machineId !== args.machineId) {
-      throw new Error("Session not found");
-    }
-
-    // Validate session is active
-    if (session.status !== "active") {
-      throw new Error(`Session is not active (status: ${session.status})`);
-    }
-
-    // Store the treated data batch
-    await ctx.db.insert("ecg_data", {
-      sessionId: args.sessionId,
-      timestamp: args.timestamp,
-      sampleRate: args.sampleRate,
-      samples: args.samples,
-      metrics: args.metrics,
-    });
-
-    return null;
-  },
-});
-
-/**
- * Get data count for a session (for debugging)
- */
-export const getSessionDataCount = internalQuery({
-  args: {
-    sessionId: v.id("sessions"),
-  },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const data = await ctx.db
-      .query("ecg_data")
-      .withIndex("by_session_and_timestamp", (q) =>
-        q.eq("sessionId", args.sessionId),
-      )
-      .collect();
-    return data.length;
-  },
-});
-
-/**
- * Get all ECG data for a session (for summary generation)
- */
-export const getAllSessionData = internalQuery({
-  args: {
-    sessionId: v.id("sessions"),
-  },
-  returns: v.array(batchValidator),
-  handler: async (ctx, args) => {
-    const data = await ctx.db
-      .query("ecg_data")
-      .withIndex("by_session_and_timestamp", (q) =>
-        q.eq("sessionId", args.sessionId),
-      )
-      .collect();
-
-    return data.map((d) => ({
-      timestamp: d.timestamp,
-      sampleRate: d.sampleRate,
-      samples: d.samples,
-      metrics: d.metrics,
-    }));
-  },
-});
-
-// ============================================
-// Public Queries (Task 3.3)
+// Public queries (history)
 // ============================================
 
 /**

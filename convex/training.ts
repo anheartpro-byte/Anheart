@@ -32,7 +32,6 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
 import {
   canAccessMachine,
   canAccessUser,
@@ -479,7 +478,6 @@ export const launchAutoSession = mutation({
       status: "pending",
       startedAt: now,
       channels: ["ECG"],
-      sampleRate: machine.config.sampleRate,
       notes: args.notes,
       kind: "auto",
       origin: "remote",
@@ -852,7 +850,6 @@ export const registerLocalSession = internalMutation({
       status: "active",
       startedAt: args.startedAt,
       channels: ["ECG"],
-      sampleRate: machine.config.sampleRate,
       notes: args.occupancy ? `Occupancy: ${args.occupancy}` : undefined,
       kind: args.kind,
       origin: "local",
@@ -891,15 +888,8 @@ export const endTrainingSession = internalMutation({
       endReason: args.reason,
     });
     await ctx.db.patch(args.machineId, { status: "online" });
-    if (!args.failed && s.status === "active") {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.sessionSummaries.generateSummary,
-        {
-          sessionId: args.sessionId,
-        },
-      );
-    }
+    // Nothing is scheduled here: the summary of a training session will be
+    // built from its record (ANH-89), not from ECG batches.
     return null;
   },
 });

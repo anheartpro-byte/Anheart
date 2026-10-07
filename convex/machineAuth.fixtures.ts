@@ -26,11 +26,6 @@ export async function machineFixture(
 
 export const machineRoutes = [
   ["POST", "/api/machine/heartbeat"],
-  ["GET", "/api/machine/session/poll"],
-  ["POST", "/api/machine/session/start"],
-  ["POST", "/api/machine/session/end"],
-  ["GET", "/api/machine/session/status"],
-  ["POST", "/api/machine/data"],
   ["GET", "/api/machine/training/poll"],
   ["GET", "/api/machine/roster"],
   ["POST", "/api/machine/profiles"],

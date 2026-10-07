@@ -135,16 +135,27 @@ CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)"
 Avant de le lancer :
 
 1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, et rend
-   `sessions.userId` facultatif. Il a été accepté tel quel par les données de
-   développement. Les données de production peuvent différer : `convex deploy`
+   `sessions.userId` et `machines.config` facultatifs. Dans sa version d'avant
+   le retrait de l'ancien mode ECG, il a été accepté tel quel par les données
+   de développement ; la version actuelle n'a été poussée sur aucun
+   déploiement. Les données de production peuvent différer : `convex deploy`
    refusera le tout s'il trouve un document non conforme, sans rien modifier.
-2. Le site de production (branche `main`) appelle l'ancienne API. Les fonctions
-   existantes gardent leur nom et leurs arguments ; `sessions.listSessions`
-   renvoie deux champs de plus (`kind`, `origin`). À vérifier sur une
-   préversion du site avant de fusionner.
+2. Le site de production (branche `main`) appelle l'ancienne API, et **elle
+   n'est plus entièrement là**. Le retrait de l'ancien mode d'enregistrement
+   ECG a supprimé trois mutations du module `sessions` (création, fin et
+   annulation d'une séance d'enregistrement), et `machines.createMachine` /
+   `updateMachine` refusent maintenant l'argument `config` que l'ancien site
+   envoie. Tant que l'ancien site tourne contre le nouveau Convex, son bouton
+   « Nouvelle session », la fin d'un enregistrement, et la création ou la
+   modification d'une machine échouent. Les autres fonctions gardent leur nom
+   et leurs arguments ; `sessions.listSessions` renvoie deux champs de plus
+   (`kind`, `origin`).
 3. Fusionner la branche dans `main` déploie le site de production (Vercel est
-   relié au dépôt GitHub). Ordre conseillé : Convex d'abord, le site ensuite.
-4. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
+   relié au dépôt GitHub). Ordre : Convex d'abord, le site **aussitôt après**,
+   dans la même fenêtre, à cause du point 2.
+4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
+   (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
+5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
 
 ---
 

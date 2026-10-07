@@ -35,8 +35,12 @@ export const machineProfileFields = {
   maxRpm: v.number(),
 };
 
+/**
+ * The two kinds of training session. A session of the retired ECG recording
+ * mode has no `kind` at all (that mode never wrote one): it is read-only
+ * history, reported as "recording" by the queries that list sessions.
+ */
 export const sessionKindValidator = v.union(
-  v.literal("recording"), // legacy ECG-only session (src/main.py)
   v.literal("auto"), // pre-saved programme, HR-controlled; remote or local
   v.literal("manual"), // operator-set speed; ONLY ever started at the machine
 );
@@ -160,11 +164,18 @@ export default defineSchema({
     ),
     lastHeartbeat: v.number(),
     location: v.optional(v.string()),
-    config: v.object({
-      sampleRate: v.number(), // Hz (default 1000)
-      channels: v.array(v.string()), // ["ECG", "EMG", etc.]
-      batchInterval: v.number(), // ms (default 1000)
-    }),
+    // DEPRECATED: settings of the retired ECG recorder. No function reads or
+    // writes this field. It stays declared, optional, only so that a
+    // deployment whose machines still carry it accepts this schema; the
+    // migration `migrations/retireLegacyRecording:removeMachineConfig` strips
+    // it from the documents, after which the field can leave the schema.
+    config: v.optional(
+      v.object({
+        sampleRate: v.number(),
+        channels: v.array(v.string()),
+        batchInterval: v.number(),
+      }),
+    ),
     createdAt: v.number(),
     isDeleted: v.optional(v.boolean()), // Soft delete flag
     deletedAt: v.optional(v.number()), // When it was deleted
@@ -178,7 +189,8 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_is_deleted", ["isDeleted"]),
 
-  // Sessions - ECG recording sessions
+  // Sessions - training sessions (auto, manual), plus the read-only history
+  // of the retired ECG recording mode (rows without `kind`).
   sessions: defineTable({
     machineId: v.id("machines"),
     // The rider. Optional only for sessions started at the machine with no
@@ -193,10 +205,10 @@ export default defineSchema({
     ),
     startedAt: v.number(),
     endedAt: v.optional(v.number()),
-    channels: v.array(v.string()),
-    sampleRate: v.optional(v.number()), // Hz - copied from machine config at session start
+    channels: v.array(v.string()), // ["ECG"] on a training session
+    sampleRate: v.optional(v.number()), // Hz - history of the recording mode; no longer written
     notes: v.optional(v.string()),
-    // --- training (absent on legacy recording sessions) ---
+    // --- training (absent on the sessions of the retired recording mode) ---
     kind: v.optional(sessionKindValidator),
     origin: v.optional(v.union(v.literal("remote"), v.literal("local"))),
     profileId: v.optional(v.string()),
@@ -218,9 +230,10 @@ export default defineSchema({
     .index("by_machine_and_status", ["machineId", "status"])
     .index("by_started_by", ["startedById"]),
 
-  // ECG Data - Real-time streaming batches of ON-DEVICE TREATED data.
-  // The Raspberry Pi filters, converts to physical units, downsamples and
-  // computes metrics before sending, so `values` are treated (e.g. mV) at
+  // ECG Data - HISTORY of the retired ECG recording mode. Read-only: no
+  // function writes to this table any more.
+  // The recorder filtered, converted to physical units, downsampled and
+  // computed metrics before sending, so `values` are treated (e.g. mV) at
   // `sampleRate` Hz (default 250), not raw ADC.
   ecg_data: defineTable({
     sessionId: v.id("sessions"),
@@ -250,7 +263,8 @@ export default defineSchema({
     ),
   }).index("by_session_and_timestamp", ["sessionId", "timestamp"]),
 
-  // Session Summaries - Computed after session ends
+  // Session Summaries - HISTORY of the retired ECG recording mode. Read-only:
+  // nothing computes or stores a summary any more.
   session_summaries: defineTable({
     sessionId: v.id("sessions"),
     duration: v.number(), // seconds
