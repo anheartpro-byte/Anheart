@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from src.bitalino_client import LinkStats
 from src.ecg_pipeline import EcgBridgeStats
-from src.training.runtime import IdleLink
+from src.training.runtime import IdleLink, RiseHold
 from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
 
 if TYPE_CHECKING:
@@ -73,6 +73,13 @@ class PanelStatus:
     drive: IdleLink
     ecg: EcgLinkStatus
     heart_rate_trend: BpmPerMinute | None
+
+    manual_rise_hold: RiseHold | None
+    """Why the heart rate holds a manual rise now; ``None`` when it does not.
+
+    From :meth:`~src.training.runtime.TrainingRuntime.manual_rise_hold`, so
+    the page can say it before a target is typed.
+    """
 
     radius: Metres
     ratio: GearRatio

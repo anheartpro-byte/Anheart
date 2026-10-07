@@ -941,6 +941,59 @@ async def test_the_status_page_renders_a_standing_verdict(
     assert status.standing.age_s == pytest.approx(2.0)
 
 
+async def test_the_status_page_shows_a_stop_the_camera_latched_behind_go_silent(
+    client: httpx.AsyncClient, rig: Rig
+) -> None:
+    """A page opened afterwards has this answer and nothing else to go by (ANH-182).
+
+    The camera's stop goes straight to the supervisor: the interface's own flag
+    stays down. Then the link to the drive is lost, and ``GO_SILENT`` takes the
+    standing verdict and the floor. The stop is still latched, the
+    acknowledgement would still demand the mushroom, and the status says so.
+    """
+    idle = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert idle.supervisor_estop is None
+
+    rig.clock.advance(Seconds(5.0))
+    rig.supervisor.latch_estop("camera presence: intrusion")
+    rig.clock.advance(Seconds(2.0))
+    rig.supervisor.trip_from_thread("drive_comm", SafetyAction.GO_SILENT, "link gone")
+    rig.supervisor.evaluate(make_observation(at=rig.clock.monotonic()))
+
+    status = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert status.estop_latched is False, "the interface's flag is not the camera's to set"
+    assert status.standing is not None
+    assert status.standing.action == "go_silent"
+    assert status.floor is not None
+    assert status.floor.action == "go_silent"
+    held = status.supervisor_estop
+    assert held is not None, "the stop latched behind GO_SILENT is in no field of the status"
+    assert (held.rule, held.action, held.latched) == ("operator_estop", "quick_stop", True)
+    assert "camera presence" in held.detail
+    assert held.age_s == pytest.approx(2.0)
+
+
+async def test_the_status_page_shows_the_stop_of_its_own_button_in_the_same_field(
+    client: httpx.AsyncClient,
+) -> None:
+    """One field for the latch, whoever set it; an acknowledgement empties it."""
+    await client.post("/api/session/estop", headers=auth(), json={"operator": OPERATOR})
+    pressed = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert pressed.estop_latched is True
+    assert pressed.supervisor_estop is not None
+    assert pressed.supervisor_estop.rule == "operator_estop"
+
+    acknowledged = await client.post(
+        "/api/safety/acknowledge",
+        headers=auth(),
+        json={"operator": OPERATOR, "estop_released": True},
+    )
+    assert acknowledged.status_code == HTTPStatus.OK
+    cleared = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert cleared.estop_latched is False
+    assert cleared.supervisor_estop is None
+
+
 async def test_the_ecg_endpoint_serves_only_what_is_new(
     client: httpx.AsyncClient, rig: Rig
 ) -> None:

@@ -2695,6 +2695,38 @@ def test_the_estop_outlives_every_tick_and_every_rule() -> None:
     assert {fired.rule for fired in rig.live()} == set()
 
 
+def test_a_latched_estop_stays_readable_behind_go_silent_until_it_is_acknowledged() -> None:
+    """``GO_SILENT`` takes the standing verdict and the floor; the stop is still latched.
+
+    The camera latches a stop, then the link to the drive is lost. Nothing the
+    supervisor reported used to show the stop any more, and a screen opened at
+    that moment could not announce it (ANH-182). Its own slot is readable,
+    names the latch whoever set it, and empties only on an acknowledgement.
+    """
+
+    def held(supervisor: SafetySupervisor) -> SafetyVerdict | None:
+        # Read through a call: a checker narrows a property it has just seen as None.
+        return supervisor.estop
+
+    rig = Rig()
+    assert held(rig.supervisor) is None
+    verdict = rig.supervisor.latch_estop("camera presence: intrusion")
+    assert held(rig.supervisor) is verdict
+
+    rig.comm_failures = 5
+    rig.tick()
+    floor = rig.supervisor.floor
+    assert rig.standing_action() is SafetyAction.GO_SILENT
+    assert floor is not None
+    assert floor.action is SafetyAction.GO_SILENT
+    assert held(rig.supervisor) is verdict, "the stop is no longer readable behind GO_SILENT"
+
+    released = Rig()
+    released.supervisor.latch_estop("hit the button")
+    assert isinstance(released.supervisor.acknowledge("dr-mensah", estop_released=True), Ok)
+    assert held(released.supervisor) is None
+
+
 def test_latching_the_estop_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     rig = Rig()
     with caplog.at_level(logging.ERROR, logger="src.training.safety"):

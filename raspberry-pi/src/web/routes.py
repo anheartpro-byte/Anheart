@@ -281,6 +281,7 @@ def _register_reads(
         return StatusRow(
             run_state=surface.run_state.value,
             estop_latched=surface.estop_latched,
+            supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
             attestation=AttestationRow.of(attested.value) if isinstance(attested, Ok) else None,
             attestation_statement=ESTOP_ATTESTATION,

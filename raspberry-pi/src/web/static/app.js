@@ -33,14 +33,18 @@
 
 var STALE_FRAME_MS = 2000;      // no frame for this long: the screen is not live
 var RECONNECT_MS = 1500;        // socket retry interval
+var ESTOP_ANSWER_MS = 2000;     // an E-STOP request with no answer for this long is said so, loudly
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
+var STATUS_STALE_MS = 12000;    // two refreshes missed: what the status last said is not the present
 var PANEL_MS = 1000;            // console link panel refresh
+var PANEL_STALE_MS = 3500;      // no /api/panel answer for this long: what it last said is not the present
 var SENSORS_MS = 1000;          // /api/sensors poll
 var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this long is stale
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
+var LOOP_ANSWER_S = 1;          // the loop empties its mailbox every 0.2 s: past this, on its clock, no answer is coming
 var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator"];
 
 var state = {
@@ -58,19 +62,26 @@ var state = {
   motionEnabled: true,   // from /api/panel; false on the read-only console
   programsEnabled: true, // from /api/panel; false until milestone M5
   panel: null,           // the last /api/panel answer
+  panelAt: 0,            // performance.now() when it came
   status: null,          // the last /api/status answer
+  statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
   statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
   estopReceipt: null,    // this page's own E-STOP, until a frame or a status taken after it takes over
   estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
   estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
   estopFrame: null,      // what the last frame said about it: "latched", "clear" or "silent"
+  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: {at, failed}
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
   sensorOrder: [],       // kinds, in configuration order
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
+  manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
+  manualTaken: null,     // the target the note says the machine took, and that note: {rpm, detail, text}
+  riseHeld: false,       // whether the console says the heart rate holds a manual rise (the box of the manual card)
+  manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
   dirty: {},             // canvas id -> true when it needs a redraw
 };
 
@@ -278,6 +289,34 @@ function closeNav() {
 /* -------------------------------------------------------- the loud banner */
 
 /*
+  What each source feeds: the large numbers, and every chip that goes green,
+  amber or red on its word. When a source goes quiet, all it fed is struck
+  and greyed together. A number struck next to a chip still saying "good",
+  "a l'arret" or "acquisition" in green is a page that still vouches for the
+  machine.
+
+  The frames feed most of it. The link panel and the status are asked over
+  HTTP, each at its own pace, and are judged on their own answers: with the
+  socket down they may still be current, and with the socket up they may not.
+*/
+var FRAME_FED = [
+  "hr", "measured-output", "setpoint-output", "console-hr", "console-output",
+  "run-mode", "side-motion", "side-safety", "mobile-mode", "mobile-motion",
+  "console-hr-quality", "hr-quality", "console-motion", "motion",
+  "console-drive-state", "drive-state", "setpoint-confirmed",
+  "safety-action", "run-safety-action", "phase", "manual-state",
+  "console-ecg-state", "ecg-state",
+];
+var PANEL_FED = ["console-mode", "console-ecg-link"];
+var STATUS_FED = ["run-state", "attest-state"];
+
+function markStale(ids, stale) {
+  ids.forEach(function (id) {
+    el(id).classList.toggle("stale", stale);
+  });
+}
+
+/*
   The socket dropping, or the frames stopping, is shown as a full-width red
   banner and every live number is struck through at the same time. Both, not
   one: the banner says "the page is not live", the struck values say which
@@ -298,12 +337,10 @@ function refreshLiveness() {
   }
   // After its text: the banner is measured as it reads, not as it read last time.
   showBanner(el("banner"), !fresh, reworded);
-  ["hr", "measured-output", "setpoint-output", "console-hr", "console-output"].forEach(function (id) {
-    el(id).classList.toggle("stale", !fresh);
-  });
-  ["run-mode", "side-motion", "side-safety", "mobile-mode", "mobile-motion"].forEach(function (id) {
-    el(id).classList.toggle("stale", !fresh);
-  });
+  renderEstopUnanswered();
+  markStale(FRAME_FED, !fresh);
+  markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
+  markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
   if (fresh) {
     pill(el("link-state"), "en direct", "good");
   } else {
@@ -327,8 +364,10 @@ function refreshLiveness() {
   verdict, so a report whose standing verdict is go_silent hides any stop
   latched behind it. It also refuses every acknowledgement: a stop that was
   latched when go_silent took over is still latched, and no report can say
-  otherwise for as long as go_silent stands. Only the interface's own flag,
-  in /api/status, still shows through it.
+  otherwise for as long as go_silent stands. Two fields of /api/status still
+  show through it, and a page opened at that moment has nothing else to go
+  by: the supervisor's own emergency-stop slot (`supervisor_estop`, whoever
+  latched it, the camera included) and the interface's flag (`estop_latched`).
 */
 function estopOpinion(standing, flagged) {
   if (flagged || (standing && standing.latched && standing.action === "quick_stop")) {
@@ -368,7 +407,7 @@ function renderEstopBanner() {
   var snapshot = state.snapshot;
   var status = state.status;
   var frame = snapshot ? estopOpinion(snapshot.safety, false) : null;
-  var polled = status ? estopOpinion(status.standing, status.estop_latched) : null;
+  var polled = status ? estopOpinion(status.standing, estopLatched(status)) : null;
   if (state.estopReceipt && snapshot && frame !== "silent" && snapshot.at >= state.estopReceipt.at) {
     state.estopReceipt = null;
   }
@@ -387,6 +426,95 @@ function renderEstopBanner() {
       });
     }
   }
+}
+
+/*
+  An E-STOP this page asked for and has no proof of. The request is answered
+  in a few milliseconds when everything works; when the console is stuck or
+  the network is mute it simply stays out, and nothing used to tell the
+  operator, who was left waiting for an answer that was not coming.
+
+  ESTOP_ANSWER_MS after the first click left unanswered, a banner says so and
+  names the wired stop. A request that failed says so at once. The request
+  itself is never withdrawn: it may still get through, and then its receipt
+  takes the notice down. So does a frame or a status answer, arriving after
+  the click, that shows a stop latched: the machine has it, whichever way it
+  came. A report under go_silent shows nothing either way and leaves the
+  notice up.
+
+  The count runs from the first unanswered click, however many follow it: a
+  second click must not make the page look reassured for two more seconds.
+*/
+function renderEstopUnanswered() {
+  var asked = state.estopAsked;
+  var waited = asked ? performance.now() - asked.at : 0;
+  var overdue = Boolean(asked) && (asked.failed !== null || waited >= ESTOP_ANSWER_MS);
+  var reworded = false;
+  if (overdue) {
+    var detail = el("estop-unanswered-detail");
+    var notice = (asked.failed !== null
+      ? "la demande a echoue : " + asked.failed
+      : "aucune reponse de la console depuis " + Math.round(waited / 1000) + " s") +
+      " - UTILISEZ L'ARRET CABLE";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  // After its text, like the other banners: measured as it reads.
+  showBanner(el("estop-unanswered"), overdue, reworded);
+}
+
+/** A report that has just arrived shows a stop latched: this page's E-STOP is no longer in doubt. */
+function estopSeenLatched(opinion) {
+  if (opinion === "latched" && state.estopAsked) {
+    state.estopAsked = null;
+    renderEstopUnanswered();
+  }
+}
+
+/*
+  A speed held or lowered by a warning that is NOT latched can climb again
+  with nobody clicking: the warning lifts when its cause ends, and the loop
+  then follows the programme or the manual target again, upwards too. To
+  somebody about to walk up to the arm, a held speed reads as "stopped for
+  good". So it is said in a banner, on every page, for as long as it is true.
+
+  True means: a freeze or a reduce that is not latched, in a session that is
+  running (a programme or a manual one, not one that is ending) and in a
+  phase that can still be asked for speed. In manual it also takes a target
+  above the setpoint: over a manual arm held at standstill the target is 0,
+  nothing is waiting, and nothing will climb.
+
+  A latched verdict never shows it: nothing resumes behind one.
+*/
+var CAN_STILL_MOVE = { baseline: true, warmup: true, hold: true };
+
+function resumePossible(snapshot) {
+  var safety = snapshot.safety;
+  if (!safety || safety.latched || (safety.action !== "freeze" && safety.action !== "reduce")) {
+    return false;
+  }
+  if (!CAN_STILL_MOVE[snapshot.phase]) {
+    return false;
+  }
+  if (snapshot.mode === "seance") {
+    return true;
+  }
+  return snapshot.mode === "manuel" && Boolean(snapshot.manual) &&
+    snapshot.manual.target.motor_rpm > snapshot.setpoint.motor_rpm;
+}
+
+function renderResumeBanner(snapshot) {
+  var possible = resumePossible(snapshot);
+  var reworded = false;
+  if (possible) {
+    var detail = el("resume-banner-detail");
+    var notice = "l'avertissement " + snapshot.safety.rule + " " +
+      (snapshot.safety.action === "reduce" ? "baisse" : "tient") +
+      " la vitesse et n'est pas verrouille : il se leve seul, et la vitesse remonte alors sans aucun clic";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  showBanner(el("resume-banner"), possible, reworded);
 }
 
 /*
@@ -505,14 +633,16 @@ function safetyKind(rank) {
 /*
   The grade of the heart rate, or "perime" once the reading is stale. The
   grade belongs to the last sample: when nothing new is measured it would go
-  on saying "good" about a signal that is no longer there. "perime" is grey
-  here as on a stale sensor card: one word, one look.
+  on saying "good" about a signal that is no longer there. "perime" is amber
+  here as on a stale sensor card, one word, one look: amber is this page's
+  colour for stale data, and in grey nothing on the card was coloured between
+  the reading going stale (4 s) and the first verdict about it (10 s).
 */
 function renderHrQuality(node, hr) {
   if (!hr) {
     pill(node, "pas de signal", "bad");
   } else if (hr.stale) {
-    pill(node, "perime", "");
+    pill(node, "perime", "warn");
   } else {
     pill(node, hr.quality, hr.quality === "good" ? "good" : "bad");
   }
@@ -545,7 +675,11 @@ function renderSnapshot(snapshot) {
   renderMode(snapshot);
   renderConsole(snapshot);
   renderManual(snapshot);
+  settleManualTarget(snapshot);
+  renderManualHold();
+  estopSeenLatched(estopOpinion(snapshot.safety, false));
   renderEstopBanner();
+  renderResumeBanner(snapshot);
 
   /* --- heart rate, with its age carried alongside --------------------- */
   var hr = snapshot.heart_rate;
@@ -692,6 +826,8 @@ function renderDriveGrid() {
 
 function renderPanel(panel) {
   state.panel = panel;
+  state.panelAt = performance.now();
+  renderManualHold();
   if (!panel) {
     pill(el("console-mode"), "pas de console", "");
     return;
@@ -804,6 +940,52 @@ function renderManual(snapshot) {
   }
 }
 
+/*
+  What the heart rate of a person on board holds, said BEFORE a target is
+  typed. With nobody on board there is no such gate. With a person on board
+  no setpoint rises without a usable heart rate, nor while its short trend is
+  unknown or falling fast: over a stopped arm a target is then refused, and
+  over a turning one the speed waits, and climbs again by itself when the hold
+  goes. None of that is a verdict, so nothing else on the page shows it, and
+  the reason used to be learnt from the refusal.
+
+  The console states the hold itself, in /api/panel (`manual_rise_hold`), from
+  the very test the loop applies: this page does not work it out again from
+  the numbers it shows, which are not the ones the gate reads. It is asked
+  once a second. When no answer has come for PANEL_STALE_MS the page no longer
+  knows, and with a person on board it says that rather than showing nothing:
+  an indicator that is off must mean "nothing holds".
+*/
+var RISE_HOLDS = {
+  no_heart_rate: "pas de frequence cardiaque utilisable",
+  trend_unknown: "tendance de la frequence cardiaque pas encore connue",
+  heart_rate_falling: "la frequence cardiaque baisse trop vite",
+};
+
+function renderManualHold() {
+  var snapshot = state.snapshot;
+  var manual = snapshot && snapshot.mode === "manuel" ? snapshot.manual : null;
+  var known = Boolean(state.panel) && performance.now() - state.panelAt < PANEL_STALE_MS;
+  var hold = known ? state.panel.manual_rise_hold : null;
+  var unknown = Boolean(manual) && manual.occupancy !== "bench" && !known;
+  state.riseHeld = Boolean(manual) && Boolean(hold);
+  show(el("manual-hold"), Boolean(manual) && (Boolean(hold) || unknown));
+  if (unknown) {
+    text(el("manual-hold-title"), "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
+    text(
+      el("manual-hold-detail"),
+      "pas de reponse recente de la console : rien ne dit ici si la frequence cardiaque retient une montee"
+    );
+  } else if (hold) {
+    text(el("manual-hold-title"), "MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE");
+    text(
+      el("manual-hold-detail"),
+      (RISE_HOLDS[hold] || hold) + ". Bras a l'arret : une cible non nulle est refusee. " +
+        "Bras en rotation : la vitesse ne monte pas, puis remonte seule vers la cible quand la retenue cesse."
+    );
+  }
+}
+
 function renderDraft() {
   var manual = state.snapshot ? state.snapshot.manual : null;
   var node = el("manual-draft");
@@ -887,16 +1069,155 @@ function doManualStart() {
     });
 }
 
+/*
+  What became of a manual target. "Appliquer" is answered 202 as soon as the
+  mailbox holds the target: the loop judges it on its next tick, and may
+  refuse it, or take it and put it back to 0 before the first step. A note
+  that said "the machine is going there" at the 202 said it of a target the
+  machine never took.
+
+  So the note is written from what the machine reports, three times:
+
+  - at the 202: sent, not taken yet;
+  - a `refused` event is the loop's answer, and the note becomes that refusal
+    word for word. An event reaches this screen before the frame of the same
+    tick, and now and then before the 202 itself: a refusal already shown for
+    this command is not overwritten by it;
+  - the first frame taken after the command whose applied target is the one
+    sent says the machine took it. When a second of the machine's own clock
+    has gone by with neither, the target was not taken and the reason did not
+    reach this screen (a socket that reconnects loses its events).
+
+  A target the machine takes back later, and a refusal answered to another
+  screen, are `refused` events too. With a manual session on screen they go to
+  this note as well: they are about the target this card shows.
+
+  And "taken" is true only for as long as the machine holds that target. Once
+  the applied target is another one (a STOP, a verdict, another screen), the
+  note is wiped rather than left to say that the machine follows a target it
+  has dropped.
+
+  Taken is not followed. The note adds "(suivie aux limites de mouvement)"
+  only while the machine is walking the setpoint to the target, and takes the
+  words off, frame by frame, for as long as something holds the setpoint
+  (followsTarget): the note must not say of a speed that is held that it is
+  on its way.
+*/
+function manualOnScreen() {
+  var snapshot = state.snapshot;
+  return Boolean(snapshot && snapshot.mode !== "repos" && snapshot.manual);
+}
+
+/*
+  Whether the applied target is `rpm`, in the motor rpm the machine counts in:
+  it rounds a target to a whole motor rpm, so the two differ by half of one at
+  most. The ratio is read off the ceiling, which is never 0 in a session.
+*/
+function holdsTarget(manual, rpm) {
+  var ceiling = manual.ceiling;
+  if (!ceiling.output_rpm) {
+    return false;
+  }
+  return Math.abs(manual.target.motor_rpm - (rpm * ceiling.motor_rpm) / ceiling.output_rpm) < 0.501;
+}
+
+function noteLoopRefusal(event) {
+  var sent = state.manualSent;
+  var answers = Boolean(sent && event.at >= sent.at);
+  if (!answers && !manualOnScreen()) {
+    return;
+  }
+  if (answers) {
+    state.manualSent = null;
+  }
+  state.manualRefusedAt = event.at;
+  problem(
+    el("manual-note"),
+    "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail
+  );
+}
+
+/*
+  Whether the machine is walking the setpoint to the target it holds, as of
+  this frame. A target taken is not always a target followed:
+
+  - a verdict that has the setpoint keeps it from the target. A reduce walks
+    it down whatever the target is. A freeze holds it away from every target
+    but one: zero is a stop asked for, and a stop is followed under a freeze;
+  - with no verdict, the heart rate of a person on board can hold a rise: the
+    box above the target says so, and a target above the setpoint waits.
+*/
+function followsTarget(snapshot, manual) {
+  var safety = snapshot.safety;
+  if (safety) {
+    return safety.action === "freeze" && manual.target.motor_rpm === 0;
+  }
+  return !(state.riseHeld && manual.target.motor_rpm > snapshot.setpoint.motor_rpm);
+}
+
+function takenNote(detail, followed) {
+  return "cible prise par la machine : " + detail + (followed ? " (suivie aux limites de mouvement)" : "");
+}
+
+function settleManualTarget(snapshot) {
+  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
+  var note = el("manual-note");
+  var taken = state.manualTaken;
+  if (taken && note.textContent !== taken.text) {
+    // Something else has been written there since: the note is no longer this one's to keep.
+    state.manualTaken = taken = null;
+  }
+  if (taken && !(manual && holdsTarget(manual, taken.rpm))) {
+    // The machine no longer holds the target the note says it took (a STOP, a
+    // verdict, another screen): the note would go on saying "taken". Wiped.
+    state.manualTaken = null;
+    ok(note, "");
+  } else if (taken) {
+    // Still held. "Followed" is said for as long as it is true, frame after frame.
+    var current = takenNote(taken.detail, followsTarget(snapshot, manual));
+    if (current !== taken.text) {
+      ok(note, current);
+      taken.text = current;
+    }
+  }
+  var sent = state.manualSent;
+  if (!sent || snapshot.at <= sent.at) {
+    return;
+  }
+  if (manual && holdsTarget(manual, sent.rpm)) {
+    var said = takenNote(sent.detail, followsTarget(snapshot, manual));
+    ok(note, said);
+    state.manualTaken = { rpm: sent.rpm, detail: sent.detail, text: said };
+  } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
+    return;
+  } else if (manual) {
+    problem(
+      el("manual-note"),
+      "cible NON prise par la machine : la cible appliquee est " + num(manual.target.output_rpm, 2) +
+        " tr/min de sortie. La raison n'est pas arrivee a cet ecran."
+    );
+  } else {
+    problem(el("manual-note"), "cible NON prise par la machine : la seance manuelle est terminee.");
+  }
+  state.manualSent = null;
+}
+
 function doManualApply() {
   var note = el("manual-note");
+  var rpm = state.manualDraft || 0;
   api("/api/manual/target", {
     method: "POST",
-    body: { output_rpm: state.manualDraft || 0, operator: operatorName() },
+    body: { output_rpm: rpm, operator: operatorName() },
   })
     .then(function (command) {
-      ok(note, "cible envoyee : " + command.detail + " - la machine y va aux limites de mouvement");
+      if (state.manualRefusedAt !== null && state.manualRefusedAt >= command.at) {
+        return;
+      }
+      state.manualSent = { at: command.at, rpm: rpm, detail: command.detail };
+      ok(note, "cible envoyee : " + command.detail + " - pas encore prise par la machine");
     })
     .catch(function (error) {
+      state.manualSent = null;
       problem(note, error);
     });
 }
@@ -958,6 +1279,9 @@ function renderZoneBand(bpm) {
 }
 
 function addEvent(event) {
+  if (event.kind === "refused") {
+    noteLoopRefusal(event);
+  }
   state.events.unshift(event);
   state.events = state.events.slice(0, 40);
   var list = el("events");
@@ -1195,7 +1519,7 @@ function updateSensorCard(entry) {
   var row = entry.row;
   var card = entry.card;
   var kind = qualityKind(entry);
-  pill(card.badge, entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "" : kind);
+  pill(card.badge, entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "warn" : kind);
   text(
     card.unit,
     channelName(row.channel) + " · " + row.unit + " · " + row.display_rate + " ech/s" +
@@ -1258,7 +1582,7 @@ function refreshSensorStaleness() {
 function renderSensorHeader(entry) {
   var row = entry.row;
   var kind = qualityKind(entry);
-  pill(el("sensor-quality"), entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "" : kind);
+  pill(el("sensor-quality"), entry.stale ? "perime" : qualityText(row.quality), kind === "stale" ? "warn" : kind);
   el("sensor-detail").classList.toggle("note-bad", entry.stale);
   if (entry.stale) {
     text(el("sensor-detail"), "Lecture figee : aucune nouvelle fenetre depuis " + ageText(entry) + ". Derniere qualite connue : " + qualityText(row.quality) + ".");
@@ -1572,12 +1896,14 @@ function loadCamera() {
   Whether the emergency-stop latch is set, from /api/status. `estop_latched`
   is the interface's own flag: it stays false for a stop the camera latched,
   although that is the same latch and its acknowledgement demands the same
-  "mushroom released" confirmation. The standing verdict names the latch
-  whoever set it.
+  "mushroom released" confirmation. `supervisor_estop` is the latch itself,
+  whoever set it, and it still shows when go_silent has taken the standing
+  verdict over. The standing verdict is read as well: it names the latch too,
+  and it is all an answer without that field has.
 */
 function estopLatched(status) {
   var standing = status.standing;
-  return status.estop_latched ||
+  return status.estop_latched || Boolean(status.supervisor_estop) ||
     Boolean(standing && standing.latched && standing.rule === "operator_estop");
 }
 
@@ -1590,15 +1916,18 @@ function loadStatus() {
     }
     state.statusShown = sent;
     state.status = status;
+    state.statusAt = performance.now();
     if (state.estopReceipt && sent > state.estopReceiptSent) {
       // Asked after the E-STOP was latched: this answer carries it from here on.
       state.estopReceipt = null;
     }
+    estopSeenLatched(estopOpinion(status.standing, estopLatched(status)));
     renderEstopBanner();
+    // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
       el("run-state"),
       status.run_state,
-      status.estop_latched ? "bad" : status.run_state === "running" ? "warn" : ""
+      estopLatched(status) ? "bad" : status.run_state === "running" ? "warn" : ""
     );
     text(
       el("bind"),
@@ -1841,14 +2170,23 @@ function doStop() {
   network, the web server and the session process, any one of which can be the
   thing that has failed - and it is never safety-rated. The safety-rated stop
   is the wired mushroom, and while STO is jumpered even that one is a ramp.
+
+  For the same reason the page does not wait in silence for the answer: see
+  renderEstopUnanswered().
 */
 function doEstop() {
   state.manualDraft = null;
+  if (!state.estopAsked) {
+    state.estopAsked = { at: performance.now(), failed: null };
+  }
+  window.setTimeout(renderEstopUnanswered, ESTOP_ANSWER_MS);
   api("/api/session/estop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed E-STOP" },
   })
     .then(function (receipt) {
+      state.estopAsked = null;
+      renderEstopUnanswered();
       state.estopReceipt = receipt;
       state.estopReceiptSent = state.statusSent;
       renderEstopBanner();
@@ -1857,6 +2195,10 @@ function doEstop() {
       });
     })
     .catch(function (error) {
+      if (state.estopAsked) {
+        state.estopAsked.failed = error.message;
+      }
+      renderEstopUnanswered();
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
     });
 }

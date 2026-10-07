@@ -1822,6 +1822,23 @@ class TrainingRuntime:
         self._withdrawn = None
         return withdrawn
 
+    def manual_rise_hold(self) -> RiseHold | None:
+        """Why the heart rate would hold a manual rise at this instant, or ``None``. Reads only.
+
+        For the console, which has to show it BEFORE a target is typed: the
+        answer :meth:`set_manual_target` gives a non-zero target over a stopped
+        arm with no verdict standing, and the gate :meth:`_follow_manual`
+        applies to a setpoint that would rise, read from the one statement of
+        both (:meth:`_heart_rate_hold`) and at this instant, as the refusal
+        is. ``None`` unless a manual session is running (:attr:`mode`), since
+        there is no target to type otherwise, and always ``None`` with nobody
+        on board. A verdict is not this method's business: it is on every
+        screen already.
+        """
+        if self.mode is not RunMode.MANUEL:
+            return None
+        return self._heart_rate_hold(self._clock.monotonic())
+
     async def fault_reset(self) -> Result[None, FaultResetRefusal]:
         """Reset a drive fault, on an operator's explicit request. Never called automatically.
 
