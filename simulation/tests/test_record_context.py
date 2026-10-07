@@ -42,7 +42,8 @@ def test_ex11_native_like_shared_writer_drives_the_same_viewer_geometry_and_fina
         energised=False,
         runtime_applied_rpm=0,
     )
-    assert isinstance(created.value.close(ManualClock(), "operator_stop", observed), Ok)
+    closed = created.value.close(ManualClock(), "operator_stop", observed)
+    assert isinstance(closed, Ok)
     loaded = view_record(tmp_path, created.value.path.name)
     assert isinstance(loaded, Ok)
     lines = [document(line) for line in loaded.value.splitlines()]
@@ -73,7 +74,8 @@ def test_ex11_partially_unobserved_final_state_remains_unknown_and_warned(
     trace = run_file(SCENARIO_DIR / "manual_32_rpm_refused.json").trace
     created = Writer.create(tmp_path, trace.manifest)
     assert isinstance(created, Ok)
-    assert isinstance(created.value.close(ManualClock(), "done", observed), Ok)
+    closed = created.value.close(ManualClock(), "done", observed)
+    assert isinstance(closed, Ok)
     loaded = view_record(tmp_path, created.value.path.name)
     assert isinstance(loaded, Ok)
     lines = [document(line) for line in loaded.value.splitlines()]

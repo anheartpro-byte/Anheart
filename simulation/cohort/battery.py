@@ -32,7 +32,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final
 
 from simulation.cohort.generate import CohortSubject, Condition, load_cohort
 from simulation.harness import PREROLL, RunResult, run_scenario
@@ -47,7 +47,6 @@ from src.training.plan import (
     SHIPPED_DEFAULTS_PATH,
     ZONE_CEILING_FRACTION,
     ProfileStore,
-    Rejected,
     TrainingProfile,
     UnknownProfile,
     profile_to_document,
@@ -152,13 +151,9 @@ def eligibility(subject: CohortSubject, session: SessionType) -> Eligibility | N
     if not isinstance(resolved, Err):
         return Eligibility(profile=resolved.value.profile, refusal=None, expected_refusal=expected)
     error = resolved.error
-    match error:
-        case Rejected(detail=detail):
-            return Eligibility(profile=None, refusal=detail, expected_refusal=expected)
-        case UnknownProfile():
-            raise ValueError(f"{profile_id} vanished from its store")
-        case _ as unreachable:
-            assert_never(unreachable)
+    if isinstance(error, UnknownProfile):
+        raise ValueError(f"{profile_id} vanished from its store")
+    return Eligibility(profile=None, refusal=error.detail, expected_refusal=expected)
 
 
 def _subject_doc(subject: CohortSubject) -> Mapping[str, JsonValue]:

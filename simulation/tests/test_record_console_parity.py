@@ -202,8 +202,10 @@ def test_anh131_a_record_the_console_writes_today_is_refused_by_the_replay_with_
         refused = replay(asyncio.run(_console_record(home, programme=programme)))
         assert isinstance(refused, Err), refused
         assert refused.error.detail.split("; ") == [
-            "the operator_action event at t=0.000 s is not replayable: "
-            "not a command of the replay vocabulary",
+            (
+                "the operator_action event at t=0.000 s is not replayable: "
+                "not a command of the replay vocabulary"
+            ),
             "the record holds no drive exchange: nothing says what the drive answered",
             "the manifest holds no geometry: the runtime cannot be built as it was",
         ]

@@ -26,6 +26,7 @@ Time: the battery runs on :class:`~src.clock.ManualClock` (deterministic, as
 from __future__ import annotations
 
 import asyncio
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Final, Protocol, assert_never, final
@@ -217,9 +218,13 @@ class Ticker(Protocol):
     """Hands out the next tick instant; owns the clock the whole rig reads."""
 
     @property
-    def clock(self) -> Clock: ...
+    @abstractmethod
+    def clock(self) -> Clock:
+        """The clock the whole rig reads."""
 
-    async def next(self) -> Monotonic: ...
+    @abstractmethod
+    async def next(self) -> Monotonic:
+        """The next tick instant, returned once it is due."""
 
 
 @final
@@ -472,8 +477,7 @@ def _wire_ecg(
                 tap=capture.accept,
             )
             return _EcgWiring(sensor=None, bitalino=client, bridge=bridge, source=source)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(scenario.ecg.mode)
 
 
 # =========================================================================
@@ -785,7 +789,8 @@ class Session:
         # a command to the runtime: that one is recorded by _input, replayably.
         detail: str | None = type(action).__name__
         match action:
-            case ManualTarget(at=at, output_rpm=rpm, expect=expect):
+            case ManualTarget():
+                rpm = action.output_rpm
                 self._input(commands.SetManualTarget(rpm))
                 result = runtime.set_manual_target(rpm)
                 accepted = isinstance(result, Ok)
@@ -796,7 +801,11 @@ class Session:
                     self._message(now, "refusal", describe_target_refusal(result.error))
                 self._targets.append(
                     TargetOutcome(
-                        at=at, requested=rpm, expected=expect, accepted=accepted, detail=outcome
+                        at=action.at,
+                        requested=rpm,
+                        expected=action.expect,
+                        accepted=accepted,
+                        detail=outcome,
                     )
                 )
                 detail = None
@@ -931,8 +940,7 @@ class Session:
                     self._message(now, "refusal", describe_reset_refusal(reset.error))
                 self._request(at, "fault_reset", expect, reset)
                 return None
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(action)
 
     def _request(
         self,
