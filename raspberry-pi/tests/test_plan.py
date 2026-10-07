@@ -2145,19 +2145,17 @@ has none - so this test does not import a private name."""
 def _describe_parse(error: ProfileParseError) -> str:
     """Exhaustive match over :data:`ProfileParseError`, ending in ``assert_never``.
 
-    The nested form of contract rule 3 lives in the tests for the unions this
-    module owns: in ``src/`` the ``case _`` arm is unreachable by construction
-    and the 100%-branch gate cannot close it (see the note in
-    ``src/motor/atv320.py``), while here it costs nothing and still fails the
-    type check the moment a variant is added without being handled.
+    The form of contract rule 3, in the tests for the unions this module owns:
+    every case returns, and the ``raise assert_never(error)`` written after the
+    match fails the type check the moment a variant is added without being
+    handled.
     """
     match error:
         case Malformed(detail, _):
             return f"malformed: {detail}"
         case Rejected(violations, _):
             return f"rejected: {len(violations)}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _describe_upsert(error: UpsertError) -> str:
@@ -2166,8 +2164,7 @@ def _describe_upsert(error: UpsertError) -> str:
             return f"conflict: {expected} != {actual}"
         case StoreUnwritable(path, _):
             return f"unwritable: {path}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _describe_delete(error: DeleteError) -> str:
@@ -2178,8 +2175,7 @@ def _describe_delete(error: DeleteError) -> str:
             return f"conflict: {expected} != {actual}"
         case StoreUnwritable(path, _):
             return f"unwritable: {path}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _describe_resolve(error: ResolveError) -> str:
@@ -2188,8 +2184,7 @@ def _describe_resolve(error: ResolveError) -> str:
             return f"unknown: {profile_id}"
         case Rejected(violations, _):
             return f"rejected: {len(violations)}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def test_every_parse_failure_is_handled_exhaustively() -> None:

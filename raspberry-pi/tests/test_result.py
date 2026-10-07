@@ -48,8 +48,8 @@ def classify(result: Result[int, DriveError]) -> str:
                     return f"timeout:{after}"
                 case BadCrc(expected=expected):
                     return f"crc:{expected}"
-                case _ as unreachable:
-                    assert_never(unreachable)
+            raise assert_never(error)
+    raise assert_never(result)
 
 
 def test_match_narrows_every_variant() -> None:

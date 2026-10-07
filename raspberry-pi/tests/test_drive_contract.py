@@ -580,6 +580,7 @@ def _handle(result: Result[MotorRpm, DriveError]) -> str:
             return f"ok:{rpm}"
         case Err(error):
             return _describe(error)
+    raise assert_never(result)
 
 
 def _describe(error: DriveError) -> str:
@@ -602,8 +603,7 @@ def _describe(error: DriveError) -> str:
             return f"range:{quantity}"
         case EnableUnconfirmed() | StopUnconfirmed() as unknown:
             return _describe_unknown_output_state(unknown)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _describe_unknown_output_state(error: EnableUnconfirmed | StopUnconfirmed) -> str:
@@ -618,8 +618,7 @@ def _describe_unknown_output_state(error: EnableUnconfirmed | StopUnconfirmed) -
             return f"enable?:{zeroed}:{removed}"
         case StopUnconfirmed(waited=waited, last_output_rpm=rpm):
             return f"stop?:{waited}:{rpm}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def test_every_error_variant_is_handled_and_carries_its_context() -> None:

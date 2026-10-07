@@ -85,8 +85,7 @@ def broken_open_master(
                 open_device=open_ftdi,
             )
             return master, handle, opens
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(backend)
 
 
 def refused_open(master: ModbusMaster) -> None:

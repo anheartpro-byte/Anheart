@@ -10,8 +10,7 @@ def incomplete_record_result(result: Result[Recording, RecordError]) -> Recordin
     match result:
         case Ok(recording):
             return recording
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(result)
 
 
 invalid_event = Event(t=0.0, kind="invented", detail="synthetic")

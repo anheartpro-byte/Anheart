@@ -185,8 +185,7 @@ def main() -> int:
             return 0
         case Backend.FTDI:
             return run_ftdi(action, create)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(backend)
 
 
 if __name__ == "__main__":

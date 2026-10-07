@@ -144,20 +144,20 @@ def link_from_args(args: argparse.Namespace) -> DriveLink:
     The validation itself lives in :func:`src.local_config.build_drive_link`, so
     the local console and these scripts parse the link identically.
     """
-    match build_drive_link(
+    built = build_drive_link(
         port=arg_text(args, "port"),
         slave=arg_text(args, "slave"),
         baud=arg_text(args, "baud"),
         parity=arg_text(args, "parity"),
         timeout=arg_text(args, "timeout"),
         offset=arg_text(args, "offset"),
-    ):
+    )
+    match built:
         case Ok(link):
             return link
         case Err(problem):
             raise ValueError(f"{problem.key}: {problem.detail}")
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(built)
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,5 +204,4 @@ def describe_error(error: DriveError) -> str:  # noqa: PLR0911 - one return per 
             return f"activation non confirmee: {detail}"
         case StopUnconfirmed(detail=detail):
             return f"arret non confirme: {detail}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
