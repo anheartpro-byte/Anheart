@@ -105,11 +105,31 @@ change. Le 1er octobre 2026 elle a ajouté sept index (`machine_profiles`,
 
 Depuis le multi-organisation (ANH-114), un déploiement qui contient déjà des
 données doit recevoir **une fois** la migration, juste après le code :
-`npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'`. Tant qu'elle n'a
-pas tourné, les fonctions liées à une organisation refusent. Elle n'a encore
-été lancée sur aucun déploiement. Procédure complète, variable
-`ANHEART_ORG_ID` et réglages Clerk :
-[convex.md](convex.md#activer-le-multi-organisation).
+
+```sh
+npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'
+```
+
+Elle n'a encore été lancée sur aucun déploiement.
+
+**Entre le déploiement du code et la fin de la migration**, aucune ligne n'a
+encore d'organisation. Pendant cet intervalle :
+
+- tout appel du tableau de bord qui dépend d'une organisation est **refusé,
+  pour tout le monde, admin compris** (« Your account does not belong to an
+  organization ») : listes, détails, lancement, et aussi **la demande d'arrêt à
+  distance d'une séance en cours**. L'arrêt à la console de la machine n'est
+  pas concerné ;
+- la liste des pratiquants servie à la machine (`/api/machine/roster`) est
+  **vide** ;
+- une séance démarrée à la console est enregistrée **sans son pratiquant**, et
+  la migration ne le rétablit pas ensuite ;
+- les autres routes machine (heartbeat, télémétrie, statut, fin de séance)
+  répondent comme avant.
+
+**Consigne : déployer quand aucune séance n'est en cours, et lancer la
+migration aussitôt.** Procédure complète, variable `ANHEART_ORG_ID` et
+réglages Clerk : [convex.md](convex.md#activer-le-multi-organisation).
 
 ### 3.2 Vérifier un déploiement sans navigateur
 
@@ -164,8 +184,11 @@ Avant de le lancer :
 4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
-6. Lancer la migration multi-organisation aussitôt après le déploiement, puis
-   suivre la [procédure d'activation](convex.md#activer-le-multi-organisation).
+6. Déployer quand aucune séance n'est en cours, et lancer la migration
+   multi-organisation aussitôt après : entre les deux, le tableau de bord
+   refuse tout, y compris une demande d'arrêt à distance (voir
+   [§3.1](#31-vers-le-développement)). Suivre ensuite la
+   [procédure d'activation](convex.md#activer-le-multi-organisation).
    `users.getCurrentUser` renvoie deux informations de plus (`organization`, et
    le rôle `org_admin`) : à vérifier sur une préversion du site, comme le
    point 2.

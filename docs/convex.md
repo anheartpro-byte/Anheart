@@ -91,7 +91,7 @@ organisations.
 |---|---|
 | `userId`, `organizationId` | Le compte et l'organisation. |
 | `role` | `"admin"` \| `"gestionnaire"` \| `"user"` : le rôle tenu **dans cette organisation** (miroir de `org:admin`, `org:gestionnaire`, `org:patient`). |
-| `active` | `false` garde la trace d'un retrait : une appartenance inactive ne donne aucun droit. |
+| `active` | `false` garde la trace d'un retrait. Une appartenance inactive ne compte plus pour les autres (le compte n'est plus un membre qu'on peut lister, lier ou désigner) ni pour le compte lui-même pendant la transition sans jeton d'organisation. Elle **ne coupe pas** un appelant dont le jeton nomme encore l'organisation : le jeton fait foi, et le retrait prend effet quand Clerk cesse de délivrer la revendication, c'est-à-dire à l'expiration du jeton en cours. |
 
 Index : `by_user`, `by_organization`, `by_user_and_organization`.
 
@@ -322,6 +322,13 @@ avec un message explicite (`ConvexError`, transmis au navigateur) :
 `users.getCurrentUser` ne lève pas dans ces cas : il renvoie le compte avec
 `organization: null` et `role: "user"`, pour que le site sache quoi afficher.
 
+Quand le jeton nomme une organisation connue, **le jeton seul décide** pour
+l'appelant : son appartenance dans le miroir `memberships` n'est pas consultée,
+qu'elle soit absente ou inactive. Un retrait fait dans Clerk prend donc effet
+à l'expiration du jeton en cours, pas avant. Le miroir sert à qualifier les
+**autres** comptes (qui est membre, avec quel rôle) et, pendant la transition,
+l'appelant sans jeton d'organisation.
+
 ### Transition : jeton sans organisation
 
 Tant que Clerk Organizations n'est pas configuré, les jetons ne portent aucune
@@ -402,8 +409,9 @@ Autres règles notables :
   in Clerk Organizations »). Avant, l'admin Anheart change le rôle d'un membre
   de son organisation (l'appartenance et son miroir `users.role`).
 - **Premier passage d'un compte** (`users.getOrCreateUser`) : le compte rejoint
-  l'organisation que nomme son jeton, avec le rôle que porte le jeton, et son
-  appartenance est écrite dans le miroir. Sans organisation dans le jeton et
+  l'organisation que nomme son jeton, **si le miroir la connaît déjà**, avec le
+  rôle que porte le jeton, et son appartenance est écrite dans le miroir. Une
+  organisation n'est jamais créée à partir d'un jeton. Sans organisation dans le jeton et
   tant que `ANHEART_ORG_ID` n'est pas définie, il rejoint l'organisation par
   défaut comme **`user`**. Sinon il est créé sans organisation.
 - **Premier admin** : avec Clerk Organizations, c'est le premier `org:admin` de
@@ -864,10 +872,16 @@ les tests (`convex/multiOrganizationMigration.test.ts`).
    une ligne `memberships` par compte, plus aucune machine ni séance sans
    `organizationId`.
 
-Entre le déploiement et la fin de la migration, les fonctions liées à une
-organisation refusent (« Your account does not belong to an organization ») :
-prévoir de lancer la migration aussitôt. Tant que `ANHEART_ORG_ID` n'est pas
-définie, le site fonctionne ensuite comme avant, en mono-organisation.
+Entre le déploiement et la fin de la migration, tout appel du tableau de bord
+qui dépend d'une organisation est refusé pour tout le monde (« Your account
+does not belong to an organization »), **y compris une demande d'arrêt à
+distance** ; la liste des pratiquants servie à la machine est vide ; une séance
+démarrée à la console est enregistrée sans son pratiquant, qui n'est pas
+rétabli ensuite. **Déployer quand aucune séance n'est en cours et lancer la
+migration aussitôt** (détail dans
+[deploiement.md](deploiement.md#31-vers-le-développement)). Tant que
+`ANHEART_ORG_ID` n'est pas définie, le site fonctionne ensuite comme avant, en
+mono-organisation.
 
 **B. Dans Clerk (tableau de bord Clerk, instance du déploiement)**
 
@@ -913,10 +927,16 @@ définie, le site fonctionne ensuite comme avant, en mono-organisation.
 
 Ne définir `ANHEART_ORG_ID` qu'une fois le sélecteur d'organisation en place
 sur le site : sans organisation active dans sa session Clerk, un utilisateur
-n'a plus accès à rien. Les organisations clientes et leurs membres arrivent
-dans le miroir à la première connexion de chaque membre
-(`users.getOrCreateUser`) ; la synchronisation par webhook Clerk est un lot
-ultérieur d'ANH-114.
+n'a plus accès à rien.
+
+**Aucune organisation cliente n'est créée dans le miroir par ce lot**, ni par
+la migration, ni au premier passage d'un compte. Tant que le webhook Clerk
+([ANH-186](https://linear.app/anheart/issue/ANH-186/multi-organisation-lot-2-webhook-clerk-vers-le-miroir-convex-signature)) n'existe pas, un jeton
+qui nomme une organisation cliente est refusé (« This organization is not
+known to the server yet »). Seule l'appartenance d'un compte à une organisation
+**déjà présente dans le miroir** est écrite à son premier passage
+(`users.getOrCreateUser`). De même, le retrait d'un membre dans Clerk n'arrive
+dans le miroir (`active: false`) qu'avec ce webhook.
 
 ---
 

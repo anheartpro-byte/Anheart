@@ -632,6 +632,38 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
     ).rejects.toThrow(/Not authorized to manage this machine/);
   });
 
+  it("reads the role from the membership, never from the stored mirror", async () => {
+    const w = await seedLegacyWorld(modules);
+    await migrate(w);
+    // The mirror on the account says admin; its membership says patient.
+    await w.t.run((ctx) => ctx.db.patch(w.patient, { role: "admin" }));
+
+    expect((await whoAmI(legacy(w, "legacy-patient")))?.role).toBe("user");
+    await expect(
+      legacy(w, "legacy-patient").mutation(api.machines.createMachine, {
+        name: "x",
+      }),
+    ).rejects.toThrow(/Unauthorized/);
+    expect(
+      await legacy(w, "legacy-patient").query(api.machines.listMachines, {}),
+    ).toEqual([]);
+    expect(
+      (await legacy(w, "legacy-patient").query(api.users.listUsers, {})).map(
+        (u) => u._id,
+      ),
+    ).toEqual([w.patient]);
+
+    // The reverse: the mirror says patient, the membership says admin.
+    await w.t.run((ctx) => ctx.db.patch(w.admin, { role: "user" }));
+
+    expect((await whoAmI(legacy(w, "legacy-admin")))?.role).toBe("admin");
+    const machines = await legacy(w, "legacy-admin").query(
+      api.machines.listMachines,
+      {},
+    );
+    expect(machines.map((m) => m._id)).toEqual([w.machine]);
+  });
+
   it("refuses an account whose membership is not active", async () => {
     const w = await seedLegacyWorld(modules);
     await migrate(w);
