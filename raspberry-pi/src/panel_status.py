@@ -21,16 +21,43 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from enum import Enum, unique
+from typing import Protocol
 
 from src.bitalino_client import LinkStats
 from src.ecg_pipeline import EcgBridgeStats
 from src.training.runtime import IdleLink, RiseHold
 from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
 
-if TYPE_CHECKING:
-    # Type-only: local_config imports the web layer, which imports this module.
-    from src.local_config import EcgSource, MotorBackend
+# The two kinds of link the records below report. They are defined here, below
+# the configuration that chooses them (``src.local_config`` imports the web
+# layer, which imports this module), and ``src.local_config`` gives them back
+# under its own name.
+
+
+@unique
+class MotorBackend(Enum):
+    """Which drive the console commands."""
+
+    SIM = "sim"
+    """``SimulatedDrive``: a full dry run, nothing opened."""
+
+    SERIAL = "serial"
+    """The ATV320 over Modbus RTU, through ``src/motor/atv320.py``."""
+
+
+@unique
+class EcgSource(Enum):
+    """Where the ECG comes from."""
+
+    SIM = "sim"
+    """``SimulatedBitalinoClient`` fed by the physiology plant."""
+
+    SERIAL = "serial"
+    """A serial device (``/dev/rfcomm0`` on the Pi, ``COM4`` on Windows)."""
+
+    RFCOMM = "rfcomm"
+    """macOS IOBluetooth RFCOMM, address ``rfcomm:XX-XX-XX-XX-XX-XX``."""
 
 
 @dataclass(frozen=True, slots=True)
