@@ -2,11 +2,13 @@
 
 The arming gate inside the runtime (EX-4), the ``record_degraded`` field of the
 dashboard heartbeat (EX-3), a launch from the dashboard recorded under its
-session id (EX-1), and the record's configuration keys.
+session id (EX-1), the dashboard link's news kept in the record, and the
+record's configuration keys.
 """
 
 from __future__ import annotations
 
+import asyncio
 import errno
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,7 +17,9 @@ from typing import cast
 import pytest
 
 from src.clock import ManualClock
-from src.cloud_sync import HEARTBEAT_PERIOD
+from src.cloud_sync import HEARTBEAT_PERIOD, Refused
+from src.contract import CONTRACT_UNSUPPORTED
+from src.control_surface import EventKind as SurfaceEvent
 from src.geometry import MachineGeometry
 from src.local_config import (
     DEFAULT_RECORD_CONFIG,
@@ -39,9 +43,17 @@ from src.training.runtime import (
 )
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy
-from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, UnixMillis
+from src.units import Bpm, Metres, Monotonic, MotorRpm, OutputRpm, RpmPerSecond, UnixMillis
 from tests.record_journal_support import refuse_writes
-from tests.test_cloud_sync import LAUNCH, OPERATOR, Dashboard, Linked, config_of, ok
+from tests.test_cloud_sync import (
+    LAUNCH,
+    OPERATOR,
+    Dashboard,
+    Linked,
+    config_of,
+    launch_answer,
+    status_answer,
+)
 
 SIM_ENV: Mapping[str, str] = {"MOTOR_BACKEND": "sim", "ECG_SOURCE": "sim", "ARM_RADIUS_M": "1.5"}
 
@@ -194,10 +206,10 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     tmp_path: Path,
 ) -> None:
     rig, dashboard, journal = recording_linked(tmp_path)
-    dashboard.answer("/api/machine/training/poll", ok({"session": dict(LAUNCH)}))
+    dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await rig.run(2.0)
     assert rig.panel.runtime.state is RuntimeState.RUNNING
-    dashboard.answer("/api/machine/training/status", ok({"active": True, "stopRequested": True}))
+    dashboard.answer("/api/machine/training/status", status_answer(stop=True))
     await rig.run(5.0)
     await rig.panel.close()
 
@@ -218,6 +230,73 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     on_disk = b"".join(p.read_bytes() for p in records[0].rglob("*") if p.is_file())
     assert b"Dr Manager" not in on_disk
     assert b"machine-key" not in on_disk
+
+
+# =========================================================================
+# What the dashboard link tells the operator during a session is in the record
+# =========================================================================
+
+
+async def test_an_incompatible_dashboard_said_during_a_session_is_in_the_record(
+    tmp_path: Path,
+) -> None:
+    """The console's real link, a session in progress, a dashboard that answers 426.
+
+    The operator is shown ``serveur incompatible (...)`` as a ``dashboard``
+    event. What the operator is shown is in ``events.jsonl``: as a ``warning``
+    whose detail starts with ``dashboard:``, apart from the refusals of what
+    was asked at this console, which stay ``refusal``.
+    """
+    sentence = "serveur incompatible (contrat 1.0 vs 2)"
+    rig, dashboard, journal = recording_linked(tmp_path)
+    watcher = rig.panel.hub.subscribe()
+    surface = rig.panel.surface
+    assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
+    await rig.run(1.0)
+    assert state_of(rig.panel.runtime) is RuntimeState.RUNNING
+    # Under the slowest running speed: the machine's own refusal, to tell the two apart.
+    assert isinstance(
+        surface.submit_manual_target(output_rpm=OutputRpm(0.5), operator=OPERATOR), Ok
+    )
+    dashboard.answer(
+        "/api/machine/heartbeat",
+        Err(Refused(426, "Unsupported machine contract", CONTRACT_UNSUPPORTED, ("2",))),
+    )
+    await rig.run(float(HEARTBEAT_PERIOD) + 1.0)
+    assert state_of(rig.panel.runtime) is RuntimeState.RUNNING, "the session goes on"
+    await rig.panel.close()
+
+    shown: list[tuple[SurfaceEvent, str]] = []
+    while True:
+        try:
+            payload = await asyncio.wait_for(watcher.next_payload(), 0.001)
+        except TimeoutError:
+            break
+        if payload.event is not None:
+            shown.append((payload.event.kind, payload.event.detail))
+    assert (SurfaceEvent.DASHBOARD, sentence) in shown, "the operator was shown it"
+
+    records = [path for path in journal.root.iterdir() if not path.name.startswith(".")]
+    assert len(records) == 1
+    loaded = read(records[0])
+    assert isinstance(loaded, Ok)
+    recording = loaded.value
+    assert recording.warnings == ()
+    about_the_link = [
+        (e.kind, e.detail, e.actor) for e in recording.events if "incompatible" in e.detail
+    ]
+    assert about_the_link == [(EventKind.WARNING, f"dashboard: {sentence}", "system")]
+    refusals = [e.detail for e in recording.events if e.kind is EventKind.REFUSAL]
+    assert len(refusals) == 1, "the refused target, and only it, is a refusal"
+    assert refusals[0].startswith("refused: ")
+    # In the file itself, as written: one line, of kind ``warning``.
+    lines = [
+        line
+        for line in (records[0] / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if sentence in line
+    ]
+    assert len(lines) == 1
+    assert '"kind":"warning"' in lines[0].replace(" ", "")
 
 
 # =========================================================================

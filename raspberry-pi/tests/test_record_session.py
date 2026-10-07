@@ -838,6 +838,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         (SurfaceEvent.REFUSED, OPERATOR, f"consigne refusee par {OPERATOR}"),
         (SurfaceEvent.END_REQUESTED, remote, "arret demande par Jean Dupont"),
         (SurfaceEvent.REFUSED, remote, "refuse"),
+        (SurfaceEvent.DASHBOARD, "", "serveur incompatible (contrat 1.0 vs 2.0)"),
         (SurfaceEvent.SESSION_RUNNING, "", "session running"),
         (SurfaceEvent.SESSION_IDLE, "", "session idle"),
         (SurfaceEvent.RECORDING, "", "enregistrement degrade"),
@@ -858,6 +859,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("refusal", "refused: consigne refusee par [redacted]", ALIAS),
         ("remote_command", "end_requested: arret demande par [redacted]", "remote"),
         ("refusal", "refused: refuse", "remote"),
+        ("warning", "dashboard: serveur incompatible (contrat 1.0 vs 2.0)", "system"),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
 

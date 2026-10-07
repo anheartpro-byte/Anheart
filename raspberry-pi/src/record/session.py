@@ -376,6 +376,13 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             return EventKind.VERDICT_ACK
         case SurfaceEvent.REFUSED:
             return EventKind.REFUSAL
+        case SurfaceEvent.DASHBOARD:
+            # News of the dashboard link (a server of another contract, a launch
+            # refused on that account). The operator was shown it, so it is
+            # kept; it answers nothing asked at this console, so it is not a
+            # refusal. The record's vocabulary is closed and has no kind of its
+            # own for it: a warning, told apart by its ``dashboard:`` prefix.
+            return EventKind.WARNING
         case SurfaceEvent.SESSION_RUNNING | SurfaceEvent.SESSION_IDLE | SurfaceEvent.RECORDING:
             # States the ticks already carry, and the recorder's own messages.
             return None
