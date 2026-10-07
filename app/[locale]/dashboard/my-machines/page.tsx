@@ -94,7 +94,7 @@ export default function MyMachinesPage() {
 
       {launchFor && (
         <LaunchTrainingModal
-          open={launchFor !== null}
+          open
           onOpenChange={(open) => !open && setLaunchFor(null)}
           machineId={launchFor}
         />

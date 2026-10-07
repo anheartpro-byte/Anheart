@@ -22,3 +22,6 @@ paths-ignore:
   - simulation/out
   # The CAD assembly (a STEP file kept in Git LFS).
   - CAO
+
+queries:
+  - uses: security-and-quality

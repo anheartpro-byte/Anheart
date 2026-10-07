@@ -17,11 +17,12 @@ import math
 import random
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Final, Protocol, assert_never, final
+from typing import Final, assert_never, final
 
 from simulation.scenario import SignalFault
 from src.bitalino_client import ChannelData, SampleBatch
 from src.clock import Clock
+from src.ecg_pipeline import SampleSource
 from src.units import Monotonic
 
 ADC_FULL_SCALE: Final[float] = 1023.0
@@ -40,15 +41,13 @@ GAP_KEEP_EVERY: Final[int] = 4
 SAMPLE_RATE: Final[int] = 1000
 
 
-class SampleSource(Protocol):
-    """What the bridge reads (``src.ecg_pipeline.SampleSource``)."""
-
-    async def read_samples(self, count: int = ...) -> SampleBatch | None: ...
-
-
 @final
 class FaultySource:
-    """Delegates to ``inner``; corrupts while a fault is armed. Mutable, owned by the loop."""
+    """Delegates to ``inner``; corrupts while a fault is armed. Mutable, owned by the loop.
+
+    ``inner`` and this wrapper are both what the bridge reads
+    (:class:`~src.ecg_pipeline.SampleSource`).
+    """
 
     __slots__ = ("_batches", "_clock", "_fault", "_inner", "_rng", "_until")
 

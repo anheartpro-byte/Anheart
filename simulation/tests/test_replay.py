@@ -682,8 +682,10 @@ def test_every_reason_a_record_is_not_replayable_is_given_at_once(
 
     edit_manifest(bare, drop)
     assert refused(bare).split("; ") == [
-        "the operator_action event at t=0.000 s is not replayable: "
-        "not a command of the replay vocabulary",
+        (
+            "the operator_action event at t=0.000 s is not replayable: "
+            "not a command of the replay vocabulary"
+        ),
         no_exchange,
         "the manifest holds no geometry: the runtime cannot be built as it was",
     ]

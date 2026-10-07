@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, assert_never, override
+from typing import override
 
 from simulation.recording import Frame
 from src.clock import ManualClock
@@ -22,11 +22,10 @@ from src.record.ecg import decode_block
 from src.record.rows import JsonScalar, JsonValue, Row, finite
 from src.record.schema import EndObservation, Event, EventKind, Manifest, RecordError
 from src.record.writer import DEFAULT_PRIVACY, FRAME, TICK_COLUMNS, Writer, csv_line, tick_line
-from src.result import Err, Ok, Result
+from src.result import Err, Result
 from src.sensors.base import SensorReading
 from src.units import UnixMillis
 
-SCHEMA: Final[int] = 2
 __all__ = [
     "Event",
     "FinalState",
@@ -49,13 +48,9 @@ class RecordingWriteError(RuntimeError):
 
 
 def _required[T](result: Result[T, RecordError]) -> T:
-    match result:
-        case Ok(value):
-            return value
-        case Err(error):
-            raise RecordingWriteError(error)
-        case _ as unreachable:
-            assert_never(unreachable)
+    if isinstance(result, Err):
+        raise RecordingWriteError(result.error)
+    return result.value
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
