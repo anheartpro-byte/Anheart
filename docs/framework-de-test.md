@@ -461,6 +461,51 @@ puis `?trace=out/...`.
 * Commandes : bouton fichier, choix du scénario live, vitesse, Lecture/Pause,
   barre de position.
 
+### 7.3 Ce que la page affiche d'une trace, et ce qu'elle peut charger
+
+Tout ce que la page lit d'une trace, d'un enregistrement ou d'un flux en direct
+est inséré comme du **texte**, dans des éléments qu'elle construit elle-même
+(`createElement`, `textContent`, `createTextNode`) : nom de la trace et
+avertissements du lecteur, libellés et note de géométrie, tuiles, horloge,
+liste d'événements. Son script ne confie aucun texte à l'analyseur HTML
+(`innerHTML` et équivalents) : un champ qui contient du balisage s'affiche tel
+qu'il est écrit.
+
+La page déclare aussi ce qu'elle a le droit de charger, par une politique de
+sécurité de contenu écrite dans une balise `meta`, juste après le jeu de
+caractères :
+
+| Directive | Valeur | Effet |
+|---|---|---|
+| `default-src` | `'none'` | rien n'est chargé qui ne soit nommé plus bas : ni cadre, ni police, ni média |
+| `script-src` | l'empreinte SHA-256 du script de la page | seul ce script s'exécute : aucun autre script, aucun gestionnaire écrit dans un attribut, pas d'`eval` |
+| `style-src` | l'empreinte SHA-256 de la feuille de style de la page | seule cette feuille s'applique : aucune autre feuille, aucun attribut `style` |
+| `connect-src` | `'self'` | `fetch` et le flux `/stream` ne vont que vers le serveur qui a servi la page |
+| `img-src` | `'self'` | la page n'a pas d'image : c'est l'icône du site, que le navigateur demande de lui-même à ce serveur (sans cette ligne, il signale un refus à chaque ouverture) |
+| `object-src` | `'none'` | aucun greffon |
+| `base-uri` | `'none'` | l'adresse de base de la page ne peut pas être changée |
+| `form-action` | `'none'` | aucun formulaire ne peut être envoyé |
+
+La page est un seul fichier, sans étape de construction : les deux empreintes
+sont écrites dans la balise. **Modifier le `<style>` ou le `<script>` de la
+page impose de mettre à jour son empreinte**, sinon le navigateur refuse la
+feuille ou le script. Le test
+`test_ex2_the_policy_names_the_page_s_own_style_and_script` échoue alors et
+affiche la valeur à écrire. Un attribut `style` ou `onclick` ajouté dans le
+HTML serait refusé de la même façon : passer par une classe de la feuille et
+par le script.
+
+Une balise `meta` ne peut pas porter `frame-ancestors`, `sandbox` ni l'envoi de
+rapports : ces directives ne se lisent que dans un en-tête de réponse, que ni
+`simulation.live` ni l'application hébergée n'envoient.
+
+Tests : `simulation/tests/test_viewer_page.py` exécute le script de la page tel
+qu'il est livré, sous Node (`viewer_requests.mjs`), dans un document de
+substitution qui garde ce que le script construit et met à part ce qu'il
+confierait à l'analyseur HTML. Il lit aussi les adresses demandées et la
+politique de la page. Node doit donc être présent là où tourne la batterie de
+la simulation.
+
 ## 8. Écrire un nouveau scénario JSON
 
 Un scénario = un fichier `simulation/scenarios/<nom>.json`. Ajouter un
