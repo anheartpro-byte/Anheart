@@ -190,8 +190,8 @@ def build_drive(link: DriveLink, clock: Clock) -> BuiltDrive:
 def describe_error(error: DriveError) -> str:  # noqa: PLR0911 - one return per variant
     """One line for the operator, per variant of the closed union."""
     match error:
-        case CommTimeout(after=after):
-            return f"pas de reponse du variateur (apres {after:.3f} s)"
+        case CommTimeout():
+            return f"pas de reponse du variateur (apres {error.after:.3f} s)"
         case BadResponse(detail=detail):
             return f"reponse invalide: {detail}"
         case UnexpectedState(expected=expected, actual=actual):

@@ -715,9 +715,9 @@ async def test_open_reports_a_wrong_register_offset(clock: ManualClock, bus: Fak
     """The drive is at offset 0; the driver is told -1, so ETA does not exist."""
     drive = build_drive(clock, bus, offset=-1)
     match await drive.open():
-        case Err(BadResponse(detail=detail)):
-            assert "exception code 2" in detail
-            assert "offset" in detail
+        case Err(BadResponse() as error):
+            assert "exception code 2" in error.detail
+            assert "offset" in error.detail
         case other:
             pytest.fail(f"expected BadResponse naming the offset, got {other!r}")
 
@@ -806,8 +806,8 @@ async def test_write_speed_rejects_values_outside_signed_16_bit(
 ) -> None:
     """Rejected at the boundary, and nothing reaches the wire."""
     match await drive.write_speed(MotorRpm(rpm)):
-        case Err(OutOfRange(quantity=quantity)):
-            assert quantity == "signed16"
+        case Err(OutOfRange() as error):
+            assert error.quantity == "signed16"
         case other:
             pytest.fail(f"expected OutOfRange, got {other!r}")
     assert bus.log == []
@@ -818,10 +818,10 @@ async def test_write_speed_catches_a_disagreeing_echo(drive: ATV320Drive, bus: F
     bus.script_writes.append(write_echo(RegisterMap().lfrd, 500))
     bus.script_reads.append(read_reply([123]))
     match await drive.write_speed(MotorRpm(500)):
-        case Err(BadResponse(detail=detail)):
-            assert "write-verify failed" in detail
-            assert "500 rpm" in detail
-            assert "123 rpm" in detail
+        case Err(BadResponse() as error):
+            assert "write-verify failed" in error.detail
+            assert "500 rpm" in error.detail
+            assert "123 rpm" in error.detail
         case other:
             pytest.fail(f"expected a write-verify BadResponse, got {other!r}")
 
@@ -851,9 +851,9 @@ async def test_write_speed_reports_a_value_the_drive_rejects(
 ) -> None:
     bus.script_writes.append(exception_response(WRITE_SINGLE_REGISTER, ILLEGAL_DATA_VALUE))
     match await drive.write_speed(MotorRpm(900)):
-        case Err(BadResponse(detail=detail)):
-            assert "rejected a write" in detail
-            assert "exception code 3" in detail
+        case Err(BadResponse() as error):
+            assert "rejected a write" in error.detail
+            assert "exception code 3" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1026,8 +1026,8 @@ async def test_read_limits_reports_a_parameter_the_drive_does_not_have(
     """Unseeded addresses answer exception code 2, as a wrong offset would."""
     assert bus.regs.tfr not in bus.registers
     match await drive.read_limits():
-        case Err(BadResponse(detail=detail)):
-            assert "3103" in detail
+        case Err(BadResponse() as error):
+            assert "3103" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1081,8 +1081,8 @@ async def test_read_register_refuses_once_the_link_is_latched(
 async def test_a_short_read_is_a_bad_response(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.script_reads.append(read_reply([]))
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "expected exactly 1 register" in detail
+        case Err(BadResponse() as error):
+            assert "expected exactly 1 register" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1094,8 +1094,8 @@ async def test_a_reply_with_no_register_block_is_a_bad_response(
     ``registers: list[int]`` and never assigns it, so this raises."""
     bus.script_reads.append(write_echo(8602, 0))
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "carries no register data" in detail
+        case Err(BadResponse() as error):
+            assert "carries no register data" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1107,8 +1107,8 @@ async def test_a_reply_that_is_not_a_pdu_is_a_bad_response(
     """pymodbus returns None when a caller sets no_response_expected."""
     bus.script_reads.append(reply)
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "neither a Modbus PDU" in detail
+        case Err(BadResponse() as error):
+            assert "neither a Modbus PDU" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1116,8 +1116,8 @@ async def test_a_reply_that_is_not_a_pdu_is_a_bad_response(
 async def test_a_non_pdu_write_reply_is_a_bad_response(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.script_writes.append(None)
     match await drive.write_command(ControlWord.SHUTDOWN):
-        case Err(BadResponse(detail=detail)):
-            assert "neither a Modbus PDU" in detail
+        case Err(BadResponse() as error):
+            assert "neither a Modbus PDU" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1135,9 +1135,9 @@ async def test_a_write_is_not_acked_by_somebody_elses_reply(
     """
     bus.script_writes.append(read_reply([0]))
     match await drive.write_command(ControlWord.SHUTDOWN):
-        case Err(BadResponse(detail=detail)):
-            assert "function code 3" in detail
-            assert "NOT acknowledged" in detail
+        case Err(BadResponse() as error):
+            assert "function code 3" in error.detail
+            assert "NOT acknowledged" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1158,8 +1158,8 @@ async def test_a_register_outside_the_16_bit_domain_is_out_of_range(
     """Parsed at the boundary, so nothing downstream has to check again."""
     bus.script_reads.append(read_reply([0x1FFFF]))
     match await drive.read_status():
-        case Err(OutOfRange(quantity=quantity)):
-            assert quantity == "register"
+        case Err(OutOfRange() as error):
+            assert error.quantity == "register"
         case other:
             pytest.fail(f"expected OutOfRange, got {other!r}")
 
@@ -1464,17 +1464,11 @@ async def test_enable_that_fails_at_the_energising_word_says_the_motor_may_be_ru
     bus.script_reads.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY, io_exception()])
 
     match await drive.enable():
-        case Err(
-            EnableUnconfirmed(
-                detail=detail,
-                reference_zeroed=zeroed,
-                run_command_removed=removed,
-            )
-        ):
-            assert zeroed, "the rollback zeroed LFRD"
-            assert removed, "and removed the run command"
-            assert "may be live" in detail
-            assert "CommTimeout" in detail, "the underlying failure is still named"
+        case Err(EnableUnconfirmed() as error):
+            assert error.reference_zeroed, "the rollback zeroed LFRD"
+            assert error.run_command_removed, "and removed the run command"
+            assert "may be live" in error.detail
+            assert "CommTimeout" in error.detail, "the underlying failure is still named"
         case other:
             pytest.fail(f"expected EnableUnconfirmed, got {other!r}")
 
@@ -1550,9 +1544,9 @@ async def test_enable_refuses_a_faulted_drive_and_names_the_fault(
     drive = build_drive(clock, bus)
 
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault, raw_code=code)):
-            assert fault is DriveFault.OVERCURRENT
-            assert code == LFT_OVERCURRENT
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.OVERCURRENT
+            assert error.raw_code == LFT_OVERCURRENT
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     assert bus.command_words() == [], "not one command word to a faulted drive"
@@ -1564,8 +1558,8 @@ async def test_enable_reports_a_fault_that_appears_mid_sequence(
     bus.on_command[ControlWord.SWITCH_ON] = ETA_FAULT
     bus.registers[RegisterMap().lft] = LFT_OVERCURRENT
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault)):
-            assert fault is DriveFault.OVERCURRENT
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.OVERCURRENT
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     assert bus.command_words() == [6, 7], "ENABLE_OPERATION must not follow a fault"
@@ -1667,8 +1661,8 @@ async def test_enable_does_not_wait_out_a_fault_that_appears_while_settling(
     bus.on_command[ControlWord.SHUTDOWN] = ETA_FAULT
     bus.registers[RegisterMap().lft] = LFT_UNDERVOLTAGE
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault)):
-            assert fault is DriveFault.UNDERVOLTAGE
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.UNDERVOLTAGE
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     # Pre-check, one read that saw the fault, one LFT read. No settling.
