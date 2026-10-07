@@ -1,7 +1,7 @@
 # Guide passager : votre séance dans la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 6 octobre 2026. Aucun passager n'a encore utilisé ce guide.
+> Version du 7 octobre 2026. Aucun passager n'a encore utilisé ce guide.
 >
 > - À cette date, aucune séance avec une personne à bord n'a encore eu lieu
 >   avec ce logiciel. Ce guide décrit ce que le logiciel est conçu pour faire.
@@ -151,9 +151,9 @@ tout de suite à l'opérateur. Vous n'avez pas à vous justifier.
 
 > **Un arrêt commandé par le logiciel n'est jamais instantané.** En
 > fonctionnement normal, le bras ralentit progressivement, puis s'arrête. Il
-> tourne encore pendant ce ralentissement. Il arrive aussi que la machine
-> garde sa vitesse au lieu de ralentir : l'opérateur dispose alors de son
-> arrêt d'urgence.
+> tourne encore pendant ce ralentissement. Cela vaut aussi quand la machine
+> gardait sa vitesse pour une raison de sécurité : l'arrêt normal la fait
+> ralentir. L'opérateur dispose en plus de son arrêt d'urgence.
 
 > **Un bras à l'arrêt ne veut pas dire que la séance est finie.** Au début de
 > la séance, le bras est à l'arrêt, puis il se met à tourner de lui-même.
@@ -178,13 +178,13 @@ l'étape « Récupération ».
 il appuie sur son bouton d'arrêt normal. En temps normal, la machine termine
 la séance en douceur : elle passe encore par le retour au calme et la
 récupération. Si la machine est en train de garder sa vitesse pour une raison
-de sécurité, cet arrêt normal ne ralentit pas le bras tant qu'elle la garde :
-l'opérateur dispose alors de son arrêt d'urgence.
+de sécurité, cet arrêt normal la fait ralentir de la même façon. L'opérateur
+dispose en plus de son arrêt d'urgence.
 
 **3. Quelqu'un demande l'arrêt depuis le site web.** Le gestionnaire, un
 administrateur, ou vous-même depuis votre compte. En temps normal, la machine
 prend cette demande en compte en quelques secondes, puis réagit comme pour un
-arrêt normal, avec la même limite. Cela ne fonctionne que si la machine est
+arrêt normal. Cela ne fonctionne que si la machine est
 reliée à Internet. Ce n'est pas un arrêt d'urgence.
 
 **4. La machine décide seule.** Elle se surveille en permanence. Selon le cas,

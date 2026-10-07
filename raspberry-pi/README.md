@@ -134,13 +134,20 @@ network only makes the dashboard's picture stale.
 | machine → dashboard | training presets whose cardiac tiers match this machine | when the profile store changes |
 | machine → dashboard | every session run here, AUTO or MANUAL, with telemetry at 1 Hz and its end | while it runs |
 | dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate) | polled every 3 s when idle |
-| dashboard → machine | a stop request forwarded to the ordinary STOP path, subject to the FREEZE limitation below | checked every 3 s |
+| dashboard → machine | a stop request forwarded to the ordinary STOP path: the setpoint walks down at the motion limits, under a FREEZE too | checked every 3 s |
 
-**Current limitations:** while FREEZE is active, the runtime keeps its last
-setpoint even after STOP or a manual target of zero; FREEZE can also hold a
-descent already in progress ([ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la)).
-Accepting a stop request or displaying ARRET/COOLDOWN proves neither a falling
-setpoint nor measured standstill. Separately, an ongoing session can resume
+**A stop that was asked for always comes down.** STOP at the console, a stop
+sent from the dashboard and a manual target of zero walk the setpoint to zero
+at the motion limits from the next tick, whether a FREEZE stands or not, latched
+or not, and a FREEZE that appears during the descent does not pause it
+([ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la)).
+With no stop asked for a FREEZE holds the setpoint as before, and every stronger
+verdict still decides first. ARRET/COOLDOWN say that the setpoint is falling or
+zero; they do not prove measured standstill.
+
+**Current limitations:** a programme's own cooldown on its timeline, with no
+stop asked for, is still held by a FREEZE until the FREEZE lifts, a stronger
+verdict arrives or `session_overrun` ends the session. Separately, an ongoing session can resume
 regulation automatically when an unlatched FREEZE/REDUCE warning disappears,
 including after REDUCE brought the setpoint to zero
 ([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).

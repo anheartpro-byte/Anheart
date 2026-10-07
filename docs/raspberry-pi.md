@@ -100,7 +100,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
 | `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 18 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). En séance manuelle, une cible non nulle est refusée, et celle déjà saisie remise à 0, tant que quelque chose retient une montée sur un bras à l'arrêt : un verdict, la fréquence cardiaque d'une personne à bord, un premier pas que le variateur n'a pas confirmé ([4.3](#43-séance-manuelle)). Limite actuelle : STOP sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). En séance manuelle, une cible non nulle est refusée, et celle déjà saisie remise à 0, tant que quelque chose retient une montée sur un bras à l'arrêt : un verdict, la fréquence cardiaque d'une personne à bord, un premier pas que le variateur n'a pas confirmé ([4.3](#43-séance-manuelle)). Un arrêt demandé (STOP, arrêt venu du site, cible manuelle à 0) fait descendre la consigne même sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
@@ -201,7 +201,7 @@ L'action la plus sévère l'emporte (`max` sur `SafetyAction`).
 | Niveau | Rang | Ce que fait le runtime |
 |---|---|---|
 | `NONE` | 0 | Suit la loi de commande (programme) ou la cible de l'opérateur (manuel), au rythme du profileur de mouvement. |
-| `FREEZE` | 1 | Garde la dernière consigne ; la loi de commande n'est pas consultée. |
+| `FREEZE` | 1 | Garde la dernière consigne ; la loi de commande n'est pas consultée. Il ne retient pas un arrêt demandé : si une fin de séance est en cours (STOP à la console ou depuis le site, entre autres) ou si la cible manuelle vaut 0, la consigne descend vers 0 aux limites de mouvement, dès le tic suivant, comme sans verdict. |
 | `REDUCE` | 2 | Descend la consigne (programme : 15 tr/min moteur/s ; manuel : aux limites de mouvement) et continue de réguler sans jamais monter. |
 | `RAMP_DOWN` | 3 | Fin de séance : phase COOLDOWN, consigne vers 0 par la rampe logicielle (programme 15 tr/min/s, manuel aux limites de mouvement). |
 | `QUICK_STOP` | 4 | Consigne à 0 **tout de suite**, commande de marche **gardée** : le variateur décélère sur sa propre rampe mise en service (3-4 s). Ce n'est pas un arrêt « immédiat ». |
@@ -213,7 +213,12 @@ suit de nouveau la loi de commande ou la cible, sans clic (voir
 a tourné dans une séance, une consigne qui revient à 0 sans que personne l'ait
 demandé, sous `REDUCE` ou sous `NONE` par la loi de commande, termine la séance
 sur le verrou `session_standstill` (voir
-[5.2](#52-les-18-règles-du-superviseur)).
+[5.2](#52-les-18-règles-du-superviseur)). Un STOP n'est pas dans ce cas, même
+donné sous un `FREEZE` : la séance se termine sur `operator_stop`, sans verrou
+de plus. Une cible manuelle mise à 0 pendant qu'un avertissement tient, `FREEZE`
+compris, est suivie jusqu'à 0, et cette arrivée à 0 termine la séance sur le
+même verrou (lecture prudente, voir
+[securite.md](securite.md#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)).
 
 ---
 
@@ -308,7 +313,9 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   ou en baisse rapide) ou un variateur qui ne confirme pas retiennent la
   montée d'un bras en mouvement est acceptée et gardée ; la consigne reste où
   elle est, puis suit la cible quand la retenue disparaît, sans clic à cet
-  instant. Capsule vide, la FC ne retient rien.
+  instant. Capsule vide, la FC ne retient rien. Sous un FREEZE, une cible plus
+  basse mais non nulle est tenue de la même façon. Seule une cible de 0 y est
+  suivie tout de suite : c'est un arrêt demandé (section 7).
 * **Départ normal avec une personne à bord** : l'ECG tourne avant le départ,
   la FC est utilisable et sa tendance connue. Si elle est stable, la première
   cible est acceptée et, avec les limites livrées, le premier pas est écrit au
@@ -318,8 +325,8 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   secondes : la cible est alors refusée et se retape (coût estimé dans
   securite.md, 7.6).
 * Phase HOLD pendant toute la séance ; au bout de 3600 s
-  (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP,
-  avec la limite actuelle sous FREEZE décrite en [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt).
+  (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP :
+  la consigne descend, même sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)).
   Si la descente dure plus de 30 s, `session_overrun` se verrouille pendant
   cette descente, à 3630 s, sans rien changer à la rampe : voir
   [5.2](#52-les-18-règles-du-superviseur).
@@ -327,7 +334,10 @@ Dans l'ordre, rien ne touche le variateur avant les quatre premières :
   nouveau départ. Une consigne ramenée à 0 par un avertissement termine la
   séance sur le verrou `session_standstill`, capsule vide comprise (voir
   section 5). Une cible que l'opérateur met lui-même à 0, sans avertissement,
-  ne la termine pas : il peut redonner une cible.
+  ne la termine pas : il peut redonner une cible. Mise à 0 pendant qu'un
+  avertissement tient (un FREEZE compris, sous lequel elle est maintenant
+  suivie), elle termine la séance sur ce même verrou quand la consigne arrive
+  à 0.
 
 ### 4.4 Séance programmée (AUTO)
 
@@ -521,7 +531,9 @@ redémarrer la console.
 * **Rien ne change pendant une séance** : même seuil, même action, même
   verrou, au même instant. La règle arrête toujours un bras qu'un FREEZE
   verrouillé tient en vitesse au-delà de la fin du programme (RAMP_DOWN
-  l'emporte sur FREEZE). Elle se déclenche toujours quand la fin de la séance
+  l'emporte sur FREEZE) quand personne n'a demandé l'arrêt ; un STOP donné
+  sous ce FREEZE fait descendre la consigne sans attendre la règle
+  ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Elle se déclenche toujours quand la fin de la séance
   elle-même dépasse l'échéance, bras déjà arrêté ou en descente : toute fin de
   séance ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt)
   rouvre une `RECOVERY` complète (avec le profil standard, une fin ouverte
@@ -699,7 +711,8 @@ Conséquences :
 | Arrêt demandé plus vite que la rampe du variateur | défaut **ObF** (surtension du bus, LFT 18) : le variateur passe en **roue libre**, le bras ralentit sans contrôle, plus longtemps. Aucun « arrêt rapide » n'existe donc dans le code. |
 | `SHUTDOWN` (6) envoyé sur un arbre qui tourne | transition CiA402 8 : l'étage de sortie tombe, **roue libre**. Mesuré sur le modèle du dépôt : arrêt à t = 144,6 s avec 6, contre t = 10,0 s en gardant la commande de marche. D'où l'ordre `SWITCH_ON` (7) puis `SHUTDOWN` (6), et seulement à l'arrêt confirmé par RFRD. |
 | QUICK_STOP, E-STOP, arrêt de sortie du processus | LFRD = 0, commande de marche **gardée** : le variateur suit sa rampe dEC. |
-| STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; sans verdict prioritaire, le chemin ordinaire descend la consigne sur la rampe logicielle. Sous FREEZE, elle reste tenue dans le code actuel (limite ANH-175 ci-dessous). |
+| STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; au tic suivant la consigne commence à descendre vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non). Un verdict plus sévère décide à sa place : REDUCE et RAMP_DOWN descendent eux-mêmes, QUICK_STOP met la consigne à 0, GO_SILENT se tait. |
+| Cible manuelle remise à 0 | même descente, sous FREEZE aussi ; la séance n'est pas en train de se terminer pendant la descente (mode « MANUEL »). À l'arrivée à 0 : la séance continue si aucun avertissement ne tient, elle se termine sur `session_standstill` si un avertissement tient. |
 | Verdict RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel aux limites de mouvement). |
 | Consigne revenue à 0 en cours de séance sans que personne l'ait demandé (`session_standstill`) | la consigne est déjà à 0 quand le verdict tombe, au tic suivant : rien de plus n'est écrit. La séance se termine comme sur tout RAMP_DOWN : marche gardée tant que l'arbre tourne, puis 7 et 6 à l'arrêt confirmé par RFRD. |
 | GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. |
@@ -707,12 +720,45 @@ Conséquences :
 | Console sans séance, au repos confirmé ou liaison non acquise | libération du transport sans écriture ; l'absence de séance ne prouve pas l'arrêt physique. |
 | Console sans séance, liaison acquise mais état non confirmé | `needs_stop_before_release` impose le passage par `shutdown()` ; un état inconnu n'est pas assimilé à un arbre arrêté. |
 
-**Limite actuelle — [ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la).**
-La branche FREEZE de `TrainingRuntime._command` réapplique la dernière consigne,
-même après STOP ou une cible manuelle à 0 ; elle peut aussi figer une descente
-déjà commencée. Le mode « ARRET », la phase COOLDOWN ou l'acceptation de la
-demande ne prouvent donc ni une baisse de consigne ni l'arrêt mesuré de l'arbre.
-Ce comportement est celui du code décrit ici, pas celui d'une correction non intégrée.
+**Un arrêt demandé descend toujours, même sous FREEZE
+([ANH-175](https://linear.app/anheart/issue/ANH-175/stop-operateur-sans-effet-tant-quun-verdict-freeze-est-en-cours-la)).**
+Jusqu'au 7 octobre 2026, la branche FREEZE de `TrainingRuntime._command`
+réappliquait la dernière consigne sans rien regarder d'autre : un STOP était
+enregistré, l'écran affichait « ARRET », et le bras continuait à la même
+vitesse tant que le FREEZE durait. Maintenant :
+
+* **Ce qui compte comme un arrêt demandé** (`_stop_asked`) : une fin de séance
+  en cours, quelle qu'en soit l'origine (STOP à la console, arrêt demandé depuis
+  le site, limite d'une heure de la séance manuelle, verdict de fin acquitté
+  avant l'arrêt du bras), ou une cible manuelle à 0. Dans les deux cas, bras
+  encore en mouvement.
+* **Ce que fait alors le tic sous FREEZE** (`_stop_under_freeze`) : un pas du
+  profileur de mouvement vers 0, comme le fait un arrêt sans verdict. Rien ne
+  peut y monter, la loi de commande et la FC ne sont pas consultées. Le dernier
+  pas d'un programme (de la vitesse minimale à 0) attend comme d'habitude
+  (`_passage_too_soon`).
+* **Dès le tic suivant.** Le maintien d'un FREEZE ne laisse pas de base de temps
+  au profileur, et un REDUCE de programme en laisse une périmée. La descente
+  part donc du tic précédent : un tic de mouvement, jamais la durée du maintien.
+* **Un FREEZE qui apparaît pendant une descente déjà commencée ne la fige pas** :
+  mêmes consignes, tic pour tic, qu'une descente sans FREEZE.
+* **Sans arrêt demandé, rien ne change** : le FREEZE tient la consigne, une
+  cible manuelle plus basse mais non nulle comprise, et la reprise se fait
+  comme avant. REDUCE, RAMP_DOWN, QUICK_STOP et GO_SILENT décident toujours en
+  premier.
+
+Le mode « ARRET », la phase COOLDOWN ou l'acceptation d'une demande ne prouvent
+toujours pas l'arrêt mesuré de l'arbre. Ils vont maintenant de pair avec une
+consigne qui descend ou qui vaut 0, sauf sous GO_SILENT, où plus rien n'est
+écrit. L'arrêt se lit sur la vitesse mesurée (RFRD).
+
+**Ce que ce changement ne couvre pas.** Le retour au calme d'un programme sur
+sa propre chronologie (phase COOLDOWN sans qu'aucune fin n'ait été demandée)
+reste tenu par un FREEZE : la consigne garde sa valeur jusqu'à ce que le FREEZE
+se lève, qu'un verdict plus sévère arrive ou que `session_overrun` termine la
+séance. Sous un FREEZE verrouillé, c'est `session_overrun` qui finit par arrêter
+le bras. L'opérateur, lui, a maintenant un STOP qui agit. Mesures et décisions
+dans [securite.md](securite.md#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175).
 
 Les distinctions de libération du transport sont exercées par `tests/test_initial_inspection_cancellation.py`
 et `tests/test_acquisition_evidence.py`, notamment le cas acquis mais illisible
@@ -741,7 +787,7 @@ tableau de bord.
 | Pi → Convex | télémétrie échantillonnée à 1 Hz, envoyée par lots | `POST /api/machine/training/telemetry` | toutes les 5 s (lots de 300 points max) |
 | Pi → Convex | fin de séance avec la raison du runtime | `POST /api/machine/training/end` | à la fin |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance) | `GET /api/machine/training/poll` | toutes les 3 s au repos |
-| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire, avec la limite sous FREEZE décrite en section 7 | `GET /api/machine/training/status` | toutes les 3 s en séance |
+| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s en séance |
 
 Règles :
 

@@ -20,7 +20,8 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > `session_standstill` en §11, STOP pendant un gel en §13.5, la cible manuelle refusée
 > ou remise à 0 en §13.11) viennent du code, des tests automatiques et de rejeux par
 > l'API, sur la vraie console en simulation. Ils n'ont pas été rejoués dans un
-> navigateur et n'ont pas de capture.
+> navigateur et n'ont pas de capture. Ce qui concerne STOP pendant un gel a été réécrit
+> le 7 octobre 2026 : STOP y fait maintenant baisser la vitesse.
 >
 > L'ajout du 6 octobre 2026 sur la règle `session_overrun` (§5, §11, §13.4, §14, §15
 > et §16, ticket ANH-181) vient du code, des tests automatiques sur la console en
@@ -81,9 +82,8 @@ dans un navigateur. Elle fonctionne sans internet.
   machine y va doucement (limites anti nausée) ;
 * conduire une **séance programmée** (dite AUTO) où la fréquence cardiaque du passager
   règle la vitesse, **si la configuration l'autorise** (désactivée par défaut) ;
-* arrêter la machine : **STOP** (arrêt en douceur ; sans effet sur la vitesse tant
-  qu'un gel `freeze` est en cours, voir §13.5) ou **E-STOP** (arrêt d'urgence
-  logiciel) ;
+* arrêter la machine : **STOP** (arrêt en douceur, qui agit aussi quand un gel
+  `freeze` est en cours, voir §13.5) ou **E-STOP** (arrêt d'urgence logiciel) ;
 * surveiller en continu des règles de sécurité (variateur en défaut, fréquence
   cardiaque trop haute, onglet fermé, caméra) et, selon la règle qui se déclenche,
   geler la vitesse, la baisser ou arrêter la machine ;
@@ -322,7 +322,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 | **Mode** | `REPOS` | rien n'est commandé ; le variateur est seulement lu. Après une séance, la console peut y rester aussi longtemps que nécessaire : rien ne se verrouille seul, et la séance suivante démarre sans redémarrer la console (§11) |
 | | `MANUEL` (orange) | séance manuelle en cours |
 | | `SEANCE` (orange) | séance programmée en cours |
-| | `ARRET` (rouge) | une séance se termine. **Pas** « arrêté » : regardez Rotation. Le plus souvent la consigne descend encore. Avec la règle `session_standstill` (§11), la consigne est déjà à 0 quand `ARRET` s'affiche et la vitesse mesurée suit, dans la fraction de seconde qui suit en simulation (délai non mesuré sur la vraie machine). Pendant un `freeze`, `ARRET` peut s'afficher après un STOP alors que la vitesse ne baisse pas encore (§13.5). Le mode revient à `REPOS` à la fin de la séance : à l'arrêt mesuré en séance manuelle de banc, après la phase `recovery` pour un programme (environ 5 minutes avec le profil standard) |
+| | `ARRET` (rouge) | une séance se termine. **Pas** « arrêté » : regardez Rotation. Le plus souvent la consigne descend encore. Avec la règle `session_standstill` (§11), la consigne est déjà à 0 quand `ARRET` s'affiche et la vitesse mesurée suit, dans la fraction de seconde qui suit en simulation (délai non mesuré sur la vraie machine). Après un STOP donné pendant un `freeze`, la consigne descend aussi (§13.5). Le mode revient à `REPOS` à la fin de la séance : à l'arrêt mesuré en séance manuelle de banc, après la phase `recovery` pour un programme (environ 5 minutes avec le profil standard) |
 | **Etat** | `idle` | rien de demandé. Seul état où l'on peut démarrer |
 | | `starting` | un démarrage vient d'être accepté |
 | | `running` (orange) | une séance tourne |
@@ -334,7 +334,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `EN ROTATION` (orange) | le bras tourne |
 | | `VITESSE INCONNUE` (rouge) | le variateur n'a pas été lu récemment : **ne jamais lire « arrêté »** |
 | **Securite** | `none` (vert) | aucune règle ne demande rien |
-| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse. Si elle n'est pas verrouillée (ligne `verrouille` à `non`, page Securite), elle **se lève seule** quand sa cause disparaît, et la vitesse **remonte alors sans aucun clic** vers la cible ou vers ce que demande le programme, tant que le bras tourne. Si un `reduce` amène la vitesse commandée à 0, la séance est terminée (`session_standstill`, §11) : rien ne repart. Tant que la pastille dit `freeze`, un STOP est enregistré mais **ne fait pas baisser la vitesse** (§13.5) |
+| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse. Si elle n'est pas verrouillée (ligne `verrouille` à `non`, page Securite), elle **se lève seule** quand sa cause disparaît, et la vitesse **remonte alors sans aucun clic** vers la cible ou vers ce que demande le programme, tant que le bras tourne. Si un `reduce` amène la vitesse commandée à 0, la séance est terminée (`session_standstill`, §11) : rien ne repart. Un `freeze` tient la vitesse, pas un arrêt demandé : **STOP**, ou une cible manuelle remise à 0, **fait baisser la vitesse même quand la pastille dit `freeze`** (§13.5) |
 | | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle termine la séance : arrêt en douceur (`ramp_down`), arrêt d'urgence (`quick_stop`), ou arrêt définitif pour ce processus (`go_silent`). Avec le `ramp_down` de la règle `session_standstill`, la vitesse commandée est déjà à 0 quand la pastille passe au rouge et la vitesse mesurée suit. Dans tous les cas, c'est Rotation qui dit que le bras est arrêté |
 | **Console** | `mouvement actif` (orange) | la console peut commander le moteur (cas normal aujourd'hui) |
 | | `LECTURE SEULE` | la console refuse tout mouvement (n'arrive pas avec la console actuelle) |
@@ -357,9 +357,9 @@ Repères de la capture (barre latérale, de haut en bas) :
   (§11, §13.6). Un arrêt demandé depuis le site passe par ce même STOP. Un E-STOP, ou
   un arrêt décidé par une règle, donnés aussi tard, relancent la même récupération et
   mènent au même verdict (§11).
-* **Pendant un gel, STOP ne fait pas baisser la vitesse.** Tant que la pastille
-  **Securite** dit `freeze`, STOP est enregistré (le mode passe à `ARRET`) mais la
-  vitesse reste gelée, jusqu'à ce que le gel se lève ou devienne `reduce`. Pour un arrêt
+* **STOP agit aussi pendant un gel.** Quand la pastille **Securite** dit `freeze`,
+  STOP est enregistré (le mode passe à `ARRET`) et la vitesse commandée commence à
+  baisser tout de suite, sur la même rampe douce que sans gel. Pour un arrêt
   immédiat : le coup de poing câblé, et **E-STOP** (§13.5).
 * S'il n'y a rien à arrêter, ou si un arrêt est déjà en cours, une fenêtre d'alerte
   s'ouvre : `STOP refuse : ...` (voir §14).
@@ -420,7 +420,8 @@ Repères :
    50 Hz, Gr 1,631).
 8. `minimum de rotation` : la plus petite vitesse non nulle (1,10 tr/min = 55 tr/min
    moteur). Entre 0 et ce minimum, rien n'est accepté.
-9. `rampe` : `cible atteinte`, ou `en cours, arrivee ~m:ss`.
+9. `rampe` : `cible atteinte`, ou `en cours, arrivee ~m:ss`. Pendant un gel `freeze`,
+   si la cible n'est ni atteinte ni nulle : `consigne maintenue, cible non atteinte`.
 10. La note sous la grille : dernier message (ici `accepte : manual_start bench (cible 0)`).
 11. Barre latérale : Mode `MANUEL`, Etat `running`.
 
@@ -441,6 +442,12 @@ Règles de la cible :
   bras ne partira pas tout seul plus tard : il faut renvoyer la cible une fois la cause
   disparue (§13.11). Sur un bras qui tourne, rien de cela : la cible est gardée, et
   suivie dès que plus rien ne retient la vitesse.
+* **Pendant un gel, seule une cible de 0 est suivie.** Un gel `freeze` tient la
+  vitesse où elle est, même si vous envoyez une cible plus basse : la ligne `rampe`
+  dit alors `consigne maintenue, cible non atteinte`, sans bandeau ni heure d'arrivée.
+  Une cible de **0** est un arrêt demandé : la vitesse baisse tout de suite. Quand elle
+  arrive à 0 alors qu'une alerte tient encore, la séance se termine et se verrouille
+  (`session_standstill`, §11) ; pour simplement terminer la séance, utilisez **STOP**.
 * **La note sous la grille ne dit pas tout.** Après **Appliquer**, elle affiche
   `cible envoyee : ... - la machine y va aux limites de mouvement` dès que la console a
   reçu la demande, même si la machine la refuse ensuite. Le refus n'apparaît que dans
@@ -462,6 +469,10 @@ Repères :
 3. `rampe` : `en cours, arrivee ~1:25`.
 4. **Vitesse mesuree** : `6.49` et pastille `EN ROTATION` : le bras accélère.
 5. Barre latérale : Rotation `EN ROTATION`.
+
+Le bandeau n'apparaît que si la vitesse commandée marche vraiment vers la cible. Si
+un gel `freeze` la tient à distance d'une cible non nulle, il n'y a ni bandeau ni heure
+d'arrivée, et `rampe` affiche `consigne maintenue, cible non atteinte`.
 
 Une fois la cible atteinte, le bandeau disparaît et `rampe` affiche `cible atteinte` :
 
@@ -808,8 +819,8 @@ disparaît dès que sa cause disparaît : une fréquence cardiaque relue, un ong
 rouvert. Tant que le bras tourne, la vitesse suit alors de nouveau la cible ou le
 programme, **vers le haut aussi, sans que personne clique**. La phrase
 `NOT LATCHED ...` à la fin de la ligne `detail` le rappelle, en anglais, sur les pages
-Seance et Securite seulement. Un bras ralenti n'est pas un bras qui s'arrête. Et tant
-que la pastille Securite dit `freeze`, un STOP ne fait pas baisser la vitesse (§13.5).
+Seance et Securite seulement. Un bras ralenti n'est pas un bras qui s'arrête. Un STOP,
+lui, fait baisser la vitesse même quand la pastille Securite dit `freeze` (§13.5).
 
 **Un bras qui s'est arrêté en cours de séance ne repart jamais seul.** Si un `reduce`,
 ou la régulation cardiaque d'une séance programmée, ramène la vitesse commandée à 0
@@ -826,8 +837,12 @@ acquittez par votre nom (§13.6), puis redémarrez une séance. Un acquittement 
 avant `REPOS` est accepté par la page, mais le verdict revient au cycle suivant :
 refaites-le une fois `REPOS` affiché. Cela vaut pour une
 séance programmée comme pour une séance manuelle, capsule vide comprise. Ne terminent
-pas la séance de cette façon : votre STOP, votre propre cible à 0 quand aucun
-avertissement n'est en cours, et le retour au calme normal d'un programme.
+pas la séance de cette façon : votre STOP (même donné pendant un gel), votre propre
+cible à 0 quand aucun avertissement n'est en cours, et le retour au calme normal d'un
+programme. Votre cible à 0 envoyée **pendant** un avertissement, gel compris, la
+termine de cette façon quand la vitesse commandée arrive à 0 : la ligne `detail` dit
+alors que c'est votre cible, suivie pendant l'avertissement, qui a amené la vitesse à
+0.
 
 Ce qui reste possible sans clic : le premier mouvement d'une séance programmée, après
 sa phase `baseline`, même si un avertissement s'est levé entre-temps. En séance
@@ -855,7 +870,9 @@ Vous pouvez encore voir ce verdict (`ramp_down`, verrouillé, détail
 **pendant** une séance :
 
 * un gel verrouillé que personne n'acquitte tient le bras en vitesse après la fin du
-  programme : la règle fait alors descendre la vitesse, c'est son rôle ;
+  programme, et personne ne demande l'arrêt : la règle fait alors descendre la vitesse,
+  c'est son rôle. N'attendez pas ce moment : **STOP** fait descendre la vitesse tout de
+  suite, même pendant ce gel (§13.5) ;
 * une fin de séance ouverte tard dans un programme (§5) : un STOP, à la console ou
   demandé depuis le site, un E-STOP, ou un arrêt décidé par une règle. Toute fin de
   séance relance une récupération complète ; si elle dépasse la durée prévue de plus
@@ -996,8 +1013,7 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
 
 Pour changer de vitesse en cours de route : composez un nouveau brouillon avec les
 boutons, puis **Appliquer**. Pour ralentir jusqu'à l'arrêt, le mieux est **STOP**
-(§13.5 ; si la pastille Securite dit `freeze`, STOP ne fait pas baisser la vitesse tant
-que le gel tient).
+(§13.5 ; il fait baisser la vitesse même si la pastille Securite dit `freeze`).
 
 Remarque constatée : après **Appliquer**, le brouillon reste orange (27,10 composé,
 27,09 appliqué : la différence d'arrondi suffit). Fiez-vous à la ligne
@@ -1072,8 +1088,8 @@ Pas à pas :
     En simulation, la phase `baseline` (3 min) se passe à l'arrêt, puis la rotation
     commence doucement en `warmup`.
 12. La séance se termine seule à la fin du programme. Pour l'arrêter avant : **STOP**
-    (si la pastille Securite dit `freeze`, STOP ne fait pas baisser la vitesse tant que
-    le gel tient : voir §13.5). Dans les quatre dernières minutes et demie du profil
+    (il fait baisser la vitesse même si la pastille Securite dit `freeze` : voir §13.5).
+    Dans les quatre dernières minutes et demie du profil
     standard de 30 minutes, le bras est déjà arrêté et la séance surveille la
     récupération : un STOP ou un E-STOP à ce moment relance 5 minutes de récupération
     et se termine par un verdict `session_overrun` à acquitter (§5, §11).
@@ -1104,7 +1120,7 @@ démarre comme la première, sans redémarrer la console (§11).
 | Situation | Bouton |
 |---|---|
 | fin normale, changement d'avis, passager qui veut descendre sans urgence | **STOP** |
-| la pastille **Securite** dit `freeze` et il faut que la vitesse baisse maintenant | **coup de poing câblé**, et **E-STOP** : STOP est enregistré mais ne fait pas baisser la vitesse tant que le gel tient |
+| la pastille **Securite** dit `freeze` et vous voulez terminer la séance sans urgence | **STOP** : la vitesse commandée baisse tout de suite, sur la rampe douce. Surveillez **Vitesse mesuree** |
 | danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé**, et **E-STOP** en plus |
 | la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé** |
 
@@ -1116,15 +1132,19 @@ STOP, pas à pas :
 3. Attendez que **Rotation** affiche `a l'arret` et que le mode revienne à `REPOS`.
 
 **STOP pendant un gel.** Si la pastille **Securite** dit `freeze` quand vous cliquez
-STOP, la demande est enregistrée et le mode passe à `ARRET`, mais la vitesse **ne
-baisse pas** : elle reste gelée jusqu'à ce que le gel se lève ou devienne `reduce`.
-Un gel qui apparaît pendant une descente demandée par STOP la fige de la même façon.
-`ARRET` ne veut donc pas dire que le bras ralentit ; regardez **Vitesse mesuree**.
-Rejoué sur la console en simulation, séance programmée : STOP 12 s après la perte de
-l'ECG, la vitesse commandée est restée inchangée pendant environ 17 s, et le bras s'est
-arrêté au même instant que sans STOP ; avec E-STOP au même moment, la vitesse commandée
-était à 0 au cycle suivant et le bras mesuré à l'arrêt environ une seconde après. Pour
-arrêter tout de suite : le **coup de poing câblé**, et **E-STOP**.
+STOP, la demande est enregistrée, le mode passe à `ARRET`, et la vitesse commandée
+**commence à baisser au cycle suivant**, sur la même rampe douce que sans gel, que le
+gel soit verrouillé ou non. Un gel qui apparaît pendant une descente demandée par STOP
+ne la fige pas. Une alerte plus forte (`reduce`, `ramp_down`, `quick_stop`,
+`go_silent`) garde la priorité et arrête à sa façon. `ARRET` va maintenant de pair
+avec une vitesse commandée qui baisse ou qui vaut 0 (sauf après un `go_silent`, où la
+console n'envoie plus rien) ; pour savoir si le bras est arrêté, regardez **Vitesse
+mesuree** et **Rotation**. Vérifié par les tests automatiques sur la console en
+simulation, séance programmée : STOP 12 s après la perte de l'ECG, la vitesse commandée
+baisse au cycle suivant et arrive à 0 avant que la règle ne passe à `reduce`.
+Jusqu'au 7 octobre 2026, elle restait inchangée pendant environ 17 s. Après la fin de
+la séance, un gel qui était verrouillé reste à acquitter (§13.6). Pour arrêter tout de
+suite : le **coup de poing câblé**, et **E-STOP**.
 
 ![STOP : rampe d'arrêt depuis 27 tr/min](img/console-11-stop-rampe-arret.png)
 
@@ -1284,15 +1304,15 @@ Que faire :
    l'avertissement se lève seul et la vitesse **remonte sans clic**. Si la baisse a
    amené la vitesse commandée à 0, la séance est **terminée** au cycle suivant (règle
    `session_standstill`, verrouillée), même si la fréquence revient ensuite : le bras
-   ne repart pas. Si la fréquence ne revient pas rapidement, n'attendez pas. **Tant
-   que la pastille Securite dit `freeze`, STOP est enregistré mais la vitesse ne baisse
-   pas** : elle ne descendra que lorsque le gel se lèvera ou deviendra `reduce` (§13.5).
-   Pour arrêter tout de suite, utilisez le **coup de poing câblé** et **E-STOP**. Une
-   fois la pastille passée à `reduce`, la vitesse baisse déjà d'elle-même et STOP
-   termine la séance. Après l'arrêt (Rotation `a l'arret`) et le retour du mode à
-   `REPOS`, acquittez (§13.6) et redémarrez une séance. Ce cas n'a pas été rejoué dans
+   ne repart pas. Si la fréquence ne revient pas rapidement, n'attendez pas : **STOP
+   termine la séance et fait baisser la vitesse tout de suite, que la pastille
+   Securite dise `freeze` ou `reduce`** (§13.5). Pour arrêter plus vite que la rampe
+   douce, utilisez le **coup de poing câblé** et **E-STOP**. Après l'arrêt (Rotation
+   `a l'arret`) et le retour du mode à `REPOS`, acquittez s'il reste un verdict
+   verrouillé (§13.6) et redémarrez une séance. Ce cas n'a pas été rejoué dans
    la page pour ce guide : il est vérifié par les tests automatiques sur la console en
-   simulation (`raspberry-pi/tests/test_standstill_console.py`).
+   simulation (`raspberry-pi/tests/test_standstill_console.py`,
+   `raspberry-pi/tests/test_stop_freeze_console.py`).
 2. En séance manuelle : décidez s'il faut continuer sans surveillance cardiaque.
    Sans passager (banc), ce n'est pas un problème de sécurité. Avec une personne à
    bord (séance manuelle par l'API seulement, jalon M6), `hr_stale` s'applique comme
@@ -1302,7 +1322,7 @@ Que faire :
    (`/dev/rfcomm0` sur le Pi).
 4. La console se reconnecte d'elle-même dès que le boîtier redevient joignable
    (compteur `reconnexions` avec un vrai boîtier). Si ce n'est pas le cas, arrêtez la
-   séance (STOP ; pendant un `freeze`, voir le point 1), puis redémarrez la console.
+   séance (STOP, qui agit aussi pendant un `freeze`), puis redémarrez la console.
 
 ### 13.9 Le variateur passe en défaut
 
@@ -1454,7 +1474,8 @@ Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
 * La machine ne retente rien d'elle-même. Tant que vous ne renvoyez pas la cible, le
   bras reste à l'arrêt, même si l'avertissement se lève, si vous acquittez, ou si la
   fréquence cardiaque revient.
-* Une cible de 0 est toujours acceptée.
+* Une cible de 0 est toujours acceptée, et toujours suivie : pendant un gel `freeze`
+  aussi, la vitesse baisse alors tout de suite (§6, règles de la cible).
 * Sur un bras **qui tourne**, rien de cela ne s'applique : une cible plus haute est
   acceptée et gardée, la vitesse reste où elle est tant que quelque chose la retient,
   puis elle monte **sans nouveau clic** quand l'empêchement disparaît.
@@ -1504,7 +1525,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |
 | ✔ `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | un verdict attend | lire la règle, traiter la cause, §13.6 |
 | `the machine is starting, not idle (pending: ...)` | double clic : une demande est déjà en attente | attendre une seconde |
-| `the machine is running, not idle` | une séance tourne déjà | STOP d'abord (pendant un `freeze`, STOP ne fait pas baisser la vitesse : §13.5) |
+| `the machine is running, not idle` | une séance tourne déjà | STOP d'abord (§13.5) |
 | ✔ `no manual session is running (the machine is stopping)` (ou `idle`) | cible envoyée sans séance manuelle en cours | démarrer une séance manuelle |
 | `the machine is <état>; try again in a moment` | cible ou reset envoyé pendant qu'une autre demande attend | réessayer |
 | ✔ `STOP refuse : there is no session to end (the machine is idle)` | rien à arrêter | rien |
@@ -1532,7 +1553,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `consigne refusee : le verdict <règle> tient le bras a l'arret. ...` | une règle de sécurité tient le bras à l'arrêt : la cible n'est pas prise, pour que le bras ne parte pas seul plus tard | §13.11 |
 | `consigne refusee : pas de frequence cardiaque utilisable ...`, `... tendance de la frequence cardiaque pas encore connue ...`, `... la frequence cardiaque baisse trop vite ...` | personne à bord : la fréquence cardiaque ne permet pas de monter depuis l'arrêt (aucun verdict) | §13.11 |
 | `cible de <n> tr/min moteur remise a 0 : ...` (sans nom d'opérateur) | la machine a repris une cible qu'elle avait acceptée, avant le premier mouvement : règle de sécurité, fréquence cardiaque, ou variateur qui n'a pas confirmé | §13.11 |
-| `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord (pendant un `freeze`, voir §13.5) |
+| `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord (§13.5) |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante | §13.1 |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux de `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` | corriger le profil ou la configuration (décision médicale) |
@@ -1552,7 +1573,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : aucune image exploitable de la camera depuis <n> s` | caméra perdue | vérifier la caméra |
 | ✔ `reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter` | défaut non réarmable | §13.9 |
 | ✔ `reset refuse : aucun defaut a acquitter (ready)` | pas de défaut (le reset précédent a déjà marché) | rien |
-| `reset refuse : mouvement encore commande (<état>, <phase>)` | une séance est active | STOP, attendre (pendant un `freeze`, voir §13.5) |
+| `reset refuse : mouvement encore commande (<état>, <phase>)` | une séance est active | STOP, attendre (§13.5) |
 | `reset refuse : acquitter d'abord le verdict <règle>` | un autre verdict attend | §13.6 puis reset |
 | `reset refuse : l'arbre tourne encore (<n> tr/min moteur)` | pas encore arrêté | attendre l'arrêt |
 | `reset refuse : <détail>` | le variateur n'a pas pris le reset | réessayer, sinon couper l'alimentation |
@@ -1615,11 +1636,9 @@ moment, ce n'est plus le comportement attendu : notez l'heure et signalez-le.
 Non, pas tant qu'il tourne. Un avertissement non verrouillé (`verrouille` à `non`) se
 lève seul quand sa cause disparaît, et la vitesse remonte alors sans aucun clic (§11).
 Arrêtez d'abord le bras, et attendez que **Rotation** affiche `a l'arret` avant
-d'approcher. Tant que la pastille Securite dit `freeze`, STOP est enregistré mais la
-vitesse ne baisse pas (elle ne baissera que lorsque le gel se lèvera ou deviendra
-`reduce`) : pour arrêter tout de suite, utilisez le **coup de poing câblé** et
-**E-STOP** (§13.5). Quand elle dit `reduce`, la vitesse baisse déjà et **STOP** termine
-la séance ; continuez de regarder **Vitesse mesuree**.
+d'approcher. **STOP** termine la séance et fait baisser la vitesse, que la pastille
+Securite dise `freeze` ou `reduce` ; pour arrêter plus vite, utilisez le **coup de
+poing câblé** et **E-STOP** (§13.5). Continuez de regarder **Vitesse mesuree**.
 
 **Je ne peux pas dépasser 6 tr/min.**
 Le plafond par défaut est `MOTOR_MAX_RPM=300` (tr/min moteur). Relevez-le par paliers
