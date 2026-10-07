@@ -155,6 +155,7 @@ logiciel : ECG, EDA, SpO2, RESP, EMG et LUX.
 Pour tous. Titre « Tableau de bord », « Bienvenue, {prénom} ».
 
 - Carte **Machines en ligne** (admin, gestionnaire) : nombre en ligne / total.
+  Une machine n'y compte plus 90 s après son dernier signal (§6).
 - Carte **Sessions actives**.
 - Carte **Utilisateurs** (admin) ou **Patients** (gestionnaire) : affiche
   toujours « - » et « Chargement… », **le compteur n'est pas implémenté**.
@@ -164,6 +165,7 @@ Pour tous. Titre « Tableau de bord », « Bienvenue, {prénom} ».
 ### Machines : `/fr/dashboard/machines`
 
 Admin et gestionnaire. Tableau des machines (nom, lieu, statut, dernier signal).
+Le statut et « Dernier signal » sont recalculés chaque seconde (§6).
 Recherche ; l'admin peut afficher les machines supprimées.
 
 - **Nouvelle machine** (admin seulement) : nom, lieu, gestionnaires. À la
@@ -179,7 +181,7 @@ Admin et gestionnaire de la machine.
 |---|---|---|
 | Bandeau « Supprimée » | Date de suppression, bouton **Restaurer**. | admin |
 | Bouton **Lancer une séance auto** | Ouvre la fenêtre de lancement (§5). | admin, gestionnaire |
-| Configuration | Statut (« En ligne », « Hors ligne », « En session »), dernier signal, « Créée le » ; bouton Modifier. | admin, gestionnaire |
+| Configuration | Statut (« En ligne », « Hors ligne », « En session ») et dernier signal, recalculés chaque seconde (§6), « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
@@ -212,9 +214,10 @@ patient = celles où il a le droit.
   renseignée : demandez à votre gestionnaire… ».
 - Aucune machine : « Vous n'avez encore aucun droit de lancement… » (patient)
   ou « Aucune machine disponible. ».
-- Par machine : nom, lieu, état en direct avec son badge « En direct » /
-  « Données périmées » (§6), nombre de programmes, bouton
-  **Lancer une séance auto**, lien **Détails**.
+- Par machine : nom, lieu, statut, état en direct avec son badge
+  « En direct » / « Données périmées » (§6), nombre de programmes, bouton
+  **Lancer une séance auto**, lien **Détails**. 90 s après le dernier
+  signal, la carte affiche « Hors ligne » et grise le bouton (§6).
 
 ### Sessions : `/fr/dashboard/sessions`
 
@@ -406,7 +409,8 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 | **Manuel** (icône main, ambre) | Séance à vitesse fixée par l'opérateur, démarrée à la machine. |
 | **Enregistrement** | Ancienne séance ECG seule. |
 | **Tableau de bord** / **Machine** | Origine : lancée depuis le site, ou démarrée à la console. |
-| **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu il y a moins de 90 s / 90 s ou plus. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Détail d'une machine et Mes machines. Voir « Fraîcheur » ci-dessous. |
+| **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu par le serveur il y a moins de 90 s / 90 s ou plus. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Détail d'une machine et Mes machines. Voir « Fraîcheur » ci-dessous. |
+| **En ligne** / **En session** / **Hors ligne** | Statut d'une machine. « Hors ligne » dès que son dernier signal a 90 s, à la même seconde que « Données périmées », quel que soit le statut encore écrit dans Convex. Liste des machines, détail d'une machine, Mes machines, fiche d'un gestionnaire. Voir « Fraîcheur » ci-dessous. |
 | Statut de séance | En attente, Active, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |
 
 ### Fraîcheur recalculée à l'horloge
@@ -414,42 +418,94 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 Une machine qui se tait n'envoie plus rien : aucune donnée ne change, donc
 aucune query Convex ne se relance. Le site ne peut pas attendre un changement de
 donnée pour dire qu'un état est périmé. Il le recalcule lui-même **chaque
-seconde** :
+seconde**, sur l'**horloge du serveur** : ni l'heure du poste ni celle du Pi ne
+datent quoi que ce soit.
 
-- un seul hook, `useFreshness` (`hooks/use-freshness.ts`), compare l'horodatage
-  de la donnée à l'horloge du navigateur (`useNow(1000)`) ;
-- un seul seuil pour l'état de la machine, `LIVE_FRESH_MS` = 90 s, défini dans
-  `lib/training.ts` et importé par `convex/training.ts` : le serveur et le site
-  ne peuvent pas diverger ;
-- la carte « État en direct », chaque carte de Mes machines et le panneau
-  d'entraînement lisent ce hook. Le badge « En direct » de l'état d'une machine
-  n'est jamais affiché sans lui.
+- **Le serveur date tout ce qui est jugé.** L'état d'une machine
+  (`live.updatedAt`) et son dernier signal (`lastHeartbeat`) sont datés par
+  Convex à la réception du heartbeat. Le dernier signe de vie d'une séance
+  active (`lastSignalAt`) est la date à laquelle Convex a **reçu** son dernier
+  point de télémétrie (la date de création de la ligne, pas le `t` que le Pi y
+  écrit) ; tant qu'aucun point n'est arrivé, c'est le début de la séance daté
+  par le serveur (pour une séance démarrée à la console : son enregistrement
+  par le serveur, pas le `startedAt` envoyé par le Pi).
+- **Chaque réponse porte l'horloge du serveur.** `getMachineLive`,
+  `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`
+  et `getMachinesForGestionnaire` renvoient `serverNow` : l'heure du serveur au
+  moment où la réponse est calculée. L'âge d'une donnée est
+  `serverNow - date`, plus le temps que le site a **compté** depuis qu'il a vu
+  cette réponse pour la première fois (`lib/server-clock.ts`). L'horloge du
+  poste ne sert qu'à compter ce temps, par différence : qu'elle avance ou
+  retarde de dix minutes ne change rien. Une réponse déjà vue (par un autre
+  composant, ou redonnée après une reconnexion) garde la date de sa première
+  apparition.
+- **Un seul hook**, `useFreshness` (`hooks/use-freshness.ts` ;
+  `useFreshnessJudge` pour juger plusieurs données sur une même lecture
+  d'horloge), rend ce verdict chaque seconde (`useLocalClock(1000)`). Sans
+  `serverNow`, rien n'est frais.
+- **Deux seuils**, définis dans `lib/training.ts` : `LIVE_FRESH_MS` = 90 s pour
+  l'état et le signal d'une machine, importé aussi par `convex/training.ts` et
+  par la tâche `checkOfflineMachines` de `convex/machines.ts` (le serveur et le
+  site ne peuvent pas diverger) ; `TELEMETRY_FRESH_MS` = 20 s pour le dernier
+  signe de vie d'une séance active.
+- Lisent ce hook, et rien d'autre : la carte « État en direct », chaque carte
+  de Mes machines, le panneau d'entraînement, et tout ce qui affiche le statut
+  d'une machine ou son dernier signal (`components/machines/MachineSignal.tsx` :
+  liste des machines, détail d'une machine, fiche d'un gestionnaire, carte
+  « Machines en ligne » du tableau de bord). Le badge « En direct » et le
+  statut « En ligne » ne sont jamais affichés sans lui.
 
 | Moment | Ce que le site affiche |
 |---|---|
-| Moins de 90 s après le dernier état | Badge « En direct », valeurs normales. |
-| 90 s après le dernier état, à la seconde près | Badge « Données périmées », valeurs grisées, cœur gris, « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Sur le détail d'une machine, « Mis à jour il y a … » continue d'avancer. |
-| État suivant reçu (heartbeat toutes les 10 s) | Retour immédiat à « En direct ». |
+| Moins de 90 s après le dernier signal | Statut écrit dans Convex (« En ligne » ou « En session »), badge « En direct », valeurs normales. |
+| 90 s après le dernier signal, à la seconde près | Statut « Hors ligne », badge « Données périmées », valeurs grisées, cœur gris, « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » La machine ne compte plus dans « Machines en ligne ». Sur Mes machines, le bouton de lancement est grisé, avec « La machine est hors ligne. ». « Dernier signal » et « Mis à jour il y a … » continuent d'avancer. |
+| Signal suivant reçu (heartbeat toutes les 10 s) | Retour immédiat au statut écrit et à « En direct ». |
 
-Sur le détail d'une machine, le verdict `stale` du serveur compte aussi quand il
-dit « périmé » : si l'horloge du navigateur retarde, le site n'est jamais plus
-lent qu'avant ce recalcul. Sur Mes machines, le serveur retire l'état quand la
-query se relance (au passage hors ligne) : la carte affiche alors « La machine
-n'a encore rapporté aucun état. »
+**Statut affiché et statut écrit.** Convex n'écrit `offline` sur une machine
+qu'au passage de sa tâche, une fois par minute : entre 1,5 et 2,5 min après le
+dernier signal. Le site n'attend pas : `shownMachineStatus` (`lib/training.ts`)
+affiche « Hors ligne » dès que le dernier signal n'est plus frais. « En ligne »
+et « Données périmées » ne s'affichent plus ensemble que dans un cas, qui est
+vrai : une machine qui envoie encore ses signaux, mais plus son état.
+
+**Textes sans état.** Sur le détail d'une machine, le verdict `stale` du
+serveur compte aussi quand il dit « périmé ». Sur Mes machines, le serveur
+retire l'état quand la query se relance après 90 s : la carte affiche alors
+« Aucun état en direct : la machine n'envoie plus de signal. ». « La machine
+n'a encore rapporté aucun état. » reste le texte d'une machine dont le site n'a
+aucun état à montrer sans qu'elle soit hors ligne, ou qui ne s'est jamais
+connectée.
 
 Limites :
 
-- La fraîcheur compare l'heure du serveur (état de la machine) ou du Pi
-  (télémétrie) à l'**horloge du navigateur**. Un poste dont l'horloge retarde
-  voit « Données périmées » plus tard (pour l'état d'une machine, jamais plus
-  tard qu'au passage hors ligne, voir ci-dessus). Un poste dont l'horloge
-  avance le voit plus tôt : au delà de 80 s d'avance environ, il l'affiche
-  alors que la machine envoie encore. L'écart n'est ni mesuré ni corrigé.
-- Le **statut** « En ligne » / « Hors ligne » et « Dernier signal » ne sont pas
-  concernés : le statut est écrit par le serveur une fois par minute (hors
-  ligne entre 1,5 et 2,5 min après le dernier signal) et « Dernier signal » ne
-  se rafraîchit qu'au prochain changement de donnée. Entre 90 s et ce passage,
-  une machine peut donc être « En ligne » et « Données périmées » à la fois.
+- **Réponse resservie à l'ouverture d'une page.** Le site date une réponse du
+  moment où il la voit. Si Convex donne à une page qui s'ouvre une réponse
+  calculée un peu plus tôt (son cache de queries), la donnée paraît plus jeune
+  d'autant, et « Données périmées » ou « Hors ligne » tarde d'autant sur cette
+  page. D'après le code source ouvert de Convex, une réponse qui a lu l'heure
+  n'est resservie que pendant 17 s au plus (réglage par défaut) ; ce n'est pas
+  un engagement de Convex, et rien n'a été mesuré sur un déploiement. Dans
+  l'autre sens il n'y a pas d'erreur possible : une réponse n'arrive pas avant
+  d'avoir été calculée.
+- **Horloge du poste réglée pendant l'affichage.** Reculée : sans effet, le
+  compteur monotone du navigateur continue. Avancée d'un coup : le site ne
+  distingue pas ce saut d'une mise en veille, le compte comme du temps écoulé
+  et affiche « Hors ligne » ou « Données périmées » à tort, jusqu'à la réponse
+  suivante (10 s au plus pour une machine qui envoie).
+- **Horloge du Pi.** Elle ne date plus rien de ce que le site juge frais. Elle
+  date encore l'axe des courbes, le début (donc le chronomètre) d'une séance
+  démarrée à la console, et l'**ordre** des points : si elle recule pendant une
+  séance, le dernier point reçu n'est plus celui de plus grand `t`, et le
+  panneau affiche « Aucun signal récent » à tort jusqu'à ce qu'elle ait
+  rattrapé son ancienne valeur (ANH-163).
+- **Lancement.** Le refus d'un lancement par le serveur lit le statut écrit, et
+  la fenêtre de lancement aussi : ouverte depuis le détail d'une machine muette
+  depuis moins de 2,5 min, elle peut encore proposer le lancement, que le
+  serveur accepte (ANH-144).
+- **Convex antérieur à cette version.** Ses réponses n'ont pas `serverNow` :
+  le site affiche alors toutes les machines « Hors ligne » et toutes les
+  données périmées. Convex se déploie avant le site
+  ([deploiement.md](deploiement.md)).
 
 ### Panneau d'entraînement (vue en direct)
 
@@ -469,9 +525,13 @@ de la machine ».
 
 **Séance active sans signal récent.** Le panneau lit le même hook de fraîcheur
 que les badges, avec le seuil de la télémétrie : 20 s (`TELEMETRY_FRESH_MS`,
-`components/training/TrainingPanel.tsx` ; le Pi envoie ses points toutes les
-5 s). Le dernier signe de vie est le dernier point reçu, ou le début de la
-séance tant qu'aucun point n'est arrivé. Passé 20 s, à la seconde près :
+`lib/training.ts` ; le Pi envoie ses points toutes les 5 s). Le dernier signe
+de vie est `lastSignalAt`, que `getTrainingSession` renvoie avec la séance :
+la **réception par le serveur** du dernier point, ou le début de la séance
+daté par le serveur tant qu'aucun point n'est arrivé. Ni le `t` que le Pi
+écrit dans ses points, ni l'horloge du poste n'entrent dans ce verdict. Il
+arrive avec la séance : à l'ouverture de la vue, le bandeau n'apparaît pas
+le temps que les points se chargent. Passé 20 s, à la seconde près :
 
 - bandeau orange « Aucun signal récent de la machine : les valeurs affichées
   peuvent être dépassées. » ;
@@ -479,8 +539,9 @@ séance tant qu'aucun point n'est arrivé. Passé 20 s, à la seconde près :
   charge passent à « - » ; la phase garde sa dernière valeur connue, grisée ;
 - l'icône du titre ne tourne plus.
 
-Le chronomètre continue : la séance reste « Active » côté serveur et la machine
-suit ses propres règles. Au point suivant, tout revient. Une séance terminée ou
+Le chronomètre continue, sur l'horloge du serveur : la séance reste « Active »
+côté serveur et la machine suit ses propres règles. Au point suivant, tout
+revient. Une séance terminée ou
 échouée n'est pas concernée : ses dernières valeurs sont son résultat.
 
 ### Courbes (`components/training/TelemetryCharts.tsx`)
@@ -597,9 +658,9 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
-| Fraîcheur et horloge du poste | La fraîcheur est jugée sur l'horloge du navigateur (§6) ; l'écart avec l'heure du serveur n'est ni mesuré ni corrigé. |
-| Statut « En ligne » et « Dernier signal » | Non recalculés à l'horloge (§6) : le statut suit le serveur (jusqu'à 2,5 min), « Dernier signal » ne bouge qu'au prochain changement de donnée. |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, horloge du serveur, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur, statut et dernier signal : hook et composants, avec l'horloge du poste et celle du Pi décalées ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
+| Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : ni l'horloge du poste ni celle du Pi ne datent ce que le site dit frais. Restent, non mesurés sur un déploiement : une réponse resservie par le cache de Convex à l'ouverture d'une page (17 s au plus d'après son code source), et une horloge du Pi qui recule pendant une séance (bandeau affiché à tort). |
+| Statut « En ligne » et « Dernier signal » | Recalculés chaque seconde par le site (§6). Convex n'écrit `offline` qu'au passage de sa tâche (jusqu'à 2,5 min) : le refus d'un lancement par le serveur et la fenêtre de lancement lisent encore ce statut écrit (ANH-144). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
 | Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |

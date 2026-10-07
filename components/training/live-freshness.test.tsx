@@ -306,6 +306,20 @@ describe("my machines: one card per machine", () => {
     expect(text).not.toContain(LIVE);
   });
 
+  it("never shows live the state of a machine it shows offline", () => {
+    // The server dates the state a few milliseconds after the signal that
+    // brought it: at the 90th second the signal is stale, the state not yet.
+    const m = machine({
+      lastHeartbeat: server - LIVE_FRESH_MS,
+      live: liveState(LIVE_FRESH_MS - 5),
+    });
+    const { html, text } = paint(card(m));
+    expect(text).toContain(OFFLINE);
+    expect(text).toContain(STALE);
+    expect(text).not.toContain(LIVE);
+    expect(html).toContain(GREYED);
+  });
+
   it("does not say a machine that went offline never reported a state", () => {
     // The server withholds the state once it is stale.
     const m = machine({

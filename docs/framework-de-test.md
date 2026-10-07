@@ -1739,32 +1739,59 @@ reste à prouver par la suite navigateur (ANH-83).
 ### Fraîcheur de l'état en direct (ANH-160)
 
 `npm run test:site` (job `web` de la CI, `vitest.site.config.mts`) exécute les
-tests de `hooks/` et de `components/`, sans navigateur. Avec deux tests des
-suites voisines, il couvre la fraîcheur de l'état en direct :
+tests de `hooks/` et de `components/`, sans navigateur. Avec les tests des
+suites voisines, il couvre la fraîcheur de l'état en direct, le statut d'une
+machine et son dernier signal. Dans tous ces tests, seule l'horloge du serveur
+date quelque chose ; l'horloge du poste est mise en avance (15 s, 80 s,
+10 min) ou en retard (15 s, 10 min), celle du Pi en avance ou en retard de
+10 min, et le résultat attendu est le même :
 
-- `hooks/use-freshness.test.ts` monte le hook `useFreshness` dans le vrai React
-  avec une **horloge simulée** : l'état devient périmé 90 s après le dernier
-  heartbeat sans qu'aucune donnée ne change, redevient frais au heartbeat
-  suivant, reste frais tant que les heartbeats arrivent, applique le seuil de
-  20 s de la télémétrie et arrête son horloge au démontage ;
+- `lib/server-clock.test.ts` (`npm run test:ecg`, comme tous les tests de
+  `lib/`) : l'heure du serveur reconstituée à partir de `serverNow` et du temps
+  compté, horloge du poste décalée, reculée, avancée, poste en veille, réponse
+  déjà vue par un autre composant ;
+- `lib/training.test.ts` (`npm run test:ecg`) fixe les bornes de `isFresh`
+  (dont le refus d'une date du futur au-delà de la tolérance), les deux seuils
+  et le statut affiché ;
+- `hooks/use-freshness.test.ts` monte `useFreshness` et `useFreshnessJudge`
+  dans le vrai React avec une **horloge simulée** : l'état devient périmé 90 s
+  après le dernier heartbeat sans qu'aucune donnée ne change, redevient frais
+  à la réponse suivante, reste frais tant que les heartbeats arrivent, applique
+  le seuil de 20 s de la télémétrie, n'est jamais frais sans `serverNow`, et
+  arrête son horloge au démontage ;
 - `components/training/live-freshness.test.tsx` rend la carte « État en
   direct », une carte de Mes machines et le panneau d'entraînement avec les
-  vrais textes de `messages/` : badge, valeurs grisées et bandeau à 90 s (20 s
-  pour le panneau), y compris quand la query du serveur dit encore « frais » ;
-- `lib/training.test.ts` (`npm run test:ecg`, comme tous les tests de `lib/`)
-  fixe les bornes de `isFresh` ;
+  vrais textes de `messages/`, à la réception d'une réponse puis 90 s (20 s
+  pour le panneau) plus tard sans réponse nouvelle : badge, statut, valeurs
+  grisées, bandeau, bouton de lancement, texte d'une machine passée hors ligne,
+  et absence de bandeau pendant le chargement de la télémétrie ;
+- `components/machines/machine-signal.test.tsx` fait de même pour le badge de
+  statut, le compteur « Machines en ligne », « Dernier signal » et la ligne des
+  versions ;
+- `components/freshness-hook.test.tsx` remplace le hook par un verdict imposé :
+  chaque composant ci-dessus doit afficher ce que le hook dit, même quand ses
+  données disent le contraire. Un composant qui calculerait l'âge lui-même,
+  une fois au rendu, échoue ici ;
 - `convex/liveFreshness.test.ts` (`npm run test:convex`) vérifie que le serveur
-  juge sur le même seuil `LIVE_FRESH_MS` que le site.
+  juge sur le même seuil `LIVE_FRESH_MS` que le site, que chaque réponse
+  concernée porte `serverNow`, et que `lastSignalAt` est la réception du
+  dernier point quelle que soit la date écrite par la machine ;
+- `convex/offlineThreshold.test.ts` (`npm run test:convex`) remplace le seuil
+  partagé par une autre valeur : la tâche `checkOfflineMachines` doit la
+  suivre.
 
 Limites. Le dépôt n'a pas de bibliothèque de test avec DOM : le hook tourne sur
 un hôte minimal (un composant qui ne rend rien), et les composants sont rendus
-en HTML statique à une heure donnée. Le passage de « En direct » à « Données
-périmées » **à l'écran**, sans recharger la page, est donc prouvé en deux
-moitiés (le hook bascule à l'horloge, les composants affichent ce que le hook
-dit), pas d'un seul tenant. Le test de bout en bout prévu (couper la console
-simulée, attendre 90 s simulées, lire le badge dans un navigateur) attend
-l'infrastructure d'ANH-83. L'écart entre l'horloge du poste et celle du serveur
-n'est pas testé.
+en HTML statique, une fois à la réception d'une réponse et une fois plus tard.
+Le passage de « En direct » à « Données périmées » **à l'écran**, sans
+recharger la page, est donc prouvé en trois morceaux (le hook bascule à
+l'horloge, chaque composant affiche ce que le hook dit, le rendu refait plus
+tard affiche l'état périmé), pas d'un seul tenant. Le test de bout en bout
+prévu (couper la console simulée, attendre 90 s simulées, lire le badge dans un
+navigateur) attend l'infrastructure d'ANH-83. Les écarts d'horloge sont
+simulés : aucun n'a été mesuré entre un vrai poste, le serveur et un Pi, et la
+durée pendant laquelle Convex ressert une réponse de son cache n'est connue que
+par la lecture de son code source.
 
 ### Retour des mutations du site (ANH-156)
 

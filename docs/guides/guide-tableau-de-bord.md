@@ -445,7 +445,7 @@ Ces pages ne demandent pas de connexion et n'ont aucune action.
 
 | Bloc | Contenu | Clic |
 |---|---|---|
-| **Machines en ligne** (administrateur, gestionnaire) | Nombre de machines au statut « En ligne », puis « / N total ». Une machine **en séance** n'est **pas** comptée comme en ligne. | Ouvre **Machines**. |
+| **Machines en ligne** (administrateur, gestionnaire) | Nombre de machines affichées « En ligne », puis « / N total ». Une machine **en séance** n'est **pas** comptée comme en ligne, et une machine sort du compte 90 s après son dernier signal. | Ouvre **Machines**. |
 | **Sessions actives** | Nombre de séances actives **parmi les 10 plus récentes** que vous pouvez voir. Sous le nombre : « Actives ». | Ouvre **Sessions**. |
 | **Utilisateurs** (administrateur) ou **Patients** (gestionnaire) | Affiche toujours « - » et « Chargement... » : **ce compteur n'est pas programmé**. | Ouvre **Utilisateurs** ou **Patients**. |
 | **Sessions récentes** | Les 5 dernières séances visibles : nom du pratiquant, machine, badge de statut, ancienneté (« il y a 3 minutes »). « Aucune session trouvée » s'il n'y en a pas. | Séance active : ouvre la **vue en direct**. Sinon (en attente, terminée, échouée) : ouvre le **détail**. |
@@ -498,12 +498,13 @@ Badges de statut d'une machine :
 
 | Badge | Sens |
 |---|---|
-| **En ligne** (plein) | La machine a donné signe de vie il y a moins de 90 s environ, et n'est pas en séance. |
+| **En ligne** (plein) | La machine a donné signe de vie il y a moins de 90 s, et n'est pas en séance. |
 | **En session** (gris) | Une séance tourne sur la machine. |
-| **Hors ligne** (rouge) | Aucun signal depuis plus de 90 s (vérifié chaque minute), ou jamais connectée. Une machine neuve est hors ligne tant que son Raspberry Pi n'a pas envoyé de signal. |
+| **Hors ligne** (rouge) | Aucun signal depuis 90 s, ou jamais connectée. Le site le recalcule chaque seconde : le badge change 90 s après le dernier signal, sans attendre le serveur ([§6.2](#62-ce-qui-vient-de-la-machine-et-avec-quel-délai)). Une machine neuve est hors ligne tant que son Raspberry Pi n'a pas envoyé de signal. |
 | **Supprimée** (rouge) | Machine désactivée (suppression douce), restaurable par un administrateur. |
 
 « Dernier signal » vaut « - » tant que la machine n'a jamais envoyé de signal.
+Sinon il avance tout seul, chaque seconde, même quand la machine se tait.
 
 S'il n'y a aucune machine : « Aucune machine trouvée » et, pour
 l'administrateur, un second bouton **Nouvelle machine**.
@@ -681,7 +682,7 @@ vient du Raspberry Pi, envoyé toutes les 10 s environ.
 
 | Indicateur | Contenu |
 |---|---|
-| Badge **En direct** (point vert clignotant) | Le dernier état reçu a moins de 90 s. |
+| Badge **En direct** (point vert clignotant) | Le serveur a reçu le dernier état il y a moins de 90 s. |
 | Badge **Données périmées** (gris) | Le dernier état a 90 s ou plus. Les valeurs sont grisées et une ligne orange dit « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Le badge revient à **En direct** dès l'état suivant. |
 | **Mode** | Repos, Manuel, Séance, Arrêt. |
 | **Phase** | Mesure de référence, Échauffement, Maintien, Retour au calme, Récupération, Inactif, Terminé. |
@@ -695,12 +696,13 @@ vient du Raspberry Pi, envoyé toutes les 10 s environ.
 d'état (neuve, ou jamais connectée depuis la console d'entraînement).
 
 > Quand une machine se tait, le passage en « Données périmées » arrive 90 s
-> après son dernier état, à la seconde près : le site le recalcule chaque
-> seconde sur l'horloge du navigateur, sans attendre qu'une donnée change. Le
-> **statut** de la machine, lui, ne passe « Hors ligne » qu'entre 1,5 et
-> 2,5 minutes après le dernier signal : pendant ce délai, une machine peut être
-> « En ligne » et « Données périmées » à la fois. Si l'horloge du poste retarde,
-> le badge retarde d'autant.
+> après son dernier état, à la seconde près, et son **statut** passe
+> « Hors ligne » à la même seconde : le site les recalcule chaque seconde,
+> sans attendre qu'une donnée change. Il compte sur l'**heure du serveur**,
+> pas sur celle de votre poste : une horloge de poste en avance ou en retard
+> ne change rien à ce que vous voyez. Vous ne verrez « En ligne » à côté de
+> « Données périmées » que pour une machine qui envoie encore ses signaux
+> mais plus son état.
 
 #### Carte « Programmes »
 
@@ -803,7 +805,7 @@ Quelles machines sont listées :
 |---|---|
 | Badge **Votre FC max : N bpm** (patient) | La FC max retenue pour vous (mesurée, ou estimée par l'âge sans le préciser ici). En rouge « Non renseignée » si rien n'est saisi. |
 | Encadré orange (patient) | « Votre FC max n'est pas renseignée : demandez à votre gestionnaire de la saisir avant de lancer une séance auto. » |
-| Carte machine | Nom, lieu, badge de statut, badge **En direct** si l'état a moins de 90 s ; les mêmes indicateurs que la carte « État en direct » ([§4.6](#carte--état-en-direct-)). À 90 s sans nouvel état : badge **Données périmées**, valeurs grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Sans état, ou une fois la machine passée « Hors ligne » : « La machine n'a encore rapporté aucun état. » |
+| Carte machine | Nom, lieu, badge de statut, badge **En direct** si l'état a moins de 90 s ; les mêmes indicateurs que la carte « État en direct » ([§4.6](#carte--état-en-direct-)). À 90 s sans nouveau signal : statut **Hors ligne**, badge **Données périmées**, valeurs grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Un peu plus tard, quand le serveur retire l'état : « Aucun état en direct : la machine n'envoie plus de signal. » Pour une machine qui n'a jamais envoyé d'état : « La machine n'a encore rapporté aucun état. » |
 | « Programmes · N programmes » | La liste des programmes de la machine, comme sur le détail. « Aucun programme » si vide. |
 | **Lancer une séance auto** | Ouvre la fenêtre de lancement. **Grisé** si la machine n'est pas « En ligne », si les programmes sont désactivés, ou s'il n'y a aucun programme. |
 | **Détails** (administrateur, gestionnaire) | Ouvre le détail de la machine. |
@@ -1069,7 +1071,7 @@ machine, « Démarrée il y a ... », badges de type et d'origine.
 | Élément | Contenu |
 |---|---|
 | Titre | « Séance d'entraînement · {programme} ». L'icône tourne tant que la séance est active, qu'aucun arrêt n'est demandé et qu'un point est arrivé depuis moins de 20 s. |
-| Bandeau orange « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | Séance active sans point reçu depuis 20 s (recalculé chaque seconde). Les cinq indicateurs sont grisés ; fréquence cardiaque, vitesse et charge passent à « - » ; la phase garde sa dernière valeur. Tout revient au point suivant. |
+| Bandeau orange « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | Séance active sans point reçu par le serveur depuis 20 s (recalculé chaque seconde, sur l'heure du serveur : ni l'horloge de votre poste ni celle de la machine ne comptent). Les cinq indicateurs sont grisés ; fréquence cardiaque, vitesse et charge passent à « - » ; la phase garde sa dernière valeur. Tout revient au point suivant. |
 | Ligne sous le titre | Badges Auto / Manuel et Tableau de bord / Machine ; « Cible {bas}-{haut} bpm » ; « · Opérateur {nom} ». |
 | **Fréquence cardiaque** | Dernière valeur **fraîche** (moins de 20 s). Couleur et texte : **vert « Dans la zone »**, **bleu « Sous la zone »**, **rouge « Au-dessus de la zone »**. Un tiret « - » et « Pas de fréquence cardiaque fiable » si la machine n'en a pas. |
 | **Vitesse du bras** | tr/min du bras ; dessous « Moteur N tr/min ». |
@@ -1990,9 +1992,9 @@ Internet, le site ne peut rien lui demander.**
 | Information sur le site | Origine | Délai typique |
 |---|---|---|
 | Statut **En ligne** | Signal de la machine | Signal toutes les 10 s. |
-| Statut **Hors ligne** | Serveur, faute de signal | Plus de 90 s sans signal, vérifié chaque minute : entre 1,5 et 2,5 min après le dernier signal. |
+| Statut **Hors ligne** | Site, sur l'heure du serveur | 90 s après le dernier signal, à la seconde près. Le serveur, lui, ne l'écrit qu'à sa vérification, chaque minute : entre 1,5 et 2,5 min après le dernier signal. D'ici là il accepte encore un lancement. |
 | Carte **État en direct** (mode, phase, FC, vitesses, charge, action de sécurité, variateur) | Machine, avec chaque signal | Toutes les 10 s. |
-| **Données périmées** | Site, sur l'horloge du navigateur | 90 s après le dernier état, à la seconde près. Sur le panneau de la vue en direct : 20 s après le dernier point. |
+| **Données périmées** | Site, sur l'heure du serveur | 90 s après le dernier état, à la seconde près. Sur le panneau de la vue en direct : 20 s après le dernier point reçu par le serveur. |
 | **Programmes** et « Programmes auto désactivés » | Machine | À chaque modification sur la machine, et au démarrage de sa console. |
 | Passage **en attente → active** | Machine | La machine interroge toutes les 3 s. |
 | Refus d'une machine qui n'a ni démarré ni refusé | Machine | 60 s après la prise en charge. |
@@ -2004,8 +2006,26 @@ Internet, le site ne peut rien lui demander.**
 Le site **ne recalcule aucune mesure** : il affiche ce que la machine envoie.
 Les seuls calculs du site sont des **vérifications à l'avance** (FC max, zone,
 âge) que le serveur et la machine refont de toute façon, et l'**âge des
-données** : chaque seconde, il compare l'heure du dernier état à l'horloge du
-navigateur pour dire « En direct » ou « Données périmées ».
+données** : chaque seconde, il dit « En direct » ou « Données périmées »,
+« En ligne » ou « Hors ligne ».
+
+**Les horloges.** Pour cet âge, le site ne lit ni l'heure de votre poste ni
+celle de la machine. Le serveur date ce qu'il reçoit (chaque signal, chaque
+paquet de points) et joint sa propre heure à chaque réponse ; le site y
+ajoute le temps qu'il a compté depuis. Ce qu'il reste à savoir :
+
+- à l'ouverture d'une page, le serveur peut redonner une réponse calculée
+  quelques secondes plus tôt (17 s au plus, d'après le code de Convex ; non
+  mesuré) : « Données périmées », « Hors ligne » ou le bandeau du panneau
+  peuvent alors tarder d'autant sur cette page ;
+- si l'heure du poste est avancée d'un coup pendant que la page est ouverte,
+  tout paraît périmé jusqu'au signal suivant (10 s au plus pour une machine
+  qui envoie) ;
+- **panneau de la vue en direct** : si l'horloge de la machine **recule**
+  pendant une séance, le panneau peut afficher « Aucun signal récent » alors
+  que la machine envoie, jusqu'à ce que son horloge ait rattrapé son ancienne
+  valeur. L'axe des courbes et, pour une séance démarrée à la console, le
+  chronomètre restent à l'heure de la machine.
 
 ### 6.3 Si la machine est hors ligne
 
@@ -2075,8 +2095,9 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Aucun rapport disponible pour le moment » | Rapports | Aucune séance terminée visible. | Normal au début. |
 | « Accès refusé. Réservé aux administrateurs. » | Paramètres | Vous n'êtes pas administrateur. | Demander à un administrateur. |
 | « Une erreur est survenue: Admin access required » | Gestionnaires | Idem. | Idem. |
-| « La machine n'a encore rapporté aucun état. » | Détail machine, Mes machines | Aucun état reçu (ou, sur Mes machines, machine passée hors ligne). | Vérifier que la console de la machine tourne et que sa clé est installée. |
-| « Données périmées » + « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | État en direct, Mes machines | 90 s sans nouvel état. | Vérifier la machine et son réseau. |
+| « La machine n'a encore rapporté aucun état. » | Détail machine, Mes machines | Aucun état reçu de cette machine. | Vérifier que la console de la machine tourne et que sa clé est installée. |
+| « Aucun état en direct : la machine n'envoie plus de signal. » | Mes machines | Machine hors ligne : elle a déjà envoyé des signaux, plus depuis 90 s. | Vérifier la machine et son réseau. |
+| « Données périmées » + « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | État en direct, Mes machines | 90 s sans nouvel état. Le statut de la machine est alors « Hors ligne ». | Vérifier la machine et son réseau. |
 | « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » (bandeau) | Vue en direct | Séance active sans point reçu depuis 20 s. | Voir [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Programmes auto désactivés sur cette machine » | Programmes, Mes machines | La machine refuse les séances auto. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme synchronisé depuis la machine » | Programmes | Aucun programme reçu. | Créer un programme à la console (P9). |
@@ -2278,7 +2299,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 |---|---|
 | Nouveau code en production | **Pas encore** : attend le redéploiement (**ANH-82**). |
 | Ouverture du nouveau code dans un navigateur contre un vrai serveur | **Faite le 2 octobre 2026**, en local, contre le serveur de développement : les 17 pages du tableau de bord, les fenêtres, les trois rôles. Voir le [§9.4](#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026). |
-| Tests du site | Unitaires seulement : règles de `lib/` et retrait de l'ancien mode ECG (`npm run test:ecg`), fraîcheur de l'état en direct (`npm run test:site`). **Aucun** test dans un navigateur ni de bout en bout. |
+| Tests du site | Unitaires seulement : règles de `lib/` et retrait de l'ancien mode ECG (`npm run test:ecg`), fraîcheur de l'état en direct, statut et dernier signal, avec les horloges du poste et de la machine décalées (`npm run test:site`). **Aucun** test dans un navigateur ni de bout en bout. |
 | Lancement auto de bout en bout (serveur, machine simulée, moteur simulé) | **Exécuté le 1er octobre 2026** sur le serveur de développement, sans passer par les pages du site : lancement, refus, télémétrie, arrêt à distance. Voir [deploiement.md](../deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026). |
 | Lancement auto observé sur les pages du site | **Fait le 2 octobre 2026** : séance en attente, active, arrêtée, annulée, vues par l'administrateur et par la patiente. Le lancement lui-même a été envoyé au serveur sans cliquer le bouton **Lancer**. |
 | Lancement auto sur une vraie machine | **Jamais exécuté.** |
@@ -2303,7 +2324,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 12 | (Retirés avec l'ancien mode d'enregistrement ECG.) Le rapport PDF, sans télémétrie, et les cartes ECG, inutiles sur les séances d'entraînement, n'existent plus. Il n'y a pas encore de rapport pour une séance d'entraînement. | Pas de fichier à télécharger. | Utiliser le détail de la séance. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
-| 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Restent au rythme du serveur : le statut « En ligne » (jusqu'à environ 2,5 min) et « Dernier signal ». | Une machine muette garde le statut « En ligne » un moment, à côté du badge « Données périmées ». | Se fier au badge « Données périmées ». |
+| 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Le statut « En ligne », le compteur « Machines en ligne » et « Dernier signal » restaient au rythme du serveur : corrigé par ANH-193, ils sont recalculés chaque seconde, sur l'heure du serveur.) Reste : le serveur accepte encore un lancement sur une machine muette depuis moins de 2,5 min environ, depuis la fenêtre ouverte sur le détail de cette machine. | Une séance lancée sur une machine muette reste « en attente ». | L'annuler ([§6.3](#63-si-la-machine-est-hors-ligne)). |
 | 16 | (Sans objet depuis le retrait de l'ancien mode d'enregistrement ECG.) La fenêtre **Nouvelle machine** proposait 100 Hz par défaut alors que le serveur et **Paramètres** annonçaient 1000 Hz : ni l'une ni l'autre n'affichent plus de fréquence. | Aucun. | Aucun. |
 | 17 | Mutations sans écran : rattacher ou détacher un seul gestionnaire d'un patient ou d'une machine, modifier son propre profil. | Moins de souplesse. | Passer par les assignations complètes. |
 

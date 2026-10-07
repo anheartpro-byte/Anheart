@@ -180,7 +180,12 @@ Avant de le lancer :
    (`kind`, `origin`).
 3. Fusionner la branche dans `main` déploie le site de production (Vercel est
    relié au dépôt GitHub). Ordre : Convex d'abord, le site **aussitôt après**,
-   dans la même fenêtre, à cause du point 2.
+   dans la même fenêtre, à cause du point 2. Dans l'autre ordre, le nouveau
+   site ne trouve pas l'heure du serveur (`serverNow`) dans les réponses de
+   l'ancien Convex : il affiche toutes les machines « Hors ligne » et toutes
+   les données périmées jusqu'au déploiement de Convex
+   ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)).
+   Ce changement n'ajoute ni table, ni champ, ni index, ni migration.
 4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
