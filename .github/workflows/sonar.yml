@@ -42,13 +42,9 @@ jobs:
     outputs:
       token: ${{ steps.token.outputs.present }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - name: Test the analysis workflows and the SonarQube Cloud configuration
-        run: node --test scripts/ci/analysis-workflows.test.mjs
-      # The only step of this job that is given the token. It runs the lines
-      # below and nothing of the repository, and prints nothing of the token.
+      # The only step of this job that is given the token, and the first one:
+      # it runs the lines below before anything of the repository is checked
+      # out or run, and prints nothing of the token.
       - name: Say whether this run was given the SonarQube Cloud token
         id: token
         env:
@@ -61,6 +57,12 @@ jobs:
             echo 'present=false' >> "$GITHUB_OUTPUT"
             echo 'SONAR_TOKEN is not set for this run: the SonarQube Cloud analysis is skipped and nothing fails (docs/framework-de-test.md, section CI).' | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # A test that fails leaves this job failed, and `sonar` skipped.
+      - name: Test the analysis workflows and the SonarQube Cloud configuration
+        run: node --test scripts/ci/analysis-workflows.test.mjs
 
   sonar:
     needs: sonar-config

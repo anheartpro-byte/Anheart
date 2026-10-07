@@ -1539,18 +1539,30 @@ dépendance ni n'exécute de code du dépôt, sauf le test décrit plus bas.
 
 **CodeQL.** Un job par langage, sans compilation (`build-mode: none`). Seul ce
 job reçoit la permission `security-events: write`, qui sert à publier les
-résultats ; aucun autre job du dépôt n'a de permission d'écriture. Les alertes
-se lisent dans **Security → Code scanning**, en choisissant la branche
-(`develop`) ou la PR dans les filtres : la vue par défaut montre la branche par
-défaut du dépôt, `main`, qui n'est analysée qu'une fois le workflow fusionné
-dans `main`. Il en va de même du passage hebdomadaire : comme le déclenchement
-nocturne de `ci.yml`, GitHub ne le lance que depuis la branche par défaut.
+résultats ; aucun autre job du dépôt n'a de permission d'écriture. Durées
+mesurées sur la PR #35 (run 37594242883) : 1 min 10 s pour
+`codeql (javascript-typescript)`, 1 min 49 s pour `codeql (python)`.
+
+Sur une PR, CodeQL ne rapporte que les alertes situées dans les lignes que la
+PR change. GitHub ajoute alors sa propre vérification, nommée « CodeQL », qui
+les résume (« No new alerts in code changed by this pull request » sur la
+PR #35). Elle n'est pas obligatoire non plus ; d'après la documentation de
+GitHub, elle échoue quand la PR introduit une alerte de sévérité élevée, seuil
+réglable dans les réglages du dépôt. L'état de tout le dépôt vient
+des analyses complètes : chaque push sur `develop` ou `main`, le passage
+hebdomadaire et les lancements manuels. Les alertes se lisent dans
+**Security → Code scanning**, en choisissant la branche (`develop`) ou la PR
+dans les filtres : la vue par défaut montre la branche par défaut du dépôt,
+`main`, qui n'est analysée qu'une fois le workflow fusionné dans `main`. Il en
+va de même du passage hebdomadaire : comme le déclenchement nocturne de
+`ci.yml`, GitHub ne le lance que depuis la branche par défaut.
 
 **SonarQube Cloud.** L'analyse a besoin du secret `SONAR_TOKEN`. Un job ne
 peut pas lire un secret dans sa propre condition : `sonar-config` le lit dans
 l'environnement d'une seule étape et dit seulement s'il est présent. Sans lui,
 `sonar-config` réussit, écrit « SONAR_TOKEN is not set for this run » dans son
-résumé, et `sonar` apparaît « Skipped » : rien n'échoue. C'est le cas tant que
+résumé, et `sonar` apparaît « Skipped » : rien n'échoue (constaté sur la
+PR #35, run 37594242936 : `sonar-config` en 5 s). C'est le cas tant que
 le secret n'existe pas, et pour toute PR venue d'un fork, à laquelle GitHub ne
 donne aucun secret ; la condition de `sonar` refuse en plus explicitement une
 PR dont la branche vient d'un autre dépôt. Les clés de l'organisation et du
@@ -1684,8 +1696,11 @@ tant que le secret `SONAR_TOKEN` n'existe pas (voir
 
 Un job `codeql (...)` ou `sonar` rouge signale une panne de l'analyse (service,
 réseau, configuration), pas un constat de l'outil : lire le journal du job.
+`sonar-config` rouge signale un test de `analysis-workflows.test.mjs` en échec.
 Les constats eux-mêmes se lisent dans **Security → Code scanning** et sur
-sonarcloud.io, et ne font pas rougir ces jobs.
+sonarcloud.io, et ne font pas rougir ces jobs ; dans une PR, ce sont les
+vérifications posées par GitHub (« CodeQL ») et par SonarQube Cloud qui les
+signalent.
 
 ### Tests unitaires du site
 

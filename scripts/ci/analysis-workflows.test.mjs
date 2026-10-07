@@ -1,8 +1,8 @@
 // What must stay true of the two static analysis workflows, codeql.yml and
 // sonar.yml, and of the files that set their scope.
 //
-// Run by the `sonar-config` job of sonar.yml before it decides anything,
-// without any install: the workflows are read as text, like ci.yml is by
+// Run by the `sonar-config` job of sonar.yml on every run, without any
+// install: the workflows are read as text, like ci.yml is by
 // ci-workflow.test.mjs. A scanner cannot be run here (CodeQL needs GitHub,
 // SonarQube Cloud needs its token): these tests hold what a later edit could
 // break without any job turning red, and the scopes are checked against the
@@ -271,10 +271,14 @@ test("the analysis job runs only with the token, and never for a pull request fr
     [...SONAR.matchAll(/^.*secrets\..*$/gm)].map(([line]) => line.trim()),
     ["SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}", "SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}"],
   );
-  // In the job that decides, only the step tested above is given it: not the step that runs code of the repository.
-  const given = SONAR_CONFIG.split(/^ {6}- /m).filter((step) => step.includes("secrets."));
-  assert.equal(given.length, 1);
-  assert.ok(given[0]?.startsWith(`name: ${TOKEN_STEP}\n`));
+  // In the job that decides, only the step tested above is given it, and it is
+  // the first step: nothing of the repository is checked out or run before it.
+  const steps = SONAR_CONFIG.split(/^ {6}- /m).slice(1);
+  assert.ok(steps[0]?.startsWith(`name: ${TOKEN_STEP}\n`), "a step runs before the token is looked for");
+  assert.deepEqual(
+    steps.map((step) => step.includes("secrets.")),
+    [true, ...steps.slice(1).map(() => false)],
+  );
   // The analysis is the official action, on the whole history.
   assert.match(SONAR_SCAN, /^ {8}uses: SonarSource\/sonarqube-scan-action@/m);
   assert.match(SONAR_SCAN, /^ {10}fetch-depth: 0$/m);
