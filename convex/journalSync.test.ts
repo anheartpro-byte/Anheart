@@ -8,12 +8,17 @@
  *   told so in a 200 it can acknowledge;
  * - EX-1 (server half): the route `POST /api/machine/training/events`, its
  *   sizes and what it refuses;
- * - EX-6: no "too old" rule on the training routes. A point or an event is
- *   stored when it is dated inside its session, on the machine's own clock,
- *   and counted `rejected` otherwise, without refusing the batch;
- * - the two clocks: the machine dates its points, the server dates the
- *   session. A machine whose clock is wrong (a Raspberry Pi has no real-time
- *   clock) loses no point for it, and nothing it sends is shown at its date.
+ * - EX-6: no "too old" rule on the training routes. For a machine that says
+ *   how long ago it started its session, a point or an event is stored when
+ *   it is dated inside that session, on the machine's own clock, and counted
+ *   `rejected` otherwise, without refusing the batch;
+ * - the two clocks, for that same machine: it dates its points, the server
+ *   dates the session. Its clock may be wrong (a Raspberry Pi has no
+ *   real-time clock): it loses no point for it, nothing it sends is shown at
+ *   its date, and what it sends late is never read as live;
+ * - a console of contract 1.0, which says no age: nothing changes for it but
+ *   the duplicates. Its dates are stored and served as it wrote them, none
+ *   is refused, and what it sends late is read as late, as before.
  *
  * Everything runs in memory with `convex-test`.
  */
@@ -23,7 +28,7 @@ import type { Id } from "./_generated/dataModel";
 import { TELEMETRY_FRESH_MS } from "../lib/training";
 import { machineHeaders } from "./machineAuth.fixtures";
 import {
-  EARLIEST_MACHINE_DATE_MS,
+  EARLIEST_SESSION_START_MS,
   SESSION_WINDOW_MARGIN_MS,
 } from "./training";
 import {
@@ -538,27 +543,40 @@ describe("ANH-129 EX-3 an event is stored once, however many times it is sent", 
 // ---------------------------------------------------------------------------
 
 describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its session", () => {
-  it("has no 'too old' rule: the record of a session of last week is stored whole", async () => {
-    const w = await world();
-    const lastWeek = NOW - 7 * 24 * HOUR;
-    const sessionId = await localSession(w, { startedAt: lastWeek });
+  /** A session whose machine says its age: its dates are on one axis, and are bounded. */
+  const aged = (w: MachineWorld, localRef = "record-1") =>
+    localSession(w, { startedAt: NOW, sessionAgeMs: 0, localRef });
 
-    const telemetry = await accepted<Outcome>(w, TELEMETRY, {
-      sessionId,
-      points: points(lastWeek, 0, 300),
-    });
-    const told = await accepted<Outcome>(w, EVENTS, {
-      sessionId,
-      events: events(lastWeek, 0, 5),
-    });
+  it.each([
+    ["a console that says no age", undefined],
+    ["a console that says its age", 7 * 24 * HOUR],
+  ])(
+    "has no 'too old' rule: the session of last week of %s is stored whole",
+    async (_name, sessionAgeMs) => {
+      const w = await world();
+      const lastWeek = NOW - 7 * 24 * HOUR;
+      const sessionId = await localSession(w, {
+        startedAt: lastWeek,
+        sessionAgeMs,
+      });
 
-    expect(telemetry).toEqual({ stored: 300, duplicates: 0, rejected: 0 });
-    expect(told).toEqual({ stored: 5, duplicates: 0, rejected: 0 });
-  });
+      const telemetry = await accepted<Outcome>(w, TELEMETRY, {
+        sessionId,
+        points: points(lastWeek, 0, 300),
+      });
+      const told = await accepted<Outcome>(w, EVENTS, {
+        sessionId,
+        events: events(lastWeek, 0, 5),
+      });
+
+      expect(telemetry).toEqual({ stored: 300, duplicates: 0, rejected: 0 });
+      expect(told).toEqual({ stored: 5, duplicates: 0, rejected: 0 });
+    },
+  );
 
   it("stores a point up to one minute before the start the machine dated, and counts an earlier one without refusing the batch", async () => {
     const w = await world();
-    const sessionId = await localSession(w, { startedAt: NOW });
+    const sessionId = await aged(w);
     const at = (t: number) => ({ ...point(NOW, 0), t });
 
     const outcome = await accepted<Outcome>(w, TELEMETRY, {
@@ -581,7 +599,7 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
 
   it("stores a point up to one minute after the end the machine dated, and counts a later one", async () => {
     const w = await world();
-    const sessionId = await localSession(w, { startedAt: NOW });
+    const sessionId = await aged(w);
     const endedAt = NOW + 10 * MINUTE;
     await accepted(w, END, { sessionId, failed: false, reason: "operator_stop", endedAt });
     const at = (t: number) => ({ ...point(NOW, 0), t });
@@ -604,7 +622,7 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
 
   it("applies the same bounds to events", async () => {
     const w = await world();
-    const sessionId = await localSession(w, { startedAt: NOW });
+    const sessionId = await aged(w);
     const endedAt = NOW + 10 * MINUTE;
     await accepted(w, END, { sessionId, failed: false, reason: "operator_stop", endedAt });
     const at = (seq: number, t: number) => ({ ...event(NOW, seq), t });
@@ -625,7 +643,7 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
 
   it("counts a point outside the session again, each time it is sent: it is never stored", async () => {
     const w = await world();
-    const sessionId = await localSession(w, { startedAt: NOW });
+    const sessionId = await aged(w);
     const outside = { ...point(NOW, 0), t: NOW - HOUR };
 
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -636,10 +654,14 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
     expect(await telemetryOf(w, sessionId)).toEqual([]);
   });
 
-  it("bounds a launch from the dashboard by the start its machine dated", async () => {
+  it("bounds a launch from the dashboard whose machine says its age by the start that machine dated", async () => {
     const w = await world();
-    const sessionId = await launched(w);
-    await accepted(w, START, { sessionId, startedAt: NOW - 2000 });
+    const sessionId = await launched(w, w.machine, NOW - MINUTE);
+    await accepted(w, START, {
+      sessionId,
+      startedAt: NOW - 2000,
+      sessionAgeMs: 2000,
+    });
 
     const outcome = await accepted<Outcome>(w, TELEMETRY, {
       sessionId,
@@ -652,8 +674,8 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
     expect(outcome).toEqual({ stored: 1, duplicates: 0, rejected: 1 });
   });
 
-  it("bounds a session registered by its machine before this rule by the start it already carries", async () => {
-    // Such a row has no `machineStartedAt`: its `startedAt` is the machine's.
+  it("sets no bound on a session registered before this rule", async () => {
+    // Such a row has no `machineStartedAt`: it is served as it always was.
     const w = await world();
     const sessionId = await w.t.run((ctx) =>
       ctx.db.insert("sessions", {
@@ -671,46 +693,213 @@ describe("ANH-129 EX-6 a point or an event is stored when it is dated inside its
     const outcome = await accepted<Outcome>(w, TELEMETRY, {
       sessionId,
       points: [
-        { ...point(NOW, 0), t: NOW - HOUR - SESSION_WINDOW_MARGIN_MS - 1 },
+        { ...point(NOW, 0), t: NOW - 3 * HOUR },
         point(NOW - HOUR, 0),
       ],
     });
 
-    expect(outcome).toEqual({ stored: 1, duplicates: 0, rejected: 1 });
+    expect(outcome).toEqual({ stored: 2, duplicates: 0, rejected: 0 });
     const { session, curve } = await shown(w, sessionId);
     expect(session?.lastMeasuredAt).toBe(NOW - HOUR);
-    expect(curve.map((served) => served.t)).toEqual([NOW - HOUR]);
+    expect(curve.map((served) => served.t)).toEqual([NOW - 3 * HOUR, NOW - HOUR]);
   });
 
-  it("sets no lower bound on a launch whose machine dated no start, and keeps the upper one", async () => {
-    // A console older than this contract confirms a launch without a date.
+  it("sets no bound on a launch confirmed by a console that says no age, before or after its end", async () => {
     const w = await world();
     const sessionId = await launched(w);
     await accepted(w, START, { sessionId });
-    const stored = await accepted<Outcome>(w, TELEMETRY, {
+    const before = await accepted<Outcome>(w, TELEMETRY, {
       sessionId,
       points: [{ ...point(NOW, 0), t: NOW - 10 * MINUTE }],
     });
-    expect(stored).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
+    expect(before).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
 
     const endedAt = NOW + 5 * MINUTE;
     await accepted(w, END, { sessionId, failed: false, reason: "operator_stop", endedAt });
     const after = await accepted<Outcome>(w, TELEMETRY, {
       sessionId,
-      points: [
-        { ...point(NOW, 0), t: endedAt + SESSION_WINDOW_MARGIN_MS },
-        { ...point(NOW, 0), t: endedAt + SESSION_WINDOW_MARGIN_MS + 1 },
-      ],
+      points: [{ ...point(NOW, 0), t: endedAt + HOUR }],
     });
-    expect(after).toEqual({ stored: 1, duplicates: 0, rejected: 1 });
+    expect(after).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
   });
 });
 
 // ---------------------------------------------------------------------------
-// Two clocks
+// A console of contract 1.0: it says no age, and nothing changes for it
 // ---------------------------------------------------------------------------
 
-describe("ANH-129 a machine whose clock is wrong loses no point, and nothing is shown at its date", () => {
+describe("ANH-129 a console that says no age is stored and served as before", () => {
+  it("stores every point of a console whose clock is corrected back by 10 minutes in mid-session, with the dates it wrote", async () => {
+    // It dates each point by reading its wall clock. The network returns a
+    // minute into the session and its clock, 10 minutes ahead, is corrected.
+    const w = await world();
+    const sessionId = await localSession(w, { startedAt: NOW });
+    const ahead = points(NOW, 1, 60);
+    const corrected = points(NOW - 10 * MINUTE, 61, 60);
+
+    const first = await accepted<Outcome>(w, TELEMETRY, { sessionId, points: ahead });
+    const second = await accepted<Outcome>(w, TELEMETRY, {
+      sessionId,
+      points: corrected,
+    });
+
+    expect(first).toEqual({ stored: 60, duplicates: 0, rejected: 0 });
+    expect(second).toEqual({ stored: 60, duplicates: 0, rejected: 0 });
+    const rows = await telemetryOf(w, sessionId);
+    expect(rows).toHaveLength(120);
+    expect(rows.map((row) => row.t).sort((a, b) => a - b)).toEqual(
+      [...corrected, ...ahead].map((sent) => sent.t).sort((a, b) => a - b),
+    );
+    // Served as written: nothing is shifted for a session without an axis.
+    const { session, curve } = await shown(w, sessionId);
+    expect(session).toMatchObject({ startedAt: NOW, lastMeasuredAt: NOW + 60_000 });
+    expect(curve.map((served) => served.t)).toEqual(rows.map((row) => row.t));
+    expect((await sessionOf(w, sessionId))?.machineStartedAt).toBeUndefined();
+  });
+
+  it.each([
+    ["a five-minute session", 300],
+    ["a five-second session", 5],
+  ])(
+    "never reads as live %s that a console dated 1970 registers late, and refuses none of its points",
+    async (_name, seconds) => {
+      // The session ran without a link; the console registers it now.
+      const w = await world();
+      const sessionId = await localSession(w, { startedAt: NEVER_SET });
+
+      const outcome = await accepted<Outcome>(w, TELEMETRY, {
+        sessionId,
+        points: points(NEVER_SET, 0, seconds),
+      });
+
+      expect(outcome).toEqual({ stored: seconds, duplicates: 0, rejected: 0 });
+      // Dated as the machine wrote it, never at its registration.
+      expect(await sessionOf(w, sessionId)).toMatchObject({
+        startedAt: NEVER_SET,
+      });
+      expect((await sessionOf(w, sessionId))?.machineStartedAt).toBeUndefined();
+      const { session, curve } = await shown(w, sessionId);
+      const newest = NEVER_SET + (seconds - 1) * 1000;
+      expect(session).toMatchObject({
+        startedAt: NEVER_SET,
+        lastSignalAt: NOW,
+        lastMeasuredAt: newest,
+        serverNow: NOW,
+      });
+      // Received now, measured long ago on any clock the server knows: late.
+      expect(NOW - newest).toBeGreaterThan(TELEMETRY_FRESH_MS);
+      expect(curve[curve.length - 1].t).toBe(newest);
+    },
+  );
+
+  it("keeps the end as the console wrote it, even before the start", async () => {
+    const w = await world();
+    const sessionId = await localSession(w, { startedAt: NOW });
+
+    await accepted(w, END, {
+      sessionId,
+      failed: false,
+      reason: "operator_stop",
+      endedAt: NOW - 10 * MINUTE,
+    });
+
+    expect(await sessionOf(w, sessionId)).toMatchObject({
+      startedAt: NOW,
+      endedAt: NOW - 10 * MINUTE,
+    });
+  });
+
+  it("keeps the date the console wrote for a session it registers late", async () => {
+    const w = await world();
+
+    const sessionId = await localSession(w, { startedAt: NOW - HOUR });
+
+    expect((await sessionOf(w, sessionId))?.startedAt).toBe(NOW - HOUR);
+    await accepted<Outcome>(w, TELEMETRY, {
+      sessionId,
+      points: points(NOW - HOUR, 0, 3),
+    });
+    const { session, curve } = await shown(w, sessionId);
+    expect(session?.lastMeasuredAt).toBe(NOW - HOUR + 2000);
+    expect(curve.map((served) => served.t)).toEqual([
+      NOW - HOUR,
+      NOW - HOUR + 1000,
+      NOW - HOUR + 2000,
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A console of contract 1.1: it says its age, and the server dates the session
+// ---------------------------------------------------------------------------
+
+describe("ANH-129 a console that says its age loses no point, and nothing is shown at its date", () => {
+  it("stores every point of a console whose clock is corrected back by 10 minutes in mid-session, at the server's dates", async () => {
+    // It dates each point as the start it wrote plus the time elapsed: the
+    // correction of its wall clock moves none of them.
+    const w = await world();
+    const ahead = NOW + 10 * MINUTE;
+    const sessionId = await localSession(w, { startedAt: ahead, sessionAgeMs: 0 });
+    vi.setSystemTime(NOW + 60_000);
+    const first = await accepted<Outcome>(w, TELEMETRY, {
+      sessionId,
+      points: points(ahead, 1, 60),
+    });
+
+    // The clock is corrected here. The second minute follows the first.
+    vi.setSystemTime(NOW + 120_000);
+    const second = await accepted<Outcome>(w, TELEMETRY, {
+      sessionId,
+      points: points(ahead, 61, 60),
+    });
+    await accepted(w, END, {
+      sessionId,
+      failed: false,
+      reason: "operator_stop",
+      endedAt: ahead + 121_000,
+    });
+
+    expect(first).toEqual({ stored: 60, duplicates: 0, rejected: 0 });
+    expect(second).toEqual({ stored: 60, duplicates: 0, rejected: 0 });
+    expect(await sessionOf(w, sessionId)).toMatchObject({
+      startedAt: NOW,
+      machineStartedAt: ahead,
+      endedAt: NOW + 121_000,
+    });
+    const curve = await w.admin.query(api.training.getSessionTelemetry, {
+      sessionId,
+    });
+    expect(curve.map((served) => served.t)).toEqual(
+      Array.from({ length: 120 }, (_, index) => NOW + (index + 1) * 1000),
+    );
+  });
+
+  it("reads as late, at the server's dates, the five-second session a console dated 1970 registers five minutes late", async () => {
+    const w = await world();
+    const sessionId = await localSession(w, {
+      startedAt: NEVER_SET,
+      sessionAgeMs: 5 * MINUTE,
+    });
+
+    const outcome = await accepted<Outcome>(w, TELEMETRY, {
+      sessionId,
+      points: points(NEVER_SET, 0, 5),
+    });
+
+    expect(outcome).toEqual({ stored: 5, duplicates: 0, rejected: 0 });
+    const { session, curve } = await shown(w, sessionId);
+    expect(session).toMatchObject({
+      startedAt: NOW - 5 * MINUTE,
+      lastSignalAt: NOW,
+      // Measured five minutes ago, not at its registration.
+      lastMeasuredAt: NOW - 5 * MINUTE + 4000,
+      serverNow: NOW,
+    });
+    expect(curve.map((served) => served.t)).toEqual(
+      [0, 1, 2, 3, 4].map((second) => NOW - 5 * MINUTE + second * 1000),
+    );
+  });
+
   it("stores every point of a session whose machine was dated 1970, and shows the session at the server's date", async () => {
     const w = await world();
     // The session started five minutes ago; the machine's clock was never set.
@@ -746,7 +935,7 @@ describe("ANH-129 a machine whose clock is wrong loses no point, and nothing is 
     });
     expect(curve[0].t).toBe(NOW - 5 * MINUTE);
     expect(curve[299].t).toBe(NOW - 5 * MINUTE + 299_000);
-    expect(curve.every((served) => served.t > EARLIEST_MACHINE_DATE_MS)).toBe(
+    expect(curve.every((served) => served.t > EARLIEST_SESSION_START_MS)).toBe(
       true,
     );
   });
@@ -814,48 +1003,11 @@ describe("ANH-129 a machine whose clock is wrong loses no point, and nothing is 
     expect(later[0].t).toBe(NOW - MINUTE + 7000);
   });
 
-  it("dates at its registration a session whose machine wrote a date no session can have, when it says no age", async () => {
-    const w = await world();
-
-    const sessionId = await localSession(w, {
-      startedAt: EARLIEST_MACHINE_DATE_MS - 1,
-    });
-
-    expect(await sessionOf(w, sessionId)).toMatchObject({
-      startedAt: NOW,
-      machineStartedAt: EARLIEST_MACHINE_DATE_MS - 1,
-    });
-  });
-
-  it("keeps the date the machine wrote when it says no age and the date is believable", async () => {
-    // A console older than this contract, or one that restarted since the
-    // session: neither can say how long ago the session started.
-    const w = await world();
-
-    const sessionId = await localSession(w, { startedAt: NOW - HOUR });
-
-    expect(await sessionOf(w, sessionId)).toMatchObject({
-      startedAt: NOW - HOUR,
-      machineStartedAt: NOW - HOUR,
-    });
-    await accepted<Outcome>(w, TELEMETRY, {
-      sessionId,
-      points: points(NOW - HOUR, 0, 3),
-    });
-    const { session, curve } = await shown(w, sessionId);
-    expect(session?.lastMeasuredAt).toBe(NOW - HOUR + 2000);
-    expect(curve.map((served) => served.t)).toEqual([
-      NOW - HOUR,
-      NOW - HOUR + 1000,
-      NOW - HOUR + 2000,
-    ]);
-  });
-
   it.each([
     ["negative", -1],
-    ["older than any session can be", NOW - EARLIEST_MACHINE_DATE_MS + 1],
+    ["older than any session can be", NOW - EARLIEST_SESSION_START_MS + 1],
   ])(
-    "does not believe an age that is %s: the date the machine wrote stands",
+    "does not read an age that is %s: the session is dated as the machine wrote it, and has no axis",
     async (_name, sessionAgeMs) => {
       const w = await world();
 
@@ -864,9 +1016,25 @@ describe("ANH-129 a machine whose clock is wrong loses no point, and nothing is 
         sessionAgeMs,
       });
 
-      expect((await sessionOf(w, sessionId))?.startedAt).toBe(NOW - HOUR);
+      const session = await sessionOf(w, sessionId);
+      expect(session?.startedAt).toBe(NOW - HOUR);
+      expect(session?.machineStartedAt).toBeUndefined();
     },
   );
+
+  it("reads the oldest age a session can have", async () => {
+    const w = await world();
+
+    const sessionId = await localSession(w, {
+      startedAt: NEVER_SET,
+      sessionAgeMs: NOW - EARLIEST_SESSION_START_MS,
+    });
+
+    expect(await sessionOf(w, sessionId)).toMatchObject({
+      startedAt: EARLIEST_SESSION_START_MS,
+      machineStartedAt: NEVER_SET,
+    });
+  });
 
   it("dates a session once: registered again, it keeps its first date", async () => {
     const w = await world();
@@ -878,7 +1046,7 @@ describe("ANH-129 a machine whose clock is wrong loses no point, and nothing is 
     vi.setSystemTime(NOW + HOUR);
     const again = await localSession(w, {
       startedAt: NEVER_SET,
-      sessionAgeMs: 61 * MINUTE,
+      sessionAgeMs: 0,
     });
 
     expect(again).toBe(first);
@@ -911,7 +1079,9 @@ describe("ANH-129 the start of a launch from the dashboard, as its machine repor
     expect(session?.lastMeasuredAt).toBe(NOW - 1000);
   });
 
-  it("never dates the start before the launch itself", async () => {
+  it("does not read an age that would date the start before the launch itself", async () => {
+    // What the server knows of this session contradicts the age: it launched
+    // it one minute ago.
     const w = await world();
     const sessionId = await launched(w, w.machine, NOW - MINUTE);
 
@@ -921,19 +1091,24 @@ describe("ANH-129 the start of a launch from the dashboard, as its machine repor
       sessionAgeMs: 5 * MINUTE,
     });
 
-    expect((await sessionOf(w, sessionId))?.startedAt).toBe(NOW);
+    const session = await sessionOf(w, sessionId);
+    expect(session).toMatchObject({ status: "active", startedAt: NOW });
+    expect(session?.machineStartedAt).toBeUndefined();
   });
 
   it.each([
-    ["text", "five minutes", "an hour ago"],
-    ["null", null, null],
+    ["neither", {}],
+    ["a date without an age", { startedAt: NOW - 2000 }],
+    ["an age without a date", { sessionAgeMs: 2000 }],
+    ["a date and an age that are text", { startedAt: "an hour ago", sessionAgeMs: "five minutes" }],
+    ["a date and an age that are null", { startedAt: null, sessionAgeMs: null }],
   ])(
-    "reads neither a date nor an age that is %s: the start is the reception",
-    async (_name, sessionAgeMs, startedAt) => {
+    "dates at its reception, as before, a start that carries %s",
+    async (_name, said) => {
       const w = await world();
       const sessionId = await launched(w, w.machine, NOW - MINUTE);
 
-      await accepted(w, START, { sessionId, startedAt, sessionAgeMs });
+      await accepted(w, START, { sessionId, ...said });
 
       const session = await sessionOf(w, sessionId);
       expect(session).toMatchObject({ status: "active", startedAt: NOW });
@@ -954,7 +1129,7 @@ describe("ANH-129 the start of a launch from the dashboard, as its machine repor
   });
 });
 
-describe("ANH-129 the end of a session, on the server's clock", () => {
+describe("ANH-129 the end of a session whose machine says its age, on the server's clock", () => {
   it("places the end the machine dated on the server's clock, and never before the start", async () => {
     const w = await world();
     const sessionId = await localSession(w, {

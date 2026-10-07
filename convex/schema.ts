@@ -292,11 +292,12 @@ export default defineSchema({
     subjectLabel: v.optional(v.string()),
     operatorName: v.optional(v.string()),
     localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
-    // The start as the machine dated it, on its own clock (unix ms). The
-    // telemetry and the events of the session are dated on that same clock:
-    // with `startedAt`, which the server dates, it is what places them on the
-    // server's clock (`convex/training.ts`, `machineAxis`). Absent on a
-    // session whose machine never said it.
+    // The start as the machine dated it, on its own clock (unix ms), for a
+    // session whose machine said how long ago it started it. Such a machine
+    // dates its points and its events as that start plus the time elapsed:
+    // with `startedAt`, which the server then dates, it is what places them
+    // on the server's clock (`convex/training.ts`, `machineAxis`). Absent on
+    // every other session, whose dates are stored and served as written.
     machineStartedAt: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),
     endReason: v.optional(v.string()),
@@ -369,7 +370,7 @@ export default defineSchema({
     organizationId, // Always the session's organisation
     sessionId: v.id("sessions"),
     machineId: v.id("machines"),
-    t: v.number(), // unix ms on the machine's clock: the session's start as it dated it, plus the time elapsed
+    t: v.number(), // unix ms, the machine's clock (see `machineAxis` in training.ts)
     elapsedS: v.number(),
     phase: v.string(),
     bpm: v.optional(v.number()), // absent = no fresh trustworthy HR

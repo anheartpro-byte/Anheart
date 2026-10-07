@@ -286,7 +286,9 @@ http.route({
  * POST /api/machine/training/start {sessionId, startedAt?, sessionAgeMs?}:
  * the Pi armed a remote launch. `startedAt` is the start as the machine dated
  * it (unix ms, its clock), `sessionAgeMs` how long ago that was on its
- * monotonic clock; a value that is not a number is not read.
+ * monotonic clock. They are read together or not at all, and a value that is
+ * not a number is not read: without both, the start is dated at its
+ * reception, as for a machine that sends neither.
  */
 http.route({
   path: "/api/machine/training/start",
@@ -309,7 +311,8 @@ http.route({
 /**
  * POST /api/machine/training/local {...}: register a session started at the
  * machine. `startedAt` is the start as the machine dated it; `sessionAgeMs`,
- * optional, how long ago that was on its monotonic clock.
+ * optional, how long ago that was on its monotonic clock. Without it the
+ * session is dated as the machine wrote it.
  */
 http.route({
   path: "/api/machine/training/local",

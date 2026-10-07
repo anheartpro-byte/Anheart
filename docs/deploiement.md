@@ -329,7 +329,7 @@ Le contrat machine passe de `1.0` à `1.1`
 | Ajout | Effet sur les données déjà là |
 |---|---|
 | Table `training_events`, index `by_session_and_seq` et `by_organization` | Aucun : la table est neuve. |
-| Champ facultatif `sessions.machineStartedAt` | Aucun : les séances existantes ne l'ont pas, et le schéma l'accepte. Une séance enregistrée par une machine avant ce champ est lue avec la date qu'elle porte déjà dans `startedAt`. |
+| Champ facultatif `sessions.machineStartedAt` | Aucun : les séances existantes ne l'ont pas, et le schéma l'accepte. Une séance sans ce champ est lue comme avant : ses dates sont servies telles que la machine les a écrites. |
 
 Aucun champ existant ne change de type, aucun index n'est ajouté à une table
 existante (`training_telemetry.by_session_and_t` existait déjà), aucune
@@ -343,8 +343,11 @@ un document non conforme.
   présents (un lot renvoyé sous l'ancien code) **restent** : rien ne les
   retire, et un point présent deux fois est simplement compté déjà reçu s'il
   est envoyé de nouveau.
-- Les dates des séances existantes ne bougent pas. Les séances créées après
-  le déploiement sont datées par le serveur
+- Les dates des séances existantes ne bougent pas, et celles des séances
+  créées après le déploiement par les consoles d'aujourd'hui non plus : elles
+  sont datées comme avant. Le serveur ne date lui-même une séance, et ne
+  borne ses points, que si la machine dit l'âge de sa séance, ce qu'aucune
+  console ne fait encore
   ([convex.md, Deux horloges](convex.md#deux-horloges)).
 - La table `training_events` est dans la liste de la migration
   multi-organisation (`MACHINE_TABLES`) : des événements reçus avant cette
@@ -354,7 +357,9 @@ un document non conforme.
 [section 3.4](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite),
 qui vaut pour un changement de majeure. Une console restée en `1.0` fonctionne
 sans changement avec ce Convex : même corps, mêmes statuts, des champs de plus
-dans des réponses qu'elle ne lit pas.
+dans des réponses qu'elle ne lit pas, les mêmes dates stockées et servies, le
+même verdict de fraîcheur. Seule différence : un lot qu'elle renvoie n'est
+plus stocké deux fois.
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.

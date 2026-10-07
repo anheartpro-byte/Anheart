@@ -250,8 +250,8 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. |
-| `startedAt`, `endedAt` | ms Unix, **sur l'horloge du serveur** : le site les lit comme des dates du serveur. La façon dont le serveur les obtient d'une machine dont l'horloge peut être fausse est décrite dans [Deux horloges](#deux-horloges). |
-| `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix). Les points et les événements de la séance sont datés sur cette même horloge. Absent quand la machine n'a donné aucune date (lancement du site confirmé par une console antérieure au contrat 1.1) ; une séance enregistrée par une machine avant ce champ porte cette date dans `startedAt`. |
+| `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Avec **toute console d'aujourd'hui** : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. Pour une séance dont la machine dit l'âge, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). |
+| `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
 | `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
 | `origin` | `remote` (site) \| `local` (machine). |
@@ -276,14 +276,22 @@ perdue, console redémarrée) n'est pas inséré de nouveau : la ligne déjà l�
 reste telle qu'elle est, avec la date à laquelle le serveur l'a reçue la
 première fois (`storeTelemetry`).
 
-`t` est une date en ms Unix **sur l'horloge de la machine** : le début de la
-séance tel qu'elle l'a daté, plus le temps écoulé. C'est l'identité du point
-et son rang dans la séance. Les lectures ne le servent pas tel quel :
-`getSessionTelemetry` et `lastMeasuredAt` le placent sur l'horloge du serveur
-(voir [Deux horloges](#deux-horloges)). Il ne dit pas qu'une séance envoie
-encore : la date de **réception** d'un point est le `_creationTime` que Convex
-donne à sa ligne (`lastSignalAt`). Le site exige les deux, mesure et
-réception, pour afficher une valeur comme actuelle (voir `getTrainingSession`).
+`t` est une date en ms Unix **sur l'horloge de la machine**. C'est l'identité
+du point et son rang dans la séance. Ce qu'elle vaut dépend de la console :
+
+- la console d'aujourd'hui (contrat 1.0) y écrit l'heure murale de la machine
+  à l'instant de la mesure. `t` est stocké et servi tel quel : `t` sert à
+  l'axe des courbes et à dire quand un point a été **mesuré**
+  (`lastMeasuredAt`) ;
+- une console qui dit l'âge de sa séance y écrit le début qu'elle a daté plus
+  le temps écoulé. Les lectures (`getSessionTelemetry`, `lastMeasuredAt`)
+  placent alors `t` sur l'horloge du serveur (voir
+  [Deux horloges](#deux-horloges)).
+
+Dans les deux cas `t` ne dit pas qu'une séance envoie encore : la date de
+**réception** d'un point est le `_creationTime` que Convex donne à sa ligne
+(`lastSignalAt`). Le site exige les deux, mesure et réception, pour afficher
+une valeur comme actuelle (voir `getTrainingSession`).
 
 ### `training_events` : événements d'une séance
 
@@ -292,7 +300,7 @@ relit dans son journal : verdicts, refus, phases, défauts du variateur,
 commandes distantes, pré-vol, avertissements, fin.
 
 `sessionId`, `machineId`, `seq`, `t` (ms Unix sur l'horloge de la machine,
-comme `training_telemetry.t`), `kind`, `detail`, `actor` (`system`, `remote`
+lu comme `training_telemetry.t`), `kind`, `detail`, `actor` (`system`, `remote`
 ou un identifiant opaque d'opérateur, jamais un nom). Index
 `by_session_and_seq` et `by_organization`.
 
@@ -305,35 +313,88 @@ table : la machine l'écrit, les tests la lisent.
 
 Un Raspberry Pi n'a pas d'horloge sauvegardée. Démarré sans réseau, il date ce
 qu'il mesure d'une heure fausse, et son horloge est corrigée d'un coup quand
-le réseau revient. C'est un cas ordinaire. Convex ne compare donc jamais
-l'heure d'une machine à la sienne, ni pour accepter un point, ni pour dire
-qu'une mesure est actuelle.
+le réseau revient. C'est un cas ordinaire.
+
+Ce que Convex en fait dépend d'**une** chose : la machine dit-elle depuis
+combien de temps sa séance a commencé (`sessionAgeMs`, compté sur son horloge
+monotone, envoyé avec `training/local` ou, pour un lancement du site, avec
+`training/start` et la date de début `startedAt`) ?
+
+**La console d'aujourd'hui ne le dit pas** : elle parle le contrat 1.0 et
+n'envoie pas ce champ. Tout ce qui suit sous « Une console qui dit son âge »
+est en place côté Convex et **ne s'applique à aucune console existante**.
+
+#### Une console qui ne dit pas son âge (toute console d'aujourd'hui)
+
+Convex se comporte comme avant ce changement, à une exception près : un point
+envoyé deux fois n'est stocké qu'une fois.
+
+- Une séance démarrée à la machine est datée comme la machine l'a écrit
+  (`startedAt`), une fin aussi. Une séance lancée du site commence à la
+  réception de la confirmation.
+- Chaque point porte l'heure murale de la machine à l'instant de sa mesure.
+  Il est stocké tel quel, **sans borne** : aucune date n'est refusée, y
+  compris après une correction de l'horloge de la machine en cours de séance,
+  vers l'avant ou vers l'arrière.
+- Les lectures servent ces dates telles quelles. Un point envoyé en retard
+  porte une date de mesure ancienne : le site ne le montre pas comme actuel.
+  Une machine dont l'horloge est fausse n'est donc pas montrée en direct, et
+  une séance datée de 1970 s'affiche en 1970.
+- `machineStartedAt` reste absent : la séance n'a pas d'axe machine.
+
+#### Une console qui dit son âge
 
 - **La machine date ses mesures sur son propre axe.** Le `t` d'un point ou
   d'un événement est le début de la séance tel que la machine l'a daté, plus
-  le temps écoulé depuis. Ce début est gardé dans `sessions.machineStartedAt`.
-- **Le serveur date la séance.** `sessions.startedAt` et `endedAt` sont sur
-  l'horloge du serveur. La machine dit depuis combien de temps la séance a
-  commencé, compté sur son horloge monotone (`sessionAgeMs`) : le début est
-  cette durée avant la réception, et l'heure murale de la machine n'est pas
-  lue. Sans `sessionAgeMs` (console antérieure au contrat 1.1, ou qui ne peut
-  plus le dire), le serveur garde la date écrite par la machine ; si cette
-  date est antérieure au 1er janvier 2024 (`EARLIEST_MACHINE_DATE_MS` : une
-  horloge jamais réglée), il date la séance à sa déclaration.
+  le temps écoulé depuis sur son horloge monotone : une seule lecture de son
+  heure murale, au début. Ce début est gardé dans `sessions.machineStartedAt`.
+- **Le serveur date la séance.** `sessions.startedAt` est `sessionAgeMs` avant
+  la réception de la déclaration. L'heure murale de la machine n'est pas lue.
 - **Le décalage entre les deux** (`startedAt - machineStartedAt`) place toute
   date de la machine sur l'horloge du serveur : le `t` servi par
-  `getSessionTelemetry` (et son `sinceT`), `lastMeasuredAt`, et `endedAt`.
-  Une séance d'une machine datée de 1970 s'affiche à la date du serveur, et
-  ses mesures en direct se lisent comme mesurées maintenant.
-- **Une séance sans axe machine** (lancement du site confirmé par une console
-  qui n'envoie aucune date) : rien n'est décalé, ses dates sont servies comme
-  la machine les a écrites.
+  `getSessionTelemetry` (et son `sinceT`), `lastMeasuredAt`, et `endedAt`
+  (jamais avant `startedAt`). Une séance d'une machine datée de 1970 s'affiche
+  à la date du serveur ; ses mesures en direct se lisent comme mesurées
+  maintenant, et celles qu'elle envoie en retard comme mesurées quand elles
+  l'ont été.
+- **Une borne de cohérence**, lue sur l'axe de la machine : un point ou un
+  événement est écrit si son `t` est entre une minute avant
+  `machineStartedAt` et une minute après la fin (`SESSION_WINDOW_MARGIN_MS`) ;
+  pas de borne haute tant que la séance n'est pas finie. Hors de ces bornes il
+  est compté `rejected`. Comme `t` ne dépend que du début et du temps écoulé,
+  une correction de l'horloge de la machine en cours de séance ne déplace
+  aucun point : aucun n'est perdu pour cette raison.
 
-Ce que cela ne fait pas : après un redémarrage **du système** de la machine
-(et non du seul logiciel), la console ne sait plus dire depuis combien de
-temps une séance d'avant le redémarrage a commencé. La date écrite par la
-machine est alors gardée telle quelle si elle est postérieure au 1er janvier
-2024, même fausse de quelques heures ou de quelques jours.
+Un âge n'est pas lu, et la séance est alors traitée comme celle d'une console
+qui n'en dit pas, quand il est négatif, quand il placerait le début avant le
+1er janvier 2024 (`EARLIEST_SESSION_START_MS`), ou, pour un lancement du site,
+avant le lancement lui-même ou sans la date de début. Une séance est datée
+**une fois**, à sa première déclaration : la déclarer de nouveau ne la redate
+pas.
+
+#### Ce qu'un âge faux peut faire, et ce qui le borne
+
+L'âge vient de la machine. Un âge trop petit (0 pour une séance d'il y a une
+heure) fait lire ses mesures comme plus récentes qu'elles ne sont : c'est la
+seule façon qu'a une machine de faire lire comme actuelles des données
+anciennes, et Convex ne peut pas la fermer contre une machine qui ment. Ce qui
+la borne :
+
+- la machine est authentifiée par sa clé et n'écrit que dans ses propres
+  séances : l'effet se limite à l'affichage de ses propres mesures ;
+- le site ne montre jamais comme actuel un point daté de plus de 5 s **après**
+  sa propre réception (`FUTURE_TOLERANCE_MS`). Un âge faux ne peut donc pas
+  faire lire une mesure comme plus récente que l'instant où elle a été reçue ;
+- le serveur refuse à bas coût l'âge que contredit ce qu'il sait déjà : pour
+  un lancement du site, il connaît la date du lancement, et un âge qui ferait
+  commencer la séance avant n'est pas lu. Pour une séance déjà déclarée, un
+  second âge n'est pas lu du tout. Il ne sait rien d'autre d'une séance
+  démarrée à la machine avant qu'elle la déclare : il ne peut pas borner
+  davantage.
+
+Rien n'est fait, côté serveur, pour refuser un point dont la date placée sur
+son horloge serait postérieure à sa réception : ce serait perdre une mesure
+pour une erreur d'âge, et le site écarte déjà ce cas de l'affichage.
 
 ### Historique de l'ancien mode d'enregistrement ECG (lecture seule)
 
@@ -572,8 +633,8 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` → pose `stopRequestedAt` (une seule fois). Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
-| `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Le `t` servi et `sinceT` sont sur l'horloge du serveur ([Deux horloges](#deux-horloges)). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure : son `t`, placé sur l'horloge du serveur ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (envoi après une coupure ou un redémarrage). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
+| `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Pour une séance dont la machine dit l'âge, le `t` servi et `sinceT` sont sur l'horloge du serveur ; sinon ce sont les dates écrites par la machine ([Deux horloges](#deux-horloges)). |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
 
@@ -609,11 +670,11 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
 | `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax}`. |
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine, au format attendu par le Pi. |
-| `markTrainingStarted` | `pending` → `active`, machine `in_session`. `startedAt` = la réception, ou `sessionAgeMs` plus tôt quand la machine le dit (jamais avant le lancement) ; `machineStartedAt` = la date écrite par la machine, si elle en envoie une. Refuse une séance d'une autre machine ou non `pending`. |
-| `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. La date envoyée par la machine devient `machineStartedAt` ; `startedAt` est daté par le serveur ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. `endedAt` = la date de fin écrite par la machine, placée sur l'horloge du serveur et jamais avant `startedAt` ; la réception si la machine n'en envoie pas ; la date de la machine telle quelle pour une séance sans axe machine. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
+| `markTrainingStarted` | `pending` → `active`, `startedAt` = maintenant, machine `in_session`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine ou non `pending`. |
+| `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
 | `getTrainingStatus` | `{status, active, stopRequested}`. |
-| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
+| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
 | `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. |
 
 Les refus de `markTrainingStarted`, `registerLocalSession`,
@@ -846,18 +907,18 @@ Détails du contrat :
   le lot : la machine n'a rien à renvoyer, et renvoyer ne coûte rien.
 - **Pas de limite « données trop anciennes ».** Aucune route d'entraînement
   ne refuse un point parce qu'il est vieux : une séance d'il y a une semaine
-  s'envoie entière. La seule borne est de cohérence, et elle se lit sur
-  l'horloge **de la machine** : un point ou un événement est écrit si son `t`
-  est entre une minute avant le début que la machine a daté et une minute
-  après la fin (`SESSION_WINDOW_MARGIN_MS`). Pas de borne basse tant que la
-  machine n'a daté aucun début, pas de borne haute tant que la séance n'est
-  pas finie. Hors de ces bornes il est compté `rejected`, sans refuser le
-  lot. L'horloge du serveur n'entre pas dans ce calcul : une machine à
-  l'heure fausse, ou remise à l'heure en cours de séance, ne perd aucun point.
+  s'envoie entière. Pour la console d'aujourd'hui, qui ne dit pas l'âge de sa
+  séance, **aucune date n'est refusée** et `rejected` vaut toujours 0. La
+  seule borne est de cohérence, elle ne vaut que pour une séance dont la
+  machine dit l'âge, et elle se lit sur l'horloge **de la machine**
+  ([Deux horloges](#deux-horloges)) : hors de ses bornes un point ou un
+  événement est compté `rejected`, sans refuser le lot.
 - **Dates** : `startedAt` (dans `training/local` et `training/start`) est le
   début tel que la machine l'a daté ; `sessionAgeMs`, facultatif, le temps
   écoulé depuis, compté sur son horloge monotone. Une valeur qui n'est pas un
-  nombre n'est pas lue. Ce que le serveur en fait : [Deux horloges](#deux-horloges).
+  nombre n'est pas lue. C'est la présence de `sessionAgeMs` qui change ce que
+  le serveur fait des dates : [Deux horloges](#deux-horloges). La console
+  d'aujourd'hui ne l'envoie pas.
 - **Événements** : `seq` entier positif ou nul, `t` nombre, `kind` de 64
   caractères au plus (minuscules, chiffres, `_`, une lettre d'abord), `detail`
   de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
@@ -1157,7 +1218,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
 | `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
-| `convex/journalSync.test.ts` | Ce que Convex fait d'une séance que la machine relit dans son enregistrement et envoie, tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles, la borne de cohérence sur l'horloge de la machine, les dates du serveur pour une machine à l'heure fausse (1970, 10 min d'avance), et les deux dates d'un envoi tardif (reçu maintenant, mesuré avant). |
+| `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
@@ -1256,11 +1317,14 @@ majeure est refusée au lieu d'être comprise de travers.
 | Mineure | Ajouts, tous compatibles |
 |---|---|
 | `1.0` | Le contrat de départ. |
-| `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local`. |
+| `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
 
 Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
 elle n'envoie aucun des champs ajoutés, ne lit pas ceux de la réponse, et
-n'appelle pas la route des événements.
+n'appelle pas la route des événements. Ses séances sont datées, stockées et
+servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
+plus stocké deux fois. La console de ce dépôt annonce `1.1` dans son en-tête
+et se comporte encore ainsi : elle n'envoie pas `sessionAgeMs`.
 
 ### Matrice de compatibilité
 

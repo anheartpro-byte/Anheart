@@ -657,11 +657,10 @@ export const getMachineLive = query({
 // ---------------------------------------------------------------------------
 
 /**
- * A date before this one is a machine clock that was never set (a Raspberry
- * Pi has no real-time clock: without a network it starts at a date of the
- * past), not a moment a session can have started.
+ * No session started before this date: an age that would place a start
+ * earlier is not an age, and is not read.
  */
-export const EARLIEST_MACHINE_DATE_MS = Date.UTC(2024, 0, 1);
+export const EARLIEST_SESSION_START_MS = Date.UTC(2024, 0, 1);
 
 /**
  * How far outside its session a point or an event may be dated and still be
@@ -671,43 +670,43 @@ export const EARLIEST_MACHINE_DATE_MS = Date.UTC(2024, 0, 1);
 export const SESSION_WINDOW_MARGIN_MS = 60_000;
 
 /**
- * When a session started, on the server's clock.
+ * When a session started, on the server's clock, for a machine that says how
+ * long ago it started it (`ageMs`, counted on its monotonic clock): that long
+ * before now. The date its wall clock wrote is not read at all.
  *
- * The machine may say how long ago it started the session, counted on its
- * monotonic clock (`ageMs`): the start is then that long before now, and the
- * date the machine's wall clock wrote is not read at all. Such an age is kept
- * only when it is not negative and does not place the start before
- * `notBefore`. Otherwise the start is `fallback`.
+ * Null when the machine says no age, or one that cannot be: a negative one, or
+ * one that would place the start before `notBefore`. The session is then
+ * dated as it always was, and has no machine axis (see `machineAxis`).
  */
-function startOnServerClock(
+function startFromAge(
   now: number,
   ageMs: number | undefined,
   notBefore: number,
-  fallback: number,
-): number {
-  if (ageMs === undefined || ageMs < 0) return fallback;
+): number | null {
+  if (ageMs === undefined || ageMs < 0) return null;
   const start = now - ageMs;
-  return start >= notBefore ? start : fallback;
+  return start >= notBefore ? start : null;
 }
 
 /**
  * The machine's own time axis for a session: the start as the machine dated
  * it, and what must be added to a date of that axis to place it on the
- * server's clock (`shift`). Every point and every event of a session is dated
- * on the machine's axis; `startedAt` and `endedAt` are on the server's.
+ * server's clock (`shift`).
  *
- * The machine's start is `machineStartedAt` when it said one. A session the
- * machine registered itself before that field existed carries its date in
- * `startedAt`. Null for a session whose machine never dated its start (a
- * launch from the dashboard confirmed by a console that sends none): nothing
- * is shifted then, and its dates are served as the machine wrote them.
+ * A session has one only if its machine said how long ago it started it, when
+ * it registered it or confirmed its start: `machineStartedAt` is written then,
+ * and at no other time. Such a machine dates every point, every event and the
+ * end as that start plus the time elapsed, so one shift places them all on
+ * the server's clock, where `startedAt` and `endedAt` are.
+ *
+ * Null for every other session (a console that does not say its age, and
+ * every session stored before this rule): nothing is shifted and nothing is
+ * bounded, its dates are stored and served as the machine wrote them.
  */
 function machineAxis(
   session: Doc<"sessions">,
 ): { start: number; shift: number } | null {
-  const start =
-    session.machineStartedAt ??
-    (session.origin === "local" ? session.startedAt : undefined);
+  const start = session.machineStartedAt;
   return start === undefined
     ? null
     : { start, shift: session.startedAt - start };
@@ -716,22 +715,26 @@ function machineAxis(
 /**
  * The dates, on the machine's axis, a point or an event of this session may
  * carry: from one minute before the start the machine dated to one minute
- * after the end. No lower bound while the machine has dated no start, no
- * upper bound while the session has not ended. The server's own clock is not
- * compared with any of them: a machine whose clock is wrong, or is corrected
- * in the middle of a session, loses nothing for it.
+ * after the end; no upper bound while the session has not ended. The server's
+ * own clock is not compared with any of them.
+ *
+ * No bound at all for a session without a machine axis: its machine dates
+ * each point by reading its wall clock, which may be corrected, forwards or
+ * backwards, in the middle of the session. Bounding those dates would refuse
+ * what was measured.
  */
 function sessionWindow(session: Doc<"sessions">): {
   from: number | null;
   to: number | null;
 } {
   const axis = machineAxis(session);
+  if (axis === null) return { from: null, to: null };
   return {
-    from: axis === null ? null : axis.start - SESSION_WINDOW_MARGIN_MS,
+    from: axis.start - SESSION_WINDOW_MARGIN_MS,
     to:
       session.endedAt === undefined
         ? null
-        : session.endedAt - (axis?.shift ?? 0) + SESSION_WINDOW_MARGIN_MS,
+        : session.endedAt - axis.shift + SESSION_WINDOW_MARGIN_MS,
   };
 }
 
@@ -1053,10 +1056,13 @@ export const getPendingTrainingSession = internalQuery({
 });
 
 /**
- * The machine armed a launch from the dashboard. `machineStartedAt` is the
- * start as the machine dated it, `sessionAgeMs` how long ago that was on its
- * monotonic clock: with it the start is dated that long before now (never
- * before the launch itself), without it at the reception of this call.
+ * The machine armed a launch from the dashboard: the session starts at the
+ * reception of this call.
+ *
+ * Unless the machine says both the start as it dated it (`machineStartedAt`)
+ * and how long ago that was on its monotonic clock (`sessionAgeMs`): the
+ * start is then that long before now, and the session has a machine axis. An
+ * age that would place the start before the launch itself is not read.
  */
 export const markTrainingStarted = internalMutation({
   args: {
@@ -1076,12 +1082,21 @@ export const markTrainingStarted = internalMutation({
         `Session is not pending (status: ${s.status})`,
       );
     const now = Date.now();
-    await ctx.db.patch(args.sessionId, {
-      status: "active",
-      // While pending, `startedAt` is the date of the launch.
-      startedAt: startOnServerClock(now, args.sessionAgeMs, s.startedAt, now),
-      machineStartedAt: args.machineStartedAt,
-    });
+    // While pending, `startedAt` is the date of the launch.
+    const start =
+      args.machineStartedAt === undefined
+        ? null
+        : startFromAge(now, args.sessionAgeMs, s.startedAt);
+    await ctx.db.patch(
+      args.sessionId,
+      start === null
+        ? { status: "active", startedAt: now }
+        : {
+            status: "active",
+            startedAt: start,
+            machineStartedAt: args.machineStartedAt,
+          },
+    );
     await ctx.db.patch(args.machineId, { status: "in_session" });
     return null;
   },
@@ -1091,12 +1106,14 @@ export const markTrainingStarted = internalMutation({
  * A session the Pi started at the machine (manual, or auto from the panel).
  * Idempotent: one session per `localRef`, dated once, at its first call.
  *
- * `startedAt` is the start as the machine dated it: it is kept as
- * `machineStartedAt`. The session's own `startedAt` is on the server's clock:
- * `sessionAgeMs` before now when the machine says how long ago it started
- * the session; otherwise the date the machine wrote, unless that date is one
- * of a clock that was never set (`EARLIEST_MACHINE_DATE_MS`), in which case
- * the session is dated at this call.
+ * `startedAt` is the start as the machine dated it, and it is the session's
+ * `startedAt`, as it always was.
+ *
+ * Unless the machine also says how long ago it started the session, on its
+ * monotonic clock (`sessionAgeMs`): the session's `startedAt` is then that
+ * long before now, on the server's clock, the date the machine wrote is kept
+ * as `machineStartedAt`, and the session has a machine axis. An age that
+ * would place the start before `EARLIEST_SESSION_START_MS` is not read.
  */
 export const registerLocalSession = internalMutation({
   args: {
@@ -1138,19 +1155,18 @@ export const registerLocalSession = internalMutation({
         null
         ? claimedRider
         : null;
-    const now = Date.now();
+    const start = startFromAge(
+      Date.now(),
+      args.sessionAgeMs,
+      EARLIEST_SESSION_START_MS,
+    );
     const id = await ctx.db.insert("sessions", {
       organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: userId ?? undefined,
       status: "active",
-      startedAt: startOnServerClock(
-        now,
-        args.sessionAgeMs,
-        EARLIEST_MACHINE_DATE_MS,
-        args.startedAt >= EARLIEST_MACHINE_DATE_MS ? args.startedAt : now,
-      ),
-      machineStartedAt: args.startedAt,
+      startedAt: start ?? args.startedAt,
+      machineStartedAt: start === null ? undefined : args.startedAt,
       channels: ["ECG"],
       notes: args.occupancy ? `Occupancy: ${args.occupancy}` : undefined,
       kind: args.kind,
@@ -1184,16 +1200,13 @@ export const endTrainingSession = internalMutation({
     if (!s || s.machineId !== args.machineId)
       throw machineError("session_not_found", "Session not found");
     if (s.status === "completed" || s.status === "failed") return null; // idempotent
-    // The machine dates the end on its own clock. Where the session has a
-    // machine axis, that date is placed on the server's clock, and never
-    // before the start; where it has none, it is kept as the machine wrote it.
+    // The end as the machine dated it, or now when it dated none. Where the
+    // session has a machine axis, the machine's date is placed on the
+    // server's clock, and never before the start.
     const axis = machineAxis(s);
-    let endedAt = Date.now();
-    if (args.endedAt !== undefined) {
-      endedAt =
-        axis === null
-          ? args.endedAt
-          : Math.max(s.startedAt, args.endedAt + axis.shift);
+    let endedAt = args.endedAt ?? Date.now();
+    if (axis !== null && args.endedAt !== undefined) {
+      endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
     }
     await ctx.db.patch(args.sessionId, {
       status: args.failed ? "failed" : "completed",
@@ -1244,8 +1257,9 @@ const batchOutcome = v.object({
  * date the server first received it. The machine may therefore send a batch
  * again whenever it is not sure it was received (a lost answer, a restart).
  *
- * A point dated outside the session is counted and not stored; it does not
- * refuse the batch, whose other points are stored.
+ * For a session that has a machine axis, a point dated outside the session
+ * is counted and not stored; it does not refuse the batch, whose other points
+ * are stored. For any other session no date is refused.
  */
 export const storeTelemetry = internalMutation({
   args: {
@@ -1301,7 +1315,7 @@ const trainingEvent = v.object({
  * Store events of a session of this machine, as it reads them back from the
  * session's local record. Idempotent like `storeTelemetry`: an event is one
  * `(sessionId, seq)`, its rank in that record, and an event already stored is
- * left as it is. An event dated outside the session is counted and not stored.
+ * left as it is. The dates are bounded as those of the telemetry are.
  */
 export const storeEvents = internalMutation({
   args: {
