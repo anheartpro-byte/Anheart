@@ -270,6 +270,12 @@ Index : `by_user`, `by_machine`, `by_machine_and_status`,
 `bpm` (absent = pas de FC fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`,
 `gLoad`, `safetyAction`. Index `by_session_and_t`.
 
+`t` sert à l'axe des courbes, à l'ordre des points et à dire quand un point a
+été **mesuré** (`lastMeasuredAt`). Il ne dit pas qu'une séance envoie encore :
+la date de **réception** d'un point est le `_creationTime` que Convex donne à
+sa ligne (`lastSignalAt`). Le site exige les deux pour afficher une valeur
+comme actuelle (voir `getTrainingSession`).
+
 ### Historique de l'ancien mode d'enregistrement ECG (lecture seule)
 
 | Table | Contenu |
@@ -462,7 +468,7 @@ arrive intact dans le navigateur, même en production.
 | FC max admise | 100 à 220 bpm | Hors bornes = refusée. |
 | Âge admis pour l'estimation | 10 à 100 ans | Hors bornes = pas d'estimation. |
 | `MIN_RIDER_AGE` | 18 | Âge minimum d'un lancement auto distant. **[MED]** : l'abaisser est une décision médicale. Le Pi a sa propre valeur (`MIN_RIDER_AGE` dans `.env`) et fait foi. |
-| `LIVE_FRESH_MS` | 90 000 ms | Au-delà, l'état en direct est « périmé ». Une seule définition, dans `lib/training.ts`, importée par `convex/training.ts` et par le site, qui recalcule la fraîcheur chaque seconde ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). `lib/training.ts` doit donc rester sans import `@/` ni code réservé au navigateur. |
+| `LIVE_FRESH_MS` | 90 000 ms | Au-delà, l'état en direct est « périmé » et la machine « hors ligne ». Une seule définition, dans `lib/training.ts`, importée par `convex/training.ts`, par la tâche `checkOfflineMachines` de `convex/machines.ts` et par le site, qui recalcule la fraîcheur chaque seconde sur l'horloge du serveur ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). `lib/training.ts` doit donc rester sans import `@/` ni code réservé au navigateur. |
 
 **FC max retenue** (`effectiveHrMax`) : la FC max mesurée si elle est dans
 100-220 ; sinon, si l'année de naissance est connue, l'estimation de Tanaka
@@ -488,12 +494,12 @@ On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
 | `listLaunchRights` | query | `machineId` | admin ou gestionnaire de la machine (sinon `[]`) | `[{userId, name, email, hrMax (retenue ou null), grantedByName, createdAt}]`. |
 | `setUserPhysiology` | mutation | `userId`, `hrMax?` (nombre ou `null` pour effacer), `birthYear?` (idem) | pas un `user` ; `canAccessUser` | Valide FC max 100-220, âge 10-100 ans. Erreurs : « Only a manager can set physiology », « You do not manage this user », « Max heart rate must be within 100-220 bpm », « Birth year gives an implausible age ». |
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
-| `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
+| `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow` (voir `getMachineLive`), `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` → pose `stopRequestedAt` (une seule fois). Autres statuts : rien. |
-| `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur à l'horloge à partir de `live.updatedAt`. |
+| `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
 
@@ -569,14 +575,14 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 |---|---|---|
 | `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin). Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
-| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. |
+| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin Anheart | Annule la suppression. |
 | `assignMachineToGestionnaires` | admin | Remplace la liste complète des gestionnaires d'**une machine**, pris dans l'organisation de la machine. |
 | `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, ou d'une autre organisation (même réponse), fait refuser l'appel sans rien écrire. Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. Le gestionnaire doit être membre actif de l'organisation de la machine. |
-| `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. |
+| `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. `getMachinesForGestionnaire` renvoie aussi `serverNow`. |
 
 ### `sessions.ts` (lectures seulement)
 
@@ -772,7 +778,9 @@ les appelait a été retiré du Pi.
 ## 7. Tâche planifiée
 
 `convex/crons.ts` : `check-offline-machines`, **toutes les minutes**. Une machine
-`online` ou `in_session` sans heartbeat depuis **90 s** passe `offline`.
+`online` ou `in_session` sans heartbeat depuis **90 s** (`LIVE_FRESH_MS`, le
+seuil du site) passe `offline`. Le site n'attend pas ce passage pour
+l'afficher hors ligne : il le fait à 90 s, sur `lastHeartbeat` et `serverNow`.
 
 ---
 

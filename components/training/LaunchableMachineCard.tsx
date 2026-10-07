@@ -12,10 +12,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Cpu, MapPin, Play, Eye } from "lucide-react";
-import { useFreshness } from "@/hooks/use-freshness";
+import { useFreshnessJudge } from "@/hooks/use-freshness";
+import { shownMachineStatus } from "@/lib/training";
+import { ShownStatusBadge } from "@/components/machines/MachineSignal";
 import { LiveReadouts } from "./MachineLiveCard";
 import { ProfileList } from "./ProfileList";
 import { LiveFreshBadge } from "./TrainingBadges";
@@ -25,9 +26,10 @@ type LaunchableMachine = FunctionReturnType<
 >[number];
 
 /**
- * One machine of "My machines": its live state, its programmes, the launch
- * button. A component of its own so that each machine has its own clock: the
- * query drops `live` only when it runs again, the hook marks it stale on time.
+ * One machine of "My machines": its status, its live state, its programmes,
+ * the launch button. A component of its own so that each machine has its own
+ * clock: the server writes "offline" and drops `live` only when its job runs,
+ * the hook says so 90 s after the last signal.
  */
 export function LaunchableMachineCard({
   machine: m,
@@ -39,8 +41,12 @@ export function LaunchableMachineCard({
   onLaunch: () => void;
 }) {
   const t = useTranslations();
-  const { fresh } = useFreshness(m.live?.updatedAt);
-  const stale = !fresh;
+  const judge = useFreshnessJudge();
+  // One clock reading for the status, its badge, the launch button and the
+  // values: they cannot disagree.
+  const signalFresh = judge(m.lastHeartbeat, m.serverNow).fresh;
+  const status = shownMachineStatus(m.status, signalFresh);
+  const stale = !signalFresh || !judge(m.live?.updatedAt, m.serverNow).fresh;
 
   return (
     <Card>
@@ -61,7 +67,7 @@ export function LaunchableMachineCard({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <MachineStatusBadge status={m.status} />
+            <ShownStatusBadge status={status} />
             {m.live && <LiveFreshBadge stale={stale} />}
           </div>
         </div>
@@ -71,7 +77,11 @@ export function LaunchableMachineCard({
           <LiveReadouts live={m.live} stale={stale} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            {t("training.live.noData")}
+            {/* "Never reported" would be false of a machine that went silent:
+                the server withholds a state once it is stale. */}
+            {status === "offline" && m.lastHeartbeat > 0
+              ? t("training.live.offlineNoData")
+              : t("training.live.noData")}
           </p>
         )}
         <Separator />
@@ -95,7 +105,7 @@ export function LaunchableMachineCard({
             className="flex-1"
             onClick={onLaunch}
             disabled={
-              m.status !== "online" ||
+              status !== "online" ||
               !m.programsEnabled ||
               m.profiles.length === 0
             }
@@ -112,39 +122,17 @@ export function LaunchableMachineCard({
             </Link>
           )}
         </div>
-        {m.status === "in_session" && (
+        {status === "in_session" && (
           <p className="text-xs text-muted-foreground">
             {t("training.launch.inSession")}
           </p>
         )}
-        {m.status === "offline" && (
+        {status === "offline" && (
           <p className="text-xs text-muted-foreground">
             {t("training.launch.offline")}
           </p>
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function MachineStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("machines");
-  const variants: Record<
-    string,
-    "default" | "secondary" | "destructive" | "outline"
-  > = {
-    online: "default",
-    offline: "destructive",
-    in_session: "secondary",
-  };
-  const labels: Record<string, string> = {
-    online: t("online"),
-    offline: t("offline"),
-    in_session: t("inSession"),
-  };
-  return (
-    <Badge variant={variants[status] || "outline"}>
-      {labels[status] || status}
-    </Badge>
   );
 }

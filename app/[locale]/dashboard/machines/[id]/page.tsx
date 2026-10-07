@@ -37,9 +37,14 @@ import {
   RotateCcw,
   Play,
 } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
+import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
-import { useMachineStatusLabel } from "@/components/dashboard/statusLabels";
+import {
+  LastSignal,
+  MachineStatusBadge,
+  MachineStatusText,
+  VersionsSeen,
+} from "@/components/machines/MachineSignal";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
@@ -77,7 +82,6 @@ export default function MachineDetailPage({
   const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
-  const statusLabel = useMachineStatusLabel();
 
   const canManage = user?.role === "admin" || user?.role === "gestionnaire";
   const isAdmin = user?.role === "admin";
@@ -178,8 +182,9 @@ export default function MachineDetailPage({
             </Button>
           )}
           <MachineStatusBadge
-            status={machine.status}
+            machine={machine}
             isDeleted={machine.isDeleted}
+            className="text-sm"
           />
         </div>
       </div>
@@ -219,19 +224,16 @@ export default function MachineDetailPage({
                 <p className="text-sm text-muted-foreground">
                   {t("machines.status")}
                 </p>
-                <p className="font-medium">{statusLabel(machine.status)}</p>
+                <p className="font-medium">
+                  <MachineStatusText machine={machine} />
+                </p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
                   {t("machines.lastHeartbeat")}
                 </p>
                 <p className="font-medium">
-                  {machine.lastHeartbeat > 0
-                    ? formatDistanceToNow(machine.lastHeartbeat, {
-                        addSuffix: true,
-                        locale: dateLocale,
-                      })
-                    : "-"}
+                  <LastSignal machine={machine} />
                 </p>
               </div>
             </div>
@@ -261,12 +263,10 @@ export default function MachineDetailPage({
             </div>
             {machine.lastVersionSeenAt !== undefined && (
               <p className="text-xs text-muted-foreground">
-                {t("machines.versionSeen", {
-                  when: formatDistanceToNow(machine.lastVersionSeenAt, {
-                    addSuffix: true,
-                    locale: dateLocale,
-                  }),
-                })}
+                <VersionsSeen
+                  at={machine.lastVersionSeenAt}
+                  serverNow={machine.serverNow}
+                />
               </p>
             )}
           </CardContent>
@@ -481,40 +481,6 @@ export default function MachineDetailPage({
         onSuccess={() => setEditSaved(true)}
       />
     </div>
-  );
-}
-
-function MachineStatusBadge({
-  status,
-  isDeleted,
-}: {
-  status: string;
-  isDeleted?: boolean;
-}) {
-  const t = useTranslations("machines");
-  const statusLabel = useMachineStatusLabel();
-
-  if (isDeleted) {
-    return (
-      <Badge variant="destructive" className="text-sm">
-        {t("deleted")}
-      </Badge>
-    );
-  }
-
-  const variants: Record<
-    string,
-    "default" | "secondary" | "destructive" | "outline"
-  > = {
-    online: "default",
-    offline: "destructive",
-    in_session: "secondary",
-  };
-
-  return (
-    <Badge variant={variants[status] || "outline"} className="text-sm">
-      {statusLabel(status)}
-    </Badge>
   );
 }
 

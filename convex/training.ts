@@ -351,6 +351,11 @@ export const listLaunchableMachines = query({
       name: v.string(),
       location: v.optional(v.string()),
       status: v.string(),
+      // Server-dated, with the server's clock in this answer: the dashboard
+      // judges the age of the signal and of `live` on them, never on the
+      // clock of the computer it runs on.
+      lastHeartbeat: v.number(),
+      serverNow: v.number(),
       programsEnabled: v.boolean(),
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
@@ -397,6 +402,8 @@ export const listLaunchableMachines = query({
         name: machine.name,
         location: machine.location,
         status: machine.status,
+        lastHeartbeat: machine.lastHeartbeat,
+        serverNow: now,
         programsEnabled: machine.programsEnabled ?? false,
         live:
           machine.live && now - machine.live.updatedAt < LIVE_FRESH_MS
@@ -589,6 +596,8 @@ export const getMachineLive = query({
       programsEnabled: v.boolean(),
       live: v.union(liveStateValidator, v.null()),
       stale: v.boolean(),
+      // The server's clock in this answer (see listLaunchableMachines).
+      serverNow: v.number(),
     }),
     v.null(),
   ),
@@ -598,11 +607,13 @@ export const getMachineLive = query({
     const machine = await ctx.db.get(args.machineId);
     if (!machine) return null;
     const live = await authorizedMachineLive(ctx, me, machine);
+    const now = Date.now();
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
       live,
-      stale: live === null || Date.now() - live.updatedAt > LIVE_FRESH_MS,
+      stale: live === null || now - live.updatedAt > LIVE_FRESH_MS,
+      serverNow: now,
     };
   },
 });
@@ -656,6 +667,50 @@ export const getSessionTelemetry = query({
   },
 });
 
+/**
+ * The last sign of life of an active session: two dates of one telemetry
+ * point, the one with the greatest `t`, which is the point the dashboard
+ * shows as the session's current values.
+ *
+ * - `lastSignalAt`: when the server received it (the date the server gave the
+ *   row, not the `t` the machine wrote in it). While no point has arrived, the
+ *   start of the session as the server dated it: a session the machine
+ *   registered itself carries the machine's own start date, so the server's
+ *   date for it is the creation of its row.
+ * - `lastMeasuredAt`: when the machine says it measured it (its `t`). A point
+ *   received this instant may have been measured long ago: the machine resends
+ *   what it queued during a link loss, oldest first. Null while no point has
+ *   arrived.
+ *
+ * Both are null for a session that is not active.
+ */
+async function lastSignal(
+  ctx: QueryCtx,
+  session: Doc<"sessions">,
+): Promise<{ lastSignalAt: number | null; lastMeasuredAt: number | null }> {
+  if (session.status !== "active") {
+    return { lastSignalAt: null, lastMeasuredAt: null };
+  }
+  const latest = await ctx.db
+    .query("training_telemetry")
+    .withIndex("by_session_and_t", (q) => q.eq("sessionId", session._id))
+    .order("desc")
+    .first();
+  if (latest) {
+    return {
+      lastSignalAt: Math.floor(latest._creationTime),
+      lastMeasuredAt: latest.t,
+    };
+  }
+  return {
+    lastSignalAt:
+      session.origin === "local"
+        ? Math.floor(session._creationTime)
+        : session.startedAt,
+    lastMeasuredAt: null,
+  };
+}
+
 /** The training fields of one session, for the live and detail pages. */
 export const getTrainingSession = query({
   args: { sessionId: v.id("sessions") },
@@ -676,6 +731,13 @@ export const getTrainingSession = query({
       subjectLabel: v.optional(v.string()),
       operatorName: v.optional(v.string()),
       startedAt: v.number(),
+      // The last sign of life of an active session (see `lastSignal`): when
+      // the server received its latest point, when the machine says it
+      // measured it, and the server's clock in this answer. The dashboard
+      // shows a value as current only if both dates are recent on that clock.
+      lastSignalAt: v.union(v.number(), v.null()),
+      lastMeasuredAt: v.union(v.number(), v.null()),
+      serverNow: v.number(),
       endedAt: v.optional(v.number()),
       stopRequestedAt: v.optional(v.number()),
       endReason: v.optional(v.string()),
@@ -707,6 +769,8 @@ export const getTrainingSession = query({
       subjectLabel: s.subjectLabel,
       operatorName: s.operatorName,
       startedAt: s.startedAt,
+      ...(await lastSignal(ctx, s)),
+      serverNow: Date.now(),
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,
       endReason: s.endReason,
