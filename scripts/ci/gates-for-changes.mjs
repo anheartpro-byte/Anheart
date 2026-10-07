@@ -95,17 +95,6 @@ export const KINDS = [
     test: (path) => path.endsWith(".md") || (path.startsWith("docs/") && endsWithOneOf(path, DOCUMENT_EXTENSIONS)),
   },
   {
-    // The scope of the SonarQube Cloud analysis, at the root and under that
-    // name only. Its one reader is the scanner of .github/workflows/sonar.yml,
-    // a workflow of its own that starts whatever this rule answers, and that
-    // tests the file first. No gate opens it: not the Python tools, not
-    // TypeScript, ESLint, the node tests or the Next.js build.
-    kind: "static analysis scope",
-    python: false,
-    node: false,
-    test: (path) => path === "sonar-project.properties",
-  },
-  {
     // The Next.js site. The Pi and the simulation read nothing from it.
     kind: "site",
     python: false,

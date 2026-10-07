@@ -20,10 +20,10 @@ concurrency:
   group: codeql-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Security analysis of the Python sources and of the JavaScript and TypeScript
-# sources by GitHub CodeQL (docs/framework-de-test.md, section CI, "Analyse
-# statique externe"). The results are in the Security tab of the repository,
-# under "Code scanning".
+# Security analysis of the Python sources, of the JavaScript and TypeScript
+# sources and of the GitHub Actions workflows by GitHub CodeQL
+# (docs/framework-de-test.md, section CI, "Analyse statique externe"). The
+# results are in the Security tab of the repository, under "Code scanning".
 #
 # Not a gate. No job below is a required check, and none may take the name of
 # a job of ci.yml (scripts/ci/analysis-workflows.test.mjs). There is no `paths`
@@ -31,8 +31,8 @@ concurrency:
 # did not start would leave them pending.
 #
 # What is analysed is decided in .github/codeql/codeql-config.yml. Nothing is
-# installed and nothing of the repository is run: both languages are read as
-# they are (build mode "none"). `security-events: write`, which publishes the
+# installed and nothing of the repository is run: every language is read as
+# it is (build mode "none"). `security-events: write`, which publishes the
 # results, is given to this job and to no other job of the repository.
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript]
+        language: [python, javascript-typescript, actions]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
