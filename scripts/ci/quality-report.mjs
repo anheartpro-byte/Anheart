@@ -32,10 +32,20 @@ import { CONVEX, holds, SITE, siteFolders } from "./coverage-thresholds.mjs";
 /** The version of `quality-report.json` and of `part.json`. Raised when a field changes meaning or goes. */
 export const SCHEMA_VERSION = 1;
 
-/** The measured folders of the site as a label names them: `lib/`, `hooks/`, `components/`. */
+/** The measured folders of the site as a label names them: `lib/`, `hooks/`, `components/`, `app/`. */
 const SITE_FOLDERS = siteFolders()
   .map((folder) => `\`${folder}/\``)
   .join(", ");
+
+/**
+ * The folders whose tests one suite of the site runs, as the line of that
+ * suite names them: `hooks/`, `components/` et `app/`.
+ * @param {readonly string[]} folders @returns {string}
+ */
+function suiteFolders(folders) {
+  const named = folders.map((folder) => `\`${folder}/\``);
+  return named.length < 2 ? named.join("") : `${named.slice(0, -1).join(", ")} et ${named.at(-1)}`;
+}
 
 /** How many files and tests a summary lists. */
 const LISTED = 10;
@@ -88,13 +98,13 @@ export const SUITES = [
     runner: "pytest",
   },
   { id: "convex", project: "convex", job: "convex-tests", part: "convex", label: "fonctions Convex", runner: "vitest" },
-  { id: "site-lib", project: "site", job: "web", part: "site", label: "`lib/`", runner: "vitest" },
+  { id: "site-lib", project: "site", job: "web", part: "site", label: suiteFolders(SITE.suites.ecg), runner: "vitest" },
   {
     id: "site-components",
     project: "site",
     job: "web",
     part: "site",
-    label: "`hooks/` et `components/`",
+    label: suiteFolders(SITE.suites.site),
     runner: "vitest",
   },
   {
