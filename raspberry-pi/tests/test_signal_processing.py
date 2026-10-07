@@ -172,10 +172,19 @@ def _with(values: Sequence[float], replaced: Mapping[int, float]) -> list[float]
     return out
 
 
+def _grade_array(processor: Processor, window: dsp.Signal, mains_hz: float = 50.0) -> str:
+    """The grader's verdict on one array, whatever its shape.
+
+    The one place the private grader is called: its only public route is
+    ``process``, which never hands it less than three seconds, a table of
+    samples or another mains frequency.
+    """
+    return processor._ecg_quality(window, mains_hz)  # pyright: ignore[reportPrivateUsage] - no public route
+
+
 def _grade(processor: Processor, raw: Sequence[float], mains_hz: float = 50.0) -> str:
-    """The grader's verdict on one window (it has no public route but ``process``)."""
-    window = dsp.as_signal(raw)
-    return processor._ecg_quality(window, mains_hz)  # pyright: ignore[reportPrivateUsage]
+    """The grader's verdict on one window of samples."""
+    return _grade_array(processor, dsp.as_signal(raw), mains_hz)
 
 
 def _ecg_processor(fs: int = FS) -> Processor:
@@ -289,7 +298,7 @@ def test_property_no_window_with_a_non_finite_sample_is_good(window: list[float]
 def test_a_window_that_is_not_one_dimensional_is_no_signal(shape: tuple[int, int]) -> None:
     """A table of samples is not a signal: (8000, 1) made the mains filter raise, graded good."""
     table = dsp.as_signal(CLEAN).reshape(shape)
-    grade = _ecg_processor()._ecg_quality(table)  # pyright: ignore[reportPrivateUsage]
+    grade = _grade_array(_ecg_processor(), table)
     assert grade == NO_SIGNAL
 
 
@@ -300,8 +309,8 @@ def test_a_mains_filter_that_scipy_refuses_is_no_signal_and_is_said(
     """EX-2. scipy raises on this notch (unstable): the grade used to fall back to ``good``."""
     caplog.set_level(logging.WARNING, logger=MODULE_NAME)
     grade = _grade(_ecg_processor(), CLEAN, mains_hz)
-    assert grade == NO_SIGNAL
     said = _warnings(caplog)
+    assert grade == NO_SIGNAL
     assert len(said) == 1
     assert said[0].startswith("ECG window not graded: the mains notch failed: ")
 
