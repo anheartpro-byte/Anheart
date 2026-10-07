@@ -20,10 +20,15 @@ and the rule is judged only while it is not.
 Three groups, and the split matters when reading a failure:
 
 * **at rest, the session over**: these fail on ``develop`` and pass here;
-* **a session in progress, unchanged on purpose**: a session frozen past its
-  end, a recovery pushed past the deadline by a late STOP, a silent runtime
-  that cannot take its setpoint back. The verdict comes at the same instant
-  as before; these pass on ``develop`` too;
+* **a session in progress, unchanged on purpose**: a recovery pushed past the
+  deadline by a late STOP, a silent runtime that cannot take its setpoint
+  back. The verdict comes at the same instant as before; these pass on
+  ``develop`` too. A third case stood here, a session a latched FREEZE held
+  at speed past its end. It no longer happens: under a FREEZE the setpoint
+  follows the programme's own descent, and that session ends on time
+  (``tests/test_runtime_cooldown_freeze.py``). The rule is now a second
+  barrier behind that guard, and one test here takes the guard away to show
+  that it still brings a turning arm down;
 * **a verdict raised during the session, once it is over**: it can be
   acknowledged and stays acknowledged; fails on ``develop``.
 
@@ -49,7 +54,7 @@ from src.motor.drive import ControlWord, DriveError, DriveFault
 from src.result import Err, Ok, Result, is_ok
 from src.training import runtime as runtime_module
 from src.training.motion import DEFAULT_MOTION_LIMITS
-from src.training.runtime import EndReason, RuntimeState, SafetyStanding
+from src.training.runtime import EndReason, RuntimeState, SafetyStanding, TrainingRuntime
 from src.training.safety import (
     RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
@@ -510,31 +515,46 @@ async def test_whatever_ends_a_session_before_its_deadline_the_rest_latches_noth
 # =========================================================================
 
 
-async def _frozen_past_its_end() -> Rig:
-    """A latched FREEZE from 40 s on: the arm is held at speed through the programme's end."""
+async def _stopped_late() -> Rig:
+    """STOP five seconds before the end: the monitored recovery will outlive the programme."""
+    rig = await _programme()
+    await rig.run(TOTAL - 5.0)
+    rig.runtime.request_stop("operator pressed STOP")
+    return rig
+
+
+def _nothing_asks_for_the_descent(_runtime: TrainingRuntime) -> bool:
+    """``TrainingRuntime._stop_asked`` answering "no", whatever the phase: its guard forced off."""
+    return False
+
+
+async def test_an_arm_still_turning_past_the_deadline_is_brought_to_zero_by_the_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rule as a second barrier: it ends a descent that did not happen, on a turning arm.
+
+    The runtime follows a programme's descent under a FREEZE (ANH-189), so a
+    latched FREEZE no longer carries a turning arm past the end of its
+    programme. That guard is the first barrier. This rule stands behind it,
+    and nothing reaches it that way any more, so to show that it still works
+    the guard is forced off here: a FREEZE then holds the setpoint whatever
+    the phase, as it did before that change.
+
+    A FREEZE latched at 40 s and never acknowledged holds the arm at speed
+    through the cooldown, the recovery and the end of the timeline, and the
+    phase machine does not call a turning arm DONE. On the first tick past
+    the deadline the rule fires, RAMP_DOWN and latched. RAMP_DOWN outranks
+    the FREEZE: the setpoint comes down to zero and the shaft follows.
+    """
+    monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
     rig = await _programme()
     await rig.run(40.0)
     rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
     await rig.run(DEADLINE - 40.0 - 1.0)
-    assert _applied(rig) > 0, "the hold did not hold"
+    held = _applied(rig)
+    assert held > 0, "with the guard off the FREEZE did not hold the arm past the end"
     assert rig.phase() is Phase.RECOVERY, "a turning arm was called DONE"
     assert _overrun(rig) is None
-    return rig
-
-
-async def test_a_session_frozen_past_its_end_is_still_ended_by_the_rule_at_the_same_instant() -> (
-    None
-):
-    """The descent that never finishes: this rule is what ends it, and it still does.
-
-    A latched FREEZE holds the setpoint for as long as nobody acknowledges
-    it. The programme's timeline runs out with the arm still turning, so the
-    phase machine does not call it DONE. Thirty seconds later the rule fires,
-    on the first tick past the deadline, RAMP_DOWN and latched, and RAMP_DOWN
-    outranks the FREEZE: the arm comes down.
-    """
-    rig = await _frozen_past_its_end()
-    held = _applied(rig)
     for _ in range(round(1.0 / TICK) - 1):
         await rig.step()
         assert _overrun(rig) is None, f"fired early, {_since_start(rig):.1f} s in"
@@ -542,14 +562,14 @@ async def test_a_session_frozen_past_its_end_is_still_ended_by_the_rule_at_the_s
 
     await rig.step()
     verdict = _overrun(rig)
-    assert verdict is not None, f"nothing ended a session frozen {_since_start(rig):.1f} s in"
+    assert verdict is not None, f"nothing ended a session held {_since_start(rig):.1f} s in"
     assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
     assert "130 s plus 30 s of grace" in verdict.detail
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN
     assert rig.runtime.end_reason is EndReason.SAFETY_VERDICT
 
     await rig.run(10.0)
-    assert _applied(rig) == 0, "RAMP_DOWN did not bring the frozen arm down"
+    assert _applied(rig) == 0, "RAMP_DOWN did not bring the held arm down"
     assert abs(rig.drive.shaft_rpm) < 1.0
 
 
@@ -560,9 +580,7 @@ async def test_a_recovery_pushed_past_the_deadline_by_a_late_stop_is_still_judge
     for a minute more. The rule fires at the deadline as it always has. What
     is new is in the next group: it can then be cleared.
     """
-    rig = await _programme()
-    await rig.run(TOTAL - 5.0)
-    rig.runtime.request_stop("operator pressed STOP")
+    rig = await _stopped_late()
     await rig.run(DEADLINE - (TOTAL - 5.0) - 0.2)
     assert rig.phase() is Phase.RECOVERY
     assert _applied(rig) == 0
@@ -673,8 +691,8 @@ async def test_a_tick_that_falls_while_a_start_is_arming_does_not_end_the_new_se
 
 async def test_an_overrun_acknowledged_before_its_session_is_over_is_taken_back() -> None:
     """Unchanged: while the session is on its way out the condition is still true."""
-    rig = await _frozen_past_its_end()
-    await rig.run(10.0)
+    rig = await _stopped_late()
+    await rig.run(DEADLINE - (TOTAL - 5.0) + 10.0)
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN
     assert rig.phase() is Phase.RECOVERY
 
@@ -683,24 +701,16 @@ async def test_an_overrun_acknowledged_before_its_session_is_over_is_taken_back(
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN, "cleared while the session was not over"
 
 
-@pytest.mark.parametrize("raised_by", ["a session frozen past its end", "a late STOP"])
-async def test_an_overrun_raised_during_a_session_is_cleared_for_good_once_it_is_over(
-    raised_by: str,
-) -> None:
+async def test_an_overrun_raised_during_a_session_is_cleared_for_good_once_it_is_over() -> None:
     """EX-3. On ``develop`` the acknowledgement was accepted and taken back, every time.
 
-    A real overrun, raised while the session ran. The session ends, its
-    recovery runs out, the console is back to REPOS with the verdict latched
-    and the rule no longer firing. A start is refused in the verdict's name,
-    as for any latch. One named acknowledgement clears it, it stays cleared
-    for as long as anybody waits, and a new start is accepted.
+    A real overrun, raised while the session ran (a STOP typed late). The
+    session ends, its recovery runs out, the console is back to REPOS with the
+    verdict latched and the rule no longer firing. A start is refused in the
+    verdict's name, as for any latch. One named acknowledgement clears it, it
+    stays cleared for as long as anybody waits, and a new start is accepted.
     """
-    if raised_by == "a session frozen past its end":
-        rig = await _frozen_past_its_end()
-    else:
-        rig = await _programme()
-        await rig.run(TOTAL - 5.0)
-        rig.runtime.request_stop("operator pressed STOP")
+    rig = await _stopped_late()
     await rig.run(100.0)
     assert rig.state() is RuntimeState.FINISHED
     assert _mode(rig) is RunMode.REPOS

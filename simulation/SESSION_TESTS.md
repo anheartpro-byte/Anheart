@@ -40,12 +40,13 @@ not counted as passing tests.
 | A14 | Every named drive fault and an unknown code in HOLD | drive_fault, mnemonic + LFT code shown, no auto-reset | sim drive_fault_*_auto covers66 named faults plus unknown; nOF is not a fault |
 | A15 | SIGTERM at every phase | emergency zero, link closed, end `shutdown` | sim `process_sigterm_auto_*` (5), panel `LocalPanel.run` |
 | A16 | Tick raises in WARMUP / HOLD | fail closed: silent, end `tick_exception`, ttO backstop | sim `process_tick_raises_auto_*` |
-| A17 | Loop stall 2 s / 5 s in HOLD | FREEZE under ttO; over ttO GO_SILENT and SLF | sim `process_loop_stall_auto_*` |
+| A17 | Loop stall 2 s / 5 s in HOLD | FREEZE under ttO, and the programme then ends by itself (`programme_complete`); over ttO GO_SILENT and SLF | sim `process_loop_stall_auto_*` |
 | A18 | Wall clock +/- 1 h | nothing changes (monotonic time rules) | sim `process_wall_clock_jump_*`, panel |
 | A19 | Frozen drive status in HOLD | tracking/echo discrepancy is detected when the demanded speed changes, within the case deadline | sim drive_status_frozen_auto_hold PASS |
 | A20 | Attendant absent | FREEZE then RAMP_DOWN | sim `attendant_absent_auto` |
 | A21 | Anti-nausea limits in a programme and at the leg tip | motion limits hold on the measured arm, with the checker's register-quantization slack | sim test_programmed_sessions_hold_the_anti_nausea_limits and test_the_g_rate_limit_holds_at_the_leg_tip_too PASS |
 | A22 | Occupied programme through the panel with `max_rpm` above the 1.2 g occupied ceiling | refused before anything turns | panel `test_cloud_sync.py` |
+| A23 | The programme's own cooldown under a latched FREEZE: shipped 30-min programme, loop stall 1.4 s in HOLD (`loop_stall`), no stop asked for | the setpoint is held to the end of HOLD, walks down from the entry into COOLDOWN with the setpoints of the nominal run, and the session ends at its planned duration as `programme_complete`; no `session_overrun`, no standstill latched (ANH-189) | sim `auto_cooldown_under_latched_freeze`; `tests/test_cooldown_under_freeze.py`; panel `test_cooldown_freeze_console.py` |
 
 ## 2. MANUAL (operator target, at the machine only)
 

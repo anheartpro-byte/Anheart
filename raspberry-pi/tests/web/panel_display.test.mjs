@@ -1486,6 +1486,32 @@ test("nothing is said to resume behind a latched verdict, a stop, or a session t
   assert.equal(announced(RESUME), false);
 });
 
+test("a programme coming down in its cooldown under a latched freeze is nowhere said to be held", () => {
+  // Given the sentence the supervisor writes once for a stalled loop, as the snapshot carries it
+  // for as long as the freeze is latched (ANH-189: under it the programme's own descent is followed).
+  const sentence =
+    "the control loop took 1.20 s between ticks against a period of 0.20 s: the setpoint is held " +
+    "where it was (it still comes down on a stop asked for, and on the programme's own descent)";
+  const latched = verdict("freeze", "loop_stall", true);
+  const frozen = { ...latched, safety: { ...latched.safety, detail: sentence } };
+  const { frame, announced, node, shown } = panel();
+  // When two frames of the cooldown show the setpoint coming down under that freeze.
+  frame(programmeFrame(60, "cooldown", { setpoint: turning(190), measured: turning(192), ...frozen }));
+  frame(programmeFrame(60.2, "cooldown", { setpoint: turning(188), measured: turning(190), ...frozen }));
+  // Then the Seance page and the Securite page print the verdict's own sentence, whole.
+  for (const grid of ["run-safety-grid", "safety-grid"]) {
+    assert.equal(rows(node(grid)).detail.textContent, sentence);
+    assert.equal(rows(node(grid)).verrouille.textContent, "oui");
+  }
+  assert.equal(node("run-safety-action").textContent, "freeze");
+  assert.equal(node("phase").textContent, "cooldown");
+  // And the page adds no "held" of its own: no banner, and no manual card to say "consigne maintenue".
+  assert.equal(announced(RESUME), false);
+  assert.equal(announced("tient la vitesse"), false);
+  assert.equal(shown("ramp-banner"), false);
+  assert.equal(shown("manual-controls"), false);
+});
+
 test("in manual the banner takes a target above the setpoint: a held arm at standstill has none", () => {
   const { frame, announced } = panel();
   const held = verdict("freeze", "attendant_absent", false);

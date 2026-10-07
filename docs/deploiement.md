@@ -371,7 +371,7 @@ aujourd'hui : passer par `/viewer/index.html?live=...`. C'est corrigé dans
 
 | Local (`python -m simulation.live`) | Hébergé |
 |---|---|
-| 60 scénarios | 56 : les 4 scénarios en mode `dsp` (chaîne BioSPPy) sont refusés avec un message. BioSPPy n'est pas installé, et ces scénarios coûtent environ 50 ms de calcul par seconde simulée. |
+| 65 scénarios | 61 : les 4 scénarios en mode `dsp` (chaîne BioSPPy) sont refusés avec un message. BioSPPy n'est pas installé, et ces scénarios coûtent environ 50 ms de calcul par seconde simulée. |
 | Un scénario peut être donné par son chemin de fichier | Par son **nom** seulement, dans la liste livrée. |
 | Vitesse de 0,1x à 200x | De **10x** à 200x : la fonction s'arrête au bout de 300 s, et 45 minutes de scénario à 10x en font 270. |
 | `clock=sim` disponible | Ignoré. |

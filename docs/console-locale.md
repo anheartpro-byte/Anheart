@@ -31,6 +31,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > les routes qui s'y rapportent, ajoutés le 7 octobre 2026) vient du code et des tests
 > automatiques sur la console en simulation ; rien n'a été rejoué dans un navigateur ni
 > mesuré sur un vrai Pi.
+> Les passages sur le retour au calme d'un programme sous un `freeze` (sections 4 et
+> 11, ajoutés le 7 octobre 2026 avec ANH-189) viennent du code et des tests automatiques
+> sur la console en simulation (`raspberry-pi/tests/test_cooldown_freeze_console.py`) ;
+> ils n'ont pas été rejoués dans un navigateur.
 > Ce que la page affiche de plus depuis le 7 octobre 2026 (la note de la carte MANUEL
 > pour une cible prise, refusée ou remise à 0, l'encadré de la fréquence cardiaque, les
 > bandeaux `ARRET D'URGENCE NON CONFIRME` et `REPRISE AUTOMATIQUE POSSIBLE`, les
@@ -206,7 +210,7 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 | **Etat** | `idle`, `starting`, `running`, `stopping`. En rouge tant qu'un arrêt d'urgence est verrouillé, quel qu'en soit l'auteur : après un arrêt posé par la caméra, la pastille dit `idle` en rouge | `/api/status` (`run_state`, `estop_latched`, `supervisor_estop`, `standing`) |
 | **Liaison** | `en direct`, `donnees figees`, `hors ligne` | la fraîcheur du WebSocket |
 | **Rotation** | `a l'arret`, `EN ROTATION`, `VITESSE INCONNUE` | vitesse mesurée |
-| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11) | l'instantané |
+| **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11). `freeze` ne veut pas dire que la consigne ne bouge plus : elle descend sous un `freeze` après un STOP (section 5) et, pour un programme, à partir de sa phase `cooldown` (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 
 Les modes :
@@ -215,7 +219,7 @@ Les modes :
 |---|---|
 | `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. Une séance finie n'y déclenche aucun verdict, aussi longtemps que la console y reste : le départ suivant ne demande pas de redémarrer la console (section 11, `session_overrun`). |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
-| `SEANCE` | une séance programmée (AUTO) déroule son programme |
+| `SEANCE` | une séance programmée (AUTO) déroule son programme. Son retour au calme (phase `cooldown`) se fait dans ce mode, y compris quand la pastille **Securite** dit `freeze` : la consigne descend alors comme sans avertissement (section 11) |
 | `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro, y compris quand la pastille **Securite** dit `freeze` (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
 
 Les états `run_state` (vue « intention » de la surface de commande) :
@@ -818,15 +822,13 @@ redémarrer la console. Avant le correctif du 6 octobre 2026 (ANH-181), ce verdi
 apparaissait seul au repos (30 s après la fin d'un programme allé à son terme, 1830,2 s
 après le départ du profil standard même arrêté tôt, 3630,2 s après le départ d'une
 séance manuelle), l'acquittement ne tenait pas et il fallait redémarrer la console.
-Le verdict peut encore apparaître **pendant** une séance : quand un `freeze`
-verrouillé que personne n'acquitte (par exemple `loop_stall`) tient le bras en vitesse
-au-delà de la fin du programme sans que personne demande l'arrêt, et la règle fait
-alors descendre la consigne (un STOP donné sous ce `freeze` la fait descendre tout de
-suite, section 5) ; quand
+Le verdict peut encore apparaître **pendant** une séance : quand
 une fin de séance est ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt),
 parce que toute fin de séance rouvre une récupération complète, qui dépasse alors
 l'échéance, bras déjà arrêté (section 5) ; quand une séance manuelle atteint ses 3600 s
-à grande vitesse et descend encore 30 s plus tard. Dans tous ces cas : attendre que
+à grande vitesse et descend encore 30 s plus tard. Un `freeze` verrouillé que personne
+n'acquitte n'est plus un de ces cas : il ne tient plus le bras en vitesse au-delà de la
+fin du programme (alinéa suivant). Dans tous ces cas : attendre que
 **Mode** affiche `REPOS`, acquitter par son nom, puis demander un nouveau départ.
 L'acquittement tient alors. Avant `REPOS`, il répond 200 et le verdict est de nouveau
 là au cycle suivant. Après un E-STOP donné tard, `session_overrun` se verrouille
@@ -838,6 +840,37 @@ plancher verrouillé garde ce premier verdict : `session_overrun` n'apparaît qu
 la liste des règles actives pendant `ARRET`, et un seul acquittement à `REPOS` suffit.
 Mesures et limites :
 [securite.md](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
+
+**Sous un `freeze`, le retour au calme d'un programme se fait quand même.** Un
+`freeze` tient la vitesse d'un programme pendant `warmup` et `hold`. À partir de la
+phase `cooldown`, le programme ne demande plus de vitesse : la consigne descend alors
+vers 0 aux limites de mouvement, dès le premier cycle de cette phase, comme sans
+avertissement, que le `freeze` soit verrouillé ou non. Elle part de la vitesse tenue
+et ne remonte pas. À l'écran pendant cette descente : **Mode** `SEANCE`, phase
+`cooldown`, pastille **Securite** `freeze`, consigne et vitesse mesurée qui baissent ;
+le bandeau `REPRISE AUTOMATIQUE POSSIBLE` n'est pas affiché. La ligne `detail` d'un
+`freeze` de `loop_stall` le dit elle-même :
+`the control loop took 1.20 s between ticks against a period of 0.20 s: the setpoint is held where it was (it still comes down on a stop asked for, and on the programme's own descent)`.
+La séance se termine ensuite comme un programme mené à son terme : phase `recovery`,
+puis `REPOS` à la durée prévue, sans `session_standstill` ni `session_overrun`. Un
+`freeze` verrouillé reste affiché à `REPOS` et refuse tout départ (409) jusqu'à son
+acquittement nominatif ; l'acquitter ne met rien en mouvement. Cette fin vaut pour un
+`freeze` verrouillé, et pour un `freeze` non verrouillé dont la cause cesse avant le
+niveau suivant de sa règle. Si la cause dure, la règle continue de compter comme avant :
+`hr_stale` passe à `reduce` à 30 s puis à `ramp_down` à 60 s, `attendant_absent` à
+`ramp_down` à 120 s, et ce `ramp_down` verrouillé termine la séance (mode `ARRET`,
+verdict à acquitter). La descente sous `freeze` ne va jamais plus vite que les limites
+de mouvement ; elle peut être en avance sur un retour au calme sans avertissement,
+parce que celui-ci est en plus borné par la rampe de la régulation. Mesuré sur le banc
+d'essai logiciel avec le profil standard : jusqu'à 2,6 s d'avance depuis 193 tr/min
+moteur, et jusqu'à 4,4 s depuis le plafond du profil, 276 tr/min moteur
+([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Les actions plus sévères
+décident toujours en premier, et une séance manuelle n'a pas de retour au calme
+propre : un `freeze` y tient la consigne jusqu'à un STOP ou une cible de 0 (section 5).
+Vérifié par l'API sur la console en simulation, avec le programme court des tests et un
+`loop_stall` pendant `hold` (`raspberry-pi/tests/test_cooldown_freeze_console.py`) ;
+pas rejoué dans un navigateur, ni sur la vraie machine. Règle et vérifications :
+[securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189).
 
 ### Acquittement
 
