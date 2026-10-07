@@ -21,6 +21,7 @@ input rate, so the reported numbers match the reference implementation.
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
 
@@ -212,29 +213,70 @@ class ChannelProcessor:
 
         Returns one of no_signal / mains_dominated / noisy / good. This is the
         piece BioSPPy lacks, so we never present hum or a flat lead as a heartbeat.
+
+        ``good`` is the only grade a heart rate is extracted under, so it is
+        returned only when every test below could be run and was passed. A
+        window that cannot be judged (not one-dimensional, shorter than a
+        second, holding a NaN or an infinity, or whose mains test cannot be
+        computed) is ``no_signal``, with the reason in the log: "I do not
+        know" never reads as "fine". Every comparison against NaN is false, so
+        a non-finite window is refused before the tests that compare.
         """
-        if raw.size < self.fs_in:
+        if raw.ndim != 1 or raw.size < self.fs_in:
+            return "no_signal"
+        finite = int(np.count_nonzero(np.isfinite(raw)))
+        if finite != raw.size:
+            logger.warning(
+                "ECG window not graded: %d of its %d samples are not finite",
+                raw.size - finite,
+                raw.size,
+            )
             return "no_signal"
         if np.std(raw) < 3 or (raw.max() - raw.min()) <= 5:
             return "no_signal"
         clip = float(np.mean((raw <= 3) | (raw >= 1020)))
         if clip > 0.5:
             return "noisy"
-        # Mains-dominated: how much variance a notch removes from the DC-corrected
-        # signal (electrodes picking up powerline hum instead of the heart).
-        try:
-            if 0 < mains_hz < self.fs_in * 0.45:
-                hp = raw - float(np.mean(raw))
-                b, a = sps.iirnotch(mains_hz, 30.0, self.fs_in)
-                notched = sps.filtfilt(b, a, hp)
-                vh = float(np.var(hp))
-                if vh > 0 and 1 - float(np.var(notched)) / vh > 0.6:
-                    return "mains_dominated"
-        except Exception:
-            # The notch could not be computed: the mains check is skipped, and the
-            # grade rests on the flat-lead and clipping checks above.
-            pass
+        removed = self._mains_share(raw, mains_hz)
+        if removed is None:
+            return "no_signal"
+        if removed > 0.6:
+            return "mains_dominated"
         return "good"
+
+    def _mains_share(self, raw: np.ndarray, mains_hz: float) -> float | None:
+        """Share of the DC-corrected variance that a notch at ``mains_hz`` removes.
+
+        Above 0.6 the electrodes are picking up powerline hum instead of the
+        heart. ``None``, with the reason in the log, when the share cannot be
+        established: a mains frequency no notch can be designed for at this
+        sampling rate (NaN included), a filter scipy refuses, or a variance
+        that is not a finite positive number. The caller must not grade such
+        a window ``good``.
+        """
+        if not 0 < mains_hz < self.fs_in * 0.45:
+            logger.warning(
+                "ECG window not graded: no mains notch at %s Hz for a signal sampled at %s Hz",
+                mains_hz,
+                self.fs_in,
+            )
+            return None
+        hp = raw - float(np.mean(raw))
+        try:
+            b, a = sps.iirnotch(mains_hz, 30.0, self.fs_in)
+            notched = sps.filtfilt(b, a, hp)
+        except ValueError as e:
+            # What scipy raises when it refuses a filter or a signal: a
+            # frequency out of range, an unstable notch, a signal shorter than
+            # the filter's padding.
+            logger.warning("ECG window not graded: the mains notch failed: %s", e)
+            return None
+        vh = float(np.var(hp))
+        vn = float(np.var(notched))
+        if not (math.isfinite(vh) and math.isfinite(vn) and vh > 0):
+            logger.warning("ECG window not graded: its variance is not a finite positive number")
+            return None
+        return 1 - vn / vh
 
 
 class SignalTreatment:
