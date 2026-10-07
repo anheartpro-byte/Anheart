@@ -76,6 +76,8 @@ test("one file of no listed kind runs everything, whatever stands next to it", (
     "CAO/Gaura_Assy_2907.STEP",
     ".gitignore",
     ".gitleaks.toml",
+    // Read by both Vercel projects, the site and the hosted simulation: not a file of the site alone.
+    "vercel.json",
     ".cursor/rules/convex_rules.mdc",
     "simulation_app.py",
     "deploy/simulation-vercel/app.py",

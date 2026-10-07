@@ -1031,7 +1031,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow et ceux du workflow CodeQL |
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL et ceux des deux workflows de déploiement |
 | `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
@@ -1053,6 +1053,10 @@ déclenche, sur une PR, que si elle modifie de quoi l'installation est faite, et
 à chaque push sur `develop`. Ce qu'il vérifie, ses permissions et ce qu'il
 implique pour `scripts/release.sh` sont dans
 [pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie).
+
+Deux autres, `deploy-production.yml` et `deploy-preview.yml`, déploient sur
+Vercel quand une personne le demande, et jamais autrement : voir
+[Déploiement Vercel par bouton](#déploiement-vercel-par-bouton-anh-198).
 
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
@@ -1637,7 +1641,7 @@ la tête de `main` par le passage hebdomadaire. Conséquences :
   le script la lit aussi. Rouge, elle fait refuser `prepare` et `pr`.
 
 **Tests.** `scripts/ci/analysis-workflows.test.mjs` est lancé par le job
-`changes` de `ci.yml` à chaque exécution, avec les deux autres fichiers de test
+`changes` de `ci.yml` à chaque exécution, avec les autres fichiers de test
 de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
 pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
 complet (celle de checkout sur le même commit que `ci.yml`), une seule
@@ -1659,6 +1663,89 @@ ni compte, ni application, ni secret.
   pas et la vue par défaut de **Code scanning** reste vide.
 * Le tri et la correction de ce que CodeQL remonte ne font pas partie de ce
   ticket.
+
+### Déploiement Vercel par bouton (ANH-198)
+
+Deux workflows séparés de `ci.yml` déploient sur Vercel, et seulement quand une
+personne le demande : aucun push, aucune PR, aucun horaire ne les lance. **Ce ne
+sont pas des gates.** Le mode d'emploi, les réglages à faire à la main et l'état
+réel sont dans
+[deploiement.md, section 5](deploiement.md#51-comment-il-se-déploie). Aucun des
+deux n'a encore tourné : ils ne peuvent être lancés qu'une fois sur `main`.
+
+| | `deploy-production.yml` | `deploy-preview.yml` |
+|---|---|---|
+| Nom affiché dans Actions | « Déployer en production (main) » | « Déployer la préversion (develop) » |
+| Déclencheur | `workflow_dispatch`, et aucun autre | `workflow_dispatch`, et aucun autre |
+| Branche acceptée | `main` | `develop` |
+| Ce qui est demandé | quoi déployer (`site`, `simulation`, `site et simulation`) ; le mot `production`, à saisir | quoi déployer |
+| Environnement GitHub | `production` | `preview` |
+| Environnement Vercel visé | Production | Preview |
+| Jobs | `Vérifier la demande (production)`, `Déployer le site (production)`, `Déployer la simulation (production)` | les trois mêmes, suffixés `(préversion)` |
+
+Aucun push ne déploie par ailleurs : le `vercel.json` de la racine coupe les
+déploiements que Vercel lançait à chaque push, pour les deux projets.
+
+**Jobs.** Le premier vérifie la demande sans passer par l'environnement GitHub :
+une demande lancée sur une autre branche, ou sans la confirmation, est refusée
+avant qu'une approbation soit demandée à qui que ce soit. Les deux jobs de
+déploiement en dépendent et ne partent que s'il a réussi ; celui du projet qui
+n'a pas été choisi est ignoré. Chacun vérifie d'abord que ses secrets existent,
+installe la CLI Vercel à sa version figée, déploie, puis écrit dans le résumé de
+l'exécution le commit déployé et l'adresse obtenue. Deux déploiements de la même
+cible (même environnement, même projet) ne se chevauchent pas : le second
+attend, et un déploiement en cours n'est jamais annulé par le suivant.
+
+Le site est construit sur le runner puis envoyé (`vercel pull`, `vercel build`,
+`vercel deploy --prebuilt`), la procédure que Vercel documente pour GitHub
+Actions. La simulation garde la procédure de son script `deploy.sh` : `build.sh`
+assemble `dist/`, que la CLI envoie et que Vercel construit.
+
+**Permissions et secrets.** `contents: read`, rien d'autre : la règle « une
+seule permission d'écriture dans tous les workflows du dépôt » tient toujours.
+Quatre secrets sont lus par leur nom et passés aux scripts par `env`, jamais
+écrits dans un script : `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
+`VERCEL_PROJECT_ID_SITE` et `VERCEL_PROJECT_ID_SIMULATION`. Le jeton n'est remis
+qu'aux étapes qui appellent Vercel : ni l'installation de la CLI ni la
+construction du site, qui exécutent des scripts d'installation de paquets npm,
+ne le reçoivent. Aucun cache n'est restauré dans un déploiement. Les actions
+sont celles de `ci.yml`, épinglées sur les mêmes commits.
+
+**Tests.** `scripts/ci/deploy-workflows.test.mjs` est lancé par le job `changes`
+à chaque exécution, avec les autres fichiers de test de la CI. Il lit les deux
+workflows comme du texte et **exécute les scripts de leurs étapes comme le
+ferait le runner**, avec un double à la place de la CLI Vercel : aucun test
+n'appelle Vercel. Il vérifie :
+
+* que `vercel.json` coupe les déploiements Git pour toutes les branches et ne
+  contient rien d'autre (les deux projets Vercel lisent ce même fichier) ;
+* que chaque workflow n'a qu'un déclencheur, le bouton ;
+* que la garde de branche est la première étape, qu'elle accepte la branche du
+  bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
+* que la production exige le mot `production` exact ;
+* les noms des environnements, les groupes de concurrence, l'absence de toute
+  permission d'écriture, et qu'aucun job ne porte le nom d'un job de `ci.yml` ;
+* que la CLI est installée à une version exacte, la même dans les deux
+  workflows, et que les actions sont épinglées comme dans `ci.yml` ;
+* que les secrets ne sont lus que par `env`, qu'aucun script ne contient
+  d'expression, qu'un secret manquant fait échouer le job par son nom, et
+  qu'aucune valeur n'est affichée ;
+* les commandes passées à la CLI pour chaque cible, le refus d'un déploiement
+  qui échoue ou ne rend pas d'adresse, et le contenu du résumé ;
+* que les deux workflows exécutent les mêmes scripts : ils ne diffèrent que par
+  trois variables et par la confirmation.
+
+**Ce que ces tests ne prouvent pas.** Qu'un déploiement réel réussit : aucun
+n'a été lancé, et la CLI y est remplacée par un double. Les réglages du dépôt
+(environnements, approbation, secrets) et ceux des projets Vercel ne sont pas
+dans le dépôt : rien ne les teste.
+
+**Avant une release.** Les jobs de ces deux workflows sont des check runs du
+commit de tête de la branche déployée, et `scripts/release.sh` les lit comme
+ceux de CodeQL : une exécution en échec, annulée, en cours ou en attente
+d'approbation fait refuser `prepare` et `pr` (tête de `develop`) ou `tag` (tête
+de `main`). Voir
+[release.md](release.md#les-boutons-de-déploiement-et-le-script).
 
 ### Lire un échec et relancer
 
@@ -1701,6 +1788,14 @@ constats se lisent dans **Security → Code scanning** et ne font pas rougir ce
 job ; dans une PR, c'est la vérification « CodeQL » posée par GitHub qui les
 signale (voir
 [Analyse statique externe](#analyse-statique-externe--codeql-anh-196)).
+
+Un bouton de déploiement rouge dit pourquoi en tête de la page de l'exécution :
+« Mauvaise branche », « Confirmation refusée », « Secret manquant »,
+« Simulation absente » ou « Adresse absente », chaque fois avec ce qu'il faut
+faire. Les quatre premiers refus arrivent avant tout appel à Vercel : rien n'a
+été déployé. Tout autre échec vient de la CLI Vercel ou de la construction du
+site : lire le journal de l'étape (voir
+[Déploiement Vercel par bouton](#déploiement-vercel-par-bouton-anh-198)).
 
 ### Tests unitaires du site
 

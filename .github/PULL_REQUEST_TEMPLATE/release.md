@@ -17,6 +17,7 @@ Chaque case cochée porte sa preuve sur la même ligne (lien, SHA, sortie de com
 - [ ] **Aucune valeur `[MED]` modifiée sans décision.** Le diff depuis la version précédente est relu ; toute valeur marquée `[MED]` qui change renvoie à sa décision médicale signée, jointe.
 - [ ] **Aucun verrou modifié par défaut.** `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` valent toujours `false` par défaut dans le code et dans les fichiers d'exemple.
 - [ ] **Niveau de validation du Pi justifié.** Le niveau annoncé ci-dessus est celui que les revues enregistrées permettent ; au-dessus de `bench`, le compte rendu de la revue M5 ou M6 est joint.
+- [ ] **Fenêtre de déploiement fixée.** Fusionner cette PR ne déploie rien. La date et l'heure du déploiement de Convex, puis du site par le bouton « Déployer en production (main) », sont écrites ici : une même fenêtre, à un moment où aucune séance n'est en cours, avec le nom de la personne qui approuve.
 
 ## Changelog
 
@@ -27,3 +28,4 @@ Chaque case cochée porte sa preuve sur la même ligne (lien, SHA, sortie de com
 - Fusion par **commit de fusion** (ni squash, ni rebase), après deux approbations, sans contournement administrateur.
 - Juste après la fusion et la CI de `main` : `scripts/release.sh tag`.
 - Puis enregistrer chaque version dans Convex (`softwareReleases.recordRelease`), comme l'indique la sortie du script.
+- La fusion ne déploie rien. Dans la fenêtre fixée, hors de toute séance : Convex d'abord, puis aussitôt le site par le bouton « Déployer en production (main) » (`docs/release.md`, étape 9), après les tags.
