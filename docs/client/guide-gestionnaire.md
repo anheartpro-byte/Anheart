@@ -1,7 +1,7 @@
 # Guide gestionnaire : le tableau de bord
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 6 octobre 2026. Aucun client n'a encore utilisé ce guide.
+> Version du 7 octobre 2026. Aucun client n'a encore utilisé ce guide.
 >
 > - Les écrans décrits ici (machines en direct, lancement d'une séance auto,
 >   suivi en direct, droits de lancement, physiologie) appartiennent à la
@@ -81,7 +81,7 @@ Le site vous permet de :
 | Le site ne peut pas | Ce qu'il faut savoir |
 |---|---|
 | Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : uniquement depuis la console de la machine ». |
-| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement. Mais tant qu'elle garde sa vitesse pour une raison de sécurité (action « Vitesse figée »), la demande ne ralentit pas le bras. L'arrêt d'urgence se fait à la machine, par l'opérateur. |
+| Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement, y compris quand elle gardait sa vitesse pour une raison de sécurité (action « Vitesse figée »). L'arrêt d'urgence se fait à la machine, par l'opérateur. |
 | Voir la machine | Le site ne voit ni la capsule, ni la salle, ni l'opérateur. Il affiche ce que la machine lui envoie, avec quelques secondes de retard. |
 | Forcer un départ | La machine refait tous les contrôles et peut refuser. |
 | Créer ou modifier un programme | Les programmes viennent de la machine. Le site les affiche en lecture seule. |
@@ -412,7 +412,7 @@ panneau **Séance d'entraînement** compte. Pour la même raison, le badge
 |---|---|---|
 | Un tiret et « Pas de fréquence cardiaque fiable » | La machine n'a plus de fréquence cardiaque fiable. Elle applique ses propres règles de sécurité : elle garde sa vitesse, puis la baisse, et termine la séance dès que la vitesse qu'elle commande est revenue à zéro, au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, la séance reprend seule. | Prévenez l'opérateur. |
 | « Au-dessus de la zone », qui dure | La fréquence dépasse la zone cible. La machine baisse sa vitesse et applique ses règles de sécurité. Si elle ramène la vitesse qu'elle commande à zéro, elle termine la séance. | Prévenez l'opérateur. Demandez l'arrêt si la situation vous inquiète. |
-| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Sa valeur dit laquelle : « Vitesse figée » (elle garde sa vitesse), « Réduction » (elle la baisse), « Décélération » (elle termine la séance), « Arrêt rapide (rampe du variateur) » (arrêt d'urgence logiciel), « Mise en silence (arrêt par le variateur) » (la console ne commande plus le moteur). Tant que « Vitesse figée » reste affichée, une demande d'arrêt envoyée depuis le site ne ralentit pas le bras. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
+| La mention « Action de sécurité » | La machine a pris une mesure de sécurité. Sa valeur dit laquelle : « Vitesse figée » (elle garde sa vitesse), « Réduction » (elle la baisse), « Décélération » (elle termine la séance), « Arrêt rapide (rampe du variateur) » (arrêt d'urgence logiciel), « Mise en silence (arrêt par le variateur) » (la console ne commande plus le moteur). Sous « Vitesse figée », une demande d'arrêt envoyée depuis le site fait quand même décélérer la machine. | Prévenez l'opérateur. L'arrêt d'urgence ne se déclenche qu'à la machine. |
 | Les nombres remplacés par des tirets, plus de nouveaux points | La machine n'envoie plus rien : liaison Internet coupée, ou machine arrêtée. Le site ne peut plus rien lui demander. | Téléphonez à l'opérateur. |
 
 ## 8. Arrêter ou annuler une séance
@@ -457,12 +457,10 @@ Ensuite :
 
 > **Ce bouton n'est pas un arrêt d'urgence.** C'est une demande. La machine la
 > lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite
-> progressivement. Deux cas où votre demande ne ralentit pas le bras :
->
-> - la machine n'a plus Internet : la demande ne lui parvient pas ;
-> - la machine garde sa vitesse pour une raison de sécurité (mention « Action
->   de sécurité » avec la valeur « Vitesse figée ») : elle enregistre la fin
->   de séance, mais ne ralentit pas tant que cette valeur reste affichée.
+> progressivement, y compris quand elle gardait sa vitesse pour une raison de
+> sécurité (mention « Action de sécurité » avec la valeur « Vitesse figée »).
+> Un cas où votre demande ne ralentit pas le bras : la machine n'a plus
+> Internet, et la demande ne lui parvient pas.
 >
 > En cas de danger, l'arrêt se fait à la machine, par l'opérateur.
 

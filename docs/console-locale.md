@@ -19,9 +19,9 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > la séance « personne à bord » reste refusée par configuration (jalon M6).
 > Les passages sur les avertissements non verrouillés, la règle `session_standstill`,
 > STOP sous un `freeze` et la cible manuelle refusée ou remise à 0 (sections 4, 5, 6,
-> 11 et 13, ajoutés le 6 octobre 2026) viennent du code, des tests automatiques et de
-> rejeux par l'API sur la console en simulation ; ils n'ont pas été rejoués dans un
-> navigateur.
+> 11 et 13, ajoutés le 6 octobre 2026, ceux sur STOP sous un `freeze` réécrits le
+> 7 octobre 2026) viennent du code, des tests automatiques et de rejeux par l'API sur
+> la console en simulation ; ils n'ont pas été rejoués dans un navigateur.
 > Les passages sur la règle `session_overrun` (sections 4, 5 et 11, ajoutés le
 > 6 octobre 2026 avec ANH-181) viennent du code, des tests automatiques sur la console
 > en simulation et de mesures sur le banc d'essai logiciel ; ils n'ont pas été rejoués
@@ -187,7 +187,7 @@ Les modes :
 | `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. Une séance finie n'y déclenche aucun verdict, aussi longtemps que la console y reste : le départ suivant ne demande pas de redémarrer la console (section 11, `session_overrun`). |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
 | `SEANCE` | une séance programmée (AUTO) déroule son programme |
-| `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro ; sous un `freeze`, elle ne descend même pas tant que le gel tient (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
+| `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro, y compris quand la pastille **Securite** dit `freeze` (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
 
 Les états `run_state` (vue « intention » de la surface de commande) :
 
@@ -224,17 +224,19 @@ s'arrête au mode : `liaison ouverte · repos`.
 - Termine la séance **sur la rampe mise en service** (pas plus vite) : une décélération
   plus rapide que la rampe du variateur déclenche une surtension (ObF) et met la
   machine en roue libre, ce qui allonge l'arrêt.
-- **Sous un `freeze`, STOP ne fait pas baisser la vitesse.** Tant que la pastille
-  **Securite** dit `freeze`, la demande est enregistrée (réponse 202, mode `ARRET`) mais
-  la consigne reste gelée : elle ne descend qu'une fois le gel levé ou devenu `reduce`.
-  Un gel qui apparaît pendant une descente demandée par STOP la fige de la même façon.
-  `ARRET` ne prouve donc ni une baisse de la consigne ni l'arrêt du bras. Rejoué sur la
-  console en simulation : STOP 12 s après une perte de l'ECG en séance programmée, la
-  consigne est restée inchangée pendant environ 17 s, et le bras s'est arrêté au même
-  instant que sans STOP ; avec E-STOP au même moment, consigne à 0 au cycle suivant.
-  Pour un arrêt immédiat : le coup de poing câblé, et E-STOP. C'est le comportement
-  actuel du logiciel, décrit dans
-  [raspberry-pi.md](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt).
+- **STOP agit aussi sous un `freeze`.** Quand la pastille **Securite** dit `freeze`,
+  la demande est enregistrée (réponse 202, mode `ARRET`) et la consigne commence à
+  descendre au cycle suivant, aux limites de mouvement, comme sans avertissement ; que
+  le gel soit verrouillé ou non. Un gel qui apparaît pendant une descente demandée par
+  STOP ne la fige pas. Les actions plus sévères (`reduce`, `ramp_down`, `quick_stop`,
+  `go_silent`) décident toujours en premier. `ARRET` va maintenant de pair avec une
+  consigne qui descend ou qui vaut 0 (sauf sous `go_silent`, où la console n'envoie
+  plus rien) ; il ne prouve pas l'arrêt du bras, qui se lit sur la vitesse mesurée.
+  Vérifié par les tests automatiques sur la console en simulation : STOP 12 s après
+  une perte de l'ECG en séance programmée, consigne plus basse au cycle suivant et à 0
+  avant le `reduce` de la règle ; jusqu'au 7 octobre 2026 elle restait inchangée
+  environ 17 s. Après la fin, un gel qui était verrouillé reste à acquitter. Détails
+  dans [raspberry-pi.md](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt).
 - En manuel, après STOP la cible repasse à 0. En séance manuelle de banc, une fois
   l'étage de sortie coupé à l'arrêt mesuré, le mode revient à `REPOS` ; pour un
   programme, `REPOS` ne revient qu'après la phase `recovery`. Repartir demande un
@@ -306,6 +308,11 @@ temps d'arrivée estimé, par exemple
 `vers 5.00 tr/min de sortie (Gr 1.001), arrivee dans ~0:08`. Un mouvement de tête
 pendant un changement de vitesse provoque la nausée (effet Coriolis).
 
+Il n'est pas affiché quand un `freeze` tient la consigne à distance d'une cible non
+nulle : rien ne marche alors vers la cible, et la console n'annonce ni rampe ni heure
+d'arrivée. Une descente vers 0 sous un `freeze` (STOP, ou cible remise à 0) est une
+vraie rampe : le bandeau s'affiche, avec son heure d'arrivée.
+
 ### Carte « Mode MANUEL »
 
 **Au repos** (pas de séance manuelle) :
@@ -331,7 +338,7 @@ Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occu
 | `−1 tr/min` / `+1 tr/min` | baisse ou monte le brouillon de 1 tr/min **de sortie** (bras) |
 | grand nombre central | le brouillon, en tr/min de sortie. En **orange** tant qu'il diffère de la cible appliquée |
 | `Appliquer` | envoie le brouillon : `POST /api/manual/target`. Rien n'est envoyé avant ce clic |
-| grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss` ou `cible atteinte`) |
+| grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss`, `cible atteinte`, ou `consigne maintenue, cible non atteinte` quand un `freeze` tient la consigne à distance d'une cible non nulle) |
 
 Règles de la cible :
 
@@ -357,7 +364,11 @@ Règles de la cible :
   20 bpm/min ; un premier pas que le variateur n'a pas confirmé. Le bras ne part donc ni
   quand un avertissement se lève, ni après un acquittement, ni quand la fréquence
   cardiaque revient : il faut retaper la cible. Une cible de 0 est toujours acceptée, et
-  rien ne change pour un bras qui tourne (la cible y est gardée, puis suivie). Les
+  rien ne change pour un bras qui tourne (la cible y est gardée, puis suivie). Une
+  exception sous un `freeze` : une cible de 0 y est suivie tout de suite, comme un
+  arrêt demandé, alors qu'une cible plus basse mais non nulle reste tenue. Quand la
+  consigne arrive ainsi à 0 pendant qu'un avertissement tient, la séance se termine sur
+  `session_standstill` (section 11) ; pour seulement terminer la séance, STOP. Les
   messages sont en section 13, la règle et ses mesures dans
   [securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178).
 - **Ce que la page montre dans ce cas.** Le refus et la remise à 0 arrivent comme
@@ -653,8 +664,13 @@ bras est arrêté (section 3, règle 2). Le bras ne repart pas quand la cause di
 finie, c'est-à-dire quand **Mode** affiche `REPOS` (pour un programme, après la phase
 `recovery` : environ 5 minutes avec le profil standard), puis demander un nouveau
 départ. Avant `REPOS`, l'acquittement répond 200 mais le verdict est de nouveau là au
-cycle suivant. Ne sont pas concernés : un STOP, une cible manuelle que l'opérateur met
-lui-même à 0 alors qu'aucun avertissement ne tient, le retour au calme d'un programme.
+cycle suivant. Ne sont pas concernés : un STOP (donné sous un `freeze` ou non), une
+cible manuelle que l'opérateur met lui-même à 0 alors qu'aucun avertissement ne tient,
+le retour au calme d'un programme. Une cible mise à 0 pendant qu'un avertissement tient
+est concernée : sous un `reduce` comme avant, et maintenant sous un `freeze`, où elle
+est suivie jusqu'à 0. Le détail dit alors
+`the operator's manual target of zero, followed under the warning loop_stall, brought the setpoint to zero`
+(avec le nom de la règle qui tenait).
 En séance manuelle, capsule vide comprise, la règle vaut aussi. Décisions et mesures :
 [securite.md](securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques).
 
@@ -672,7 +688,9 @@ après le départ du profil standard même arrêté tôt, 3630,2 s après le dé
 séance manuelle), l'acquittement ne tenait pas et il fallait redémarrer la console.
 Le verdict peut encore apparaître **pendant** une séance : quand un `freeze`
 verrouillé que personne n'acquitte (par exemple `loop_stall`) tient le bras en vitesse
-au-delà de la fin du programme, et la règle fait alors descendre la consigne ; quand
+au-delà de la fin du programme sans que personne demande l'arrêt, et la règle fait
+alors descendre la consigne (un STOP donné sous ce `freeze` la fait descendre tout de
+suite, section 5) ; quand
 une fin de séance est ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt),
 parce que toute fin de séance rouvre une récupération complète, qui dépasse alors
 l'échéance, bras déjà arrêté (section 5) ; quand une séance manuelle atteint ses 3600 s
@@ -780,10 +798,9 @@ Rejoué en simulation, dans cet ordre :
 3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
    `RAMPE EN COURS` s'affiche jusqu'à l'arrivée.
 4. Surveiller **Vitesse mesuree** (pas la consigne).
-5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`. Si la pastille
-   **Securite** dit `freeze` à ce moment, STOP est enregistré mais la vitesse ne baisse
-   pas tant que le gel tient (section 5) : pour un arrêt immédiat, coup de poing câblé
-   et E-STOP.
+5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`. STOP fait
+   descendre la consigne même si la pastille **Securite** dit `freeze` à ce moment
+   (section 5). Pour un arrêt immédiat : coup de poing câblé et E-STOP.
 6. En cas d'urgence : `E-STOP`, puis, une fois la machine arrêtée et le coup de poing
    réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter`.
 

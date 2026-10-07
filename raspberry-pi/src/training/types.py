@@ -202,7 +202,10 @@ class SafetyAction(IntEnum):
     # Hold the current speed: stop moving the setpoint in either direction.
     # The verdict for "the evidence has gone stale": with no trustworthy heart
     # rate, regulating is guessing, and the last commanded speed is the only
-    # value known to have been survivable a moment ago.
+    # value known to have been survivable a moment ago. It holds a speed, not
+    # a stop: once the operator has asked for the arm to come down (a STOP, a
+    # manual target of zero), the setpoint walks to zero under it all the same
+    # (``TrainingRuntime._stop_under_freeze``).
 
     REDUCE = 2
     # Step the setpoint down and keep regulating. The ordinary response to a
@@ -749,10 +752,20 @@ class ManualView:
     min_run: SpeedView
 
     ramping: bool
-    """Whether the setpoint is still on its way to the target: "do not move your head"."""
+    """Whether the setpoint is still on its way to the target: "do not move your head".
+
+    ``False`` too while a FREEZE holds the setpoint away from a non-zero
+    target: nothing is on its way then, and a screen must not say otherwise.
+    Compare ``target`` with the snapshot's ``setpoint`` to tell "reached" from
+    "held".
+    """
 
     ramp_eta: Seconds | None
-    """Seconds until the setpoint reaches the target at the motion limits; ``None`` unknown."""
+    """Seconds until the setpoint reaches the target at the motion limits.
+
+    ``None`` when unknown, and when a FREEZE holds the setpoint away from the
+    target: there is no arrival to announce.
+    """
 
 
 #: A drive observation older than this is no longer evidence about the machine.

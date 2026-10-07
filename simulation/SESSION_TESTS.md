@@ -79,6 +79,7 @@ not counted as passing tests.
 | R2 | Launch for a rider whose HRmax the zone exceeds | refused, reported back as a failed session with the reason | panel `test_a_preset_too_hard_for_the_rider_is_refused`; cohort A2 exercises the same `resolve` |
 | R3 | Launch of an unknown preset / above the occupied ceiling / tiers mismatch / programmes disabled / occupied disabled | refused before anything turns, reason sent back | panel `test_cloud_sync.py` |
 | R4 | Remote end mid-HOLD (auto) and at 27 rpm (manual) | ends as `operator_stop`, cooldown ramp | sim `stop_remote_auto`, `stop_remote_manual` |
+| R4b | STOP under a FREEZE: operator STOP 12 s into a lost heart rate (auto, `hr_stale`), remote end under a latched `loop_stall` at 27 rpm (manual) | the setpoint walks down from the next tick under the FREEZE and reaches zero; ends as `operator_stop`, no standstill latched (ANH-175) | sim `stop_operator_auto_under_freeze`, `stop_remote_manual_under_latched_freeze`; `tests/test_stop_under_freeze.py` |
 | R5 | Dashboard unreachable / its step raising during a session | the session is unaffected, the error logged | panel `test_failure_process.py`, `test_cloud_sync.py` |
 | R6 | Remote launch while a local session runs | refused ("busy"), no poll while busy | panel `test_cloud_sync.py` |
 | R7 | Remote launch below MIN_RIDER_AGE (default18), or without age | refused before anything turns; subjectAge travels with the launch | panel test_a_launch_for_a_child_is_refused and test_a_launch_without_the_rider_s_age_is_refused PASS |

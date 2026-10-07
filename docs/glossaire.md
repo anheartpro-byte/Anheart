@@ -168,7 +168,7 @@ plusieurs règles se déclenchent, la plus grave gagne.
 | Niveau | Effet |
 |---|---|
 | NONE | aucune exigence ; la demande du régulateur s'applique |
-| FREEZE | figer la vitesse : la consigne ne bouge plus |
+| FREEZE | figer la vitesse : la consigne ne bouge plus. Un arrêt demandé (STOP, cible manuelle à 0) la fait quand même descendre |
 | REDUCE | baisser la consigne et continuer à réguler |
 | RAMP_DOWN | finir la séance : descente contrôlée jusqu'à zéro |
 | QUICK_STOP | consigne à zéro tout de suite ; l'ordre de marche reste en place, et le variateur freine sur sa propre rampe (3 à 4 s) |

@@ -1,7 +1,7 @@
 # Manuel opérateur : la console de la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 6 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
+> Version du 7 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
 > cette date. Aucun client ne l'a encore utilisé.
 >
 > - Les captures d'écran viennent d'essais en simulation (machine simulée),
@@ -86,8 +86,9 @@ est gardé pour cet onglet seulement.
 4. **Un arrêt demandé à l'écran n'est jamais instantané, et il n'est pas
    toujours suivi d'effet.** **E-STOP** demande une décélération immédiate :
    même alors, le bras tourne encore pendant la décélération. **STOP** demande
-   un arrêt progressif, mais tant que la pastille **Securite** affiche
-   « freeze », la console garde la vitesse et STOP ne ralentit pas le bras.
+   un arrêt progressif. Il agit aussi quand la pastille **Securite** affiche
+   « freeze » : la console garde alors la vitesse tant que personne ne demande
+   l'arrêt, mais STOP la fait baisser.
    Après un clic, regardez le bras et la vitesse mesurée. Si la vitesse ne
    baisse pas après un STOP, l'arrêt logiciel qui reste est **E-STOP**. Si
    elle ne baisse pas après un E-STOP, il ne reste que l'arrêt d'urgence câblé
@@ -356,7 +357,11 @@ l'écran.*
 - Pour changer de vitesse : composez un nouveau brouillon, puis **Appliquer**.
 - Vous pouvez ramener vous-même le bras à l'arrêt en appliquant une cible de
   0. Si **Securite** affiche « none » à ce moment, la séance continue :
-  **Mode** reste « MANUEL », et une nouvelle cible fera repartir le bras.
+  **Mode** reste « MANUEL », et une nouvelle cible fera repartir le bras. Si
+  **Securite** affiche autre chose que « none » quand la vitesse commandée
+  arrive à zéro, la séance se termine et l'arrêt est verrouillé, comme quand
+  la console ramène elle-même la vitesse à zéro (plus bas dans cette liste).
+  **STOP**, lui, termine la séance sans verrouiller d'arrêt pour cela.
 - **Sur un bras à l'arrêt, une cible n'est prise que si rien ne retient le
   bras.** Tant que **Securite** affiche autre chose que « none », une cible
   autre que 0 est refusée : la liste **Evenements** de la page **Seance**
@@ -373,11 +378,13 @@ l'écran.*
   vitesse, mais le variateur peut avoir reçu ce premier pas : lisez
   **Rotation** et **Vitesse mesuree**
   ([section 10](#10-un-démarrage-est-refusé)).
-- Si **Securite** affiche « freeze », la console garde la vitesse : ni
-  **Appliquer**, ni **STOP** ne la font baisser
-  ([section 9.2](#92-la-console-agit-seule)). Sur un bras qui tourne, une
-  cible appliquée pendant ce temps est gardée, puis suivie sans autre clic
-  quand « freeze » disparaît.
+- Si **Securite** affiche « freeze », la console garde la vitesse devant
+  toute cible autre que 0 : **Appliquer** ne la fait ni monter ni baisser
+  ([section 9.2](#92-la-console-agit-seule)). La ligne « rampe » affiche alors
+  « consigne maintenue, cible non atteinte », et le bandeau orange n'apparaît
+  pas. Sur un bras qui tourne, cette cible est gardée, puis suivie sans autre
+  clic quand « freeze » disparaît. Une cible de 0 et **STOP** font baisser la
+  vitesse même pendant « freeze ».
 - **Acquitter un « freeze » verrouillé pendant que le bras tourne relâche la
   vitesse.** Un « freeze » verrouillé ne disparaît pas seul : c'est
   l'acquittement qui le lève. Donné alors que **Mode** affiche « MANUEL », cet
@@ -573,7 +580,7 @@ Ce que cela change pour vous :
 | Situation | Ce que vous faites |
 |---|---|
 | Fin normale, changement d'avis, le passager demande à s'arrêter sans urgence | **STOP**, puis surveillez la vitesse mesurée. |
-| Vous voulez arrêter le bras alors que **Securite** affiche « freeze » | Tant que « freeze » est affiché, STOP ne ralentit pas le bras. Des deux boutons, seul **E-STOP** le ralentit. |
+| Vous voulez arrêter le bras alors que **Securite** affiche « freeze » | **STOP** agit aussi pendant « freeze » : la vitesse commandée se met à baisser. Surveillez la vitesse mesurée. |
 | Danger immédiat, comportement anormal de la machine, doute sérieux | **E-STOP**, et l'arrêt d'urgence câblé de votre machine. L'ordre entre les deux reste à préciser par Anheart ([section 2](#2-les-huit-règles-à-retenir)). |
 | L'écran ne répond plus, bandeau rouge « NO LIVE DATA » | Regardez le bras, puis suivez la [section 9.3](#93-bandeau-rouge-no-live-data). |
 
@@ -585,8 +592,8 @@ Ce que cela change pour vous :
 3. Regardez la carte **Vitesse mesuree**. En fonctionnement normal, la
    vitesse se met à baisser dans les secondes qui suivent. Si elle ne baisse
    pas, quelle qu'en soit la raison, l'arrêt logiciel qui reste est
-   **E-STOP**. Une raison connue : tant que **Securite** affiche « freeze »,
-   STOP ne ralentit pas le bras.
+   **E-STOP**. « freeze » n'est pas une de ces raisons : STOP fait baisser la
+   vitesse aussi quand **Securite** affiche « freeze ».
 4. Attendez que **Rotation** affiche « a l'arret » et que **Mode** revienne à
    « REPOS ». Si **Mode** ne revient pas à « REPOS », lisez **Securite** et
    la carte **Variateur**, puis la
@@ -603,15 +610,19 @@ dater d'une version antérieure de l'écran.*
 - En temps normal, STOP termine la séance en douceur, sur une décélération
   progressive. C'est voulu : un freinage plus brutal ferait passer le variateur
   en défaut, et le bras ralentirait alors sans contrôle, plus longtemps.
-- **Tant que Securite affiche « freeze », STOP ne ralentit pas le bras.** La
-  console enregistre la fin de séance, affiche « ARRET », puis les phases
-  « cooldown » et « recovery », mais elle garde la vitesse. Ne vous fiez pas à
-  **Mode** : lisez **Rotation** et **Vitesse mesuree**. Des deux boutons, seul
-  **E-STOP** ralentit alors le bras.
+- **STOP agit aussi quand Securite affiche « freeze ».** La console enregistre
+  la fin de séance, affiche « ARRET », et fait baisser la vitesse commandée
+  tout de suite, sur la même décélération progressive. Si « freeze » apparaît
+  alors que le bras ralentit déjà après un STOP, le ralentissement continue.
+  Une action plus forte (« reduce », « ramp_down », « quick_stop »,
+  « go_silent ») garde la priorité
+  ([section 9.2](#92-la-console-agit-seule)). Pour savoir si le bras est
+  arrêté, ne vous fiez pas à **Mode** : lisez **Rotation** et **Vitesse
+  mesuree**.
 - Une fois STOP enregistré (**Mode** « ARRET »), la séance ne reprend pas :
-  si la cause d'un « freeze » ou d'un « reduce » disparaît ensuite, la console
-  ramène la vitesse commandée à zéro au lieu de reprendre la séance. En séance
-  programmée, la vitesse commandée peut encore monter un court instant juste
+  la console ramène la vitesse commandée à zéro, que la cause d'un « freeze »
+  ou d'un « reduce » disparaisse ensuite ou non. En séance programmée, sans
+  « freeze », la vitesse commandée peut encore monter un court instant juste
   après le clic, avant de redescendre.
 - Une séance programmée arrêtée par STOP passe encore par ses phases de fin
   (« cooldown », puis « recovery »). Le retour à « REPOS » n'est donc pas
@@ -696,11 +707,11 @@ acquitter, par son nom.
    comptée à partir de l'arrêt du bras, et sa durée est celle du programme :
    avec les deux programmes fournis par défaut à la date de ce brouillon,
    « ARRET » dure alors au moins 5 minutes après l'arrêt du bras. Cette durée
-   n'est pas une valeur validée pour vos séances. L'écran peut afficher
-   « recovery » plus longtemps, par exemple après un STOP donné sous
-   « freeze » : la phase reste affichée tant que la vitesse commandée n'est pas
-   revenue à zéro, et **Mode** peut ensuite revenir à « REPOS » sans ces
-   5 minutes.
+   n'est pas une valeur validée pour vos séances. Si la vitesse commandée met
+   plus de temps à revenir à zéro que la phase « cooldown » du programme,
+   l'écran affiche « recovery » alors que le bras tourne encore : la phase
+   reste affichée tant que la vitesse commandée n'est pas revenue à zéro, et
+   **Mode** peut ensuite revenir à « REPOS » sans ces 5 minutes.
 
    **Exception : le variateur est en défaut** (pastille « fault » dans la
    carte **Variateur**). **Mode** peut alors rester sur « ARRET » tant que le
@@ -754,7 +765,7 @@ la pastille **Securite** change.
 
 | **Securite** affiche | Ce que fait la console | Ce que vous faites |
 |---|---|---|
-| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas et ne la baisse pas, même après un STOP. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Tant que « freeze » est affiché, STOP ne ralentit pas le bras : des deux boutons, seul **E-STOP** le ralentit. Avant d'acquitter un « freeze » verrouillé, lisez l'avertissement sous ce tableau. |
+| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas, et ne la baisse pas non plus tant que personne ne demande l'arrêt, pas même pour la fin prévue d'un programme (phase « cooldown »). Un **STOP**, ou en séance manuelle une cible de 0, la fait baisser quand même. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. Avant d'acquitter un « freeze » verrouillé, lisez l'avertissement sous ce tableau. |
 | « reduce » | Elle baisse la vitesse commandée. Si elle la ramène à zéro, elle termine la séance, même si le bras tourne encore à cet instant : **Securite** passe à « ramp_down », avec la règle « session_standstill ». | Cherchez la cause. Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. |
 | « ramp_down » | Elle termine la séance : elle ramène progressivement la vitesse commandée à zéro. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | « quick_stop » | Arrêt d'urgence logiciel : elle met tout de suite la vitesse commandée à zéro, et la machine décélère. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
@@ -774,9 +785,10 @@ la pastille **Securite** change.
 > nouveau le programme ou la cible appliquée, vers le haut aussi, sans aucun
 > autre clic. En séance programmée, un bras qui n'avait pas encore fait son
 > premier mouvement peut alors le faire de lui-même. Si une fin de séance est
-> déjà enregistrée (**Mode** « ARRET », par exemple après un STOP), c'est
-> l'inverse : la console ramène alors la vitesse commandée à zéro. Ces
-> comportements ont été vérifiés en simulation seulement.
+> déjà enregistrée (**Mode** « ARRET », par exemple après un STOP),
+> l'acquittement ne relâche rien : la console ramène déjà la vitesse commandée
+> à zéro, et continue. Ces comportements ont été vérifiés en simulation
+> seulement.
 >
 > **Un bras que la console a ramené à l'arrêt ne repart pas.** Une fois que le
 > bras a tourné, dès que la vitesse commandée revient à zéro en cours de
@@ -801,7 +813,10 @@ la pastille **Securite** change.
 >   ramène la vitesse commandée à zéro comme le programme le prévoit : **Mode**
 >   reste sur « SEANCE », et cette règle ne verrouille rien ;
 > - en séance manuelle, un arrêt que vous avez demandé vous-même par une cible
->   de 0 ([section 5](#5-séance-manuelle-capsule-vide)).
+>   de 0 alors que **Securite** affichait « none »
+>   ([section 5](#5-séance-manuelle-capsule-vide)). Si **Securite** affiche
+>   autre chose quand la vitesse commandée arrive à zéro, la règle s'applique :
+>   la séance se termine et l'arrêt est verrouillé.
 >
 > Tant que **Mode** affiche « SEANCE » ou « MANUEL », personne ne s'approche du
 > bras ni de la capsule, même si **Rotation** affiche « a l'arret ». Pour la
@@ -818,7 +833,7 @@ Les règles que vous verrez le plus souvent sur la ligne « regle » :
 | Règle affichée | En clair | Ce que fait la console |
 |---|---|---|
 | « operator_estop » | Quelqu'un a cliqué E-STOP. | Arrêt d'urgence logiciel. |
-| « session_standstill » | La console a ramené elle-même la vitesse commandée à zéro en cours de séance, en dehors de la fin prévue d'un programme. | Fin de séance verrouillée. Le bras peut encore tourner quand l'alerte apparaît : lisez **Rotation**. Il ne repart pas. |
+| « session_standstill » | La console a ramené elle-même la vitesse commandée à zéro en cours de séance, en dehors de la fin prévue d'un programme. Ou, en séance manuelle, votre cible de 0 l'y a ramenée pendant qu'une alerte était affichée. | Fin de séance verrouillée. Le bras peut encore tourner quand l'alerte apparaît : lisez **Rotation**. Il ne repart pas. |
 | « attendant_absent » | Plus aucune page de la console n'est ouverte. | « freeze » après 60 secondes, fin de séance après 120 secondes. Si une page est rouverte avant, la séance reprend seule. |
 | « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | « freeze » après 10 secondes, « reduce » après 30 secondes. Fin de séance dès que la vitesse commandée est revenue à zéro, et au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, donc tant que la console n'a pas ramené la vitesse commandée à zéro, la séance reprend seule. |
 | « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». | Fin de séance en douceur. |
@@ -852,8 +867,8 @@ cas suivants :
   la date de ce brouillon, c'est le cas d'un arrêt enregistré dans les quatre
   dernières minutes et demie environ ;
 - quand un « freeze » verrouillé garde la vitesse au-delà de la durée
-  prévue : la console ramène alors la vitesse commandée à zéro, malgré ce
-  « freeze » ;
+  prévue, sans qu'un arrêt ait été demandé : la console ramène alors la
+  vitesse commandée à zéro, malgré ce « freeze » ;
 - en séance manuelle, si **Mode** affiche encore « ARRET » 30 secondes après
   l'arrêt automatique des 60 minutes, parce que le bras ralentit depuis une
   vitesse élevée.
@@ -944,9 +959,9 @@ Ce que fait la console :
 
 Quatre choses à savoir avant d'agir :
 
-- **Pendant « freeze », STOP ne ralentit pas le bras.** Il enregistre la fin
-  de séance, mais des deux boutons, seul **E-STOP** ralentit le bras tant que
-  « freeze » est affiché.
+- **STOP agit aussi pendant « freeze ».** Il enregistre la fin de séance, et
+  la vitesse commandée se met à baisser tout de suite, sans attendre
+  « reduce ».
 - **Si la fréquence cardiaque revient avant que la console ait ramené la
   vitesse commandée à zéro, la séance reprend seule**, sauf si une fin de
   séance a déjà été enregistrée. Le bras peut réaccélérer. Ne vous approchez
@@ -1199,7 +1214,7 @@ Ce qu'il est utile de noter pour le support :
 | Gc, Gr | Deux façons d'exprimer la charge, en g, calculées au point de référence de la machine. La charge est plus forte vers les pieds de la personne à bord. |
 | Passager | La personne dans la capsule. Le site web l'appelle « pratiquant ». |
 | Pastille | Petite étiquette colorée qui donne un état. |
-| STOP | L'arrêt normal, en douceur. Il ne ralentit pas le bras tant que **Securite** affiche « freeze ». |
+| STOP | L'arrêt normal, en douceur. Il agit aussi quand **Securite** affiche « freeze ». |
 | tr/min | Tours par minute. Dans ce manuel : ceux du bras. |
 | Variateur | L'appareil qui alimente et pilote le moteur. |
 | Verdict | Le nom que la console donne à une décision de sécurité. |
