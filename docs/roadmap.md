@@ -5,6 +5,8 @@
 > Mis à jour le 2 octobre 2026 (revue chef de projet : 27 tickets ajoutés ANH-127 à ANH-153, 20 sous-tickets ANH-154 à ANH-173, 3 fermés comme remplacés, 10 fils de travail, étiquettes Fil / Taille / Qui / Matériel).
 >
 > **Deux documents Linear à lire avant de prendre un ticket :** *Processus de développement* (branches `develop` et `main`, une PR par ticket, un développeur et deux reviewers agents, CI verte, commentaire de clôture) et *File d'exécution pour les agents* (l'ordre des tickets).
+>
+> **Une release** (passage de `develop` à `main`) suit [release.md](release.md) : versions `pi-X.Y.Z`, `cloud-X.Y.Z` et `web-X.Y.Z`, changelog, check-list, niveau de validation de chaque version du Pi.
 
 ## 1. Où on en est
 
@@ -14,7 +16,7 @@
 | Simulation (`simulation/`) | **Fait** : géométrie issue de la CAO, 60 scénarios, cohorte de 30 personnes de 10 à 50 ans, 199 pannes toutes réussies, visualiseur 2D, résultat instantané. Ne sait pas encore rejouer une séance réelle. |
 | Convex | **Version précédente en production.** Le nouveau schéma (`convex/training.ts`, droits de lancement, télémétrie, champs de séance auto/manuel) est **déployé sur le développement** depuis le 1er octobre 2026 et testé de bout en bout avec une console simulée ([deploiement.md](deploiement.md)). Il reste à **redéployer la production** (ANH-82). Aucun test Convex, pas d'organisations, pas d'audit, pas de version de contrat. |
 | Tableau de bord (site) | **Site Next.js déjà en production** (ancienne version). Les nouvelles pages (machine en direct, droits de lancement, séances auto) tournent en local contre le Convex de développement : toutes ouvertes dans un navigateur le 2 octobre 2026, captures réelles dans le guide. Pas encore déployées, pas de test automatisé. Défauts relevés dans ANH-122 (scindé en ANH-154 à ANH-160). |
-| Déploiement | **Simulation hébergée** en ligne (`anheart-simulation.vercel.app`). **Image Docker du Pi** prête et essayée en simulation, jamais sur un vrai Pi. Pas de CI, pas de CD, pas de release, pas d'OTA, pas de supervision. |
+| Déploiement | **Simulation hébergée** en ligne (`anheart-simulation.vercel.app`). **Image Docker du Pi** prête et essayée en simulation, jamais sur un vrai Pi. Pas de CI, pas de CD, pas d'OTA, pas de supervision. Le processus de release est écrit et outillé ([release.md](release.md)), mais aucune release n'a encore été faite. |
 | Sécurité matérielle | **Hors de cette roadmap** (projet Roadmap Hardware) : STO ponté, pas de frein, pas d'arrêt dans la capsule, pas de porte ni de capteur de harnais. La partie logicielle correspondante (lecture des entrées, règles, pré-vol) reste ici, codée en simulation d'abord (ANH-92 à ANH-97). |
 | Médical et réglementaire | **Rien de signé** : toutes les valeurs médicales sont des placeholders. |
 
@@ -81,6 +83,7 @@ Les jalons disent *quand* une chose est due. Un agent travaille par *fil* : une 
 - **Règles d'équipe** :
   - toute PR passe la CI (gates Pi, simulation, Convex, site, audit) et reçoit deux approbations ;
   - toute PR qui change un comportement met à jour `docs/` ;
+  - une release suit [release.md](release.md), et une machine ne reçoit qu'une version du Pi validée pour son état ;
   - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que les deux reviewers écrivent quels invariants ils ont vérifiés ;
   - le Pi décide : tout ce qui descend du cloud est revalidé par le Pi ;
   - une clé de sûreté change à deux, et sur place ;
@@ -96,5 +99,6 @@ Les jalons disent *quand* une chose est due. Un agent travaille par *fil* : une 
 - [`docs/README.md`](README.md) : sommaire de la documentation technique.
 - [`docs/securite.md`](securite.md) : ce que le logiciel garantit et ne garantit pas.
 - [`docs/deploiement.md`](deploiement.md) : état du déploiement Convex, Vercel et Docker.
+- [`docs/release.md`](release.md) : versions des trois composants, changelog, check-list de release, version validée par machine.
 - [`simulation/README.md`](../simulation/README.md) : framework de test, batterie, cohorte, matrice de pannes.
-- À créer par les tickets : `docs/enregistrement.md` (ANH-127), `docs/programmes.md` (ANH-137), `docs/menaces.md` (ANH-136), `docs/release.md` (ANH-134), `docs/pi-image.md` (ANH-161), `docs/exploitation.md` (ANH-150), `docs/secrets.md` (ANH-153), `docs/consentement.md` (ANH-143).
+- À créer par les tickets : `docs/enregistrement.md` (ANH-127), `docs/programmes.md` (ANH-137), `docs/menaces.md` (ANH-136), `docs/pi-image.md` (ANH-161), `docs/exploitation.md` (ANH-150), `docs/secrets.md` (ANH-153), `docs/consentement.md` (ANH-143).

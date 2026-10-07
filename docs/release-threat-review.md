@@ -1,9 +1,10 @@
 # Check-list de release : revue des menaces
 
 Ce contrôle documentaire ANH-136 est obligatoire à chaque jalon, avant chaque
-release et avant le pilote ANH-120. Il sera repris dans le processus complet
-ANH-134 ; il ne remplace ni les gates de release, ni les validations machine,
-médicales ou humaines. Une case non prouvée reste ouverte.
+release et avant le pilote ANH-120. C'est une ligne de la
+[check-list de release](release.md#5-la-check-list-de-release) ; il ne remplace
+ni les gates de release, ni les validations machine, médicales ou humaines. Une
+case non prouvée reste ouverte.
 
 - [ ] Le [modèle de menaces](menaces.md) correspond au SHA candidat et aux
   composants effectivement déployés ; les protections locales non déployées

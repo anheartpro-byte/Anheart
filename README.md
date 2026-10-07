@@ -45,6 +45,8 @@ fonctions Convex et ouvre le tableau de bord Convex.
 - Simulation, depuis la racine : `simulation/scripts/check.sh`.
 - Site, depuis la racine : `npm run lint`, `npm run build`,
   `npm run test:convex`, `npm run test:ecg` et `npm run test:site`.
+- Processus de release, depuis la racine : `npm run test:release`
+  ([docs/release.md](docs/release.md)).
 
 Lire le [contrat Python strict](.agents/skills/anheart-strict-python/SKILL.md)
 avant de modifier le client. Le [framework de test](docs/framework-de-test.md)

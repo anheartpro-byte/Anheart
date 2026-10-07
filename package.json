@@ -1,6 +1,6 @@
 {
   "name": "-t",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "private": true,
   "scripts": {
     "dev": "npm-run-all --parallel dev:frontend dev:backend",
@@ -13,7 +13,8 @@
     "test:convex": "vitest run --config vitest.convex.config.mts",
     "test:ecg": "vitest run --config vitest.ecg.config.mts",
     "test:site": "vitest run --config vitest.site.config.mts",
-    "test:dependency-security": "node --test scripts/ci/braces-depth-guard.test.mjs"
+    "test:dependency-security": "node --test scripts/ci/braces-depth-guard.test.mjs",
+    "test:release": "node --test scripts/release.test.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.10",
