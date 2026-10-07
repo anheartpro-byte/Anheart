@@ -1777,8 +1777,9 @@ dans le job navigateur d'ANH-83.
 ### Infrastructure encore dépendante d'autres tickets
 
 Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
-local ne le remplacent pas. La matrice Convex complète par organisation et le
-contrat machine restent ANH-132. L'endurance 24 h de la console entière,
+local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
+sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
+[convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
 acquisition comprise, reste ANH-164 : aucun job vide ne la simule. L'étape
 nocturne de `pi-gate` ne juge que l'enregistrement de séance (ANH-128) : une
 journée simulée de séances avec l'écrivain actif, sans le calcul de

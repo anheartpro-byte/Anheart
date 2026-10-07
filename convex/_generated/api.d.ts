@@ -14,6 +14,7 @@ import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_crypto from "../lib/crypto.js";
 import type * as machines from "../machines.js";
+import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
 import type * as sessionSummaries from "../sessionSummaries.js";
 import type * as sessions from "../sessions.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/crypto": typeof lib_crypto;
   machines: typeof machines;
+  "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
   sessionSummaries: typeof sessionSummaries;
   sessions: typeof sessions;

@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 import http from "./http";
 import { MATRIX, ROUTE_COVERAGE } from "./authorization.matrix";
+import { ORG_B_ACTORS } from "./test.setup";
 
 type Registration = {
   isPublic?: boolean;
@@ -96,6 +97,52 @@ describe("ANH-132 completeness of the authorization matrix", () => {
     const discovered = new Set(discoverRoutes());
     const stale = [...coveredRoutes].filter((r) => !discovered.has(r)).sort();
     expect(stale).toEqual([]);
+  });
+
+  // ANH-114: no public function escapes the two-organisation check. Every
+  // entry has a cell acted by a member of centre B, and wherever the function
+  // takes an identifier or lists rows, such a cell is refused, empty or
+  // filtered to centre B.
+  it("checks every public function from another organisation", () => {
+    const foreign = new Set<string>(ORG_B_ACTORS);
+    const unchecked = MATRIX.filter(
+      (entry) => !entry.cases.some((c) => foreign.has(c.actor)),
+    ).map((entry) => entry.id);
+    expect(unchecked).toEqual([]);
+  });
+
+  it("never lets another organisation succeed on a resource named by identifier", () => {
+    const leaking = MATRIX.flatMap((entry) =>
+      entry.cases
+        .filter((c) => c.scope === "foreign" && c.expect.outcome === "success")
+        .map((c) => `${entry.id} (${c.actor})`),
+    );
+    expect(leaking).toEqual([]);
+  });
+
+  // A function that takes the identifier of an organisation-scoped resource
+  // has a "foreign" cell: called from centre B with an identifier of centre A.
+  // The only entries without one are the functions listed here, which act on
+  // the caller alone or list the caller's own organisation.
+  it("calls every function that takes an identifier with one of another organisation", () => {
+    const withoutForeignCell = MATRIX.filter(
+      (entry) => !entry.cases.some((c) => c.scope === "foreign"),
+    )
+      .map((entry) => entry.id)
+      .sort();
+    expect(withoutForeignCell).toEqual([
+      "machines.createMachine", // Anheart admin only; refused to centre B by role
+      "machines.listMachines",
+      "sessions.getCompletedSessionsForUser",
+      "softwareReleases.listReleases", // Anheart-wide register, Anheart admin only
+      "softwareReleases.recordRelease", // Anheart-wide register, Anheart admin only
+      "training.listLaunchableMachines",
+      "users.createPatient", // creates in the caller's organisation
+      "users.getCurrentUser",
+      "users.getOrCreateUser",
+      "users.listGestionnaires",
+      "users.updateUserProfile",
+    ]);
   });
 
   // Proof that the gate has teeth: a throwaway public export that no matrix row

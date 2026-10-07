@@ -11,7 +11,11 @@
  */
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
+import {
+  getCurrentUserOrThrow,
+  canAccessMachine,
+  canAccessSession,
+} from "./lib/auth";
 
 /**
  * Get session details
@@ -65,11 +69,9 @@ export const getSession = query({
     const session = await ctx.db.get(args.sessionId);
     if (!session) return null;
 
-    // Check access: patient can see own, gestionnaire can see their machine's
-    const isPatient = currentUser._id === session.userId;
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !canAccessMach) {
+    // Check access, in the session's organisation: patient can see own,
+    // gestionnaire can see their machine's
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 
@@ -176,8 +178,17 @@ export const listSessions = query({
         .withIndex("by_user", (q) => q.eq("userId", args.userId!))
         .order("desc")
         .take(limit);
-    } else {
+    } else if (currentUser.role === "admin") {
       sessions = await ctx.db.query("sessions").order("desc").take(limit);
+    } else {
+      // Anyone but the Anheart admin lists inside their organisation
+      sessions = await ctx.db
+        .query("sessions")
+        .withIndex("by_organization", (q) =>
+          q.eq("organizationId", currentUser.organizationId),
+        )
+        .order("desc")
+        .take(limit);
     }
 
     // Filter by status if not already filtered by index
@@ -185,21 +196,12 @@ export const listSessions = query({
       sessions = sessions.filter((s) => s.status === args.status);
     }
 
-    // Filter by access rights
+    // Filter by access rights: the session's organisation, then its rider
+    // or whoever can access its machine
     const accessibleSessions = [];
     for (const session of sessions) {
-      if (currentUser.role === "admin") {
+      if (await canAccessSession(ctx, session, currentUser)) {
         accessibleSessions.push(session);
-      } else if (currentUser.role === "user") {
-        if (session.userId === currentUser._id) {
-          accessibleSessions.push(session);
-        }
-      } else {
-        // Gestionnaire - check if they can access the machine
-        const canAccess = await canAccessMachine(ctx, session.machineId);
-        if (canAccess) {
-          accessibleSessions.push(session);
-        }
       }
     }
 
@@ -246,7 +248,8 @@ export const getActiveSessionForMachine = query({
     v.null(),
   ),
   handler: async (ctx, args) => {
-    const hasAccess = await canAccessMachine(ctx, args.machineId);
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const hasAccess = await canAccessMachine(ctx, args.machineId, currentUser);
     if (!hasAccess) {
       return null;
     }
@@ -304,23 +307,31 @@ export const getCompletedSessionsForUser = query({
         .order("desc")
         .take(100);
     } else if (currentUser.role === "admin") {
-      // Admin sees all completed sessions
+      // Anheart admin sees all completed sessions
       sessions = await ctx.db.query("sessions").order("desc").take(100);
     } else {
-      // Gestionnaire sees sessions for machines they have access to
-      sessions = await ctx.db.query("sessions").order("desc").take(100);
-      const accessibleSessions = [];
-      for (const session of sessions) {
-        const canAccess = await canAccessMachine(ctx, session.machineId);
-        if (canAccess) {
-          accessibleSessions.push(session);
-        }
-      }
-      sessions = accessibleSessions;
+      // Organisation admin and gestionnaire see, in their organisation,
+      // sessions for machines they have access to
+      sessions = await ctx.db
+        .query("sessions")
+        .withIndex("by_organization", (q) =>
+          q.eq("organizationId", currentUser.organizationId),
+        )
+        .order("desc")
+        .take(100);
     }
 
-    // Filter to completed sessions only
-    sessions = sessions.filter((s) => s.status === "completed");
+    // Filter to the completed sessions the caller may read
+    const readable = [];
+    for (const session of sessions) {
+      if (
+        session.status === "completed" &&
+        (await canAccessSession(ctx, session, currentUser))
+      ) {
+        readable.push(session);
+      }
+    }
+    sessions = readable;
 
     // Enrich with names
     const result = [];

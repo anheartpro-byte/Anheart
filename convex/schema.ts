@@ -58,16 +58,63 @@ export const validationLevelValidator = v.union(
   v.literal("auto_validated"), // programmed sessions (M5)
   v.literal("occupied_validated"), // a person on board (M6)
 );
+/**
+ * Role of a member inside ONE organisation: the mirror of the Clerk roles
+ * `org:admin`, `org:gestionnaire` and `org:patient`. Whether an `admin` is the
+ * Anheart super-admin is never stored: `convex/lib/auth.ts` derives it from the
+ * organisation the role is held in.
+ */
+export const organizationRoleValidator = v.union(
+  v.literal("admin"),
+  v.literal("gestionnaire"),
+  v.literal("user"),
+);
+
+/**
+ * The organisation (client) a row belongs to. Optional only so that rows
+ * written before the multi-organisation migration still load: a row without
+ * it is served to no one but the Anheart admin (`convex/lib/auth.ts`).
+ */
+const organizationId = v.optional(v.id("organizations"));
 
 export default defineSchema({
+  // Organisations (clients) - mirror of Clerk Organizations. Clerk carries
+  // membership, roles and invitations; Convex stays the authority on the data.
+  organizations: defineTable({
+    // Absent only on the default organisation created by the migration, until
+    // it is linked to the Clerk organisation named by ANHEART_ORG_ID.
+    clerkOrgId: v.optional(v.string()),
+    name: v.string(),
+    slug: v.string(),
+    createdAt: v.number(),
+    settings: v.object({
+      requirePrescription: v.boolean(),
+      language: v.union(v.literal("fr"), v.literal("en")),
+    }),
+  })
+    .index("by_clerk_org_id", ["clerkOrgId"])
+    .index("by_slug", ["slug"]),
+
+  // Memberships - mirror of Clerk organisation memberships. A user may belong
+  // to several organisations; `active: false` keeps the trace of a removal.
+  memberships: defineTable({
+    userId: v.id("users"),
+    organizationId: v.id("organizations"),
+    role: organizationRoleValidator,
+    active: v.boolean(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_organization", ["organizationId"])
+    .index("by_user_and_organization", ["userId", "organizationId"]),
+
   // Users - Extended Clerk user data with roles and relationships
   users: defineTable({
     clerkId: v.string(),
-    role: v.union(
-      v.literal("admin"),
-      v.literal("gestionnaire"),
-      v.literal("user"),
-    ),
+    // Read-only mirror of the role held in the organisation below. It is
+    // never read to authorise the caller: see `convex/lib/auth.ts`.
+    role: organizationRoleValidator,
+    // Main organisation of the account.
+    organizationId,
     // Legacy field - kept for migration compatibility
     gestionnaireId: v.optional(v.id("users")),
     firstName: v.string(),
@@ -82,12 +129,14 @@ export default defineSchema({
   })
     .index("by_clerk_id", ["clerkId"])
     .index("by_gestionnaire", ["gestionnaireId"])
-    .index("by_role", ["role"]),
+    .index("by_role", ["role"])
+    .index("by_organization", ["organizationId"]),
 
   // User-Gestionnaire relationship (many-to-many for patients)
   // A user (patient) can be managed by multiple gestionnaires
   // A gestionnaire can manage multiple users (patients)
   user_gestionnaires: defineTable({
+    organizationId, // The organisation the link lives in
     userId: v.id("users"), // The patient
     gestionnaireId: v.id("users"), // The gestionnaire managing this patient
     createdAt: v.number(),
@@ -95,12 +144,14 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_gestionnaire", ["gestionnaireId"])
-    .index("by_user_and_gestionnaire", ["userId", "gestionnaireId"]),
+    .index("by_user_and_gestionnaire", ["userId", "gestionnaireId"])
+    .index("by_organization", ["organizationId"]),
 
   // Machine-Gestionnaire relationship (many-to-many)
   // A machine can be managed by multiple gestionnaires
   // A gestionnaire can manage multiple machines
   machine_gestionnaires: defineTable({
+    organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     gestionnaireId: v.id("users"),
     isOwner: v.boolean(), // The original creator/owner of the machine
@@ -109,12 +160,14 @@ export default defineSchema({
   })
     .index("by_machine", ["machineId"])
     .index("by_gestionnaire", ["gestionnaireId"])
-    .index("by_machine_and_gestionnaire", ["machineId", "gestionnaireId"]),
+    .index("by_machine_and_gestionnaire", ["machineId", "gestionnaireId"])
+    .index("by_organization", ["organizationId"]),
 
   // Launch rights: which users may launch AUTO training sessions on which
   // machine. Granted and revoked only by an admin or a gestionnaire managing
   // both the machine and the user. Manual sessions are never remote.
   machine_user_permissions: defineTable({
+    organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     userId: v.id("users"),
     grantedBy: v.id("users"),
@@ -122,7 +175,8 @@ export default defineSchema({
   })
     .index("by_machine", ["machineId"])
     .index("by_user", ["userId"])
-    .index("by_machine_and_user", ["machineId", "userId"]),
+    .index("by_machine_and_user", ["machineId", "userId"])
+    .index("by_organization", ["organizationId"]),
 
   // Released software versions (ANH-134), one row per component version,
   // written only by an admin (`softwareReleases.recordRelease`). The rule that
@@ -130,6 +184,10 @@ export default defineSchema({
   // for programmed sessions only receives a Pi version that is
   // `auto_validated` or higher, and a machine validated for a person on board
   // only an `occupied_validated` one.
+  //
+  // Anheart-wide on purpose: no `organizationId`. A released version is the
+  // same for every organisation, and only the Anheart admin reads or writes
+  // the register (`convex/softwareReleases.ts`).
   software_releases: defineTable({
     component: softwareComponentValidator,
     version: v.string(), // the tag of the version, e.g. "pi-0.1.0"
@@ -143,16 +201,21 @@ export default defineSchema({
   // Training presets, mirrored from each Pi. The Pi is the authority; this
   // table is replaced wholesale on every sync.
   machine_profiles: defineTable({
+    organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     ...machineProfileFields,
     storeRev: v.number(),
     updatedAt: v.number(),
   })
     .index("by_machine", ["machineId"])
-    .index("by_machine_and_profile", ["machineId", "profileId"]),
+    .index("by_machine_and_profile", ["machineId", "profileId"])
+    .index("by_organization", ["organizationId"]),
 
-  // Machines - Raspberry Pi devices
+  // Machines - Raspberry Pi devices. A machine belongs to exactly one
+  // organisation; everything it writes through the machine routes inherits
+  // that organisation on the server.
   machines: defineTable({
+    organizationId,
     name: v.string(),
     apiKey: v.string(), // Versioned salted digest; legacy values require replacement.
     apiKeySelector: v.optional(v.string()),
@@ -193,11 +256,13 @@ export default defineSchema({
     .index("by_api_key", ["apiKey"])
     .index("by_apiKeySelector", ["apiKeySelector"])
     .index("by_status", ["status"])
-    .index("by_is_deleted", ["isDeleted"]),
+    .index("by_is_deleted", ["isDeleted"])
+    .index("by_organization", ["organizationId"]),
 
   // Sessions - training sessions (auto, manual), plus the read-only history
   // of the retired ECG recording mode (rows without `kind`).
   sessions: defineTable({
+    organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     // The rider. Optional only for sessions started at the machine with no
     // rider chosen from the synced roster; every remote launch sets it.
@@ -234,7 +299,8 @@ export default defineSchema({
     .index("by_machine_and_local_ref", ["machineId", "localRef"])
     .index("by_machine", ["machineId"])
     .index("by_machine_and_status", ["machineId", "status"])
-    .index("by_started_by", ["startedById"]),
+    .index("by_started_by", ["startedById"])
+    .index("by_organization", ["organizationId"]),
 
   // ECG Data - HISTORY of the retired ECG recording mode. Read-only: no
   // function writes to this table any more.
@@ -292,6 +358,7 @@ export default defineSchema({
 
   // Training telemetry, ~1 Hz, from the Pi's TelemetrySnapshot.
   training_telemetry: defineTable({
+    organizationId, // Always the session's organisation
     sessionId: v.id("sessions"),
     machineId: v.id("machines"),
     t: v.number(), // unix ms, Pi clock
@@ -303,7 +370,9 @@ export default defineSchema({
     setpointMotorRpm: v.number(),
     gLoad: v.number(),
     safetyAction: v.string(),
-  }).index("by_session_and_t", ["sessionId", "t"]),
+  })
+    .index("by_session_and_t", ["sessionId", "t"])
+    .index("by_organization", ["organizationId"]),
 
   // Machine Heartbeats - For monitoring (can be cleaned up periodically)
   machine_heartbeats: defineTable({

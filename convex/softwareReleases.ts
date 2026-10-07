@@ -5,6 +5,11 @@
  * row carries how far that version has been validated; `lib/releaseValidation`
  * holds the rule the machine registry and the remote update will apply with it.
  * Only an admin reads or writes this table.
+ *
+ * The register is Anheart-wide, not per organisation (ANH-114): a version is
+ * the same for every client, so the table carries no `organizationId`, and
+ * "admin" here is the admin of the Anheart organisation. The admin of a client
+ * organisation (`org_admin`) neither reads nor writes it.
  */
 import { ConvexError, v } from "convex/values";
 import { internalQuery, mutation, query } from "./_generated/server";
