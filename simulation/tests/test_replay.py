@@ -214,7 +214,7 @@ def test_a_tick_that_raised_in_the_original_is_a_divergence_at_its_instant(tmp_p
     assert report.outcome is Outcome.DIVERGENCE
     divergence = report.divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(3.0)
+    assert divergence.t == 3.0
     assert divergence.requested == "emergency_zero"
     assert report.comparison.matches
     assert report.comparison.actual_ticks == report.recorded_ticks
@@ -402,7 +402,7 @@ def test_ex3_a_modified_frame_stops_the_replay_and_names_the_instant_and_the_dif
     assert report.outcome is Outcome.DIVERGENCE
     divergence = report.divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(3.0)
+    assert divergence.t == 3.0
     assert divergence.requested == f"speed {written[0]} motor rpm"
     assert divergence.recorded == f"speed {written[0] + 5} motor rpm at t=3.000 s"
     # Nothing after the divergence was replayed; what came before still compares equal.
@@ -420,7 +420,7 @@ def test_ex3_a_modified_frame_stops_the_replay_and_names_the_instant_and_the_dif
     assert cli.main(["--replay", str(folder), "--json"]) == cli.EXIT_DIFFERENT
     parsed = document(capsys.readouterr().out)
     assert parsed["outcome"] == "divergence"
-    assert num(obj(parsed["divergence"])["t"]) == pytest.approx(3.0)
+    assert num(obj(parsed["divergence"])["t"]) == 3.0
 
 
 def test_ex3_a_frame_missing_from_the_record_is_a_divergence(bench: Path, tmp_path: Path) -> None:
@@ -432,7 +432,7 @@ def test_ex3_a_frame_missing_from_the_record_is_a_divergence(bench: Path, tmp_pa
     )
     divergence = replayed(folder).divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(4.0)
+    assert divergence.t == 4.0
     assert divergence.requested.startswith("speed ")
     assert divergence.recorded == "read_status at t=4.000 s"
 
@@ -446,7 +446,7 @@ def test_ex3_a_record_cut_short_is_a_divergence_at_its_last_frame(
     )
     divergence = replayed(folder).divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(6.0)
+    assert divergence.t == 6.0
     assert divergence.recorded == NO_FURTHER
 
 
@@ -497,7 +497,7 @@ def test_ex3_a_drive_that_answers_otherwise_makes_the_runtime_decide_otherwise(
     assert report.outcome is Outcome.DIVERGENCE
     divergence = report.divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(3.0)
+    assert divergence.t == 3.0
     assert divergence.requested.startswith("speed ")
     assert divergence.recorded.startswith("speed ")
     assert divergence.recorded.endswith(" at t=3.000 s")
@@ -521,7 +521,7 @@ def test_ex3_a_mismatch_found_by_the_emergency_zero_is_kept_without_raising(
     )
     divergence = replayed(folder).divergence
     assert divergence is not None
-    assert divergence.t == pytest.approx(3.0)
+    assert divergence.t == 3.0
     assert divergence.requested == "emergency_zero"
 
 

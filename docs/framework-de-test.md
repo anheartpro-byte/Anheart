@@ -1987,17 +1987,33 @@ Un fichier par séance : `<nom>.tar.gz`, l'archive d'un dossier
 d'enregistrement fermé. Le dossier lui-même n'est pas versionné : une séance
 de treize minutes contient environ 4000 blocs d'ECG.
 
-`simulation/tests/test_real_records.py` rejoue **chaque archive présente dans
-le dossier**. Une archive ajoutée est donc rejouée par la gate suivante, et ne
-peut pas être fusionnée si elle ne passe pas. Pour chacune, la gate exige :
+`simulation/tests/test_real_records.py` juge **chaque archive présente dans
+le dossier** (`judge`, dans `simulation/real_records.py`). Une archive ajoutée
+est donc jugée par la gate suivante, et ne peut pas être fusionnée si elle ne
+passe pas. Pour chacune, la gate exige, dans cet ordre, et dit laquelle de ces
+exigences n'est pas tenue :
 
 1. un enregistrement fermé et intact : le reader ne signale aucun
    avertissement (tous les fichiers sont dans `checksums.sha256` et leur
-   correspondent) ;
-2. un manifeste anonyme : `subject_id` et `session_id` à `null`,
-   `organization_id` valant `synthetic` (simulation) ou `anonymized` ;
+   correspondent), et le manifeste porte une fin ;
+2. un enregistrement anonyme, sous l'une de deux formes fermées :
+
+   | Champ | Enregistrement de la simulation | Séance réelle |
+   |---|---|---|
+   | `subject_id`, `session_id` | `null` | `null` |
+   | `machine_id` | `simulation` | `anonymized` |
+   | `organization_id` | `synthetic` | `anonymized` |
+   | `operator` | `sim-operator` | `anonymized` |
+   | `actor` de chaque événement | `system`, `remote` ou `sim-operator` | `system`, `remote` ou `anonymized` |
+   | `record_id`, `local_ref` | ceux de la simulation | ceux de la bibliothèque, dérivés du nom de l'archive (`library_identity`) : les identifiants d'origine ramèneraient à la séance |
+   | nom du dossier dans l'archive | se termine par `_<local_ref>` | se termine par `_<local_ref>` |
+
 3. un rejeu conforme à ce que la bibliothèque déclare : `MATCH`, ou l'écart
    accepté décrit en 16.7.
+
+La date de la séance reste dans le manifeste et dans le nom du dossier : pour
+une séance réelle, c'est à l'outil d'anonymisation de la traiter (il n'existe
+pas encore, section 16.6).
 
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 `--export-real`, comme preuve de fonctionnement avant toute séance réelle :
@@ -2029,13 +2045,23 @@ $PY -m simulation.run --export-real <nom_du_scénario>
 La commande lance le scénario, retire `subject_id`, rejoue l'enregistrement
 produit et n'écrit l'archive que si ce rejeu est `MATCH`.
 
+L'export est reproductible : `record_id` et `local_ref` sont dérivés du nom du
+scénario, les dates viennent de l'horloge du harness, et `software_version`
+vaut toujours `unversioned`, quelle que soit la variable d'environnement.
+Exporter deux fois le même scénario donne la même archive, octet pour octet.
+Et une archive qui contient déjà exactement cet enregistrement n'est pas
+réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
+comparaison porte sur le contenu lu, pas sur les octets, parce que deux
+versions de zlib ne compriment pas pareil.
+
 **Une séance réelle.** Pas encore possible de bout en bout : il manque
 l'enregistrement par la console et le rejeu des échanges Modbus natifs
 (section 16.8). La marche à suivre, le jour où ils existent :
 
 1. récupérer l'archive `.tar.gz` de la séance ;
-2. anonymiser le manifeste (`subject_id` et `session_id` à `null`,
-   `organization_id` à `anonymized`), puis recalculer `checksums.sha256` ;
+2. l'anonymiser sous la forme « séance réelle » du tableau de 16.5 (manifeste,
+   acteurs des événements, identifiants de la bibliothèque, nom du dossier),
+   puis recalculer `checksums.sha256` ;
 3. vérifier `python -m simulation.run --replay <archive>` ;
 4. déposer l'archive dans `simulation/scenarios/real/` sous un nom qui ne
    désigne ni une personne ni un lieu, et ouvrir la PR. La gate fait le reste.
@@ -2057,22 +2083,44 @@ Quand `test_real_records.py` échoue, ou quand `--replay` sort en 1 :
 | Conclusion | Ce qu'on fait |
 |---|---|
 | c'est une régression | on corrige le code. L'enregistrement ne change pas |
-| c'est un changement voulu, et l'enregistrement vient de la simulation | on le **régénère** : `$PY -m simulation.run --export-real` (sans nom : tous les enregistrements simulés). La PR qui change le comportement contient les archives régénérées et dit, dans sa description, quel écart elle a constaté (archive, instant, nature) et quel ticket le justifie |
+| c'est un changement voulu, et l'enregistrement vient de la simulation | on le **régénère** : `$PY -m simulation.run --export-real` (sans nom : tous les enregistrements simulés ; seules les archives dont le contenu change sont réécrites). La PR qui change le comportement contient les archives régénérées et dit, dans sa description, quel écart elle a constaté (archive, instant, nature) et quel ticket le justifie. Un fichier `.accepted.json` posé à côté d'un enregistrement de la simulation est refusé par la gate |
 | c'est un changement voulu, et l'enregistrement est une séance réelle | une séance réelle ne se refait pas. On **documente l'écart accepté** : un fichier `<nom>.accepted.json` à côté de l'archive (ci-dessous) |
 | la cause n'est pas trouvée | on ouvre un ticket avec le rapport JSON. Rien n'est régénéré ni accepté |
 
-Un écart accepté est un fichier à côté de l'archive :
+Un écart accepté est un fichier à côté de l'archive, qui contient le ticket,
+la raison, et **le rapport JSON du rejeu tout entier**, tel que
+`--replay <archive> --json` l'affiche :
 
 ```json
-{"ticket": "ANH-000", "reason": "une phrase : ce qui a changé et pourquoi c'est voulu",
- "outcome": "divergence", "t": 312.4}
+{
+ "ticket": "ANH-000",
+ "reason": "une phrase : ce qui a changé et pourquoi c'est voulu",
+ "report": {
+  "comparison": {
+   "actual_ticks": 64, "counts": {}, "expected_ticks": 64, "first": null,
+   "matches": true, "shifted_transitions": [0, 0], "tolerated_rpm": [0, 0]
+  },
+  "divergence": {
+   "recorded": "speed 82 motor rpm at t=3.000 s",
+   "requested": "speed 77 motor rpm", "t": 3.0, "tick": 64
+  },
+  "integrity": [], "outcome": "divergence",
+  "record": "2f3ef78c51ab47a189de09c96fb7ed62", "recorded_ticks": 95,
+  "tolerances": {"setpoint_motor_rpm": 1, "verdict_ticks": 1}
+ }
+}
 ```
 
-`outcome` vaut `difference` ou `divergence` ; `t` est l'instant du premier
-écart, ou de la divergence, tel que le rapport le donne. La gate exige alors
-**cet** écart : même nature, même instant à la milliseconde. Un autre écart
-échoue, et le jour où l'écart disparaît la gate échoue aussi, jusqu'à ce que
-le fichier soit retiré.
+La gate exige alors **ce rapport, et aucun autre** : le même premier écart
+(nature, tic, les deux décisions), le même décompte de chaque nature d'écart,
+les mêmes tolérances consommées, la même divergence (ce qui est demandé, ce
+que l'enregistrement contient, l'instant, le nombre de tics rejoués avant).
+Un écart de plus n'importe où dans la séance, ou un de moins, et la gate
+échoue en disant quelle partie du rapport diffère (`comparison`, `divergence`,
+`outcome`...). Un écart accepté ne peut donc pas en couvrir un autre, ni avant
+ni après lui. Le jour où le rejeu redevient `MATCH`, la gate échoue aussi,
+jusqu'à ce que le fichier soit retiré. Un rapport `match` n'est pas un écart :
+le fichier est refusé.
 
 Un écart accepté affaiblit l'enregistrement : après une divergence, la suite
 de la séance n'est plus rejouée. Si elle arrive tôt, l'enregistrement ne
@@ -2102,8 +2150,8 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 * **Coût.** Rejouer la bibliothèque prend environ trois minutes sur un Mac et
   près de sept minutes de calcul en CI, réparties sur trois parts de la
   batterie (les deux longs rejeux sont dans `SLOW_SECONDS`). Ses trois
-  archives pèsent 4 Mo dans le dépôt, et chaque régénération ajoute ce poids
-  à l'historique.
+  archives pèsent 4 Mo dans le dépôt. Une régénération n'ajoute à
+  l'historique que les archives dont le contenu a changé (section 16.6).
 * **Dépendances numériques.** Le rejeu repasse l'ECG dans le DSP : une
   nouvelle version de numpy, scipy ou BioSPPy qui changerait une fréquence
   cardiaque calculée se verrait ici comme un écart. Ces dépendances ne sont
@@ -2117,4 +2165,4 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées |
-| `test_real_records.py` | la gate de la bibliothèque, les archives, l'anonymat, l'écart accepté, l'export |
+| `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences, les archives, les deux formes d'anonymat, l'écart accepté (un second écart derrière lui est refusé, de même qu'un fichier accepté à côté d'un enregistrement de la simulation), l'export reproductible |

@@ -4,38 +4,48 @@ One file per session: ``<name>.tar.gz``, the archive of one closed schema-2
 record folder (the form a record leaves the console in). A session holds
 thousands of raw ECG blocks, so the folder itself is not committed.
 
-Every archive in the directory is replayed by ``tests/test_real_records.py``,
-and must replay green: that is what makes a recorded session a non-regression
-scenario. Two things can stand next to an archive:
+Every archive in the directory is judged by ``tests/test_real_records.py``
+(:func:`judge`): closed, intact, anonymous, and replayed. That is what makes a
+recorded session a non-regression scenario. Two things can stand next to an
+archive:
 
 * nothing: the replay must match;
 * ``<name>.accepted.json``: a difference somebody examined and accepted, with
-  the ticket that says why. The replay must then show THAT difference, at that
-  instant, and no other; the day it no longer shows, the file must go.
+  the ticket that says why. It holds the replay's whole JSON report, and the
+  replay must then give back THAT report and no other: the same first
+  difference, the same counts of every kind, the same divergence. One more
+  difference anywhere, or one fewer, and the gate fails; the day the replay
+  matches again, the file must go.
 
-A record made by the simulation is never patched that way: it is exported again
-(:func:`export`). A real session cannot be recorded again, which is what the
-accepted file is for. ``docs/framework-de-test.md`` has the procedure.
+A record made by the simulation is never excused that way, and the gate refuses
+an accepted file next to one: it is exported again (:func:`export`), which
+leaves an archive alone when what it holds did not change. A real session
+cannot be recorded again, which is what the accepted file is for.
+``docs/framework-de-test.md`` has the procedure.
 """
 
 from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import tarfile
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Final, Literal
+from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
-from simulation.harness import run_scenario
-from simulation.replay import ReplayError, replay
+from simulation.harness import OPERATOR, REMOTE, SYSTEM, run_scenario
+from simulation.replay import ReplayError, integrity_line, replay, replay_recording
 from simulation.replay_report import Outcome, ReplayReport
 from simulation.scenario import SCENARIO_DIR, load_scenario, scenario_paths
-from src.record.codec import Privacy
+from src.record.codec import JSON, Privacy, mapping
+from src.record.reader import Recording, read
+from src.record.rows import JsonValue
 from src.record.schema import Manifest
 from src.result import Err, Ok, Result
 
@@ -43,11 +53,27 @@ REAL_DIR: Final[Path] = SCENARIO_DIR / "real"
 ARCHIVE_SUFFIX: Final[str] = ".tar.gz"
 ACCEPTED_SUFFIX: Final[str] = ".accepted.json"
 
-ANONYMOUS_ORGANIZATIONS: Final[frozenset[str]] = frozenset({"synthetic", "anonymized"})
-"""What ``organization_id`` may be in the library: the simulation's, or the anonymiser's."""
+SIMULATION_MACHINE: Final[str] = "simulation"
+"""``machine_id`` of a record the simulation made (``simulation.session_record``)."""
 
-INSTANT_TOLERANCE: Final[float] = 1e-3
-"""An accepted difference names its instant to the millisecond, as the record does."""
+SIMULATION_ORGANIZATION: Final[str] = "synthetic"
+
+ANONYMIZED: Final[str] = "anonymized"
+"""What stands where a real session named a machine, an organisation or an operator."""
+
+UNVERSIONED: Final[str] = "unversioned"
+"""``software_version`` of an exported record: never read from the environment."""
+
+LOCAL_REF_LENGTH: Final[int] = 16
+
+
+def library_identity(name: str) -> str:
+    """The ``record_id`` of the library record ``name``: it says the name and nothing else.
+
+    Derived, never drawn: the same scenario exported twice is the same record,
+    and the identifier of a real session cannot be the one its source knows it by.
+    """
+    return hashlib.sha256(f"anheart-library:{name}".encode()).hexdigest()[:32]
 
 
 def name_of(archive: Path) -> str:
@@ -114,14 +140,46 @@ def replay_path(path: Path) -> Result[ReplayReport, ReplayError]:
 # =========================================================================
 
 
-def identifying(manifest: Manifest) -> str | None:
-    """Which field still says who or where, or ``None`` when the manifest is anonymous."""
+def is_simulated(manifest: Manifest) -> bool:
+    """Whether the record says the simulation made it."""
+    return manifest.machine_id == SIMULATION_MACHINE
+
+
+def identifying(recording: Recording, name: str, folder: str) -> str | None:  # noqa: PLR0911  # one return per field
+    """Which field still says who or where, or ``None`` when the record is anonymous.
+
+    ``name`` is the library's name for the record, ``folder`` the name of the
+    record folder inside its archive.
+
+    Two closed forms, and nothing in between. A record of the simulation names
+    the simulation everywhere. Any other record names nobody: ``anonymized``
+    for the machine, the organisation, the operator and every event actor, and
+    the identifiers of the library (:func:`library_identity`) instead of its own.
+    Either way the folder is named after the manifest's ``local_ref``, as the
+    writer names it, and so cannot carry an identifier the manifest dropped.
+    """
+    manifest = recording.manifest
     if manifest.subject_id is not None:
         return "subject_id"
     if manifest.session_id is not None:
         return "session_id"
-    if manifest.organization_id not in ANONYMOUS_ORGANIZATIONS:
+    simulation = is_simulated(manifest)
+    if not simulation and manifest.machine_id != ANONYMIZED:
+        return "machine_id"
+    if manifest.organization_id != (SIMULATION_ORGANIZATION if simulation else ANONYMIZED):
         return "organization_id"
+    operator = OPERATOR if simulation else ANONYMIZED
+    if manifest.operator != operator:
+        return "operator"
+    identity = library_identity(name)
+    if not simulation and manifest.record_id != identity:
+        return "record_id"
+    if not simulation and manifest.local_ref != identity[:LOCAL_REF_LENGTH]:
+        return "local_ref"
+    if any(event.actor not in {SYSTEM, REMOTE, operator} for event in recording.events):
+        return "actor"
+    if not folder.endswith(f"_{manifest.local_ref}"):
+        return "folder"
     return None
 
 
@@ -131,12 +189,12 @@ class Accepted:
 
     ticket: str
     reason: str
-    outcome: Literal["difference", "divergence"]
-    t: float
-    """The instant of the first difference, or of the divergence, in seconds."""
+    report: Mapping[str, JsonValue]
+    """The replay's whole report, as ``--replay <archive> --json`` prints it."""
 
 
 _ACCEPTED: Final[TypeAdapter[Accepted]] = TypeAdapter(Accepted)
+_ACCEPTABLE: Final[frozenset[str]] = frozenset({Outcome.DIFFERENCE.value, Outcome.DIVERGENCE.value})
 
 
 def accepted_for(archive: Path) -> Result[Accepted | None, str]:
@@ -145,9 +203,13 @@ def accepted_for(archive: Path) -> Result[Accepted | None, str]:
     if not sidecar.exists():
         return Ok(None)
     try:
-        return Ok(_ACCEPTED.validate_json(sidecar.read_bytes()))
+        accepted = _ACCEPTED.validate_json(sidecar.read_bytes())
     except (OSError, ValidationError):
         return Err(f"{sidecar.name} is not an accepted-difference file")
+    outcome = accepted.report.get("outcome")
+    if not isinstance(outcome, str) or outcome not in _ACCEPTABLE:
+        return Err(f"{sidecar.name} holds a report that is neither a difference nor a divergence")
+    return Ok(accepted)
 
 
 def found_at(report: ReplayReport) -> float | None:
@@ -158,20 +220,68 @@ def found_at(report: ReplayReport) -> float | None:
     return None if first is None else first.t
 
 
-def refusal(report: ReplayReport, accepted: Accepted | None) -> str | None:
-    """Why the gate refuses this replay, or ``None`` when it is what the library says."""
+def refusal(
+    report: ReplayReport, accepted: Accepted | None, *, simulated: bool = False
+) -> str | None:
+    """Why the gate refuses this replay, or ``None`` when it is what the library says.
+
+    An accepted difference is the WHOLE report, compared whole: the first
+    difference with its kind and its tick, the count of every kind of failed
+    check, what was tolerated, the divergence with what was asked and what the
+    record holds. Comparing only "a difference, at that instant" would let a
+    second, unrelated difference ride in behind the accepted one.
+    """
     where = found_at(report)
     if accepted is None:
         if where is None:
             return None
         return f"unexplained {report.outcome.value} at t={where:.3f} s"
+    if simulated:
+        return (
+            "a record of the simulation is exported again, never excused: remove its accepted file"
+        )
     if where is None:
         return "the accepted difference no longer shows: remove its accepted file"
-    if report.outcome is not Outcome(accepted.outcome):
-        return f"a {report.outcome.value} where a {accepted.outcome} was accepted"
-    if abs(where - accepted.t) > INSTANT_TOLERANCE:
-        return f"{report.outcome.value} at t={where:.3f} s, accepted at t={accepted.t:.3f} s"
+    found = mapping(JSON.validate_json(report.to_json()))
+    parts = sorted(
+        key for key in {*found, *accepted.report} if found.get(key) != accepted.report.get(key)
+    )
+    if parts:
+        return f"the replay is not the accepted one: it differs in {', '.join(parts)}"
     return None
+
+
+def judge(archive: Path, work: Path) -> str | None:  # noqa: PLR0911  # one return per demand
+    """Why the gate refuses the library record ``archive``, or ``None`` when it stands.
+
+    ``work`` is a directory of the caller's the archive is extracted into. In
+    order: an archive of one record; closed and intact (every member listed in
+    the checksums, and matching); anonymous; then replayed, and the replay is
+    what the library says it is.
+    """
+    unpacked = unpack(archive, work)
+    if isinstance(unpacked, Err):
+        return unpacked.error
+    loaded = read(unpacked.value)
+    if isinstance(loaded, Err):
+        return f"the record cannot be read ({loaded.error.detail})"
+    recording = loaded.value
+    if recording.warnings:
+        flaw = recording.warnings[0]
+        return f"the record is not closed and intact: {integrity_line(flaw.file, flaw.code)}"
+    if recording.manifest.ended_at is None:
+        return "the record is not closed: its manifest has no end"
+    names = identifying(recording, name_of(archive), unpacked.value.name)
+    if names is not None:
+        return f"the record is not anonymous: {names}"
+    accepted = accepted_for(archive)
+    if isinstance(accepted, Err):
+        return accepted.error
+    replayed = asyncio.run(replay_recording(recording))
+    if isinstance(replayed, Err):
+        return f"the record is not replayable: {replayed.error.detail}"
+    refused = refusal(replayed.value, accepted.value, simulated=is_simulated(recording.manifest))
+    return None if refused is None else f"{refused}\n{replayed.value.to_text()}"
 
 
 # =========================================================================
@@ -185,26 +295,62 @@ def simulated(directory: Path = REAL_DIR, scenarios: Path = SCENARIO_DIR) -> tup
     return tuple(name for name in map(name_of, archives(directory)) if name in battery)
 
 
+@dataclass(frozen=True, slots=True)
+class Exported:
+    """Where an exported record stands, and whether its archive had to be written."""
+
+    archive: Path
+    rewritten: bool
+
+
+def _same(record: Path, archive: Path, work: Path) -> bool:
+    """Whether ``archive`` already holds the record folder ``record``, content for content.
+
+    Read, not compared byte for byte: two zlib builds compress the same blocks
+    into different bytes, and that is not a change worth a commit.
+    """
+    if not archive.exists():
+        return False
+    unpacked = unpack(archive, work)
+    if isinstance(unpacked, Err):
+        return False
+    held, made = read(unpacked.value), read(record)
+    return isinstance(held, Ok) and isinstance(made, Ok) and held.value == made.value
+
+
 def export(
     name: str, directory: Path = REAL_DIR, scenarios: Path = SCENARIO_DIR
-) -> Result[Path, str]:
+) -> Result[Exported, str]:
     """Run the battery scenario ``name``, and put its record in the library.
 
-    The record is anonymous (no ``subject_id``) and is replayed before it is
-    kept: an export that does not replay green is not written.
+    The record is anonymous (no ``subject_id``), and it is the same record every
+    time: its identifiers come from the name (:func:`library_identity`), its
+    dates from the harness clock, its version from nowhere. It is replayed
+    before it is kept: an export that does not replay green is not written.
+    And an archive that already holds exactly this record is left alone, so
+    that remaking the library costs the repository only what really changed.
     """
     loaded = load_scenario(scenarios / f"{name}.json")
     if isinstance(loaded, Err):
         return Err(f"{name} is not a scenario of the battery")
     trace = asyncio.run(run_scenario(loaded.value)).trace
-    anonymous = replace(trace, manifest=replace(trace.manifest, subject_id=None))
+    identity = library_identity(name)
+    manifest = replace(
+        trace.manifest,
+        subject_id=None,
+        record_id=identity,
+        local_ref=identity[:LOCAL_REF_LENGTH],
+        software_version=UNVERSIONED,
+    )
+    archive = directory / f"{name}{ARCHIVE_SUFFIX}"
     with TemporaryDirectory(prefix="anheart-export-") as work:
-        record = anonymous.write_record(Path(work), Privacy())
+        record = replace(trace, manifest=manifest).write_record(Path(work) / "made", Privacy())
         report = replay(record)
         if isinstance(report, Err):
             return Err(f"{name} is not replayable: {report.error.detail}")
         if not report.value.matches:
             return Err(f"the record of {name} does not replay green:\n{report.value.to_text()}")
-        archive = directory / f"{name}{ARCHIVE_SUFFIX}"
+        if _same(record, archive, Path(work) / "held"):
+            return Ok(Exported(archive, rewritten=False))
         pack(record, archive)
-    return Ok(archive)
+    return Ok(Exported(archive, rewritten=True))

@@ -8,6 +8,7 @@ copy under its own ``tmp_path`` and edits that.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import shutil
@@ -15,6 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from simulation.real_records import ANONYMIZED, LOCAL_REF_LENGTH, library_identity
 from simulation.scenario import SCENARIO_DIR, Action, EcgMode, Scenario
 from simulation.tests.conftest import document, load, run
 from src.record.codec import Privacy
@@ -92,3 +94,55 @@ def tick_at(header: Cells, rows: list[Cells], t: float) -> Cells:
     column = header.index("t")
     (found,) = [row for row in rows if abs(float(row[column]) - t) < 1e-9]
     return found
+
+
+def reseal(folder: Path) -> None:
+    """Write ``checksums.sha256`` again, as the writer does when it closes a record.
+
+    For a test that stands for "the same session, as another runtime would
+    have recorded it": the record is whole and closed, only its content differs.
+    """
+    index = folder / "checksums.sha256"
+    index.unlink(missing_ok=True)
+    members = sorted(path for path in folder.rglob("*") if path.is_file())
+    index.write_text(
+        "".join(
+            f"{hashlib.sha256(member.read_bytes()).hexdigest()}  "
+            f"{member.relative_to(folder).as_posix()}\n"
+            for member in members
+        ),
+        encoding="utf-8",
+    )
+
+
+def as_real(folder: Path, name: str) -> Path:
+    """A simulated record folder, rewritten as the anonymous form of a real session ``name``.
+
+    Nothing in the library is a real session yet. This is what one looks like
+    once anonymised: nobody named in the manifest or the events, the library's
+    identifiers, the folder renamed after them, the checksums written again.
+    """
+    identity = library_identity(name)
+    local_ref = identity[:LOCAL_REF_LENGTH]
+
+    def anonymise(manifest: Line) -> None:
+        manifest.update(
+            machine_id=ANONYMIZED,
+            organization_id=ANONYMIZED,
+            operator=ANONYMIZED,
+            subject_id=None,
+            record_id=identity,
+            local_ref=local_ref,
+        )
+
+    def rename(lines: list[Line]) -> list[Line]:
+        for line in lines:
+            if line["actor"] not in {"system", "remote"}:
+                line["actor"] = ANONYMIZED
+        return lines
+
+    edit_manifest(folder, anonymise)
+    edit_lines(folder, "events.jsonl", rename)
+    reseal(folder)
+    stamp = folder.name.partition("_")[0]
+    return folder.rename(folder.with_name(f"{stamp}_{local_ref}"))

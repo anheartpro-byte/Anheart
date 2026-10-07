@@ -503,18 +503,23 @@ async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> R
     recorded = NO_FURTHER if pending is None else located(pending)
     mismatch = tape.mismatch
     divergence: Divergence | None = None
+    # To the millisecond, like every instant of a record: the report is what an
+    # accepted difference pins, and float dust has no place in it.
+    now = Seconds(round(session.now(), 3))
     if raised is not None:
         divergence = Divergence(
-            session.now(), len(actual), f"nothing: the replayed code raised {raised}", recorded
+            now, len(actual), f"nothing: the replayed code raised {raised}", recorded
         )
     elif mismatch is not None:
-        divergence = Divergence(mismatch.t, len(actual), mismatch.requested, mismatch.recorded)
+        divergence = Divergence(
+            Seconds(round(mismatch.t, 3)), len(actual), mismatch.requested, mismatch.recorded
+        )
     elif pending is not None:
-        divergence = Divergence(session.now(), len(actual), NO_FURTHER, recorded)
+        divergence = Divergence(now, len(actual), NO_FURTHER, recorded)
     return ReplayedSession(tuple(actual), divergence)
 
 
-def _warning(file: str, code: str) -> str:
+def integrity_line(file: str, code: str) -> str:
     """One reader warning. The member name comes from the record, so it is vetted."""
     return f"{file if _MEMBER.fullmatch(file) is not None else '<member>'}: {code}"
 
@@ -540,7 +545,7 @@ async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayE
             recorded_ticks=len(expected),
             comparison=compare_decisions(expected[: len(replayed.decisions)], replayed.decisions),
             divergence=replayed.divergence,
-            integrity=tuple(_warning(w.file, w.code) for w in recording.warnings),
+            integrity=tuple(integrity_line(w.file, w.code) for w in recording.warnings),
         )
     )
 

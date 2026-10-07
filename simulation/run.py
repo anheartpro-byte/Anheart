@@ -18,7 +18,8 @@ it decides with what was recorded (:mod:`simulation.replay`): exit code 0 when
 they match, 1 on a difference or a divergence, 2 when the record cannot be
 replayed at all. ``--export-real [NAME ...]`` runs battery scenarios and puts
 their records in the library the gate replays (:mod:`simulation.real_records`);
-with no name it remakes every simulated record the library already holds.
+with no name it remakes every simulated record the library already holds. An
+archive that already holds exactly the record is left alone (``unchanged``).
 """
 
 from __future__ import annotations
@@ -140,7 +141,8 @@ def export_command(names: Sequence[str], library: Path) -> int:
             print(f"{name}: {exported.error}", file=sys.stderr)
             failed = True
         else:
-            print(f"{name}: {exported.value}")
+            state = "written" if exported.value.rewritten else "unchanged"
+            print(f"{name}: {state} {exported.value.archive}")
     return 1 if failed else 0
 
 
