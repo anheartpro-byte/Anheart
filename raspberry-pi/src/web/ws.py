@@ -77,6 +77,31 @@ _BAD_TOKEN: Final[str] = "a valid token is required"  # noqa: S105  # a message,
 
 _FELL_BEHIND: Final[str] = "this screen fell behind and was disconnected; reload to resync"
 
+LOGGED_HEADER_LIMIT: Final[int] = 120
+"""Most characters of a refused header value that go into the log.
+
+An ``Origin`` is a scheme, a host and a port. The value logged is whatever the
+peer sent, read before any check has passed, so its length is bounded here
+rather than left to the server's own limit on a header.
+"""
+
+
+def logged_header(value: str | None) -> str | None:
+    """A header value as it is written to the log: on one line, and bounded.
+
+    The value comes from the peer and has passed no check yet. Line breaks are
+    replaced first, so that it stays on the line of the message that quotes it
+    whatever the format directive is; what is left is cut to
+    :data:`LOGGED_HEADER_LIMIT` characters, and the cut is stated with the
+    length received. ``None`` (the header absent) is returned as it is.
+    """
+    if value is None:
+        return None
+    single = value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    if len(single) <= LOGGED_HEADER_LIMIT:
+        return single
+    return f"{single[:LOGGED_HEADER_LIMIT]}... ({len(single)} characters received)"
+
 
 def register_socket(app: FastAPI, *, services: Services, config: WebConfig) -> None:
     """Register the telemetry socket on ``app``."""
@@ -95,7 +120,7 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
     """
     origin = websocket.headers.get("origin")
     if not config.origin_allowed(origin):
-        _logger.warning("refused telemetry socket from origin %r", origin)
+        _logger.warning("refused telemetry socket from origin %r", logged_header(origin))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_BAD_ORIGIN)
         return
     if not config.token_matches(websocket.query_params.get(TOKEN_QUERY_PARAM)):
