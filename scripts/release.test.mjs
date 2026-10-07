@@ -570,6 +570,7 @@ for (const [name, checks, message] of [
   ["a cancelled gate", ci({ "pi-gate": "completed\tcancelled" }), /develop n'est pas vert[\s\S]*pi-gate : completed cancelled/],
   ["a gate still running", ci({ "simulation-gate": "in_progress\t" }), /develop n'est pas vert[\s\S]*simulation-gate : in_progress/],
   ["a failed check that is not a gate", ci({}, "Vercel\tcompleted\tfailure\n"), /develop n'est pas vert[\s\S]*Vercel : completed failure/],
+  ["a gate that failed in one run though it passed in another", ci({}, "pi-gate\tcompleted\tfailure\n"), /develop n'est pas vert[\s\S]*pi-gate : completed failure/],
   ["no check at all", "", /aucune vérification CI pour develop/],
   // Seen on the real repository: before the CI starts, a pushed commit carries
   // one successful third-party check and none of the gates.
@@ -584,6 +585,31 @@ for (const [name, checks, message] of [
     assert.equal(fx.state(), before);
   });
 }
+
+test("EX-2 a gate skipped by one run of a commit does not hide that another run passed it", (t) => {
+  // On a pull request the CI may skip a gate that the changed files cannot
+  // affect; on a push every gate runs. The head of develop carries both runs
+  // while the release PR is open on it.
+  const fx = fixture(t);
+  const both = ci({}, `${VERCEL}pi-gate\tcompleted\tskipped\nsimulation-gate\tcompleted\tskipped\n`);
+  const result = fx.run(["prepare", ...ALL, "--dry-run"], { checks: both });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^CI : verte \(9 vérifications terminées, toutes les gates réussies\)$/m);
+});
+
+test("EX-2 the gates release.sh requires are the required checks of the CI workflow", () => {
+  const required = /^REQUIRED_CHECKS="([^"]+)"$/m.exec(real("scripts/release.sh"));
+  assert.ok(required, "REQUIRED_CHECKS not found in scripts/release.sh");
+  const names = required[1].split(" ");
+  assert.deepEqual(names, GATES);
+  const held = /^const REQUIRED = (\[[^\]]+\]);$/m.exec(real("scripts/ci/ci-workflow.test.mjs"));
+  assert.ok(held, "REQUIRED not found in scripts/ci/ci-workflow.test.mjs");
+  assert.deepEqual(names, JSON.parse(held[1]));
+  const workflow = real(".github/workflows/ci.yml");
+  for (const name of names) {
+    assert.match(workflow, new RegExp(`^ {2}${name}:[ \\t]*$`, "m"), `${name} is not a job of ci.yml`);
+  }
+});
 
 test("EX-2 prepare refuses when the CI state cannot be read", (t) => {
   const fx = fixture(t);

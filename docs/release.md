@@ -211,15 +211,26 @@ lignes de la section. Quoi faire quand il refuse est dit à la
 
 « Vert » veut dire deux choses à la fois :
 
+- aucun *check run* du commit n'a échoué, n'a été annulé ou n'est encore en
+  cours ;
 - chacune des six gates de la CI (`pi-gate`, `simulation-gate`, `convex-tests`,
-  `web`, `audit`, `docs`) est présente sur le commit, terminée et réussie ;
-- aucun autre *check run* du commit n'a échoué, n'a été annulé ou n'est encore
-  en cours.
+  `web`, `audit`, `docs`) a, sur ce commit, au moins une exécution terminée et
+  réussie.
 
 Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si un check
 run tiers y a réussi (les commentaires d'aperçu de Vercel, par exemple,
-répondent avant que les gates ne démarrent). Une gate ignorée (`skipped`) ne
-compte pas comme réussie.
+répondent avant que les gates ne démarrent).
+
+Une gate ignorée (`skipped`) ne compte ni pour ni contre. La CI n'ignore une
+gate que sur une PR dont les fichiers changés ne peuvent pas la concerner ; sur
+un push vers `develop` ou `main`, toutes tournent
+([framework-de-test.md](framework-de-test.md)). Le script lit le commit de tête
+de ces deux branches, où le push a donc tout lancé. Deux cas en découlent :
+
+- la PR de release est ouverte sur ce même commit et son exécution a ignoré une
+  gate : l'exécution du push, réussie, suffit, et le commit est vert ;
+- une gate n'a sur le commit que des exécutions ignorées : le commit n'est pas
+  vert, et le script la nomme parmi les gates absentes ou non réussies.
 
 Le script ne lit que les check runs. Il **ne lit pas les statuts de commit** :
 les deux déploiements Vercel (celui du site et celui de la simulation) sont des
@@ -227,10 +238,12 @@ statuts, et un déploiement en échec ne bloque donc pas le script. Le
 responsable de release regarde les statuts dans la PR de release avant de
 fusionner.
 
-La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Si un job
-de `.github/workflows/ci.yml` est renommé, cette liste doit suivre dans la même
-PR : sinon le script refuse toute release, ce qui est le sens voulu de la
-panne.
+La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Ce sont
+les six noms que la protection de branche exige et que
+`scripts/ci/ci-workflow.test.mjs` tient ; `npm run test:release` échoue si la
+liste du script s'en écarte. Si un job de `.github/workflows/ci.yml` est
+renommé, cette liste doit suivre dans la même PR : sinon le script refuse toute
+release, ce qui est le sens voulu de la panne.
 
 `pr` et `tag` ne prennent aucune version en argument : ils lisent celles des
 fichiers de la branche, et publient celles qui n'ont pas encore de tag.
@@ -370,7 +383,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Envoyer la version dans le heartbeat | ANH-133 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
-| Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 en cours) |
+| Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
 | Déployer Convex et le site à la fusion dans `main` | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |

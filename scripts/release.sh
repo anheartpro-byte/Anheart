@@ -155,11 +155,17 @@ is_level() {
   return 1
 }
 
-# Refuse si le commit n'est pas vert : chaque gate de REQUIRED_CHECKS doit être
-# présente, terminée et réussie, et aucun autre check run ne doit avoir échoué
-# ni être en cours. Un check run tiers réussi (les commentaires d'aperçu de
-# Vercel, par exemple) ne remplace jamais une gate : un commit sur lequel la CI
-# n'a pas tourné n'est pas vert.
+# Refuse si le commit n'est pas vert : aucun de ses check runs ne doit avoir
+# échoué ni être en cours, et chaque gate de REQUIRED_CHECKS doit y avoir au
+# moins une exécution terminée et réussie. Un check run tiers réussi (les
+# commentaires d'aperçu de Vercel, par exemple) ne remplace jamais une gate :
+# un commit sur lequel la CI n'a pas tourné n'est pas vert.
+#
+# Une gate ignorée (skipped) ne compte ni pour ni contre. La CI n'en ignore que
+# sur une PR, jamais sur un push vers develop ou main : la tête de ces branches
+# porte donc une exécution réussie de chaque gate, même si la PR de release,
+# ouverte sur ce même commit, en a ignoré une. Une gate qui n'a que des
+# exécutions ignorées est refusée.
 #
 # Seuls les check runs du commit sont lus. Les statuts de commit (les
 # déploiements Vercel, par exemple) ne le sont pas : le responsable de release
