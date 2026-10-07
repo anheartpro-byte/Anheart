@@ -1003,7 +1003,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle et ceux du workflow |
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow et ceux du workflow CodeQL |
 | `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all`, rejeu nocturne des scénarios réels ; artefact `simulation-report` |
@@ -1012,6 +1012,10 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
+
+Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
+une gate : voir
+[Analyse statique externe](#analyse-statique-externe--codeql-anh-196).
 
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
@@ -1495,6 +1499,113 @@ Le journal du job `changes` donne la raison, par exemple `path rule: python
 gates run: raspberry-pi/src/units.py (python)` ou `path rule: python gates
 skipped: none of the 3 changed files can affect them`.
 
+### Analyse statique externe : CodeQL (ANH-196)
+
+Un workflow séparé de `ci.yml`, `.github/workflows/codeql.yml`, fait analyser
+le dépôt par CodeQL, l'outil d'analyse de sécurité de GitHub, en plus des
+gates. **Ce n'est pas une gate** : aucun de ses jobs n'est une vérification
+obligatoire, et il ne remplace ni ruff, ni basedpyright, ni mypy, ni ESLint, ni
+l'audit des dépendances.
+
+| | CodeQL |
+|---|---|
+| Ce qui est cherché | des failles de sécurité, avec la suite de requêtes par défaut de GitHub |
+| Ce qui est lu | les sources Python et JavaScript/TypeScript, tests compris, et les workflows GitHub Actions du dépôt |
+| Périmètre réglé dans | `.github/codeql/codeql-config.yml` |
+| Quand | PR vers `develop` ou `main`, push sur ces branches, chaque lundi à 04:37 UTC, à la demande |
+| Jobs | `codeql (python)`, `codeql (javascript-typescript)` et `codeql (actions)` |
+| Où lire les résultats | onglet **Security → Code scanning** du dépôt |
+| Compte ou secret | aucun |
+
+**SonarQube Cloud : envisagé, non retenu.** Le ticket prévoyait aussi une
+analyse par SonarQube Cloud. Le chef de projet a décidé le 7 octobre 2026 de
+ne garder que CodeQL : avec l'offre gratuite pour dépôt public, le tableau de
+bord de SonarQube Cloud est public, constats de sécurité compris, alors que les
+résultats de CodeQL ne sont lisibles que par les personnes qui ont accès au
+dépôt. Le dépôt ne contient donc ni workflow, ni configuration, ni secret pour
+SonarQube Cloud.
+
+**Périmètre.** CodeQL laisse de côté ce qui est généré, installé, ou n'est pas
+du code : `convex/_generated`, `node_modules`, les environnements virtuels
+(`.venv`, `.venv-*`, `venv`), `.next`, `out`, `build`, `simulation/out` et
+`CAO/`. Tout le reste est analysé : un nouveau dossier l'est sans avoir à être
+déclaré. Le workflow n'installe aucune dépendance et n'exécute aucun code du
+dépôt.
+
+**Jobs et permissions.** Un job par langage, sans compilation
+(`build-mode: none`). Seul ce job reçoit la permission
+`security-events: write`, qui sert à publier les résultats ; aucun autre job du
+dépôt n'a de permission d'écriture, et le workflow ne lit aucun secret. Les
+actions sont épinglées par commit complet, celle de checkout sur le même commit
+que dans `ci.yml`. Durées mesurées sur la PR #35 (run 37594242883) :
+1 min 10 s pour `codeql (javascript-typescript)`, 1 min 49 s pour
+`codeql (python)`.
+
+**Lire les résultats.** Sur une PR, CodeQL ne rapporte que ce qui se trouve
+dans les lignes que la PR change. GitHub ajoute alors sa propre vérification,
+nommée « CodeQL », qui le résume (« No new alerts in code changed by this pull
+request » sur la PR #35). Elle n'est pas obligatoire non plus ; d'après la
+documentation de GitHub, elle échoue quand la PR introduit une alerte de
+sévérité élevée, seuil réglable dans les réglages du dépôt. L'état de tout le
+dépôt vient des analyses complètes : chaque push sur `develop` ou `main`, le
+passage hebdomadaire et les lancements manuels. Les résultats se lisent dans
+**Security → Code scanning**, en choisissant la branche (`develop`) ou la PR
+dans les filtres : la vue par défaut montre la branche par défaut du dépôt,
+`main`, qui n'est analysée qu'une fois le workflow fusionné dans `main`. Il en
+va de même du passage hebdomadaire : comme le déclenchement nocturne de
+`ci.yml`, GitHub ne le lance que depuis la branche par défaut.
+
+**Ce que cette analyse bloque.** Rien dans une PR : les jobs `codeql (...)` ne
+sont pas dans la protection de branche de `develop`. Les rendre obligatoires
+est un réglage du dépôt, décidé par le chef de projet. Un job CodeQL n'échoue
+pas parce qu'il trouve quelque chose : il n'échoue que si l'analyse elle-même
+échoue. Le workflow n'a aucun filtre `paths` : s'il devient obligatoire un
+jour, un workflow non déclenché laisserait ses vérifications en attente. Aucun
+de ses jobs ne peut porter le nom d'un job de `ci.yml`.
+
+Une exception à connaître avant une release. `scripts/release.sh`
+([release.md](release.md#4-ce-que-fait-le-script)) ne lit pas la protection de
+branche : sa fonction `require_green` lit **toutes** les vérifications (check
+runs) du commit, obligatoires ou non, et refuse si l'une n'est pas terminée ou
+s'est terminée autrement que réussie, ignorée ou neutre. `prepare` et `pr`
+l'appliquent au commit de tête de `develop`, `tag` au commit de tête de `main`.
+Les jobs `codeql (...)` sont posés sur ces deux commits par les pushs, et sur
+la tête de `main` par le passage hebdomadaire. Conséquences :
+
+* un job `codeql (...)` en échec, annulé ou encore en cours sur la tête de
+  `develop` fait refuser `prepare` et `pr` ; sur la tête de `main`, il fait
+  refuser `tag`. Attendre la fin de l'analyse, ou relancer le job s'il a échoué
+  sur une panne ;
+* un job CodeQL qui a trouvé quelque chose reste réussi : il ne bloque pas le
+  script ;
+* tant qu'une PR de release est ouverte, sa tête est la tête de `develop` : la
+  vérification « CodeQL » que GitHub y pose est un check run comme un autre, et
+  le script la lit aussi. Rouge, elle fait refuser `prepare` et `pr`.
+
+**Tests.** `scripts/ci/analysis-workflows.test.mjs` est lancé par le job
+`changes` de `ci.yml` à chaque exécution, avec les deux autres fichiers de test
+de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
+pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
+complet (celle de checkout sur le même commit que `ci.yml`), une seule
+permission d'écriture dans tous les workflows du dépôt, déclencheurs, langages,
+noms des jobs, et le périmètre confronté aux fichiers suivis par Git (seuls le
+code Convex généré et le fichier de CAO sont laissés de côté).
+
+**Réglage du dépôt à ne pas toucher.** Ne pas activer le « Default setup » de
+CodeQL (**Settings → Code security**) : GitHub refuserait alors les résultats
+envoyés par ce workflow. C'est la seule précaution manuelle ; CodeQL ne demande
+ni compte, ni application, ni secret.
+
+**Limites.**
+
+* Le workflow ne se déclenche que pour les PR vers `develop` ou `main`, comme
+  `ci.yml` : une PR empilée sur une autre branche n'est analysée qu'une fois
+  redirigée vers `develop`.
+* Tant que le workflow n'est pas sur `main`, le passage hebdomadaire ne tourne
+  pas et la vue par défaut de **Code scanning** reste vide.
+* Le tri et la correction de ce que CodeQL remonte ne font pas partie de ce
+  ticket.
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
@@ -1529,6 +1640,13 @@ de chemins a jugé qu'aucun fichier de la PR ne pouvait l'affecter : le job
 `changes` a alors réussi et en donne la raison. Si `changes` est lui-même
 annulé ou absent, le run a été annulé dans ses premières secondes et rien n'a
 été jugé : relancer le run.
+
+Un job `codeql (...)` rouge signale une panne de l'analyse (service, réseau,
+configuration), pas un constat de l'outil : lire le journal du job. Les
+constats se lisent dans **Security → Code scanning** et ne font pas rougir ce
+job ; dans une PR, c'est la vérification « CodeQL » posée par GitHub qui les
+signale (voir
+[Analyse statique externe](#analyse-statique-externe--codeql-anh-196)).
 
 ### Tests unitaires du site
 
