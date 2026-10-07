@@ -2981,13 +2981,25 @@ class TrainingRuntime:
         The destination is zero and nothing else, so nothing here can raise
         the setpoint, and neither the controller nor the heart rate is
         consulted. A manual descent is step for step the one
-        :meth:`_follow_manual` walks with no verdict. A programme's ordinary
-        cooldown walks towards the controller's demand, which itself goes to
-        zero at ``RuntimeLimits.slew``; with the shipped limits that demand
-        runs ahead and the motion limits are what binds, so the two descents
-        are the same, and this one is never faster than the motion limits.
-        It is therefore also the walk of that cooldown itself when the
-        timeline reaches it, or goes on with it, under a FREEZE (ANH-189).
+        :meth:`_follow_manual` walks with no verdict.
+
+        A programme's ordinary descent (its cooldown, or a stop with no
+        verdict) is bounded twice, and this one only once. It walks at the
+        motion limits towards the controller's demand, and that demand comes
+        down on the control law's own ramp: at once by ``slew x`` the age of
+        its last decision (a head start of 3 to 78 rpm with the shipped
+        15 rpm/s and 5 s period), then by ``floor(slew x dt)`` whole rpm a
+        tick, which at 5 Hz is 2 or 3 rpm according to the tick's measured
+        length, against 2.48 for the shipped motion limits. While the head
+        start lasts the motion limits are what binds and the two descents are
+        the same, tick for tick. Once it is spent the ordinary one goes at
+        the control law's pace. So this walk is never faster than the motion
+        limits and never behind an ordinary descent, and it can be AHEAD of
+        one, with the shipped limits too: by up to 2.6 s from 193 rpm on the
+        shipped programme, in 9 of the 26 places the control period can fall
+        (measured on the software rig, never on the machine). It is also the
+        walk a programme's own cooldown takes when the timeline reaches it,
+        or goes on with it, under a FREEZE (ANH-189).
 
         The time base. The hold arm leaves the profiler none, and a REDUCE on
         a programme walks its own ramp and leaves a stale one. Followed
@@ -2997,7 +3009,7 @@ class TrainingRuntime:
         one tick's worth, which is what a setpoint parked at its target gets
         when it is given a new one with no verdict standing. A FREEZE that
         appears during a descent already begun finds the profiler running and
-        changes nothing: the descent does not even pause.
+        keeps its time base: the descent does not even pause.
 
         Every stronger verdict still decides first, in its own arm: this one
         is reached under FREEZE only. What the zero means once it is reached

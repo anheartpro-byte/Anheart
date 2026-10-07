@@ -235,7 +235,9 @@ même verrou (lecture prudente, voir
 [securite.md](securite.md#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)).
 Le retour au calme d'un programme n'est pas dans ce cas non plus, qu'il se
 fasse sous un `FREEZE` ou sans verdict : la séance se termine sur
-`programme_complete`, à la durée prévue
+`programme_complete`, à la durée prévue, sauf si la cause d'un `FREEZE` non
+verrouillé dure jusqu'au niveau suivant de sa règle, dont le RAMP_DOWN
+verrouillé termine alors la séance comme avant
 ([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)).
 
 ---
@@ -563,7 +565,10 @@ redémarrer la console.
   vitesse au-delà de la fin du programme : la consigne suit la descente du
   programme sous FREEZE, la séance se termine à la durée prévue et la règle
   n'a pas à intervenir
-  ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Elle se déclenche toujours quand la fin de la séance
+  ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Elle reste la
+  seconde barrière derrière cette garde : un test retire la garde et vérifie
+  qu'elle ramène encore à 0, dès l'échéance, un bras tenu en vitesse
+  (RAMP_DOWN l'emporte sur FREEZE). Elle se déclenche toujours quand la fin de la séance
   elle-même dépasse l'échéance, bras déjà arrêté ou en descente : toute fin de
   séance ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt)
   rouvre une `RECOVERY` complète (avec le profil standard, une fin ouverte
@@ -775,7 +780,8 @@ vitesse tant que le FREEZE durait. Maintenant :
   au profileur, et un REDUCE de programme en laisse une périmée. La descente
   part donc du tic précédent : un tic de mouvement, jamais la durée du maintien.
 * **Un FREEZE qui apparaît pendant une descente déjà commencée ne la fige pas** :
-  mêmes consignes, tic pour tic, qu'une descente sans FREEZE.
+  elle continue aux limites de mouvement, jamais au-dessus des consignes d'une
+  descente sans FREEZE au même tic (les mêmes aux instants vérifiés).
 * **Sans arrêt demandé et avant COOLDOWN, rien ne change** : le FREEZE tient
   la consigne, une cible manuelle plus basse mais non nulle comprise, et la
   reprise se fait comme avant. REDUCE, RAMP_DOWN, QUICK_STOP et GO_SILENT
@@ -791,15 +797,34 @@ retour au calme d'un programme sur sa propre chronologie (phase COOLDOWN sans
 qu'aucune fin n'ait été demandée) n'est plus tenu par un FREEZE. Dès le
 premier tic de COOLDOWN, la consigne prend la descente de
 `_stop_under_freeze` : les limites de mouvement, rien qui puisse monter, le
-dernier pas qui attend comme d'habitude. Avec les limites livrées, ce sont les
-consignes du retour au calme sans verdict, tic pour tic. Un FREEZE pris
-pendant la montée descend depuis la vitesse qu'il tenait, sans jamais
-rejoindre le palier. La descente continue en RECOVERY si elle dure plus que
-COOLDOWN. La séance se termine alors comme un programme mené à son terme :
-aucun `session_standstill`, aucun `session_overrun`, fin `programme_complete`
-à la durée prévue ; un FREEZE verrouillé reste à acquitter avant le départ
-suivant. Une séance manuelle n'a pas de phase de ce genre : un FREEZE y tient
-la consigne jusqu'à un arrêt demandé. Détails et vérifications dans
+dernier pas qui attend comme d'habitude. Un FREEZE pris pendant la montée
+descend depuis la vitesse qu'il tenait, sans jamais rejoindre le palier. La
+descente continue en RECOVERY si elle dure plus que COOLDOWN.
+
+Cette descente n'est jamais plus rapide que les limites de mouvement, et
+jamais en retard sur un retour au calme sans verdict : au même tic, sa
+consigne est au plus la sienne. Elle peut être **en avance** sur lui, avec les
+limites livrées aussi. Un retour au calme sans verdict (comme un STOP sans
+verdict sur un programme) a une borne de plus : il marche vers la demande de la
+loi de commande, qui descend sur sa propre rampe, `floor(slew × dt)` tr/min
+entiers par tic (2 ou 3 à 5 Hz avec les 15 tr/min/s livrés, contre 2,48 pour
+les limites de mouvement), après une avance de `slew` fois l'âge de sa
+dernière décision. Tant que cette avance dure, les deux descentes ont les
+mêmes consignes, tic pour tic ; quand elle est épuisée, le retour au calme
+sans verdict va au rythme de la loi et arrive après : jusqu'à 2,6 s plus tard,
+mesuré sur le banc d'essai logiciel avec le profil livré, à 9 des 26 positions
+de l'entrée en COOLDOWN dans la période de régulation.
+
+La séance se termine alors comme un programme mené à son terme : aucun
+`session_standstill`, aucun `session_overrun`, fin `programme_complete` à la
+durée prévue ; un FREEZE verrouillé reste à acquitter avant le départ suivant.
+Cela vaut pour un FREEZE verrouillé, et pour un FREEZE non verrouillé dont la
+cause cesse avant le niveau suivant de sa règle. Si elle dure, `hr_stale`
+(RAMP_DOWN à 60 s) ou `attendant_absent` (RAMP_DOWN à 120 s) termine la séance
+sur son verrou, comme avant. Une séance manuelle n'a pas de phase de ce
+genre : un FREEZE y tient la consigne jusqu'à un arrêt demandé. `session_overrun`
+reste la seconde barrière derrière cette garde (vérifié en retirant la garde
+dans un test). Détails et vérifications dans
 [securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189).
 
 Les distinctions de libération du transport sont exercées par `tests/test_initial_inspection_cancellation.py`

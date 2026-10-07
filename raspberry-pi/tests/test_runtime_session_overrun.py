@@ -23,10 +23,12 @@ Three groups, and the split matters when reading a failure:
 * **a session in progress, unchanged on purpose**: a recovery pushed past the
   deadline by a late STOP, a silent runtime that cannot take its setpoint
   back. The verdict comes at the same instant as before; these pass on
-  ``develop`` too. (A third case stood here, a session a latched FREEZE held
-  at speed past its end. It no longer exists: under a FREEZE the setpoint
-  follows the programme's own descent, and that session ends on time,
-  ``tests/test_runtime_cooldown_freeze.py``);
+  ``develop`` too. A third case stood here, a session a latched FREEZE held
+  at speed past its end. It no longer happens: under a FREEZE the setpoint
+  follows the programme's own descent, and that session ends on time
+  (``tests/test_runtime_cooldown_freeze.py``). The rule is now a second
+  barrier behind that guard, and one test here takes the guard away to show
+  that it still brings a turning arm down;
 * **a verdict raised during the session, once it is over**: it can be
   acknowledged and stays acknowledged; fails on ``develop``.
 
@@ -52,7 +54,7 @@ from src.motor.drive import ControlWord, DriveError, DriveFault
 from src.result import Err, Ok, Result, is_ok
 from src.training import runtime as runtime_module
 from src.training.motion import DEFAULT_MOTION_LIMITS
-from src.training.runtime import EndReason, RuntimeState, SafetyStanding
+from src.training.runtime import EndReason, RuntimeState, SafetyStanding, TrainingRuntime
 from src.training.safety import (
     RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
@@ -519,6 +521,56 @@ async def _stopped_late() -> Rig:
     await rig.run(TOTAL - 5.0)
     rig.runtime.request_stop("operator pressed STOP")
     return rig
+
+
+def _nothing_asks_for_the_descent(_runtime: TrainingRuntime) -> bool:
+    """``TrainingRuntime._stop_asked`` answering "no", whatever the phase: its guard forced off."""
+    return False
+
+
+async def test_an_arm_still_turning_past_the_deadline_is_brought_to_zero_by_the_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rule as a second barrier: it ends a descent that did not happen, on a turning arm.
+
+    The runtime follows a programme's descent under a FREEZE (ANH-189), so a
+    latched FREEZE no longer carries a turning arm past the end of its
+    programme. That guard is the first barrier. This rule stands behind it,
+    and nothing reaches it that way any more, so to show that it still works
+    the guard is forced off here: a FREEZE then holds the setpoint whatever
+    the phase, as it did before that change.
+
+    A FREEZE latched at 40 s and never acknowledged holds the arm at speed
+    through the cooldown, the recovery and the end of the timeline, and the
+    phase machine does not call a turning arm DONE. On the first tick past
+    the deadline the rule fires, RAMP_DOWN and latched. RAMP_DOWN outranks
+    the FREEZE: the setpoint comes down to zero and the shaft follows.
+    """
+    monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
+    rig = await _programme()
+    await rig.run(40.0)
+    rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
+    await rig.run(DEADLINE - 40.0 - 1.0)
+    held = _applied(rig)
+    assert held > 0, "with the guard off the FREEZE did not hold the arm past the end"
+    assert rig.phase() is Phase.RECOVERY, "a turning arm was called DONE"
+    assert _overrun(rig) is None
+    for _ in range(round(1.0 / TICK) - 1):
+        await rig.step()
+        assert _overrun(rig) is None, f"fired early, {_since_start(rig):.1f} s in"
+    assert _applied(rig) == held
+
+    await rig.step()
+    verdict = _overrun(rig)
+    assert verdict is not None, f"nothing ended a session held {_since_start(rig):.1f} s in"
+    assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
+    assert "130 s plus 30 s of grace" in verdict.detail
+    assert _standing_rule(rig) == RULE_SESSION_OVERRUN
+    assert rig.runtime.end_reason is EndReason.SAFETY_VERDICT
+
+    await rig.run(10.0)
+    assert _applied(rig) == 0, "RAMP_DOWN did not bring the held arm down"
+    assert abs(rig.drive.shaft_rpm) < 1.0
 
 
 async def test_a_recovery_pushed_past_the_deadline_by_a_late_stop_is_still_judged() -> None:

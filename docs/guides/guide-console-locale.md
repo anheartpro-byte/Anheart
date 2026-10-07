@@ -887,14 +887,21 @@ Securite dit `freeze` (§13.5).
 
 **Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
 tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
-sa phase `cooldown`, la vitesse commandée se met à baisser, sur la même rampe douce que
-sans gel, que le gel soit verrouillé ou non. Elle part de la vitesse gelée et ne
-remonte pas. Vous lisez alors : **Mode** `SEANCE`, phase `cooldown`, pastille Securite
+sa phase `cooldown`, la vitesse commandée se met à baisser, sur la rampe douce des
+limites de mouvement et jamais plus vite, que le gel soit verrouillé ou non. Elle part
+de la vitesse gelée et ne remonte pas. Elle n'est jamais en retard sur un retour au
+calme sans gel, et peut avoir un peu d'avance sur lui (jusqu'à 2,6 s mesurés en
+simulation avec le profil standard). Vous lisez alors : **Mode** `SEANCE`, phase `cooldown`, pastille Securite
 `freeze`, et une vitesse commandée puis mesurée qui baissent ; pas de bandeau
-**REPRISE AUTOMATIQUE POSSIBLE**. La séance se termine ensuite normalement : phase
-`recovery`, puis `REPOS` à la durée prévue, sans rien de plus à acquitter. Un gel
-verrouillé (par exemple `loop_stall`) reste affiché à `REPOS` : acquittez-le par votre
-nom avant la séance suivante (§13.6) ; cet acquittement ne met rien en mouvement. En
+**REPRISE AUTOMATIQUE POSSIBLE**. Si la cause du gel cesse à temps (fréquence
+cardiaque relue, onglet rouvert), la séance se termine ensuite normalement : phase
+`recovery`, puis `REPOS` à la durée prévue, sans rien de plus à acquitter. Si elle dure,
+la règle passe à son niveau suivant comme elle l'a toujours fait (`hr_stale` : `reduce`
+à 30 s, `ramp_down` à 60 s ; `attendant_absent` : `ramp_down` à 120 s), et ce `ramp_down`
+verrouillé termine la séance : mode `ARRET`, puis un verdict à acquitter une fois `REPOS`
+affiché (§13.6). Un gel verrouillé (par exemple `loop_stall`) laisse la séance se
+terminer à la durée prévue et reste affiché à `REPOS` : acquittez-le par votre nom avant
+la séance suivante (§13.6) ; cet acquittement ne met rien en mouvement. En
 séance manuelle il n'y a pas de retour au calme prévu : pendant un gel, seuls **STOP**
 ou une cible de 0 font baisser la vitesse (§13.5). Vérifié par les tests automatiques
 sur la console en simulation, pas dans un navigateur ni sur la vraie machine.

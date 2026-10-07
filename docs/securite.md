@@ -38,7 +38,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
 | **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend sur un bras à l'arrêt : tant que quelque chose y retient une montée (un verdict, verrouillé ou non ; avec une personne à bord, une fréquence cardiaque inutilisable, de tendance inconnue ou en baisse rapide ; un premier pas que le variateur n'a pas confirmé), une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève, ni un acquittement, ni une fréquence cardiaque qui revient ou se stabilise ne mettent le bras en mouvement. Reste possible sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 la liste exacte de ce que les règles ne couvrent pas et en 7.6 la règle des cibles manuelles). | `safety.py`, `runtime.py` |
 | **Une séance qui dépasse sa durée est arrêtée ; une séance finie n'est plus jugée.** `session_overrun` termine, sur un verrou, une séance encore en cours 30 s après sa durée prévue. Une fois la séance finie, la règle ne juge plus, aussi longtemps que la console reste au repos : rien ne se verrouille seul après une séance, et un nouveau départ ne demande pas de redémarrer la console ([section 8](#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)). | `safety.py`, `runtime.py` |
-| **Un arrêt demandé descend toujours, et la descente prévue d'un programme aussi.** STOP à la console, arrêt demandé depuis le site, cible manuelle remise à 0 : la consigne descend aux limites de mouvement dès le cycle suivant, qu'un avertissement FREEZE tienne ou non, verrouillé ou non, et un FREEZE qui apparaît pendant la descente ne la fige pas ([7.7](#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)). De même, dès qu'un programme entre dans son retour au calme (`cooldown`), la consigne suit sa descente sous FREEZE comme sans verdict, et la séance se termine à la durée prévue ([7.8](#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Hors de ces cas, FREEZE tient la consigne comme avant ; les verdicts plus sévères décident toujours en premier. | `runtime.py` |
+| **Un arrêt demandé descend toujours, et la descente prévue d'un programme aussi.** STOP à la console, arrêt demandé depuis le site, cible manuelle remise à 0 : la consigne descend aux limites de mouvement dès le cycle suivant, qu'un avertissement FREEZE tienne ou non, verrouillé ou non, et un FREEZE qui apparaît pendant la descente ne la fige pas ([7.7](#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)). De même, dès qu'un programme entre dans son retour au calme (`cooldown`), la consigne descend aux limites de mouvement sous FREEZE comme sans verdict, sans jamais remonter, et la séance se termine à la durée prévue, sauf si la cause d'un FREEZE non verrouillé dure jusqu'au niveau suivant de sa règle ([7.8](#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Hors de ces cas, FREEZE tient la consigne comme avant ; les verdicts plus sévères décident toujours en premier. | `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
@@ -109,7 +109,7 @@ que mesure la batterie aujourd'hui.
 - **Une écriture mal adressée à vitesse constante** est indiscernable d'une
   écriture correcte ; la détection attend que la consigne bouge.
 - **Personne à bord en manuel** : la FC monte assez pour déclencher `hr_rate`
-  (FREEZE) avant 19 tr/min, à la rampe anti-nausée (`manual_occupied_ceiling`).
+  (REDUCE) avant 19 tr/min, à la rampe anti-nausée (`manual_occupied_ceiling`).
   C'est un comportement voulu, mais il limite l'usage manuel avec passager.
 - **Le simulateur modélise une fermeture minimale du variateur** : après chaque
   sortie de console, le variateur simulé verrouille SLF via ttO, alors que le
@@ -576,7 +576,9 @@ Sur le profil livré `standard_30_min`, en simulation (scénario
 432 s) : avant, 165 tenu jusqu'au retour de la FC à 447 s, 0 à 460 s ;
 maintenant, descente dès 432 s, 0 à 444,6 s. Avec les limites de la console,
 la descente sous FREEZE a les mêmes consignes, cycle pour cycle, qu'un STOP
-sans aucun verdict. Capsule vide à 27 tr/min au bras (1344 tr/min moteur),
+sans aucun verdict, à l'instant où cela a été mesuré : selon l'endroit où
+tombe la période de régulation, un STOP sans verdict peut être le plus lent
+des deux (7.8, « La rampe »). Capsule vide à 27 tr/min au bras (1344 tr/min moteur),
 FREEZE `loop_stall` verrouillé, arrêt demandé hors de la machine (scénario
 `stop_remote_manual_under_latched_freeze`) : avant, 1344 tenu jusqu'à la fin
 du scénario, 240 s plus tard, mode « ARRET » ; maintenant, 0 après 105,8 s de
@@ -599,8 +601,9 @@ descente aux limites de mouvement, console revenue à « REPOS ».
   part donc du cycle précédent, sauf si le profileur y tournait déjà : un cycle
   de mouvement, jamais plus.
 - Un FREEZE qui apparaît pendant une descente déjà commencée trouve le
-  profileur en marche et ne change rien : mêmes consignes qu'une descente sans
-  FREEZE (vérifié cycle pour cycle).
+  profileur en marche et ne la met pas en pause : mêmes consignes qu'une
+  descente sans FREEZE aux instants vérifiés, et jamais au-dessus d'elles
+  (7.8, « La rampe »).
 - **La fin de séance.** Un STOP sous FREEZE se termine comme tout STOP : fin
   `operator_stop`, aucun verrou `session_standstill`, puisque la séance se
   terminait déjà, sur demande. Un FREEZE qui était verrouillé avant le STOP le
@@ -647,8 +650,8 @@ l'appliquant sont de l'auteur du changement.
 
 **La règle.** Un FREEZE tient une vitesse que quelqu'un veut encore. À partir
 de l'entrée d'un programme dans son retour au calme (phase `cooldown`), plus
-aucune phase ne demande de vitesse : la consigne suit alors la descente du
-programme, sous un FREEZE exactement comme sans verdict, verrouillé ou non,
+aucune phase ne demande de vitesse : la consigne descend alors vers 0 aux
+limites de mouvement, sous un FREEZE comme sans verdict, verrouillé ou non,
 dès le premier cycle de cette phase. Elle ne monte jamais : la descente part
 de la consigne en vigueur, même quand un FREEZE pris pendant la montée la
 tenait sous le palier.
@@ -676,31 +679,56 @@ Ce qui ne change pas :
   le dernier pas (de la vitesse minimale à 0) attendant comme d'habitude. Elle
   commence au premier cycle de `cooldown` par un cycle de mouvement, jamais par
   la durée du maintien.
-- **La rampe du retour au calme ordinaire.** Avec les limites livrées, les
-  consignes sont les mêmes, cycle pour cycle, que celles du même programme
-  sans aucun verdict : ni plus rapides, ni plus lentes. La descente ne dépasse
-  jamais les limites de mouvement. Un retour au calme ordinaire est en plus
-  borné par la rampe de la loi de commande (`RuntimeLimits.slew`) ; avec les
-  limites livrées elle est plus rapide que les limites de mouvement et ne
-  compte donc pas. Avec un réglage qui la rendrait plus lente qu'elles, la
-  descente sous FREEZE suivrait les seules limites de mouvement, comme le STOP
-  sous FREEZE de 7.7.
+- **La rampe : jamais plus rapide que les limites de mouvement, jamais en
+  retard sur un retour au calme ordinaire, parfois en avance sur lui.** La
+  descente sous FREEZE n'a qu'une borne, les limites de mouvement : 12,4 tr/min
+  moteur/s au plus, soit 2,48 tr/min par cycle. Un retour au calme ordinaire
+  en a deux. Il marche aux limites de mouvement vers la demande de la loi de
+  commande, et cette demande descend sur la rampe propre de la loi : elle prend
+  d'abord une avance égale à `RuntimeLimits.slew` fois l'âge de la dernière
+  décision de la loi (3 à 78 tr/min avec les 15 tr/min/s et la période de 5 s
+  livrés), puis elle baisse d'un nombre entier de tr/min par cycle,
+  `floor(slew × dt)`, soit 2 ou 3 tr/min à 5 Hz selon la durée mesurée du
+  cycle. Tant que l'avance dure, seules les limites de mouvement comptent et
+  les deux descentes ont les mêmes consignes, cycle pour cycle. Quand elle est
+  épuisée, le retour au calme ordinaire va au rythme de la loi de commande et
+  arrive après. La descente sous FREEZE n'est donc jamais au-dessus d'un
+  retour au calme ordinaire au même cycle, et elle peut être **en avance** sur
+  lui, avec les réglages livrés aussi. Mesuré sur le banc d'essai logiciel,
+  profil livré, depuis 193 tr/min moteur, en déplaçant l'entrée en `cooldown`
+  cycle par cycle sur une période de régulation (26 positions) : 75 cycles
+  sous FREEZE à chaque position ; sans verdict, 75 cycles à 17 positions et 76
+  à 88 aux 9 autres, soit jusqu'à 2,6 s de plus (sur ce banc la loi y baisse
+  sa demande de 2 tr/min par cycle). Avec une rampe de la loi plus lente,
+  l'écart grandit. Le STOP sous FREEZE de 7.7 prend la même descente : la même
+  remarque vaut pour lui.
 - Un FREEZE qui apparaît pendant un retour au calme déjà commencé ne le fige
-  pas. Un FREEZE qui se lève, ou qui est acquitté, pendant la descente la rend
-  au retour au calme ordinaire, sans pause et sans remontée.
+  pas : la descente continue aux limites de mouvement, jamais au-dessus de ce
+  qu'elle aurait été sans lui. Un FREEZE qui se lève, ou qui est acquitté,
+  pendant la descente la rend au retour au calme ordinaire, sans pause et sans
+  remontée.
 - Si la descente dure plus longtemps que la phase `cooldown`, elle continue
   pendant `recovery`, sous FREEZE comme sans verdict.
 
-**La fin de séance.** Une séance qui descend ainsi se termine comme un
-programme mené à son terme : phases `cooldown` puis `recovery` sur la
-chronologie du programme, étage de sortie retiré à l'arrêt mesuré, fin
-`programme_complete` à la durée prévue, mode « REPOS ». Aucun verrou
-`session_standstill` : c'est le retour au calme du programme (7.3). Aucun
-verdict `session_overrun` : la séance est finie avant l'échéance de cette
-règle (section 8). Un FREEZE verrouillé (`loop_stall`, alerte venue d'un autre
-fil) reste en vigueur au repos : il refuse tout départ jusqu'à son
-acquittement nominatif, comme tout verdict verrouillé. L'acquitter pendant la
-récupération ou au repos ne met rien en mouvement.
+**La fin de séance.** Sous un FREEZE verrouillé, ou sous un FREEZE non
+verrouillé dont la cause cesse avant le niveau suivant de sa règle, une séance
+qui descend ainsi se termine comme un programme mené à son terme : phases
+`cooldown` puis `recovery` sur la chronologie du programme, étage de sortie
+retiré à l'arrêt mesuré, fin `programme_complete` à la durée prévue, mode
+« REPOS ». Aucun verrou `session_standstill` : c'est le retour au calme du
+programme (7.3). Aucun verdict `session_overrun` : la séance est finie avant
+l'échéance de cette règle (section 8). Un FREEZE verrouillé (`loop_stall`,
+alerte venue d'un autre fil) reste en vigueur au repos : il refuse tout départ
+jusqu'à son acquittement nominatif, comme tout verdict verrouillé. L'acquitter
+pendant la récupération ou au repos ne met rien en mouvement.
+
+Si la cause d'un FREEZE non verrouillé dure, sa règle continue de compter et
+atteint son propre niveau suivant, comme avant ce changement : `hr_stale`
+passe à REDUCE après 30 s sans fréquence cardiaque fiable puis à RAMP_DOWN
+après 60 s, `attendant_absent` à RAMP_DOWN après 120 s sans signe de présence.
+Ce RAMP_DOWN est verrouillé : il termine la séance sur un verdict de sécurité
+(`safety_verdict`), à acquitter, que le bras soit déjà arrêté ou non. La
+descente du programme sous FREEZE n'y change rien.
 
 **L'écran.** Pendant cette descente le mode reste « SEANCE », la phase est
 `cooldown` et la pastille **Securite** dit toujours `freeze`. Le bandeau
@@ -724,9 +752,21 @@ jamais sur le matériel :
   séance ;
 - le profil livré `standard_30_min` avec un FREEZE `loop_stall` verrouillé
   pendant le palier (scénario `auto_cooldown_under_latched_freeze`) : la
-  consigne commence à descendre à 1260 s, à l'entrée en `cooldown`, avec les
-  consignes du scénario nominal `auto_standard_30_min`, et la séance est finie
-  à 1800 s ;
+  consigne commence à descendre à 1260 s, à l'entrée en `cooldown`, sans
+  jamais dépasser les limites de mouvement ni être au-dessus de celle du
+  scénario nominal `auto_standard_30_min` au même cycle, et la séance est
+  finie à 1800 s ;
+- l'entrée en `cooldown` déplacée cycle par cycle sur une période de
+  régulation : à 27 positions avec les limites de mouvement livrées et une loi
+  de commande dont la rampe est plus lente qu'elles, et à deux positions du
+  profil livré (celle où les deux descentes sont les mêmes, celle où le retour
+  au calme ordinaire a le plus de retard). Partout : jamais plus rapide que
+  les limites de mouvement, jamais au-dessus du retour au calme ordinaire ;
+- une cause non verrouillée qui dure (`hr_stale`, `attendant_absent`) : la
+  règle atteint son RAMP_DOWN verrouillé et termine la séance, comme avant ;
+- la règle `session_overrun` comme seconde barrière : avec la garde de 7.8
+  retirée dans le test, un FREEZE verrouillé tient le bras au-delà de la fin
+  du programme et la règle ramène la consigne à 0 dès l'échéance ;
 - dix-huit courses de la simulation rejouées avant et après le changement :
   dix-sept ont les mêmes lignes et les mêmes trames (dix programmes, dont
   ceux où un FREEZE tient pendant le palier, et sept séances manuelles, dont
@@ -850,6 +890,8 @@ résultats identiques jusqu'au verdict :
   FREEZE, et cette séance se termine à la durée prévue sans que la règle
   intervienne
   ([7.8](#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)).
+  La règle reste la seconde barrière derrière cette garde : un test retire la
+  garde et vérifie qu'elle ramène encore ce bras à 0, dès l'échéance.
 - **Une fin de séance qui dépasse l'échéance.** Voir 8.5.
 - **Un acquittement donné avant la fin de la séance** est accepté et le verdict
   revient au cycle suivant, comme pour toute règle dont la cause est encore

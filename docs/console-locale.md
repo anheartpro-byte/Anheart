@@ -854,7 +854,16 @@ le bandeau `REPRISE AUTOMATIQUE POSSIBLE` n'est pas affiché. La ligne `detail` 
 La séance se termine ensuite comme un programme mené à son terme : phase `recovery`,
 puis `REPOS` à la durée prévue, sans `session_standstill` ni `session_overrun`. Un
 `freeze` verrouillé reste affiché à `REPOS` et refuse tout départ (409) jusqu'à son
-acquittement nominatif ; l'acquitter ne met rien en mouvement. Les actions plus sévères
+acquittement nominatif ; l'acquitter ne met rien en mouvement. Cette fin vaut pour un
+`freeze` verrouillé, et pour un `freeze` non verrouillé dont la cause cesse avant le
+niveau suivant de sa règle. Si la cause dure, la règle continue de compter comme avant :
+`hr_stale` passe à `reduce` à 30 s puis à `ramp_down` à 60 s, `attendant_absent` à
+`ramp_down` à 120 s, et ce `ramp_down` verrouillé termine la séance (mode `ARRET`,
+verdict à acquitter). La descente sous `freeze` ne va jamais plus vite que les limites
+de mouvement ; elle peut être en avance sur un retour au calme sans avertissement,
+jusqu'à 2,6 s mesurés sur le banc d'essai logiciel avec le profil standard, parce que
+celui-ci est en plus borné par la rampe de la régulation
+([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Les actions plus sévères
 décident toujours en premier, et une séance manuelle n'a pas de retour au calme
 propre : un `freeze` y tient la consigne jusqu'à un STOP ou une cible de 0 (section 5).
 Vérifié par l'API sur la console en simulation, avec le programme court des tests et un

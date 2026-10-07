@@ -14,11 +14,16 @@ Four groups, and the split matters when reading a failure:
   setpoint was held through the cooldown and the recovery;
 * **what follows it**: the recovery, the end at the planned time, and nothing
   that restarts. These fail there too;
-* **the walk itself**: what the descent may and may not do, compared tick for
-  tick with a twin rig that no FREEZE ever touches;
+* **the walk itself**: what the descent may and may not do. Two bounds hold
+  wherever the control period falls: never faster than the motion limits,
+  and never behind the cooldown of a twin rig that no FREEZE touches. It is
+  NOT always that twin's cooldown tick for tick: an ordinary cooldown is also
+  bound by the control law's own ramp, and once that ramp's head start is
+  spent the twin is the slower of the two, with the shipped limits too;
 * **unchanged on purpose**: before the cooldown a FREEZE holds exactly as
-  before, a manual session has no cooldown of its own, and every stronger
-  verdict still decides first. These pass before and after.
+  before, a manual session has no cooldown of its own, every stronger
+  verdict still decides first, and a cause that lasts still reaches its
+  rule's own later levels. These pass before and after.
 
 The matrix is every source of a FREEZE the supervisor has: ``hr_stale`` and
 ``attendant_absent`` (not latched), ``loop_stall`` and a trip from a thread
@@ -28,6 +33,7 @@ never the hardware.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from itertools import pairwise
 from typing import Final, Literal, assert_never
 
@@ -37,18 +43,20 @@ from hypothesis import strategies as st
 
 from src.local_panel import RUNTIME_LIMITS
 from src.result import Err, Ok, is_ok
-from src.training.motion import DEFAULT_MOTION_LIMITS, motor_rate_limit
+from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
 from src.training.plan import TrainingProfile
-from src.training.runtime import EndReason, RuntimeState, SafetyStanding
+from src.training.runtime import EndReason, RuntimeLimits, RuntimeState, SafetyStanding
 from src.training.safety import RULE_SESSION_OVERRUN, RULE_SESSION_STANDSTILL, SafetySupervisor
 from src.training.types import Occupancy, Phase, RunMode, SafetyAction, TelemetrySnapshot
-from src.units import Bpm, MotorRpm, Seconds
+from src.units import Bpm, MotorRpm, RpmPerSecond, Seconds
 from tests.test_runtime import (
     GEOMETRY,
+    LIMITS,
     OPERATOR,
     REAL_PROFILE,
     RIG_MOTION,
     TICK,
+    Occupant,
     Rig,
     _Imposed,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
     _imposing,  # pyright: ignore[reportPrivateUsage]
@@ -73,6 +81,7 @@ from tests.test_runtime_stop_freeze import (
     THREAD_RULE,
     Source,
     Standing,
+    Walk,
     _applied,  # pyright: ignore[reportPrivateUsage]  # the readers and the judge of a walk
     _assert_an_ordinary_walk,  # pyright: ignore[reportPrivateUsage]
     _end,  # pyright: ignore[reportPrivateUsage]
@@ -120,6 +129,31 @@ SHIPPED_COOLDOWN_AT: Final[float] = 1260.0
 SHIPPED_PLANNED: Final[float] = float(REAL_PROFILE.total_duration_s)
 PLATEAU_AT: Final[float] = 900.0
 """Seconds into the shipped programme, in the middle of its HOLD."""
+
+ALIGNMENTS: Final[range] = range(27)
+"""Ticks added to HOLD so that COOLDOWN begins at every point of a control period.
+
+The shipped period is five seconds. On the manual clock a decision falls
+every 25 or 26 ticks (the gate is ``since >= period``, and 25 ticks may
+measure a hair under five seconds), so 27 shifts cover every alignment.
+"""
+
+MOST_AHEAD: Final[int] = 17
+"""The shift at which the shipped programme's COOLDOWN begins one tick after
+the control law's last decision of HOLD, measured on this rig: its head start
+is then 3 rpm, the smallest there is."""
+
+SLOW_LAW: Final[RuntimeLimits] = RuntimeLimits(
+    slew=RpmPerSecond(14.0), start_hysteresis_rpm=MotorRpm(10)
+)
+"""The shipped control law with a ramp of 14 rpm/s instead of 15.
+
+Its demand comes down by ``floor(slew x dt)`` whole rpm a tick. At 15 rpm/s
+and 5 Hz that is 2 or 3 rpm, whichever side of 0.2 s the measured tick falls
+on. At 14 it is 2 rpm on every tick, so 10 rpm/s: for certain under the
+12.4 rpm/s of the shipped motion limits, whatever the clock reads. This is
+the rig on which the two bounds of an ordinary cooldown differ at every run.
+"""
 
 Stronger = Literal["reduce", "ramp_down", "quick_stop", "go_silent"]
 STRONGER: Final[dict[Stronger, SafetyAction]] = {
@@ -183,10 +217,16 @@ async def _frozen_in_hold(source: Source) -> tuple[Rig, Standing, list[Telemetry
     return rig, standing, frozen
 
 
-async def _twins(profile: TrainingProfile, at: float, **kwargs: object) -> tuple[Rig, Rig]:
-    """Two identical rigs on ``profile``, ``at`` seconds in, no verdict on either."""
-    witness = await _running_rig(profile=profile, **kwargs)
-    rig = await _running_rig(profile=profile, **kwargs)
+async def _twins(
+    profile: TrainingProfile,
+    at: float,
+    *,
+    limits: RuntimeLimits = LIMITS,
+    motion: MotionLimits = RIG_MOTION,
+) -> tuple[Rig, Rig]:
+    """Two identical rigs on ``profile``, ``at`` seconds in, turning, no verdict on either."""
+    witness = await _started(profile, limits=limits, motion=motion)
+    rig = await _started(profile, limits=limits, motion=motion)
     for twin in (witness, rig):
         await _until(twin, at)
         assert _verdict(twin) is None
@@ -194,23 +234,93 @@ async def _twins(profile: TrainingProfile, at: float, **kwargs: object) -> tuple
     return witness, rig
 
 
-async def _climbing() -> Rig:
-    """The long programme caught in the middle of its WARMUP climb, no verdict standing.
+async def _started(
+    profile: TrainingProfile, *, limits: RuntimeLimits = LIMITS, motion: MotionLimits = RIG_MOTION
+) -> Rig:
+    """A programme just past its BASELINE, fed as ``_running_rig`` feeds it.
 
-    The recipe of ``_running_rig`` (82 bpm through BASELINE, then 65 so that
-    the control law accelerates), stopped :data:`CLIMBING_AT` seconds in
-    instead of at the WARMUP ceiling.
+    82 bpm through BASELINE, then 65 so that the control law accelerates, but
+    without that builder's wait for a turning arm: the shipped control law
+    takes longer to start one than the accelerated rig's.
     """
-    rig = _rig(profile=LONG)
+    rig = _rig(profile=profile, limits=limits, motion=motion)
     rig.fed_bpm = Bpm(82)
     assert is_ok(await rig.start())
     await rig.run(11.0)
     rig.fed_bpm = Bpm(65)
+    return rig
+
+
+async def _climbing() -> Rig:
+    """The long programme caught in the middle of its WARMUP climb, no verdict standing."""
+    rig = await _started(LONG)
     climb = await _until(rig, CLIMBING_AT)
     assert rig.phase() is Phase.WARMUP
     assert _setpoints(climb)[-2] < _setpoints(climb)[-1], "the setpoint is not climbing"
     assert _verdict(rig) is None
     return rig
+
+
+async def _shipped_before_cooldown(shift: int) -> Rig:
+    """The shipped programme with ``shift`` more ticks of HOLD, two ticks before its COOLDOWN.
+
+    The console's limits, the shipped motion limits and a simulated person on
+    board, as ``_console_rig`` builds it. Lengthening HOLD moves the entry
+    into COOLDOWN against the control law's five-second period.
+    """
+    profile = replace(REAL_PROFILE, total_duration_s=Seconds(SHIPPED_PLANNED + shift * TICK))
+    rig = _rig(
+        profile=profile, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS, occupant=Occupant()
+    )
+    assert is_ok(await rig.start())
+    await rig.run(1.0)
+    await _until(rig, SHIPPED_COOLDOWN_AT + shift * TICK - 2 * TICK)
+    assert _verdict(rig) is None
+    return rig
+
+
+async def _descents(
+    witness: Rig, rig: Rig
+) -> tuple[int, list[TelemetrySnapshot], list[TelemetrySnapshot]]:
+    """Freeze ``rig`` on the last tick of HOLD, then walk both twins down to zero.
+
+    Returns the setpoint both start from, the descent under the FREEZE, and
+    the witness's ordinary cooldown, each from the first tick of COOLDOWN to
+    its first zero.
+    """
+    standing = _freeze(rig)
+    for twin in (witness, rig):
+        await twin.step()
+    start = _applied(rig)
+    assert start == _applied(witness) > 0, "the twins do not start from the same setpoint"
+    assert rig.phase() is Phase.HOLD
+    assert _verdict(rig) == (standing.rule, SafetyAction.FREEZE, True)
+    assert _verdict(witness) is None
+
+    under = await _walk_down(rig, standing)
+    free = await _walk_down(witness, NOTHING)
+    assert under[0].phase is Phase.COOLDOWN
+    assert {snapshot.safety_action for snapshot in under} == {SafetyAction.FREEZE}
+    assert _rules_shown(free) == set()
+    return start, under, free
+
+
+def _assert_never_behind(under: list[TelemetrySnapshot], free: list[TelemetrySnapshot]) -> None:
+    """Tick for tick the setpoint under the FREEZE is at most the ordinary one's.
+
+    And it is at zero no later. Past its own zero there is nothing left to
+    compare: it stays there.
+    """
+    mine, theirs = _setpoints(under), _setpoints(free)
+    assert len(mine) <= len(theirs), (
+        f"under the FREEZE the arm was down after {len(mine)} ticks, {len(theirs)} without"
+    )
+    behind = [
+        (tick, frozen, ordinary)
+        for tick, (frozen, ordinary) in enumerate(zip(mine, theirs, strict=False))
+        if frozen > ordinary
+    ]
+    assert not behind, f"above the ordinary cooldown at (tick, frozen, ordinary) {behind[:3]}"
 
 
 def _freeze(rig: Rig) -> Standing:
@@ -238,7 +348,7 @@ async def _taken_over(action: SafetyAction, *, lead: float) -> None:
     witness, rig = await _twins(LONG, COOLDOWN_AT - 2 * TICK)
     _freeze(rig)
     free, under = await _both(witness, rig, lead)
-    assert under == free
+    assert under == free, "the premise: at this alignment the two descents are the same so far"
     assert _applied(rig) > 0
 
     for twin in (witness, rig):
@@ -379,7 +489,9 @@ async def test_a_descent_still_under_way_at_the_recovery_goes_on_under_a_freeze(
     A cooldown of 4 s at the shipped motion limits: the timeline enters
     RECOVERY with the arm still coming down. Under a FREEZE the walk crosses
     that boundary without a pause, with the setpoints of a twin that no
-    FREEZE touches.
+    FREEZE touches. (The same setpoints, and not only never behind: on this
+    rig the control law's own ramp is 70 rpm/s, far above these motion limits,
+    so the twin's cooldown is bound by them alone wherever the period falls.)
     """
     witness, rig = await _twins(
         SHORT_COOLDOWN, SHORT_COOLDOWN_AT - 2 * TICK, motion=DEFAULT_MOTION_LIMITS
@@ -404,17 +516,23 @@ async def test_a_descent_still_under_way_at_the_recovery_goes_on_under_a_freeze(
 
 
 async def test_a_freeze_that_appears_during_the_cooldown_does_not_pause_it() -> None:
-    """The descent begun with no verdict goes on, tick for tick, when a FREEZE arrives."""
+    """The descent begun with no verdict goes on when a FREEZE arrives: never behind, never up.
+
+    A second into the cooldown one twin is frozen. From there its setpoint is
+    at every tick at most the other's, it is at zero no later, and the rest
+    of its walk stays inside the motion limits.
+    """
     witness, rig = await _twins(LONG, COOLDOWN_AT + 1.0)
     assert rig.phase() is Phase.COOLDOWN
-    assert 0 < _applied(rig) < int(LONG.max_rpm), "the descent was not under way"
+    reached = _applied(rig)
+    assert 0 < reached < int(LONG.max_rpm), "the descent was not under way"
 
-    _freeze(rig)
-    free, under = await _both(witness, rig, 8.0)
-    assert under == free, "the FREEZE changed the descent"
-    assert under[-1] == 0
-    turning = [snapshot for snapshot in rig.snapshots[-len(under) :] if snapshot.setpoint.motor_rpm]
-    assert {snapshot.safety_action for snapshot in turning} == {SafetyAction.FREEZE}
+    standing = _freeze(rig)
+    under = await _walk_down(rig, standing)
+    free = await _walk_down(witness, NOTHING)
+    _assert_never_behind(under, free)
+    _assert_an_ordinary_walk(reached, under, _walk_of("programme"))
+    assert {snapshot.safety_action for snapshot in under} == {SafetyAction.FREEZE}
     assert _rules_shown(witness.snapshots) == set()
 
 
@@ -576,53 +694,111 @@ async def test_whenever_a_freeze_is_latched_the_programme_ends_on_time_and_never
 # =========================================================================
 
 
-async def test_on_the_shipped_programme_the_descent_under_a_freeze_is_the_ordinary_cooldown() -> (
-    None
-):
-    """EX-1, "the usual ramp", on the machine's own numbers: the same setpoints, tick for tick.
+@pytest.mark.parametrize(
+    ("shift", "ahead"),
+    [
+        pytest.param(0, False, id="cooldown two seconds after a decision"),
+        pytest.param(MOST_AHEAD, True, id="cooldown one tick after a decision"),
+    ],
+)
+async def test_on_the_shipped_programme_the_descent_under_a_freeze_is_never_behind_the_ordinary_one(
+    shift: int, ahead: bool
+) -> None:
+    """EX-1, "the usual ramp", on the machine's own numbers, at two places of the control period.
 
     The shipped 30-minute programme, the console's limits and the shipped
     motion limits, a simulated person on board. One rig reaches its COOLDOWN
     with nothing standing; its twin is frozen on the last tick of HOLD (a
-    latched trip from a thread). From the entry into COOLDOWN down to zero the
-    two write the same setpoints: the descent under the FREEZE is no faster,
-    and no slower, than the ordinary one.
+    latched trip from a thread). What holds at both places: the descent under
+    the FREEZE stays inside the motion limits, and at every tick its setpoint
+    is at most the ordinary cooldown's.
+
+    What differs is the ordinary cooldown, which is also bound by the control
+    law's own ramp. That ramp starts ``slew x`` the age of the law's last
+    decision ahead, then comes down 2 rpm a tick on this rig, where the motion
+    limits pay for 2.48:
+
+    * the programme as shipped enters COOLDOWN two seconds after a decision.
+      The head start (29 rpm) outlasts the descent, the motion limits are all
+      that binds, and the two write the same setpoints, tick for tick;
+    * with HOLD seventeen ticks longer the entry falls one tick after a
+      decision. The head start is 3 rpm, the ordinary cooldown goes at the
+      control law's pace, and it reaches zero later than the frozen twin
+      (88 ticks against 75 when this was measured, 2.6 s).
+
+    So "the ordinary cooldown, tick for tick" is true at the first place and
+    not at the second: under a FREEZE the descent can be AHEAD of an ordinary
+    one, with the shipped limits.
     """
-    witness = await _console_rig(SHIPPED_COOLDOWN_AT - 2 * TICK)
-    rig = await _console_rig(SHIPPED_COOLDOWN_AT - 2 * TICK)
-    standing = _freeze(rig)
-    for twin in (witness, rig):
-        await twin.step()
-    start = _applied(rig)
-    assert start == _applied(witness)
-    assert _verdict(rig) == (standing.rule, SafetyAction.FREEZE, True)
-    assert _verdict(witness) is None
-    assert rig.phase() is Phase.HOLD
+    witness = await _shipped_before_cooldown(shift)
+    rig = await _shipped_before_cooldown(shift)
+    start, under, free = await _descents(witness, rig)
 
-    under = await _walk_down(rig, standing)
-    free = await _walk_down(witness, NOTHING)
-    assert under[0].phase is Phase.COOLDOWN
-    assert {snapshot.safety_action for snapshot in under} == {SafetyAction.FREEZE}
-    assert _rules_shown(free) == set()
-    assert _setpoints(under) == _setpoints(free)
     _assert_an_ordinary_walk(start, under, SHIPPED)
+    _assert_never_behind(under, free)
+    if ahead:
+        assert len(free) > len(under), "at this alignment the ordinary cooldown was not the slower"
+    else:
+        assert _setpoints(under) == _setpoints(free), "at this alignment the two were the same"
     rate = motor_rate_limit(MotorRpm(0), DEFAULT_MOTION_LIMITS, GEOMETRY)
-    assert RUNTIME_LIMITS.slew > rate, "the premise: the controller's own ramp is not what binds"
+    assert RUNTIME_LIMITS.slew > rate, "the shipped law's nominal ramp is above the motion limits"
 
 
-async def test_on_the_accelerated_rig_the_descent_under_a_freeze_is_the_ordinary_cooldown() -> None:
-    """The same comparison where the control law's own ramp is a hair above the motion limits."""
-    witness, rig = await _twins(LONG, COOLDOWN_AT - 2 * TICK)
-    standing = _freeze(rig)
-    for twin in (witness, rig):
-        await twin.step()
-    start = _applied(rig)
-    assert start == _applied(witness) == int(LONG.max_rpm)
+async def test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast() -> None:
+    """The two bounds that are true at every alignment, on a rig where the two ramps differ.
 
-    under = await _walk_down(rig, standing)
-    free = await _walk_down(witness, NOTHING)
-    assert _setpoints(under) == _setpoints(free)
-    _assert_an_ordinary_walk(start, under, _walk_of("programme"))
+    The shipped motion limits, and a control law whose ramp is 10 rpm/s on
+    every tick (:data:`SLOW_LAW`): an ordinary cooldown is then the slower one
+    as soon as its head start is spent. The entry into COOLDOWN is moved
+    through a whole control period, one tick at a time. At every place:
+
+    * the descent under the FREEZE is an ordinary walk at the motion limits,
+      never faster, and the same walk whatever the place: it does not read
+      the control law;
+    * at every tick its setpoint is at most the ordinary cooldown's, and it
+      is at zero no later.
+
+    And the two are the same only where the head start outlasts the descent:
+    elsewhere the ordinary cooldown arrives later, by up to several seconds.
+    """
+    walk = Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=float(SLOW_LAW.slew))
+    frozen: set[tuple[int, ...]] = set()
+    later: list[int] = []
+    for shift in ALIGNMENTS:
+        profile = replace(LONG, total_duration_s=Seconds(PLANNED + shift * TICK))
+        witness, rig = await _twins(
+            profile,
+            COOLDOWN_AT + shift * TICK - 2 * TICK,
+            limits=SLOW_LAW,
+            motion=DEFAULT_MOTION_LIMITS,
+        )
+        start, under, free = await _descents(witness, rig)
+        assert start == int(LONG.max_rpm), "the setpoint is not parked at the ceiling"
+        _assert_an_ordinary_walk(start, under, walk)
+        _assert_never_behind(under, free)
+        frozen.add(tuple(_setpoints(under)))
+        later.append(len(free) - len(under))
+
+    assert len(frozen) == 1, "the descent under the FREEZE depended on the control period"
+    assert min(later) == 0, "nowhere did the head start outlast the descent: not this rig"
+    assert max(later) * TICK > 2.0, "the control law's ramp never bound the ordinary cooldown"
+
+
+async def test_on_the_accelerated_rig_the_descent_under_a_freeze_is_never_behind_either() -> None:
+    """The same two bounds through the accelerated rig's own control period (one second).
+
+    There the control law's ramp (70 rpm/s) is a hair above the motion limits
+    (69.7), and on this clock it pays for 14 rpm a tick: the two descents
+    come out the same at every place. Asserted as the bounds all the same,
+    which is what must hold.
+    """
+    for shift in range(6):
+        profile = replace(LONG, total_duration_s=Seconds(PLANNED + shift * TICK))
+        witness, rig = await _twins(profile, COOLDOWN_AT + shift * TICK - 2 * TICK)
+        start, under, free = await _descents(witness, rig)
+        assert start == int(LONG.max_rpm)
+        _assert_an_ordinary_walk(start, under, _walk_of("programme"))
+        _assert_never_behind(under, free)
 
 
 async def test_the_descent_after_a_long_freeze_spends_one_tick_of_motion_not_the_hold() -> None:
@@ -724,6 +900,30 @@ async def test_a_manual_session_has_no_descent_of_its_own_a_freeze_holds_it_as_b
     assert {snapshot.mode for snapshot in held} == {RunMode.MANUEL}
     assert _verdict(rig) == (standing.rule, SafetyAction.FREEZE, True)
     assert _end(rig) is None
+
+
+@pytest.mark.parametrize("source", ["hr_stale", "attendant_absent"])
+async def test_a_cause_that_lasts_still_ends_the_session_on_the_later_level_of_its_rule(
+    source: Source,
+) -> None:
+    """A FREEZE that is not latched is the first level of a rule that goes on counting.
+
+    The heart rate stays lost, or the attendant away, through the cooldown
+    and after it. The rule reaches its own RAMP_DOWN (60 s without a heart
+    rate, 120 s without a ping), which latches and ends the session as a
+    safety verdict, to be acknowledged: as before this change. "Ends as a
+    programme run to its end" is said of a latched FREEZE, and of a cause
+    that ends before that level.
+    """
+    rig, standing, _ = await _frozen_in_hold(source)
+    held = _applied(rig)
+    after = await _until(rig, COOLDOWN_AT + 62.0, feed=standing.feed, ping=standing.ping)
+    assert _never_rises([held, *_setpoints(after)])
+    assert _applied(rig) == 0
+    assert _verdict(rig) == (standing.rule, SafetyAction.RAMP_DOWN, True)
+    assert _end(rig) is EndReason.SAFETY_VERDICT
+    assert rig.runtime.mode is RunMode.ARRET
+    assert _rules_shown(after) == {standing.rule}
 
 
 @pytest.mark.parametrize("stronger", ["reduce", "ramp_down", "quick_stop", "go_silent"])

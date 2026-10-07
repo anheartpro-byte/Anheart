@@ -16,7 +16,11 @@ The battery (``test_battery.py``) already judges the file's own expectations
 and every invariant. The tests here say it about the rows, so that a failure
 names the instant, and they set the descent beside the one the same programme
 makes with nothing standing (``auto_standard_30_min``, already in the battery):
-the same setpoints, tick for tick.
+never faster than the motion limits, and at every tick at most the nominal
+run's setpoint. Not "the same setpoints": an ordinary cooldown is also bound
+by the control law's own ramp, so it can be the slower of the two, according
+to where the control period falls when COOLDOWN begins (the Pi tests walk
+through every such place).
 """
 
 from __future__ import annotations
@@ -27,9 +31,11 @@ from typing import Final
 from simulation.invariants import rules_seen
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import run_file
+from src.geometry import CONFIRMED_GEAR_RATIO
 from src.record.rows import Row
 from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.safety import RULE_LOOP_STALL, RULE_SESSION_OVERRUN, RULE_SESSION_STANDSTILL
+from src.units import output_to_motor_slew
 
 FROZEN: Final = SCENARIO_DIR / "auto_cooldown_under_latched_freeze.json"
 NOMINAL: Final = SCENARIO_DIR / "auto_standard_30_min.json"
@@ -44,6 +50,12 @@ OVERRUN_AT: Final[float] = PLANNED + 30.0
 MIN_RUN: Final[int] = int(DEFAULT_MOTION_LIMITS.min_run)
 
 TICK: Final[float] = 0.2
+
+ANGULAR_LIMIT: Final[float] = float(
+    output_to_motor_slew(DEFAULT_MOTION_LIMITS.output_accel, CONFIRMED_GEAR_RATIO)
+)
+"""The angular acceleration limit at the motor shaft, rpm/s: the fastest the
+motion limits ever allow, whatever the radius the g-rate limit is judged at."""
 
 STANDING: Final[tuple[str, str]] = (RULE_LOOP_STALL, "FREEZE")
 
@@ -76,10 +88,13 @@ def test_under_a_latched_freeze_the_setpoint_is_held_to_the_end_of_hold_and_no_f
     assert first.setpoint_motor_rpm < speed, "the FREEZE held the setpoint into the cooldown"
 
 
-def test_the_descent_under_the_freeze_is_the_one_the_programme_makes_with_nothing_standing() -> (
-    None
-):
-    """Never up, FREEZE all the way, and the setpoints of the nominal run of the same programme."""
+def test_the_descent_under_the_freeze_is_never_too_fast_and_never_behind_the_nominal_one() -> None:
+    """Never up, FREEZE all the way, inside the motion limits, at most the nominal run's setpoint.
+
+    The nominal run of the same programme enters COOLDOWN from the same
+    setpoint at the same instant. Tick for tick the frozen run is never above
+    it, and it is at zero no later.
+    """
     frozen = _descent(run_file(FROZEN).trace.rows)
     nominal = _descent(run_file(NOMINAL).trace.rows)
     walked = [row.setpoint_motor_rpm for row in frozen]
@@ -91,12 +106,24 @@ def test_the_descent_under_the_freeze_is_the_one_the_programme_makes_with_nothin
     )
     assert {row.phase for row in frozen} == {"cooldown"}
     assert {row.mode for row in frozen} == {"seance"}
-
-    assert {row.safety_action for row in nominal} == {"NONE"}
-    assert walked == [row.setpoint_motor_rpm for row in nominal], (
-        "the descent under the FREEZE is not the ordinary cooldown"
-    )
     assert frozen[-1].t < RECOVERY_AT, "the arm was still coming down when RECOVERY began"
+
+    # Never faster than the motion limits: one tick pays for 2.48 rpm at most,
+    # and one more rpm may be carried over, the last step from the minimum apart.
+    steps = [
+        (before, after) for before, after in pairwise(walked) if (before, after) != (MIN_RUN, 0)
+    ]
+    assert max(before - after for before, after in steps) <= ANGULAR_LIMIT * TICK + 1
+
+    # Never behind the ordinary cooldown of the same programme.
+    ordinary = [row.setpoint_motor_rpm for row in nominal]
+    assert {row.safety_action for row in nominal} == {"NONE"}
+    assert nominal[0].phase == "cooldown"
+    assert abs(nominal[0].t - frozen[0].t) < TICK / 2, "the two runs do not enter COOLDOWN together"
+    assert len(walked) <= len(ordinary), "the frozen run was at zero after the nominal one"
+    assert all(mine <= theirs for mine, theirs in zip(walked, ordinary, strict=False)), (
+        "the frozen run was above the ordinary cooldown at some tick"
+    )
 
 
 def test_the_session_ends_at_its_planned_duration_and_the_overrun_rule_stays_silent() -> None:

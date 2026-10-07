@@ -440,7 +440,7 @@ Options utiles : `--workers N` (0 = un par cœur, défaut), `--out DIR` (où
 événement).
 
 ```sh
-$PY -m simulation.run --list                 # les 60 scénarios
+$PY -m simulation.run --list                 # les 65 scénarios
 $PY -m simulation.run manual_27_rpm --csv    # un scénario, plus un CSV
 $PY -m simulation.run --all                  # tous, plus simulation/out/summary.md
 ```
