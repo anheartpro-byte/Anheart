@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
 from src.task_completion import complete_owned
 
-if TYPE_CHECKING:
-    from src.local_panel import WebRunner
-
 _LOG: Final[logging.Logger] = logging.getLogger(__name__)
+
+
+class WebRunner(Protocol):
+    """Serves the page until told to exit."""
+
+    @abstractmethod
+    async def serve(self) -> None:
+        """Run the server on this loop until it is asked to exit."""
+
+    @abstractmethod
+    def request_exit(self) -> None:
+        """Ask the server to finish; :meth:`serve` returns shortly after."""
 
 
 @dataclass(frozen=True, slots=True)

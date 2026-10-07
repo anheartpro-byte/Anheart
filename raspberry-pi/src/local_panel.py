@@ -133,7 +133,7 @@ from src.local_config import (
 from src.motor.atv320 import ATV320Drive, serial_master
 from src.motor.drive import DriveBackend
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
-from src.panel_lifecycle import PanelTasks
+from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.monitor import PresenceMonitor
@@ -452,20 +452,8 @@ class PanelReporter:
 
 
 # =========================================================================
-# The web server, behind a seam
+# The web server, behind a seam (:class:`~src.panel_lifecycle.WebRunner`)
 # =========================================================================
-
-
-class WebRunner(Protocol):
-    """Serves the page until told to exit."""
-
-    @abstractmethod
-    async def serve(self) -> None:
-        """Run the server on this loop until it is asked to exit."""
-
-    @abstractmethod
-    def request_exit(self) -> None:
-        """Ask the server to finish; :meth:`serve` returns shortly after."""
 
 
 @final
