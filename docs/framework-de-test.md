@@ -1530,37 +1530,42 @@ de chemins a jugé qu'aucun fichier de la PR ne pouvait l'affecter : le job
 annulé ou absent, le run a été annulé dans ses premières secondes et rien n'a
 été jugé : relancer le run.
 
-### Régression ECG du navigateur (ANH-71)
+### Tests unitaires du site
 
-`npm run test:ecg` exerce les fonctions réellement utilisées par le repli du
-graphe ECG pour les anciennes séances en ADC brut. Les fixtures synthétiques
-entièrement numériques couvrent le bruit secteur à 50 Hz, les décalages ADC
-64/512/960 à 250/1000 Hz, une suite d'impulsions de période une seconde et une
-entrée constante. Le bruit secteur doit produire `mains_dominated`, sans BPM,
-HRV ni pics par l'API `computeHeartRate` ; les impulsions restent à 60 BPM.
+`npm run test:ecg` lance les tests de `lib/**/*.test.ts` (configuration
+`vitest.ecg.config.mts`, environnement Node). Le nom du script date de la
+bibliothèque ECG du navigateur que ces tests couvraient ; elle a été retirée
+avec l'ancien mode d'enregistrement ECG, et la CI appelle toujours le script
+sous ce nom.
 
-Le noyau IIR partagé (`lib/ecg/biquad.ts`) initialise chaque passe à l'équilibre
-continu de son propre premier échantillon, au lieu de créer un transitoire à
-partir d'un historique nul. Des tests distincts couvrent les deux cascades du
-détecteur Hamilton, le filtre de qualité, le notch, l'entrée vide et les deux
-extrémités d'un signal non constant. Les coefficients et seuils ne changent
-pas ; le filtre FIR d'affichage reste inchangé. Le principe d'initialisation
-est décrit dans la [documentation SciPy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter_zi.html),
-sans prétendre reproduire tout `scipy.signal.filtfilt` ni son padding.
+Les règles des fenêtres du site et les bornes de fraîcheur ont leurs fichiers,
+décrits dans les deux sections suivantes. Un autre,
+`lib/legacyRecordingRetired.test.ts`, garde le retrait de l'ancien mode
+d'enregistrement ECG. Il lit les sources du site (`app/`, `components/`,
+`hooks/`, `lib/`, `i18n/`) et les deux catalogues de messages, et échoue si :
 
-Le contrôle navigateur du 4 octobre 2026 a monté le vrai `ECGChart` en local :
-les six fixtures de bruit donnent `-- BPM` et zéro pic, les deux suites
-d'impulsions donnent 60 BPM, et les métriques explicites du dispositif gardent
-la priorité. Ce contrôle de composant avec données synthétiques ne prouve ni
-la connexion Clerk/Convex, ni la validité clinique, ni la chaîne de commande du
-Pi, ni le traitement des données en mV privées de leurs métriques.
+* une page appelle une mutation du module `sessions` ou nomme `createSession`,
+  `endSession` ou `cancelSession` (le site ne crée une séance que par
+  `training.launchAutoSession`) ;
+* un des fichiers de l'ancien bloc ECG existe ou est importé
+  (`components/charts/`, `components/ECGWaveform.tsx`, `lib/ecg.ts`, `lib/ecg/`,
+  `lib/generatePdf.ts`, `components/modals/SessionFormModal.tsx`) ;
+* les lots ECG sont lus ailleurs que dans la carte d'historique du détail d'une
+  séance (`ecgData.getSessionDataStats`) ;
+* la fenêtre machine reparle de fréquence, de canaux ou d'intervalle ;
+* les catalogues `fr` et `en` n'ont pas les mêmes clés, gardent une clé de
+  l'ancien mode, ou n'ont pas une clé que les pages Sessions, détail, vue en
+  direct, Rapports ou la fenêtre machine nomment.
+
+C'est une lecture de texte : elle ne monte aucun composant et ne prouve pas le
+rendu dans un navigateur.
 
 ### Règles des fenêtres du site, sans navigateur
 
-`npm run test:ecg` exécute tous les fichiers `lib/**/*.test.ts`. En plus des
-fonctions ECG, il couvre donc les règles qu'une fenêtre du site applique avant
-d'appeler Convex, extraites en fonctions pures dans `lib/` pour être testées
-sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
+`npm run test:ecg` exécute tous les fichiers `lib/**/*.test.ts`. En plus du
+test du retrait de l'ancien mode ECG, il couvre donc les règles qu'une fenêtre
+du site applique avant d'appeler Convex, extraites en fonctions pures dans
+`lib/` pour être testées sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
 reste à prouver par la suite navigateur (ANH-83).
 
 ### Fraîcheur de l'état en direct (ANH-160)

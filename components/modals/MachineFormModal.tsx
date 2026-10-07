@@ -31,20 +31,11 @@ import {
 } from "@/components/ui/form";
 import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 
-// Available BITalino sensor channels (A1-A6)
-const AVAILABLE_CHANNELS = ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"];
-
 // Validation messages are passed in so they follow the active locale.
-const createMachineSchema = (messages: {
-  nameRequired: string;
-  channelRequired: string;
-}) =>
+const createMachineSchema = (messages: { nameRequired: string }) =>
   z.object({
     name: z.string().min(1, messages.nameRequired).max(100),
     location: z.string().max(200).optional(),
-    sampleRate: z.number().min(100).max(10000),
-    batchInterval: z.number().min(100).max(5000),
-    channels: z.array(z.string()).min(1, messages.channelRequired),
     gestionnaireIds: z.array(z.string()).optional(),
   });
 
@@ -57,11 +48,6 @@ interface MachineFormModalProps {
     _id: Id<"machines">;
     name: string;
     location?: string;
-    config: {
-      sampleRate: number;
-      channels: string[];
-      batchInterval: number;
-    };
     gestionnaires?: Array<{
       _id: Id<"users">;
       firstName: string;
@@ -96,7 +82,6 @@ export function MachineFormModal({
     () =>
       createMachineSchema({
         nameRequired: t("machines.form.nameRequired"),
-        channelRequired: t("machines.form.channelRequired"),
       }),
     [t],
   );
@@ -106,9 +91,6 @@ export function MachineFormModal({
     defaultValues: {
       name: "",
       location: "",
-      sampleRate: 100,
-      batchInterval: 1000,
-      channels: ["ECG"],
       gestionnaireIds: [],
     },
   });
@@ -119,9 +101,6 @@ export function MachineFormModal({
       form.reset({
         name: machine?.name ?? "",
         location: machine?.location ?? "",
-        sampleRate: machine?.config.sampleRate ?? 100,
-        batchInterval: machine?.config.batchInterval ?? 1000,
-        channels: machine?.config.channels ?? ["ECG"],
         gestionnaireIds: machine?.gestionnaires?.map((g) => g._id) ?? [],
       });
     }
@@ -134,11 +113,6 @@ export function MachineFormModal({
           machineId: machine._id,
           name: values.name,
           location: values.location || undefined,
-          config: {
-            sampleRate: values.sampleRate,
-            channels: values.channels,
-            batchInterval: values.batchInterval,
-          },
         });
         // The gestionnaire list is an admin-only call. Whether it is made is
         // decided in lib/machineForm.ts, never here: only for a caller
@@ -160,11 +134,6 @@ export function MachineFormModal({
         const result = await createMachine({
           name: values.name,
           location: values.location || undefined,
-          config: {
-            sampleRate: values.sampleRate,
-            channels: values.channels,
-            batchInterval: values.batchInterval,
-          },
           gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
         });
         setApiKey(result.apiKey);
@@ -191,21 +160,6 @@ export function MachineFormModal({
     form.reset();
     onOpenChange(false);
     if (hadApiKey) onSuccess?.();
-  };
-
-  const toggleChannel = (channel: string) => {
-    const current = form.getValues("channels");
-    if (current.includes(channel)) {
-      form.setValue(
-        "channels",
-        current.filter((c) => c !== channel),
-        { shouldValidate: true },
-      );
-    } else {
-      form.setValue("channels", [...current, channel], {
-        shouldValidate: true,
-      });
-    }
   };
 
   // Show API key dialog after creation
@@ -299,80 +253,6 @@ export function MachineFormModal({
                       {...field}
                     />
                   </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="sampleRate"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("machines.sampleRate")} (Hz)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={100}
-                        max={10000}
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1000)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="batchInterval"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("machines.batchInterval")}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={100}
-                        max={5000}
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1000)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <FormField
-              control={form.control}
-              name="channels"
-              render={() => (
-                <FormItem>
-                  <FormLabel>{t("machines.channels")} *</FormLabel>
-                  <div className="flex flex-wrap gap-2">
-                    {AVAILABLE_CHANNELS.map((channel) => (
-                      <Button
-                        key={channel}
-                        type="button"
-                        variant={
-                          form.watch("channels").includes(channel)
-                            ? "default"
-                            : "outline"
-                        }
-                        size="sm"
-                        onClick={() => toggleChannel(channel)}
-                      >
-                        {channel}
-                      </Button>
-                    ))}
-                  </div>
                   <FormMessage />
                 </FormItem>
               )}

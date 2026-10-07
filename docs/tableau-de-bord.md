@@ -8,10 +8,10 @@ ne parle **jamais** directement au Raspberry Pi.
 
 > **État réel.**
 > - Le code se compile : `npx tsc --noEmit -p .` ne signale aucune erreur.
-> - Les fonctions ECG du site ont des tests numériques synthétiques :
->   `npm run test:ecg` ([portée et limites](framework-de-test.md#régression-ecg-du-navigateur-anh-71)).
->   La même commande exécute les tests unitaires des règles de `lib/`
->   extraites des fenêtres du site.
+> - `npm run test:ecg` exécute les tests unitaires de `lib/` : les règles
+>   extraites des fenêtres du site, et le test de non-régression du retrait de
+>   l'ancien mode d'enregistrement ECG
+>   ([portée et limites](framework-de-test.md#tests-unitaires-du-site)).
 >   La fraîcheur de l'état en direct (§6) a des tests unitaires, sans
 >   navigateur : `npm run test:site`
 >   ([portée et limites](framework-de-test.md#fraîcheur-de-létat-en-direct-anh-160)).
@@ -148,10 +148,9 @@ Pour tous. Titre « Tableau de bord », « Bienvenue, {prénom} ».
 Admin et gestionnaire. Tableau des machines (nom, lieu, statut, dernier signal).
 Recherche ; l'admin peut afficher les machines supprimées.
 
-- **Nouvelle machine** (admin seulement) : nom, lieu, fréquence
-  d'échantillonnage, canaux, intervalle de lot, gestionnaires. À la création,
-  la **clé API** s'affiche **une seule fois** (« Cette clé ne sera affichée
-  qu'une seule fois! ») avec un bouton Copier. Elle va dans
+- **Nouvelle machine** (admin seulement) : nom, lieu, gestionnaires. À la
+  création, la **clé API** s'affiche **une seule fois** (« Cette clé ne sera
+  affichée qu'une seule fois! ») avec un bouton Copier. Elle va dans
   `raspberry-pi/.env` (`MACHINE_API_KEY`).
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
@@ -162,7 +161,7 @@ Admin et gestionnaire de la machine.
 |---|---|---|
 | Bandeau « Supprimée » | Date de suppression, bouton **Restaurer**. | admin |
 | Bouton **Lancer une séance auto** | Ouvre la fenêtre de lancement (§5). | admin, gestionnaire |
-| Configuration | Statut (« En ligne », « Hors ligne », « En session »), dernier signal, fréquence, intervalle, canaux, « Créée le » ; bouton Modifier. | admin, gestionnaire |
+| Configuration | Statut (« En ligne », « Hors ligne », « En session »), dernier signal, « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
@@ -206,10 +205,10 @@ Pour tous (chacun voit ce que ses droits permettent). Onglets par statut
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
 durée. Un clic ouvre la vue en direct (séance active) ou le détail.
 
-Le bouton **Nouvelle session** (admin, gestionnaire) crée une séance
-d'**enregistrement ECG** (ancien mode `recording`, pour le client
-`python -m src.main`). **Ce n'est pas une séance d'entraînement** et la console
-locale ne la prend pas.
+Cette page ne crée aucune séance : une séance auto se lance depuis une machine
+(« Lancer une séance auto », §5), une séance manuelle depuis la console. Le
+badge « Enregistrement » ne concerne plus que l'historique de l'ancien mode
+d'enregistrement ECG, retiré.
 
 ### Séance en direct : `/fr/dashboard/sessions/{id}/live`
 
@@ -219,32 +218,28 @@ locale ne la prend pas.
   gros indicateurs, courbes et bouton **Arrêter la séance**. Sans point reçu
   depuis 20 s, il affiche « Aucun signal récent de la machine… » et grise ses
   indicateurs (§6).
-- Sous le panneau, la page affiche aussi l'ancien bloc ECG (qualité du signal,
-  FC, durée, lots de données, échantillons). **Pour une séance d'entraînement,
-  ce bloc reste vide** (« Connexion... ») : la console locale n'envoie pas l'ECG
-  brut au site, seulement la télémétrie. Ce bloc est traduit. Le nombre
-  d'échantillons est compté sur les lots affichés (les 10 dernières secondes)
-  et signalé comme partiel.
-- Séance d'**enregistrement** : tracé ECG, badge « 5s de délai » pour un
-  gestionnaire (Convex retarde ses données de 5 s), bouton **Terminer la
-  session** (admin, gestionnaire).
+- Séance d'entraînement **finie** : le même panneau, figé, et le bouton
+  **Voir le détail**.
+- La page n'affiche rien d'autre : la console locale n'envoie pas l'ECG brut au
+  site, seulement la télémétrie.
+- Séance de l'**ancien mode d'enregistrement** (historique) : pas de vue en
+  direct. La page affiche « Cette séance vient de l'ancien mode
+  d'enregistrement ECG : elle n'a pas de vue en direct. » et renvoie au détail.
 
 ### Détail d'une séance : `/fr/dashboard/sessions/{id}`
 
 Nom du pratiquant (ou « Pratiquant non précisé »), machine, statut, bandeau
 d'échec avec la raison. Pour une séance d'entraînement, la carte
 **Entraînement** : type, origine, programme, zone cible, durée prévue, FC max du
-pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Pour une
-séance d'enregistrement : tracé ECG et résumé.
+pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Suivent les
+cartes « Informations patient », « Chronologie de la session » et, s'il y en a,
+« Notes de session ».
 
-Les cartes du haut donnent la durée, les lots de données, les échantillons
-enregistrés, les canaux et la fréquence d'échantillonnage. Le nombre
-d'échantillons et la fréquence sont **lus dans les lots chargés** (200 au plus
-sur cette page), jamais calculés à partir d'une constante. Quand la session
-compte plus de lots, les cartes l'indiquent (« lots chargés sur … ») ; tant que
-le serveur n'a pas donné le nombre de lots, elles affichent « - », y compris
-pour le comptage de chaque canal. Avec plusieurs canaux, le libellé précise
-« tous canaux confondus ».
+Pour une séance de l'ancien mode d'enregistrement ECG (historique, lecture
+seule), la carte **Ancien enregistrement ECG** remplace la carte Entraînement :
+canaux enregistrés et, si des données existent, nombre de lots, durée des
+données et plage horaire, comptés par le serveur (`ecgData.getSessionDataStats`).
+Le tracé n'est plus affiché.
 
 ### Patients : `/fr/dashboard/patients` et `/fr/dashboard/patients/{id}`
 
@@ -281,14 +276,10 @@ cases est dans `lib/gestionnaireMachines.ts`.
 
 ### Rapports : `/fr/dashboard/reports`
 
-Séances terminées visibles par l'utilisateur, avec **Télécharger PDF** (généré
-dans le navigateur par `lib/generatePdf.ts` à partir des données ECG). Le
-rapport suit la langue de l'interface : libellés, dates, nombres et nom du
-fichier (`Rapport_ECG_{identifiant}_{date}.pdf` en français). Sa fréquence
-d'échantillonnage et son nombre d'échantillons sont lus dans les lots chargés
-pour le rapport (50 au plus) ; au-delà, la liste et le PDF indiquent un
-comptage partiel. Pour une séance d'entraînement, il n'y a pas d'ECG sur le
-site : le rapport n'a pas de contenu ECG. **Ce dernier cas n'est pas vérifié.**
+Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
+durée, et le bouton **Voir** qui ouvre le détail. Il n'y a plus de rapport PDF :
+l'ancien, construit sur les données ECG, a été retiré avec le mode
+d'enregistrement ; le rapport de séance d'entraînement est à faire (ANH-89).
 
 ### Paramètres : `/fr/dashboard/settings`
 
@@ -414,8 +405,7 @@ seconde** :
   ne peuvent pas diverger ;
 - la carte « État en direct », chaque carte de Mes machines et le panneau
   d'entraînement lisent ce hook. Le badge « En direct » de l'état d'une machine
-  n'est jamais affiché sans lui (l'ancien bloc ECG fait exception, voir les
-  limites).
+  n'est jamais affiché sans lui.
 
 | Moment | Ce que le site affiche |
 |---|---|
@@ -442,8 +432,6 @@ Limites :
   ligne entre 1,5 et 2,5 min après le dernier signal) et « Dernier signal » ne
   se rafraîchit qu'au prochain changement de donnée. Entre 90 s et ce passage,
   une machine peut donc être « En ligne » et « Données périmées » à la fois.
-- L'ancien bloc ECG de la vue en direct (badge « En direct » de l'en-tête) ne
-  lit pas ce hook.
 
 ### Panneau d'entraînement (vue en direct)
 
@@ -518,8 +506,8 @@ Pièges :
 
 - `npm run lint` parcourt aussi `raspberry-pi/.venv` et
   `simulation/cad/.venv-cad` : sur 275 erreurs relevées, 273 viennent de
-  fichiers JavaScript de ces environnements Python ; 2 sont dans
-  `components/charts/LiveSensorDisplay.tsx`.
+  fichiers JavaScript de ces environnements Python ; les 2 autres étaient dans
+  un composant de l'ancien bloc ECG, retiré depuis.
 - Aller directement sur `/fr/dashboard` sans être passé par la page d'accueil
   laisse le compte sans ligne Convex : les pages restent vides.
 
@@ -531,7 +519,7 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (fonctions ECG et règles de `lib/` extraites des fenêtres) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants). **Aucun test dans un navigateur** : la coupure d'une console simulée suivie de 90 s d'attente n'est pas rejouée de bout en bout (ANH-83). |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants). **Aucun test dans un navigateur** : la coupure d'une console simulée suivie de 90 s d'attente n'est pas rejouée de bout en bout (ANH-83). |
 | Fraîcheur et horloge du poste | La fraîcheur est jugée sur l'horloge du navigateur (§6) ; l'écart avec l'heure du serveur n'est ni mesuré ni corrigé. |
 | Statut « En ligne » et « Dernier signal » | Non recalculés à l'horloge (§6) : le statut suit le serveur (jusqu'à 2,5 min), « Dernier signal » ne bouge qu'au prochain changement de donnée. |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
@@ -539,9 +527,8 @@ Pièges :
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |
 | Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
-| ECG et rapport PDF d'une séance d'entraînement | Pas d'ECG transmis par la console locale : bloc ECG vide, rapport sans ECG. |
-| Vue en direct : textes du bloc ECG | Traduits. La vue en direct d'une session d'enregistrement réellement active n'a pas été observée dans un navigateur depuis la traduction. |
-| Nombre d'échantillons d'une longue session | Compté sur les lots chargés (200 sur la fiche, 50 pour un rapport, 10 s en direct) et signalé comme partiel au-delà. Un total exact demande un comptage côté serveur (`getSessionDataStats`, `convex/ecgData.ts`). |
+| Rapport d'une séance d'entraînement | Pas de rapport PDF sur le site : l'ancien rapport ECG est retiré, celui des séances d'entraînement reste à faire (ANH-89). |
+| Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:ecg` ; **pas rouvertes dans un navigateur** depuis. |
 | Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, messages d'accès des pages Gestionnaires, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 

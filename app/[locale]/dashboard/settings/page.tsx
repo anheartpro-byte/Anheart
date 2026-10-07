@@ -233,8 +233,6 @@ export default function SettingsPage() {
             <Separator />
             <div className="text-sm text-muted-foreground">
               <p>{t("settings.heartbeatTimeout")}: 90s</p>
-              <p>{t("settings.defaultSampleRate")}: 1000 Hz</p>
-              <p>{t("settings.defaultBatchInterval")}: 1000 ms</p>
             </div>
           </CardContent>
         </Card>
