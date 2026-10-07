@@ -666,15 +666,17 @@ zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
 
 Types d'événements : `start_requested`, `fault_reset_requested`, `end_requested`,
 `emergency_stop`, `acknowledged`, `attested`, `session_running`, `session_idle`,
-`refused`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
+`refused`, `dashboard`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
 l'arrêt, reset refusé, démarrage refusé) arrivent comme événements `refused` : la
 route HTTP a déjà répondu 202. Une cible manuelle que la machine a remise à 0 arrive de
 la même façon, sans nom d'opérateur : personne ne l'a demandé. Tant qu'une séance
 manuelle est à l'écran, ces refus sont aussi écrits dans la note de la carte Mode
 MANUEL (section 6). Hors séance manuelle, un démarrage ou un reset refusé par la
 boucle n'apparaît que dans cette liste.
-Un tableau de bord d'un autre contrat y arrive aussi, sans nom d'opérateur
-(section « Lien avec le tableau de bord » plus bas).
+Un tableau de bord d'un autre contrat arrive sous son propre type, `dashboard`,
+sans nom d'opérateur (section « Lien avec le tableau de bord » plus bas) : ce
+n'est pas une réponse de la boucle, et il n'est jamais écrit dans la note de la
+carte Mode MANUEL.
 
 ---
 
@@ -1005,8 +1007,10 @@ utilisable` et `la frequence cardiaque baisse trop vite`. Les trois raisons de
 fréquence cardiaque ne concernent qu'une séance manuelle « personne à bord », que la
 page ne propose pas (section 6).
 
-Lien avec le tableau de bord (`incompatible_server`, événement `refused` sans nom
-d'opérateur). Rien n'a été demandé à la console : c'est le lien qui refuse.
+Lien avec le tableau de bord (`incompatible_server`). Ce n'est pas un refus de
+la boucle : rien n'a été demandé à la console, c'est le lien qui refuse. Le
+message arrive sous son propre type d'événement, `dashboard`, sans nom
+d'opérateur, et n'est jamais écrit dans la note de la carte Mode MANUEL.
 
 | Message | Sens |
 |---|---|
@@ -1014,7 +1018,8 @@ d'opérateur). Rien n'a été demandé à la console : c'est le lien qui refuse.
 
 Le message est émis pour chaque lancement refusé, quand il change, et sinon
 rappelé toutes les 60 s tant que l'incompatibilité dure. Vérifié par
-`raspberry-pi/tests/test_cloud_contract.py`, pas rejoué dans un navigateur.
+`raspberry-pi/tests/test_cloud_contract.py` et, pour la page,
+`raspberry-pi/tests/web/panel_display.test.mjs` ; pas rejoué dans un navigateur.
 
 Reset défaut variateur (`describe_reset_refusal`) :
 

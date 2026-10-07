@@ -1044,6 +1044,45 @@ test("a refusal that is not about a manual target is left to the event list", ()
   assert.equal(node("events").children.length, 1);
 });
 
+// What the dashboard link publishes when it turns something down (ANH-133): nobody's command, and
+// never about a manual target. It has its own kind for that reason.
+const dashboardNews = (at, detail) => ({ kind: "dashboard", at, wall_clock: 0, operator: "", detail });
+
+const INCOMPATIBLE = "serveur incompatible (contrat 1.0 vs inconnu)";
+
+test("news from the dashboard link is listed and never read as the machine's answer about a target", async () => {
+  // Given a manual session on screen and a target just sent, the loop's answer still awaited.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the link says, in that same instant, that the dashboard is of another contract.
+  context.addEvent(dashboardNews(60.1, INCOMPATIBLE));
+  // Then the manual card still waits for the machine's own answer, and claims no refusal.
+  const note = node("manual-note");
+  assert.equal(note.textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(note.classes.has("note-bad"), false);
+  assert.notEqual(context.state.manualSent, null);
+  // And the frame that shows the target applied is still read as the machine taking it.
+  frame(manualFrame(60.2, 249));
+  assert.ok(note.textContent.startsWith("cible prise par la machine"), note.textContent);
+  // The news itself is in the event list, under its own kind.
+  const listed = node("events").children;
+  assert.equal(listed.length, 1);
+  assert.ok(listed[0].textContent.includes("dashboard  " + INCOMPATIBLE), listed[0].textContent);
+  assert.ok(listed[0].classes.has("event-dashboard"));
+});
+
+test("the same words under the kind `refused` would be taken for the machine's answer", async () => {
+  // The witness for the test above: this is what the page does with a `refused` event, and why
+  // the link does not publish one.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  context.addEvent(refusal(60.1, INCOMPATIBLE, ""));
+  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"), node("manual-note").textContent);
+  assert.equal(context.state.manualSent, null);
+});
+
 test("an Appliquer the console refuses outright shows that answer and awaits nothing", async () => {
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));

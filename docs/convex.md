@@ -470,7 +470,7 @@ HTTP n'y existent pas).
 Clé inconnue : **401**
 `{"error": "unauthorized", "message": "Invalid API key"}`.
 
-**Contrat** : chaque route exige ensuite l'en-tête
+**Contrat** : chaque route (8 des 9, l'exception suit) exige ensuite l'en-tête
 `X-Anheart-Contract: <majeure.mineure>`, vérifié **après** la clé et avant
 tout traitement, par le même point de passage que l'authentification
 (`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
@@ -520,8 +520,8 @@ applicatif n'enregistre la clé. Une régénération remplace atomiquement séle
 sel et digest : l'ancienne clé cesse de fonctionner immédiatement. Les champs
 de suppression/désactivation restent inchangés.
 
-**Erreurs** : tout refus des routes d'entraînement (et de `profiles`,
-`roster`, ainsi que les 401 et 426 de toutes les routes) a la forme
+**Erreurs** : tout refus des 9 routes machine (les 401 et les 426 compris)
+a la forme
 `{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
 d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
 changer. La liste des codes est dans `contracts/machine-api.json` :
@@ -536,11 +536,9 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `machine_not_found` | 400 | La machine a disparu entre l'authentification et l'écriture. |
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
 
-Les routes de l'ancien mode (`session/*`, `data`) gardent leur forme
-`{"error": "<message>"}` pour leurs propres refus. Côté Pi, toute réponse
-≥ 400 devient `Refused` (on ne réessaie pas la même requête) et son code est
-journalisé ; une absence de réponse devient `Unreachable` (on réessaie plus
-tard).
+Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la même
+requête) et son code est journalisé ; une absence de réponse devient
+`Unreachable` (on réessaie plus tard).
 
 ### Routes utilisées par la console locale (`raspberry-pi/src/cloud_sync.py`)
 
@@ -834,7 +832,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à toute route machine **sauf** `GET /api/machine/training/status`, sans rien lire ni écrire d'autre. |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 8 des 9 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre. |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 
@@ -848,11 +846,12 @@ majeure est refusée au lieu d'être comprise de travers.
 
 | Version du Pi (`raspberry-pi/VERSION`) | Majeure de contrat | Version Convex minimale |
 |---|---|---|
-| `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.0`) | le code de la branche `develop` qui sert la majeure 1 (aucune version Convex n'est encore numérotée) |
+| `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.0`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
 
-Cette matrice est tenue à jour par le processus de release (ticket ANH-134) :
-une ligne par version publiée du Pi. Tant que ce processus n'existe pas, elle
-ne contient que la ligne de développement.
+Cette matrice est tenue à jour à chaque release (check-list de
+[release.md](release.md)) : une ligne par version publiée du Pi. Aucune
+version n'a encore été publiée : elle ne contient que la ligne de
+développement.
 
 Limites à connaître :
 

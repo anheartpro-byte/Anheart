@@ -17,6 +17,7 @@ import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 import sharedText from "../contracts/machine-api.json?raw";
 import { api, internal } from "./_generated/api";
+import http from "./http";
 import {
   CONTRACT_HEADER,
   CONTRACT_VERSION,
@@ -242,6 +243,16 @@ describe("ANH-133 the stop request gets through whatever the contract", () => {
   it("is the only route exempt from the contract, and the shared file says so", () => {
     expect(exempt).toEqual([`GET ${STATUS}`]);
     expect(enforced).toHaveLength(machineRoutes.length - 1);
+    // The list these suites iterate is every route the backend registers: a
+    // route added without the gate cannot stay out of them.
+    expect(
+      machineRoutes.map(([method, path]) => `${method} ${path}`).sort(),
+    ).toEqual(
+      http
+        .getRoutes()
+        .map(([path, method]) => `${method} ${path}`)
+        .sort(),
+    );
     expect(
       machineRoutes.map(([method, path]) => `${method} ${path}`),
     ).toContain(`GET ${STATUS}`);

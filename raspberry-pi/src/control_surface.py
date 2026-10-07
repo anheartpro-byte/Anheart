@@ -154,6 +154,12 @@ class EventKind(Enum):
     SESSION_RUNNING = "session_running"
     SESSION_IDLE = "session_idle"
     REFUSED = "refused"
+    # The loop's answer about a command or a manual target: the page writes it
+    # into the card of the session on screen.
+
+    DASHBOARD = "dashboard"
+    # What the dashboard link turned down on the machine's behalf. Never an
+    # answer to something typed at this console, hence not ``refused``.
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,13 +778,15 @@ class ControlSurface:
     def note_remote_refusal(self, detail: str) -> None:
         """The dashboard link turned something down on this machine's behalf. Say so.
 
-        Published like any refusal so the operator reads it in the same list,
-        but it answers no command from the mailbox: unlike :meth:`note_refused`
-        it neither counts as a refused command nor touches the start intention,
+        The operator reads it in the same list as everything else, but it
+        answers no command from the mailbox. Unlike :meth:`note_refused` it
+        neither counts as a refused command nor touches the start intention,
         so a start the operator has just typed here is not un-queued by news
-        about the dashboard.
+        about the dashboard. And it goes out under its own kind: on the page a
+        ``refused`` event is the machine's answer about the manual target on
+        screen, which this never is.
         """
-        self._publish(EventKind.REFUSED, self._clock.monotonic(), "", detail)
+        self._publish(EventKind.DASHBOARD, self._clock.monotonic(), "", detail)
 
     def note_presence(self, operator: str) -> Monotonic:
         """Record an attendant presence ping. Returns the instant recorded.

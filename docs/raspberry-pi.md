@@ -1042,8 +1042,8 @@ Ce que fait la console :
   configuration.
 * **La version logicielle** est lue une fois, au démarrage, dans le fichier
   `raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker). Le dépôt y porte
-  `pi-0.0.0-dev` ; le processus de release (ticket ANH-134) y écrira le tag de
-  chaque version. Fichier absent, illisible ou mal formé : la console démarre
+  `pi-0.0.0-dev` ; le script de release (`scripts/release.sh`, voir
+  [release.md](release.md)) y écrit le tag de chaque version. Fichier absent, illisible ou mal formé : la console démarre
   quand même et annonce `pi-unknown`, jamais une version devinée.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
@@ -1071,8 +1071,12 @@ Ce que fait la console :
   la console porte (`session_not_found (HTTP 400): Session not found`) ; un
   refus identique au précédent n'est pas réécrit.
 
-L'affichage sur la console est un événement `refused` sans nom d'opérateur dans
-la liste **Evenements** (voir [console-locale.md](console-locale.md)). Il est
+L'affichage sur la console est un événement de type `dashboard`, sans nom
+d'opérateur, dans la liste **Evenements** (voir
+[console-locale.md](console-locale.md)). Ce n'est pas un événement `refused` :
+la page lit un `refused` comme la réponse de la machine à propos de la cible
+manuelle à l'écran et l'écrit dans la carte Mode MANUEL, ce que cette nouvelle
+du lien n'est jamais. Il est
 émis pour chaque lancement refusé, quand la phrase change, et sinon rappelé
 toutes les 60 s tant que l'incompatibilité dure (`INCOMPATIBLE_REPEAT`) : la
 liste n'est envoyée qu'aux écrans connectés à ce moment-là, et une page ouverte

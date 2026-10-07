@@ -99,7 +99,11 @@ def unsupported(*supported: str) -> Reply:
 
 
 async def refusals_shown(watcher: TelemetryClient) -> list[str]:
-    """Every refusal the operator's screen has received so far, oldest first."""
+    """What the link has said on the operator's screen so far, oldest first.
+
+    Each is a ``dashboard`` event and never a ``refused`` one: the page reads a
+    ``refused`` event as the machine's answer about the manual target on screen.
+    """
     shown: list[str] = []
     while True:
         try:
@@ -108,7 +112,7 @@ async def refusals_shown(watcher: TelemetryClient) -> list[str]:
             return shown
         event = payload.event
         if payload.kind is PayloadKind.EVENT and event is not None:
-            assert event.kind is EventKind.REFUSED
+            assert event.kind is EventKind.DASHBOARD
             assert event.operator == ""  # nobody's command: the link's own news
             shown.append(event.detail)
 

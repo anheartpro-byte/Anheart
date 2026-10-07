@@ -449,7 +449,7 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
 
   it.each(cases)(
     "$route: $state $kind session",
-    async ({ route, call, unknownStatus, state, kind }) => {
+    async ({ call, unknownStatus, state, kind }) => {
       const w = await world();
       const foreign = await seedSession(w, w.otherMachine, state, kind);
       const unknown = await seedSession(w, w.otherMachine, state, kind);
@@ -464,12 +464,11 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
 
       expect(onForeign).toEqual(onUnknown);
       expect(onForeign.status).toBe(unknownStatus);
-      // The training routes answer with a stable code (ANH-133).
-      expect(JSON.parse(onForeign.body)).toEqual(
-        route.startsWith("training/")
-          ? { error: "session_not_found", message: "Session not found" }
-          : { error: "Session not found" },
-      );
+      // A stable code, the same for both (ANH-133).
+      expect(JSON.parse(onForeign.body)).toEqual({
+        error: "session_not_found",
+        message: "Session not found",
+      });
       // The session, its machine and the stored measurements are unchanged.
       const after = await w.t.run(async (ctx) => ({
         session: await ctx.db.get(foreign),
