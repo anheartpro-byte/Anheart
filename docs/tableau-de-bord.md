@@ -161,6 +161,22 @@ Admin et gestionnaire de la machine.
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | Zone de danger | **Régénérer la clé** (l'ancienne cesse de fonctionner ; la nouvelle s'affiche une fois) ; **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
 
+**Modifier** (carte Configuration) enregistre les champs de la machine, dont
+le nom et le lieu, par `machines.updateMachine`, ouvert à l'admin et au
+gestionnaire de la machine.
+La liste des gestionnaires de la machine, que seul un admin voit dans la
+fenêtre, part dans un second appel réservé à l'admin
+(`machines.assignMachineToGestionnaires`) : la fenêtre ne le fait que si
+l'appelant est admin **et** si la liste a changé. L'ordre fait partie de la
+liste, car le serveur fait du premier gestionnaire le « Propriétaire » : un
+gestionnaire décoché puis recoché passe en fin de liste, et la liste est alors
+envoyée. Un gestionnaire qui modifie le nom ou le lieu ne fait donc que le
+premier appel, et un admin qui ne touche pas aux cases ne réécrit pas la
+liste. Après l'enregistrement, la
+fenêtre se ferme et la carte Configuration affiche « Machine mise à jour avec
+succès » ; si le serveur refuse, son message s'affiche en rouge en haut de la
+fenêtre, qui reste ouverte. La règle d'envoi est dans `lib/machineForm.ts`.
+
 ### Mes machines : `/fr/dashboard/my-machines`
 
 Pour tous (c'est la page de lancement des patients). Liste les machines où
