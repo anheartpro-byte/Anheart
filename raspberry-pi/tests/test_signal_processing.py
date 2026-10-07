@@ -654,6 +654,18 @@ def test_an_empty_batch_re_emits_the_previous_metrics_and_is_not_fresh(
 # =========================================================================
 
 
+DEAD: Final[tuple[float, ...]] = (0.0,) * WINDOW
+"""A dead input, for the tests that hand BioSPPy nothing to find.
+
+Zero and not mid-scale, on purpose. A constant of 512 counts leaves each
+filter a residue of the order of 1e-13 whose pattern depends on the platform,
+and BioSPPy's detectors put their threshold on that residue: the same flat
+line counted no muscle activation on macOS and one on the Linux runner. Zeros
+filter to exact zeros everywhere, so what is asserted is the extractor's
+answer to "nothing there", not the rounding of a machine.
+"""
+
+
 def _once(channel: str, raw: Sequence[float]) -> tuple[int, Mapping[str, object]]:
     """One window through a new processor for ``channel``: the counter and the metrics."""
     processor = LEGACY.ChannelProcessor(channel, FS, 250)
@@ -671,7 +683,8 @@ def test_respiration_reports_a_rate_in_breaths_per_minute() -> None:
 
 
 def test_respiration_without_a_breath_reports_nothing() -> None:
-    seq, metrics = _once("RESP", [ADC_MID] * WINDOW)
+    """No zero crossing, so BioSPPy answers an empty rate: no number is made of it."""
+    seq, metrics = _once("RESP", DEAD)
     assert (seq, metrics) == (0, {})
 
 
@@ -691,7 +704,7 @@ def test_skin_conductance_counts_its_responses() -> None:
     assert count >= 1
 
 
-def test_muscle_activity_counts_activations_and_none_at_rest() -> None:
+def test_muscle_activity_counts_activations_and_none_on_a_dead_input() -> None:
     bursts = [
         ADC_MID
         + (150.0 if 2000 <= i < 3000 or 5000 <= i < 6000 else 0.0)
@@ -699,11 +712,11 @@ def test_muscle_activity_counts_activations_and_none_at_rest() -> None:
         for i in range(WINDOW)
     ]
     active_seq, active = _once("EMG", bursts)
-    rest_seq, rest = _once("EMG", [ADC_MID] * WINDOW)
+    dead_seq, dead = _once("EMG", DEAD)
     found = active.get("activations")
     assert isinstance(found, int)
     assert found >= 1
-    assert (active_seq, rest_seq, rest) == (1, 1, {"activations": 0})
+    assert (active_seq, dead_seq, dead) == (1, 1, {"activations": 0})
 
 
 def test_the_pulse_wave_reports_a_pulse() -> None:
@@ -717,12 +730,12 @@ def test_a_pulse_wave_too_slow_to_be_a_pulse_reports_nothing() -> None:
     assert (seq, metrics) == (0, {})
 
 
-def test_a_flat_pulse_wave_makes_biosppy_raise_and_reports_nothing(
+def test_a_dead_pulse_wave_makes_biosppy_raise_and_reports_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """BioSPPy raises ``IndexError`` here, not ``ValueError``: why the catch stays broad."""
     caplog.set_level(logging.DEBUG, logger=MODULE_NAME)
-    seq, metrics = _once("SpO2", [ADC_MID] * WINDOW)
+    seq, metrics = _once("SpO2", DEAD)
     assert (seq, metrics) == (0, {})
     assert "Metric extraction failed for SpO2: index 0 is out of bounds" in caplog.text
 
