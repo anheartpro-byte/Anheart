@@ -106,6 +106,84 @@ describe("ANH-203 physiology card: what it shows", () => {
   });
 });
 
+describe("ANH-205 physiology card: a value on record that is not a whole number", () => {
+  // The server stores a max heart rate and a birth year only as finite whole
+  // numbers. A record written before it required one may still hold another
+  // value: the card shows no figure made from it, marks its field, and saves
+  // nothing until the manager has replaced it.
+  it.each<
+    [string, object, "phys-hrmax" | "phys-birthyear", string, string, object]
+  >([
+    [
+      "a birth year that is not a number",
+      { birthYear: Number.NaN },
+      "phys-birthyear",
+      t.invalidBirthYear,
+      "1986",
+      { birthYear: 1986 },
+    ],
+    [
+      "half a year as birth year",
+      { birthYear: 1986.5 },
+      "phys-birthyear",
+      t.invalidBirthYear,
+      "1986",
+      { birthYear: 1986 },
+    ],
+    [
+      "a max heart rate that is not a number, beside a usable birth year",
+      { hrMax: Number.NaN, birthYear: 1986 },
+      "phys-hrmax",
+      t.invalidHrMax,
+      "185",
+      { hrMax: 185 },
+    ],
+    [
+      "half a beat as max heart rate, beside a usable birth year",
+      { hrMax: 180.5, birthYear: 1986 },
+      "phys-hrmax",
+      t.invalidHrMax,
+      "185",
+      { hrMax: 185 },
+    ],
+  ])(
+    "%s: the max heart rate is shown as not set, the field is marked, and only its replacement is sent",
+    async (_case, record, field, message, replacement, sent) => {
+      const screen = render(<PhysiologyCard userId={userId} user={record} />);
+
+      // A measured value that cannot be used is not replaced by the estimate.
+      expect(screen.text()).toContain(`${t.effective} ${t.notSet}`);
+      expect(screen.text()).not.toContain("bpm (");
+      expect(screen.text()).not.toContain("NaN");
+      expect(screen.text()).toContain(message);
+      expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(true);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({});
+
+      await type(screen.field(field), replacement);
+
+      expect(screen.text()).not.toContain(message);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({ [save]: [[{ userId, ...sent }]] });
+    },
+  );
+
+  it("does not let the other field be saved alone while one on record is not a whole number", async () => {
+    const screen = render(
+      <PhysiologyCard
+        userId={userId}
+        user={{ hrMax: Number.NaN, birthYear: 1986 }}
+      />,
+    );
+
+    await type(screen.field("phys-birthyear"), "1987");
+
+    expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+});
+
 describe("ANH-203 physiology card: what it sends", () => {
   it("sends only the field the manager touched", async () => {
     const screen = render(

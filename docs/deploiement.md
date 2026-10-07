@@ -218,6 +218,10 @@ Avant de le lancer :
    `users.getCurrentUser` renvoie deux informations de plus (`organization`, et
    le rôle `org_admin`) : à vérifier sur une préversion du site, comme le
    point 2.
+7. Vérifier la physiologie déjà enregistrée, par la requête en lecture seule
+   de la [section 3.5](#35-vérifier-la-physiologie-déjà-enregistrée) : le
+   schéma accepte tout nombre, `convex deploy` ne signale donc pas une FC max
+   ou une année de naissance qui ne serait pas un entier.
 
 ### 3.4 Ordre de mise à jour : les consoles d'abord, Convex ensuite
 
@@ -243,6 +247,75 @@ D'où l'ordre :
 
 `scripts/pi/preflight.sh` dit dans quelle situation se trouve une console avant
 de la démarrer ([section 7.5](#75-vérifier-puis-démarrer)).
+
+### 3.5 Vérifier la physiologie déjà enregistrée
+
+`training.setUserPhysiology` n'enregistre une FC max ou une année de naissance
+que si c'est un **entier fini**, et toute lecture d'un compte applique la même
+règle ([convex.md §4](convex.md#4-fonctions-de-trainingts), « Valeur utilisable »).
+Le schéma, lui, déclare ces deux champs comme des nombres, sans plus : un
+déploiement ne dit rien d'une valeur enregistrée avant ce contrôle.
+
+**Quand.** Sur tout déploiement qui a déjà servi les fonctions d'entraînement
+(aujourd'hui celui de développement), avant d'y pousser ce code ou juste
+après. Le schéma de la branche `main` n'a ni `hrMax` ni `birthYear` : une
+production encore sur ce schéma ne devrait rien renvoyer, ce qui reste à
+constater par la requête, pas à supposer.
+
+**Comment.** La requête ci-dessous ne fait que lire : une query Convex n'a
+aucun moyen d'écrire. Dans le tableau de bord Convex du déploiement, page
+**Data**, menu `⋮`, **Custom query** (« Custom test query »), coller :
+
+```js
+import { query } from "convex:/_system/repl/wrappers.js";
+
+export default query({
+  handler: async (ctx) => {
+    // Absent, or a finite whole number: nothing to report.
+    const usable = (value) => value === undefined || Number.isInteger(value);
+    const riders = (await ctx.db.query("users").collect())
+      .filter((user) => !usable(user.hrMax) || !usable(user.birthYear))
+      .map((user) => ({
+        _id: user._id,
+        hrMax: String(user.hrMax),
+        birthYear: String(user.birthYear),
+      }));
+    const pending = [];
+    for (const machine of await ctx.db.query("machines").collect()) {
+      const waiting = await ctx.db
+        .query("sessions")
+        .withIndex("by_machine_and_status", (q) =>
+          q.eq("machineId", machine._id).eq("status", "pending"),
+        )
+        .collect();
+      for (const session of waiting) {
+        if (!usable(session.subjectHrMax) || !usable(session.subjectAge)) {
+          pending.push({
+            _id: session._id,
+            machineId: session.machineId,
+            subjectHrMax: String(session.subjectHrMax),
+            subjectAge: String(session.subjectAge),
+          });
+        }
+      }
+    }
+    return { riders, pending };
+  },
+});
+```
+
+Elle renvoie des identifiants et les valeurs en cause, écrites en texte (une
+valeur absente se lit `undefined`), sans nom ni adresse.
+
+**Résultat attendu** : `{ riders: [], pending: [] }`.
+
+| Ce qui est renvoyé | Ce que cela veut dire | Quoi faire |
+|---|---|---|
+| Une ligne dans `riders` | Un compte dont la FC max ou l'année de naissance enregistrée n'est pas un entier fini. Avec ce code, la valeur compte comme non renseignée : tout lancement auto pour ce pratiquant est refusé (« … must be set by a manager before an auto session »), la fenêtre de lancement le bloque, et la carte **Physiologie** marque le champ. | Un gestionnaire ou un admin ressaisit la valeur sur la carte **Physiologie** du compte ([tableau-de-bord.md §5.1](tableau-de-bord.md#51-régler-la-fc-max-et-lannée-de-naissance)), ou vide le champ. Relancer la requête. |
+| Une ligne dans `pending` | Une séance en attente dont la FC max ou l'âge copié au lancement n'est pas un entier fini. Elle date d'avant ce contrôle : aucun lancement ne peut plus en créer. | L'annuler depuis le site (`training.requestStop` sur une séance en attente l'annule), corriger le compte du pratiquant, puis relancer. |
+
+Cette requête n'a été exécutée sur aucun déploiement. Sa logique a été
+exercée en mémoire, sur des données de test.
 
 ---
 

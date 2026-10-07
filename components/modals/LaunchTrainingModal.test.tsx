@@ -505,6 +505,123 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
   });
 });
 
+describe("ANH-205 launch window: a value on the rider's record that is not a whole number", () => {
+  // The server uses a max heart rate and a birth year only as finite whole
+  // numbers, and refuses the launch otherwise. A record written before it
+  // required one may still hold another value: the window counts it as not
+  // set, shows no figure made from it, and sends nothing.
+  it.each<[string, object, string]>([
+    [
+      "a birth year that is not a number, and no max heart rate",
+      { birthYear: Number.NaN },
+      t.birthYearMissing,
+    ],
+    [
+      "a birth year that is not a number, and a measured max heart rate",
+      { hrMax: 180, birthYear: Number.NaN },
+      t.birthYearMissing,
+    ],
+    [
+      "an infinite birth year, and a measured max heart rate",
+      { hrMax: 180, birthYear: Number.NEGATIVE_INFINITY },
+      t.birthYearMissing,
+    ],
+    ["half a year as birth year", { birthYear: 1986.5 }, t.birthYearMissing],
+    [
+      "a max heart rate that is not a number, and the birth year of an adult",
+      { hrMax: Number.NaN, birthYear: 1986 },
+      t.hrMaxMissing,
+    ],
+    [
+      "half a beat as max heart rate, and the birth year of an adult",
+      { hrMax: 180.5, birthYear: 1986 },
+      t.hrMaxMissing,
+    ],
+  ])(
+    "a patient with %s cannot be launched: the reason is shown and nothing can be sent",
+    async (_case, record, reason) => {
+      // No launch right names him: the record is all the window has.
+      gestionnaireWithPatient(record);
+      const { screen } = open({ profileId: ENDURANCE.profileId });
+
+      await choose(screen, PATIENT_OPTION);
+
+      expect(screen.text()).toContain(reason);
+      expect(screen.text()).not.toContain("NaN");
+      expect(screen.text()).not.toContain("Infinity");
+      expect(screen.text()).not.toContain("180.5");
+      expect(screen.text()).not.toContain(`(${t.hrMaxEstimated})`);
+      expect(launchDisabled(screen)).toBe(true);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({});
+    },
+  );
+
+  it("the same patient can be launched once the record holds whole numbers", async () => {
+    gestionnaireWithPatient({ hrMax: 180, birthYear: Number.NaN });
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+    await choose(screen, PATIENT_OPTION);
+    expect(launchDisabled(screen)).toBe(true);
+
+    answer("users:getUserById", { hrMax: 180, birthYear: 1986 });
+    screen.rerender(
+      <LaunchTrainingModal
+        open
+        onOpenChange={() => {}}
+        machineId={machineId}
+        profileId={ENDURANCE.profileId}
+      />,
+    );
+
+    expect(screen.text()).not.toContain(t.birthYearMissing);
+    expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it.each<[string, object, number | null, string]>([
+    [
+      // The server still answers the measured max heart rate: only the birth
+      // year, which the launch requires too, is unusable.
+      "a birth year that is not a number, and a measured max heart rate",
+      { hrMax: 185, birthYear: Number.NaN },
+      185,
+      t.birthYearMissing,
+    ],
+    [
+      "half a year as birth year, and a measured max heart rate",
+      { hrMax: 185, birthYear: 1986.5 },
+      185,
+      t.birthYearMissing,
+    ],
+    [
+      "a max heart rate that is not a number",
+      { hrMax: Number.NaN, birthYear: 1986 },
+      null,
+      t.hrMaxMissing,
+    ],
+  ])(
+    "a rider whose own record holds %s cannot launch for himself",
+    async (_case, record, myHrMax, reason) => {
+      answer("users:getCurrentUser", {
+        _id: "me",
+        role: "user",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@anheart.test",
+        ...record,
+      });
+      machine({ myHrMax });
+
+      const { screen } = open({ profileId: ENDURANCE.profileId });
+
+      expect(screen.text()).toContain(reason);
+      expect(screen.text()).not.toContain("NaN");
+      expect(launchDisabled(screen)).toBe(true);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({});
+    },
+  );
+});
+
 describe("ANH-203 launch window: the rider's max heart rate and the programme's zone", () => {
   it("shows the max heart rate the server holds for the person signed in", () => {
     signedInAs("user");

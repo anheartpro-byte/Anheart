@@ -31,6 +31,7 @@ import {
   armRpm,
   effectiveHrMax,
   formatMinutes,
+  isWholeNumber,
   readOptionalNumber,
   zoneCeiling,
 } from "@/lib/training";
@@ -180,6 +181,16 @@ function LaunchForm({
     }
   }
 
+  // The server uses a max heart rate and a birth year only as whole numbers:
+  // any other value on the rider's record counts as not set, whoever rides.
+  const riderRecord = riderIsPatient ? riderDoc : me;
+  const notWholeOnRecord = (key: "hrMax" | "birthYear") => {
+    const value = riderRecord
+      ? readOptionalNumber(riderRecord, key)
+      : undefined;
+    return value !== undefined && !isWholeNumber(value);
+  };
+
   // Why the launch cannot go ahead at all (the server would refuse).
   let blocker: string | null = null;
   if (!machine) blocker = t("training.launch.notLaunchable");
@@ -190,8 +201,10 @@ function LaunchForm({
     blocker = t("training.launch.programsDisabled");
   else if (machine.profiles.length === 0)
     blocker = t("training.launch.noPrograms");
-  else if (riderHrMax.state === "missing")
+  else if (riderHrMax.state === "missing" || notWholeOnRecord("hrMax"))
     blocker = t("training.launch.hrMaxMissing");
+  else if (notWholeOnRecord("birthYear"))
+    blocker = t("training.launch.birthYearMissing");
   else if (riderIsPatient && riderDoc) {
     // Mirrors the server's age gate (MIN_RIDER_AGE): birth year required, adults only.
     const birthYear = readOptionalNumber(riderDoc, "birthYear");
