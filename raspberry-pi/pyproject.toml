@@ -3,7 +3,7 @@
 # Deliberately NO [project] table. This file exists only to hold tool config in
 # one place; it is not a package definition. The application is run as
 # `python -m src.local_panel` from this directory, and the Dockerfile copies
-# requirements-prod.txt before src/ so its layer cache keeps working. Adding
+# the requirement lock files before src/ so its layer cache keeps working. Adding
 # [project] would force a src/ -> src/anheart/ rename touching every import.
 #
 # Why this much strictness: this code commands a motor with a person inside it.

@@ -40,9 +40,13 @@ MACHINE_API_KEY={KEY}
 """
 
 FAKE_CURL: Final[str] = """#!/bin/sh
-# Scripted curl: records its arguments, then prints the canned body and status
-# the way `-w '\\n%{http_code}'` does.
+# Scripted curl: records its arguments, and its standard input when a header
+# is read from it (`-H @-`), then prints the canned body and status the way
+# `-w '\\n%{http_code}'` does.
 printf '%s\\n' "$@" > "$FAKE_CURL_LOG"
+for argument in "$@"; do
+    if [ "$argument" = "@-" ]; then cat > "$FAKE_CURL_LOG.stdin"; fi
+done
 printf '%s\\n%s' "$FAKE_BODY" "$FAKE_CODE"
 """
 
@@ -61,6 +65,8 @@ class Verdict:
     exit_code: int
     output: str
     curl_arguments: tuple[str, ...]
+    curl_input: str
+    """What curl was given on its standard input, where no other process can read it."""
 
     @property
     def dashboard(self) -> tuple[str, ...]:
@@ -116,7 +122,13 @@ def preflight(
         timeout=30,
     )
     arguments = tuple(log.read_text(encoding="utf-8").splitlines()) if log.exists() else ()
-    return Verdict(exit_code=done.returncode, output=done.stdout, curl_arguments=arguments)
+    given = tmp_path / "curl.log.stdin"
+    return Verdict(
+        exit_code=done.returncode,
+        output=done.stdout,
+        curl_arguments=arguments,
+        curl_input=given.read_text(encoding="utf-8") if given.exists() else "",
+    )
 
 
 # =========================================================================
@@ -201,11 +213,23 @@ def test_the_request_is_the_idle_console_s_own_read_with_its_contract(tmp_path: 
     verdict = preflight(tmp_path, code="200", body=NOTHING_WAITING % CONTRACT_VERSION)
     sent = verdict.curl_arguments
     assert f"{URL}/api/machine/training/poll" in sent
-    assert f"Authorization: Bearer {KEY}" in sent
+    # The key is a header curl reads from its standard input (`-H @-`).
+    assert verdict.curl_input == f"Authorization: Bearer {KEY}\n"
+    assert sent[sent.index("@-") - 1] == "-H"
     # The version is read out of src/contract.py by the script itself.
     assert f"{CONTRACT_HEADER}: {CONTRACT_VERSION}" in sent
     # A plain GET: nothing is posted, so nothing can be recorded or started.
     assert not {"-X", "POST", "-d", "--data"} & set(sent)
+
+
+def test_the_machine_key_is_never_on_a_command_line(tmp_path: Path) -> None:
+    """A command line is readable by every user of the machine (the process list)."""
+    verdict = preflight(tmp_path, code="200", body=NOTHING_WAITING % CONTRACT_VERSION)
+    assert verdict.said("ok", URL, "key accepted")
+    assert verdict.curl_arguments, "the dashboard was not asked"
+    assert not any(KEY in argument for argument in verdict.curl_arguments)
+    assert KEY in verdict.curl_input
+    assert KEY not in verdict.output
 
 
 def test_the_answer_is_read_and_never_printed(tmp_path: Path) -> None:

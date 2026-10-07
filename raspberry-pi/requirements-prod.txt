@@ -1,10 +1,14 @@
 # AnHeart Raspberry Pi - production dependencies (Docker image / Pi).
+#
+# The image does not install this file directly: it installs
+# requirements-lock.txt, which is this file resolved once, with every package
+# it pulls in at an exact version and with its hashes.
 -r requirements-base.txt
 
 # Bluetooth Classic acquisition. On Linux the vendor lib imports PyBluez
 # lazily, only when given a MAC address; on Windows use a COM port instead
 # and install with --no-deps (see requirements-dev.txt).
-bitalino>=1.2.6
+bitalino==1.2.6
 
 # Bluetooth auto-pairing (bluetoothctl driver, Linux only).
-pexpect>=4.8
+pexpect==4.9.0

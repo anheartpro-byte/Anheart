@@ -1,0 +1,6 @@
+# Build tools of the one package the image builds from source: PyBluez-bitalino,
+# pulled in by bitalino (requirements-prod.txt). Its setup.py needs the `wheel`
+# package next to setuptools. Resolved, with hashes, in
+# requirements-build-lock.txt (the command is written at its top).
+setuptools==84.0.0
+wheel==0.48.0

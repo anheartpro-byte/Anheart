@@ -186,7 +186,7 @@ describe("the retired ECG recording mode is named nowhere", () => {
       "app/[locale]/dashboard/sessions/page.tsx",
       "docs/convex.md",
       "README.md",
-      "raspberry-pi/docker-compose.yml",
+      "raspberry-pi/scripts/install.sh",
     ]) {
       expect(files, expected).toContain(expected);
     }

@@ -16,10 +16,11 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 > simulation (variateur simulé, BITalino simulé, physiologie simulée) et par les
 > tests automatiques. Le variateur réel a été **lu** au banc (adresse Modbus 248,
 > décalage de registres 0, rapport 49,79 compté à la main). **Aucune séance avec
-> une personne à bord n'a eu lieu.** Le `Dockerfile`, `docker-compose.yml` et
-> le service systemd (`scripts/anheart.service`) lancent la console
-> `src.local_panel` ; l'image a été essayée en simulation dans un conteneur,
-> **jamais sur un vrai Pi**. Procédure : [deploiement.md](deploiement.md#7-le-raspberry-pi).
+> une personne à bord n'a eu lieu.** Le `Dockerfile` et le service systemd
+> (`scripts/anheart.service`, qui lance cette image) démarrent la console
+> `src.local_panel` ; l'installation est exécutée en CI, en simulation,
+> **jamais sur un vrai Pi**. Procédure : [pi-image.md](pi-image.md) et
+> [deploiement.md](deploiement.md#7-le-raspberry-pi).
 
 ## Sommaire
 
@@ -45,7 +46,7 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 
 | Commande | Programme | Rôle | État |
 |---|---|---|---|
-| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | entrée du `Dockerfile` et de `scripts/anheart.service`, également lançable à la main |
+| `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | entrée du `Dockerfile`, dont `scripts/anheart.service` lance l'image ; également lançable à la main |
 
 C'est la seule entrée du dossier : l'ancien enregistreur ECG et ses modules
 (tampon SQLite, client Convex d'origine) ont été retirés. La console lit ses clés
@@ -999,7 +1000,7 @@ sort avec le code 2.
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
-| `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
+| `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation). Dans l'image Docker, le script d'entrée la règle sur le contenu de `VERSION` quand la configuration ne la règle pas ([pi-image.md](pi-image.md#la-version)) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
 par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale
@@ -1023,8 +1024,8 @@ Deux clés des fichiers `.env` ne sont pas lues par `src/local_config.py` :
 
 | Clé | Lue par | Rôle |
 |---|---|---|
-| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh`, `scripts/install.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
-| `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Compose l'exporte depuis `.env` (`env_file`) ; le `Dockerfile` et `scripts/anheart.service` la fixent aussi eux-mêmes |
+| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
+| `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Le `Dockerfile` la fixe lui-même ; sur le Pi, le service la transmet aussi depuis `/etc/anheart/anheart.env` |
 
 Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
 `BATCH_INTERVAL_MS`, `HEARTBEAT_INTERVAL_S`, `BUFFER_DB_PATH`, `LOG_LEVEL`) ne
@@ -1412,9 +1413,12 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 - **Passager** : `subject_id` est l'identifiant transmis par le tableau de
   bord, ou `null` pour un départ tapé à la console. Le nom affiché du
   programme n'est pas écrit.
-- **Au repos** : le dossier racine est en mode 700 et appartient au compte qui
-  lance la console (`pi` avec le service systemd, `root` dans le conteneur
-  Docker). **Il n'y a pas de chiffrement au repos.** C'est la règle d'attente
+- **Au repos** : le dossier racine est en mode 700. Lancée à la main, la
+  console le crée sous le compte qui la lance. Sur un Pi installé par
+  `scripts/install.sh`, c'est `/var/lib/anheart/records`, propriété du compte
+  `anheart` ; la console y écrit sous `root`, depuis son conteneur
+  ([pi-image.md](pi-image.md#sous-quel-compte)). **Il n'y a pas de chiffrement
+  au repos.** C'est la règle d'attente
   du ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
   HDS / RGPD (ANH-172).
 - `config_hash` et `medical_parameters_version` sont des SHA-256 de la

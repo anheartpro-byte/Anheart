@@ -2,9 +2,14 @@
 # Preflight for the AnHeart console on the Raspberry Pi. Read-only: it checks,
 # it changes nothing, and it never talks to the drive.
 #
-#     bash scripts/pi/preflight.sh          (from raspberry-pi/, on the Pi)
+#     sudo bash scripts/pi/preflight.sh     (from raspberry-pi/, on the Pi)
 #
-# Exit code 0 when nothing blocks `docker compose up`, 1 otherwise.
+# Exit code 0 when nothing blocks the console, 1 otherwise.
+#
+# The configuration read is the machine's, /etc/anheart/anheart.env, written by
+# scripts/install.sh and readable by root only (hence sudo). In a development
+# tree that has its own .env, that file is read instead; ANHEART_ENV_FILE names
+# another one.
 set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
@@ -15,33 +20,33 @@ ok()   { printf '  ok    %s\n' "$1"; }
 warn() { printf '  WARN  %s\n' "$1"; warnings=$((warnings + 1)); }
 fail() { printf '  FAIL  %s\n' "$1"; failures=$((failures + 1)); }
 
+env_file="${ANHEART_ENV_FILE:-}"
+if [ -z "$env_file" ]; then
+    if [ -f .env ]; then env_file=".env"; else env_file="/etc/anheart/anheart.env"; fi
+fi
+
 value() {
-    # The value of KEY in .env, without quotes or a trailing comment.
-    grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//'
+    # The value of KEY in the configuration, without quotes or a trailing comment.
+    grep -E "^$1=" "$env_file" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//'
 }
 
 echo "1. Docker"
 if command -v docker >/dev/null 2>&1; then
     ok "docker: $(docker --version)"
-    if docker compose version >/dev/null 2>&1; then
-        ok "docker compose: $(docker compose version --short)"
-    else
-        fail "docker compose plugin missing (sudo apt install docker-compose-plugin)"
-    fi
     if docker info >/dev/null 2>&1; then
         ok "the daemon answers for this user"
     else
-        fail "the daemon does not answer (sudo usermod -aG docker \$USER, then log in again)"
+        fail "the daemon does not answer (run this script with sudo)"
     fi
 else
-    fail "docker missing (curl -fsSL https://get.docker.com | sh)"
+    fail "docker missing (sudo bash scripts/install.sh)"
 fi
 
-echo "2. Configuration (.env)"
-if [ ! -f .env ]; then
-    fail ".env missing (cp .env.pi.example .env, then fill it in)"
+echo "2. Configuration ($env_file)"
+if [ ! -r "$env_file" ]; then
+    fail "$env_file missing or unreadable (sudo bash scripts/install.sh writes it; it is readable by root only)"
 else
-    ok ".env present"
+    ok "$env_file present"
     for key in MOTOR_BACKEND ECG_SOURCE ARM_RADIUS_M; do
         if [ -n "$(value "$key")" ]; then ok "$key=$(value "$key")"; else fail "$key is required"; fi
     done
@@ -111,8 +116,12 @@ else
             if [ -z "$contract" ]; then
                 fail "src/contract.py: this console's contract version could not be read"
             else
-                answer="$(curl -s --max-time 10 -w '\n%{http_code}' "$url/api/machine/training/poll" \
-                    -H "Authorization: Bearer $key" -H "X-Anheart-Contract: $contract")"
+                # The key reaches curl on its standard input (`-H @-`), never
+                # on its command line, which every user of the machine can read
+                # in the process list. printf is the shell's own: no process.
+                answer="$(printf 'Authorization: Bearer %s\n' "$key" \
+                    | curl -s --max-time 10 -w '\n%{http_code}' "$url/api/machine/training/poll" \
+                        -H @- -H "X-Anheart-Contract: $contract")"
                 code="${answer##*$'\n'}"
                 server="$(printf '%s' "${answer%$'\n'*}" \
                     | sed -nE 's/.*"server_contract_version"[[:space:]]*:[[:space:]]*"([0-9]+\.[0-9]+)".*/\1/p' | head -n 1)"

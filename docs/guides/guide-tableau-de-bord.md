@@ -1620,7 +1620,8 @@ Un patient peut avoir plusieurs gestionnaires : cochez le chez chacun.
    coché sera « Propriétaire »).
 4. **Créer**.
 5. **Copiez la clé** (**Copier**) et gardez la en lieu sûr. **Fermer**.
-6. Sur le Raspberry Pi, dans le fichier `raspberry-pi/.env`, renseignez :
+6. Sur le Raspberry Pi, dans le fichier `/etc/anheart/anheart.env` (`raspberry-pi/.env`
+   sur un poste de développement), renseignez :
    `MACHINE_API_KEY=<la clé>` et `CONVEX_URL=https://<déploiement>.convex.site`
    (voir [guide-console-locale.md](guide-console-locale.md)).
 7. Redémarrez la console de la machine.

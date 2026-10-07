@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Copy the console to a Raspberry Pi and (re)build it there.
+# Copy the console's sources to a Raspberry Pi. It installs nothing there.
 #
-#     bash scripts/pi/deploy.sh pi@anheart-pi.local            # copy + build
-#     bash scripts/pi/deploy.sh pi@anheart-pi.local --start    # ... and start
+#     bash scripts/pi/deploy.sh pi@anheart-pi.local
 #
-# Run from the development machine. The Pi's own .env and data/ are never
-# overwritten: they are the machine's, not the repository's.
+# Run from the development machine, from raspberry-pi/. The machine's
+# configuration (/etc/anheart/anheart.env) and its data (/var/lib/anheart) are
+# outside the copied directory: this script cannot touch them.
 #
-# --start refuses to act while a session is running on the Pi: replacing the
-# console under a turning machine is not something a script decides.
+# Installing, building the image and starting the console is ONE script, run on
+# the Pi itself: scripts/install.sh (docs/pi-image.md). It is the one that
+# refuses to replace the console while a session is running.
 set -euo pipefail
 
 target="${1:-}"
-action="${2:-}"
-if [ -z "$target" ]; then
-    echo "usage: $0 user@host [--start]" >&2
+if [ -z "$target" ] || [ "$#" -ne 1 ]; then
+    echo "usage: $0 user@host" >&2
     exit 2
 fi
 
@@ -30,23 +30,4 @@ rsync -az --delete \
     --exclude 'tests/' --exclude 'stubs/' \
     "$here/" "$target:~/$remote_dir/"
 
-echo "== build the image on the Pi (the first build takes several minutes)"
-ssh "$target" "cd ~/$remote_dir && docker compose build"
-
-if [ "$action" != "--start" ]; then
-    echo "Copied and built. On the Pi: bash scripts/pi/preflight.sh && docker compose up -d"
-    exit 0
-fi
-
-echo "== preflight"
-ssh "$target" "cd ~/$remote_dir && bash scripts/pi/preflight.sh"
-
-echo "== is a session running?"
-state="$(ssh "$target" "cd ~/$remote_dir && port=\$(grep -E '^UI_PORT=' .env | cut -d= -f2); curl -s --max-time 3 http://127.0.0.1:\${port:-8080}/api/status" || true)"
-case "$state" in
-    *'"run_state":"idle"'*|"") ;;
-    *) echo "The console on the Pi is not idle. Stop the session at the machine first." >&2; exit 1 ;;
-esac
-
-echo "== start"
-ssh "$target" "cd ~/$remote_dir && docker compose up -d && sleep 8 && docker compose ps && docker compose logs --tail 12"
+echo "Copied. On the Pi: cd ~/$remote_dir && sudo bash scripts/install.sh"

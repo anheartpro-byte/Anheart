@@ -21,7 +21,9 @@ réellement vérifié**. Il complète [convex.md](convex.md),
 > - **Raspberry Pi** : l'image Docker lance maintenant la console. Elle a été
 >   construite et essayée **en simulation** dans un conteneur ARM64. Elle n'a
 >   **jamais** tourné sur un vrai Pi, ni avec le vrai variateur, ni avec le vrai
->   BITalino (section 7).
+>   BITalino (section 7). Depuis le 7 octobre 2026, un Pi s'installe par un
+>   script et un service systemd lance l'image à l'allumage ; la CI exécute
+>   cette installation en simulation ([pi-image.md](pi-image.md)).
 
 ## Sommaire
 
@@ -70,7 +72,7 @@ Aucune clé n'est dans le dépôt. Tous les fichiers ci-dessous sont ignorés pa
 | `.env.local` | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clé publique de l'instance Clerk de développement. |
 | `.env.local` | `CLERK_SECRET_KEY` | Clé secrète de l'instance Clerk de **développement** (`sk_test_...`). Sans elle le site ne démarre pas en local. |
 | `.vercel-cli/` (racine) | connexion de la CLI Vercel | Connexion au compte du client, valable pour ce dépôt seulement : passer `--global-config .vercel-cli` à chaque commande `vercel`. |
-| `raspberry-pi/.env` | `MACHINE_API_KEY`, `CONVEX_URL` | Sur le Pi : la clé de la machine et l'hôte `.convex.site`. |
+| `/etc/anheart/anheart.env` (sur le Pi, lisible par root seul) | `MACHINE_API_KEY`, `CONVEX_URL` | La clé de la machine et l'hôte `.convex.site`. Écrit par `scripts/install.sh`, hors du dépôt ; sur un poste de développement, le même rôle est tenu par `raspberry-pi/.env`. |
 
 Les variables du projet Vercel `anheart` (`NEXT_PUBLIC_CONVEX_URL`,
 `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`,
@@ -456,8 +458,9 @@ raspberry-pi/.venv/bin/pytest deploy/simulation-vercel/tests
 
 | Prêt | Vérifié comment |
 |---|---|
-| L'image Docker lance la **console** (`python -m src.local_panel`), et rien d'autre. | Construite pour ARM64 (la même architecture que le Pi 4 et 5), 1,8 Go. |
-| `docker-compose.yml` : périphériques, réseau de l'hôte, redémarrage automatique, délai d'arrêt de 60 s. | `docker compose up` en simulation : conteneur « healthy », heartbeat et programmes reçus par Convex de développement. |
+| L'image Docker lance la **console** (`python -m src.local_panel`), et rien d'autre. | Construite pour ARM64 (la même architecture que le Pi 4 et 5) : 1,31 Go, mesuré par la CI sur un runner arm64 (job `pi-install`, run 37610353541). |
+| `scripts/anheart.service` : la même image lancée par systemd à l'allumage, périphériques, réseau de l'hôte, relance après une sortie en erreur, délai d'arrêt de 60 s. | Test de bout en bout en CI, en simulation ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) : service activé, `/healthz`, conteneur « healthy », console au repos après un arrêt du service en pleine séance, après un arrêt brutal, et après l'arrêt puis le rallumage de la machine de remplacement. La liaison avec Convex n'y est pas rejouée (clé de machine vide) ; elle l'avait été avec cette image lancée par Compose, avant ce changement (heartbeat et programmes reçus par le Convex de développement). |
+| `scripts/install.sh` : installe un Pi neuf, sans rien réécrire ni redémarrer à la relance. | Même test, et `tests/test_pi_install.py` dans la gate du Pi. |
 | Arrêt propre. | `docker stop` pendant une séance manuelle simulée : la console met la consigne à zéro, rend la liaison, sort avec le code 0. |
 | Jeton d'accès quand la page n'écoute pas que sur la boucle locale. | 401 sans l'en-tête `x-anheart-token`, 200 avec. |
 | `scripts/pi/preflight.sh` : contrôle avant démarrage, en lecture seule. | Lancé avec une bonne clé (accepté) puis une mauvaise (refusé). |
@@ -467,7 +470,8 @@ raspberry-pi/.venv/bin/pytest deploy/simulation-vercel/tests
 | Le variateur réel depuis le conteneur (`/dev/ttyUSB0` ou `ftdi://`). | Pas de Pi ni de variateur sous la main. |
 | Le BITalino réel depuis le conteneur (liaison `rfcomm`). | Idem. Le script d'entrée tente `rfcomm bind` ; sans Bluetooth il échoue avec un message clair et la console démarre quand même. |
 | Le navigateur en plein écran au démarrage du Pi. | Le fichier est fourni, il n'a jamais été essayé. |
-| Le temps de construction de l'image sur un Pi. | Construit sur un Mac. |
+| Le temps de construction de l'image sur un Pi. | Construit sur un Mac, et sur un runner arm64 de la CI. |
+| L'installation par `scripts/install.sh` sur un vrai Pi, et le démarrage à l'allumage. | Exécutée seulement dans la machine de remplacement de la CI ([pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi)). |
 
 **`PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` restent à `false`** dans le
 modèle de configuration : la machine déployée n'offre que le manuel banc, et le
@@ -476,18 +480,14 @@ décision de jalon (M5, M6), pas une étape de déploiement.
 
 ### 7.2 Préparer le Pi (une fois)
 
-Sur un Raspberry Pi 4 ou 5, Raspberry Pi OS 64 bits :
+Sur un Raspberry Pi 4 ou 5, flasher l'image Raspberry Pi OS figée (fichier et
+empreinte dans [pi-image.md](pi-image.md#le-système-du-pi)). Rien d'autre à
+installer à la main : Docker et le service viennent du script de la section 7.3.
+
+Appairer le BITalino (code 1234), une seule fois, quand il est sous la main :
 
 ```sh
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER        # puis se déconnecter et se reconnecter
-sudo systemctl enable --now bluetooth
-```
-
-Appairer le BITalino (code 1234), une seule fois :
-
-```sh
-bash scripts/pair_device.sh 98:D3:91:FE:4E:9F
+bash scripts/pair_device.sh <adresse MAC du BITalino>
 ```
 
 ### 7.3 Copier et construire
@@ -498,18 +498,30 @@ Depuis le poste de développement, dans `raspberry-pi/` :
 bash scripts/pi/deploy.sh pi@anheart-pi.local
 ```
 
-Le script copie le dossier dans `~/anheart/raspberry-pi` du Pi et y construit
-l'image. Il ne remplace **jamais** le `.env` ni le dossier `data/` du Pi.
-
-### 7.4 Configurer
-
-Sur le Pi :
+Le script copie le dossier dans `~/anheart/raspberry-pi` du Pi, et rien de plus.
+Puis, **sur le Pi** :
 
 ```sh
 cd ~/anheart/raspberry-pi
-cp .env.pi.example .env
-nano .env
+sudo bash scripts/install.sh
 ```
+
+`install.sh` installe Docker, crée le compte `anheart` et ses dossiers, écrit la
+configuration si elle n'existe pas, construit l'image, installe et démarre le
+service `anheart`, puis vérifie que la console répond. Il peut être relancé
+sans risque : détail et versions figées dans [pi-image.md](pi-image.md).
+
+### 7.4 Configurer
+
+Sur le Pi, la configuration est `/etc/anheart/anheart.env`, créée par
+`install.sh` à partir de `.env.pi.example` et lisible par root seul :
+
+```sh
+sudo nano /etc/anheart/anheart.env
+```
+
+Une ligne y est `CLÉ=valeur` et rien d'autre : ni guillemets, ni commentaire en
+fin de ligne.
 
 À remplir :
 
@@ -528,12 +540,12 @@ Toutes les clés sont décrites dans
 ### 7.5 Vérifier, puis démarrer
 
 ```sh
-bash scripts/pi/preflight.sh
-docker compose up -d
-docker compose logs -f
+sudo bash scripts/pi/preflight.sh
+sudo systemctl restart anheart
+journalctl -u anheart -f
 ```
 
-`preflight.sh` contrôle Docker, le `.env`, la présence du câble du variateur,
+`preflight.sh` contrôle Docker, la configuration (`/etc/anheart/anheart.env`), la présence du câble du variateur,
 l'appairage du BITalino, la clé de la machine et le contrat du tableau de
 bord. Il ne parle jamais au variateur. Il sort avec le code 1 s'il trouve un
 point bloquant.
@@ -571,13 +583,22 @@ cp scripts/pi/anheart-kiosk.desktop ~/.config/autostart/
 
 ### 7.6 Arrêter, mettre à jour
 
+Arrêter la console, sur le Pi :
+
 ```sh
-docker compose down          # arrêt : la console met la consigne à zéro avant de sortir
-bash scripts/pi/deploy.sh pi@anheart-pi.local --start   # depuis le poste de développement
+sudo systemctl stop anheart     # la console met la consigne à zéro avant de sortir
 ```
 
-`--start` refuse d'agir si la console du Pi n'est pas au repos : on ne remplace
-pas le logiciel d'une machine qui tourne.
+Mettre à jour, console en marche et **au repos** :
+
+```sh
+bash scripts/pi/deploy.sh pi@anheart-pi.local   # depuis le poste de développement : nouvelles sources
+sudo bash scripts/install.sh                    # sur le Pi : nouvelle image, service redémarré
+```
+
+`install.sh` refuse d'agir si la console du Pi n'est pas au repos : on ne
+remplace pas le logiciel d'une machine qui tourne. `systemctl status anheart`
+montre la version installée.
 
 Un redémarrage (du conteneur, du Pi) **ne relance jamais un mouvement** : la
 console revient au repos, en lecture seule. Si elle trouve le variateur activé
@@ -587,11 +608,12 @@ l'opérateur.
 > Arrêter la console **pendant une séance** laisse la séance `active` dans
 > Convex (section 4). Terminer la séance à la console avant d'arrêter.
 
-### 7.7 Sans Docker
+### 7.7 Un seul chemin
 
-`scripts/anheart.service` lance la même console depuis un environnement virtuel,
-par systemd. À n'utiliser que sur un Pi où Docker n'est pas voulu ; les
-instructions sont en tête du fichier.
+Il n'y a plus d'installation sans Docker ni de fichier Compose : un seul chemin
+est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
+(image publiée et signée par la CI) sont dans
+[pi-image.md](pi-image.md#1-le-choix--une-image-docker-lancée-par-systemd).
 
 ---
 
@@ -605,5 +627,5 @@ instructions sont en tête du fichier.
 | Déployer Convex en production, puis fusionner la branche | Une décision (section 3.3). |
 | Donner aux préversions Vercel les valeurs de développement | Un réglage dans Vercel (section 5.2). |
 | Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
-| Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. |
+| Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |
 | Vérifier chaque préversion Git de la simulation avant fusion | `simulation/` et `deploy/` sont versionnés ; le projet Git construit depuis la racine avec `simulation_app:app`. |

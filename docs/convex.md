@@ -819,7 +819,9 @@ celles d'un projet **neuf**.
    configuré, cette étape disparaît : le premier admin est le premier
    `org:admin` de l'organisation Anheart dans Clerk.
 7. Créer la machine sur le site (admin), copier la clé affichée **une seule
-   fois**, et la mettre dans `raspberry-pi/.env` : `MACHINE_API_KEY=…` et
+   fois**, et la mettre dans la configuration de la machine
+   (`/etc/anheart/anheart.env` sur un Pi installé, `raspberry-pi/.env` sur un
+   poste de développement) : `MACHINE_API_KEY=…` et
    `CONVEX_URL=https://<déploiement>.convex.site`.
 
 `npm run dev` lance ensemble Next.js et `convex dev` ; son `predev` exécute

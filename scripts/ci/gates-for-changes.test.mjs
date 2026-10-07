@@ -120,6 +120,7 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     "raspberry-pi/tests/web/panel_manual.test.mjs",
     "contracts/machine-api.json",
     "contracts/README.md",
+    "docs/pi-image.md",
   ];
   for (const path of forced) {
     const { kind, ...needed } = classify(path);
