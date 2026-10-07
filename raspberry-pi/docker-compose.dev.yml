@@ -27,9 +27,8 @@ services:
     devices: []
     volumes:
       - ./data:/app/data
-      - ./.env.docker:/app/.env:ro
     # The console (python -m src.local_panel) in full simulation. These win
-    # over .env.docker. UI_HOST is not loopback here (the page is reached
+    # over the .env file. UI_HOST is not loopback here (the page is reached
     # through the port mapping), so the console demands a token: send it in the
     # `x-anheart-token` header, or open the page and type it when asked.
     environment:
@@ -40,7 +39,6 @@ services:
       UI_HOST: "0.0.0.0"
       UI_PORT: "8080"
       UI_TOKEN: "dev-only-token-change-me"
-      LOG_LEVEL: "DEBUG"
       PYTHONUNBUFFERED: "1"
     # The session must be brought to a safe stop before the container dies.
     # The default 10 s is not enough once a controlled ramp is involved.

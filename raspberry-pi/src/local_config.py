@@ -1,8 +1,8 @@
-"""Configuration of the local operator console, from the environment. No Convex.
+"""Configuration of the local operator console, from the environment.
 
-``src/config.py`` requires Convex credentials, so a bench session with nobody's
-cloud account cannot even start through it. This module is the console's own:
-it reads the ``.env`` keys the console needs, validates every one of them, and
+No Convex credentials are required: a bench session with nobody's cloud account
+must be able to start. This module is the console's only configuration: it
+reads the ``.env`` keys the console needs, validates every one of them, and
 reports **every** problem at once rather than the first, because an operator at
 a bench fixes a ``.env`` in one go, not one line per restart.
 

@@ -167,8 +167,8 @@ la **chaîne de sécurité**, listée dans `[tool.coverage.report] include` de
 `training/*`, `sim/*`, `bitalino_client`, `geometry`, `ecg_pipeline`,
 `local_config`, `bitalino_rfcomm_macos`, `local_panel`, `panel_status`,
 `cloud_sync`, `dsp`, `sensors/*`, `presence/*`, `panel_lifecycle`,
-`task_completion` et `web/profile_writer`. Le reste du code web, l'ancien client
-Convex et le tampon SQLite sont mesurés mais ne bloquent pas.
+`task_completion` et `web/profile_writer`. Le reste du code web est mesuré mais
+ne bloque pas.
 
 **Dette déclarée.** `src/signal_processing.py` fait partie de la chaîne de
 sécurité (la fréquence cardiaque qui pilote le moteur le traverse) mais n'est

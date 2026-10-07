@@ -302,9 +302,8 @@ async def _acquire(
 ) -> list[float]:
     """Run a simulated acquisition and return the RAW ECG column.
 
-    One second per read at 1000 Hz, which is exactly what
-    ``src/session_manager.py`` does (``read_samples(config.sample_rate)``).
-    Eight seconds is the pipeline's metric window.
+    One second per read at 1000 Hz. Eight seconds is the pipeline's metric
+    window.
     """
     clock = ManualClock()
     subject = Physiology(geometry=SIM_ARM, origin=clock.monotonic(), config=config, script=script)
@@ -327,7 +326,7 @@ async def _acquire(
 
 
 def _ecg_column(batch: SampleBatch) -> Sequence[float]:
-    """The ECG channel's values out of a batch, the way the session manager reads them."""
+    """The ECG channel's values out of a batch, the way the ECG pipeline reads them."""
     for channel in batch.channels:
         if channel.channel == ECG_CHANNEL:
             return channel.values
@@ -423,7 +422,7 @@ def test_the_channel_name_table_covers_every_channel_the_client_accepts() -> Non
 def test_the_pipeline_does_not_care_whether_a_window_arrived_in_one_piece() -> None:
     """Justifies feeding 8 s in one call in the tests below.
 
-    The session manager calls ``treat_batch`` once per second. The metric path
+    The console calls ``treat_batch`` once per block read. The metric path
     reads a rolling window of RAW samples, so eight one-second calls and one
     eight-second call must produce the same metrics. If they ever diverge,
     every pipeline assertion in this file is testing the wrong code path, so
@@ -1667,7 +1666,7 @@ def test_motion_noise_wrecks_the_heart_rate_long_before_it_degrades_the_grade(
 def test_the_batches_are_the_pipelines_own_records_and_not_look_alikes() -> None:
     """A simulator with its own record type would be testing its own record type.
 
-    The session manager reads ``batch.channels[i].channel`` and ``.values`` and
+    The ECG pipeline reads ``batch.channels[i].channel`` and ``.values`` and
     hands them straight to ``treat_batch``, so the objects have to be the real
     ``SampleBatch``/``ChannelData``. The Protocol in ``src/sim/bitalino.py``
     describes them statically; this is what stops that description from
@@ -1694,10 +1693,10 @@ async def _one_batch(channels: Sequence[int] | None = None) -> SampleBatch:
     return batch
 
 
-def test_the_client_carries_the_whole_surface_the_session_manager_calls() -> None:
+def test_the_client_carries_the_whole_surface_the_console_calls() -> None:
     """Named directly, so a rename fails the TYPE CHECK rather than a runtime probe.
 
-    ``src/session_manager.py`` calls exactly these, and the sync/async split is
+    The console relies on exactly these, and the sync/async split is
     part of the contract: five coroutines and one plain method. A drop-in that
     got that split wrong would fail at the moment a session starts, on
     hardware, which is the worst possible place to find out.
@@ -1854,7 +1853,7 @@ def test_a_batch_is_stamped_with_its_first_sample() -> None:
 
 
 def test_the_client_refuses_a_configuration_the_hardware_would_refuse() -> None:
-    """Mirrored from the real client, because a session manager that can start a
+    """Mirrored from the real client, because a console that can start a
     simulated session at 500 Hz and not a real one was never really tested."""
     with pytest.raises(ValueError, match="sample rate must be one of"):
         SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()), sample_rate=500)
@@ -1945,7 +1944,7 @@ def test_an_injected_disconnect_fires_the_callback_after_the_flags_drop() -> Non
     """Mirrors the real client's acquisition-thread failure path, in order.
 
     A callback that inspected the client must see a device that is already gone
-    rather than one that is about to be: the session manager's disconnect
+    rather than one that is about to be: a consumer's disconnect
     handling is only as good as that ordering, and it is the ordering the real
     client happens to have.
     """
@@ -1985,7 +1984,7 @@ def test_an_injected_disconnect_without_a_callback_is_still_a_disconnect() -> No
     asyncio.run(scenario())
 
 
-def test_the_client_accepts_the_callback_shape_the_session_manager_passes() -> None:
+def test_the_client_accepts_the_callback_shape_of_the_real_client() -> None:
     """A coroutine function taking nothing and returning nothing."""
     callback: Callable[[], Awaitable[None]] = _noop
     client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))

@@ -5,7 +5,7 @@ Launched with ``python -m src.local_panel`` from ``raspberry-pi/``, natively
 composition root the rest of the code was written for and never had: the
 training runtime, the ATV320 (or its simulator), the BITalino (or its
 simulator), the ECG DSP and the operator web page, wired together on ONE
-asyncio loop. ``main.py`` (the Convex recorder) is untouched.
+asyncio loop. It is the only entry point of this directory.
 
 Confirmed idle is READ-ONLY
 --------------------------
