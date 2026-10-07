@@ -1066,6 +1066,14 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    séance sans que personne l'ait demandé termine la séance (section 5) ; rien
    ne bloque la boucle.
 
+La règle 10 du contrat donne quatre formes d'écriture que l'analyse statique
+du dépôt accepte comme les vérificateurs de types : `match` qui rend une
+valeur terminé par `raise assert_never(sujet)`, motif de classe qui lit le
+champ sur la valeur reconnue, membre de protocole abstrait dont la
+documentation est le seul corps, jamais deux modules qui s'importent l'un
+l'autre. Elles sont détaillées dans
+[framework-de-test.md, « Traiter un constat »](framework-de-test.md#analyse-statique-externe--codeql-anh-196).
+
 Exceptions en cours (dans `pyproject.toml`) : `signal_processing.py` et
 `scripts/` sont hors vérification de types ; `signal_processing.py` est aussi
 hors de la porte de couverture (`coverage_pending`, liste figée par

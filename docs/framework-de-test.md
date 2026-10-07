@@ -1680,34 +1680,52 @@ traiter. Trois règles :
   installé ; aucun filtre de règle n'est ajouté
   (`scripts/ci/analysis-workflows.test.mjs` le vérifie).
 
-Formes que l'analyse et les vérificateurs de types stricts du Pi acceptent
-ensemble, à reprendre dans le code nouveau de `raspberry-pi/src/` :
+Formes que l'analyse et les vérificateurs de types stricts acceptent ensemble,
+à reprendre dans le code Python nouveau. Les quatre premières sont la règle 10
+du contrat de code strict (résumé dans
+[raspberry-pi.md, section 13](raspberry-pi.md#13-le-contrat-de-code-strict-et-la-gate)),
+qui en donne un exemple chacune :
 
-* une fonction qui rend une valeur dans chaque cas d'un `match` exhaustif se
-  termine, après le `match`, par `raise assert_never(sujet)`, sans dernier cas
-  générique : l'analyse ne sait pas qu'un `match` complet ne peut pas finir
-  sans cas, et les deux vérificateurs de types refusent toujours un cas oublié
-  en le nommant ;
-* une valeur choisie par cas est rendue dans chaque cas, pas affectée à une
-  variable lue après le `match` ;
-* un membre de protocole (`typing.Protocol`) est déclaré `@abstractmethod` et
-  a sa documentation pour seul corps, comme les protocoles de la bibliothèque
-  standard ;
-* une valeur reçue d'un tiers n'entre dans un journal qu'une fois ses sauts de
-  ligne remplacés et sa longueur bornée, comme le fait `logged_header`
-  ([`src/web/ws.py`](../raspberry-pi/src/web/ws.py)) ;
-* pour un nom de fichier reçu de l'extérieur, la forme que l'analyse reconnaît
-  est celle de `resolve_under`
+* **`match` qui rend une valeur.** Une fonction qui rend une valeur dans
+  chaque cas d'un `match` exhaustif se termine, après le `match`, par
+  `raise assert_never(sujet)`, sans dernier cas générique : l'analyse suppose
+  qu'un `match` peut finir sans prendre de cas. Les deux vérificateurs de
+  types refusent toujours un cas oublié en le nommant, et une valeur
+  impossible lève toujours une `AssertionError`. Chaque cas rend sa valeur,
+  au lieu d'affecter une variable lue après le `match`. Un sujet qui est un
+  appel ou un `await` est d'abord lié à un nom. Un `match` dont les cas
+  agissent sans rien rendre garde son dernier cas générique.
+* **Motif de classe.** Le motif reconnaît la classe, et le champ se lit sur la
+  valeur reconnue (`case AlreadyStarted():` puis `refusal.state`). Capturer un
+  champ sous son propre nom (`case AlreadyStarted(state=state):`) est lu par
+  l'analyse comme un usage de `state` avant son affectation ; elle l'a signalé
+  sur le premier cas d'un `match` qui ouvre une fonction. Pour une valeur
+  imbriquée, lier l'objet et lire dessus : `case Err(BadResponse() as error):`
+  puis `error.detail`.
+* **Membre de protocole.** Un membre de `typing.Protocol` est déclaré
+  `@abstractmethod` et a sa documentation pour seul corps, comme les
+  protocoles de la bibliothèque standard. Une classe qui satisfait le
+  protocole par sa forme n'est pas concernée ; une classe qui en hérite doit
+  définir tous ses membres, sinon elle ne peut pas être construite.
+* **Imports.** Deux modules ne s'importent jamais l'un l'autre, même sous
+  `if TYPE_CHECKING:` : l'analyse compte un import réservé aux types comme
+  exécuté et signale un cycle. Le type partagé se définit dans celui des deux
+  que l'autre importe déjà, et l'autre le redonne sous son propre nom quand ce
+  nom est public.
+* **Journal.** Une valeur reçue d'un tiers n'entre dans un journal qu'une fois
+  ses sauts de ligne remplacés et sa longueur bornée, comme le fait
+  `logged_header` ([`src/web/ws.py`](../raspberry-pi/src/web/ws.py)).
+* **Nom de fichier.** Pour un nom de fichier reçu de l'extérieur, la forme que
+  l'analyse reconnaît est celle de `resolve_under`
   ([`src/record/containment.py`](../raspberry-pi/src/record/containment.py)) :
   normaliser le chemin, vérifier qu'il commence par le dossier permis, puis
   n'utiliser que le chemin normalisé.
 
-Ce que l'analyse lit mal aujourd'hui, et qui se remet donc comme faux positif
-avec sa raison : un import placé sous `if TYPE_CHECKING:` est compté comme
-exécuté, si bien que deux modules qui ne se référencent que pour leurs types
-sont signalés comme un cycle d'imports ; l'instruction `type` et les
-paramètres de type ne sont pas vus comme des définitions ; `await` sur une
-tâche est lu comme une instruction sans effet.
+Ce que l'analyse lit mal aujourd'hui et qu'aucune écriture plus simple ne
+retire, donc ce qui se remet comme faux positif avec sa raison : l'instruction
+`type` et les paramètres de type ne sont pas vus comme des définitions ;
+`await` sur une tâche est lu comme une instruction sans effet ; une constante
+publique qui n'est lue que par un autre module peut être dite inutilisée.
 
 **Ce que cette analyse bloque.** Rien dans une PR : les jobs `codeql (...)` ne
 sont pas dans la protection de branche de `develop`. Les rendre obligatoires
