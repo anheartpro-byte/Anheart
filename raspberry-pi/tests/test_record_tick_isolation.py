@@ -3,8 +3,10 @@
 Three angles on the one safety requirement of the black box:
 
 * **measured**: the same console, ticked with and without the writer active,
-  takes the same time per tick (the difference of the medians is far under a
-  millisecond; the supervisor's ``loop_stall`` rule acts at 600 ms);
+  costs the loop thread the same processor time per tick (the difference of
+  the medians is far under a millisecond; the supervisor's ``loop_stall``
+  rule acts at 600 ms). Processor time, not the time on a watch: the verdict
+  must not depend on what else the machine is doing (ANH-183);
 * **structural**: while a recorded session ticks, the thread that runs the
   loop opens, creates, renames, truncates and flushes NOTHING under the
   records directory. Every one of those is the journal thread's;
@@ -22,7 +24,8 @@ import asyncio
 import statistics
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, Literal
@@ -64,22 +67,70 @@ BLOCKS: Final[int] = 6
 TICKS_PER_BLOCK: Final[int] = 250
 
 SAME: Final[float] = 0.001
-"""Seconds. "The tick does not change": the medians differ by less than this."""
+"""Seconds of processor. "The tick does not change": the medians differ by less than this."""
 
 EXIT_BOUND: Final[float] = 12.0
 """Seconds. A console whose records disk is dead still leaves: the 5 s it gives the
 journal thread (``STOP_TIMEOUT``), plus the rest of its exit, with room for a slow runner."""
 
 TAIL: Final[float] = 0.1
-"""Seconds. Ninety-nine ticks in a hundred, writer active, stay under a sixth of the
-0.6 s ``loop_stall`` FREEZE.
+"""Seconds of processor. Ninety-nine ticks in a hundred, writer active, stay under a
+sixth of the 0.6 s ``loop_stall`` FREEZE.
 
-The percentile, not the maximum: on a shared runner one tick in a few thousand
-is preempted for tens of milliseconds whatever the code under it does (170 ms
-was seen on a loaded machine, in the arm WITHOUT the writer as well), and that
-says nothing about the writer. The slowest tick is printed. The bound on every
+The percentile, not the maximum: now and then a tick computes for longer
+whatever the code under it does (the interpreter collects its garbage inside
+whichever call set it off), and that says nothing about the writer. The
+slowest tick is printed. The bound on every
 single tick is the next two tests: nothing the tick does can wait on the disk,
 and under the real loop a disk that never answers raises no ``loop_stall``."""
+
+
+@dataclass(frozen=True, slots=True)
+class Spent:
+    """What one ``control_step`` took, in seconds, read on two clocks."""
+
+    watch: float
+    """From its start to its end, as a watch reads it (``time.perf_counter``).
+
+    Printed, never judged: on a shared runner it also counts every moment the
+    thread was set aside for another process (170 ms was seen for one tick on
+    a loaded machine, in the arm WITHOUT the writer as well)."""
+    processor: float
+    """What the loop thread itself spent computing (``time.thread_time``).
+
+    What is judged: it does not move with the load of the machine. It does
+    not count a wait either (a lock, the disk): that a tick never waits on the
+    record is what the next tests prove, without a stopwatch."""
+
+
+def verdict(without: Sequence[Spent], with_writer: Sequence[Spent]) -> tuple[bool, str]:
+    """Whether the tick costs the same with the writer active, and the measurement as text."""
+
+    def median(ticks: Sequence[Spent], *, processor: bool) -> float:
+        return statistics.median(tick.processor if processor else tick.watch for tick in ticks)
+
+    def p99(ticks: Sequence[Spent], *, processor: bool) -> float:
+        values = [tick.processor if processor else tick.watch for tick in ticks]
+        return statistics.quantiles(values, n=100)[98]
+
+    def shown(seconds: float) -> str:
+        return f"{seconds * 1e6:.0f} us"
+
+    summary = (
+        f"control tick, {len(without)} ticks each, processor time of the loop thread: "
+        f"median {shown(median(without, processor=True))} without the writer, "
+        f"{shown(median(with_writer, processor=True))} with; "
+        f"p99 {shown(p99(without, processor=True))} without, "
+        f"{shown(p99(with_writer, processor=True))} with. "
+        f"On a watch (not judged): median {shown(median(without, processor=False))} without, "
+        f"{shown(median(with_writer, processor=False))} with; "
+        f"p99 {shown(p99(without, processor=False))} without, "
+        f"{shown(p99(with_writer, processor=False))} with; "
+        f"max {shown(max(tick.watch for tick in without))} without, "
+        f"{shown(max(tick.watch for tick in with_writer))} with"
+    )
+    same = median(with_writer, processor=True) - median(without, processor=True) < SAME
+    return same and p99(with_writer, processor=True) < TAIL, summary
 
 
 async def cruising(tmp_path: Path, name: str, *, record: bool) -> tuple[Rig, Journal | None]:
@@ -106,10 +157,10 @@ async def cruising(tmp_path: Path, name: str, *, record: bool) -> tuple[Rig, Jou
     return rig, journal
 
 
-async def timed_ticks(rig: Rig, count: int) -> list[float]:
-    """``count`` control ticks as the loop runs them; the duration of each ``control_step``."""
+async def timed_ticks(rig: Rig, count: int) -> list[Spent]:
+    """``count`` control ticks as the loop runs them; what each ``control_step`` took."""
     panel = rig.panel
-    spent: list[float] = []
+    spent: list[Spent] = []
     for index in range(count):
         rig.clock.advance(TICK)
         panel.surface.note_presence(OPERATOR)
@@ -117,8 +168,10 @@ async def timed_ticks(rig: Rig, count: int) -> list[float]:
         if index % 5 == 0:
             await panel.sensor_step()
         started = time.perf_counter()
+        computing = time.thread_time()
         await panel.control_step()
-        spent.append(time.perf_counter() - started)
+        computed = time.thread_time() - computing
+        spent.append(Spent(watch=time.perf_counter() - started, processor=computed))
     return spent
 
 
@@ -135,8 +188,8 @@ async def test_ex2_the_tick_takes_the_same_time_with_the_writer_active(
     assert journal is not None
     journal.start()
 
-    without: list[float] = []
-    with_writer: list[float] = []
+    without: list[Spent] = []
+    with_writer: list[Spent] = []
     for _ in range(BLOCKS):  # interleaved, so a slow moment of the machine hits both
         without.extend(await timed_ticks(plain, TICKS_PER_BLOCK))
         with_writer.extend(await timed_ticks(recorded, TICKS_PER_BLOCK))
@@ -152,21 +205,37 @@ async def test_ex2_the_tick_takes_the_same_time_with_the_writer_active(
     assert len(loaded.value.rows) >= BLOCKS * TICKS_PER_BLOCK, "the writer really was active"
     assert len(loaded.value.raw) >= BLOCKS * TICKS_PER_BLOCK
 
-    median_without = statistics.median(without)
-    median_with = statistics.median(with_writer)
-    p99_without = statistics.quantiles(without, n=100)[98]
-    p99_with = statistics.quantiles(with_writer, n=100)[98]
-    summary = (
-        f"control tick, {len(without)} ticks each: median {median_without * 1e6:.0f} us without "
-        f"the writer, {median_with * 1e6:.0f} us with; p99 {p99_without * 1e6:.0f} us without, "
-        f"{p99_with * 1e6:.0f} us with; max {max(without) * 1e6:.0f} us without, "
-        f"{max(with_writer) * 1e6:.0f} us with"
-    )
+    same, summary = verdict(without, with_writer)
     print(summary)  # noqa: T201 - the measurement the ticket asks for, shown with -s
-    assert median_with - median_without < SAME, summary
-    assert p99_with < TAIL, summary
+    assert same, summary
     await plain.panel.close()
     await recorded.panel.close()
+
+
+def test_ex2_the_verdict_on_the_tick_does_not_move_with_the_load_of_the_machine() -> None:
+    """ANH-183 EX-8: a loaded runner cannot fail the measure, a costlier tick still does."""
+    quiet = [Spent(watch=60e-6, processor=50e-6)] * 300
+    # Every tick set aside for 200 ms by its neighbours, the writer's arm only: the worst a
+    # loaded runner can do to the time on a watch. The thread computed no more.
+    crowded = [Spent(watch=0.2, processor=62e-6)] * 300
+    passed, said = verdict(quiet, crowded)
+    assert passed, said
+    assert "200000 us with" in said, "the time on a watch is still shown"
+    # The writer makes the tick compute 2 ms more: no load explains that.
+    costlier = [Spent(watch=2.1e-3, processor=2.05e-3)] * 300
+    refused, _ = verdict(quiet, costlier)
+    assert not refused
+    # One tick in fifty computes for 150 ms with the writer: the median hides it, the tail does not.
+    heavy_tail = [
+        *[Spent(watch=60e-6, processor=50e-6)] * 294,
+        *[Spent(watch=0.15, processor=0.15)] * 6,
+    ]
+    tailed, _ = verdict(quiet, heavy_tail)
+    assert not tailed
+    # A single long tick (the interpreter collecting its garbage, say) is not the writer's doing.
+    one_pause = [*[Spent(watch=60e-6, processor=50e-6)] * 299, Spent(watch=0.3, processor=0.3)]
+    spared, _ = verdict(quiet, one_pause)
+    assert spared
 
 
 async def test_ex2_no_tick_touches_the_records_directory_or_calls_fsync(
