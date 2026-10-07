@@ -64,6 +64,8 @@ function panel() {
   const clock = { now: 1000 };
   const published = new Map();
   const listeners = [];
+  // One-shot timers the page sets: kept here, and fired by `wait` when their time has come.
+  const timers = [];
   const context = vm.createContext({
     document: {
       title: /<title>([^<]*)<\/title>/.exec(html)[1],
@@ -74,6 +76,7 @@ function panel() {
     window: {
       addEventListener: (name, listener) => listeners.push([name, listener]),
       sessionStorage: { getItem: () => null, setItem: () => undefined },
+      setTimeout: (callback, delay) => timers.push({ callback, due: clock.now + delay }),
     },
     performance: { now: () => clock.now },
   });
@@ -112,6 +115,13 @@ function panel() {
     stack,
     // What the browser does on a window event: call whoever listens to it.
     fire: (name) => listeners.filter((entry) => entry[0] === name).forEach((entry) => entry[1]()),
+    // Time passing with nothing arriving: the timers that have come due fire, in the order they were set.
+    wait: (ms) => {
+      clock.now += ms;
+      const due = timers.filter((timer) => timer.due <= clock.now);
+      due.forEach((timer) => timers.splice(timers.indexOf(timer), 1));
+      due.forEach((timer) => timer.callback());
+    },
     shown: (id) => !node(id).classes.has("hidden"),
     // Whether a banner saying `phrase` is on screen, whichever element carries it.
     announced: (phrase) =>
@@ -182,6 +192,7 @@ function status(overrides = {}) {
   return {
     run_state: "idle",
     estop_latched: false,
+    supervisor_estop: null,
     attested: true,
     attestation: null,
     attestation_statement: "",
@@ -226,6 +237,7 @@ function panelRow(overrides = {}) {
       dsp_quality: "good",
     },
     heart_rate_trend_bpm_per_min: 0,
+    manual_rise_hold: null,
     radius_m: 1.5,
     gear_ratio: 49.79,
     motor_max_rpm: 300,
@@ -793,4 +805,839 @@ test("the tab is titled after the page it shows", () => {
   }
   context.showView("sensor", "RESP");
   assert.equal(context.document.title, "RESP - AnHeart");
+});
+
+/* ======================= what the loop made of a manual target ======================= */
+
+const RATIO = 49.79;
+
+// One speed as the API renders it, from the whole motor rpm the machine counts in.
+const turning = (motor) => ({ motor_rpm: motor, output_rpm: motor / RATIO, hertz: motor / 27.6, g_load: 0, resultant_g: 1 });
+
+function manualRow(target = 0, overrides = {}) {
+  return {
+    occupancy: "bench",
+    occupancy_label: "BANC - personne a bord : NON",
+    target: turning(target),
+    ceiling: turning(300),
+    min_run: turning(55),
+    ramping: false,
+    ramp_eta_s: null,
+    ...overrides,
+  };
+}
+
+// A manual session as one frame shows it, the applied target in motor rpm.
+const manualFrame = (at, target = 0, overrides = {}) =>
+  snapshot({ at, mode: "manuel", phase: "hold", manual: manualRow(target), ...overrides });
+
+// What the loop publishes when it refuses a command, or takes a target back (no operator then).
+const refusal = (at, detail, operator = "op") => ({ kind: "refused", at, wall_clock: 0, operator, detail });
+
+const HELD = "consigne refusee : le verdict hr_stale tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible";
+const TAKEN_BACK =
+  "cible de 249 tr/min moteur remise a 0 : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. " +
+  "Attendre une frequence cardiaque fiable, puis redonner la cible";
+
+// The operator composes `rpm` and presses "Appliquer"; the console takes the target into its mailbox at `at`.
+async function apply(context, rpm, at) {
+  context.state.manualDraft = rpm;
+  context.api = (path, options) =>
+    path === "/api/manual/target"
+      ? Promise.resolve({ kind: "manual_target", operator: "op", detail: options.body.output_rpm.toFixed(2) + " output rpm", at })
+      : new Promise(() => undefined);
+  context.doManualApply();
+  await settle();
+}
+
+test("the 202 of Appliquer says the target is sent, not that the machine is on its way", async () => {
+  // Given a manual session at standstill, and a target the console has only put in its mailbox.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // Then the note claims nothing the loop has not said yet.
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  // And a frame taken before the command changes nothing: it cannot speak about it.
+  frame(manualFrame(59.9));
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+});
+
+test("a target the loop refuses turns the note into that refusal", async () => {
+  // Given a target sent over an arm that a verdict holds at standstill.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8, 0, verdict("freeze", "hr_stale", false)));
+  await apply(context, 5, 60);
+  // When the loop refuses it on its next tick, as an event.
+  context.addEvent(refusal(60.1, HELD));
+  // Then the note is the refusal, in red, word for word, and no longer says "sent".
+  const note = node("manual-note");
+  assert.ok(note.textContent.includes(HELD), note.textContent);
+  assert.ok(note.textContent.startsWith("refus de la machine"), note.textContent);
+  assert.equal(note.textContent.includes("cible envoyee"), false);
+  assert.ok(note.classes.has("note-bad"));
+  // And the frames that follow, target still at 0, leave it there.
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(manualFrame(60 + tick * 0.2, 0, verdict("freeze", "hr_stale", false)));
+  }
+  assert.ok(note.textContent.includes(HELD), note.textContent);
+});
+
+test("a refusal that reaches the screen before the 202 is not overwritten by it", async () => {
+  // Given a refusal the socket delivered first: it is stamped after the command it answers.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  context.addEvent(refusal(60.1, HELD));
+  // When the 202 of that command arrives.
+  await apply(context, 5, 60);
+  // Then the note still says refused, and nothing is awaited any more.
+  assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
+  assert.equal(context.state.manualSent, null);
+  // And a later target is not taken for answered by that older refusal.
+  await apply(context, 4, 70);
+  assert.equal(node("manual-note").textContent, "cible envoyee : 4.00 output rpm - pas encore prise par la machine");
+});
+
+test("the note says the machine took the target once a frame shows it applied", async () => {
+  // Given a target sent: 5.00 tr/min at the arm is 249 tr/min at the motor.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the first frame taken after the command shows that target applied.
+  frame(manualFrame(60.2, 249));
+  // Then the note says so, from the machine's own report.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  assert.equal(context.state.manualSent, null);
+});
+
+test("the note stops saying the machine follows a target once the machine has dropped it", async () => {
+  // Given a target the machine took, the arm on its way to it.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249, { setpoint: turning(60), measured: turning(58) }));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"));
+  // While the machine holds it, the note stays.
+  frame(manualFrame(62, 249, { setpoint: turning(120), measured: turning(118) }));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"));
+  // When the operator presses STOP: the target is 0 from the next frame, the arm still turning.
+  frame(manualFrame(62.2, 0, { mode: "arret", phase: "cooldown", setpoint: turning(119), measured: turning(120) }));
+  // Then the card no longer says that the machine took 5 tr/min and follows it.
+  assert.equal(node("manual-note").textContent, "");
+});
+
+test("a target taken while a verdict holds the setpoint is not said to be followed", async () => {
+  // Given an arm turning at 120 tr/min moteur under a warning that holds its speed.
+  const { context, frame, node } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  const at120 = { setpoint: turning(120), measured: turning(120) };
+  frame(manualFrame(59.8, 120, { ...at120, ...held }));
+  await apply(context, 5, 60);
+  // When the machine takes the higher target and the freeze keeps the setpoint where it is.
+  frame(manualFrame(60.2, 249, { ...at120, ...held }));
+  // Then the note says taken, and does not say followed.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  // A reduce walks the setpoint down whatever the target is: not followed either.
+  frame(manualFrame(60.4, 249, { setpoint: turning(110), measured: turning(112), ...verdict("reduce", "hr_stale", false) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  // When the warning lifts, the setpoint walks to the target again, and the note says so.
+  frame(manualFrame(60.6, 249, { setpoint: turning(112), measured: turning(112) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+  // And the words come off again the moment a verdict holds the setpoint, latched or not.
+  frame(manualFrame(60.8, 249, { setpoint: turning(118), measured: turning(116), ...verdict("freeze", "loop_stall", true) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+});
+
+test("under a freeze a target of 0 is a stop asked for, and the note says it is followed", async () => {
+  // Given an arm at 249 tr/min moteur under a freeze, and the operator's own zero.
+  const { context, frame, node } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  frame(manualFrame(59.8, 249, { setpoint: turning(249), measured: turning(249), ...held }));
+  await apply(context, 0, 60);
+  // When the machine takes it: under a freeze a stop asked for is walked down all the same.
+  frame(manualFrame(60.2, 0, { setpoint: turning(240), measured: turning(246), ...held }));
+  // Then, of all targets under a freeze, this one is said followed.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 0.00 output rpm (suivie aux limites de mouvement)");
+});
+
+test("wiping a taken note leaves alone what was written there since", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249));
+  // The route refuses a later click: its answer replaces the note.
+  context.api = () => Promise.reject(new Error("the machine is running, not idle"));
+  context.doManualApply();
+  await settle();
+  // When the machine then drops the target, that answer is not the note to wipe.
+  frame(manualFrame(62.2, 0, { mode: "arret", phase: "cooldown" }));
+  assert.equal(node("manual-note").textContent, "the machine is running, not idle");
+});
+
+test("an applied target one motor rpm away from the one sent is not read as taken", async () => {
+  // Given a turning arm holding 249 tr/min moteur, and 5.02 tr/min sent (250 at the motor).
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8, 249));
+  await apply(context, 5.02, 60);
+  // When the frames keep showing 249: the new target was not taken.
+  frame(manualFrame(60.2, 249));
+  // Then the note does not say it was.
+  assert.equal(node("manual-note").textContent.includes("prise par la machine :"), false, node("manual-note").textContent);
+  frame(manualFrame(60.4, 250));
+  assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"), node("manual-note").textContent);
+});
+
+test("a target the machine takes back is written in the note of every screen showing the session", async () => {
+  for (const clicked of [true, false]) {
+    // Given a target the machine took, on the screen that sent it and on one that did not.
+    const { context, frame, node } = panel();
+    frame(manualFrame(59.8));
+    if (clicked) await apply(context, 5, 60);
+    frame(manualFrame(60.2, 249));
+    // When the machine puts it back to 0 before the first step: nobody's command, no operator.
+    context.addEvent(refusal(60.4, TAKEN_BACK, ""));
+    frame(manualFrame(60.4));
+    // Then both notes say so, in red.
+    const note = node("manual-note");
+    assert.ok(note.textContent.includes(TAKEN_BACK), `clicked=${clicked}: ${note.textContent}`);
+    assert.ok(note.classes.has("note-bad"));
+  }
+});
+
+test("with no word from the loop for a second of its clock, the note says the target was not taken", async () => {
+  // Given a target sent, and a refusal that never reached this screen (its socket reconnected).
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // While the loop may still answer, the note waits.
+  frame(manualFrame(60.8));
+  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  // When more than a second of the machine's clock has passed and the applied target is still 0.
+  frame(manualFrame(61.2));
+  // Then the note stops waiting, and says what the machine holds instead.
+  const note = node("manual-note");
+  assert.ok(note.textContent.startsWith("cible NON prise par la machine"), note.textContent);
+  assert.ok(note.textContent.includes("0.00 tr/min de sortie"), note.textContent);
+  assert.ok(note.classes.has("note-bad"));
+});
+
+test("a target still unanswered when the session is over is said not taken", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the machine is back at rest with no manual session, a second later.
+  frame(snapshot({ at: 61.2 }));
+  assert.equal(node("manual-note").textContent, "cible NON prise par la machine : la seance manuelle est terminee.");
+  assert.ok(node("manual-note").classes.has("note-bad"));
+});
+
+test("a refusal that is not about a manual target is left to the event list", () => {
+  // Given a machine at rest: no manual session on screen, no target awaited.
+  const { context, frame, node } = panel();
+  frame(snapshot());
+  // When the loop refuses a programme somebody asked for.
+  context.addEvent(refusal(51, "demarrage refuse : age du passager requis pour une seance programmee"));
+  // Then the manual card says nothing about it, and the event is listed as before.
+  assert.equal(node("manual-note").textContent, "");
+  assert.equal(node("events").children.length, 1);
+});
+
+test("an Appliquer the console refuses outright shows that answer and awaits nothing", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When the next click is refused by the route itself (409).
+  context.api = () => Promise.reject(new Error("the machine is already stopping"));
+  context.doManualApply();
+  await settle();
+  // Then the note is that answer, and no frame rewrites it with the fate of the earlier target.
+  assert.equal(node("manual-note").textContent, "the machine is already stopping");
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, "the machine is already stopping");
+});
+
+/* ================== what the heart rate holds, before a target is typed ================== */
+
+// A manual session with a person declared on board, which the page itself cannot start yet.
+const riderFrame = (at, target = 0, overrides = {}) =>
+  manualFrame(at, target, {
+    manual: manualRow(target, { occupancy: "occupied", occupancy_label: "PERSONNE A BORD" }),
+    ...overrides,
+  });
+
+const HOLD_WORDS = {
+  no_heart_rate: "pas de frequence cardiaque utilisable",
+  trend_unknown: "tendance de la frequence cardiaque pas encore connue",
+  heart_rate_falling: "la frequence cardiaque baisse trop vite",
+};
+
+for (const [hold, words] of Object.entries(HOLD_WORDS)) {
+  test(`a rise held by the heart rate (${hold}) is shown on the manual card before any target is typed`, () => {
+    // Given a person on board, an arm at standstill, no verdict, and nothing typed or sent.
+    const { context, frame, node, shown } = panel();
+    const asked = [];
+    context.api = (path) => {
+      asked.push(path);
+      return new Promise(() => undefined);
+    };
+    frame(riderFrame(60));
+    context.renderPanel(panelRow());
+    assert.equal(shown("manual-hold"), false);
+    // When the console reports that the heart rate holds a rise.
+    context.renderPanel(panelRow({ manual_rise_hold: hold }));
+    // Then the card says so, in French, with what it means for a target.
+    assert.equal(shown("manual-hold"), true);
+    assert.equal(node("manual-hold-title").textContent, "MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE");
+    assert.ok(node("manual-hold-detail").textContent.startsWith(words + "."), node("manual-hold-detail").textContent);
+    assert.ok(node("manual-hold-detail").textContent.includes("une cible non nulle est refusee"));
+    assert.ok(node("manual-hold-detail").textContent.includes("remonte seule"));
+    assert.deepEqual(asked, [], "the hold was learnt from a request, not shown before one");
+    // And it stays over the frames that follow, then goes when the console says nothing holds.
+    frame(riderFrame(60.2));
+    assert.equal(shown("manual-hold"), true);
+    context.renderPanel(panelRow());
+    assert.equal(shown("manual-hold"), false);
+  });
+}
+
+test("a hold the page has no words for is shown by its name rather than hidden", () => {
+  const { context, frame, node, shown } = panel();
+  frame(riderFrame(60));
+  context.renderPanel(panelRow({ manual_rise_hold: "a_hold_added_later" }));
+  assert.equal(shown("manual-hold"), true);
+  assert.ok(node("manual-hold-detail").textContent.startsWith("a_hold_added_later."));
+});
+
+test("the hold is shown only while a manual session can take a target", () => {
+  const { context, frame, shown } = panel();
+  context.renderPanel(panelRow({ manual_rise_hold: "no_heart_rate" }));
+  // At rest there is no target to type, whatever the last session left behind.
+  frame(snapshot({ at: 60, manual: manualRow(0, { occupancy: "occupied" }) }));
+  assert.equal(shown("manual-hold"), false);
+  // In a session it is shown.
+  frame(riderFrame(60.2));
+  assert.equal(shown("manual-hold"), true);
+  // Once the session is ending every target is refused anyway: the card stops announcing a hold.
+  frame(riderFrame(60.4, 0, { mode: "arret" }));
+  assert.equal(shown("manual-hold"), false);
+});
+
+test("with a person on board, a console that stops answering is shown as an unknown hold", () => {
+  // Given a session with a person on board, and a console that reports no hold.
+  const { context, clock, frame, node, shown } = panel();
+  frame(riderFrame(60));
+  context.renderPanel(panelRow());
+  assert.equal(shown("manual-hold"), false);
+  // When /api/panel has not answered for longer than its answers stay current, frames still coming.
+  for (let tick = 1; tick <= 20; tick += 1) {
+    frame(riderFrame(60 + tick * 0.2));
+  }
+  assert.ok(clock.now - context.state.panelAt > 3500);
+  // Then the card does not go on showing "nothing holds": it says it no longer knows.
+  assert.equal(shown("manual-hold"), true);
+  assert.equal(node("manual-hold-title").textContent, "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
+  // And the next answer puts the indicator back to what the console says.
+  context.renderPanel(panelRow());
+  assert.equal(shown("manual-hold"), false);
+});
+
+test("while the heart rate holds a rise, a higher target taken is not said to be followed", async () => {
+  // Given a person on board, an arm turning at 120 tr/min moteur, and the console saying the rise is held.
+  const { context, frame, node } = panel();
+  const at120 = { setpoint: turning(120), measured: turning(120) };
+  frame(riderFrame(59.6, 120, at120));
+  context.renderPanel(panelRow({ manual_rise_hold: "heart_rate_falling" }));
+  // When a higher target is taken: no verdict stands, and yet the speed does not climb.
+  await apply(context, 5, 60);
+  frame(riderFrame(60.2, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  // A lower target is a descent, and the heart rate holds no descent: followed.
+  await apply(context, 2, 61);
+  frame(riderFrame(61.2, 100, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 2.00 output rpm (suivie aux limites de mouvement)");
+  // Once the console says nothing holds any more, the rise is followed, and the note says so.
+  await apply(context, 5, 62);
+  frame(riderFrame(62.2, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  context.renderPanel(panelRow());
+  frame(riderFrame(62.4, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+});
+
+test("with nobody on board the heart rate holds nothing, answered or not", () => {
+  const { context, frame, shown } = panel();
+  frame(manualFrame(60));
+  context.renderPanel(panelRow());
+  for (let tick = 1; tick <= 20; tick += 1) {
+    frame(manualFrame(60 + tick * 0.2));
+  }
+  assert.equal(shown("manual-hold"), false);
+});
+
+/* ============ a stop the camera latched, on a page opened once go_silent stands ============ */
+
+// What /api/status answers when the camera latched a stop and the link to the drive was then lost:
+// go_silent is the standing verdict and the floor, and the stop shows in the supervisor's slot alone.
+const cameraStopBehindSilence = () =>
+  status({
+    estop_latched: false,
+    supervisor_estop: verdict("quick_stop", "operator_estop").safety,
+    standing: silent().safety,
+    floor: silent().safety,
+  });
+
+test("a page opened once go_silent stands announces the stop the camera latched behind it", async () => {
+  // Given a page just opened: it never saw the stop latched, and every frame it gets says go_silent.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(cameraStopBehindSilence());
+  frame(snapshot({ at: 70, mode: "arret", ...silent() }));
+  await settle();
+  // Then the banner is up, from the status alone, and the frames that follow do not take it down.
+  assert.equal(shown("estop-banner"), true);
+  for (let tick = 1; tick <= 5; tick += 1) {
+    frame(snapshot({ at: 70 + tick * 0.2, mode: "arret", ...silent() }));
+    assert.equal(shown("estop-banner"), true, `hidden after ${tick} frames`);
+  }
+});
+
+test("go_silent with no stop latched behind it raises no emergency-stop banner", async () => {
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(status({ standing: silent().safety, floor: silent().safety }));
+  frame(snapshot({ at: 70, mode: "arret", ...silent() }));
+  await settle();
+  assert.equal(shown("estop-banner"), false);
+});
+
+for (const id of ["verdicts-grid", "system-grid"]) {
+  test(`#${id} reports the e-stop latched when go_silent hides the stop the camera latched`, async () => {
+    const { context, node } = panel();
+    context.api = () => Promise.resolve(cameraStopBehindSilence());
+    await context.loadStatus();
+    // The standing verdict no longer names it: only the supervisor's slot does.
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "comms_lost / go_silent");
+    assert.equal(rows(node(id))["e-stop verrouille"].textContent, "OUI");
+  });
+}
+
+test("the state chip is red for a latched emergency stop whoever latched it", async () => {
+  const { context, node } = panel();
+  // A stop latched by the camera leaves the interface idle: the chip read "idle", in grey.
+  context.api = () =>
+    Promise.resolve(
+      status({ supervisor_estop: verdict("quick_stop", "operator_estop").safety, standing: verdict("quick_stop", "operator_estop").safety }),
+    );
+  await context.loadStatus();
+  assert.equal(node("run-state").textContent, "idle");
+  assert.ok(node("run-state").classes.has("pill-bad"));
+  // Behind go_silent as well.
+  context.api = () => Promise.resolve(cameraStopBehindSilence());
+  await context.loadStatus();
+  assert.ok(node("run-state").classes.has("pill-bad"));
+  // And grey again once nothing is latched.
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  assert.equal(node("run-state").classes.has("pill-bad"), false);
+});
+
+/* ======================= an E-STOP the console does not answer ======================= */
+
+// The operator presses E-STOP and nothing comes back: the request stays out until the test answers it.
+function pressUnanswered(context) {
+  const request = deferred();
+  const sent = [];
+  context.api = (path) => {
+    sent.push(path);
+    return path === "/api/session/estop" ? request.promise : new Promise(() => undefined);
+  };
+  context.doEstop();
+  return { request, sent };
+}
+
+test("an E-STOP the console does not answer is said so after two seconds, with the wired stop named", async () => {
+  // Given a live page, and a console that takes the request and answers nothing.
+  const { context, frame, announced, published, stack, wait } = panel();
+  frame(snapshot({ at: 59.9, mode: "manuel", phase: "hold" }));
+  const { sent } = pressUnanswered(context);
+  await settle();
+  assert.deepEqual(sent, ["/api/session/estop"], "the request did not leave on the first click");
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  // While an answer can still be on its way, the page does not cry wolf.
+  wait(1900);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  // When two seconds have gone by with nothing back.
+  wait(100);
+  // Then a banner says the stop is not confirmed, for how long, and what to use instead.
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("aucune reponse de la console depuis 2 s"), true);
+  assert.equal(announced("UTILISEZ L'ARRET CABLE"), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And it claims no latch: the banner of a latched stop is not up.
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), false);
+});
+
+test("the notice of an unanswered E-STOP keeps counting, frames or no frames, and outlives further clicks", async () => {
+  const { context, clock, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("depuis 2 s"), true);
+  // A second click, also unanswered, must not make the page look reassured for two more seconds.
+  context.doEstop();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // Live frames with no stop in them keep it up and current.
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  assert.equal(announced("depuis 4 s"), true);
+  // So does the liveness check alone, once the frames have stopped as well.
+  clock.now += 3000;
+  context.refreshLiveness();
+  assert.equal(announced("depuis 7 s"), true);
+  assert.equal(announced("NO LIVE DATA"), true);
+});
+
+test("the notice appears even in a browser whose timer never fires", () => {
+  // Given a page whose one-shot timer is lost; its periodic liveness check still runs.
+  const { context, clock, announced } = panel();
+  pressUnanswered(context);
+  clock.now += 2500;
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+});
+
+test("a late answer takes the unanswered notice down and raises the banner of the latched stop", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  const { request } = pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // When the request gets through after all.
+  request.resolve(receipt);
+  await settle();
+  // Then the stop is known latched, and said so.
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  // And the timers still pending from the clicks bring nothing back.
+  wait(5000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+});
+
+test("a frame that shows a stop latched ends the doubt; one under go_silent does not", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  // go_silent hides whatever is latched behind it: the notice stays.
+  frame(snapshot({ at: 62.2, mode: "arret", ...silent() }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // A latched quick stop, whichever way it came, is the stop the click was asking for.
+  frame(snapshot({ at: 62.4, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+});
+
+test("a status answer that shows the stop latched ends the doubt as well", async () => {
+  // Given frames that have stopped and an E-STOP left unanswered.
+  const { context, clock, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // When HTTP answers a status in which the stop is latched.
+  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  await context.loadStatus();
+  clock.now += 100;
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+});
+
+test("a failed E-STOP request is said at once and stays on screen after its alert", async () => {
+  // Given a console that cannot be reached at all.
+  const { context, frame, announced, wait } = panel();
+  const alerts = [];
+  context.window.alert = (message) => alerts.push(message);
+  frame(snapshot({ at: 59.9 }));
+  context.api = () => Promise.reject(new Error("Failed to fetch"));
+  context.doEstop();
+  await settle();
+  // Then the alert is raised as before, and the banner stays once it is dismissed.
+  assert.equal(alerts.length, 1);
+  assert.ok(alerts[0].includes("UTILISEZ L'ARRET CABLE"));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("la demande a echoue : Failed to fetch - UTILISEZ L'ARRET CABLE"), true);
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  wait(3000);
+  assert.equal(announced("la demande a echoue : Failed to fetch"), true);
+});
+
+test("an E-STOP answered in time never shows the unanswered notice", async () => {
+  const { context, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9 }));
+  await pressEstop(context);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  wait(5000);
+  context.refreshLiveness();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+});
+
+/* ================= a speed that can come back up with nobody clicking ================= */
+
+const RESUME = "REPRISE AUTOMATIQUE POSSIBLE";
+
+// A programme under way at 200 tr/min moteur, as one frame shows it.
+const programmeFrame = (at, phase, overrides = {}) =>
+  snapshot({ at, mode: "seance", phase, setpoint: turning(200), measured: turning(200), ...overrides });
+
+test("a programme whose speed an unlatched warning holds says the speed can climb again by itself", () => {
+  // Given a programme in its warm-up, and a banner stack that takes no room.
+  const { frame, announced, published, stack } = panel();
+  frame(programmeFrame(60, "warmup"));
+  assert.equal(announced(RESUME), false);
+  // When a warning that is not latched holds the speed.
+  frame(programmeFrame(60.2, "warmup", verdict("freeze", "hr_stale", false)));
+  // Then a banner says so in French, names the warning, and the page makes room for it.
+  assert.equal(announced(RESUME), true);
+  assert.equal(announced("l'avertissement hr_stale tient la vitesse et n'est pas verrouille"), true);
+  assert.equal(announced("la vitesse remonte alors sans aucun clic"), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And when the warning lowers the speed instead, it says that.
+  frame(programmeFrame(60.4, "warmup", verdict("reduce", "hr_stale", false)));
+  assert.equal(announced("l'avertissement hr_stale baisse la vitesse et n'est pas verrouille"), true);
+  // It goes with the warning.
+  frame(programmeFrame(60.6, "warmup"));
+  assert.equal(announced(RESUME), false);
+  assert.equal(published.get("--banners-h"), "0px");
+});
+
+test("the banner is shown in the phases that can still be asked for speed, and in no other", () => {
+  const { frame, announced } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  for (const [phase, expected] of [
+    ["baseline", true],
+    ["warmup", true],
+    ["hold", true],
+    ["cooldown", false],
+    ["recovery", false],
+    ["done", false],
+  ]) {
+    frame(programmeFrame(60, phase, held));
+    assert.equal(announced(RESUME), expected, phase);
+  }
+});
+
+test("nothing is said to resume behind a latched verdict, a stop, or a session that is ending", () => {
+  const { frame, announced } = panel();
+  // Latched: it stands until a named operator clears it.
+  frame(programmeFrame(60, "hold", verdict("freeze", "loop_stall", true)));
+  assert.equal(announced(RESUME), false);
+  frame(programmeFrame(60.2, "hold", verdict("reduce", "hr_stale", true)));
+  assert.equal(announced(RESUME), false);
+  // A stop ends the session, latched or not.
+  frame(programmeFrame(60.4, "hold", verdict("ramp_down", "drive_fault", false)));
+  assert.equal(announced(RESUME), false);
+  // Ending, or at rest: the speed follows nothing upwards from there.
+  frame(programmeFrame(60.6, "hold", { mode: "arret", ...verdict("freeze", "hr_stale", false) }));
+  assert.equal(announced(RESUME), false);
+  frame(programmeFrame(60.8, "hold", { mode: "repos", ...verdict("freeze", "hr_stale", false) }));
+  assert.equal(announced(RESUME), false);
+});
+
+test("in manual the banner takes a target above the setpoint: a held arm at standstill has none", () => {
+  const { frame, announced } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  // A turning arm whose rise towards 249 tr/min moteur is held at 120: it will climb when the warning lifts.
+  frame(manualFrame(60, 249, { setpoint: turning(120), measured: turning(120), ...held }));
+  assert.equal(announced(RESUME), true);
+  // A reduce walking the setpoint down under the target: the same.
+  frame(manualFrame(60.2, 249, { setpoint: turning(90), measured: turning(95), ...verdict("reduce", "hr_stale", false) }));
+  assert.equal(announced(RESUME), true);
+  // An arm at its target: nothing above it to climb to.
+  frame(manualFrame(60.4, 120, { setpoint: turning(120), measured: turning(120), ...held }));
+  assert.equal(announced(RESUME), false);
+  // An arm held at standstill: its target is 0, nothing waits, nothing will move.
+  frame(manualFrame(60.6, 0, held));
+  assert.equal(announced(RESUME), false);
+});
+
+/* ================== chips that go on vouching for a machine gone quiet ================== */
+
+const css = readFileSync(new URL("app.css", assets), "utf8");
+
+// The chips of the cards that the frames colour, with what a healthy machine at rest makes them say.
+const FRAME_CHIPS = {
+  "console-hr-quality": "good",
+  "hr-quality": "good",
+  "console-motion": "a l'arret",
+  motion: "a l'arret",
+  "setpoint-confirmed": "confirmee par le variateur",
+  "safety-action": "none",
+  "run-safety-action": "none",
+};
+
+test("under NO LIVE DATA the green chips of the cards are struck with the numbers beside them", () => {
+  // Given a live page on a healthy machine: the chips of its cards are green.
+  const { context, clock, frame, node, shown } = panel();
+  frame(snapshot());
+  for (const [id, label] of Object.entries(FRAME_CHIPS)) {
+    assert.equal(node(id).textContent, label, id);
+    assert.ok(node(id).classes.has("pill-good"), `#${id} is not green on a healthy machine`);
+    assert.equal(node(id).classes.has("stale"), false, id);
+  }
+  // When the frames stop.
+  clock.now += 5000;
+  context.refreshLiveness();
+  // Then every one of them is struck, like the large numbers and the chips of the sidebar.
+  assert.equal(shown("banner"), true);
+  for (const id of [...Object.keys(FRAME_CHIPS), "console-drive-state", "drive-state", "phase", "manual-state"]) {
+    assert.ok(node(id).classes.has("stale"), `#${id} still vouches for the machine under NO LIVE DATA`);
+  }
+  for (const id of ["console-hr", "console-output", "side-motion", "side-safety", "run-mode"]) {
+    assert.ok(node(id).classes.has("stale"), id);
+  }
+  // And they come back with the frames.
+  frame(snapshot({ at: 56 }));
+  for (const id of Object.keys(FRAME_CHIPS)) {
+    assert.equal(node(id).classes.has("stale"), false, id);
+    assert.ok(node(id).classes.has("pill-good"), id);
+  }
+});
+
+test("a struck chip loses its colour: the stylesheet takes the green away", () => {
+  // The chips keep their colour class when struck; this rule, placed after them, is what greys them.
+  const colours = css.indexOf(".pill-good {");
+  const struck = /\.pill\.stale\s*\{([^}]*)\}/.exec(css);
+  assert.ok(struck, "no rule for a struck chip");
+  assert.ok(struck.index > colours, "the rule comes before the colours it has to override");
+  assert.ok(/background:\s*var\(--panel-2\)/.test(struck[1]), struck[1]);
+  assert.ok(/border-color:\s*var\(--line\)/.test(struck[1]), struck[1]);
+});
+
+test("the chips fed by the link panel are struck when the panel stops answering, and only then", () => {
+  // Given a BITalino acquiring: its chip is green.
+  const { context, clock, frame, node } = panel();
+  context.renderPanel(panelRow());
+  frame(snapshot());
+  assert.equal(node("console-ecg-link").textContent, "acquisition");
+  assert.ok(node("console-ecg-link").classes.has("pill-good"));
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+  // When the frames stop but the panel still answers over HTTP: its chips are current.
+  clock.now += 3000;
+  context.renderPanel(panelRow());
+  context.refreshLiveness();
+  assert.ok(node("console-motion").classes.has("stale"));
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+  assert.equal(node("console-mode").classes.has("stale"), false);
+  // When the panel has not answered for 3.5 s, frames or no frames.
+  for (let tick = 1; tick <= 18; tick += 1) {
+    frame(snapshot({ at: 60 + tick * 0.2 }));
+  }
+  // Then "acquisition" no longer stands in green for a link nobody has heard of.
+  assert.equal(node("console-motion").classes.has("stale"), false);
+  assert.ok(node("console-ecg-link").classes.has("stale"));
+  assert.ok(node("console-mode").classes.has("stale"));
+  // And the next answer brings them back.
+  context.renderPanel(panelRow());
+  context.refreshLiveness();
+  assert.equal(node("console-ecg-link").classes.has("stale"), false);
+});
+
+test("the chips fed by the status are struck when the status stops answering", async () => {
+  const { context, clock, node } = panel();
+  context.api = () => Promise.resolve(status());
+  await context.loadStatus();
+  context.refreshLiveness();
+  assert.equal(node("attest-state").textContent, "atteste");
+  assert.ok(node("attest-state").classes.has("pill-good"));
+  assert.equal(node("attest-state").classes.has("stale"), false);
+  // One refresh missed is not yet silence.
+  clock.now += 9000;
+  context.refreshLiveness();
+  assert.equal(node("attest-state").classes.has("stale"), false);
+  // Two are: "atteste" and the state no longer stand for the present.
+  clock.now += 3000;
+  context.refreshLiveness();
+  assert.ok(node("attest-state").classes.has("stale"));
+  assert.ok(node("run-state").classes.has("stale"));
+  await context.loadStatus();
+  context.refreshLiveness();
+  assert.equal(node("attest-state").classes.has("stale"), false);
+});
+
+test("every element the liveness check strikes exists in the page", () => {
+  const { context, node } = panel();
+  const lists = vm.runInContext("[FRAME_FED, PANEL_FED, STATUS_FED]", context);
+  assert.equal(lists.length, 3);
+  for (const ids of lists) {
+    assert.ok(ids.length > 0);
+    for (const id of ids) node(id);
+  }
+});
+
+/* ============================ "perime", in the colour of stale data ============================ */
+
+const sensorRow = (overrides = {}) => ({
+  kind: "RESP",
+  channel: 3,
+  label: "Respiration",
+  unit: "%",
+  description: "",
+  display_rate: 50,
+  at: null,
+  waveform: [],
+  quality: "good",
+  detail: "",
+  metrics: [],
+  ...overrides,
+});
+
+for (const id of ["console-hr-quality", "hr-quality"]) {
+  test(`#${id} shows a stale heart rate in amber before any verdict speaks about it`, () => {
+    // Given a reading 6 s old: stale since 4 s, and no warning before 10 s.
+    const { frame, node } = panel();
+    frame(snapshot({ heart_rate: { bpm: 72, quality: "good", age_s: 6, stale: true, seq: 423 }, live_bpm: null }));
+    // Then the card is not left without a colour: its chip is amber, the page's colour for stale data.
+    assert.equal(node(id).textContent, "perime");
+    assert.ok(node(id).classes.has("pill-warn"), node(id).className);
+    assert.equal(node("safety-action").textContent, "none");
+  });
+}
+
+test("a stale sensor says perime in amber on its card, on its page and in the menu", () => {
+  // Given a sensor channel that has delivered nothing: its reading is stale.
+  const { context, node } = panel();
+  context.api = () => new Promise(() => undefined);
+  context.renderSensors([sensorRow()]);
+  const entry = context.state.sensors.RESP;
+  assert.equal(entry.card.badge.textContent, "perime");
+  assert.ok(entry.card.badge.classes.has("pill-warn"), entry.card.badge.className);
+  // On its own page, the chip of the title.
+  context.showView("sensor", "RESP");
+  assert.equal(node("sensor-quality").textContent, "perime");
+  assert.ok(node("sensor-quality").classes.has("pill-warn"), node("sensor-quality").className);
+  // In the menu its dot is the stale one, which the stylesheet draws as an amber ring.
+  assert.ok(entry.nav.dot.classes.has("dot-stale"));
+  assert.ok(/\.dot-stale\s*\{[^}]*var\(--warn\)/.test(css));
+});
+
+test("a sensor that delivers again leaves amber for its own grade", () => {
+  const { context, clock } = panel();
+  context.renderSensors([sensorRow({ at: 10 })]);
+  clock.now += 1000;
+  context.renderSensors([sensorRow({ at: 11 })]);
+  const badge = context.state.sensors.RESP.card.badge;
+  assert.equal(badge.textContent, "bon signal");
+  assert.ok(badge.classes.has("pill-good"));
+});
+
+test("the resume banner is part of the stack every page shows, and is not an alarm", () => {
+  const banner = banners.find((entry) => entry.id === "resume-banner");
+  assert.ok(banner, "the banner is not in the stack above the pages");
+  const stackMarkup = /<div id="banners"[\s\S]*?\n<\/div>/.exec(html)[0];
+  assert.ok(stackMarkup.includes('id="resume-banner"'));
+  assert.ok(/id="resume-banner" class="banner banner-warn hidden"/.test(html));
 });

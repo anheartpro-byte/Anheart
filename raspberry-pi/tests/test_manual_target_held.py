@@ -1317,3 +1317,76 @@ async def test_a_manual_start_under_a_standing_verdict_is_refused_and_carries_no
     assert _target(rig) == 0
     armed = await rig.run(30.0)
     assert not _moved(armed), "a start moved the arm with no target typed"
+
+
+# =========================================================================
+# WHAT THE CONSOLE CAN SAY BEFORE A TARGET IS TYPED (ANH-182)
+# =========================================================================
+
+
+def _announced(rig: Rig) -> RiseHold | None:
+    """What the console reads to warn the operator BEFORE a target is typed."""
+    return rig.runtime.manual_rise_hold()
+
+
+async def test_the_hold_announced_before_a_target_is_the_one_it_would_be_refused_for() -> None:
+    """One statement of the gate, read before the click and at the click.
+
+    A person on board, one reading before the start: the trend is not known,
+    and the console is told so before anybody types. A target typed then is
+    refused for that very reason. A minute of readings later nothing is
+    announced, and a gap of six seconds, which is not yet a warning, is
+    announced as no usable heart rate, again the reason of the refusal.
+    """
+    rig = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig.fed_bpm = Bpm(75)
+    rig.feed(Bpm(75))
+    assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
+    assert is_ok(await rig.runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MANUAL_CEILING))
+
+    assert _announced(rig) is RiseHold.TREND_UNKNOWN
+    assert _refused_for(rig, 200) is RiseHold.TREND_UNKNOWN
+
+    await rig.run(60.0)
+    assert _announced(rig) is None, "a hold is announced over a steady, known heart rate"
+
+    quiet = await rig.run(6.0, feed=False)
+    assert not _verdicts(quiet), "a verdict stood: this is not the case under test"
+    assert _announced(rig) is RiseHold.NO_HEART_RATE
+    assert _refused_for(rig, 200) is RiseHold.NO_HEART_RATE
+
+
+async def test_a_falling_heart_rate_is_announced_before_a_target_is_typed() -> None:
+    """The vasovagal gate, closed by one reading: announced with no target waiting."""
+    rig = await _not_moved_yet(Occupancy.OCCUPIED)
+    assert _announced(rig) is None
+    closing = CLOSINGS["a falling rate"]
+    for bpm in closing.readings:
+        rig.feed(Bpm(bpm))
+
+    assert _standing(rig) is None, "a verdict stands: this is not the case under test"
+    assert _announced(rig) is RiseHold.HEART_RATE_FALLING
+    assert _refused_for(rig, 200) is closing.hold
+
+
+async def test_nothing_is_announced_with_nobody_on_board_nor_outside_a_manual_session() -> None:
+    """No gate with an empty capsule, and no target to type when no manual session runs.
+
+    The runtime keeps the record of a manual session after it has finished,
+    until the next start: a hold read off that record would be announced at
+    rest, to an operator who has nothing to type.
+    """
+    idle = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    assert _announced(idle) is None, "announced before any session, with no reading at all"
+
+    bench = await _not_moved_yet(Occupancy.BENCH)
+    await bench.run(6.0, feed=False)
+    assert _announced(bench) is None, "the heart rate holds nothing with an empty capsule"
+
+    rig = await _not_moved_yet(Occupancy.OCCUPIED)
+    await rig.run(6.0, feed=False)
+    assert _announced(rig) is RiseHold.NO_HEART_RATE
+    rig.runtime.request_stop("operator: stop button")
+    await rig.run(75.0)
+    assert rig.state() is RuntimeState.FINISHED
+    assert _announced(rig) is None, "a finished session still announces a hold"

@@ -316,10 +316,15 @@ et le cycle de 0,2 s, le pas est écrit au premier cycle qui suit, ou au second
 quand le profil n'a pas encore de base de temps (premier cycle de la séance,
 cycle qui suit un FREEZE), soit 0,4 s au plus.
 
-**Le bandeau à l'écran reste à faire.** Dire clairement et en permanence, en
-français et sur toutes les pages, qu'une reprise automatique reste possible
-demande de modifier la page web, ce que ce changement ne fait pas. La phrase
-anglaise ci-dessus est un palliatif.
+**Le bandeau à l'écran.** Depuis le 7 octobre 2026 (ANH-182), la page de la
+console le dit en français et sur toutes les pages : un bandeau orange
+`REPRISE AUTOMATIQUE POSSIBLE`, affiché tant qu'un `freeze` ou un `reduce` non
+verrouillé tient ou baisse une vitesse qui peut encore remonter (mode `SEANCE`
+ou `MANUEL`, phase `baseline`, `warmup` ou `hold`, et en manuel une cible
+au-dessus de la consigne). Conditions et rejeu dans un navigateur :
+[console-locale.md](console-locale.md#11-page--securite-). La phrase anglaise
+ci-dessus reste dans le détail des verdicts ; elle y figure encore sur un bras
+manuel tenu à l'arrêt, où la cible vaut 0 et où plus rien ne peut remonter.
 
 ### 7.5 Ce que cela coûte
 
@@ -475,12 +480,15 @@ acquittement.
 **Ce que l'opérateur voit.** La page existante affiche déjà les événements
 `refused` avec leur texte (en orange, dans la liste des événements) et la
 « cible appliquee » lue dans l'instantané : elle montre donc le refus, et la
-cible revenue à 0 avec le brouillon resté en orange. Trois défauts restent,
-à corriger dans la page : après « Appliquer », la note dit encore « cible
-envoyee … la machine y va » parce que la boîte aux lettres a répondu 202
-avant que la boucle refuse ; rien de plus visible qu'une ligne d'événement
-ne signale le retrait ; et rien n'indique, avant de taper, que la FC retient
-la montée.
+cible revenue à 0 avec le brouillon resté en orange. Trois défauts restaient
+dans la page ; ils sont corrigés depuis le 7 octobre 2026 (ANH-182). Après
+« Appliquer », la note de la carte dit « cible envoyee … pas encore prise par
+la machine », puis ce que la boucle a répondu : « cible prise par la
+machine », ou « refus de la machine », suivi du message du refus ou du
+retrait, en rouge. Et avec une personne à bord, un encadré « MONTEE RETENUE
+PAR LA FREQUENCE CARDIAQUE » dit avant de taper que la FC retient la montée,
+et pourquoi : la console donne elle-même cette garde à la page, qui ne la
+recalcule pas. Détail : [console-locale.md](console-locale.md#6-page--tableau-de-bord-).
 
 **Ce que cela coûte.**
 
