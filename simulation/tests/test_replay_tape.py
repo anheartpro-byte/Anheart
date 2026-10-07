@@ -187,7 +187,8 @@ async def test_ex1_the_tape_answers_each_call_with_what_was_recorded_in_order() 
     assert isinstance(drive, DriveBackend)
     assert drive.acquisition_evidence == AcquisitionEvidence(0, address_proven=False)
     assert drive.emergency_budget == EMERGENCY_BUDGET
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert drive.acquisition_evidence == AcquisitionEvidence(1, address_proven=True)
     read = await drive.read_status()
     assert isinstance(read, Ok)
@@ -202,7 +203,8 @@ async def test_ex1_the_tape_answers_each_call_with_what_was_recorded_in_order() 
     assert clock.monotonic() == Monotonic(ORIGIN + 0.025)
     assert drive.emergency_disable_blocking(Seconds(0.5)) is EmergencyStopOutcome.ACKNOWLEDGED
     before_the_last = drive.pending
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert (before_the_last is None, drive.pending is None) == (False, True)
     assert drive.mismatch is None
     assert drive.acquisition_evidence == AcquisitionEvidence(7, address_proven=True)
@@ -227,7 +229,8 @@ async def test_ex1_a_recorded_failure_is_replayed_as_a_failure_with_its_latency(
     assert isinstance(await drive.write_command(ControlWord.SWITCH_ON), Err)
     assert isinstance(await drive.write_speed(MotorRpm(0)), Err)
     assert drive.emergency_disable_blocking(Seconds(0.5)) is EmergencyStopOutcome.SENT_UNCONFIRMED
-    assert isinstance(await drive.close(), Err)
+    closed = await drive.close()
+    assert isinstance(closed, Err)
     assert drive.mismatch is None
 
 
@@ -242,9 +245,11 @@ async def test_ex3_another_call_than_the_recorded_one_stops_the_tape_and_says_wh
     # The frame was not consumed, and nothing is answered any more: every call
     # fails at once, without raising, and the first mismatch stands.
     assert drive.pending is not None
-    assert await drive.open() == Err(CommTimeout(after=Seconds(0.0)))
+    opened = await drive.open()
+    assert opened == Err(CommTimeout(after=Seconds(0.0)))
     assert drive.acquisition_evidence == AcquisitionEvidence(0, address_proven=False)
-    assert isinstance(await drive.close(), Err)
+    closed = await drive.close()
+    assert isinstance(closed, Err)
     assert isinstance(await drive.write_command(ControlWord.SHUTDOWN), Err)
     assert isinstance(await drive.read_limits(), Err)
     assert isinstance(await drive.write_speed(MotorRpm(150)), Err)
@@ -301,7 +306,8 @@ async def test_ex2_an_exchange_within_one_tick_of_its_instant_is_served(
 
 async def test_ex3_a_call_past_the_end_of_the_tape_is_a_divergence() -> None:
     drive, _ = tape(frame("open"))
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert isinstance(await drive.read_limits(), Err)
     found = drive.mismatch
     assert found is not None

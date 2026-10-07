@@ -225,7 +225,8 @@ def test_ex11_generic_shared_record_does_not_invent_missing_geometry_or_final_dr
     assert isinstance(created, Ok)
     for row in trace.rows:
         assert isinstance(created.value.tick(row), Ok)
-    assert isinstance(created.value.close(ManualClock(), "operator_stop"), Ok)
+    closed = created.value.close(ManualClock(), "operator_stop")
+    assert isinstance(closed, Ok)
     result = view_record(tmp_path, created.value.path.name)
     assert isinstance(result, Ok)
     lines = [document(line) for line in result.value.splitlines()]

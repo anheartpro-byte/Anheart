@@ -24,7 +24,8 @@ class ExchangeClock:
 
 async def test_ex5_measured_call_latency_and_start_time_are_not_placeholder_values() -> None:
     drive = RecordingDrive(SimulatedDrive(ManualClock()), ExchangeClock())
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     (frame,) = drive.frames
     assert frame.at == Monotonic(5.0)
     assert frame.latency_ms == pytest.approx(25)
@@ -39,7 +40,8 @@ async def test_ex5_read_status_is_one_grouped_observation_and_failed_limits_rema
     assert isinstance(await drive.read_limits(), Err)
     assert drive.frames[-1].observations == ()
     assert not drive.frames[-1].ok
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     readback = await drive.read_status()
     assert isinstance(readback, Ok)
     observed = drive.frames[-1]

@@ -147,7 +147,8 @@ async def test_the_faulty_drive_refuses_lies_and_freezes() -> None:
     clock = ManualClock()
     sim = SimulatedDrive(clock)
     drive = FaultyDrive(sim)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     drive.refuse(ControlWord.SHUTDOWN)
     refused = await drive.write_command(ControlWord.SHUTDOWN)
     assert isinstance(refused, Err)
@@ -176,7 +177,8 @@ async def test_the_faulty_drive_refuses_lies_and_freezes() -> None:
     drive.emergency_disable_blocking(drive.emergency_budget)
     sim.inject_comms_loss(Seconds(5.0))
     assert isinstance(await drive.read_status(), Err)
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
 
 
 # -- the corrupting source --------------------------------------------------------------

@@ -19,7 +19,7 @@ from simulation.harness import (
     load_motion,
 )
 from simulation.recording import FrameKind, InjectedTickError, RecordingDrive
-from simulation.scenario import SCENARIO_DIR
+from simulation.scenario import SCENARIO_DIR, parse_scenario
 from simulation.sensors import DirectSensor
 from simulation.tests.conftest import run_file
 from simulation.tracefile import finite
@@ -113,7 +113,8 @@ def test_sensor_noise_is_seeded_and_reproducible() -> None:
 async def test_the_recording_drive_logs_every_frame_it_passes_on() -> None:
     clock = ManualClock()
     drive = RecordingDrive(SimulatedDrive(clock), clock)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert isinstance(await drive.read_limits(), Ok)
     assert isinstance(await drive.read_status(), Ok)
     await drive.write_command(ControlWord.SHUTDOWN)
@@ -242,12 +243,8 @@ def test_a_reader_notes_a_missing_required_integer() -> None:
 def test_a_broken_profile_library_refuses_to_load(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import simulation.scenario as scenario_module  # noqa: PLC0415
-
     broken = tmp_path / "_profiles.json"
     broken.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(scenario_module, "SIM_PROFILES_PATH", broken)
+    monkeypatch.setattr("simulation.scenario.SIM_PROFILES_PATH", broken)
     with pytest.raises(ValueError, match=r"_profiles\.json unusable"):
-        scenario_module.parse_scenario(
-            '{"name": "x", "kind": "auto", "duration_s": 1, "profile": "x"}'
-        )
+        parse_scenario('{"name": "x", "kind": "auto", "duration_s": 1, "profile": "x"}')
