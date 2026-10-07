@@ -319,10 +319,28 @@ test("the coverage of Convex and of the site decides their gates: under the thre
     assert.doesNotMatch(text, /enabled:|autoUpdate|perFile/, config);
   }
   // What each configuration measures is the list, not a copy of it.
-  assert.match(atRoot("vitest.convex.config.mts"), /^ {6}include: CONVEX\.include,\n {6}exclude: CONVEX\.exclude,$/m);
+  const convex = atRoot("vitest.convex.config.mts");
+  assert.match(convex, /^ {6}include: CONVEX\.include,\n {6}exclude: CONVEX\.exclude,$/m);
   const site = atRoot("vitest.site-coverage.config.mts");
   assert.match(site, /^ {4}include: testsOf\(siteFolders\(\)\),$/m, "the measured run runs every test of the site");
-  assert.match(site, /^ {6}include: sourcesOf\(siteFolders\(\)\),\n {6}exclude: SITE\.exclude,$/m);
+  assert.match(site, /^const measure = \{ include: sourcesOf\(siteFolders\(\)\), exclude: SITE\.exclude \};$/m);
+  assert.match(site, /^ {6}include: measure\.include,\n {6}exclude: measure\.exclude,$/m);
+  // Each command that enforces a threshold refuses to start when what the threshold names is not
+  // measured: Vitest would count the threshold of a name that matches no file as reached. The check is
+  // made by the configuration itself, on the lists it measures with, before the configuration is given.
+  for (const [text, call] of /** @type {const} */ ([
+    [convex, "assertMeasured(import.meta.dirname, CONVEX);"],
+    [site, "assertMeasured(import.meta.dirname, measure);"],
+  ])) {
+    const at = text.indexOf(`\n${call}\n`);
+    assert.ok(at > 0, `${call} is not called`);
+    assert.ok(at < text.indexOf("\nexport default defineConfig("), `${call} must come before the configuration`);
+    assert.doesNotMatch(
+      text,
+      /try \{|catch|\/\/ *assertMeasured|if \(.*\) assertMeasured/,
+      "the check must not be softened",
+    );
+  }
   // The measured run of the site is the two plain suites together: each takes its folders from the same list.
   assert.match(atRoot("vitest.ecg.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.ecg\),$/m);
   assert.match(atRoot("vitest.site.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.site\),$/m);

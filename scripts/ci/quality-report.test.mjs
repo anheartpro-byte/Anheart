@@ -44,13 +44,17 @@ import {
   SUITES,
 } from "./quality-report.mjs";
 import {
+  assertMeasured,
   CONVEX,
+  globToRegExp,
   holds,
+  measuredFiles,
   SITE,
   siteFolders,
   sourcesOf,
   testsOf,
   THRESHOLD,
+  unjudged,
   vitestThresholds,
 } from "./coverage-thresholds.mjs";
 
@@ -1393,6 +1397,93 @@ test("the thresholds, the measured folders and the files judged alone are writte
     assert.ok(!CONVEX.exclude.includes(file), `${file} is left out of the measure`);
   }
   for (const folder of siteFolders()) assert.ok(existsSync(join(ROOT, folder)), `${folder}/ does not exist`);
+});
+
+test("a threshold that names something the measure does not hold stops the command instead of passing", (context) => {
+  // The globs of the lists, read as Vitest reads them.
+  const matches = (/** @type {string} */ glob, /** @type {string} */ file) => globToRegExp(glob).test(file);
+  for (const [glob, file, expected] of /** @type {const} */ ([
+    ["convex/**/*.ts", "convex/training.ts", true],
+    ["convex/**/*.ts", "convex/lib/auth.ts", true],
+    ["convex/**/*.ts", "convex/lib/deep/er.ts", true],
+    ["convex/**/*.ts", "convex/training.tsx", false],
+    ["convex/**/*.ts", "elsewhere/convex/training.ts", false],
+    ["convex/_generated/**", "convex/_generated/api.d.ts", true],
+    ["convex/_generated/**", "convex/generated.ts", false],
+    ["convex/**/*.test.ts", "convex/lib/auth.test.ts", true],
+    ["convex/**/*.test.ts", "convex/testing.ts", false],
+    ["convex/test.setup.ts", "convex/test.setup.ts", true],
+    ["convex/test.setup.ts", "convex/testXsetup.ts", false],
+    ["components/**/*.{ts,tsx}", "components/ui/button.tsx", true],
+    ["components/**/*.{ts,tsx}", "components/ui/button.css", false],
+    ["**/*.test.{ts,tsx}", "lib/training.test.ts", true],
+    ["**/*.test.{ts,tsx}", "components/ui/button.test.tsx", true],
+    ["**/*.test.{ts,tsx}", "components/ui/button.tsx", false],
+    ["lib/*.ts", "lib/sub/file.ts", false],
+  ])) {
+    assert.equal(matches(glob, file), expected, `${glob} against ${file}`);
+  }
+
+  // A small repository: two sources, a test, a generated file, an installed one.
+  const root = scratch(context);
+  for (const file of [
+    "convex/training.ts",
+    "convex/lib/auth.ts",
+    "convex/lib/auth.test.ts",
+    "convex/_generated/api.ts",
+    "convex/node_modules/pkg/index.ts",
+    "lib/training.ts",
+    "lib/training.test.ts",
+  ]) {
+    write(root, file, "");
+  }
+  const convex = {
+    include: ["convex/**/*.ts"],
+    exclude: ["convex/_generated/**", "convex/**/*.test.ts"],
+    alone: ["convex/training.ts", "convex/lib/auth.ts"],
+  };
+  assert.deepEqual(measuredFiles(root, convex), ["convex/lib/auth.ts", "convex/training.ts"]);
+  assert.deepEqual(unjudged(root, convex), []);
+  assert.doesNotThrow(() => assertMeasured(root, convex));
+
+  // The file of the safety chain is renamed and the list is not: Vitest would count its threshold as reached.
+  const renamed = { ...convex, alone: ["convex/trainingSessions.ts", "convex/lib/auth.ts"] };
+  assert.deepEqual(unjudged(root, renamed), [
+    '"convex/trainingSessions.ts" must reach the threshold alone but is not a measured file ' +
+      "(renamed, removed or excluded?): its threshold would count as reached",
+  ]);
+  assert.throws(
+    () => assertMeasured(root, renamed),
+    /^Error: Coverage threshold without an object \(scripts\/ci\/coverage-thresholds\.mjs\):\n- "convex\/trainingSessions\.ts" must reach/,
+  );
+  // A file that exists but that an exclusion takes out of the measure is not judged either.
+  assert.match(
+    unjudged(root, { ...convex, exclude: [...convex.exclude, "convex/lib/**"] }).join("\n"),
+    /"convex\/lib\/auth\.ts" must reach/,
+  );
+  assert.match(
+    unjudged(root, { ...convex, alone: ["convex/lib/auth.test.ts"] }).join("\n"),
+    /auth\.test\.ts" must reach/,
+  );
+  assert.match(unjudged(root, { ...convex, alone: ["convex/_generated/api.ts"] }).join("\n"), /api\.ts" must reach/);
+  // A folder of the site mistyped, or emptied of its sources: it would leave the measure without a word.
+  const site = { include: ["lib/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}"], exclude: ["**/*.test.{ts,tsx}"] };
+  assert.deepEqual(measuredFiles(root, site), ["lib/training.ts"]);
+  assert.deepEqual(unjudged(root, site), [
+    '"hooks/**/*.{ts,tsx}" matches no measured file: nothing of it would be judged',
+  ]);
+  assert.throws(() => assertMeasured(root, site), /"hooks\/\*\*\/\*\.\{ts,tsx\}" matches no measured file/);
+  write(root, "hooks/use-thing.test.ts", "");
+  assert.equal(unjudged(root, site).length, 1, "a folder that holds only tests holds nothing to measure");
+  write(root, "hooks/use-thing.ts", "");
+  assert.deepEqual(unjudged(root, site), []);
+
+  // The lists of the repository as they are: everything they name is measured.
+  assert.deepEqual(unjudged(ROOT, CONVEX), []);
+  assert.deepEqual(unjudged(ROOT, { include: sourcesOf(siteFolders()), exclude: SITE.exclude }), []);
+  const measured = measuredFiles(ROOT, CONVEX);
+  for (const file of CONVEX.alone) assert.ok(measured.includes(file), file);
+  assert.ok(!measured.some((file) => /\.test\.ts$|\.fixtures\.ts$|_generated/.test(file)));
 });
 
 test("a job that left no artifact reads « indisponible », and one that did not run « non lancé »", () => {

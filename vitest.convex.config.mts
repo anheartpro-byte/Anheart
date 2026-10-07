@@ -1,5 +1,14 @@
 import { defineConfig } from "vitest/config";
-import { CONVEX, vitestThresholds } from "./scripts/ci/coverage-thresholds.mjs";
+import {
+  assertMeasured,
+  CONVEX,
+  vitestThresholds,
+} from "./scripts/ci/coverage-thresholds.mjs";
+
+// Before any test: every file that must hold the threshold alone is a file
+// this configuration measures. Vitest would count the threshold of a name
+// that matches nothing as reached; here the command stops instead.
+assertMeasured(import.meta.dirname, CONVEX);
 
 export default defineConfig({
   test: {
