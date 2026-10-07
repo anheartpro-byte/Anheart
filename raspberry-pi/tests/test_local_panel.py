@@ -87,7 +87,7 @@ from src.units import Bpm, Hertz, Monotonic, MotorRpm, OutputRpm, RawRegister, S
 from src.web.deps import Services
 from tests.test_ecg_pipeline import FakeTreatment
 from tests.test_runtime import FakeDrive
-from tests.test_web_api import SERVE_TEST_PORT
+from tests.test_web_api import free_port
 
 BASE_ENV: Final[Mapping[str, str]] = {
     "MOTOR_BACKEND": "sim",
@@ -459,7 +459,7 @@ async def test_a_tick_that_raises_stops_the_console_failed_closed(
 
 async def test_the_production_web_runner_binds_and_exits(tmp_path: Path) -> None:
     """Loopback only, on a free port, told to exit before serving anything."""
-    config = config_from({**BASE_ENV, "UI_PORT": str(SERVE_TEST_PORT)})
+    config = config_from({**BASE_ENV, "UI_PORT": str(free_port())})
     panel = build_panel(config, clock=ManualClock(), profiles_path=tmp_path / "p.json")
     runner = UvicornRunner(panel.services, config)
     runner.request_exit()

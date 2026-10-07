@@ -1343,15 +1343,18 @@ détecte pas, d'où la deuxième règle.
   échoue (`did not collect the same tests`) ;
 * **isolement.** Fichiers sous `tmp_path`, aucun chemin ni port fixe partagé
   entre deux tests, aucun état laissé au test suivant : l'ordre et le
-  voisinage des tests ne sont plus ceux de la série. Exception connue : deux
-  tests ouvrent réellement le port fixe 8099,
+  voisinage des tests ne sont plus ceux de la série. Deux tests ouvrent
+  réellement un port,
   `tests/test_web_api.py::test_the_server_serves_and_stops_without_touching_the_signal_handlers`
   et `tests/test_local_panel.py::test_the_production_web_runner_binds_and_exits`.
-  Ils sont nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`) et vont
-  toujours dans le même processus, qui les exécute l'un après l'autre. Si
-  l'un d'eux est renommé, la gate échoue jusqu'à la mise à jour de cette
-  liste. Deux gates lancées en même temps sur une même machine peuvent
-  toujours se disputer ce port ;
+  Depuis ANH-183, chacun demande un port libre au système (`free_port`, dans
+  `tests/test_web_api.py`) au lieu du port fixe 8099 qu'ils partageaient :
+  deux gates lancées en même temps sur une même machine ne se le disputent
+  plus. Ils restent nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`)
+  et vont toujours dans le même processus, qui les exécute l'un après
+  l'autre : entre la réponse du système et l'ouverture du port, un autre
+  processus pourrait recevoir le même numéro. Si l'un d'eux est renommé, la
+  gate échoue jusqu'à la mise à jour de cette liste ;
 * **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
   les CPU du runner sont occupés pendant toute la durée des tests.
 

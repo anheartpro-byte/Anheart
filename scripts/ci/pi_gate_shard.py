@@ -65,10 +65,13 @@ SAME_PROCESS: Final[frozenset[str]] = frozenset(
 )
 """Tests that must never run at the same time, so they all go to process 0.
 
-Both bind the fixed port ``SERVE_TEST_PORT`` (8099) for real. One process runs
-its tests one after the other, which is the only guarantee two processes
-cannot give. A name listed here that is no longer collected stops the run:
-a stale entry would silently give the guarantee up.
+Both bind a port for real. Each asks the system for a free one and then binds
+it (``free_port`` in ``raspberry-pi/tests/test_web_api.py``; they once shared
+the fixed port 8099): between the answer and the bind, another process may be
+given the same number. One process runs its tests one after the other, which
+is the only guarantee two processes cannot give. A name listed here that is no
+longer collected stops the run: a stale entry would silently give the
+guarantee up.
 """
 
 ALONE_IN_PROCESS_ZERO: Final[frozenset[str]] = frozenset({"tests/test_cohort.py"})
