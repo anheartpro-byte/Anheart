@@ -849,6 +849,13 @@ Le lien court `/?live=...` perd ses paramètres sur la version en ligne
 aujourd'hui : passer par `/viewer/index.html?live=...`. C'est corrigé dans
 `app.py` et prendra effet au prochain déploiement en production.
 
+La page du visualiseur a changé deux fois depuis la version en ligne (elle ne
+lit une trace que sur son propre serveur ; elle affiche le contenu d'une trace
+comme du texte et déclare ce qu'elle a le droit de charger, voir
+[framework-de-test.md](framework-de-test.md#73-ce-que-la-page-affiche-dune-trace-et-ce-quelle-peut-charger)) :
+la démonstration hébergée doit être redéployée ([section 6.4](#64-redéployer))
+pour servir la page corrigée.
+
 > L'adresse est **publique** : quiconque la connaît peut lancer un scénario, ce
 > qui consomme du temps de calcul sur le compte Vercel du client. Elle ne montre
 > ni donnée de patient ni secret. Pour la restreindre, activer la protection des

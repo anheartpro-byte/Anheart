@@ -2,6 +2,14 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<!-- What this page may load: its own style and its own script, each named by
+     its hash, and requests to the server that served it (the page has no
+     image: the one a browser asks that server for by itself is the site's
+     icon). Nothing else: no other script or style, no frame or plugin, no
+     base address, no form. Change the style or the script below and its hash
+     must follow: simulation/tests/test_viewer_page.py gives the value to
+     write here. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-qGg2l0sFBTmOyrpXIhYlZRuBXjAZG6wHtr0W8PxbNvQ='; style-src 'sha256-pgXEJqXqJommJWAIfLhnjo349pfpbY/rmc1lzNfMX4o='; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Anheart 2D Simulator</title>
 <style>
@@ -54,6 +62,12 @@
   .chart canvas { width: 100%; height: 170px; display: block; }
   .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
   .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  .legend i.accent { background: var(--accent); } .legend i.setpoint { background: var(--setpoint); }
+  .legend i.hr { background: var(--hr); } .legend i.hrlive { background: var(--hrlive); }
+  .legend i.zone { background: var(--zone); height: 8px; }
+  .legend i.gref { background: var(--gref); } .legend i.gleg { background: var(--gleg); }
+  .legend i.hz { background: var(--hz); }
+  #clock { font-variant-numeric: tabular-nums; }
   #events { grid-column: 1 / -1; max-height: 220px; overflow: auto; font-size: 12px; }
   #events div { padding: 2px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   #events span.t { display: inline-block; width: 70px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -71,7 +85,7 @@
   </select> x</label>
   <button id="play">Lecture</button>
   <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="position">
-  <span id="clock" style="font-variant-numeric: tabular-nums">t = 0 s</span>
+  <span id="clock">t = 0 s</span>
   <span id="source" class="note"></span>
 </header>
 <main>
@@ -97,13 +111,13 @@
   </section>
   <section class="panel charts">
     <div class="chart"><h3>Vitesse de sortie (tr/min)</h3><canvas id="cRpm"></canvas>
-      <div class="legend"><span><i style="background:var(--accent)"></i>mesuree</span><span><i style="background:var(--setpoint)"></i>consigne</span></div></div>
+      <div class="legend"><span><i class="accent"></i>mesuree</span><span><i class="setpoint"></i>consigne</span></div></div>
     <div class="chart"><h3>Frequence cardiaque (bpm)</h3><canvas id="cHr"></canvas>
-      <div class="legend"><span><i style="background:var(--hr)"></i>vraie</span><span><i style="background:var(--hrlive)"></i>mesuree</span><span><i style="background:var(--zone);height:8px"></i>zone</span></div></div>
+      <div class="legend"><span><i class="hr"></i>vraie</span><span><i class="hrlive"></i>mesuree</span><span><i class="zone"></i>zone</span></div></div>
     <div class="chart"><h3>Charge centripete (g)</h3><canvas id="cG"></canvas>
-      <div class="legend"><span><i style="background:var(--gref)"></i>reference</span><span><i style="background:var(--gleg)"></i>pointe du pied</span></div></div>
+      <div class="legend"><span><i class="gref"></i>reference</span><span><i class="gleg"></i>pointe du pied</span></div></div>
     <div class="chart"><h3>Frequence variateur (Hz)</h3><canvas id="cHz"></canvas>
-      <div class="legend"><span><i style="background:var(--hz)"></i>sortie variateur</span></div></div>
+      <div class="legend"><span><i class="hz"></i>sortie variateur</span></div></div>
   </section>
   <section class="panel" id="events"><div class="empty">Charger une trace (bouton en haut) ou lancer un scenario live.</div></section>
 </main>
@@ -169,12 +183,22 @@ function rowAt(t) {
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (r[mid].t <= t) lo = mid; else hi = mid - 1; }
   return lo;
 }
+// An element of this page's own making: a tag and a class written here, and
+// the text it shows. What a trace holds only ever arrives as that text.
+function textElement(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  el.textContent = text;
+  return el;
+}
 function renderEvents() {
-  const box = $("events"); box.innerHTML = "";
-  if (!S.events.length) { box.innerHTML = '<div class="empty">Aucun evenement.</div>'; return; }
+  const box = $("events"); box.textContent = "";
+  if (!S.events.length) { box.appendChild(textElement("div", "empty", "Aucun evenement.")); return; }
   for (const e of S.events) {
     const d = document.createElement("div");
-    d.innerHTML = `<span class="t">${fmt(e.t, 1)} s</span><b>${e.kind}</b> ${e.detail.replace(/</g, "&lt;")}`;
+    d.appendChild(textElement("span", "t", `${fmt(e.t, 1)} s`));
+    d.appendChild(textElement("b", "", `${e.kind}`));
+    d.appendChild(document.createTextNode(` ${e.detail}`));
     d.onclick = () => { S.cursor = e.t; S.playing = false; $("play").textContent = "Lecture"; draw(); };
     box.appendChild(d);
   }
