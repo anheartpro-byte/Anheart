@@ -206,6 +206,22 @@ export async function submit(form: TestElement) {
   await fire(form, "submit");
 }
 
+/**
+ * The buttons of a form, in order, each with the type a browser gives it: a
+ * button that says nothing of its type is a submit button. This document has
+ * no default action (a click on a submit button submits nothing here, a test
+ * submits the form itself), so a wrong type is invisible to a test that only
+ * acts: a test of a form reads the types, to prove which button submits it
+ * and that no other does.
+ */
+export function buttonsOf(
+  form: TestElement,
+): { label: string; type: string }[] {
+  return elementsOf(form)
+    .filter((element) => element.localName === "button")
+    .map((button) => ({ label: textOf(button), type: button.type }));
+}
+
 /** Lets pending promises and timers of the component settle, under fake timers or not. */
 export async function settle(run: () => unknown = () => {}) {
   await act(async () => {

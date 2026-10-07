@@ -1,4 +1,11 @@
-import { click, messages, render, submit, type } from "@/test-support/render";
+import {
+  buttonsOf,
+  click,
+  messages,
+  render,
+  submit,
+  type,
+} from "@/test-support/render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answer,
@@ -162,6 +169,27 @@ afterEach(() => {
 });
 
 describe("ANH-203 launch window: opening", () => {
+  it("is a form that « Lancer » alone submits: « Annuler » and every choice of a list are plain buttons", () => {
+    // The tests below submit the form themselves: in a browser it is the
+    // submit button, or Enter in a field, that does. A Cancel button without
+    // `type="button"` would launch the session it is there to give up.
+    gestionnaireWithPatient({ hrMax: 180, birthYear: 1986 });
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    const buttons = buttonsOf(screen.form());
+    expect(buttons.filter((button) => button.type !== "button")).toEqual([
+      { label: t.submit, type: "submit" },
+    ]);
+    expect(buttons.map((button) => button.label)).toEqual([
+      ENDURANCE_OPTION,
+      SPRINT_OPTION,
+      MYSELF_OPTION,
+      PATIENT_OPTION,
+      t.submit,
+      fr.common.cancel,
+    ]);
+  });
+
   it("draws nothing while closed, and asks the server nothing", () => {
     signedInAs("user");
     machine();
@@ -380,7 +408,7 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
     expect(launchDisabled(screen)).toBe(true);
   });
 
-  it.each(["0", "-5", "abc"])(
+  it.each(["0", "-5"])(
     "refuses a duration of %s minutes: message shown, nothing sent",
     async (minutes) => {
       signedInAs("user");
@@ -395,6 +423,38 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
       expect(mutationCalls()).toEqual({});
     },
   );
+
+  it("if a text that is not a number reaches it, refuses it the same way (a number field of a browser hands over no such text)", async () => {
+    // The duration is a `type="number"` field: for "abc" a browser gives the
+    // component an empty value, never the text. This is what the component
+    // does should the text arrive anyway; the document of these tests, which
+    // filters nothing, is what lets it arrive here.
+    signedInAs("user");
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    await type(screen.field("launch-duration"), "abc");
+
+    expect(screen.text()).toContain(t.durationInvalid);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it("asks the browser for a number of whole minutes, one at least: what the field itself refuses is not tested here", () => {
+    // `type`, `min` and `step` are applied by a browser, not by the document
+    // of these tests: they are read here, not exercised.
+    signedInAs("user");
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    const field = screen.field("launch-duration");
+    expect({
+      type: field.type,
+      min: field.getAttribute("min"),
+      step: field.getAttribute("step"),
+    }).toEqual({ type: "number", min: "1", step: "1" });
+  });
 
   it("a patient whose birth year is unknown cannot be launched", async () => {
     gestionnaireWithPatient({ hrMax: 180 });
@@ -593,7 +653,7 @@ describe("ANH-203 launch window: what is sent", () => {
 
     await choose(screen, ENDURANCE_OPTION);
     await choose(screen, PATIENT_OPTION);
-    await type(screen.field("launch-duration"), " 12.5 ");
+    await type(screen.field("launch-duration"), "12");
     await type(screen.field("launch-notes"), "  première séance  ");
     await submit(screen.form());
 
@@ -604,12 +664,37 @@ describe("ANH-203 launch window: what is sent", () => {
             machineId,
             profileId: "endurance",
             userId: patientId,
-            totalDurationS: 750,
+            totalDurationS: 720,
             notes: "première séance",
           },
         ],
       ],
     });
+  });
+
+  it("if a fraction of a minute, with spaces around it, reaches it, sends it rounded to the second: 12.5 gives 750 s", async () => {
+    // Not a value the form lets through in a browser: the field has a step of
+    // one minute, so a browser refuses to submit 12.5, and a number field
+    // hands over no spaces. This is what the component computes should such a
+    // value reach it; the server checks the duration again.
+    signedInAs("user");
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    await type(screen.field("launch-duration"), " 12.5 ");
+    await submit(screen.form());
+
+    expect(mutation(LAUNCH).mock.calls).toEqual([
+      [
+        {
+          machineId,
+          profileId: "endurance",
+          userId: undefined,
+          totalDurationS: 750,
+          notes: undefined,
+        },
+      ],
+    ]);
   });
 
   it("a manager who launches for himself sends no rider", async () => {

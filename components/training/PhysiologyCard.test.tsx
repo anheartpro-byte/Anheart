@@ -1,4 +1,11 @@
-import { click, messages, render, submit, type } from "@/test-support/render";
+import {
+  buttonsOf,
+  click,
+  messages,
+  render,
+  submit,
+  type,
+} from "@/test-support/render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mutation, mutationCalls, resetConvex } from "@/test-support/convex";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -38,6 +45,16 @@ afterEach(() => {
 });
 
 describe("ANH-203 physiology card: what it shows", () => {
+  it("is a form whose only button submits it", () => {
+    // The tests below submit the form themselves: in a browser it is this
+    // button, or Enter in a field, that does. Its type is what makes it so.
+    const screen = render(<PhysiologyCard userId={userId} user={{}} />);
+
+    expect(buttonsOf(screen.form())).toEqual([
+      { label: fr.common.save, type: "submit" },
+    ]);
+  });
+
   it("shows the measured max heart rate the server holds, and says it is measured", () => {
     const screen = render(
       <PhysiologyCard userId={userId} user={{ hrMax: 185, birthYear: 1986 }} />,

@@ -1,4 +1,5 @@
 import {
+  buttonsOf,
   click,
   messages,
   render,
@@ -86,6 +87,31 @@ beforeEach(() => {
 afterEach(() => {
   for (const toast of getFeedbackToasts()) dismissFeedback(toast.id);
   vi.useRealTimers();
+});
+
+describe("ANH-203 patient window: the form", () => {
+  it.each([
+    ["creating", undefined, fr.common.create],
+    ["editing", PAUL, fr.common.save],
+  ])(
+    "%s: one button submits the form, « Annuler » and the two languages are plain buttons",
+    (_case, patient, label) => {
+      // The tests below submit the form themselves: in a browser it is the
+      // submit button, or Enter in a field, that does.
+      const { screen } = open({ patient });
+
+      const buttons = buttonsOf(screen.form());
+      expect(buttons.filter((button) => button.type !== "button")).toEqual([
+        { label, type: "submit" },
+      ]);
+      expect(buttons.map((button) => button.label)).toEqual([
+        "Francais",
+        "English",
+        label,
+        fr.common.cancel,
+      ]);
+    },
+  );
 });
 
 describe("ANH-203 patient window: creating", () => {

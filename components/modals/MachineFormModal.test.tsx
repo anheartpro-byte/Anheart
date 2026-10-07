@@ -1,4 +1,5 @@
 import {
+  buttonsOf,
   click,
   messages,
   render,
@@ -118,6 +119,34 @@ afterEach(() => {
   for (const toast of getFeedbackToasts()) dismissFeedback(toast.id);
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("ANH-203 machine window: the form", () => {
+  it.each([
+    ["creating", undefined, fr.common.create],
+    ["editing", MACHINE, fr.common.save],
+  ])(
+    "%s: one button submits the form, « Annuler » and the boxes of the gestionnaires are plain buttons",
+    (_case, machine, label) => {
+      // The tests below submit the form themselves: in a browser it is the
+      // submit button, or Enter in a field, that does.
+      signedInAs("admin");
+      answer("users:listGestionnaires", [ANNA, BORIS]);
+      const { screen } = open({ machine });
+
+      const buttons = buttonsOf(screen.form());
+      expect(buttons.filter((button) => button.type !== "button")).toEqual([
+        { label, type: "submit" },
+      ]);
+      // Two boxes (they read nothing), the submit button, then Cancel.
+      expect(buttons.map((button) => button.label)).toEqual([
+        "",
+        "",
+        label,
+        fr.common.cancel,
+      ]);
+    },
+  );
 });
 
 describe("ANH-203 machine window: creating", () => {
