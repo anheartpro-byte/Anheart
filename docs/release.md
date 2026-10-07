@@ -573,7 +573,9 @@ qu'il tourne à chaque exécution, quels que soient les fichiers changés : ces
 tests lisent le script, mais aussi ce document, `docs/roadmap.md` et le modèle
 de PR, qu'une PR de documentation peut changer seule. C'est là que le script
 tourne sous Linux (bash 5, l'`awk` du runner) ; en local il tourne aussi sous
-macOS (bash 3.2).
+macOS (bash 3.2). Première exécution sous Linux le 7 octobre 2026 (exécution
+37703336157) : 86 tests réussis en 41 s, et le job `docs` entier en 48 s, contre
+une dizaine de secondes avant ces tests.
 
 ---
 
