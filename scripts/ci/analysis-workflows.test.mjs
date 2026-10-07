@@ -175,7 +175,7 @@ test("CodeQL leaves out generated, installed and binary paths, and nothing else"
   }
   // No key that would narrow the analysis to some paths or to some queries.
   assert.doesNotMatch(read(CODEQL_CONFIG), /^(paths|disable-default-queries|query-filters):/m);
-  // The one suite named adds the quality checks to the security ones: it widens the analysis.
+  // The one suite named is the widest one: security and quality, nothing else.
   assert.deepEqual(block(read(CODEQL_CONFIG), "queries"), ["- uses: security-and-quality"]);
   // The way this file reads an entry, on paths that exist only once something is installed or built.
   assert.ok(entries.some((entry) => leavesOut(entry, "node_modules/react/index.js")));

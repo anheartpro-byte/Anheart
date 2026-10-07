@@ -7,9 +7,6 @@
 # so that the same file gives the same scope on a developer's machine.
 name: Anheart
 
-queries:
-  - uses: security-and-quality
-
 paths-ignore:
   # Written by `convex codegen`.
   - convex/_generated
@@ -25,3 +22,6 @@ paths-ignore:
   - simulation/out
   # The CAD assembly (a STEP file kept in Git LFS).
   - CAO
+
+queries:
+  - uses: security-and-quality

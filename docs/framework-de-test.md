@@ -1569,7 +1569,7 @@ l'audit des dépendances.
 
 | | CodeQL |
 |---|---|
-| Ce qui est cherché | des failles de sécurité et des défauts de qualité du code, avec la suite « sécurité et qualité » de GitHub (`security-and-quality`) |
+| Ce qui est cherché | des failles de sécurité et des défauts de qualité du code (vérification sans effet, variable peut-être non initialisée, import inutile), avec la suite `security-and-quality` de GitHub, nommée sous `queries` dans le fichier de périmètre |
 | Ce qui est lu | les sources Python et JavaScript/TypeScript, tests compris, et les workflows GitHub Actions du dépôt |
 | Périmètre réglé dans | `.github/codeql/codeql-config.yml` |
 | Quand | PR vers `develop` ou `main`, push sur ces branches, chaque lundi à 04:37 UTC, à la demande |
@@ -1985,8 +1985,8 @@ lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
   l'endurance nocturne) : ils ne sont pas lancés, donc pas comptés.
 - La qualité du code au sens d'un outil d'analyse (complexité, duplication,
   code mort) : aucun outil du dépôt ne la mesure. CodeQL cherche des failles de
-  sécurité et des défauts de qualité, sans les compter dans ce rapport : ses
-  résultats se lisent dans **Security → Code scanning**
+  sécurité et des défauts de qualité, et ses résultats se lisent dans
+  **Security → Code scanning**
   ([Analyse statique externe](#analyse-statique-externe--codeql-anh-196)).
 - Ce que trouvent `npm audit`, `pip-audit`, gitleaks et CodeQL : le résumé d'une
   exécution d'un dépôt public est public. Le rapport ne porte que des noms de
