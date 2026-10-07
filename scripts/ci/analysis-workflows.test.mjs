@@ -174,7 +174,9 @@ test("CodeQL leaves out generated, installed and binary paths, and nothing else"
     assert.ok(entries.includes(expected), `${expected} is analysed`);
   }
   // No key that would narrow the analysis to some paths or to some queries.
-  assert.doesNotMatch(read(CODEQL_CONFIG), /^(paths|queries|disable-default-queries|query-filters):/m);
+  assert.doesNotMatch(read(CODEQL_CONFIG), /^(paths|disable-default-queries|query-filters):/m);
+  // The one suite named adds the quality checks to the security ones: it widens the analysis.
+  assert.deepEqual(block(read(CODEQL_CONFIG), "queries"), ["- uses: security-and-quality"]);
   // The way this file reads an entry, on paths that exist only once something is installed or built.
   assert.ok(entries.some((entry) => leavesOut(entry, "node_modules/react/index.js")));
   assert.ok(entries.some((entry) => leavesOut(entry, "raspberry-pi/.venv/lib/python3.12/site.py")));

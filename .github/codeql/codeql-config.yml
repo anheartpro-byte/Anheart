@@ -7,6 +7,9 @@
 # so that the same file gives the same scope on a developer's machine.
 name: Anheart
 
+queries:
+  - uses: security-and-quality
+
 paths-ignore:
   # Written by `convex codegen`.
   - convex/_generated
