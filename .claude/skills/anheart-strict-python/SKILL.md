@@ -267,8 +267,29 @@ keeps the catch-all arm of rule 3.
 value** (the two arms above). Capturing a field under its own name,
 `case UnknownProfile(profile_id=profile_id):`, is read by the analysis as a
 use of `profile_id` before it is bound; it has reported it on the first case
-of a `match` that opens a function. For a nested value, bind the object and
-read from it: `case Err(BadResponse() as error):` then `error.detail`.
+of a `match` that opens a function.
+
+For an error carried by a `Result`, keep the nested form of rule 3:
+`case Err(error):`, then `match error:`, each arm reading its field from
+`error`. Each guard follows its own `match` (`LinkError` stands for
+`CommTimeout | BadResponse`):
+
+    def reading(result: Result[MotorRpm, LinkError]) -> str:
+        match result:
+            case Ok(rpm):
+                return f"{rpm} rpm"
+            case Err(error):
+                match error:
+                    case CommTimeout():
+                        return f"no answer within {error.after:.3f} s"
+                    case BadResponse():
+                        return f"unusable answer: {error.detail}"
+                raise assert_never(error)
+        raise assert_never(result)
+
+Naming the variant inside `Err(...)`, as in `case Err(BadResponse() as error):`,
+is refused by both type checkers even when every variant is handled, for the
+reason rule 3 gives.
 
 **A protocol member is declared `@abstractmethod`, and its docstring is its
 whole body**, as the standard library writes its own protocols:

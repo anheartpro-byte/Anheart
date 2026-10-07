@@ -1699,9 +1699,12 @@ qui en donne un exemple chacune :
   valeur reconnue (`case AlreadyStarted():` puis `refusal.state`). Capturer un
   champ sous son propre nom (`case AlreadyStarted(state=state):`) est lu par
   l'analyse comme un usage de `state` avant son affectation ; elle l'a signalé
-  sur le premier cas d'un `match` qui ouvre une fonction. Pour une valeur
-  imbriquée, lier l'objet et lire dessus : `case Err(BadResponse() as error):`
-  puis `error.detail`.
+  sur le premier cas d'un `match` qui ouvre une fonction. Pour une erreur
+  portée par un `Result`, la forme imbriquée de la règle 3 reste la règle :
+  `case Err(error):`, puis `match error:`, chaque cas lisant son champ sur
+  `error`, et chaque garde après son propre `match`. Nommer la variante dans
+  `Err(...)` (`case Err(BadResponse() as error):`) est refusé par les deux
+  vérificateurs de types, même quand tous les cas sont traités.
 * **Membre de protocole.** Un membre de `typing.Protocol` est déclaré
   `@abstractmethod` et a sa documentation pour seul corps, comme les
   protocoles de la bibliothèque standard. Une classe qui satisfait le
