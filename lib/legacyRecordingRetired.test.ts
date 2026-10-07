@@ -12,7 +12,6 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..");
 const SOURCE_DIRECTORIES = ["app", "components", "hooks", "lib", "i18n"];
-const THIS_FILE = "lib/legacyRecordingRetired.test.ts";
 
 type Source = { path: string; text: string };
 
@@ -33,7 +32,8 @@ const sources: Source[] = SOURCE_DIRECTORIES.filter((directory) =>
     path: relative(ROOT, file).split("\\").join("/"),
     text: readFileSync(file, "utf8"),
   }))
-  .filter((source) => source.path !== THIS_FILE);
+  // The site's sources, not its tests: a test of a removal names what it removes.
+  .filter((source) => !/\.test\.tsx?$/.test(source.path));
 
 function matches(pattern: RegExp): string[] {
   return sources.flatMap((source) =>

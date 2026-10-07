@@ -164,7 +164,6 @@ describe("ANH-154 machines.setGestionnaireMachines", () => {
         apiKey: "synthetic-hash",
         status: "offline" as const,
         lastHeartbeat: 0,
-        config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
         createdAt: NOW,
       });
       await ctx.db.delete(id);

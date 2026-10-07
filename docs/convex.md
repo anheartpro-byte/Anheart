@@ -16,7 +16,9 @@ machines, les séances et la télémétrie. Il sert deux clients :
 > une console de Pi en simulation : voir
 > [deploiement.md](deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026).
 > Il n'est **pas** en production (ticket ANH-82), et n'a jamais été appelé par
-> un vrai Pi. Cet état de déploiement est historique ; les tests locaux Convex
+> un vrai Pi. Le retrait de l'ancien mode d'enregistrement ECG décrit ici
+> (routes, mutations, champ `config`, migration) n'est déployé **nulle part**.
+> Cet état de déploiement est historique ; les tests locaux Convex
 > sont désormais exécutables avec `npm run test:convex`. Les fichiers `convex/training.ts`, `lib/training.ts`,
 > `components/training/` et la page `my-machines` ne sont pas encore commités
 > (état `git status` au moment de la rédaction).
@@ -51,9 +53,10 @@ Sommaire :
   - **manual** : l'opérateur fixe la vitesse. **Aucune mutation Convex ne crée
     une séance manuelle.** Le Pi l'enregistre après l'avoir démarrée lui-même
     (`/api/machine/training/local`), pour que le site l'affiche.
-- Le troisième type, `recording`, est l'ancien mode « enregistrement ECG seul »
-  du client `src/main.py`. Il est conservé mais n'est pas utilisé par la console
-  locale.
+- L'ancien mode « enregistrement ECG seul » est **retiré** : plus aucune
+  fonction ni route ne crée, ne démarre, n'alimente ni ne termine une séance
+  d'enregistrement. Ses séances restent en base, sans champ `kind`, en lecture
+  seule ; les lectures les rapportent avec le type `recording`.
 
 Voir le [glossaire](glossaire.md) pour « zone », « palier hard max / critique ».
 
@@ -155,7 +158,7 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | `authenticationEnabled` | `false` refuse l'authentification ; absent ou `true` l'autorise sous réserve d'une clé valide et d'une machine non supprimée. Distinct de `status` et de `programsEnabled`. Aucun nouveau contrôle public/UI de ce champ. |
 | `status` | `"online"` \| `"offline"` \| `"in_session"`. |
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
-| `config` | `{ sampleRate, channels, batchInterval }` (défaut `1000`, `["ECG"]`, `1000`). Hérité du mode enregistrement. |
+| `config` | **Obsolète.** `{ sampleRate, channels, batchInterval }`, réglages de l'ancien enregistreur ECG. Facultatif ; aucune fonction ne le lit ni ne l'écrit. Il reste déclaré le temps que la migration `removeMachineConfig` le retire des documents ([§8](#8-déployer)), puis il quittera le schéma. |
 | `isDeleted`, `deletedAt`, `deletedBy` | Suppression douce. |
 | `programsEnabled` | Rapporté par le Pi : accepte-t-il les séances auto ? |
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
@@ -186,8 +189,8 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. |
 | `startedAt`, `endedAt` | ms Unix. |
-| `channels`, `sampleRate`, `notes` | Hérités du mode enregistrement. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
-| `kind` | `recording` \| `auto` \| `manual` (absent = ancien `recording`). |
+| `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
+| `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
 | `origin` | `remote` (site) \| `local` (machine). |
 | `profileId`, `profileName`, `zoneLowBpm`, `zoneHighBpm`, `totalDurationS` | Programme lancé. |
 | `subjectHrMax`, `subjectAge`, `subjectLabel` | FC max retenue, âge, nom du pratiquant. |
@@ -205,13 +208,17 @@ Index : `by_user`, `by_machine`, `by_machine_and_status`,
 `bpm` (absent = pas de FC fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`,
 `gLoad`, `safetyAction`. Index `by_session_and_t`.
 
-### Tables héritées du mode enregistrement ECG
+### Historique de l'ancien mode d'enregistrement ECG (lecture seule)
 
 | Table | Contenu |
 |---|---|
-| `ecg_data` | Lots d'ECG **déjà traité** sur le Pi (`values` en mV à `sampleRate` Hz) et métriques par canal (`heartRate`, `hrv`, `quality`…). Écrit par `/api/machine/data`. **La console locale n'envoie pas ces lots** : seul l'ancien client `src/main.py` le fait. |
-| `session_summaries` | Résumé calculé en fin de séance (FC moyenne/min/max, HRV, ECG sous-échantillonné). Calculé à partir de `ecg_data` : sans ECG, aucun résumé n'est produit. |
-| `machine_heartbeats` | Historique des heartbeats (`timestamp`, `batteryLevel`, `wifiStrength`, `activeSessionId`). Aucun nettoyage n'est programmé. |
+| `ecg_data` | Lots d'ECG **déjà traité** sur le Pi (`values` en mV à `sampleRate` Hz) et métriques par canal (`heartRate`, `hrv`, `quality`…), écrits autrefois par l'enregistreur. **Plus aucune fonction n'y écrit.** Les lectures de `ecgData.ts` restent pour consulter l'existant. La console locale n'a jamais envoyé ces lots. |
+| `session_summaries` | Résumé calculé autrefois à la fin d'une séance d'enregistrement (FC moyenne/min/max, HRV, ECG sous-échantillonné). **Plus rien n'en calcule ni n'en écrit** ; `getSummary` et `getSummaryWithEcg` lisent l'existant. Le résumé d'une séance d'entraînement viendra de son enregistrement (ANH-89). |
+
+### `machine_heartbeats`
+
+Historique des heartbeats (`timestamp`, `batteryLevel`, `wifiStrength`,
+`activeSessionId`). Aucun nettoyage n'est programmé.
 
 ---
 
@@ -357,7 +364,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine, au format attendu par le Pi. |
 | `markTrainingStarted` | `pending` → `active`, `startedAt` = maintenant, machine `in_session`. Refuse une séance d'une autre machine ou non `pending`. |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, et passe la machine `in_session`. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. Pour une séance `completed` qui était `active`, planifie `sessionSummaries.generateSummary`. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
 | `getTrainingStatus` | `{status, active, stopRequested}`. |
 | `storeTelemetry` | Insère des points pour la séance (qui doit appartenir à la machine). |
 
@@ -392,7 +399,7 @@ Résumé des fonctions les plus utilisées par le site.
 | `createMachine` | admin | Crée la machine, statut `offline`. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
 | `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. |
-| `updateMachine` | admin, gestionnaire de la machine | Nom, lieu, config. |
+| `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin | Annule la suppression. |
 | `assignMachineToGestionnaires` | admin | Remplace la liste complète des gestionnaires d'**une machine**. |
@@ -400,24 +407,30 @@ Résumé des fonctions les plus utilisées par le site.
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. |
 | `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. |
 
-### `sessions.ts` (séances d'enregistrement héritées, et listes)
+### `sessions.ts` (lectures seulement)
+
+Aucune fonction de ce module ne crée, ne démarre ni ne termine une séance. Une
+séance naît de `training.launchAutoSession` (lancement depuis le site) ou de
+`registerLocalSession` (séance démarrée à la machine), et se termine par les
+routes d'entraînement.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `createSession` | admin, gestionnaire | Crée une séance **`recording`** `pending` (ancien mode ECG). Machine en ligne, non occupée, au moins un canal. |
-| `endSession`, `cancelSession` | admin, gestionnaire de la machine | Termine / annule une séance d'enregistrement. |
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
 | `listSessions` | connecté | admin : toutes ; user : les siennes ; gestionnaire : celles de ses machines. Retourne `kind` et `origin`. La limite (`limit`, 50 par défaut) s'applique **avant** le filtrage par droits. |
 | `getActiveSessionForMachine` | accès machine | Séance active. |
 | `getCompletedSessionsForUser` | connecté | Séances `completed` visibles (page Rapports). |
 
-### `ecgData.ts` et `sessionSummaries.ts`
+### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
-Lectures de l'ECG des séances d'enregistrement (`getRecentEcgData`,
-`getSessionAllData`, `getSessionEcgRange`, `getSessionDataStats`,
-`getLatestEcgBatch`) et du résumé (`getSummary`, `getSummaryWithEcg`).
+Lectures de l'ECG des séances de l'ancien mode d'enregistrement
+(`getRecentEcgData`, `getSessionAllData`, `getSessionEcgRange`,
+`getSessionDataStats`, `getLatestEcgBatch`) et de leur résumé (`getSummary`,
+`getSummaryWithEcg`). Ces deux modules ne contiennent plus aucune écriture.
 Autorisation : pratiquant, admin ou accès à la machine. `getRecentEcgData`
-applique un **retard de 5 s** aux gestionnaires sur une séance active.
+applique un **retard de 5 s** aux gestionnaires sur une séance active. Le site
+n'appelle plus que `getSessionDataStats`, pour la carte d'historique du détail
+d'une séance.
 
 ### `softwareReleases.ts` (registre des versions publiées)
 
@@ -448,7 +461,7 @@ HTTP n'y existent pas).
 `{"error": "Invalid API key"}`.
 
 La suppression (`isDeleted`) ou la désactivation explicite
-(`authenticationEnabled: false`) produit aussi **401**, sur les 14 routes et
+(`authenticationEnabled: false`) produit aussi **401**, sur les 9 routes et
 les deux queries internes d'authentification. Une machine simplement `offline`
 peut envoyer son heartbeat avec une clé valide.
 
@@ -516,19 +529,18 @@ Détails du contrat :
   télémétrie en attente est bornée à 3600 points (1 h), les plus anciens
   sont jetés d'abord ; 20 séances terminées au plus restent dues.
 
-### Routes présentes mais non appelées par la console locale
+### Route présente mais non appelée par la console locale
 
 | Méthode et chemin | Rôle |
 |---|---|
 | `GET /api/machine/roster` | `{riders: [{userId, name, hrMax}]}` : patients ayant le droit sur la machine. **Aucun code du Pi ne l'appelle.** |
-| `GET /api/machine/session/poll` | Ancien mode : `{session: null}` ou `{session: {id, channels, config}}`. Ne renvoie **que** les séances `recording`, jamais une séance auto. |
-| `POST /api/machine/session/start` | Ancien mode : `{sessionId}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
-| `POST /api/machine/session/end` | Ancien mode : `{sessionId, reason?, failed?}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
-| `GET /api/machine/session/status?sessionId=` | Ancien mode : `{status, endedAt, active}`. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue. |
-| `POST /api/machine/data` | Ancien mode : lot ECG `{sessionId, timestamp, sampleRate?, samples, metrics?, batchId?}`. Horodatage refusé s'il est à plus de 1 min dans le futur ou plus de 5 min dans le passé. La séance doit appartenir à la machine authentifiée, sinon même réponse qu'une séance inconnue ; elle doit ensuite être `active`. |
 
-Ces routes « session » et « data » sont celles de `raspberry-pi/src/convex_client.py`
-(client hérité `python -m src.main`).
+### Routes retirées
+
+Les cinq routes de l'ancien mode d'enregistrement ECG (interrogation, début,
+fin et statut d'une séance d'enregistrement, envoi des lots ECG) n'existent
+plus : leurs chemins répondent **404**, même avec une clé valide. Le client qui
+les appelait a été retiré du Pi.
 
 ---
 
@@ -573,6 +585,36 @@ celles d'un projet **neuf**.
 
 `npm run dev` lance ensemble Next.js et `convex dev` ; son `predev` exécute
 `convex dev --until-success && convex dashboard` (réseau et compte requis).
+
+### Migration du retrait de l'ancien mode ECG
+
+**Pas encore exécutée, sur aucun déploiement.** Deux mutations internes de
+`convex/migrations/retireLegacyRecording.ts`, à lancer à la main, une fois par
+déploiement, **après** avoir déployé ce code :
+
+```bash
+npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
+npx convex run migrations/retireLegacyRecording:removeMachineConfig
+```
+
+| Mutation | Effet | Résultat renvoyé |
+|---|---|---|
+| `failOpenRecordingSessions` | Passe `failed` toute séance de l'ancien mode (sans `kind`) encore `pending` ou `active`, avec `endReason = "legacy mode retired"` et `endedAt`. Les séances d'enregistrement finies et toutes les séances d'entraînement ne sont pas touchées ; les lignes gardent leur forme (pas de `kind` ajouté). Le statut de la machine n'est pas écrit : le prochain heartbeat le recalcule. | `{machinesChecked, sessionsFailed}` |
+| `removeMachineConfig` | Retire le champ `config` de chaque machine, supprimées comprises. Rien d'autre ne change. | `{machinesChecked, machinesCleared}` |
+
+Les deux sont idempotentes : une seconde exécution renvoie zéro. Pourquoi la
+première compte : une séance d'enregistrement restée `pending` refuse tout
+lancement auto sur sa machine (« A session is already waiting for this
+machine ») et empêche de supprimer cette machine.
+
+Le champ `machines.config` reste déclaré, facultatif, dans le schéma : le
+retirer tant que des documents le portent ferait échouer `convex deploy`. Une
+fois `removeMachineConfig` passée sur **tous** les déploiements, le champ peut
+quitter `convex/schema.ts`. La valeur `recording` de `sessions.kind`, elle, a
+pu partir tout de suite : aucun code ne l'a jamais écrite.
+
+`convex/legacyRecordingRetired.test.ts` exerce ces deux mutations en mémoire
+(`npm run test:convex`). Ce n'est pas une preuve sur des données réelles.
 
 ---
 
@@ -628,7 +670,7 @@ régressions locales exécutables.
 | 4 | **Séances locales sans pratiquant.** Le Pi n'envoie ni `userId` ni `subjectLabel` à `/training/local` (le champ existe côté Convex). | Une séance démarrée à la machine apparaît sans pratiquant (« Unknown » dans les listes). Le patient ne la voit pas dans ses séances. |
 | 5 | **`/api/machine/roster` inutilisé.** | La liste des pratiquants autorisés n'arrive pas sur la console locale. |
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
-| 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG ni de résumé (`session_summaries`) ni de rapport PDF utile pour une séance auto/manuelle. |
+| 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG, pas de résumé et pas de rapport pour une séance auto/manuelle : le résumé et le rapport viendront de l'enregistrement de séance (ANH-89). |
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
 | 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
@@ -662,7 +704,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/test.setup.ts` | Fabriques partagées : un monde d'un centre (admin, deux gestionnaires, trois patients, deux machines, droits de lancement, profils) et un monde de machines avec de vraies clés pour les routes HTTP. Nom à deux points : non déployé. |
 | `convex/authorization.matrix.ts` | La **matrice d'autorisation** : la politique de chaque fonction publique, une ligne par rôle (et par côté quand l'accès dépend de la propriété). Nom à deux points : non déployé. |
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
-| `convex/httpRoutes.test.ts` | Les 14 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/httpRoutes.test.ts` | Les 9 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice. |

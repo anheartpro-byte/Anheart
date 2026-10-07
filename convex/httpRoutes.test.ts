@@ -3,7 +3,7 @@
  * ANH-132: the machine HTTP routes in `convex/http.ts`.
  *
  * Authentication refusals (missing header, malformed/unknown key, deleted or
- * disabled machine, regenerated key) across all fourteen routes are already
+ * disabled machine, regenerated key) across all nine routes are already
  * proven by `machineAuth.test.ts`; this suite does not repeat them. It covers
  * the per-route contract: malformed bodies, idempotency, machine binding, and
  * the pending-session filtering the Pi depends on.
@@ -68,11 +68,15 @@ async function seedPendingAuto(w: MachineWorld, machineId: Id<"machines">) {
   );
 }
 
+/**
+ * A session of this machine. "legacy" is a session of the retired ECG
+ * recording mode: a row without `kind`, as that mode wrote them.
+ */
 async function seedSession(
   w: MachineWorld,
   machineId: Id<"machines">,
   status: "pending" | "active" | "completed" | "failed",
-  kind: "recording" | "auto",
+  kind: "legacy" | "auto",
 ) {
   return await w.t.run((ctx) =>
     ctx.db.insert("sessions", {
@@ -81,7 +85,7 @@ async function seedSession(
       status,
       startedAt: NOW,
       channels: ["ECG"],
-      kind,
+      kind: kind === "legacy" ? undefined : kind,
     }),
   );
 }
@@ -151,7 +155,7 @@ describe("ANH-132 /api/machine/training/poll", () => {
     const w = await world();
     const mine = await seedPendingAuto(w, w.machine);
     await seedPendingAuto(w, w.otherMachine); // another machine's auto
-    await seedSession(w, w.machine, "pending", "recording"); // not an auto
+    await seedSession(w, w.machine, "pending", "legacy"); // not an auto
 
     const response = await send(w, w.machineKey, "GET", "/api/machine/training/poll");
     expect(response.status).toBe(200);
@@ -336,150 +340,12 @@ describe("ANH-132 /api/machine/profiles", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Legacy ECG-only routes (used by raspberry-pi/src/convex_client.py).
-// ---------------------------------------------------------------------------
-
-describe("ANH-132 legacy /api/machine/session/poll", () => {
-  it("returns a pending recording session, never an auto one", async () => {
-    const w = await world();
-    // The auto session is older, so a filter that just took the first pending
-    // row would return it: the recording-only filter is what keeps it out.
-    await seedPendingAuto(w, w.machine);
-    const recording = await seedSession(w, w.machine, "pending", "recording");
-    const response = await send(w, w.machineKey, "GET", "/api/machine/session/poll");
-    expect(response.status).toBe(200);
-    const payload = (await response.json()) as { session: { id: string } | null };
-    expect(payload.session?.id).toBe(recording);
-  });
-});
-
-describe("ANH-132 legacy /api/machine/session lifecycle (own session)", () => {
-  it("starts, reports status for, and ends this machine's recording session", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "pending", "recording");
-
-    const start = await send(w, w.machineKey, "POST", "/api/machine/session/start", {
-      sessionId,
-    });
-    expect(start.status).toBe(200);
-    expect((await w.t.run((ctx) => ctx.db.get(sessionId)))?.status).toBe("active");
-
-    const status = await send(
-      w,
-      w.machineKey,
-      "GET",
-      `/api/machine/session/status?sessionId=${sessionId}`,
-    );
-    expect(status.status).toBe(200);
-    expect(((await status.json()) as { active: boolean }).active).toBe(true);
-
-    const end = await send(w, w.machineKey, "POST", "/api/machine/session/end", {
-      sessionId,
-    });
-    expect(end.status).toBe(200);
-    expect((await w.t.run((ctx) => ctx.db.get(sessionId)))?.status).toBe("completed");
-  });
-
-  it("returns 404 for an unknown session status and 400 for a missing id", async () => {
-    const w = await world();
-    const missing = await send(w, w.machineKey, "GET", "/api/machine/session/status");
-    expect(missing.status).toBe(400);
-    const sessionId = await seedSession(w, w.machine, "pending", "recording");
-    await w.t.run((ctx) => ctx.db.delete(sessionId));
-    const unknown = await send(
-      w,
-      w.machineKey,
-      "GET",
-      `/api/machine/session/status?sessionId=${sessionId}`,
-    );
-    expect(unknown.status).toBe(404);
-  });
-});
-
-describe("ANH-132 legacy /api/machine/data", () => {
-  const batch = (sessionId: string, timestamp: number) => ({
-    sessionId,
-    timestamp,
-    sampleRate: 250,
-    samples: [{ channel: "ECG", values: [1, 2, 3], unit: "mV" }],
-  });
-
-  it("stores a batch for this machine's active session", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "active", "recording");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/data",
-      batch(sessionId, Date.now()),
-    );
-    expect(response.status).toBe(200);
-  });
-
-  it("refuses a batch for this machine's session that is not active (400)", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "pending", "recording");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/data",
-      batch(sessionId, Date.now()),
-    );
-    expect(response.status).toBe(400);
-    const payload = (await response.json()) as { error?: string };
-    expect(payload.error).toMatch(/not active/);
-    expect(await w.t.run((ctx) => ctx.db.query("ecg_data").collect())).toEqual([]);
-  });
-
-  it.each([
-    { label: "invalid JSON", raw: "not json" },
-  ])("refuses $label with 400", async ({ raw }) => {
-    const w = await world();
-    const response = await sendRaw(w, w.machineKey, "POST", "/api/machine/data", raw);
-    expect(response.status).toBe(400);
-  });
-
-  it("refuses a timestamp too far in the future or too far in the past (400)", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "active", "recording");
-    const future = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/data",
-      batch(sessionId, Date.now() + 120000),
-    );
-    const past = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/data",
-      batch(sessionId, Date.now() - 600000),
-    );
-    expect(future.status).toBe(400);
-    expect(past.status).toBe(400);
-  });
-
-  it("refuses a missing timestamp (400)", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "active", "recording");
-    const response = await send(w, w.machineKey, "POST", "/api/machine/data", {
-      sessionId,
-      samples: [{ channel: "ECG", values: [1] }],
-    });
-    expect(response.status).toBe(400);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // ANH-177: a session must belong to the authenticated machine.
 // ---------------------------------------------------------------------------
 
 /**
  * Every route that reads or changes a session designated by its identifier
- * (eight routes, two of them with two body forms), called by the first machine
+ * (four routes, one of them with two body forms), called by the first machine
  * for `sessionId`, with the status it answers for a session it does not know.
  */
 const sessionRoutes: Array<{
@@ -487,50 +353,6 @@ const sessionRoutes: Array<{
   unknownStatus: 400 | 404;
   call: (w: MachineWorld, sessionId: string) => Promise<Response>;
 }> = [
-  {
-    route: "session/start",
-    unknownStatus: 400,
-    call: (w, sessionId) =>
-      send(w, w.machineKey, "POST", "/api/machine/session/start", { sessionId }),
-  },
-  {
-    route: "session/end",
-    unknownStatus: 400,
-    call: (w, sessionId) =>
-      send(w, w.machineKey, "POST", "/api/machine/session/end", { sessionId }),
-  },
-  {
-    route: "session/end (failed)",
-    unknownStatus: 400,
-    call: (w, sessionId) =>
-      send(w, w.machineKey, "POST", "/api/machine/session/end", {
-        sessionId,
-        failed: true,
-        reason: "synthetic reason",
-      }),
-  },
-  {
-    route: "session/status",
-    unknownStatus: 404,
-    call: (w, sessionId) =>
-      send(
-        w,
-        w.machineKey,
-        "GET",
-        `/api/machine/session/status?sessionId=${sessionId}`,
-      ),
-  },
-  {
-    route: "data",
-    unknownStatus: 400,
-    call: (w, sessionId) =>
-      send(w, w.machineKey, "POST", "/api/machine/data", {
-        sessionId,
-        timestamp: Date.now(),
-        sampleRate: 250,
-        samples: [{ channel: "ECG", values: [1, 2, 3], unit: "mV" }],
-      }),
-  },
   {
     route: "training/start",
     unknownStatus: 400,
@@ -592,7 +414,7 @@ const sessionRoutes: Array<{
 ];
 
 const sessionStates = ["pending", "active", "completed", "failed"] as const;
-const sessionKinds = ["recording", "auto"] as const;
+const sessionKinds = ["legacy", "auto"] as const;
 
 /** Status, headers and body: everything the caller can observe. */
 async function fullResponse(response: Response) {
@@ -645,34 +467,6 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
       expect(after.telemetry).toEqual([]);
     },
   );
-});
-
-describe("ANH-177 legacy session routes for the owning machine", () => {
-  it("end with failed marks this machine's session failed (200)", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "active", "recording");
-    const response = await send(w, w.machineKey, "POST", "/api/machine/session/end", {
-      sessionId,
-      failed: true,
-      reason: "synthetic reason",
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ success: true });
-    const session = await w.t.run((ctx) => ctx.db.get(sessionId));
-    expect(session?.status).toBe("failed");
-    expect(session?.notes).toContain("synthetic reason");
-    expect((await w.t.run((ctx) => ctx.db.get(w.machine)))?.status).toBe("offline");
-  });
-
-  it("start refuses a session that is not pending (400)", async () => {
-    const w = await world();
-    const sessionId = await seedSession(w, w.machine, "active", "recording");
-    const response = await send(w, w.machineKey, "POST", "/api/machine/session/start", {
-      sessionId,
-    });
-    expect(response.status).toBe(400);
-    expect(((await response.json()) as { error: string }).error).toMatch(/not pending/);
-  });
 });
 
 describe("ANH-177 roster is limited to this machine's riders", () => {

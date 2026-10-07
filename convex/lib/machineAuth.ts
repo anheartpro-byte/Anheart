@@ -7,11 +7,6 @@ export const authenticatedMachine = v.union(
     _id: v.id("machines"),
     name: v.string(),
     status: v.string(),
-    config: v.object({
-      sampleRate: v.number(),
-      channels: v.array(v.string()),
-      batchInterval: v.number(),
-    }),
   }),
   v.null(),
 );
@@ -30,6 +25,5 @@ export async function authenticateMachine(ctx: QueryCtx, apiKey: string) {
     _id: machine._id,
     name: machine.name,
     status: machine.status,
-    config: machine.config,
   };
 }

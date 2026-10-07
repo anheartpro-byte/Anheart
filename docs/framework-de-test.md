@@ -1539,14 +1539,33 @@ avec l'ancien mode d'enregistrement ECG, et la CI appelle toujours le script
 sous ce nom.
 
 Les règles des fenêtres du site et les bornes de fraîcheur ont leurs fichiers,
-décrits dans les deux sections suivantes. Un autre,
-`lib/legacyRecordingRetired.test.ts`, garde le retrait de l'ancien mode
-d'enregistrement ECG. Il lit les sources du site (`app/`, `components/`,
-`hooks/`, `lib/`, `i18n/`) et les deux catalogues de messages, et échoue si :
+décrits dans les deux sections suivantes. Deux autres gardent le retrait de
+l'ancien mode d'enregistrement ECG.
 
-* une page appelle une mutation du module `sessions` ou nomme `createSession`,
-  `endSession` ou `cancelSession` (le site ne crée une séance que par
-  `training.launchAutoSession`) ;
+`lib/legacyModeReferences.test.ts` lit **tout le dépôt** (les fichiers texte
+suivis par le gestionnaire de versions : Pi, Convex, site, documentation,
+scripts) et échoue dès qu'un fichier nomme l'entrée ou les deux modules de
+l'ancien enregistreur du Pi, une des routes machine de l'ancien mode, ou la
+mutation qui créait ses séances. Sept emplacements font exception, listés dans
+le test avec leur raison : la migration (`convex/migrations/`), l'historique
+documenté (`docs/suivi-tickets.md`, `docs/reviews/`), et les quatre tests du
+retrait, qui nomment ce qu'ils interdisent. Un nouvel emplacement s'ajoute dans
+cette liste, avec sa raison, ou la référence se retire.
+
+Limite : ce test lit de la documentation et du Python, mais tourne dans le job
+`web`. Sur une PR qui ne change que du Markdown, ou que des fichiers Python,
+la règle de chemins saute ce job
+([Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) :
+une référence réintroduite par une telle PR n'est vue qu'au push sur `develop`
+ou à l'exécution nocturne, où toutes les gates tournent.
+
+`lib/legacyRecordingRetired.test.ts` lit les sources du site (`app/`,
+`components/`, `hooks/`, `lib/`, `i18n/`, hors tests) et les deux catalogues de
+messages, et échoue si :
+
+* une page appelle une mutation du module `sessions` ou nomme une des trois
+  mutations retirées (création, fin, annulation d'une séance d'enregistrement) :
+  le site ne crée une séance que par `training.launchAutoSession` ;
 * un des fichiers de l'ancien bloc ECG existe ou est importé
   (`components/charts/`, `components/ECGWaveform.tsx`, `lib/ecg.ts`, `lib/ecg/`,
   `lib/generatePdf.ts`, `components/modals/SessionFormModal.tsx`) ;
@@ -1557,8 +1576,10 @@ d'enregistrement ECG. Il lit les sources du site (`app/`, `components/`,
   l'ancien mode, ou n'ont pas une clé que les pages Sessions, détail, vue en
   direct, Rapports ou la fenêtre machine nomment.
 
-C'est une lecture de texte : elle ne monte aucun composant et ne prouve pas le
-rendu dans un navigateur.
+Ce sont des lectures de texte : elles ne montent aucun composant et ne prouvent
+pas le rendu dans un navigateur. Les deux autres couches ont leur propre test du
+retrait : `raspberry-pi/tests/test_legacy_recorder_retired.py` (gate du Pi) et
+`convex/legacyRecordingRetired.test.ts` (`npm run test:convex`).
 
 ### Règles des fenêtres du site, sans navigateur
 

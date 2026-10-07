@@ -51,18 +51,11 @@ export async function trainingFixture(
       apiKey: "synthetic-hash",
       status: "in_session",
       lastHeartbeat: now,
-      config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
       createdAt: now,
       programsEnabled: true,
     } as const;
-    const machineId = await ctx.db.insert("machines", {
-      ...machineFields,
-      config: { ...machineFields.config, channels: ["ECG"] },
-    });
-    const otherMachineId = await ctx.db.insert("machines", {
-      ...machineFields,
-      config: { ...machineFields.config, channels: ["ECG"] },
-    });
+    const machineId = await ctx.db.insert("machines", machineFields);
+    const otherMachineId = await ctx.db.insert("machines", machineFields);
     for (const userId of [launcher, rider]) {
       await ctx.db.insert("machine_user_permissions", {
         machineId,

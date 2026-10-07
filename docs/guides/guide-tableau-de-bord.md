@@ -958,8 +958,11 @@ site ne crée une séance que par **Lancer une séance auto**.
 > séance a été créée avant le retrait, elle reste **en attente**, le site
 > n'offre **aucun bouton pour l'annuler**, et tant qu'elle existe, **tout
 > lancement auto sur cette machine est refusé** (« A session is already waiting
-> for this machine ») et la machine ne peut pas être supprimée. Seule une
-> intervention dans la console d'administration de Convex peut la débloquer.
+> for this machine ») et la machine ne peut pas être supprimée. Une migration,
+> à exécuter une fois au redéploiement, passe ces séances au statut
+> **Échouée** avec le motif « legacy mode retired » (voir
+> [convex.md](../convex.md#migration-du-retrait-de-lancien-mode-ecg)). Elle n'a
+> encore été exécutée sur aucun serveur.
 
 ### 4.11 Vue en direct d'une séance
 
@@ -2281,7 +2284,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 |---|---|---|---|
 | 1 | (Corrigé dans le code le 1er octobre 2026, à vérifier au redéploiement.) La lecture de « l'utilisateur connecté » ne déclarait ni FC max ni année de naissance. | Aurait bloqué le tableau de bord de tout compte dont la physiologie est saisie. | Vérifier après le redéploiement avec un patient dont la physiologie est saisie. |
 | 2 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) **Assigner des Machines** (fiche gestionnaire) remplaçait tous les gestionnaires de chaque machine cochée, et ne retirait rien quand on décochait. | Des gestionnaires perdaient l'accès sans le savoir. | Jusqu'au redéploiement : passer par **Modifier** sur le détail de la machine (P6). |
-| 3 | (Corrigé par le retrait de l'ancien mode d'enregistrement ECG : le bouton **Nouvelle session** n'existe plus.) Une séance « Enregistrement » créée avant ce retrait et restée en attente n'est prise par aucune console, et le site ne sait pas l'annuler. | La machine concernée reste **inlançable** et **non supprimable**. | Nettoyage via la console Convex. |
+| 3 | (Corrigé par le retrait de l'ancien mode d'enregistrement ECG : le bouton **Nouvelle session** n'existe plus.) Une séance « Enregistrement » créée avant ce retrait et restée en attente n'est prise par aucune console, et le site ne sait pas l'annuler. | La machine concernée reste **inlançable** et **non supprimable** tant que la migration n'est pas passée. | Exécuter la migration du retrait de l'ancien mode ([§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg)). |
 | 4 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) Un gestionnaire qui **Modifiait** une machine recevait une erreur alors que la modification était enregistrée. | Confusion. | Jusqu'au redéploiement : vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |

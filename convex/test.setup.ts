@@ -90,12 +90,6 @@ export function as(t: World["t"], actor: Actor, claims?: Claims | null) {
   return t.withIdentity({ ...claims, subject: actor });
 }
 
-const MACHINE_CONFIG = {
-  sampleRate: 1000,
-  channels: ["ECG"],
-  batchInterval: 1000,
-} as const;
-
 /**
  * One organisation's worth of accounts, machines and relationships. Two
  * managers with disjoint patients and machines let every ownership cell be
@@ -138,7 +132,6 @@ export async function seedWorld(
         apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
-        config: { ...MACHINE_CONFIG, channels: ["ECG"] },
         createdAt: NOW,
         programsEnabled: true,
       });
@@ -299,14 +292,18 @@ export async function seedMachineWorld(
   };
 }
 
-/** Insert a session straight into the store (bypassing policy) for read/stop tests. */
+/**
+ * Insert a session straight into the store (bypassing policy) for read/stop
+ * tests. Without `kind`, the row is a session of the retired ECG recording
+ * mode: that mode never wrote the field.
+ */
 export async function addSession(
   w: World,
   fields: {
     machineId: Id<"machines">;
     userId?: Id<"users">;
     status: "pending" | "active" | "completed" | "failed";
-    kind?: "recording" | "auto" | "manual";
+    kind?: "auto" | "manual";
     startedById?: Id<"users">;
     stopRequestedAt?: number;
   },
