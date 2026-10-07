@@ -408,8 +408,7 @@ def describe_surface_refusal(refusal: StartRefusal) -> str:
             return f"verdict de securite {verdict.rule} a acquitter a la console"
         case SurfaceBusy(state=state):
             return f"console occupee ({state.value})"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def end_is_failure(reason: EndReason | None) -> bool:
@@ -425,8 +424,7 @@ def end_is_failure(reason: EndReason | None) -> bool:
             | None
         ):
             return True
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(reason)
 
 
 # =========================================================================

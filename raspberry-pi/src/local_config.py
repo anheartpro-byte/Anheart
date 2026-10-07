@@ -339,8 +339,7 @@ class LocalConfig:
                     )
                 trial = self.geometry.motor_rpm_for(OCCUPIED_INITIAL_RESULTANT_G)
                 return Ok(MotorRpm(min(self.motor_max_rpm, trial)))
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(occupancy)
 
 
 # =========================================================================
@@ -486,8 +485,7 @@ def bitalino_address(
                     )
                 )
             return Ok(address)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(source)
 
 
 def _radius(env: Mapping[str, str]) -> Result[Metres, ConfigProblem]:

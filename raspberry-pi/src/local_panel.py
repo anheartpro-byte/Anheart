@@ -991,8 +991,7 @@ def build_drive(config: LocalConfig, clock: Clock) -> DriveSide:
 
             drive = ATV320Drive(clock, master, link.settings, link.registers)
             return DriveSide(backend=drive, simulator=None, release=release)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(config.motor_backend)
 
 
 def _nothing() -> None:
@@ -1070,8 +1069,7 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
                 device_factory=device_factory_for(address),
             )
             return EcgSide(client=client, simulator=None, link_stats=client.link_stats)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(config.ecg_source)
 
 
 def load_panel_motion_limits(config: LocalConfig) -> MotionLimits:
@@ -1381,8 +1379,7 @@ def describe_resolve_error(error: ResolveError) -> str:
             return f"demarrage refuse : programme {profile_id!r} inconnu sur cette machine"
         case Rejected(detail=detail):
             return f"demarrage refuse : programme inadapte a ce passager ({detail})"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
@@ -1399,8 +1396,7 @@ def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
             )
         case HeldAtStandstill(by=by):
             return f"consigne refusee : {_held_by(by)}, puis redonner la cible"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def describe_withdrawn_target(withdrawn: WithdrawnTarget) -> str:
@@ -1444,8 +1440,7 @@ def _held_by(by: Holding) -> str:
                 "le variateur n'a pas confirme la consigne, elle n'est pas redemandee. "
                 "Verifier la liaison"
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(by)
 
 
 def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
@@ -1468,8 +1463,7 @@ def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
             )
         case ResetUndelivered(detail=detail):
             return f"reset refuse : {detail}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 # =========================================================================

@@ -988,6 +988,7 @@ class CommandRow:
                 )
             case FaultReset():
                 return cls(kind="fault_reset", operator=command.operator, detail="", at=command.at)
+        raise assert_never(command)
 
 
 @dataclass(frozen=True, slots=True)

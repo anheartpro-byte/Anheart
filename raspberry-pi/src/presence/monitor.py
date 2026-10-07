@@ -428,8 +428,7 @@ def _level(zone: ZoneView) -> float:
             return 0.0
         case PersonInZone(confidence=confidence):
             return confidence
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(zone)
 
 
 def _describe_person(person: PersonInZone | None) -> str:
@@ -821,8 +820,7 @@ class PresenceMonitor:
                 return ()
             case Occupancy.OCCUPIED:
                 return self._rider_refusals(seen)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(occupancy)
 
     @staticmethod
     def _rider_refusals(seen: PresenceObservation) -> tuple[PresenceRefusal, ...]:

@@ -243,8 +243,7 @@ class PresenceAcknowledger:
                 return outcome
             case Err(error):
                 return self._after_refusal(operator, error)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(outcome)
 
     def _after_refusal(
         self, operator: str, error: AcknowledgeRefusal
@@ -258,8 +257,7 @@ class PresenceAcknowledger:
                 return Err(error)
             case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
                 return Err(error)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(error)
 
 
 def _merge(record: SafetyAcknowledgement, presence: SafetyAcknowledgement) -> SafetyAcknowledgement:

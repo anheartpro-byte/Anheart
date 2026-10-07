@@ -879,8 +879,7 @@ def motion_is_over(phase: Phase) -> bool:
             return True
         case Phase.BASELINE | Phase.WARMUP | Phase.HOLD:
             return False
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(phase)
 
 
 # =========================================================================
@@ -1449,15 +1448,15 @@ class TrainingRuntime:
     @property
     def mode(self) -> RunMode:
         """What the machine is doing, in the operator's words. Derived from :attr:`state`."""
-        match self.state:
+        state = self.state
+        match state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
                 return RunMode.REPOS
             case RuntimeState.ENDING:
                 return RunMode.ARRET
             case RuntimeState.RUNNING:
                 return RunMode.MANUEL if self._manual is not None else RunMode.SEANCE
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(state)
 
     @property
     def idle_link(self) -> IdleLink:
@@ -2842,8 +2841,7 @@ class TrainingRuntime:
                 )
             case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
                 return Err(refusal)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(refusal)
 
     # =====================================================================
     # Commanding
