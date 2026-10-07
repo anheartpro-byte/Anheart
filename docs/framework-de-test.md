@@ -2840,9 +2840,7 @@ fait aujourd'hui sans que ce soit forcément voulu, un commentaire au-dessus de
 lui commence par « What the page does today » ou « Known and filed ». Corriger
 ce comportement fera échouer ce test, et c'est attendu : le test se change avec
 la correction. Sont notés ainsi, entre autres : aucune page ne connaît le rôle
-d'admin d'une organisation cliente, qui voit donc ce que voit un patient ; la
-fenêtre « Assigner des patients » rouvre sur les cases d'une modification
-annulée, et s'ouvre avant que les patients du gestionnaire soient connus ;
+d'admin d'une organisation cliente, qui voit donc ce que voit un patient ;
 plusieurs textes sont écrits en anglais dans les pages ; les durées « il y a… »
 de quatre pages se comptent sur l'horloge du poste ; aucune page n'a d'écran
 d'erreur (il n'y a pas de `error.tsx` sous `app/`), si bien qu'une requête
