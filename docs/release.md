@@ -136,7 +136,13 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```
    Le script ouvre la PR `develop` vers `main` avec le modèle
    [`.github/PULL_REQUEST_TEMPLATE/release.md`](../.github/PULL_REQUEST_TEMPLATE/release.md),
-   où il a rempli les versions, le candidat et le changelog.
+   où il a rempli les versions, le candidat et le changelog. `main` exige une
+   branche à jour : si `main` a reçu un commit que `develop` n'a pas (la PR
+   dédiée des boutons de déploiement, par exemple), GitHub refuse la fusion
+   tant que `develop` ne l'a pas repris. La marche est dans
+   [deploiement.md, section 5.5, étape 5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
+   `main` exigeait aussi deux vérifications Vercel, qui ne répondent plus : les
+   retirer d'abord (même section, étape 4).
 5. **Remplir la check-list** de la PR ([section 5](#5-la-check-list-de-release)),
    preuve après preuve. Deux approbations.
 6. **Fusionner par commit de fusion**, jamais en squash ni en rebase : un
@@ -148,9 +154,20 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```
 8. **Enregistrer les versions dans Convex** avec les lignes que le script vient
    d'afficher ([section 6](#6-enregistrer-la-version-dans-convex)).
-9. **Déployer.** Le déploiement de Convex et du site n'est pas fait par ce
-   script : voir [deploiement.md](deploiement.md) (automatisation prévue par
-   ANH-126).
+9. **Déployer, dans la fenêtre fixée par la check-list.** Ni la fusion dans
+   `main` ni ce script ne déploient (pour la toute première fusion dans `main`,
+   voir la précaution de
+   [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)). Dans une
+   même fenêtre, **à un moment où aucune séance n'est en cours** : Convex
+   d'abord, à la main
+   ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), puis
+   **aussitôt** le site, par le bouton « Déployer en production (main) » de
+   l'onglet Actions
+   ([section 5.1](deploiement.md#51-comment-il-se-déploie)). La simulation
+   hébergée part du même bouton si elle a changé. Le bouton vient après les
+   tags de l'étape 7 : lancé avant, il peut les faire refuser
+   ([section 4](#les-boutons-de-déploiement-et-le-script)). Un bouton pour
+   Convex reste prévu par ANH-126.
 
 Si une étape échoue, rien n'est à défaire à la main sauf à l'étape 2 : quand la
 branche `release/…` a été créée mais pas poussée, la supprimer avant de
@@ -232,11 +249,10 @@ de ces deux branches, où le push a donc tout lancé. Deux cas en découlent :
 - une gate n'a sur le commit que des exécutions ignorées : le commit n'est pas
   vert, et le script la nomme parmi les gates absentes ou non réussies.
 
-Le script ne lit que les check runs. Il **ne lit pas les statuts de commit** :
-les deux déploiements Vercel (celui du site et celui de la simulation) sont des
-statuts, et un déploiement en échec ne bloque donc pas le script. Le
-responsable de release regarde les statuts dans la PR de release avant de
-fusionner.
+Le script ne lit que les check runs. Il **ne lit pas les statuts de commit**.
+Les déploiements que Vercel lançait à chaque push étaient des statuts ; Vercel
+n'en lance plus pour un commit qui contient `vercel.json`
+([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
 
 La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Ce sont
 les six noms que la protection de branche exige et que
@@ -247,6 +263,45 @@ release, ce qui est le sens voulu de la panne.
 
 `pr` et `tag` ne prennent aucune version en argument : ils lisent celles des
 fichiers de la branche, et publient celles qui n'ont pas encore de tag.
+
+### Les boutons de déploiement et le script
+
+Les deux boutons de déploiement
+([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)) sont
+des workflows GitHub Actions : **leurs jobs sont des check runs, posés sur le
+commit de tête de la branche déployée, et le script les lit comme les autres.**
+Le bouton de préversion les pose sur la tête de `develop`, que lisent `prepare`
+et `pr` ; le bouton de production sur la tête de `main`, que lit `tag`. Sur le
+commit que le script s'apprête à lire :
+
+| Exécution d'un bouton | Effet sur le script |
+|---|---|
+| réussie | aucun |
+| un job ignoré (`skipped` : le projet qui n'a pas été choisi) | aucun |
+| en cours, ou en attente d'approbation | refus : attendre la fin, ou approuver ou refuser l'exécution |
+| en échec, refusée à l'approbation ou annulée | refus, tant que cette exécution reste attachée au commit |
+
+Un bouton en échec ne dit rien du code : un secret manquant, une confirmation
+mal saisie ou un quota Vercel épuisé suffisent. Pour lever le refus,
+**supprimer l'exécution en échec** (« Delete workflow run ») : ses
+vérifications quittent le commit, et rien n'est déployé. Ce geste n'a pas été
+essayé sur ce dépôt.
+
+**Ne pas relancer l'exécution (« Re-run ») dans le seul but de faire passer le
+script : la relancer, c'est déployer.** Une exécution relancée garde ses
+saisies et son commit ; elle est soumise aux mêmes règles qu'un clic (fenêtre
+du déploiement de Convex, aucune séance en cours, approbation), et le job la
+refuse (« Exécution périmée ») dès que son commit n'est plus la tête de la
+branche. Si le déploiement doit bien avoir lieu, lancer une nouvelle exécution
+par « Run workflow », puis supprimer celle qui a échoué : une nouvelle
+exécution, même réussie, ne retire pas de ce commit les vérifications de
+l'ancienne.
+
+D'où l'ordre du [déroulé](#3-le-déroulé) : le bouton de production vient
+**après** `scripts/release.sh tag`. Lancé avant, sur la tête de `main`, il fait
+attendre `tag`, ou le fait refuser s'il échoue. De même, entre `prepare` et la
+fusion de la release, ne pas lancer le bouton de préversion sur la tête de
+`develop`, ou attendre qu'il ait réussi.
 
 ### Comment le changelog est construit
 
@@ -300,6 +355,11 @@ la PR n'est pas fusionnée tant qu'une case est ouverte.
 - [ ] **Niveau de validation du Pi justifié.** Le niveau annoncé ci-dessus est
   celui que les revues enregistrées permettent ; au-dessus de `bench`, le
   compte rendu de la revue M5 ou M6 est joint.
+- [ ] **Fenêtre de déploiement fixée.** Le site ne se déploie plus à la
+  fusion. La date et l'heure du déploiement de Convex, puis du site par le
+  bouton « Déployer en production (main) », sont écrites ici : une même
+  fenêtre, à un moment où aucune séance n'est en cours, avec le nom de la
+  personne qui approuve.
 
 ### Comment prouver chaque ligne
 
@@ -317,6 +377,7 @@ pour une première release.
 | Valeurs `[MED]` | `git grep -l '\[MED\]' origin/develop -- raspberry-pi/src convex` liste les fichiers concernés ; `git diff <base>..origin/develop -- <ces fichiers>` montre ce qui a changé. |
 | Verrous | `git diff <base>..origin/develop -- raspberry-pi/src/local_config.py raspberry-pi/.env.example raspberry-pi/.env.pi.example` ne change aucun des deux défauts, et les deux fichiers d'exemple portent `=false`. |
 | Niveau de validation | `bench` : cette check-list. Au-dessus : le compte rendu de revue. |
+| Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance et de celle qui approuve. Qu'aucune séance ne soit en cours se vérifie au moment de déployer, pas ici ([étape 9 du déroulé](#3-le-déroulé)). |
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -384,7 +445,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
 | Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
-| Déployer Convex et le site à la fusion dans `main` | ANH-126 |
+| Déployer Convex par un bouton, comme le site et la simulation (ANH-198) | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 
 [Sommaire](README.md) · [Déploiement](deploiement.md) · [Menaces](menaces.md) · [Roadmap](roadmap.md)

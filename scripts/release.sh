@@ -167,9 +167,11 @@ is_level() {
 # ouverte sur ce même commit, en a ignoré une. Une gate qui n'a que des
 # exécutions ignorées est refusée.
 #
-# Seuls les check runs du commit sont lus. Les statuts de commit (les
-# déploiements Vercel, par exemple) ne le sont pas : le responsable de release
-# les regarde dans la PR.
+# Seuls les check runs du commit sont lus, pas les statuts de commit. Les jobs
+# des deux boutons de déploiement Vercel (ANH-198) sont des check runs comme
+# les autres : une exécution de bouton en échec, annulée, en cours ou en
+# attente d'approbation sur ce commit fait refuser (docs/release.md, section 4,
+# « Les boutons de déploiement et le script »).
 require_green() { # sha branche
   local runs bad missing name total
   runs="$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" --paginate \

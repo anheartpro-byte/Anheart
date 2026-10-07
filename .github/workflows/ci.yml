@@ -60,7 +60,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - name: Test the path rule and the workflow that applies it
-        run: node --test scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs
+        run: node --test scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs
       - name: Decide which gates this run needs
         id: rule
         env:

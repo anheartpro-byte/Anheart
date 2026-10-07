@@ -632,6 +632,30 @@ test("EX-2 pr and tag refuse a branch that is not green", (t) => {
   assert.equal(git(fx.origin, "tag", "-l"), "");
 });
 
+test("ANH-198 a deployment button run on the head commit is read like any check", (t) => {
+  // The jobs of deploy-preview.yml and deploy-production.yml are check runs of
+  // the head of the branch they deploy (docs/release.md, section 4).
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  const preview = ci({}, "Déployer le site (préversion)\tcompleted\tfailure\n");
+  refuses(fx.run(["pr"], { checks: preview }), /develop n'est pas vert[\s\S]*Déployer le site \(préversion\) : completed failure/);
+
+  fx.mergeIntoMain();
+  /** A run of the production button for the site alone: the simulation, not chosen, is skipped. */
+  const button = (/** @type {string} */ site) =>
+    ci({}, `Vérifier la demande (production)\tcompleted\tsuccess\nDéployer le site (production)\t${site}\nDéployer la simulation (production)\tcompleted\tskipped\n`);
+  // Failed, cancelled, running, or waiting for its approval: tag refuses.
+  for (const site of ["completed\tfailure", "completed\tcancelled", "in_progress\t", "waiting\t", "queued\t"]) {
+    refuses(fx.run(["tag"], { checks: button(site) }), /main n'est pas vert[\s\S]*Déployer le site \(production\) : /);
+  }
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  // Succeeded: nothing stands in the way.
+  const done = fx.run(["tag", "--dry-run"], { checks: button("completed\tsuccess") });
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /^CI : verte \(9 vérifications terminées, toutes les gates réussies\)$/m);
+});
+
 test("EX-2 pr opens develop -> main with the release template filled", (t) => {
   const fx = fixture(t);
   assert.equal(fx.run(["prepare", ...ALL]).status, 0);
@@ -847,7 +871,7 @@ test("EX-2 CHANGELOG.md keeps the line release.sh inserts under", () => {
 test("EX-3 the release PR template carries the check-list of docs/release.md, word for word", () => {
   const template = checklist(real(TEMPLATE));
   assert.deepEqual(template, checklist(real("docs/release.md")));
-  assert.equal(template.length, 9);
+  assert.equal(template.length, 10);
   for (const required of [
     "Gates vertes",
     "Docs à jour",
@@ -859,6 +883,9 @@ test("EX-3 the release PR template carries the check-list of docs/release.md, wo
     "PROGRAMS_ENABLED",
     "OCCUPANCY_OCCUPIED_ENABLED",
     "Niveau de validation du Pi",
+    // ANH-198: merging the release deploys nothing any more, the deployment is a step with its window.
+    "Déployer en production (main)",
+    "aucune séance n'est en cours",
   ]) {
     assert.ok(template.some((item) => item.includes(required)), `no check-list item about ${required}`);
   }
