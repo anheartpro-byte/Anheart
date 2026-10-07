@@ -1707,6 +1707,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : variateur en defaut (<code>, LFT <n>)` | défaut variateur présent | §13.9 |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sur le disque du Pi pour enregistrer la séance | exporter les enregistrements utiles, puis libérer de la place sur le Pi ([référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement du Pi est inutilisable | faire vérifier le disque et les droits du dossier par la personne qui administre le Pi |
+| `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` | le disque du Pi ne répond plus depuis plus de 15 s | ne pas insister ; faire vérifier le disque par la personne qui administre le Pi |
 | ✔ `demarrage refuse : age du passager requis pour une seance programmee` | âge vide | saisir l'âge |
 | ✔ `demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)` | passager trop jeune | refus voulu (décision médicale pour changer) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) | enregistrer le profil sur le Pi |

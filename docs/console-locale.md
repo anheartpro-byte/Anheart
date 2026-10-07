@@ -719,7 +719,8 @@ repos uniquement.`) et le bouton `Exporter l'enregistrement`. Le bouton demande 
 des enregistrements, télécharge l'archive du plus récent et écrit dans la note
 `exporte : <nom>.tar.gz`. Sinon la note passe en rouge avec la raison :
 `aucun enregistrement sur cette machine`, `cette console n'enregistre pas`,
-`export refuse pendant une seance : attendre le retour au repos`, ou l'erreur de l'API.
+`liste des enregistrements refusee pendant une seance : attendre le retour au repos`,
+ou une autre erreur de l'API (section 13).
 Voir la [section 16](#16-lenregistrement-de-séance-boîte-noire-locale).
 
 ---
@@ -967,10 +968,13 @@ Mode MANUEL, précédés de `refus de la machine (<heure>) :` (section 6).
 | `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` | 409 | acquittement sans la case « coup de poing » |
 | `nothing is latched to acknowledge` | 409 | rien à acquitter |
 | `a valid x-anheart-token header is required` | 401 | jeton absent ou faux |
-| `export refuse pendant une seance : attendre le retour au repos` | 409 | export d'un enregistrement demandé pendant une séance |
+| `liste des enregistrements refusee pendant une seance : attendre le retour au repos` | 409 | liste des enregistrements demandée pendant une séance (c'est ce que voit le bouton d'export) |
+| `export refuse pendant une seance : attendre le retour au repos` | 409 | archive d'un enregistrement demandée pendant une séance |
 | `enregistrement inconnu sur cette machine` | 404 | le nom demandé n'est pas celui d'un dossier d'enregistrement |
 | `cette console n'enregistre pas` | 404 | export demandé à une console construite sans enregistrement (tests) |
-| `archive impossible (<erreur>)` | 500 | le disque a refusé la construction de l'archive |
+| `lecture des enregistrements deja en cours : reessayer dans un instant` | 503 | deux lectures du disque des enregistrements sont déjà en cours ; la requête est refusée tout de suite, jamais mise en attente |
+| `le disque des enregistrements ne repond pas` | 504 | le disque n'a pas répondu en 5 s (liste) ou 120 s (archive) |
+| `lecture des enregistrements impossible (<erreur>)` | 500 | le disque a refusé la lecture ou la construction de l'archive |
 
 ### Refus de la boucle (événement `refused`)
 
@@ -1077,10 +1081,12 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | 401 | jeton absent ou faux |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
-| 409 | la machine n'est pas dans un état pour ça (dont : export pendant une séance) |
+| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance) |
 | 412 | arrêt d'urgence non attesté depuis ce démarrage |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
-| 500 | stock de profils non inscriptible, archive d'enregistrement impossible |
+| 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
+| 503 | lecture des enregistrements déjà en cours (deux au plus à la fois) |
+| 504 | le disque des enregistrements ne répond pas |
 
 ### Public
 
@@ -1141,8 +1147,14 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/api/records` | les enregistrements de séance du disque, le plus récent d'abord : `recording` (cette console enregistre-t-elle), `records` (`name`, `closed` : `false` pour un enregistrement interrompu) | 200 |
-| GET | `/api/records/{name}/archive` | le dossier `name` en `.tar.gz` (`Content-Disposition: attachment`), construit hors de la boucle de contrôle | 200 ; 404 (nom inconnu, console sans enregistrement) ; 409 (séance en cours) ; 500 (archive impossible) |
+| GET | `/api/records` | les enregistrements de séance du disque, le plus récent d'abord : `recording` (cette console enregistre-t-elle), `records` (`name`, `closed` : `false` pour un enregistrement interrompu) | 200 ; 409 (séance en cours) ; 503 ; 504 ; 500 |
+| GET | `/api/records/{name}/archive` | le dossier `name` en `.tar.gz` (`Content-Disposition: attachment`) | 200 ; 404 (nom inconnu, console sans enregistrement) ; 409 (séance en cours) ; 503 ; 504 ; 500 |
+
+Ces deux routes lisent le disque sur deux fils qui leur sont réservés, jamais
+sur la boucle de contrôle ni sur les fils du traitement ECG. 503 : les deux
+sont pris, la requête est refusée tout de suite. 504 : le disque n'a pas
+répondu à temps. Détail dans
+[raspberry-pi.md](raspberry-pi.md#146-export).
 
 ### WebSocket `/ws/telemetry`
 
@@ -1225,6 +1237,7 @@ tant qu'il se passe bien.
 |---|---|---|
 | le disque est trop plein pour démarrer | liste **Evenements**, événement `refused` | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` |
 | le dossier d'enregistrement est inutilisable | événement `refused` au départ, et événement `recording` dès le lancement de la console | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` |
+| le disque ne répond plus depuis plus de 15 s | événement `refused` au départ | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` |
 | l'enregistrement se dégrade pendant une séance | événement `recording` | `enregistrement de seance degrade : …` (disque plein, droits, erreur d'écriture, file pleine, disque qui ne répond plus), toujours suivi de `La seance et la securite continuent.` |
 | l'enregistrement redevient normal | événement `recording` | `enregistrement de seance retabli` |
 
@@ -1247,9 +1260,13 @@ sera gardé `RECORD_LOCAL_RETENTION_DAYS` jours (30 par défaut) puis supprimé.
 `Exporter l'enregistrement` : la console prépare l'archive `.tar.gz` du
 **dernier** enregistrement et le navigateur la télécharge sous le nom du
 dossier. Seulement machine au repos : pendant une séance, la note dit
-`export refuse pendant une seance : attendre le retour au repos`. Les autres
-enregistrements s'exportent par l'API (`GET /api/records`, puis
-`GET /api/records/{nom}/archive`).
+`liste des enregistrements refusee pendant une seance : attendre le retour au repos`.
+Si le disque ne répond pas, elle dit `le disque des enregistrements ne repond pas`
+ou `lecture des enregistrements deja en cours : reessayer dans un instant` :
+attendre, ne pas multiplier les clics (deux lectures au plus sont en cours à la
+fois, les autres sont refusées tout de suite, et la machine n'en est pas
+ralentie). Les autres enregistrements s'exportent par l'API
+(`GET /api/records`, puis `GET /api/records/{nom}/archive`).
 
 **Qui peut lire.** Le dossier est réservé au compte qui lance la console
 (mode 700). Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :

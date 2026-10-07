@@ -1,7 +1,7 @@
 """ANH-128 EX-9: the simulation and the console write the SAME record, by the same library.
 
-One record comes from the harness (a battery scenario, written through
-``Trace.write_record``), the other from the REAL console built by
+One record comes from the harness (the first seconds of a battery scenario,
+written through ``Trace.write_record``), the other from the REAL console built by
 :func:`src.local_panel.build_panel` with ``MOTOR_BACKEND=sim ECG_SOURCE=sim``
 and its session journal. They are compared as files, not as parsed objects:
 the same entries in the directory, the same keys in the manifest (and in its
@@ -14,10 +14,11 @@ from __future__ import annotations
 import asyncio
 import gzip
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from simulation.scenario import SCENARIO_DIR
-from simulation.tests.conftest import document, obj, run_file
+from simulation.tests.conftest import document, load, obj, run
 from src.bitalino_client import SampleBatch
 from src.clock import ManualClock
 from src.ecg_pipeline import EcgFrame, Treatment, treat_ecg
@@ -121,9 +122,19 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
     return records[0]
 
 
-def _simulation_record(tmp_path: Path, scenario: str) -> Path:
-    trace = run_file(SCENARIO_DIR / scenario).trace
-    return trace.write_record(tmp_path / "simulation", Privacy())
+def _simulation_record(tmp_path: Path, name: str, seconds: float) -> Path:
+    """The first ``seconds`` of a battery scenario, run here and written by the harness.
+
+    Shortened on purpose: the structure of a record does not depend on how long
+    the session lasted, and the full signal-processing scenarios take minutes.
+    """
+    whole = load(SCENARIO_DIR / name)
+    scenario = replace(
+        whole,
+        duration=Seconds(seconds),
+        actions=tuple(action for action in whole.actions if action.at <= seconds),
+    )
+    return run(scenario).trace.write_record(tmp_path / "simulation", Privacy())
 
 
 def _manifest(record: Path) -> Mapping[str, object]:
@@ -178,7 +189,7 @@ def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simul
     tmp_path: Path,
 ) -> None:
     console = asyncio.run(_console_record(tmp_path, programme=False))
-    simulation = _simulation_record(tmp_path, "manual_27_rpm.json")
+    simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 30.0)
     _assert_same_structure(console, simulation)
     assert _manifest(console)["profile"] is None
     assert _manifest(simulation)["profile"] is None
@@ -187,7 +198,7 @@ def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simul
 
 def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_path: Path) -> None:
     console = asyncio.run(_console_record(tmp_path, programme=True))
-    simulation = _simulation_record(tmp_path, "fault_bitalino_disconnect_dsp.json")
+    simulation = _simulation_record(tmp_path, "auto_jog_150_dsp.json", 12.0)
     _assert_same_structure(console, simulation)
     ours, theirs = _manifest(console), _manifest(simulation)
     assert (ours["kind"], theirs["kind"]) == ("auto", "auto")

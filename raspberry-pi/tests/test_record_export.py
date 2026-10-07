@@ -7,11 +7,13 @@ l'enregistrement » button asks for.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import os
 import tarfile
 import tempfile
+import threading
 from pathlib import Path
 from typing import Final
 
@@ -20,11 +22,14 @@ import pytest
 import src.record.export as export_module
 from src.clock import ManualClock
 from src.record.export import (
+    BUSY,
     EXPORT_PREFIX,
     STALE_AFTER_MS,
+    TIMEOUT,
     UNKNOWN_RECORD,
     RecordEntry,
     RecordExporter,
+    RecordIo,
     build_archive,
     discard,
     listing,
@@ -33,8 +38,9 @@ from src.record.export import (
 from src.record.reader import read
 from src.record.schema import RecordError
 from src.result import Err, Ok, Result
-from src.units import Monotonic, UnixMillis
+from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_console_support import recorded_rig, set_target, start_bench, stop
+from tests.record_journal_support import wait_for
 from tests.test_failure_rig import BENCH_ENV, make_rig
 from tests.test_record_retention import closed_record, open_record
 
@@ -196,10 +202,152 @@ def test_ex8_discarding_an_archive_never_raises(
 async def test_ex8_the_exporter_works_off_the_event_loop(tmp_path: Path) -> None:
     record = closed_record(tmp_path)
     exporter = RecordExporter(tmp_path, ManualClock(Monotonic(0.0), NOW))
-    assert await exporter.listing() == (RecordEntry(record.name, closed=True),)
+    listed = await exporter.listing()
+    assert isinstance(listed, Ok)
+    assert listed.value == (RecordEntry(record.name, closed=True),)
     built = await exporter.archive(record.name)
     assert isinstance(built, Ok)
     assert tarfile.is_tarfile(built.value)
+    assert exporter.io.active == 0
+
+
+# =========================================================================
+# Record reads have threads of their own, a few, and never a queue
+# =========================================================================
+
+
+class Disk:
+    """A disk that answers only when told to. Every call is counted with its thread."""
+
+    def __init__(self) -> None:
+        self.answer: threading.Event = threading.Event()
+        self.threads: list[str] = []
+        self.late: list[int] = []
+
+    def read(self) -> int:
+        self.threads.append(threading.current_thread().name)
+        if not self.answer.wait(30.0):
+            raise AssertionError("the test never let the disk answer")
+        return len(self.threads)
+
+    def came_back(self) -> bool:
+        return not any(thread.name == "record-io" for thread in threading.enumerate())
+
+
+async def test_ex3_a_record_read_runs_on_a_record_thread_never_on_the_loop_s_pool() -> None:
+    disk = Disk()
+    disk.answer.set()
+    io = RecordIo()
+    assert await io.run(disk.read, Seconds(5.0)) == Ok(1)
+    assert disk.threads == ["record-io"]
+    assert io.active == 0
+
+
+async def test_ex3_past_its_few_threads_a_record_read_is_refused_at_once_never_queued() -> None:
+    disk = Disk()
+    io = RecordIo(limit=2)
+    first = asyncio.create_task(io.run(disk.read, Seconds(30.0)))
+    second = asyncio.create_task(io.run(disk.read, Seconds(30.0)))
+    await asyncio.sleep(0)
+    assert io.active == 2
+    for _ in range(50):
+        assert await io.run(disk.read, Seconds(30.0)) == Err(RecordError("read", BUSY))
+    await asyncio.sleep(0.05)
+    assert disk.threads == ["record-io", "record-io"], "a refused read never reached a thread"
+    assert not first.done()
+
+    disk.answer.set()
+    assert {(await first), (await second)} == {Ok(2)}
+    assert io.active == 0
+    assert await io.run(disk.read, Seconds(5.0)) == Ok(3)
+
+
+async def test_ex3_a_caller_gives_up_on_a_silent_disk_and_the_slot_stays_taken() -> None:
+    disk = Disk()
+    io = RecordIo(limit=1)
+    assert await io.run(disk.read, Seconds(0.05), disk.late.append) == Err(
+        RecordError("read", TIMEOUT)
+    )
+    assert io.active == 1, "the thread is still on the disk"
+    assert await io.run(disk.read, Seconds(0.05)) == Err(RecordError("read", BUSY))
+
+    disk.answer.set()
+    wait_for(disk.came_back)
+    await asyncio.sleep(0)
+    assert io.active == 0
+    assert disk.late == [1], "what came back after its caller left was handed to the cleanup"
+
+
+async def test_ex3_a_result_that_arrives_in_time_is_not_treated_as_late() -> None:
+    disk = Disk()
+    disk.answer.set()
+    io = RecordIo()
+    assert await io.run(disk.read, Seconds(5.0), disk.late.append) == Ok(1)
+    assert disk.late == []
+
+
+async def test_ex3_a_bug_in_a_record_read_is_an_answer_and_frees_its_slot() -> None:
+    def broken() -> int:
+        raise RuntimeError("injected: a bug in a record read")
+
+    io = RecordIo(limit=1)
+    assert await io.run(broken, Seconds(5.0)) == Err(RecordError("read", "RuntimeError"))
+    assert io.active == 0
+
+
+async def test_ex3_a_cleanup_that_fails_still_hands_its_slot_back() -> None:
+    def broken(_value: int) -> None:
+        raise RuntimeError("injected: a bug in the cleanup of a late result")
+
+    disk = Disk()
+    io = RecordIo(limit=1)
+    assert await io.run(disk.read, Seconds(0.05), broken) == Err(RecordError("read", TIMEOUT))
+    disk.answer.set()
+    wait_for(disk.came_back)
+    await asyncio.sleep(0)
+    assert io.active == 0
+    assert await io.run(disk.read, Seconds(5.0)) == Ok(2)
+
+
+def test_ex3_a_record_thread_that_outlives_the_console_ends_without_a_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop is closed before the disk answers: nobody is left to tell, and nothing is raised."""
+    disk = Disk()
+    unraised: list[threading.ExceptHookArgs] = []
+    monkeypatch.setattr(threading, "excepthook", unraised.append)
+
+    async def console() -> Result[int, RecordError]:
+        return await RecordIo().run(disk.read, Seconds(0.05))
+
+    assert asyncio.run(console()) == Err(RecordError("read", TIMEOUT))
+    disk.answer.set()
+    wait_for(disk.came_back)
+    assert unraised == []
+
+
+async def test_ex8_an_archive_finished_after_its_request_gave_up_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = closed_record(tmp_path)
+    proceed = threading.Event()
+    real = export_module.build_archive
+
+    def slow(root: Path, name: str, now: UnixMillis) -> Result[Path, RecordError]:
+        proceed.wait(30.0)
+        return real(root, name, now)
+
+    monkeypatch.setattr(export_module, "build_archive", slow)
+    monkeypatch.setattr(export_module, "ARCHIVE_TIMEOUT", Seconds(0.05))
+    exporter = RecordExporter(tmp_path, ManualClock(Monotonic(0.0), NOW))
+    assert await exporter.archive(record.name) == Err(RecordError("read", TIMEOUT))
+    # A second one, for a record that does not exist: late too, with nothing to remove.
+    unknown = await exporter.archive("2026-01-01T000000Z_missing")
+    assert unknown == Err(RecordError("read", TIMEOUT))
+    assert exporter.io.active == 2
+    proceed.set()
+    wait_for(lambda: not any(t.name == "record-io" for t in threading.enumerate()))
+    assert exports(tmp_path) == [], "nobody will send it: it does not stay on the disk"
 
 
 # =========================================================================
@@ -224,6 +372,15 @@ async def test_ex8_the_console_lists_its_records_and_exports_the_latest_at_rest(
         assert during.json()["detail"] == (
             "export refuse pendant une seance : attendre le retour au repos"
         )
+        # The list reads the disk too: at rest only, like the archive.
+        listing_during = await session.get("/api/records")
+        assert listing_during.status_code == 409
+        assert listing_during.json()["detail"] == (
+            "liste des enregistrements refusee pendant une seance : attendre le retour au repos"
+        )
+        exporter = recorded.rig.panel.services.records
+        assert exporter is not None
+        assert exporter.io.active == 0, "a refused request reads nothing"
 
         await stop(recorded, session, 30.0)
         listed = await session.get("/api/records")
@@ -261,7 +418,47 @@ async def test_ex8_a_failed_archive_is_a_500_with_its_cause(
     async with recorded.rig.http() as session:
         failed = await session.get("/api/records/2026-10-05T101112Z_local-1/archive")
     assert failed.status_code == 500
-    assert failed.json()["detail"] == "archive impossible (OSError:ENOSPC)"
+    assert failed.json()["detail"] == "lecture des enregistrements impossible (OSError:ENOSPC)"
+
+
+async def test_ex3_a_records_disk_that_never_answers_costs_two_threads_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """However many requests arrive, two wait and the others are told at once."""
+    recorded = recorded_rig(tmp_path)
+    answer = threading.Event()
+
+    def never(_root: Path) -> tuple[RecordEntry, ...]:
+        answer.wait(30.0)
+        return ()
+
+    monkeypatch.setattr(export_module, "listing", never)
+    monkeypatch.setattr(export_module, "LISTING_TIMEOUT", Seconds(0.3))
+    exporter = recorded.rig.panel.services.records
+    assert exporter is not None
+    async with recorded.rig.http() as session:
+        answers = await asyncio.gather(*(session.get("/api/records") for _ in range(40)))
+        statuses = sorted(answer_.status_code for answer_ in answers)
+        assert statuses == [503] * 38 + [504] * 2
+        busy = next(a for a in answers if a.status_code == 503)
+        assert busy.json()["detail"] == (
+            "lecture des enregistrements deja en cours : reessayer dans un instant"
+        )
+        slow = next(a for a in answers if a.status_code == 504)
+        assert slow.json()["detail"] == "le disque des enregistrements ne repond pas"
+        assert exporter.io.active == 2, "the two threads are still on the disk"
+        assert len([t for t in threading.enumerate() if t.name == "record-io"]) == 2
+        again = await session.get("/api/records")
+        assert again.status_code == 503
+
+        answer.set()
+        for _ in range(500):  # the two threads hand their slots back through the loop
+            if exporter.io.active == 0:
+                break
+            await asyncio.sleep(0.01)
+        monkeypatch.undo()
+        back = await session.get("/api/records")
+        assert back.json() == {"recording": True, "records": []}
 
 
 async def test_ex8_a_console_that_records_nothing_says_so(tmp_path: Path) -> None:

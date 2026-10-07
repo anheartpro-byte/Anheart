@@ -644,12 +644,19 @@ class RecordStorageLow:
     directory, below ``required_bytes``; ``None`` when it could not be
     measured at all, which refuses just the same: a session nobody can record
     is not started on the strength of a number nobody read.
+
+    Nor on a number nobody read LATELY: ``stale_for`` is the age of that
+    measurement when it is too old to be evidence (whoever measures is stuck,
+    most likely on a disk that stopped answering), whatever it said.
     """
 
     free_bytes: int | None
     required_bytes: int
     where: str
     """The records directory, for the operator's message."""
+
+    stale_for: Seconds | None = None
+    """How old the measurement is, when that is why it is refused; else ``None``."""
 
 
 type StartRefusal = (

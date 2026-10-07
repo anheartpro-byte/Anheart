@@ -30,7 +30,14 @@ from src.local_panel import (
     open_journal,
 )
 from src.motor.drive import DriveFault
-from src.record.journal import MIN_FREE_BYTES, Cause, Journal, JournalStatus, Storage
+from src.record.journal import (
+    MIN_FREE_BYTES,
+    STORAGE_STALE_AFTER,
+    Cause,
+    Journal,
+    JournalStatus,
+    Storage,
+)
 from src.record.reader import read
 from src.record.schema import EventKind, RecordError
 from src.record.session import (
@@ -71,6 +78,7 @@ from tests.test_failure_rig import (
     PROGRAMME_ENV,
     SHORT_PROFILE,
     SHORT_STORE,
+    attest,
     config_of,
     start_programme,
 )
@@ -371,8 +379,8 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
 
 
 def low_disk(monkeypatch: pytest.MonkeyPatch, free: int | None) -> None:
-    def measured(_root: Path) -> Storage:
-        return Storage(free)
+    def measured(_root: Path, at: Monotonic) -> Storage:
+        return Storage(free, at)
 
     monkeypatch.setattr(journal_module, "measure", measured)
 
@@ -433,13 +441,13 @@ def test_ex4_the_gate_reads_the_last_measurement_and_names_the_directory(
 ) -> None:
     free = [MIN_FREE_BYTES - 1]
 
-    def measured(_root: Path) -> Storage:
-        return Storage(free[0])
+    def measured(_root: Path, at: Monotonic) -> Storage:
+        return Storage(free[0], at)
 
     monkeypatch.setattr(journal_module, "measure", measured)
     clock = ManualClock()
     journal = Journal(tmp_path / "records", clock)
-    gate = storage_gate(journal)
+    gate = storage_gate(journal, clock)
     refusal = gate()
     assert refusal is not None
     assert refusal == RecordStorageLow(MIN_FREE_BYTES - 1, MIN_FREE_BYTES, str(journal.root))
@@ -449,7 +457,65 @@ def test_ex4_the_gate_reads_the_last_measurement_and_names_the_directory(
     clock.advance(Seconds(5.0))
     journal.drain()
     assert gate() is None
-    assert "illisible sous /x" in describe_record_storage(None, MIN_FREE_BYTES, "/x")
+    unreadable = RecordStorageLow(None, MIN_FREE_BYTES, "/x")
+    assert "illisible sous /x" in describe_record_storage(unreadable)
+
+
+def test_ex4_a_measurement_nobody_refreshed_for_fifteen_seconds_refuses_whatever_it_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A journal thread stuck on a dead disk leaves its last number behind: it must not arm."""
+    reads: list[Path] = []
+
+    def measured(root: Path, at: Monotonic) -> Storage:
+        reads.append(root)
+        return Storage(10 * MIN_FREE_BYTES, at)
+
+    monkeypatch.setattr(journal_module, "measure", measured)
+    clock = ManualClock(Monotonic(50.0))
+    journal = Journal(tmp_path / "records", clock)
+    gate = storage_gate(journal, clock)
+    assert gate() is None
+
+    clock.advance(STORAGE_STALE_AFTER)
+    assert gate() is None, "fifteen seconds old exactly is still evidence"
+    clock.advance(Seconds(0.25))
+    refusal = gate()
+    assert refusal is not None
+    assert refusal == RecordStorageLow(
+        10 * MIN_FREE_BYTES, MIN_FREE_BYTES, str(journal.root), stale_for=Seconds(15.25)
+    )
+    assert describe_start_refusal(refusal) == (
+        "demarrage refuse : enregistrement de seance impossible, espace libre sous "
+        f"{journal.root} mesure il y a 15 s : le disque ne repond plus"
+    )
+    assert len(reads) == 1, "the gate reads a value and a clock: it never asks the disk"
+
+    # The thread comes back, measures again, and the gate opens again.
+    journal.drain()
+    assert len(reads) == 2
+    assert gate() is None
+
+
+async def test_ex4_a_console_whose_journal_is_stuck_refuses_the_start_and_says_why(
+    tmp_path: Path,
+) -> None:
+    recorded = recorded_rig(tmp_path)
+    async with recorded.rig.http() as session:
+        # Sixteen seconds of console with nobody draining: the journal thread is stuck.
+        await recorded.tick(16.0, drain=False)
+        await attest(session)
+        started = await session.post(
+            "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+        )
+        assert started.status_code == 202
+        await recorded.tick(1.0, drain=False)
+    assert recorded.state() is RuntimeState.IDLE
+    assert recorded.rig.panel.runtime.output_enabled is False
+    assert recorded.rig.refusals() == [
+        "demarrage refuse : enregistrement de seance impossible, espace libre sous "
+        f"{recorded.root} mesure il y a 16 s : le disque ne repond plus"
+    ]
 
 
 # =========================================================================

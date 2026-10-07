@@ -60,7 +60,8 @@ from src.control_surface import (
     SurfaceBusy,
 )
 from src.geometry import MachineGeometry
-from src.record.export import UNKNOWN_RECORD, discard
+from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
+from src.record.schema import RecordError
 from src.result import Err, Ok
 from src.sensors.registry import SPECS
 from src.training.plan import (
@@ -265,22 +266,35 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
 def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
     """The session records on disk: their list, and one of them as an archive.
 
-    Both read the disk on a worker thread (:class:`~src.record.export.RecordExporter`):
-    no handler here blocks the loop the control tick runs on.
+    Both read the disk, on threads kept apart from everything else the console
+    does (:class:`~src.record.export.RecordIo`): no handler here blocks the
+    loop the control tick runs on, and none can take a thread from the ECG
+    treatment. Both are refused while a session is in progress: the machine
+    reads its records at rest.
     """
     surface = services.surface
 
+    def at_rest_only(what: str) -> None:
+        if surface.run_state is not RunState.IDLE:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"{what} pendant une seance : attendre le retour au repos",
+            )
+
     @app.get("/api/records", dependencies=auth, tags=["records"])
     async def list_records() -> RecordsRow:
-        """Every session record on this machine, newest first."""
+        """Every session record on this machine, newest first. 409 during a session."""
         exporter = services.records
         if exporter is None:
             return RecordsRow(recording=False, records=())
+        at_rest_only("liste des enregistrements refusee")
+        listed = await exporter.listing()
+        if isinstance(listed, Err):
+            raise _record_failure(listed.error)
         return RecordsRow(
             recording=True,
             records=tuple(
-                RecordRow(name=entry.name, closed=entry.closed)
-                for entry in await exporter.listing()
+                RecordRow(name=entry.name, closed=entry.closed) for entry in listed.value
             ),
         )
 
@@ -298,26 +312,38 @@ def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND, detail="cette console n'enregistre pas"
             )
-        if surface.run_state is not RunState.IDLE:
-            raise HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail="export refuse pendant une seance : attendre le retour au repos",
-            )
+        at_rest_only("export refuse")
         built = await exporter.archive(name)
         if isinstance(built, Err):
-            unknown = built.error.detail == UNKNOWN_RECORD
-            raise HTTPException(
-                status_code=HTTPStatus.NOT_FOUND if unknown else HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail="enregistrement inconnu sur cette machine"
-                if unknown
-                else f"archive impossible ({built.error.detail})",
-            )
+            raise _record_failure(built.error)
         return FileResponse(
             path=built.value,
             media_type="application/gzip",
             filename=f"{name}.tar.gz",
             background=BackgroundTask(discard, built.value),
         )
+
+
+def _record_failure(error: RecordError) -> HTTPException:
+    """Why a record could not be read, as the status and the sentence the page shows."""
+    if error.detail == UNKNOWN_RECORD:
+        return HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail="enregistrement inconnu sur cette machine"
+        )
+    if error.detail == BUSY:
+        return HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail="lecture des enregistrements deja en cours : reessayer dans un instant",
+        )
+    if error.detail == TIMEOUT:
+        return HTTPException(
+            status_code=HTTPStatus.GATEWAY_TIMEOUT,
+            detail="le disque des enregistrements ne repond pas",
+        )
+    return HTTPException(
+        status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+        detail=f"lecture des enregistrements impossible ({error.detail})",
+    )
 
 
 def _register_reads(

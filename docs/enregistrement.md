@@ -69,7 +69,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `clocks` | objet décrit ci-dessous |
 | `started_at` | horodatage ISO 8601 UTC terminé par `Z` |
 | `ended_at` | horodatage UTC `Z`, ou `null` avant fermeture |
-| `end_reason` | motif de fin, ou `null` avant fermeture |
+| `end_reason` | motif de fin, ou `null` avant fermeture ; les valeurs écrites par la console du Pi, dont `interrupted` et `superseded`, sont dans [raspberry-pi.md](raspberry-pi.md#141-où-et-quand) |
 | `preflight` | liste de `{check, passed}` pour les contrôles réellement faits, ou `null` |
 | `geometry` | copie typée de la géométrie appliquée décrite ci-dessous, ou `null` si non observée |
 | `end_observation` | observation finale typée décrite ci-dessous, ou `null` si absente |

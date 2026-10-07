@@ -262,9 +262,9 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
 4. Runtime au repos (`IDLE` ou `FINISHED`).
 5. Sur la console : au moins 500 Mo libres sous le dossier d'enregistrement de
    séance, d'après la dernière mesure du fil du journal ; refus aussi si cet
-   espace n'a pas pu être mesuré (`RecordStorageLow`,
-   [14.4](#144-départ-refusé-sous-500-mo)). Demandée en dernier, pour que
-   l'opérateur entende d'abord ce que lui seul peut lever.
+   espace n'a pas pu être mesuré, ou si la mesure a plus de 15 s
+   (`RecordStorageLow`, [14.4](#144-départ-refusé-sous-500-mo)). Demandée en
+   dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
 6. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
    défaut : refus (`DriveInFault`), **sans réarmement automatique**.
@@ -1176,7 +1176,7 @@ locale aléatoire.
 | Chaque seconde | les indicateurs des capteurs dans `sensors.csv` |
 | Événement de la console pendant la séance | demande de fin, E-STOP, réarmement, attestation (`operator_action`, ou `remote_command` si elle vient du tableau de bord) ; acquittement (`verdict_ack`) ; refus (`refusal`) |
 | La phase de la séance atteint `DONE` | événement `end`, manifeste final (`ended_at`, `end_reason`, observation finale), `checksums.sha256` |
-| Sortie de la console en cours de séance | même fermeture, **après** l'arrêt du variateur, avec le motif du runtime (`shutdown` si rien d'autre n'avait déjà mis fin à la séance) et le compte rendu de l'arrêt ; la sortie attend la fermeture au plus 5 s |
+| Sortie de la console en cours de séance | même fermeture, **après** l'arrêt du variateur, avec le motif du runtime (`shutdown` si rien d'autre n'avait déjà mis fin à la séance) et le compte rendu de l'arrêt ; la sortie attend le fil du journal au plus 5 s, sans emprunter de fil à personne |
 
 La fermeture suit la phase `DONE` et non l'état `FINISHED` du runtime, exprès.
 Après un STOP ordinaire, c'est le même tic. Derrière un défaut variateur
@@ -1189,7 +1189,14 @@ comme les départs refusés.
 
 `end_reason` reprend le motif du runtime (`programme_complete`,
 `operator_stop`, `emergency_stop`, `safety_verdict`, `tick_exception`,
-`shutdown`).
+`shutdown`). Deux valeurs viennent de l'enregistreur lui-même, quand un
+enregistrement est fermé sans que le runtime ait mis fin à sa séance :
+`interrupted` (une séance démarre alors que la précédente n'avait pas été vue
+finir, ou la console ferme un enregistrement dont le runtime n'a pas donné de
+motif) et `superseded` (le fil du journal reçoit l'ouverture d'un
+enregistrement alors que le précédent n'a pas été fermé). Aucune des deux
+n'est attendue en fonctionnement normal : les voir dans un manifeste signale
+un défaut à examiner.
 
 ### 14.2 Aucune écriture dans la boucle
 
@@ -1258,8 +1265,22 @@ refusé et le variateur n'est pas touché :
 Un espace **illisible** refuse de la même façon
 (`… enregistrement de seance impossible, espace libre illisible sous <dossier> …`) :
 une séance que personne ne peut enregistrer ne part pas sur un chiffre que
-personne n'a lu. La porte ne mesure rien elle-même : elle lit la mesure du fil
-du journal, qui date de 5 s au plus tant que ce fil tourne.
+personne n'a lu.
+
+Ni sur un chiffre que personne n'a lu **récemment**. La porte ne mesure rien
+elle-même, aucun appel au système de fichiers : elle lit la dernière mesure du
+fil du journal et son âge. Cette mesure date de 5 s au plus tant que ce fil
+tourne. S'il est bloqué sur un disque qui ne répond plus, son dernier chiffre
+reste, aussi bon qu'il l'était : au-delà de **15 s** (`STORAGE_STALE_AFTER`,
+trois mesures manquées), la porte refuse, quoi que dise ce chiffre :
+
+`demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus`
+
+Le refus se lève de lui-même à la mesure suivante. Limite connue : le fil du
+journal ne mesure pas pendant qu'il applique la rétention (14.5), donc une
+purge qui durerait plus de 15 s refuserait les départs jusqu'à sa fin, avec
+cette même phrase. Aujourd'hui rien ne pose le marqueur de dépôt : la purge ne
+supprime rien et dure quelques millisecondes.
 
 Ordre de grandeur mesuré en simulation, deux voies : une séance de 10 minutes
 fait 3 092 fichiers et 1,3 Mo de contenu, mais 13,5 Mo **occupés** sur un
@@ -1301,11 +1322,33 @@ sont derrière le jeton. Le bouton « Exporter l'enregistrement » de la page
 Configuration télécharge le plus récent
 ([console-locale.md](console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)).
 
-L'archive est construite sur un fil de travail, jamais sur la boucle, et
-l'export est **refusé (409) tant qu'une séance est en cours**. Seul un dossier
-d'enregistrement directement sous la racine peut être nommé. L'archive est un
-fichier temporaire à côté des enregistrements, supprimé après l'envoi ; elle
-ne porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
+La liste et l'archive lisent le disque. Elles sont **refusées (409) tant
+qu'une séance est en cours**, et hors séance elles ne passent **ni par la
+boucle, ni par le groupe de fils par défaut de la boucle**. Ce groupe est
+celui du traitement ECG, des capteurs et de la liaison BITalino : un dossier
+d'enregistrement qui ne répond plus y prendrait un fil par requête, jusqu'à ce
+que la fréquence cardiaque ne sorte plus et que le superviseur termine la
+séance sur une fréquence périmée. Une séance arrêtée par le disque, ce que
+l'enregistrement ne doit jamais faire. Les lectures d'enregistrements ont donc
+leurs propres fils (`RecordIo`, `src/record/export.py`) :
+
+- deux au plus à la fois, chacun un fil démon nommé `record-io` ;
+- une lecture de plus est refusée tout de suite (503
+  `lecture des enregistrements deja en cours : reessayer dans un instant`),
+  jamais mise en attente : rien ne s'empile derrière un disque muet ;
+- une requête attend le disque 5 s pour la liste, 120 s pour une archive,
+  puis répond 504 `le disque des enregistrements ne repond pas`. Le fil
+  qu'elle laisse garde sa place jusqu'à ce que le disque le rende, et rien
+  d'autre : ni un fil du traitement ECG, ni la sortie du processus.
+
+La sortie de la console n'emprunte aucun fil non plus : elle demande au fil du
+journal de finir et regarde toutes les 50 ms, pendant 5 s au plus, s'il a
+fini.
+
+Seul un dossier d'enregistrement directement sous la racine peut être nommé.
+L'archive est un fichier temporaire à côté des enregistrements, supprimé après
+l'envoi (ou dès qu'elle est prête, si sa requête n'attend plus) ; elle ne
+porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 ### 14.7 Ce que l'enregistrement dit des personnes, et sa protection
 

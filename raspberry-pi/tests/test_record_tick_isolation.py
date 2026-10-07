@@ -10,7 +10,10 @@ Three angles on the one safety requirement of the black box:
   records directory. Every one of those is the journal thread's;
 * **adversarial**: with a disk that does not answer at all, the real task
   loop goes on ticking at 5 Hz, no ``loop_stall`` is ever raised, the operator
-  is told the record is degraded, and the session ends when asked.
+  is told the record is degraded, and the session ends when asked;
+* **with a person on board**: record reads stuck on that same dead disk take
+  no thread from the ECG treatment. The heart rate stays fresh, no verdict is
+  raised, and the console still stops.
 """
 
 from __future__ import annotations
@@ -19,29 +22,43 @@ import asyncio
 import statistics
 import threading
 import time
+from collections.abc import Mapping
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, Literal
 
 import pytest
 
+import src.record.export as export_module
 import src.record.journal as journal_module
 import src.record.writer as writer_module
 from src.clock import ManualClock, RealClock
 from src.control_surface import EventKind
+from src.ecg_pipeline import treat_off_loop
 from src.local_panel import EXIT_OK, DriveSide, LocalPanel, build_panel
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
-from src.record.journal import Cause, Journal, Limits
+from src.record.export import RecordEntry
+from src.record.journal import STOP_TIMEOUT, Cause, Journal, Limits
 from src.record.reader import read
 from src.result import Ok
 from src.telemetry import PayloadKind
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_LOOP_STALL
-from src.training.types import Occupancy
+from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Monotonic, OutputRpm, Seconds, UnixMillis
+from tests.record_console_support import recorded_rig, set_target
 from tests.record_journal_support import count_fsync, journal_threads, wait_for, watch_tree
 from tests.test_failure_process import FakeWeb
-from tests.test_failure_rig import BENCH_ENV, OPERATOR, TICK, Rig, config_of, make_rig, no_dsp
+from tests.test_failure_rig import (
+    BENCH_ENV,
+    OPERATOR,
+    TICK,
+    Rig,
+    attest,
+    config_of,
+    make_rig,
+    no_dsp,
+)
 
 BLOCKS: Final[int] = 6
 TICKS_PER_BLOCK: Final[int] = 250
@@ -49,8 +66,20 @@ TICKS_PER_BLOCK: Final[int] = 250
 SAME: Final[float] = 0.001
 """Seconds. "The tick does not change": the medians differ by less than this."""
 
-NEVER_NEAR_A_STALL: Final[float] = 0.3
-"""Seconds. No single tick, writer or not, may come near the 0.6 s ``loop_stall`` FREEZE."""
+EXIT_BOUND: Final[float] = 12.0
+"""Seconds. A console whose records disk is dead still leaves: the 5 s it gives the
+journal thread (``STOP_TIMEOUT``), plus the rest of its exit, with room for a slow runner."""
+
+TAIL: Final[float] = 0.1
+"""Seconds. Ninety-nine ticks in a hundred, writer active, stay under a sixth of the
+0.6 s ``loop_stall`` FREEZE.
+
+The percentile, not the maximum: on a shared runner one tick in a few thousand
+is preempted for tens of milliseconds whatever the code under it does (170 ms
+was seen on a loaded machine, in the arm WITHOUT the writer as well), and that
+says nothing about the writer. The slowest tick is printed. The bound on every
+single tick is the next two tests: nothing the tick does can wait on the disk,
+and under the real loop a disk that never answers raises no ``loop_stall``."""
 
 
 async def cruising(tmp_path: Path, name: str, *, record: bool) -> tuple[Rig, Journal | None]:
@@ -135,7 +164,7 @@ async def test_ex2_the_tick_takes_the_same_time_with_the_writer_active(
     )
     print(summary)  # noqa: T201 - the measurement the ticket asks for, shown with -s
     assert median_with - median_without < SAME, summary
-    assert max(with_writer) < NEVER_NEAR_A_STALL, summary
+    assert p99_with < TAIL, summary
     await plain.panel.close()
     await recorded.panel.close()
 
@@ -226,6 +255,7 @@ async def test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loo
     stop = asyncio.Event()
     seen: list[float] = []
     said: list[str] = []
+    asked_to_stop: list[float] = []
 
     async def watch() -> None:
         """What the operator's page receives: every snapshot's instant, every record message."""
@@ -257,6 +287,7 @@ async def test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loo
         for _ in range(15):
             surface.note_presence(OPERATOR)
             await asyncio.sleep(0.2)
+        asked_to_stop.append(time.monotonic())
         stop.set()
         return state, cause, stuck
 
@@ -265,6 +296,7 @@ async def test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loo
         (state, cause, stuck), code = await asyncio.gather(
             operate(panel), panel.run(stop, FakeWeb(None))
         )
+        left_after = time.monotonic() - asked_to_stop[0]
     finally:
         watching.cancel()
         disk.release.set()
@@ -275,13 +307,104 @@ async def test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loo
     assert len(said) == 1
     assert said[0].startswith("enregistrement de seance degrade : le disque ne repond plus")
     # The loop never stalled: 5 Hz throughout, and the supervisor never said otherwise.
+    # 0.6 s is the supervisor's own bound (loop_stall FREEZE, which latches): the
+    # check on its verdict below is the proof, this one names the gap if it fails.
     gaps = [later - earlier for earlier, later in pairwise(seen)]
     assert len(seen) > 40
-    assert max(gaps) < 0.5, f"a tick came {max(gaps):.3f} s after the previous one"
+    assert max(gaps) < 0.6, f"a tick came {max(gaps):.3f} s after the previous one"
     assert panel.runtime.end_reason is EndReason.OPERATOR_STOP
     standing = panel.runtime.standing
     assert standing is None or standing.rule != RULE_LOOP_STALL
     assert code == EXIT_OK
     # The console's exit waited 5 s for the record at most, then left: the thread is a daemon.
     assert "session record not finalised: the disk did not answer in time" in caplog.text
+    assert STOP_TIMEOUT <= left_after < EXIT_BOUND, f"the console left after {left_after:.1f} s"
     wait_for(lambda: journal_threads() == [], timeout=30.0)
+
+
+# =========================================================================
+# Record reads on a dead disk, with a person on board
+# =========================================================================
+
+OCCUPIED_ENV: Final[Mapping[str, str]] = {**BENCH_ENV, "OCCUPANCY_OCCUPIED_ENABLED": "true"}
+
+REQUESTS: Final[int] = 40
+"""More than any default thread pool has workers (``min(32, cpus + 4)``)."""
+
+
+async def test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupied_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The records disk stops answering and the page keeps asking for the list.
+
+    The ECG treatment here is the production one: it runs on the event loop's
+    default thread pool. Were the record reads on that pool too, forty stuck
+    requests would take every thread of it, no heart rate would come out any
+    more, and the supervisor would end the session on a stale one: a session
+    stopped by the disk. They have threads of their own, two, and nothing else.
+    """
+    recorded = recorded_rig(tmp_path, env=OCCUPIED_ENV, treat=treat_off_loop)
+    exporter = recorded.rig.panel.services.records
+    assert exporter is not None
+    answer = threading.Event()
+
+    def never(_root: Path) -> tuple[RecordEntry, ...]:
+        answer.wait(120.0)
+        return ()
+
+    monkeypatch.setattr(export_module, "listing", never)
+    runtime = recorded.rig.panel.runtime
+    seen: list[TelemetrySnapshot] = []
+    try:
+        async with recorded.rig.http() as session:
+            asking = [asyncio.create_task(session.get("/api/records")) for _ in range(REQUESTS)]
+            for _ in range(200):
+                if sum(task.done() for task in asking) == REQUESTS - 2:
+                    break
+                await asyncio.sleep(0.01)
+            refused = [task.result().status_code for task in asking if task.done()]
+            assert refused == [503] * (REQUESTS - 2), "all but two were told at once"
+            assert exporter.io.active == 2
+
+            # A heart rate the runtime trusts, from the simulated ECG through the real
+            # treatment, on the pool the stuck reads are NOT on.
+            for _ in range(120):
+                await asyncio.wait_for(recorded.tick(1.0), 30.0)
+                if runtime.snapshot().live_bpm is not None:
+                    break
+            assert runtime.snapshot().live_bpm is not None, "no heart rate came out"
+
+            await attest(session)
+            started = await session.post(
+                "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+            )
+            assert started.status_code == 202, started.text
+            await asyncio.wait_for(recorded.tick(1.0), 30.0)
+            assert recorded.state() is RuntimeState.RUNNING, recorded.rig.refusals()
+            await set_target(session, 3.0)
+            for _ in range(60):
+                await asyncio.wait_for(recorded.tick(1.0), 30.0)
+                seen.append(runtime.snapshot())
+
+            assert recorded.state() is RuntimeState.RUNNING
+            assert all(snapshot.live_bpm is not None for snapshot in seen), "a stale heart rate"
+            assert [s.safety.rule for s in seen if s.safety is not None] == []
+            assert seen[-1].measured.motor_rpm > 55, "the session went on turning"
+            assert exporter.io.active == 2, "the two record threads are still on the dead disk"
+            assert not recorded.degraded(), "the record itself was written all along"
+
+            # And the console still stops, with those two threads still stuck.
+            detail = await asyncio.wait_for(recorded.rig.panel.close(), 20.0)
+            for task in asking:
+                task.cancel()
+            await asyncio.gather(*asking, return_exceptions=True)
+    finally:
+        answer.set()
+    assert runtime.end_reason is EndReason.SHUTDOWN
+    recording = recorded.recording()
+    assert recording.warnings == ()
+    assert recording.manifest.occupancy == "occupied"
+    observation = recording.manifest.end_observation
+    assert observation is not None
+    assert observation.shutdown_detail == detail
+    assert await recorded.rig.left_stopped() == ""

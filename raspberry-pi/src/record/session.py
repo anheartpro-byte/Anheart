@@ -61,6 +61,7 @@ from src.motor.drive import DriveStatus
 from src.record.codec import IDENTIFIER, Privacy
 from src.record.journal import (
     MIN_FREE_BYTES,
+    STORAGE_STALE_AFTER,
     Cause,
     Closing,
     Journal,
@@ -334,16 +335,27 @@ def _why(status: JournalStatus) -> str:
     return f"erreur d'ecriture ({error.operation} : {error.detail})"
 
 
-def storage_gate(journal: Journal) -> Callable[[], RecordStorageLow | None]:
-    """The arming gate: refuse under 500 MB free, or when the space could not be measured.
+def storage_gate(journal: Journal, clock: Clock) -> Callable[[], RecordStorageLow | None]:
+    """The arming gate: at least 500 MB free under the records directory, measured lately.
 
-    Reads the journal thread's last measurement and returns at once.
+    Refuses under 500 MB, when the space could not be measured, and when the
+    measurement is older than :data:`~src.record.journal.STORAGE_STALE_AFTER`:
+    a journal thread stuck on a dead disk leaves its last number behind, and
+    that number would otherwise go on saying there is room.
+
+    It reads the journal thread's last measurement and the clock, and returns
+    at once: no file-system call, the gate runs in the control task.
     """
 
     def gate() -> RecordStorageLow | None:
-        free = journal.free_bytes
+        storage = journal.storage
+        free = storage.free_bytes
+        age = elapsed(storage.measured_at, clock.monotonic())
+        where = str(journal.root)
+        if age > STORAGE_STALE_AFTER:
+            return RecordStorageLow(free, MIN_FREE_BYTES, where, stale_for=age)
         if free is None or free < MIN_FREE_BYTES:
-            return RecordStorageLow(free, MIN_FREE_BYTES, str(journal.root))
+            return RecordStorageLow(free, MIN_FREE_BYTES, where)
         return None
 
     return gate

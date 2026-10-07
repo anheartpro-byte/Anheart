@@ -70,6 +70,13 @@ FSYNC_PERIOD: Final[Seconds] = Seconds(2.0)
 PROBE_PERIOD: Final[Seconds] = Seconds(5.0)
 """How often the free space under the records directory is measured, session or not."""
 
+STORAGE_STALE_AFTER: Final[Seconds] = Seconds(15.0)
+"""A free-space measurement older than this is no longer evidence: three missed probes.
+
+The journal thread measures every :data:`PROBE_PERIOD`. When it is stuck on a
+disk that does not answer, its last number stays, and looks as good as it was.
+Past this age the arming gate refuses on it, exactly as on an unreadable one."""
+
 STALL_AFTER: Final[Seconds] = Seconds(5.0)
 """Submitted values waiting this long with nothing consumed: the disk is not answering."""
 
@@ -165,9 +172,13 @@ type Item = Opening | Closing | Entry
 
 @dataclass(frozen=True, slots=True)
 class Storage:
-    """The last measurement of the records directory. ``None``: it could not be measured."""
+    """The last measurement of the records directory, and when it was taken."""
 
     free_bytes: int | None
+    """``None``: it could not be measured."""
+
+    measured_at: Monotonic
+    """On the injected clock. Whoever reads the number decides whether it is still fresh."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,12 +253,12 @@ def prepare_root(root: Path) -> None:
     root.chmod(PRIVATE_MODE)
 
 
-def measure(root: Path) -> Storage:
-    """The free space under ``root``, or ``Storage(None)`` when it cannot be read."""
+def measure(root: Path, at: Monotonic) -> Storage:
+    """The free space under ``root`` at ``at``; ``free_bytes`` is ``None`` when unreadable."""
     try:
-        return Storage(shutil.disk_usage(root).free)
+        return Storage(shutil.disk_usage(root).free, at)
     except OSError:
-        return Storage(None)
+        return Storage(None, at)
 
 
 def raw_block(batch: RawBatch) -> RawBlock:
@@ -330,8 +341,8 @@ class Scribe:
             prepare_root(self._root)
         except OSError as error:
             _logger.warning("records directory unusable: %s", describe_os_error(error))
-            return Storage(None)
-        return measure(self._root)
+            return Storage(None, self._probed_at)
+        return measure(self._root, self._probed_at)
 
     def progress(self) -> Progress:
         return Progress(
@@ -449,7 +460,7 @@ class Scribe:
             self._note(writer.sync())
         if now - self._probed_at >= PROBE_PERIOD:
             self._probed_at = now
-            self._storage = measure(self._root)
+            self._storage = measure(self._root, now)
         retention = self._retention_days
         if writer is None and retention is not None and now - self._purged_at >= PURGE_PERIOD:
             self._purged_at = now
@@ -625,18 +636,23 @@ class Journal:
         )
 
     @property
-    def free_bytes(self) -> int | None:
-        """The last measured free space under the records directory; ``None`` = unknown."""
-        return self._progress.storage.free_bytes
+    def storage(self) -> Storage:
+        """The journal thread's last measurement of the records directory. Memory only."""
+        return self._progress.storage
 
     # --- the thread --------------------------------------------------------
 
     def start(self) -> None:
         """Start the journal thread. A second call does nothing."""
-        if self._thread is not None:
-            return
-        self._thread = Thread(target=self._run, name="record-journal", daemon=True)
-        self._thread.start()
+        self._started()
+
+    def _started(self) -> Thread:
+        thread = self._thread
+        if thread is None:
+            thread = Thread(target=self._run, name="record-journal", daemon=True)
+            self._thread = thread
+            thread.start()
+        return thread
 
     def _run(self) -> None:
         while not self._stopping.wait(self._period):
@@ -653,8 +669,7 @@ class Journal:
     def drain(self) -> None:
         """One cycle of the journal thread. Blocking I/O: never call it from the event loop.
 
-        Public for the code that runs without the thread (tests, and
-        :meth:`stop` when it was never started).
+        Public for the tests that run without the thread, one cycle at a time.
         """
         self._scribe.cycle(self._queue, self._dropped, self._publish)
 
@@ -662,16 +677,29 @@ class Journal:
         """The journal thread's one write to the producer's side: a whole value, swapped in."""
         self._progress = progress
 
+    def request_stop(self) -> None:
+        """Ask the thread to write what is queued and end. Returns at once.
+
+        The last drain is the thread's own work even when it was never started
+        (it is started here, to do just that): nothing on this side ever
+        touches the disk, so the console's exit can ask from the event loop.
+        """
+        self._stopping.set()
+        self._started()
+
+    @property
+    def stopped(self) -> bool:
+        """Whether the thread has ended. ``False`` while it was never asked to."""
+        thread = self._thread
+        return thread is not None and not thread.is_alive()
+
     def stop(self, timeout: Seconds = STOP_TIMEOUT) -> bool:
-        """Drain what is queued and end the thread. Blocking: call it off the event loop.
+        """:meth:`request_stop`, then wait for the thread. Blocking: never on the event loop.
 
         Returns whether the thread finished within ``timeout``. It is a daemon:
         a disk that never answers cannot keep the process from exiting.
         """
         self._stopping.set()
-        thread = self._thread
-        if thread is None:
-            self._cycle()
-            return True
+        thread = self._started()
         thread.join(timeout)
         return not thread.is_alive()

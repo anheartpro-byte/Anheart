@@ -139,7 +139,7 @@ from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
 from src.record.export import RecordExporter
-from src.record.journal import Journal
+from src.record.journal import STOP_TIMEOUT, Journal
 from src.record.session import SessionRecorder, SessionRequest, stamp_for, storage_gate
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
@@ -231,6 +231,11 @@ SENSOR_PERIOD: Final[Seconds] = Seconds(1.0)
 
 CLOUD_PERIOD: Final[Seconds] = Seconds(1.0)
 """One dashboard step a second: telemetry is sampled at 1 Hz."""
+
+STOP_POLL: Final[Seconds] = Seconds(0.05)
+STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
+"""At exit the console looks this often, this many times, whether the session
+record's thread has finished: :data:`~src.record.journal.STOP_TIMEOUT` in all."""
 
 RUNTIME_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
     slew=RpmPerSecond(15.0), start_hysteresis_rpm=MotorRpm(10)
@@ -899,8 +904,9 @@ class LocalPanel:
         waits for measured standstill before removing the run command.
 
         The session record is closed AFTER the drive: the stop never waits on
-        a disk. Its last writes happen on a worker thread, for at most
-        :data:`~src.record.journal.STOP_TIMEOUT`.
+        a disk. Its last writes are the journal thread's; this waits for that
+        thread at most :data:`~src.record.journal.STOP_TIMEOUT`, without
+        borrowing a thread from anybody (see :func:`journal_stopped`).
         """
         if not self._runtime.needs_stop_before_release:
             self._drive.release()
@@ -911,7 +917,7 @@ class LocalPanel:
         recorder = self._recorder
         if recorder is not None:
             recorder.finish(self._clock.monotonic(), self._runtime, detail)
-            if not await asyncio.to_thread(recorder.journal.stop):
+            if not await journal_stopped(recorder.journal):
                 _logger.error(
                     "session record not finalised: the disk did not answer in time "
                     "(what was already written stays readable)"
@@ -1109,7 +1115,7 @@ def build_panel(
         safety=safety,
         motion=motion,
         limit_radius=config.leg_tip_radius,
-        arming_gate=None if journal is None else storage_gate(journal),
+        arming_gate=None if journal is None else storage_gate(journal, clock),
     )
     hub = TelemetryHub(clock=clock)
     ecg_side = build_ecg_client(config, clock)
@@ -1221,6 +1227,22 @@ def build_panel(
     )
 
 
+async def journal_stopped(journal: Journal) -> bool:
+    """Ask the journal thread to finish and wait for it, at most ``STOP_TIMEOUT``.
+
+    No executor: the wait is this coroutine's own, a short sleep at a time.
+    The loop's thread pool is shared with the ECG treatment and may be full of
+    work that will never return; a console that needed one of its threads to
+    stop would then never stop.
+    """
+    journal.request_stop()
+    for _ in range(STOP_POLLS):
+        if journal.stopped:
+            break
+        await asyncio.sleep(STOP_POLL)
+    return journal.stopped
+
+
 def build_recorder(
     config: LocalConfig,
     *,
@@ -1297,16 +1319,23 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
         case DriveInFault(report=report):
             code = "?" if report is None else f"{report.fault.mnemonic}, LFT {report.raw_code}"
             reason = f"variateur en defaut ({code})"
-        case RecordStorageLow(free_bytes=free, required_bytes=required, where=where):
-            reason = describe_record_storage(free, required, where)
+        case RecordStorageLow():
+            reason = describe_record_storage(refusal)
         case _ as unreachable:
             assert_never(unreachable)
     return f"demarrage refuse : {reason}"
 
 
-def describe_record_storage(free: int | None, required: int, where: str) -> str:
+def describe_record_storage(refusal: RecordStorageLow) -> str:
     """Why the session record refuses an arming, with the numbers and the directory."""
     megabyte = 1_000_000
+    where = refusal.where
+    free = refusal.free_bytes
+    if refusal.stale_for is not None:
+        return (
+            f"enregistrement de seance impossible, espace libre sous {where} mesure il y a "
+            f"{refusal.stale_for:.0f} s : le disque ne repond plus"
+        )
     if free is None:
         return (
             f"enregistrement de seance impossible, espace libre illisible sous {where} "
@@ -1314,7 +1343,7 @@ def describe_record_storage(free: int | None, required: int, where: str) -> str:
         )
     return (
         f"espace disque insuffisant pour l'enregistrement de seance : {free // megabyte} Mo "
-        f"libres sous {where}, {required // megabyte} Mo requis. Liberer de l'espace"
+        f"libres sous {where}, {refusal.required_bytes // megabyte} Mo requis. Liberer de l'espace"
     )
 
 

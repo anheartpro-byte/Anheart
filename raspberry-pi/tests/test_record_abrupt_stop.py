@@ -31,6 +31,9 @@ RUN_FOR: Final[float] = 4.0
 FRESH: Final[float] = 2.0
 """The acceptance bound: nothing older than this is missing at the kill."""
 
+FIRST_TICK: Final[float] = 0.1
+"""Seconds. Half a control period: the first row written is the arming tick itself."""
+
 
 def wait_until_armed(process: subprocess.Popen[str], said: Path, timeout: float) -> None:
     """Block until the worker has written ``ARMED``; fail with its stderr if it never does."""
@@ -89,7 +92,10 @@ def test_acceptance_a_sigkill_mid_session_leaves_a_record_readable_to_within_two
     rows = recording.rows
     assert len(rows) >= (RUN_FOR - FRESH) * 5, f"only {len(rows)} ticks were written"
     assert age(rows[-1].t) < FRESH, f"the last tick is {age(rows[-1].t):.2f} s old"
-    assert rows[0].t == 0.0
+    # The first row is the tick that armed the session, not the one after it (0.2 s
+    # later). Its instant is read on the real clock a fraction of a millisecond
+    # after the session's origin: half a tick is the bound, not an exact zero.
+    assert rows[0].t < FIRST_TICK, f"the first row is {rows[0].t} s into the session"
     assert all(later.t > earlier.t for earlier, later in pairwise(rows))
 
     events = recording.events

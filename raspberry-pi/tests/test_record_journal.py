@@ -261,29 +261,32 @@ def test_ex4_the_free_space_is_measured_at_startup_and_every_five_seconds(
 ) -> None:
     free = [MIN_FREE_BYTES + 1]
 
-    def measured(_root: Path) -> Storage:
-        return Storage(free[0])
+    def measured(_root: Path, at: Monotonic) -> Storage:
+        return Storage(free[0], at)
 
     monkeypatch.setattr(journal_module, "measure", measured)
     clock = clock_at_start()
+    started = clock.monotonic()
     journal = Journal(tmp_path / "records", clock)
-    assert journal.free_bytes == MIN_FREE_BYTES + 1
+    assert journal.storage == Storage(MIN_FREE_BYTES + 1, started)
 
     free[0] = 123
     clock.advance(Seconds(PROBE_PERIOD - 0.1))
     journal.drain()
-    assert journal.free_bytes == MIN_FREE_BYTES + 1
+    assert journal.storage == Storage(MIN_FREE_BYTES + 1, started), "not yet due"
     clock.advance(Seconds(0.1))
     journal.drain()
-    assert journal.free_bytes == 123
+    # The measurement says when it was taken: whoever reads it judges its age.
+    assert journal.storage == Storage(123, clock.monotonic())
     assert journal.status(clock.monotonic()).free_bytes == 123
 
 
 def test_ex4_the_real_measurement_reads_the_disk_and_says_when_it_cannot(tmp_path: Path) -> None:
-    measured = measure(tmp_path).free_bytes
-    assert measured is not None
-    assert measured > 0
-    assert measure(tmp_path / "missing") == Storage(None)
+    measured = measure(tmp_path, Monotonic(7.0))
+    assert measured.free_bytes is not None
+    assert measured.free_bytes > 0
+    assert measured.measured_at == 7.0
+    assert measure(tmp_path / "missing", Monotonic(8.0)) == Storage(None, Monotonic(8.0))
 
 
 def test_ex3_a_records_path_that_is_a_file_is_unavailable_and_costs_only_the_record(
@@ -293,7 +296,7 @@ def test_ex3_a_records_path_that_is_a_file_is_unavailable_and_costs_only_the_rec
     root.write_text("not a directory")
     clock = clock_at_start()
     journal = Journal(root, clock)
-    assert journal.free_bytes is None
+    assert journal.storage == Storage(None, clock.monotonic())
     assert "records directory unusable: FileExistsError:EEXIST" in caplog.text
     idle = journal.status(clock.monotonic())
     assert idle.degraded
@@ -744,15 +747,27 @@ def test_ex2_the_dedicated_thread_does_every_write_and_every_fsync(
     assert loaded.value.manifest.end_reason == "operator_stop"
 
 
-def test_ex2_stop_without_a_thread_drains_inline(tmp_path: Path) -> None:
+def test_ex2_a_journal_that_was_never_started_still_writes_its_last_drain_on_its_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clock = clock_at_start()
     journal = opened(tmp_path, clock)
     journal.submit(row())
     journal.close(closing())
-    assert journal.stop()
+    assert not journal.stopped, "never asked to stop"
+    fsyncs = count_fsync(monkeypatch)
+    with watch_tree(journal.root) as touches:
+        # Asking is all the caller does: this returns at once and touches nothing.
+        journal.request_stop()
+        wait_for(lambda: journal.stopped)
+    assert touches.by(threading.get_ident()) == []
+    assert threading.get_ident() not in fsyncs
+    assert touches.seen != []
     loaded = read(record_of(journal))
     assert isinstance(loaded, Ok)
+    assert loaded.value.warnings == ()
     assert loaded.value.manifest.end_reason == "operator_stop"
+    assert journal.stop(), "already stopped: nothing left to wait for"
 
 
 def test_ex3_a_failed_cycle_does_not_raise_and_the_stall_detector_sees_it(
@@ -772,7 +787,7 @@ def test_ex3_a_failed_cycle_does_not_raise_and_the_stall_detector_sees_it(
 
     monkeypatch.setattr(Scribe, "cycle", broken)
     journal.submit(row())
-    assert journal.stop()  # the inline cycle fails, and says so, without raising
+    assert journal.stop()  # the last cycle fails on its thread, and says so, without raising
     assert "session journal cycle failed" in caplog.text
     journal.status(clock.monotonic())
     clock.advance(Seconds(STALL_AFTER + 0.2))
