@@ -1742,17 +1742,20 @@ reste à prouver par la suite navigateur (ANH-83).
 tests de `hooks/` et de `components/`, sans navigateur. Avec les tests des
 suites voisines, il couvre la fraîcheur de l'état en direct, le statut d'une
 machine et son dernier signal. Dans tous ces tests, seule l'horloge du serveur
-date quelque chose ; l'horloge du poste est mise en avance (15 s, 80 s,
-10 min) ou en retard (15 s, 10 min), celle du Pi en avance ou en retard de
-10 min, et le résultat attendu est le même :
+date une réception ; l'horloge du poste est mise en avance (15 s, 80 s,
+10 min) ou en retard (15 s, 10 min), et le résultat attendu est le même.
+L'horloge du Pi est décalée elle aussi : de 4 s, sans effet ; de 12 s, 25 s
+ou 10 min, le panneau affiche le bandeau des mesures qui ne sont pas datées
+de maintenant, et aucune valeur :
 
 - `lib/server-clock.test.ts` (`npm run test:ecg`, comme tous les tests de
   `lib/`) : l'heure du serveur reconstituée à partir de `serverNow` et du temps
   compté, horloge du poste décalée, reculée, avancée, poste en veille, réponse
   déjà vue par un autre composant ;
 - `lib/training.test.ts` (`npm run test:ecg`) fixe les bornes de `isFresh`
-  (dont le refus d'une date du futur au-delà de la tolérance), les deux seuils
-  et le statut affiché ;
+  (dont le refus d'une date du futur au-delà de la tolérance), celles de
+  `datedAfterReception` (un point daté après sa propre réception), les deux
+  seuils et le statut affiché ;
 - `hooks/use-freshness.test.ts` monte `useFreshness` et `useFreshnessJudge`
   dans le vrai React avec une **horloge simulée** : l'état devient périmé 90 s
   après le dernier heartbeat sans qu'aucune donnée ne change, redevient frais
@@ -1764,7 +1767,13 @@ date quelque chose ; l'horloge du poste est mise en avance (15 s, 80 s,
   vrais textes de `messages/`, à la réception d'une réponse puis 90 s (20 s
   pour le panneau) plus tard sans réponse nouvelle : badge, statut, valeurs
   grisées, bandeau, bouton de lancement, texte d'une machine passée hors ligne,
-  et absence de bandeau pendant le chargement de la télémétrie ;
+  et absence de bandeau pendant le chargement de la télémétrie. Pour le
+  panneau, le bloc « points received late (every clock right) » rejoue le
+  renvoi d'une file après une coupure : un paquet reçu à l'instant dont le
+  point le plus récent a été mesuré il y a plus de 20 s n'est pas montré
+  comme actuel, le bandeau tient pendant toute la vidange de la file et ne
+  part qu'au premier point mesuré depuis moins de 20 s, y compris pour une
+  séance démarrée à la console et enregistrée au retour de la liaison ;
 - `components/machines/machine-signal.test.tsx` fait de même pour le badge de
   statut, le compteur « Machines en ligne », « Dernier signal » et la ligne des
   versions ;
@@ -1774,8 +1783,11 @@ date quelque chose ; l'horloge du poste est mise en avance (15 s, 80 s,
   une fois au rendu, échoue ici ;
 - `convex/liveFreshness.test.ts` (`npm run test:convex`) vérifie que le serveur
   juge sur le même seuil `LIVE_FRESH_MS` que le site, que chaque réponse
-  concernée porte `serverNow`, et que `lastSignalAt` est la réception du
-  dernier point quelle que soit la date écrite par la machine ;
+  concernée porte `serverNow`, que `lastSignalAt` est la réception du
+  dernier point quelle que soit la date écrite par la machine, et que
+  `lastMeasuredAt` est cette date écrite (paquet de 300 points renvoyé une
+  heure après, file qui se vide paquet après paquet, séance enregistrée au
+  retour de la liaison) ;
 - `convex/offlineThreshold.test.ts` (`npm run test:convex`) remplace le seuil
   partagé par une autre valeur : la tâche `checkOfflineMachines` doit la
   suivre.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  datedAfterReception,
   FUTURE_TOLERANCE_MS,
   isFresh,
   LIVE_FRESH_MS,
@@ -50,6 +51,29 @@ describe("isFresh", () => {
     expect(isFresh(NOW + 600_000, NOW)).toBe(false);
     expect(isFresh(NOW + 600_000, NOW, TELEMETRY_FRESH_MS)).toBe(false);
   });
+});
+
+describe("datedAfterReception", () => {
+  it("accepts a point measured before the server received it, however long before", () => {
+    expect(datedAfterReception(NOW - 1000, NOW)).toBe(false);
+    expect(datedAfterReception(NOW - 3_600_000, NOW)).toBe(false);
+  });
+
+  it("accepts a point dated up to the tolerance after its reception", () => {
+    expect(datedAfterReception(NOW + FUTURE_TOLERANCE_MS, NOW)).toBe(false);
+  });
+
+  it("refuses a point dated after its reception beyond the tolerance: the machine's clock is ahead", () => {
+    expect(datedAfterReception(NOW + FUTURE_TOLERANCE_MS + 1, NOW)).toBe(true);
+    expect(datedAfterReception(NOW + 600_000, NOW)).toBe(true);
+  });
+
+  it.each([undefined, null])(
+    "says nothing without a reception date (%s)",
+    (receivedAt) => {
+      expect(datedAfterReception(NOW + 600_000, receivedAt)).toBe(false);
+    },
+  );
 });
 
 describe("shownMachineStatus", () => {

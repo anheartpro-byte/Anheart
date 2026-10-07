@@ -208,16 +208,13 @@ describe("live view: training panel", () => {
       origin: "remote",
       startedAt: SERVER - 600_000,
       lastSignalAt: SERVER - agoMs,
+      // The machine measured the point a second before the server received it.
+      lastMeasuredAt: SERVER - agoMs - 1000,
       serverNow: SERVER + 7,
       canStop: true,
     });
     answers.set("training:getSessionTelemetry", [
-      {
-        ...justNow,
-        // The machine's own date for the point: never what the panel judges.
-        t: SERVER + 999_999,
-        elapsedS: 600,
-      },
+      { ...justNow, t: SERVER - agoMs - 1000, elapsedS: 600 },
     ]);
   }
 
@@ -237,11 +234,16 @@ describe("live view: training panel", () => {
     expect(text).toContain("148");
   });
 
-  it("gives the hook the server's date for the last signal, the server's clock and the 20 s threshold", () => {
+  it("gives the hook the reception of the last point, its measurement date and the date of the point it prints, each with the server's clock and the 20 s threshold", () => {
     session(4000);
     paint(panel);
     expect(hook.calls).toEqual([
+      // When the server received the last point.
       [SERVER - 4000, SERVER + 7, TELEMETRY_FRESH_MS],
+      // When the machine says it measured it.
+      [SERVER - 5000, SERVER + 7, TELEMETRY_FRESH_MS],
+      // The date of the point whose values are printed.
+      [SERVER - 5000, SERVER + 7, TELEMETRY_FRESH_MS],
     ]);
   });
 
@@ -284,9 +286,7 @@ describe("machine status, count and last signal", () => {
   );
 
   it("counts online the machines the hook calls fresh, and none when it says stale", () => {
-    const count = (
-      <OnlineMachinesCount machines={[heardNow, heardAnHourAgo]} />
-    );
+    const count = <OnlineMachinesCount machines={[heardNow, heardAnHourAgo]} />;
     expect(paint(count).trim()).toBe("2");
     expect(hook.calls).toEqual([
       [SERVER, SERVER + 7],

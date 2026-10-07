@@ -270,10 +270,11 @@ Index : `by_user`, `by_machine`, `by_machine_and_status`,
 `bpm` (absent = pas de FC fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`,
 `gLoad`, `safetyAction`. Index `by_session_and_t`.
 
-`t` sert à l'axe des courbes et à l'ordre des points, jamais à dire qu'une
-séance envoie encore : la date de **réception** d'un point est le
-`_creationTime` que Convex donne à sa ligne (voir `getTrainingSession`,
-`lastSignalAt`).
+`t` sert à l'axe des courbes, à l'ordre des points et à dire quand un point a
+été **mesuré** (`lastMeasuredAt`). Il ne dit pas qu'une séance envoie encore :
+la date de **réception** d'un point est le `_creationTime` que Convex donne à
+sa ligne (`lastSignalAt`). Le site exige les deux pour afficher une valeur
+comme actuelle (voir `getTrainingSession`).
 
 ### Historique de l'ancien mode d'enregistrement ECG (lecture seule)
 
@@ -498,7 +499,7 @@ On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` → pose `stopRequestedAt` (une seule fois). Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). `lastSignalAt` = quand le serveur a entendu la machine pour la dernière fois sur une séance **active** (`null` sinon) : la réception du point de plus grand `t` (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `serverNow` comme pour `getMachineLive`. La query se relance donc à chaque paquet de points. |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
 

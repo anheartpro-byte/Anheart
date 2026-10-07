@@ -7,7 +7,9 @@
  * The dashboard never reads the clock of the computer it runs on to tell an
  * age: every answer that carries a date to be aged carries the server's clock
  * too (`serverNow`), and the last sign of life of a session is dated by the
- * server when it receives it, never by the machine.
+ * server when it receives it. The date the machine wrote in that point
+ * (`lastMeasuredAt`) is served next to it: a point received this instant may
+ * have been measured long ago.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
@@ -156,6 +158,8 @@ describe("the last sign of life of a session, dated by the server", () => {
     ["10 min behind", -600_000],
   ] as const;
 
+  const HOUR = 3_600_000;
+
   const point = (t: number) => ({
     t,
     elapsedS: 15,
@@ -167,6 +171,10 @@ describe("the last sign of life of a session, dated by the server", () => {
     gLoad: 1.2,
     safetyAction: "none",
   });
+
+  /** One batch of the machine's queue: a point per second from `firstT`. */
+  const resent = (firstT: number, count = 300) =>
+    Array.from({ length: count }, (_, second) => point(firstT + second * 1000));
 
   /** A session of the fixture's machine, without any telemetry yet. */
   async function sessionOf(
@@ -218,10 +226,102 @@ describe("the last sign of life of a session, dated by the server", () => {
       vi.setSystemTime(now + 75_000);
       expect(await read(f, sessionId)).toMatchObject({
         lastSignalAt: now + 15_000,
+        // The machine's own date for that point, served as it wrote it.
+        lastMeasuredAt: now + 15_000 + machineClockMs,
         serverNow: now + 75_000,
       });
     },
   );
+
+  it("tells the reception of a point from its measurement: a batch resent after a link loss is received now, measured long ago", async () => {
+    // Every clock is right. The link was lost for an hour during the session:
+    // the machine resends what it queued, 300 points at a time, oldest first.
+    const f = await seedTraining(modules);
+    const sessionId = await sessionOf(f, {
+      status: "active",
+      origin: "remote",
+      startedAt: now - 2 * HOUR,
+    });
+    await f.t.mutation(internal.training.storeTelemetry, {
+      machineId: f.machineId,
+      sessionId,
+      points: resent(now - HOUR),
+    });
+    vi.setSystemTime(now + 2000);
+    expect(await read(f, sessionId)).toMatchObject({
+      // Received 2 s ago...
+      lastSignalAt: now,
+      // ...but its newest point was measured 55 minutes ago.
+      lastMeasuredAt: now - HOUR + 299_000,
+      serverNow: now + 2000,
+    });
+  });
+
+  it("follows the measurement date batch after batch while the machine's queue drains", async () => {
+    const f = await seedTraining(modules);
+    const sessionId = await sessionOf(f, {
+      status: "active",
+      origin: "remote",
+      startedAt: now - HOUR,
+    });
+    // A ten-minute loss: 600 points queued, then one more every second.
+    const lossStart = now - 600_000;
+    const told = [];
+    for (const [sentAfterMs, firstT, count] of [
+      [0, lossStart, 300],
+      [5000, lossStart + 300_000, 300],
+      [10_000, lossStart + 600_000, 10],
+    ] as const) {
+      vi.setSystemTime(now + sentAfterMs);
+      await f.t.mutation(internal.training.storeTelemetry, {
+        machineId: f.machineId,
+        sessionId,
+        points: resent(firstT, count),
+      });
+      const session = await read(f, sessionId);
+      told.push({
+        receivedAgoMs: Date.now() - (session?.lastSignalAt ?? 0),
+        measuredAgoMs: Date.now() - (session?.lastMeasuredAt ?? 0),
+      });
+    }
+    expect(told).toEqual([
+      { receivedAgoMs: 0, measuredAgoMs: 301_000 },
+      { receivedAgoMs: 0, measuredAgoMs: 6000 },
+      { receivedAgoMs: 0, measuredAgoMs: 1000 },
+    ]);
+  });
+
+  it("serves both dates for a session started at the machine and registered after the link returns", async () => {
+    // The session ran for an hour without a link: the machine registers it
+    // now, with the start it dated itself, then resends its queue.
+    const f = await seedTraining(modules);
+    const sessionId = await f.t.mutation(
+      internal.training.registerLocalSession,
+      {
+        machineId: f.machineId,
+        localRef: "local-late",
+        kind: "manual",
+        startedAt: now - HOUR,
+        operatorName: "Operator",
+      },
+    );
+    expect(await read(f, sessionId)).toMatchObject({
+      startedAt: now - HOUR,
+      lastSignalAt: now,
+      lastMeasuredAt: null,
+    });
+    vi.setSystemTime(now + 5000);
+    await f.t.mutation(internal.training.storeTelemetry, {
+      machineId: f.machineId,
+      sessionId,
+      points: resent(now - HOUR),
+    });
+    expect(await read(f, sessionId)).toMatchObject({
+      lastSignalAt: now + 5000,
+      lastMeasuredAt: now - HOUR + 299_000,
+      serverNow: now + 5000,
+    });
+  });
 
   it("is the reception of the batch for every point of one batch", async () => {
     const f = await seedTraining(modules);
@@ -236,7 +336,10 @@ describe("the last sign of life of a session, dated by the server", () => {
       sessionId,
       points: [1, 2, 3, 4, 5].map((s) => point(now + s * 1000)),
     });
-    expect((await read(f, sessionId))?.lastSignalAt).toBe(now + 5000);
+    expect(await read(f, sessionId)).toMatchObject({
+      lastSignalAt: now + 5000,
+      lastMeasuredAt: now + 5000,
+    });
   });
 
   it("is the start the server dated, while a session launched from the dashboard has sent no point", async () => {
@@ -255,6 +358,7 @@ describe("the last sign of life of a session, dated by the server", () => {
     expect(await read(f, sessionId)).toMatchObject({
       startedAt: now + 30_000,
       lastSignalAt: now + 30_000,
+      lastMeasuredAt: null,
       serverNow: now + 34_000,
     });
   });
@@ -278,6 +382,7 @@ describe("the last sign of life of a session, dated by the server", () => {
       expect(await read(f, sessionId)).toMatchObject({
         startedAt: now + machineClockMs,
         lastSignalAt: now + 2000,
+        lastMeasuredAt: null,
         serverNow: now + 9000,
       });
     },
@@ -299,6 +404,7 @@ describe("the last sign of life of a session, dated by the server", () => {
       });
       expect(await read(f, sessionId)).toMatchObject({
         lastSignalAt: null,
+        lastMeasuredAt: null,
         serverNow: now,
       });
     },
@@ -312,6 +418,7 @@ describe("the last sign of life of a session, dated by the server", () => {
         .query(api.training.getTrainingSession, { sessionId: f.sessionId });
     expect(await asked("rider")).toMatchObject({
       lastSignalAt: now,
+      lastMeasuredAt: now,
       serverNow: now,
     });
     expect(await asked("outsider")).toBeNull();
@@ -400,7 +507,7 @@ describe("the server's dates of a machine and of a session stay in their organis
     const { w, sessionId } = await centreBSends();
     expect(await toldTo(w, sessionId, "orgBManager")).toMatchObject({
       live: { serverNow: now, live: { updatedAt: now } },
-      session: { serverNow: now, lastSignalAt: now },
+      session: { serverNow: now, lastSignalAt: now, lastMeasuredAt: now },
       machine: { serverNow: now, lastHeartbeat: now },
       launchable: [{ serverNow: now, lastHeartbeat: now }],
       listed: [{ serverNow: now, lastHeartbeat: now }],
@@ -408,7 +515,13 @@ describe("the server's dates of a machine and of a session stay in their organis
     });
   });
 
-  it.each(["orgAdmin", "manager", "otherManager", "patient", "stranger"] as const)(
+  it.each([
+    "orgAdmin",
+    "manager",
+    "otherManager",
+    "patient",
+    "stranger",
+  ] as const)(
     "serves none of them to %s of another organisation",
     async (actor) => {
       const { w, sessionId } = await centreBSends();

@@ -102,6 +102,23 @@ export function isFresh(
 }
 
 /**
+ * Whether a telemetry point is dated after the server received it, beyond the
+ * tolerance. No point is measured after its own reception: such a date comes
+ * from a machine whose clock is ahead, and tells nothing of the point's age.
+ * Unlike an age, this never changes as time passes: a point dated so does not
+ * become believable a few seconds later.
+ */
+export function datedAfterReception(
+  measuredAt: number,
+  receivedAt: number | null | undefined,
+): boolean {
+  return (
+    typeof receivedAt === "number" &&
+    measuredAt - receivedAt > FUTURE_TOLERANCE_MS
+  );
+}
+
+/**
  * The status to show for a machine. Its record says "online" or "in_session"
  * until the server's job notices the silence, up to a minute after the signal
  * stopped being fresh: a machine whose last signal is not fresh is shown

@@ -497,6 +497,7 @@
       "fresh": "En direct",
       "stale": "Données périmées",
       "staleDesc": "Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées.",
+      "lateDesc": "La machine envoie, mais ses mesures ne sont pas datées de maintenant (rattrapage après une coupure de liaison, ou horloge de la machine déréglée) : les valeurs affichées peuvent être dépassées.",
       "noData": "La machine n'a encore rapporté aucun état.",
       "offlineNoData": "Aucun état en direct : la machine n'envoie plus de signal.",
       "runMode": "Mode",

@@ -668,26 +668,47 @@ export const getSessionTelemetry = query({
 });
 
 /**
- * When the server last heard of an active session from its machine: the
- * reception of its latest telemetry point (the date the server gave the row,
- * not the `t` the machine wrote in it), or its start while no point has
- * arrived. A session the machine registered itself carries the machine's own
- * start date: the server's date for it is the creation of its row.
+ * The last sign of life of an active session: two dates of one telemetry
+ * point, the one with the greatest `t`, which is the point the dashboard
+ * shows as the session's current values.
+ *
+ * - `lastSignalAt`: when the server received it (the date the server gave the
+ *   row, not the `t` the machine wrote in it). While no point has arrived, the
+ *   start of the session as the server dated it: a session the machine
+ *   registered itself carries the machine's own start date, so the server's
+ *   date for it is the creation of its row.
+ * - `lastMeasuredAt`: when the machine says it measured it (its `t`). A point
+ *   received this instant may have been measured long ago: the machine resends
+ *   what it queued during a link loss, oldest first. Null while no point has
+ *   arrived.
+ *
+ * Both are null for a session that is not active.
  */
-async function lastSignalAt(
+async function lastSignal(
   ctx: QueryCtx,
   session: Doc<"sessions">,
-): Promise<number | null> {
-  if (session.status !== "active") return null;
+): Promise<{ lastSignalAt: number | null; lastMeasuredAt: number | null }> {
+  if (session.status !== "active") {
+    return { lastSignalAt: null, lastMeasuredAt: null };
+  }
   const latest = await ctx.db
     .query("training_telemetry")
     .withIndex("by_session_and_t", (q) => q.eq("sessionId", session._id))
     .order("desc")
     .first();
-  if (latest) return Math.floor(latest._creationTime);
-  return session.origin === "local"
-    ? Math.floor(session._creationTime)
-    : session.startedAt;
+  if (latest) {
+    return {
+      lastSignalAt: Math.floor(latest._creationTime),
+      lastMeasuredAt: latest.t,
+    };
+  }
+  return {
+    lastSignalAt:
+      session.origin === "local"
+        ? Math.floor(session._creationTime)
+        : session.startedAt,
+    lastMeasuredAt: null,
+  };
 }
 
 /** The training fields of one session, for the live and detail pages. */
@@ -710,10 +731,12 @@ export const getTrainingSession = query({
       subjectLabel: v.optional(v.string()),
       operatorName: v.optional(v.string()),
       startedAt: v.number(),
-      // When the server last heard of an active session from its machine, on
-      // the server's clock (null for a session that is not active), and that
-      // clock in this answer. The machine's own clock dates neither.
+      // The last sign of life of an active session (see `lastSignal`): when
+      // the server received its latest point, when the machine says it
+      // measured it, and the server's clock in this answer. The dashboard
+      // shows a value as current only if both dates are recent on that clock.
       lastSignalAt: v.union(v.number(), v.null()),
+      lastMeasuredAt: v.union(v.number(), v.null()),
       serverNow: v.number(),
       endedAt: v.optional(v.number()),
       stopRequestedAt: v.optional(v.number()),
@@ -746,7 +769,7 @@ export const getTrainingSession = query({
       subjectLabel: s.subjectLabel,
       operatorName: s.operatorName,
       startedAt: s.startedAt,
-      lastSignalAt: await lastSignalAt(ctx, s),
+      ...(await lastSignal(ctx, s)),
       serverNow: Date.now(),
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,

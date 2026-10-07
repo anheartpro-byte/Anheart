@@ -50,13 +50,6 @@ const VIEWER_CLOCKS = [
   ["10 min behind", -600_000],
 ] as const;
 
-/** How far the machine's clock is from the server's. */
-const MACHINE_CLOCKS = [
-  ["on time", 0],
-  ["10 min ahead", 600_000],
-  ["10 min behind", -600_000],
-] as const;
-
 /** The texts these tests rely on, as the French site shows them. */
 const LIVE = "En direct";
 const STALE = "Données périmées";
@@ -64,6 +57,8 @@ const ONLINE = "En ligne";
 const OFFLINE = "Hors ligne";
 const NO_SIGNAL =
   "Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées.";
+const NOT_OF_NOW =
+  "La machine envoie, mais ses mesures ne sont pas datées de maintenant (rattrapage après une coupure de liaison, ou horloge de la machine déréglée) : les valeurs affichées peuvent être dépassées.";
 const NEVER_REPORTED = "La machine n&#x27;a encore rapporté aucun état.";
 const STOPPED_SENDING =
   "Aucun état en direct : la machine n&#x27;envoie plus de signal.";
@@ -388,33 +383,43 @@ describe("my machines: one card per machine", () => {
 });
 
 describe("live view: training panel", () => {
-  type Telemetry = "none" | "loading" | { receivedAgoMs: number };
+  /**
+   * The latest point of the session: when the server received it, and when
+   * the machine measured it (a moment before, unless it resends an old one).
+   */
+  type Point = { receivedAgoMs: number; measuredAgoMs?: number };
+  type Telemetry = "none" | "loading" | Point;
 
   /**
    * getTrainingSession and getSessionTelemetry as they last ran. The server
-   * dates the reception of the last point (`lastSignalAt`); the point's own
-   * `t` is the machine's clock, `machineClockMs` away from the server's.
+   * dates the reception of the last point (`lastSignalAt`) and serves the date
+   * the machine wrote in it (`lastMeasuredAt`, the point's `t`): the machine's
+   * clock, `machineClockMs` away from the server's.
    */
   function session(
     status: string,
     telemetry: Telemetry,
-    { machineClockMs = 0, startedAgoMs = 600_000 } = {},
+    { machineClockMs = 0, startedAgoMs = 600_000, origin = "remote" } = {},
   ) {
     const startedAt = server - startedAgoMs;
-    const received =
-      typeof telemetry === "object" ? server - telemetry.receivedAgoMs : null;
+    const point = typeof telemetry === "object" ? telemetry : null;
+    const received = point ? server - point.receivedAgoMs : null;
+    const t = point
+      ? server - (point.measuredAgoMs ?? point.receivedAgoMs) + machineClockMs
+      : null;
     answers.set("training:getTrainingSession", {
       _id: sessionId,
       machineId,
       machineName: "Centri Paris",
       status,
       kind: "auto",
-      origin: "remote",
+      origin,
       zoneLowBpm: 145,
       zoneHighBpm: 155,
       totalDurationS: 1800,
       startedAt,
       lastSignalAt: status === "active" ? (received ?? startedAt) : null,
+      lastMeasuredAt: status === "active" ? t : null,
       serverNow: server,
       endedAt: status === "active" ? undefined : server - 300_000,
       canStop: status === "active",
@@ -423,11 +428,11 @@ describe("live view: training panel", () => {
       "training:getSessionTelemetry",
       telemetry === "loading"
         ? undefined
-        : received === null
+        : t === null
           ? []
           : [
               {
-                t: received + machineClockMs,
+                t,
                 elapsedS: 600,
                 phase: "hold",
                 bpm: 148,
@@ -446,17 +451,31 @@ describe("live view: training panel", () => {
     expect(text).toContain("148");
     expect(text).toContain("24.1");
     expect(text).not.toContain(NO_SIGNAL);
+    expect(text).not.toContain(NOT_OF_NOW);
     expect(html).not.toContain(GREYED);
     expect(html).toContain("animate-spin");
   }
 
-  function expectSilent({ html, text }: ReturnType<typeof paint>) {
-    expect(text).toContain(NO_SIGNAL);
+  /** Nothing stands for "now": no number, greyed readouts, the arm not drawn as turning. */
+  function expectNothingCurrent({ html, text }: ReturnType<typeof paint>) {
     expect(html).toContain(GREYED);
-    // No number stands for "now", and the arm is no longer drawn as turning.
     expect(text).not.toContain("148");
     expect(text).not.toContain("24.1");
     expect(html).not.toContain("animate-spin");
+  }
+
+  /** The machine has gone quiet. */
+  function expectSilent(view: ReturnType<typeof paint>) {
+    expectNothingCurrent(view);
+    expect(view.text).toContain(NO_SIGNAL);
+    expect(view.text).not.toContain(NOT_OF_NOW);
+  }
+
+  /** The machine sends, but measurements that are not of now. */
+  function expectNotOfNow(view: ReturnType<typeof paint>) {
+    expectNothingCurrent(view);
+    expect(view.text).toContain(NOT_OF_NOW);
+    expect(view.text).not.toContain(NO_SIGNAL);
   }
 
   it("shows the values of a point received 5 s ago, without notice", () => {
@@ -495,13 +514,11 @@ describe("live view: training panel", () => {
   it("shows no notice while the telemetry of a session that sends is still loading", () => {
     // The page has just opened on a session started ten minutes ago: the
     // session is known, its points are not there yet.
-    session("active", "loading");
-    answers.set("training:getTrainingSession", {
-      ...(answers.get("training:getTrainingSession") as object),
-      lastSignalAt: server - 3000,
-    });
+    session("active", { receivedAgoMs: 3000 });
+    answers.set("training:getSessionTelemetry", undefined);
     const { html, text } = paint(panel);
     expect(text).not.toContain(NO_SIGNAL);
+    expect(text).not.toContain(NOT_OF_NOW);
     expect(html).not.toContain(GREYED);
     // No value is invented meanwhile.
     expect(text).not.toContain("148");
@@ -512,32 +529,172 @@ describe("live view: training panel", () => {
     const { html, text } = paintAfter(600_000, panel);
     expect(text).toContain("148");
     expect(text).not.toContain(NO_SIGNAL);
+    expect(text).not.toContain(NOT_OF_NOW);
     expect(html).not.toContain(GREYED);
   });
 
-  describe.each(MACHINE_CLOCKS)(
-    "when the machine's clock is %s",
-    (_name, machineClockMs) => {
-      it("shows the values of a session that sends", () => {
-        session("active", { receivedAgoMs: 4000 }, { machineClockMs });
-        expectCurrent(paint(panel));
-      });
+  describe("points received late (every clock right)", () => {
+    it("does not show as current a batch received now whose newest point was measured more than 20 s ago", () => {
+      // The link was lost for an hour: the machine resends its queue, oldest
+      // first. The first batch arrives now; its newest point is 55 min old.
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 55 * 60_000 });
+      expectNotOfNow(paint(panel));
+      // Just past the threshold is enough.
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 20_000 });
+      expectNotOfNow(paint(panel));
+    });
 
-      it("stops showing the last values as current 20 s after the last point received, not later", () => {
-        session("active", { receivedAgoMs: 0 }, { machineClockMs });
-        expectCurrent(paintAfter(TELEMETRY_FRESH_MS - 1000, panel));
+    it("keeps the notice while the machine's queue drains, and lifts it only at a point measured less than 20 s ago", () => {
+      // A batch every 5 s, each one fresh as a reception, each one older than
+      // 20 s as a measurement, until the queue is empty.
+      for (const measuredAgoMs of [55, 50, 45, 5, 1].map((m) => m * 60_000)) {
+        session("active", { receivedAgoMs: 0, measuredAgoMs });
+        expectNotOfNow(paint(panel));
+        elapse(4000);
+        // Between two batches the point only gets older.
+        expectNotOfNow(paint(panel));
         elapse(1000);
-        expectSilent(paint(panel));
-        elapse(600_000);
-        expectSilent(paint(panel));
+      }
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 21_000 });
+      expectNotOfNow(paint(panel));
+      elapse(5000);
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 1000 });
+      expectCurrent(paint(panel));
+    });
+
+    it("says the machine is silent, not late, once the catch-up itself stops", () => {
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 55 * 60_000 });
+      expectNotOfNow(paintAfter(TELEMETRY_FRESH_MS - 1000, panel));
+      elapse(1000);
+      expectSilent(paint(panel));
+    });
+
+    it("never shows as current the points of a session started at the machine and registered after the link returns", () => {
+      // The session ran an hour without a link. The machine registers it now
+      // (the server dates that), with the start it dated itself an hour ago.
+      const offline = { origin: "local", startedAgoMs: 3_600_000 };
+      session("active", "none", offline);
+      answers.set("training:getTrainingSession", {
+        ...(answers.get("training:getTrainingSession") as object),
+        lastSignalAt: server,
       });
-    },
-  );
+      const registered = paint(panel);
+      // Nothing received yet: no number, and no notice during the 20 s the
+      // first batch is given.
+      expect(registered.text).not.toContain("148");
+      expect(registered.text).not.toContain(NO_SIGNAL);
+      expect(registered.text).not.toContain(NOT_OF_NOW);
+
+      elapse(5000);
+      for (const measuredAgoMs of [55, 30, 5].map((m) => m * 60_000)) {
+        session("active", { receivedAgoMs: 0, measuredAgoMs }, offline);
+        expectNotOfNow(paint(panel));
+        elapse(5000);
+      }
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 1000 }, offline);
+      expectCurrent(paint(panel));
+    });
+
+    it("stops showing a value 20 s after it was measured, even received more recently", () => {
+      // Measured 15 s before the server received it: 5 s of grace are left.
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 15_000 });
+      expectCurrent(paintAfter(4000, panel));
+      elapse(1000);
+      expectNotOfNow(paint(panel));
+    });
+
+    it("prints no number of a point whose own date is old, whatever the session's answer says of it", () => {
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 1000 });
+      const telemetry = answers.get("training:getSessionTelemetry") as {
+        t: number;
+      }[];
+      answers.set("training:getSessionTelemetry", [
+        { ...telemetry[0], t: server - 55 * 60_000 },
+      ]);
+      const { text } = paint(panel);
+      expect(text).not.toContain("148");
+      expect(text).not.toContain("24.1");
+    });
+  });
+
+  describe("when the machine's clock is right", () => {
+    it("shows the values of a session that sends, measured a second before they arrive", () => {
+      session("active", { receivedAgoMs: 4000, measuredAgoMs: 5000 });
+      expectCurrent(paint(panel));
+    });
+  });
+
+  describe.each([
+    ["10 min behind", -600_000],
+    ["10 min ahead", 600_000],
+    ["25 s behind", -25_000],
+    ["12 s ahead", 12_000],
+  ])("when the machine's clock is %s", (_name, machineClockMs) => {
+    it("shows the notice of measurements not dated now, and no value, although the machine sends", () => {
+      // The safe side: the date the machine writes cannot be told from an old
+      // measurement, or is in the future. The notice names the clock.
+      session(
+        "active",
+        { receivedAgoMs: 0, measuredAgoMs: 1000 },
+        {
+          machineClockMs,
+        },
+      );
+      expectNotOfNow(paint(panel));
+      for (let batch = 0; batch < 6; batch++) {
+        elapse(5000);
+        session(
+          "active",
+          { receivedAgoMs: 0, measuredAgoMs: 1000 },
+          {
+            machineClockMs,
+          },
+        );
+        expectNotOfNow(paint(panel));
+      }
+    });
+
+    it("never shows the last values as current after the machine stops sending", () => {
+      session(
+        "active",
+        { receivedAgoMs: 0, measuredAgoMs: 1000 },
+        {
+          machineClockMs,
+        },
+      );
+      for (let second = 0; second < 700; second += 1) {
+        expectNothingCurrent(paint(panel));
+        elapse(1000);
+      }
+      expectSilent(paint(panel));
+    });
+  });
+
+  describe.each([
+    ["4 s behind", -4000],
+    ["4 s ahead", 4000],
+  ])("when the machine's clock is only %s", (_name, machineClockMs) => {
+    it("shows the values of a session that sends, from one batch to the next", () => {
+      for (let batch = 0; batch < 6; batch++) {
+        session(
+          "active",
+          { receivedAgoMs: 0, measuredAgoMs: 1000 },
+          {
+            machineClockMs,
+          },
+        );
+        expectCurrent(paint(panel));
+        elapse(4000);
+        expectCurrent(paint(panel));
+        elapse(1000);
+      }
+    });
+  });
 
   describe.each(VIEWER_CLOCKS)("on a computer whose clock is %s", (_n, off) => {
     it("shows the values of a session that sends, and its time on the server's clock", () => {
       viewerClock(off);
-      session("active", { receivedAgoMs: 4000 });
+      session("active", { receivedAgoMs: 4000, measuredAgoMs: 5000 });
       const view = paint(panel);
       expectCurrent(view);
       // Started 10 min ago on the server's clock, 30 min planned.
@@ -553,12 +710,30 @@ describe("live view: training panel", () => {
       expectSilent(paint(panel));
     });
 
-    it("stops showing the last values as current when the machine's clock is 10 min ahead too", () => {
+    it("does not show as current a batch received now and measured 55 min ago", () => {
       viewerClock(off);
-      session("active", { receivedAgoMs: 0 }, { machineClockMs: 600_000 });
-      expectCurrent(paintAfter(TELEMETRY_FRESH_MS - 1000, panel));
+      session("active", { receivedAgoMs: 0, measuredAgoMs: 55 * 60_000 });
+      expectNotOfNow(paint(panel));
+    });
+
+    it("never shows the last values as current when the machine's clock is 10 min ahead", () => {
+      viewerClock(off);
+      session(
+        "active",
+        { receivedAgoMs: 0, measuredAgoMs: 1000 },
+        {
+          machineClockMs: 600_000,
+        },
+      );
+      expectNotOfNow(paintAfter(TELEMETRY_FRESH_MS - 1000, panel));
       elapse(1000);
       expectSilent(paint(panel));
+      // Not even when the server's clock reaches the date the machine wrote.
+      elapse(600_000 - TELEMETRY_FRESH_MS - 2000);
+      for (let second = 0; second < 30; second++) {
+        expectSilent(paint(panel));
+        elapse(1000);
+      }
     });
   });
 });
