@@ -748,6 +748,24 @@ function loadPanel() {
 /* ------------------------------------------------------------ manual mode */
 
 /*
+  The "rampe" line of the manual card. While a `freeze` holds the setpoint
+  away from a target that is not zero, the machine announces no ramp and no
+  arrival time (`ramping` false, `ramp_eta_s` null): nothing is on its way.
+  That is a setpoint HELD, not a target reached, so "cible atteinte" is said
+  only when the setpoint of this same snapshot is the target.
+*/
+function rampLine(snapshot, manual) {
+  if (manual.ramping) {
+    return "en cours, arrivee ~" + secs(manual.ramp_eta_s);
+  }
+  var setpoint = snapshot.setpoint;
+  if (setpoint && setpoint.motor_rpm !== manual.target.motor_rpm) {
+    return "consigne maintenue, cible non atteinte";
+  }
+  return "cible atteinte";
+}
+
+/*
   The manual card. The draft is only ever a number on this screen until
   "Appliquer": nothing is sent on a +/- click. The target is what the machine
   holds, the draft is what the operator is composing, and the draft is shown
@@ -774,7 +792,7 @@ function renderManual(snapshot) {
     ["cible appliquee", speedLine(manual.target)],
     ["plafond", speedLine(manual.ceiling)],
     ["minimum de rotation", speedLine(manual.min_run)],
-    ["rampe", manual.ramping ? "en cours, arrivee ~" + secs(manual.ramp_eta_s) : "cible atteinte"],
+    ["rampe", rampLine(snapshot, manual)],
   ]);
   show(el("ramp-banner"), manual.ramping);
   if (manual.ramping) {
