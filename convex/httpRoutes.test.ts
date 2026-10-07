@@ -191,15 +191,19 @@ async function written(w: MachineWorld) {
 }
 
 describe("ANH-195 EX-3 a JSON body that is not an object is refused with 400", () => {
-  it("covers the six routes that take a body", () => {
-    expect(bodyRoutes).toEqual([
-      "/api/machine/heartbeat",
-      "/api/machine/profiles",
-      "/api/machine/training/end",
-      "/api/machine/training/local",
-      "/api/machine/training/start",
-      "/api/machine/training/telemetry",
-    ]);
+  // Not an exact list: a route added to the router joins the table below by
+  // itself. This only holds that the table was read, and is not empty.
+  it("covers at least the six routes that took a body when this was written", () => {
+    expect(bodyRoutes).toEqual(
+      expect.arrayContaining([
+        "/api/machine/heartbeat",
+        "/api/machine/profiles",
+        "/api/machine/training/end",
+        "/api/machine/training/local",
+        "/api/machine/training/start",
+        "/api/machine/training/telemetry",
+      ]),
+    );
   });
 
   const cases = bodyRoutes.flatMap((path) =>
