@@ -602,9 +602,19 @@ gh api repos/anheartpro-byte/Anheart/branches/main/protection/required_status_ch
 voies.
 
 *Voie A, la plus simple : la première release* (`develop` vers `main`,
-[release.md](release.md#3-le-déroulé)). Elle apporte tout, et ne demande aucun
-autre réglage que l'étape 4. Les boutons n'existent qu'après elle. Une
-précaution pour cette première fusion : qu'un push sur `main` ne déploie plus
+[release.md](release.md#3-le-déroulé)). Elle apporte tout, et les boutons
+n'existent qu'après elle. Pour les boutons, elle ne demande aucun autre réglage
+que l'étape 4.
+
+**Une réserve, à trancher par le chef de projet avant la première release.**
+[release.md, étape 6](release.md#3-le-déroulé) demande de fusionner la PR de
+release par un commit de fusion. Or `main` exige un historique linéaire (relevé
+le 7 octobre 2026), ce qui interdit un commit de fusion : en l'état, la PR de
+release ne peut pas être fusionnée comme le processus le demande. ANH-198 ne
+règle pas ce point ; il est consigné dans le ticket de suite du processus de
+release. La même réserve vaut pour la release qui suit la voie B.
+
+Une précaution pour cette première fusion : qu'un push sur `main` ne déploie plus
 n'a été constaté que sur des branches de travail. La release apporte le nouveau
 site ; s'il partait quand même en production à la fusion, il tournerait contre
 l'ancien Convex ([§3.3](#33-vers-la-production)). Fusionner donc cette première
@@ -614,11 +624,14 @@ commandes du point 4 de la voie B).
 
 *Voie B : une PR dédiée vers `main`, pour avoir les boutons avant la première
 release.* Elle fait aussi constater sur `main`, avec un commit qui ne change
-pas le site, qu'un push n'y déploie plus. Elle coûte trois changements
-temporaires de protection. Relevé le 7 octobre 2026 : `main` et `develop`
-exigent toutes deux un historique linéaire et une branche à jour ; `main` exige
-les six gates, qu'aucune branche partie de `main` ne peut faire tourner,
-puisque `main` ne contient pas encore la CI.
+pas le site, qu'un push n'y déploie plus. Elle coûte deux changements
+temporaires de protection, chacun fait puis défait : sur `main`, les six gates
+retirées des vérifications obligatoires le temps de fusionner la PR dédiée
+(points 2 et 3) ; sur `develop`, « Require linear history » décoché le temps de
+la fusion qui reprend `main` (point 5). Relevé le 7 octobre 2026 : `main` et
+`develop` exigent toutes deux un historique linéaire et une branche à jour ;
+`main` exige les six gates, qu'aucune branche partie de `main` ne peut faire
+tourner, puisque `main` ne contient pas encore la CI.
 
 1. Créer la branche à partir de `main`, avec les trois fichiers tels qu'ils
    sont sur `develop`, et ouvrir la PR :
@@ -685,7 +698,9 @@ puisque `main` ne contient pas encore la CI.
 
 Avec la voie B, `main` ne contient pas encore la simulation hébergée : le
 bouton de production refuse de la déployer (« Simulation absente ») et ne peut
-déployer que le site, tel qu'il est sur `main`.
+déployer que le site, tel qu'il est sur `main`. La release qui suit la voie B
+reste soumise à la réserve de la voie A : commit de fusion demandé, historique
+linéaire exigé par `main`.
 
 **6. Séparer les variables de l'environnement « Preview » de Vercel**, pour
 qu'une préversion du site ne lise plus les données de production
