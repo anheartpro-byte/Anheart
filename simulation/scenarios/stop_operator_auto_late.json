@@ -1,0 +1,32 @@
+{
+  "name": "stop_operator_auto_late",
+  "description": "ANH-185, an ending opened late. The shipped 30-min programme, operator STOP at 1600 s: the programme is in its own recovery, the arm at rest. The STOP re-opens a whole 300 s recovery, which ends at 1900 s, past the 1830 s (duration plus 30 s of grace) at which session_overrun used to latch over an ending that was going exactly as it should. The rule must stay silent, the console must be back at rest with nothing to acknowledge, and a START at 1930 s must be accepted.",
+  "tags": [
+    "auto",
+    "stop",
+    "rest"
+  ],
+  "kind": "auto",
+  "duration_s": 1960,
+  "profile": "standard_30_min",
+  "actions": [
+    {
+      "at_s": 1600,
+      "do": "operator_stop"
+    },
+    {
+      "at_s": 1930,
+      "do": "start_again",
+      "expect": "accepted"
+    }
+  ],
+  "expect": {
+    "end_reason": "shutdown",
+    "max_output_rpm": 5.55,
+    "forbid_rules": [
+      "session_overrun",
+      "hr_critical",
+      "hr_hard_max"
+    ]
+  }
+}

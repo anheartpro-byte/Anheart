@@ -248,6 +248,12 @@ nothing reached from :meth:`SafetySupervisor.evaluate` may raise, and a phase
 this set does not know merely leaves a sentence off.
 """
 
+ENDING_TO_ZERO: Final[str] = "bring the setpoint back to zero"
+"""What an ending in progress is given its descent for, in ``session_overrun``'s sentence."""
+
+ENDING_TO_DONE: Final[str] = "finish its descent and its monitored recovery"
+"""What it is given its descent and its recovery for, once its setpoint is at zero."""
+
 ESTOP_ATTESTATION: Final[str] = (
     "a latching mushroom emergency stop is wired normally-closed into P24 -> STO "
     "and the STO jumper has been removed"
@@ -731,6 +737,41 @@ class SafetyLimits:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class EndingInProgress:
+    """An ending the session has opened: when, and how long it is allowed to take.
+
+    The runtime's statement, in :attr:`SafetyObservation.ending`, of three
+    facts that are fixed on the tick the ending opens and do not move after
+    it: the ending is recorded once and a second cause never replaces it, and
+    the two durations belong to the session (its profile, or its manual
+    ceiling). So an ending cannot push its own deadline back.
+
+    ``session_overrun`` is the only rule that reads it. See
+    :meth:`SafetySupervisor._rule_session_overrun` for what it does with it,
+    and for the numbers on the shipped settings.
+    """
+
+    opened: Seconds
+    """Time since the session started at which the ending opened."""
+
+    descent: Seconds
+    """How long the setpoint may take, from there, to be back at zero.
+
+    The budget the phase machine itself gives an ending's ``COOLDOWN``: the
+    profile's cooldown for a programme, and for a manual session the
+    motion-limited walk from its ceiling plus the drive's commissioned ramp.
+    """
+
+    recovery: Seconds
+    """How long the monitored recovery lasts once the setpoint is at zero.
+
+    The profile's recovery for a programme, the shortest recovery a profile
+    may declare after a manual session with a person on board, none after a
+    bench session.
+    """
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SafetyObservation:
     """Everything the rules are allowed to judge, for one instant.
 
@@ -907,10 +948,12 @@ class SafetyObservation:
     a statement about what is commanded, not about the measured speed:
     ``session_overrun`` can only bring a setpoint down, and there is none left.
 
-    ``phase`` alone cannot say it. A verdict that arrives at rest after a
-    programme completed by itself (an e-stop pressed while the rider gets out,
-    a drive switched off) opens an ending of its own, and the phase reads
-    ``RECOVERY`` again over a machine whose session finished minutes ago.
+    ``phase`` alone cannot say it. A runtime that has gone silent reaches
+    ``DONE`` over a setpoint it can no longer take back, and that session is
+    not over. (A verdict arriving at rest after a programme completed by
+    itself used to be a second such case: it opened an ending of its own and
+    the phase read ``RECOVERY`` again over a session finished minutes ago.
+    The runtime no longer opens one there, ANH-185.)
 
     ``session_overrun`` is the only rule that reads it, and what it does there
     is make that rule QUIETER: once said, the rule stops judging. So it is two
@@ -918,6 +961,24 @@ class SafetyObservation:
     commanded, whatever the phase machine believes - and it defaults to
     ``False``, the fail-safe direction: an observation that does not say its
     session is over is judged as a session in progress, exactly as before this
+    field existed.
+    """
+
+    ending: EndingInProgress | None = None
+    """The ending this session has opened, or ``None`` while it has opened none.
+
+    The runtime's statement of something that HAPPENED, like
+    :attr:`stopped_by`: an operator's stop, an emergency stop, a verdict that
+    stops or a manual session's own limit opened an ending at that instant,
+    and the session is on its way out from there (its descent, then its
+    monitored recovery).
+
+    ``session_overrun`` is the only rule that reads it, and it can only make
+    that rule LATER, never earlier and never silent: the deadline of a session
+    that has opened an ending is the later of the programme's own and the
+    ending's (:meth:`SafetySupervisor._rule_session_overrun`). Defaults to
+    ``None``, the fail-safe direction: an observation that states no ending is
+    judged against the programme's deadline alone, exactly as before this
     field existed.
     """
 
@@ -1178,6 +1239,24 @@ def _least_squares_slope(times: tuple[float, ...], values: tuple[float, ...]) ->
         # finite ZERO - "not changing" - from nonsense timestamps.
         return None
     return covariance / variance
+
+
+@dataclass(frozen=True, slots=True)
+class _EndingDue:
+    """The ending ``session_overrun`` is measuring a session against, for its sentence.
+
+    Built only while an ending's own due time is the later one (see
+    :meth:`SafetySupervisor._overrun_due`), and read only when the rule fires.
+    """
+
+    opened: Seconds
+    """Time since the session started at which the ending opened."""
+
+    budget: Seconds
+    """What it was given from there: its descent, plus its recovery once at zero."""
+
+    goal: str
+    """What that budget was for: :data:`ENDING_TO_ZERO` or :data:`ENDING_TO_DONE`."""
 
 
 def _severity(verdict: SafetyVerdict) -> SafetyAction:
@@ -2588,18 +2667,28 @@ class SafetySupervisor:
 
         "In progress" means: until the session's phase machine has reached
         ``DONE`` with a setpoint of zero in force. So everything this rule
-        caught while a session ran, it still catches, at the same instant: a
-        phase that never advanced, a descent that never finished (a runtime
-        gone silent keeps a setpoint it can no longer take back; a latched
-        ``FREEZE`` is no longer such a case, the runtime follows a programme's
-        planned descent under it, ANH-189), a recovery pushed past the
-        deadline by an ending opened late (a STOP, an e-stop, a verdict that
-        stops). A verdict raised then is acknowledged once that session is
-        over, and the acknowledgement holds, because the condition is no
-        longer true.
+        caught while a session ran with no ending opened, it still catches, at
+        the same instant: a phase that never advanced, a descent that never
+        finished (a runtime gone silent keeps a setpoint it can no longer take
+        back; a latched ``FREEZE`` is no longer such a case, the runtime
+        follows a programme's planned descent under it, ANH-189). A verdict
+        raised then is acknowledged once that session is over, and the
+        acknowledgement holds, because the condition is no longer true.
+
+        A session that has OPENED AN ENDING is judged against that ending
+        (:attr:`SafetyObservation.ending`, ANH-185). An ending opened late
+        cannot be over by the programme's deadline: a stop, an emergency stop
+        or a verdict in the last 270 s of the shipped 1800 s programme opens a
+        300 s recovery that ends after 1830 s, and a manual session that
+        reaches its 3600 s limit at 1344 motor rpm needs 104 s to come down.
+        The rule then latched over an ending that was going exactly as it
+        should, and the operator acknowledged a sentence that said nothing
+        true. See :meth:`_overrun_due` for the deadline that applies instead,
+        and why it leaves the rule armed.
         """
-        limits = self._limits
-        deadline = Seconds(observation.total_duration + limits.overrun_grace)
+        grace = self._limits.overrun_grace
+        due, ending = self._overrun_due(observation, grace)
+        deadline = Seconds(due + grace)
         firing = self._trackers[RULE_SESSION_OVERRUN].update(
             condition=not observation.session_over and observation.elapsed > deadline,
             now=observation.now,
@@ -2607,17 +2696,106 @@ class SafetySupervisor:
         )
         if firing is None:
             return None
+        against = f"a programme of {observation.total_duration:.0f} s"
+        if ending is not None:
+            against = (
+                f"an ending opened at {ending.opened:.0f} s with {ending.budget:.0f} s to "
+                f"{ending.goal}"
+            )
         return SafetyVerdict(
             action=SafetyAction.RAMP_DOWN,
             rule=RULE_SESSION_OVERRUN,
             detail=(
-                f"the session has run {observation.elapsed:.0f} s against a programme of "
-                f"{observation.total_duration:.0f} s plus {limits.overrun_grace:.0f} s of "
-                "grace: the phase machine has lost track"
+                f"the session has run {observation.elapsed:.0f} s against {against} plus "
+                f"{grace:.0f} s of grace: the phase machine has lost track"
             ),
             latched=True,
             since=firing.since,
         )
+
+    @staticmethod
+    def _overrun_due(
+        observation: SafetyObservation, grace: Seconds
+    ) -> tuple[Seconds, _EndingDue | None]:
+        """When this session is due to be over, in time since its start, and against what.
+
+        The second value is the ending whose own due time is the one returned,
+        for the verdict's sentence, or ``None`` when it is the programme's.
+
+        With no ending opened: the programme's total duration, as always.
+
+        With an ending opened in time, the LATER of that and the ending's own
+        due time, which is built from the three facts the runtime fixed when
+        the ending opened (:class:`EndingInProgress`):
+
+        * while the setpoint in force is not zero, ``opened + descent``: the
+          ending has its descent budget to bring the setpoint back to zero,
+          and not one second of its recovery;
+        * once the setpoint in force is zero, ``opened + descent + recovery``.
+
+        ``grace`` (:attr:`SafetyLimits.overrun_grace`, 30 s) is added by the
+        caller in every case.
+
+        On the shipped settings. A programme's descent budget is its
+        profile's cooldown, 240 s, and its recovery 300 s. The motion-limited
+        walk from the profile's ceiling (276 motor rpm) takes 18.0 s and the
+        longest descent measured from there on the software rig 26 s, so
+        240 s is nine times what a descent needs. A manual session's budget
+        is the motion-limited walk from its own ceiling plus the drive's 4 s
+        ramp: 107.8 s from 1344 motor rpm, 110.8 s from the 1380 rpm
+        nameplate; its recovery is 60 s with a person on board and none on
+        the bench. An ending that goes as it should is over at most two ticks
+        after ``opened + descent + recovery``, because that is how the
+        runtime's phase machine counts it, so 30 s of grace never fires on
+        one.
+
+        What stays armed, and when.
+
+        * The later of the two, never the ending's alone: an ending never
+          brings the deadline FORWARD. No session is judged earlier than
+          before this existed, so nothing new can latch, and every verdict
+          this rule gave with no late ending is given at the same instant.
+        * "In time" means opened before the session had overrun, that is no
+          later than the programme's duration plus the grace. An ending
+          opened after that excuses nothing: it is the ending this rule's own
+          verdict opens, and the rule goes on firing through it until the
+          session is over, as it always has, so an acknowledgement given
+          before then is still taken back.
+        * An arm still turning is judged at ``opened + descent`` plus the
+          grace. For a programme that is the unchanged 1830 s unless the
+          ending opened after 1560 s, which is 60 s after the arm should have
+          been at rest; at the very latest 2100 s, for an ending opened at
+          1830 s. For a manual session's own limit it is 3600 s plus its
+          descent budget plus the grace: 3737.8 s from 1344 motor rpm, where
+          the walk itself ends at about 3704 s.
+        * A session parked in its recovery is judged at
+          ``opened + descent + recovery`` plus the grace: 570 s after its
+          ending opened on the shipped programme.
+
+        The rule's ``RAMP_DOWN`` outranks a ``FREEZE``, so a descent that a
+        ``FREEZE`` held, or that anything else left unfinished, is walked to
+        zero from that instant. The setpoint decides which of the two budgets
+        applies, and it is a measurement (what was last written to the
+        drive): a setpoint that left zero again inside an ending would be
+        judged on the shorter one at once.
+
+        A due time that is not later than the programme's own, or that is
+        not a finite number at all, leaves the programme's: the statement can
+        delay this rule by a finite time and can do nothing else to it.
+        """
+        planned = observation.total_duration
+        ending = observation.ending
+        if ending is None or ending.opened > planned + grace:
+            return planned, None
+        budget = ending.descent
+        goal = ENDING_TO_ZERO
+        if observation.commanded_rpm == 0:
+            budget = Seconds(ending.descent + ending.recovery)
+            goal = ENDING_TO_DONE
+        due = Seconds(ending.opened + budget)
+        if planned < due < math.inf:
+            return due, _EndingDue(opened=ending.opened, budget=budget, goal=goal)
+        return planned, None
 
     def _rule_loop_stall(self, observation: SafetyObservation) -> SafetyVerdict | None:
         """The control loop missed its period: FREEZE, then GO_SILENT.

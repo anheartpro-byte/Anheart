@@ -47,6 +47,7 @@ not counted as passing tests.
 | A21 | Anti-nausea limits in a programme and at the leg tip | motion limits hold on the measured arm, with the checker's register-quantization slack | sim test_programmed_sessions_hold_the_anti_nausea_limits and test_the_g_rate_limit_holds_at_the_leg_tip_too PASS |
 | A22 | Occupied programme through the panel with `max_rpm` above the 1.2 g occupied ceiling | refused before anything turns | panel `test_cloud_sync.py` |
 | A23 | The programme's own cooldown under a latched FREEZE: shipped 30-min programme, loop stall 1.4 s in HOLD (`loop_stall`), no stop asked for | the setpoint is held to the end of HOLD, walks down from the entry into COOLDOWN with the setpoints of the nominal run, and the session ends at its planned duration as `programme_complete`; no `session_overrun`, no standstill latched (ANH-189) | sim `auto_cooldown_under_latched_freeze`; `tests/test_cooldown_under_freeze.py`; panel `test_cooldown_freeze_console.py` |
+| A24 | An ending opened late: shipped 30-min programme, operator STOP at 1600 s, in the programme's own recovery with the arm at rest | the STOP re-opens a whole 300 s recovery, which ends at 1900 s; `session_overrun` stays silent past the programme's 1830 s, the console is back at rest with nothing to acknowledge, and a START at 1930 s is accepted (ANH-185) | sim `stop_operator_auto_late`; runtime `tests/test_runtime_ending_alerts.py` (STOP, e-stop and electrodes off, late); panel `test_session_overrun_console.py` |
 
 ## 2. MANUAL (operator target, at the machine only)
 
