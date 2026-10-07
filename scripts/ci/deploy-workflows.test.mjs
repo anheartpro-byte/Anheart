@@ -2,7 +2,7 @@
 // .github/workflows/deploy-production.yml and deploy-preview.yml, and of the
 // `vercel.json` that keeps every push from deploying.
 //
-// Run by the `changes` job of ci.yml with the other CI test files, on every
+// Run by the `docs` job of ci.yml with the other CI test files, on every
 // run and without any install: the workflows are read as text, and the
 // scripts of their steps are run as the runner would run them, with a double
 // in place of the Vercel CLI. Nothing here calls Vercel. A real deployment
@@ -673,7 +673,8 @@ test("the summary of a run gives the commit deployed and the address obtained", 
   }
 });
 
-test("the changes job of ci.yml runs this file", () => {
-  const changes = jobsOf(workflow("ci.yml")).get("changes") ?? "";
-  assert.match(changes, /^ {8}run: node --test .*\bscripts\/ci\/deploy-workflows\.test\.mjs\b/m);
+test("the docs job of ci.yml, a required check that always runs, runs this file", () => {
+  const docs = jobsOf(workflow("ci.yml")).get("docs") ?? "";
+  assert.match(docs, /^ {10}node --test .*\bscripts\/ci\/deploy-workflows\.test\.mjs\b/m);
+  assert.doesNotMatch(docs, /^ {4}(if|needs):/m);
 });

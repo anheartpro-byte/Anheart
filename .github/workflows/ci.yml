@@ -139,11 +139,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
-      # Where `node --test` is told, below, to keep its JUnit file.
-      - name: Make room for the numbers of the quality report
-        run: mkdir -p "$RUNNER_TEMP/quality"
-      - name: Test the path rule, the workflows and the quality report
-        run: node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
+      # The tests of this rule and of the workflows are a step of `docs`: this
+      # job is not a required check, so a test failing here blocked no merge.
       - name: Decide which gates this run needs
         id: rule
         env:
@@ -159,16 +156,6 @@ jobs:
             git diff --name-only --no-renames -z 'HEAD^1' HEAD > "$changed"
           fi
           node scripts/ci/gates-for-changes.mjs --event "$EVENT_NAME" < "$changed" | tee -a "$GITHUB_OUTPUT"
-      - name: Keep the numbers for the quality report
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: quality-scripts-changes
-          retention-days: 14
-          if-no-files-found: ignore
-          overwrite: true
-          path: ${{ runner.temp }}/quality
 
   # The tests of the Pi gate, cut into PI_SHARES shares, one pytest process
   # each, four to a runner: as many as it has CPUs. `pi-gate` judges them.
@@ -708,6 +695,16 @@ jobs:
           args: --offline --include-fragments --no-progress 'README.md' 'docs/**/*.md'
           token: ''
           jobSummary: false
+      # Part of the gate: the tests of what decides the gates themselves (the
+      # path rule, this workflow, the analysis and deployment workflows, the
+      # quality report). In this job because it is a required check that runs
+      # on every event, whatever the files changed: a workflow test that fails
+      # blocks the merge. They install nothing and read the files as text.
+      - name: Test the path rule, the workflows and the quality report
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
       - name: Resolve threat identifiers
         if: ${{ !cancelled() }}
         run: |
@@ -737,3 +734,20 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           path: ${{ runner.temp }}/quality
+      # Part of the gate, last because it is the only step that installs
+      # anything: the test that reads every text file of the repository, of
+      # every kind (lib/legacyModeReferences.test.ts). `web` runs it with the
+      # tests of lib/, and the path rule skips `web` on a pull request that
+      # changes only documentation or Python: there a retired name could come
+      # back unseen until the push to develop. Here it runs on every event.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: ${{ !cancelled() }}
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install what the test of the whole repository runs with
+        if: ${{ !cancelled() }}
+        run: npm ci
+      - name: Test what is read across the whole repository
+        if: ${{ !cancelled() }}
+        run: npm run test:lib -- lib/legacyModeReferences.test.ts

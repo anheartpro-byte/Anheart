@@ -1,7 +1,7 @@
 // What must stay true of the quality report of a CI run (ANH-199,
 // docs/framework-de-test.md, section CI, "Rapport de qualité").
 //
-// Run by the `changes` job of ci.yml with the other CI test files, without any
+// Run by the `docs` job of ci.yml with the other CI test files, without any
 // install. The inputs are written here as the tools write them: JUnit files of
 // pytest, of vitest and of `node --test`, `coverage json` of coverage.py,
 // `coverage-final.json` of vitest, the stages a gate script records. Each run
@@ -1760,8 +1760,8 @@ test("the two commands write the summaries and quality-report.json from what the
   assert.equal(main(["job", "pi", "--dir", join(artifacts, "quality-pi"), "--shares", "2"], env), 0);
   assert.equal(JSON.parse(readFileSync(join(artifacts, "quality-pi", "part.json"), "utf8")).part, "pi");
   assert.match(readFileSync(summary, "utf8"), /Détail de la qualité : console du Pi/);
-  // In `changes`, `docs`: the JUnit file as `node --test` wrote it.
-  write(artifacts, "quality-scripts-changes/scripts-ci.xml", NODE);
+  // In `docs`: the JUnit files as `node --test` wrote them.
+  write(artifacts, "quality-scripts-docs/scripts-ci.xml", NODE);
   write(artifacts, "quality-scripts-docs/scripts-men.xml", NODE.replace(/<failure[\s\S]*?<\/failure>/, ""));
   // An artifact of a later format is not read as if it were this one.
   write(

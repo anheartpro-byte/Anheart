@@ -1083,7 +1083,7 @@ par un commit de fusion
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL, ceux des deux workflows de déploiement, ceux du rapport de qualité et ceux du script qui tient `convex/_generated/api.d.ts` |
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)). Ne lance plus aucun test depuis ANH-183 : ce job n'est pas une vérification obligatoire, ses tests sont dans `docs` |
 | `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
@@ -1092,7 +1092,7 @@ par un commit de fusion
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
-| `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; puis les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub. Ils sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés, et qu'ils lisent des pages de `docs/` ([release.md](release.md#7-tests)) |
+| `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
@@ -1718,6 +1718,40 @@ Le journal du job `changes` donne la raison, par exemple `path rule: python
 gates run: raspberry-pi/src/units.py (python)` ou `path rule: python gates
 skipped: none of the 3 changed files can affect them`.
 
+### Ce que le job docs lance à chaque exécution (ANH-183)
+
+`docs` est une vérification obligatoire, et la règle de chemins ne la saute
+jamais. Deux sortes de tests y tournent pour cette raison, en plus des
+contrôles de la documentation :
+
+* **les tests de ce qui décide les gates** : `gates-for-changes.test.mjs`,
+  `ci-workflow.test.mjs`, `analysis-workflows.test.mjs`,
+  `deploy-workflows.test.mjs`, `quality-report.test.mjs` et
+  `convex-generated-api.test.mjs`, tous dans
+  `scripts/ci`. Ils tournaient dans `changes`, que la protection de branche
+  n'exige pas : un test de workflow en échec n'empêchait aucune fusion. Ils
+  n'installent rien et lisent les fichiers comme du texte. `changes` ne
+  lance plus aucun test : il ne fait que répondre. La règle qu'il applique
+  reste celle de la PR elle-même ; si la PR la casse, `docs` rougit ;
+* **le test qui lit tout le dépôt**, `lib/legacyModeReferences.test.ts` : il
+  cherche les noms de l'ancien mode d'enregistrement ECG dans chaque fichier
+  texte, Python et documentation compris. `web` le lance avec les tests de
+  `lib/`, mais la règle saute `web` sur une PR qui ne change que de la
+  documentation ou du Python : un nom retiré pouvait y revenir sans être vu
+  avant le push sur `develop`. `docs` installe donc Node 24 et les
+  dépendances (`npm ci`) à la fin, après ses contrôles qui n'installent
+  rien, puis lance ce seul fichier
+  (`npm run test:lib -- lib/legacyModeReferences.test.ts`). C'est le seul
+  test de cette sorte relevé le 8 octobre 2026 : les autres tests du site et
+  de Convex ne lisent que leurs propres dossiers, ou `contracts/`, dont tout
+  changement lance toutes les gates ; côté Python, `test_pi_install.py` lit
+  `docs/pi-image.md` et `.github/`, qui les lancent toutes aussi.
+
+`scripts/ci/ci-workflow.test.mjs` tient les deux : chaque fichier de test de
+`scripts/ci` est lancé par une étape, et une seule, d'un job obligatoire sans
+condition (`docs` ou `audit`), que rien n'adoucit ; `docs` lance le test du
+dépôt entier après avoir installé ce qu'il lui faut.
+
 ### Analyse statique externe : CodeQL (ANH-196)
 
 Un workflow séparé de `ci.yml`, `.github/workflows/codeql.yml`, fait analyser
@@ -1872,7 +1906,7 @@ la tête de `main` par le passage hebdomadaire. Conséquences :
   le script la lit aussi. Rouge, elle fait refuser `prepare` et `pr`.
 
 **Tests.** `scripts/ci/analysis-workflows.test.mjs` est lancé par le job
-`changes` de `ci.yml` à chaque exécution, avec les autres fichiers de test
+`docs` de `ci.yml` à chaque exécution, avec les autres fichiers de test
 de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
 pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
 complet (celle de checkout sur le même commit que `ci.yml`), une seule
@@ -1968,7 +2002,7 @@ de Node n'est utilisée. Aucun cache n'est restauré dans un déploiement. Les
 actions sont celles de `ci.yml`, épinglées sur les mêmes commits, avec pour
 seules entrées celles que le test connaît.
 
-**Tests.** `scripts/ci/deploy-workflows.test.mjs` est lancé par le job `changes`
+**Tests.** `scripts/ci/deploy-workflows.test.mjs` est lancé par le job `docs`
 à chaque exécution, avec les autres fichiers de test de la CI. Il lit les deux
 workflows comme du texte et **exécute les scripts de leurs étapes comme le
 ferait le runner**, avec un double à la place de la CLI Vercel : aucun test
@@ -2053,7 +2087,7 @@ tableau tel qu'il est affiché.
 | Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
 | Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
 | Site | les tests de `lib/`, puis ceux de `hooks/`, de `components/` et des pages de `app/` (vitest, deux suites) | `web` |
-| Scripts | les tests de `scripts/ci` lancés par `changes`, `audit` et `docs` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
+| Scripts | les tests de `scripts/ci` lancés par `docs` et `audit` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
 
 Sous le tableau, une ligne donne l'état d'`audit` et de `docs`, sans rien de ce
 qu'ils ont trouvé, puis trois parties : « Seuils de couverture, chaîne de
@@ -2262,8 +2296,9 @@ pourcentage se calcule, il n'est pas stocké.
   `coverage_pending` de `raspberry-pi/pyproject.toml`, comme du texte (rien
   n'est installé pour lire du TOML) : une liste de chaînes simples, sur une ou
   plusieurs lignes, commentaires admis. Écrite autrement, elle est dite
-  « indisponible ». `changes`, `audit` et `docs` publient seulement le fichier
-  JUnit de leurs tests de scripts.
+  « indisponible ». `audit` et `docs` publient seulement les fichiers JUnit
+  de leurs tests de scripts ; `changes` ne lance plus de test et ne publie
+  rien.
 - `scripts/ci/quality-report.mjs report`, dans `quality-report`, réunit le tout
   avec l'état de chaque job.
 
@@ -2290,7 +2325,7 @@ une espace ou quelques signes sans effet est écrit comme une référence de
 caractère. Un nom ne peut donc ni fermer une cellule, ni produire un lien, une
 image, une mention ou une balise.
 
-**Tests.** `scripts/ci/quality-report.test.mjs` (job `changes`, sans
+**Tests.** `scripts/ci/quality-report.test.mjs` (job `docs`, sans
 installation) nourrit l'outil avec des fichiers écrits comme les outils les
 écrivent : toutes les gates vertes, une gate sautée par la règle de chemins,
 une gate en échec, un artefact absent, une exécution dont on ne sait rien. Il
@@ -2434,8 +2469,8 @@ Error: Coverage threshold without an object (scripts/ci/coverage-thresholds.mjs)
 ```
 
 Le contrôle est donc dans l'étape qui applique le seuil, dans les jobs
-obligatoires `convex-tests` et `web`, et non dans le seul job `changes`, qui
-n'est pas une vérification obligatoire. Pour Convex, `npm run test:convex`
+obligatoires `convex-tests` et `web`, et pas seulement dans les tests du
+workflow. Pour Convex, `npm run test:convex`
 lit la même configuration : il s'arrête lui aussi, avec le même message.
 Observé en local le 7 octobre 2026 avec un nom changé dans la liste : avant
 ce contrôle, `npm run coverage:convex` rendait 0 sans rien dire ; avec lui,
@@ -2565,8 +2600,8 @@ dossier vide ou ne contenant que des tests), et `ci-workflow.test.mjs`
 vérifie que les deux configurations l'appellent, avant de se définir et sans
 l'adoucir.
 
-Ces tests lisent des fichiers : ils ne lancent pas Vitest (le job `changes`
-n'installe rien). Que la commande échoue réellement sous le seuil a été
+Ces tests lisent des fichiers : ils ne lancent pas Vitest (l'étape de `docs`
+qui les lance n'installe rien). Que la commande échoue réellement sous le seuil a été
 vérifié à la main le 7 octobre 2026, avec les commandes ci-dessus et l'option
 `--exclude` de Vitest pour retirer des tests : le site sans les tests de
 `components/modals/` ni de `components/ui/` (41,0 % de lignes, 47,4 % de

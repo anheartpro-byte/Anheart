@@ -110,8 +110,8 @@ export const SUITES = [
   {
     id: "scripts-ci",
     project: "scripts",
-    job: "changes",
-    part: "scripts-changes",
+    job: "docs",
+    part: "scripts-docs",
     label: "règles de la CI et du rapport",
     runner: "node --test",
   },

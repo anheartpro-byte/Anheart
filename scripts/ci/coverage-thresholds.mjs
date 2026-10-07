@@ -8,7 +8,7 @@
 // to a list below is tested, measured and reported from the next run on.
 //
 // Plain data and a few small functions, nothing to install: Vitest loads this
-// file from its configurations, and the `changes` job reads it as it is.
+// file from its configurations, and the `docs` job reads it as it is.
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";

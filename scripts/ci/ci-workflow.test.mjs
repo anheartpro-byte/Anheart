@@ -1,8 +1,9 @@
 // What must stay true of .github/workflows/ci.yml for the path rule to be safe.
 //
-// Run by the `changes` job before it decides anything, without any install:
-// the workflow is read as text, job by job. These are the properties a later
-// edit of the workflow could break without any gate turning red.
+// Run by the `docs` job, a required check that runs on every event, without
+// any install: the workflow is read as text, job by job. These are the
+// properties a later edit of the workflow could break without any gate
+// turning red.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -11,7 +12,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CONVEX, SITE, siteFolders, sourcesOf, testsOf, vitestThresholds } from "./coverage-thresholds.mjs";
+import {
+  CONVEX,
+  SITE,
+  globToRegExp,
+  siteFolders,
+  sourcesOf,
+  testsOf,
+  vitestThresholds,
+} from "./coverage-thresholds.mjs";
 import { COVERAGES, GATES, SUITES } from "./quality-report.mjs";
 
 const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -306,7 +315,7 @@ test("what the report adds to a gate cannot change the verdict of that gate", ()
       }
     }
   }
-  assert.ok(added >= 11, `${added} steps of the report were read`);
+  assert.ok(added >= 10, `${added} steps of the report were read`);
 });
 
 // --- The thresholds of Convex and of the site (ANH-203; docs/framework-de-test.md,
@@ -585,14 +594,16 @@ test("the audit hands the report the JUnit files of its two test files, and noth
   const kept = (/** @type {string} */ text) =>
     [...text.matchAll(/\$RUNNER_TEMP\/quality\/([\w.-]+)/g)].map(([, name]) => name).sort();
   assert.deepEqual(kept(jobs.get("audit") ?? ""), ["scripts-dependency-guard.xml", "scripts-gitleaks-fixture.xml"]);
-  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-men.xml", "scripts-release.xml"]);
-  assert.deepEqual(kept(jobs.get("changes") ?? ""), ["scripts-ci.xml"]);
+  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-ci.xml", "scripts-men.xml", "scripts-release.xml"]);
+  // The job that decides which gates run runs no test and hands the report nothing.
+  assert.deepEqual(kept(jobs.get("changes") ?? ""), []);
   // Each of those files is written by `node --test` itself, for the test file named on the same line.
   for (const [id, file] of [
     ["audit", "scripts/ci/braces-depth-guard.test.mjs"],
     ["audit", "scripts/ci/gitleaks-fixture.test.mjs"],
     ["docs", "scripts/ci/check-men.test.mjs"],
     ["docs", "scripts/release.test.mjs"],
+    ["docs", "scripts/ci/convex-generated-api.test.mjs"],
   ]) {
     const line = (jobs.get(id ?? "") ?? "").split("\n").find((text) => text.trimEnd().endsWith(` ${file}`)) ?? "";
     assert.match(
@@ -629,8 +640,87 @@ test("the release tooling is tested by `docs`, the required job no path rule can
   assert.equal(JSON.parse(atRoot("package.json")).scripts["test:release"], "node --test scripts/release.test.mjs");
   assert.deepEqual(
     SUITES.filter(({ job }) => job === "docs").map(({ id }) => id),
-    ["scripts-men", "scripts-release"],
+    ["scripts-ci", "scripts-men", "scripts-release"],
   );
+});
+
+// --- What tests the gates is itself a gate (ANH-183) ---
+//
+// The tests of the path rule and of the workflows once ran in `changes`, which
+// branch protection does not require: one of them failing blocked no merge. And
+// the path rule lets `web` be skipped on a pull request that changes no file of
+// the site, though one test of the site reads every file of the repository.
+// Both now run in `docs`: a required check, on every event, whatever changed.
+
+/** The steps of a job that can let it pass though a command of theirs failed. @param {string} step */
+const softened = (step) => /continue-on-error|\|\| *(true|:)\b|set \+e\b/.test(step);
+
+test("every test file of scripts/ci runs in a required job that no path rule can skip", () => {
+  const always = REQUIRED.filter((id) => ALWAYS.includes(id));
+  assert.deepEqual(always, ["audit", "docs"]);
+  const files = readdirSync(new URL("./", import.meta.url)).filter((name) => name.endsWith(".test.mjs"));
+  assert.ok(files.length >= 9 && files.includes("ci-workflow.test.mjs"), "the test files of scripts/ci were not read");
+  for (const file of files) {
+    const running = always.flatMap((id) =>
+      stepsOf(id)
+        .filter((step) =>
+          new RegExp(`^ +(run: )?.*\\bnode --test .* scripts/ci/${file.replaceAll(".", "\\.")}\\b`, "m").test(step),
+        )
+        .map((step) => ({ id, step })),
+    );
+    assert.equal(running.length, 1, `${file} is run by ${running.length} steps of ${always.join(" and ")}`);
+    const [{ id, step }] = /** @type {[{id: string, step: string}]} */ (running);
+    assert.ok(!softened(step), `${id}: the step that runs ${file} can pass though it failed`);
+    // Never skipped because an earlier check of the job failed; never run on a cancelled run.
+    const condition = /^ {8}if:[ \t]*(.*)$/m.exec(step)?.[1];
+    assert.equal(condition, "${{ !cancelled() }}", `${id}: ${file}`);
+  }
+  // The job that decides which gates run is not required: it runs no test, so none can fail unseen.
+  assert.ok(!REQUIRED.includes("changes"));
+  assert.doesNotMatch(jobs.get("changes") ?? "", /node --test|\.test\.mjs/);
+  assert.deepEqual(
+    SUITES.filter(({ id }) => id === "scripts-ci").map(({ job, part }) => [job, part]),
+    [["docs", "scripts-docs"]],
+  );
+});
+
+test("the test that reads every file of the repository runs in `docs`, whatever the pull request changes", () => {
+  const WHOLE = "lib/legacyModeReferences.test.ts";
+  const name = "Test what is read across the whole repository";
+  const steps = stepsOf("docs");
+  const at = steps.findIndex((text) => text.startsWith(`name: ${name}\n`));
+  assert.ok(at > 0, `docs: no step "${name}"`);
+  const step = steps[at] ?? "";
+  assert.match(step, new RegExp(`^ {8}run: npm run test:lib -- ${WHOLE.replaceAll(".", "\\.")}$`, "m"));
+  assert.ok(!softened(step), "the step can pass though the test failed");
+  assert.equal(stepCondition("docs", name), "${{ !cancelled() }}");
+  // The command exists, runs the file, and the file is the one that reads the repository.
+  assert.equal(JSON.parse(atRoot("package.json")).scripts["test:lib"], "vitest run --config vitest.lib.config.mts");
+  assert.match(atRoot(WHOLE), /execFileSync\("git", \["ls-files", "-z"\]/);
+  assert.ok(
+    testsOf(SITE.suites.lib).some((glob) => globToRegExp(glob).test(WHOLE)),
+    "the suite does not run it",
+  );
+  // What it runs with is installed just before, from the lockfile, and nothing softens that either.
+  const before = steps.slice(0, at);
+  const install = before.findIndex((text) => /^ {8}run: npm ci$/m.test(text));
+  const node = before.findIndex((text) => text.startsWith("uses: actions/setup-node@"));
+  assert.ok(node >= 0 && install > node, "docs: `npm ci` must follow the installation of Node");
+  for (const index of [node, install]) {
+    assert.ok(!softened(before[index] ?? ""));
+    assert.match(before[index] ?? "", /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m);
+  }
+  // The checks that install nothing stay first: none of them waits for, nor depends on, the install.
+  const cheap = before.slice(0, node).map((text) => titleOf(text));
+  for (const title of [
+    "Check local Markdown links and anchors",
+    "Resolve threat identifiers",
+    "Test the release tooling",
+  ]) {
+    assert.ok(cheap.includes(`name: ${title}`), `${title} must come before the install`);
+  }
+  // `web` still runs the whole suite of lib/, this file included, when the site changes.
+  assert.match(jobs.get("web") ?? "", /^ {6}- run: npm run test:lib -- \$VITEST_REPORT /m);
 });
 
 test("the workflow gives no token more than read access, and each action is pinned to one full commit", () => {
