@@ -1059,12 +1059,13 @@ Ce que fait la console :
   raison `refusee par la machine : serveur incompatible (contrat X vs Y)`.
 * **Un arrêt traverse toutes les versions.** La route
   `/api/machine/training/status` répond quel que soit le contrat annoncé, et
-  une réponse qui porte `stopRequested: true` arrête la séance en cours quelle
-  que soit la majeure qu'elle annonce, version absente comprise : un arrêt a
-  le même sens partout, et le refuser ne serait jamais le côté sûr. C'est la
-  **seule** chose retenue d'une réponse d'une autre majeure : `active: false`,
-  qui termine aussi la séance quand le serveur est de la majeure de la
-  console, est alors ignoré, comme tout le reste de la réponse.
+  une réponse qui porte `stopRequested: true` ou `active: false` arrête la
+  séance en cours quelle que soit la majeure qu'elle annonce, version absente
+  ou illisible comprise : un arrêt a le même sens partout, ces deux champs ne
+  peuvent provoquer qu'un arrêt ordinaire, et le refuser ne serait jamais le
+  côté sûr. C'est **tout** ce qui est retenu d'une réponse d'une autre
+  majeure : aucun autre champ n'est lu, et rien n'y peut lancer, reprendre ou
+  réarmer quoi que ce soit.
 * **Les refus du serveur** arrivent sous la forme
   `{error: <code stable>, message: <texte>}`. Le code est ce que le journal de
   la console porte (`session_not_found (HTTP 400): Session not found`) ; un

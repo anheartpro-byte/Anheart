@@ -12,9 +12,10 @@ What this file establishes, requirement by requirement:
   as a failed session;
 * EX-5: a refusal is read as ``{error: <stable code>, message}`` and the code
   is what the log carries;
-* the one thing that crosses every contract: a stop request. It reaches a
-  running session whatever major the dashboard is of, and it is the only
-  thing taken from an answer of another major.
+* the one thing that crosses every contract: a stop. A stop asked for, or a
+  session the dashboard no longer holds active, ends a running session
+  whatever major the dashboard is of, and that is all that is taken from an
+  answer of another major.
 
 The rig is the one of ``test_cloud_sync.py``: the REAL control surface and
 profile store of a simulated panel, a scripted dashboard, no network.
@@ -558,6 +559,23 @@ def test_the_scripted_poll_answer_is_what_the_server_sends() -> None:
 OTHER_VERSIONS: Final[tuple[object, ...]] = ("2.0", "0.9", None, "", 1, ["1.0"], "1.0.0")
 """What a dashboard of another major, or one that states none, may announce."""
 
+ANY_VERSION: Final[tuple[object, ...]] = (CONTRACT_VERSION, "1.7", *OTHER_VERSIONS)
+"""This console's major included: a stop does not depend on the version at all."""
+
+STOPS: Final[tuple[tuple[bool, bool], ...]] = ((True, True), (False, False), (False, True))
+"""``(active, stopRequested)``: a stop asked for, a session no longer active, or both."""
+
+FORGED: Final[Mapping[str, object]] = {
+    "status": "completed",
+    "endedAt": 1_700_000_000_000,
+    # No status answer has these: nothing in it may be read as an order.
+    "session": dict(LAUNCH),
+    "start": True,
+    "resume": True,
+    "rearm": True,
+}
+"""Everything else a status answer of another major might carry. None of it is read."""
+
 
 def test_the_route_that_carries_the_stop_is_the_one_the_shared_file_exempts() -> None:
     exempt = shared()["contract_exempt_routes"]
@@ -565,12 +583,14 @@ def test_the_route_that_carries_the_stop_is_the_one_the_shared_file_exempts() ->
     assert list(cast("dict[str, object]", exempt)) == [f"GET {STATUS}"]
 
 
-@pytest.mark.parametrize("version", OTHER_VERSIONS)
-async def test_a_stop_request_of_another_major_is_forwarded_once(
-    tmp_path: Path, version: object
+@pytest.mark.parametrize("version", ANY_VERSION)
+@pytest.mark.parametrize(("active", "stop"), STOPS)
+async def test_a_stop_is_forwarded_once_whatever_the_contract_of_the_answer(
+    tmp_path: Path, version: object, active: bool, stop: bool
 ) -> None:
+    """Asked to stop, or told the session is no longer active: either ends it, under any version."""
     r = rig(tmp_path)
-    r.dashboard.answer(STATUS, status_answer(stop=True, version=version))
+    r.dashboard.answer(STATUS, status_answer(active=active, stop=stop, version=version))
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
     await r.step(5.0)
@@ -580,10 +600,20 @@ async def test_a_stop_request_of_another_major_is_forwarded_once(
     assert asked == [("GET", STATUS)]
 
 
-async def test_a_stop_request_with_no_version_field_at_all_is_forwarded(tmp_path: Path) -> None:
-    """A dashboard older than the contract: its status answer carries no version."""
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"active": True, "stopRequested": True},
+        {"active": False, "status": "completed"},
+        {"active": False},
+    ],
+)
+async def test_a_stop_from_a_dashboard_older_than_the_contract_is_forwarded(
+    tmp_path: Path, answer: Mapping[str, object]
+) -> None:
+    """Its status answer carries no version field at all, and it is believed as before."""
     r = rig(tmp_path)
-    r.dashboard.answer(STATUS, ok({"active": True, "stopRequested": True}))
+    r.dashboard.answer(STATUS, ok(answer))
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
     await r.step(5.0)
@@ -592,38 +622,38 @@ async def test_a_stop_request_with_no_version_field_at_all_is_forwarded(tmp_path
 
 @pytest.mark.parametrize("version", OTHER_VERSIONS)
 @pytest.mark.parametrize("stop", [False, None, "true", 1, "yes"])
-async def test_nothing_but_a_stop_request_is_taken_from_a_status_answer_of_another_major(
+async def test_nothing_else_in_a_status_answer_of_another_major_is_acted_on(
     tmp_path: Path, version: object, stop: object
 ) -> None:
-    """``active: false`` and everything else in it is ignored; only a real ``true`` stops."""
+    """Only a real ``stopRequested: true`` or ``active: false`` stops; the rest is ignored."""
     r = rig(tmp_path)
     r.dashboard.answer(
         STATUS,
-        ok(
-            {
-                "active": False,
-                "status": "completed",
-                "stopRequested": stop,
-                SERVER_VERSION_FIELD: version,
-            }
-        ),
+        ok({**FORGED, "active": True, "stopRequested": stop, SERVER_VERSION_FIELD: version}),
     )
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
     await r.step(5.0)
     await r.step(5.0)
-    # Still asking: no stop was forwarded.
+    # Still asking: no stop was forwarded. And nothing was handed to the console.
     assert len(r.dashboard.to(STATUS)) == 3
+    assert r.panel.surface.pending is None
+    assert r.panel.surface.run_state is RunState.IDLE
 
 
-async def test_the_same_answer_from_this_major_is_believed(tmp_path: Path) -> None:
-    """The control: from a dashboard of this major, a session no longer active ends here too."""
+@pytest.mark.parametrize("version", ANY_VERSION)
+@pytest.mark.parametrize("active", [None, "false", 0, "no", []])
+async def test_only_an_exact_false_says_the_session_is_no_longer_active(
+    tmp_path: Path, version: object, active: object
+) -> None:
     r = rig(tmp_path)
-    r.dashboard.answer(STATUS, status_answer(active=False, version="1.7"))
+    r.dashboard.answer(
+        STATUS, ok({"active": active, "stopRequested": False, SERVER_VERSION_FIELD: version})
+    )
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
     await r.step(5.0)
-    assert len(r.dashboard.to(STATUS)) == 1
+    assert len(r.dashboard.to(STATUS)) == 2
 
 
 def stop_reason_of(rig_: Linked) -> str | None:
@@ -655,32 +685,55 @@ def refuse_everything_but_the_status(dashboard: Dashboard) -> None:
 
 
 @pytest.mark.parametrize("version", ["2.0", None])
+@pytest.mark.parametrize(("active", "stop"), STOPS)
 async def test_a_stop_from_a_dashboard_of_another_major_stops_a_running_session(
-    tmp_path: Path, version: object
+    tmp_path: Path, version: object, active: bool, stop: bool
 ) -> None:
     """The whole path on the simulated machine: everything refused, and the stop still lands."""
     rig_ = await running_remote_session(tmp_path)
     refuse_everything_but_the_status(rig_.dashboard)
-    rig_.dashboard.answer(STATUS, status_answer(stop=True, version=version))
+    rig_.dashboard.answer(STATUS, status_answer(active=active, stop=stop, version=version))
     await rig_.run(5.0)
     assert state_of(rig_.panel) is RuntimeState.ENDING
     assert stop_reason_of(rig_) == STOP_REASON
     await rig_.panel.close()
 
 
-async def test_a_dashboard_of_another_major_cannot_end_a_running_session_any_other_way(
+async def test_a_session_an_older_dashboard_no_longer_holds_active_is_stopped(
+    tmp_path: Path,
+) -> None:
+    """A dashboard older than the contract says the session is over, without a stop request.
+
+    Its answer names no version. The console must not keep the arm turning for a
+    session the dashboard has closed: it ends it on the ordinary ramp, as it did
+    before the contract existed.
+    """
+    rig_ = await running_remote_session(tmp_path)
+    rig_.dashboard.answer(STATUS, ok({"status": "completed", "active": False}))
+    await rig_.run(5.0)
+    assert state_of(rig_.panel) is RuntimeState.ENDING
+    assert stop_reason_of(rig_) == STOP_REASON
+    await rig_.panel.close()
+
+
+async def test_nothing_else_from_a_dashboard_of_another_major_touches_a_running_session(
     tmp_path: Path,
 ) -> None:
     rig_ = await running_remote_session(tmp_path)
     refuse_everything_but_the_status(rig_.dashboard)
-    rig_.dashboard.answer(STATUS, status_answer(active=False, version="2.0"))
+    forged = ok({**FORGED, "active": True, "stopRequested": "true", SERVER_VERSION_FIELD: "2.0"})
+    rig_.dashboard.answer(STATUS, forged)
     await rig_.run(10.0)
-    # No stop was asked for: the session runs on under the local supervisor.
+    # Nothing in it is a stop: the session runs on under the local supervisor.
     assert state_of(rig_.panel) is RuntimeState.RUNNING
     assert stop_reason_of(rig_) is None
-    # The moment a stop IS asked for, it is honoured.
-    rig_.dashboard.answer(STATUS, status_answer(active=False, stop=True, version="2.0"))
+    # Once the dashboard does end it, nothing in such an answer starts it again.
+    rig_.dashboard.answer(STATUS, status_answer(active=False, version="2.0"))
     await rig_.run(5.0)
     assert state_of(rig_.panel) is RuntimeState.ENDING
+    rig_.dashboard.answer(STATUS, forged)
+    await rig_.run(30.0)
+    assert state_of(rig_.panel) is not RuntimeState.RUNNING
     assert stop_reason_of(rig_) == STOP_REASON
+    assert rig_.panel.surface.pending is None
     await rig_.panel.close()

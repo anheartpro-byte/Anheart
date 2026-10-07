@@ -487,7 +487,8 @@ les versions : le refuser ne serait jamais le côté sûr. Sans cette exception,
 une demande d'arrêt du tableau de bord n'atteindrait plus une séance en cours
 dès que le serveur ne sert pas la majeure de la console. La route ne fait que
 lire, et sa réponse annonce `server_contract_version` : une console d'une
-autre majeure n'en retient que `stopRequested`. Les routes exemptées sont
+autre majeure n'en retient que ce qui arrête, `stopRequested: true` ou
+`active: false`. Les routes exemptées sont
 listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
 passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
@@ -571,12 +572,13 @@ Détails du contrat :
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
   pas la sienne ; il termine le lancement par `/training/end` avec la raison
   `refusee par la machine : serveur incompatible (contrat X vs Y)`.
-- **Arrêt demandé** : si `status` répond `stopRequested: true`, le Pi fait un
-  arrêt ordinaire sur la rampe réglée, attribué à l'opérateur « tableau de
-  bord », **quelle que soit la version** annoncée par la réponse. Une réponse
-  `active: false` produit le même arrêt, mais seulement si elle est de la
-  majeure du Pi : d'une autre majeure, rien d'autre que `stopRequested` n'est
-  retenu.
+- **Arrêt demandé** : si `status` répond `stopRequested: true` ou
+  `active: false`, le Pi fait un arrêt ordinaire sur la rampe réglée, attribué
+  à l'opérateur « tableau de bord », **quelle que soit la version** annoncée
+  par la réponse (même majeure, autre majeure, absente ou illisible). Ces deux
+  champs ne peuvent provoquer qu'un arrêt ordinaire : les croire est le côté
+  sûr. Rien d'autre n'est retenu d'une réponse d'une autre majeure : rien n'y
+  peut lancer, reprendre ou réarmer quoi que ce soit.
 - **Lancement refusé par le Pi** : le Pi termine la séance `pending` par
   `/training/end` avec `failed: true` et une raison qui commence par
   `refusee par la machine : `. Un lancement ni démarré ni refusé en 60 s est
@@ -833,7 +835,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
 | Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à toute route machine **sauf** `GET /api/machine/training/status`, sans rien lire ni écrire d'autre. |
-| Demande d'arrêt | Elle traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi honore `stopRequested` d'une réponse de n'importe quelle majeure. C'est la seule chose qu'il retient d'une réponse d'une autre majeure. |
+| Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 
 Une évolution compatible (un champ optionnel de plus, un code d'erreur de plus)

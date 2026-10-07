@@ -52,9 +52,11 @@ machine goes on exactly as it would with no dashboard.
 
 One thing crosses every contract: **a stop**. "Stop" means the same under any
 version, and refusing one is never the safe side. The status route answers
-whatever contract the console announces, and a stop request in its answer is
-forwarded whatever major that answer is of. Nothing else in an answer of
-another major is acted on.
+whatever contract the console announces, and its answer ends the session
+whatever major it is of, in either of the two ways it always could: a stop
+was asked for, or the dashboard no longer holds the session active. Both can
+only ever cause an ordinary stop. Nothing else in an answer of another major
+is acted on: nothing in it can start, resume or re-arm anything.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -813,15 +815,11 @@ class CloudSync:
         if isinstance(sent, Err):
             return
         document = sent.value
-        # A stop request is honoured whatever contract the answer is of. That
-        # the session is no longer active is believed only from this
-        # console's own major: nothing else is trusted across majors.
-        asked = document.get("stopRequested") is True
-        ended = (
-            document.get("active") is False
-            and server_refusal(document.get(SERVER_VERSION_FIELD)) is None
-        )
-        if asked or ended:
+        # Deliberately not gated on the answer's contract version: a stop asked
+        # for, or a session the dashboard no longer holds active, can only end
+        # this session on the ordinary ramp, and that is the safe side under
+        # any contract. These two fields are all that is read here.
+        if document.get("stopRequested") is True or document.get("active") is False:
             self._forward_stop(tracked, "arret demande depuis le tableau de bord")
 
     def _forward_stop(self, tracked: _Tracked, reason: str) -> None:

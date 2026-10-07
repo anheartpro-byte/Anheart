@@ -373,9 +373,10 @@ http.route({
  *
  * The one machine route that answers whatever contract the machine announces
  * (the key is still required): it carries the stop request, and "stop" means
- * the same thing under every contract. A console of another major honours
- * `stopRequested` from this answer and trusts nothing else in it. The route
- * only reads.
+ * the same thing under every contract. A console of another major ends its
+ * session on `stopRequested: true` or `active: false` (either can only cause
+ * an ordinary stop) and trusts nothing else in this answer. The route only
+ * reads.
  */
 http.route({
   path: "/api/machine/training/status",

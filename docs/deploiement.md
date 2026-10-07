@@ -166,8 +166,8 @@ lancement distant n'est armé), mais pas au même prix.
 
 | Situation | Effet |
 |---|---|
-| Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et demande d'arrêt fonctionnent. Seul le lancement distant est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. |
-| Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, sa télémétrie et ses fins de séance sont **refusées**. Une demande d'arrêt du tableau de bord lui parvient encore. |
+| Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et fins de séance fonctionnent. Un arrêt venu du tableau de bord aussi : demande d'arrêt, ou séance que le serveur ne tient plus pour active. Le **lancement distant** est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. La fiche machine n'affiche pas les versions, que cet ancien Convex ne stocke pas. |
+| Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, ses programmes ne sont plus synchronisés, sa télémétrie et ses fins de séance sont **refusées**, et aucun lancement distant ne lui parvient. Un arrêt venu du tableau de bord lui parvient encore. |
 
 D'où l'ordre :
 

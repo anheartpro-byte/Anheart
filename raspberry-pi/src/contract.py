@@ -14,10 +14,12 @@ and everything it accepts back. The two sides must share the **major**:
 A different **minor** is fine in both directions: within one major each side
 relies only on what every minor of it provides.
 
-One exchange is outside this rule on purpose: **a stop request**. It means the
-same under every contract, so the dashboard answers it whatever major the
-console announces, and the console honours it whatever major the answer is of
-(:mod:`src.cloud_sync`). Nothing else is taken from an answer of another major.
+One exchange is outside this rule on purpose: **a stop**. It means the same
+under every contract, so the dashboard answers the status request whatever
+major the console announces, and the console ends its session on that answer
+whatever major it is of: a stop asked for, or a session no longer active
+(:mod:`src.cloud_sync`). Both can only cause an ordinary stop. Nothing else is
+taken from an answer of another major.
 
 Why the version is a constant and not read from a file at run time
 ------------------------------------------------------------------

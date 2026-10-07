@@ -141,9 +141,10 @@ repository root, `src/contract.py` here). Every request carries
 and the console arms nothing from a dashboard of another major. Either way the
 event list shows `serveur incompatible (contrat X vs Y)` and the machine runs
 on as it would with no dashboard. One thing crosses every contract: a stop.
-The status route answers whatever contract is announced, and a stop request
-in its answer is honoured whatever major that answer is of. Nothing else in
-an answer of another major is acted on.
+The status route answers whatever contract is announced, and its answer ends
+the session whatever major it is of, when a stop was asked for or the
+dashboard no longer holds the session active. Nothing else in an answer of
+another major is acted on.
 
 **A stop that was asked for always comes down.** STOP at the console, a stop
 sent from the dashboard and a manual target of zero walk the setpoint to zero
