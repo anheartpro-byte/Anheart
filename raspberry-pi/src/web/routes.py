@@ -48,16 +48,20 @@ from typing import Final, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Request, params
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from src.control_surface import (
     CommandRefusal,
     EndRefusal,
     NothingRunning,
+    RunState,
     SafetyHolding,
     StartRefusal,
     SurfaceBusy,
 )
 from src.geometry import MachineGeometry
+from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
+from src.record.schema import RecordError
 from src.result import Err, Ok
 from src.sensors.registry import SPECS
 from src.training.plan import (
@@ -115,6 +119,8 @@ from src.web.schemas import (
     PreviewBody,
     ProfileListRow,
     ProfileRow,
+    RecordRow,
+    RecordsRow,
     SafetyRow,
     SensorRow,
     SensorsRow,
@@ -254,6 +260,90 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_session(app, services=services, auth=auth)
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
+    _register_records(app, services=services, auth=auth)
+
+
+def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """The session records on disk: their list, and one of them as an archive.
+
+    Both read the disk, on threads kept apart from everything else the console
+    does (:class:`~src.record.export.RecordIo`): no handler here blocks the
+    loop the control tick runs on, and none can take a thread from the ECG
+    treatment. Both are refused while a session is in progress: the machine
+    reads its records at rest.
+    """
+    surface = services.surface
+
+    def at_rest_only(what: str) -> None:
+        if surface.run_state is not RunState.IDLE:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"{what} pendant une seance : attendre le retour au repos",
+            )
+
+    @app.get("/api/records", dependencies=auth, tags=["records"])
+    async def list_records() -> RecordsRow:
+        """Every session record on this machine, newest first. 409 during a session."""
+        exporter = services.records
+        if exporter is None:
+            return RecordsRow(recording=False, records=())
+        at_rest_only("liste des enregistrements refusee")
+        listed = await exporter.listing()
+        if isinstance(listed, Err):
+            raise _record_failure(listed.error)
+        return RecordsRow(
+            recording=True,
+            records=tuple(
+                RecordRow(name=entry.name, closed=entry.closed) for entry in listed.value
+            ),
+        )
+
+    @app.get("/api/records/{name}/archive", dependencies=auth, tags=["records"])
+    async def export_record(name: str) -> FileResponse:
+        """One record as ``<name>.tar.gz``. 409 while a session is in progress.
+
+        Refused during a session on purpose: compressing tens of megabytes is
+        work this machine should not be doing with somebody on board, and the
+        record of the session in progress is not complete yet. The archive is
+        a temporary file, removed once the response has been sent.
+        """
+        exporter = services.records
+        if exporter is None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND, detail="cette console n'enregistre pas"
+            )
+        at_rest_only("export refuse")
+        built = await exporter.archive(name)
+        if isinstance(built, Err):
+            raise _record_failure(built.error)
+        return FileResponse(
+            path=built.value,
+            media_type="application/gzip",
+            filename=f"{name}.tar.gz",
+            background=BackgroundTask(discard, built.value),
+        )
+
+
+def _record_failure(error: RecordError) -> HTTPException:
+    """Why a record could not be read, as the status and the sentence the page shows."""
+    if error.detail == UNKNOWN_RECORD:
+        return HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail="enregistrement inconnu sur cette machine"
+        )
+    if error.detail == BUSY:
+        return HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail="lecture des enregistrements deja en cours : reessayer dans un instant",
+        )
+    if error.detail == TIMEOUT:
+        return HTTPException(
+            status_code=HTTPStatus.GATEWAY_TIMEOUT,
+            detail="le disque des enregistrements ne repond pas",
+        )
+    return HTTPException(
+        status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+        detail=f"lecture des enregistrements impossible ({error.detail})",
+    )
 
 
 def _register_reads(

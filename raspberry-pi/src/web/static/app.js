@@ -227,6 +227,44 @@ function api(path, options) {
   });
 }
 
+/* The latest session record, as a file. Fetched rather than linked: a link
+   cannot carry the token header. */
+function exportRecord() {
+  var note = el("record-note");
+  var headers = {};
+  if (state.token) {
+    headers["X-Anheart-Token"] = state.token;
+  }
+  api("/api/records").then(function (body) {
+    if (!body.records.length) {
+      throw new Error(
+        body.recording ? "aucun enregistrement sur cette machine" : "cette console n'enregistre pas"
+      );
+    }
+    var name = body.records[0].name;
+    return fetch("/api/records/" + encodeURIComponent(name) + "/archive", {
+      headers: headers,
+      cache: "no-store",
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.json().then(function (refusal) {
+          throw new Error(refusal && refusal.detail ? refusal.detail : String(response.status));
+        });
+      }
+      return response.blob();
+    }).then(function (archive) {
+      var link = document.createElement("a");
+      link.href = URL.createObjectURL(archive);
+      link.download = name + ".tar.gz";
+      link.click();
+      URL.revokeObjectURL(link.href);
+      ok(note, "exporte : " + name + ".tar.gz");
+    });
+  }).catch(function (error) {
+    problem(note, error);
+  });
+}
+
 function problem(node, error) {
   node.className = "note note-bad";
   text(node, error && error.message ? error.message : String(error));
@@ -2273,6 +2311,7 @@ function start() {
     }
     boot();
   };
+  el("record-export").onclick = exportRecord;
   el("nav-console").onclick = function () {
     showView("console");
   };

@@ -157,7 +157,7 @@ from __future__ import annotations
 import logging
 import math
 from asyncio import CancelledError, Task, create_task, shield
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
 from types import MappingProxyType
@@ -636,6 +636,29 @@ class DriveInFault:
     state: DriveState
 
 
+@dataclass(frozen=True, slots=True)
+class RecordStorageLow:
+    """The session record (the local black box) has nowhere to go.
+
+    ``free_bytes`` is the last measured free space under the records
+    directory, below ``required_bytes``; ``None`` when it could not be
+    measured at all, which refuses just the same: a session nobody can record
+    is not started on the strength of a number nobody read.
+
+    Nor on a number nobody read LATELY: ``stale_for`` is the age of that
+    measurement when it is too old to be evidence (whoever measures is stuck,
+    most likely on a disk that stopped answering), whatever it said.
+    """
+
+    free_bytes: int | None
+    required_bytes: int
+    where: str
+    """The records directory, for the operator's message."""
+
+    stale_for: Seconds | None = None
+    """How old the measurement is, when that is why it is refused; else ``None``."""
+
+
 type StartRefusal = (
     AlreadyStarted
     | NotAttested
@@ -646,8 +669,14 @@ type StartRefusal = (
     | DriveParameterRefused
     | DrivePrecommanded
     | DriveInFault
+    | RecordStorageLow
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
+
+type ArmingGate = Callable[[], RecordStorageLow | None]
+"""Asked at every arming, before the drive is touched. It reads memory and
+returns at once: the gate runs inside the control task, where nothing may wait
+(the free space is measured by the journal thread, never here)."""
 
 
 # =========================================================================
@@ -1149,6 +1178,7 @@ class TrainingRuntime:
 
     __slots__ = (
         "_applied_rpm",
+        "_arming_gate",
         "_attendant_last_seen",
         "_clock",
         "_controller",
@@ -1217,6 +1247,7 @@ class TrainingRuntime:
         supervisor: SafetySupervisor | None = None,
         motion: MotionLimits = DEFAULT_MOTION_LIMITS,
         limit_radius: Metres | None = None,
+        arming_gate: ArmingGate | None = None,
     ) -> None:
         """Build an idle runtime. Raises ``ValueError`` on a mismatched supervisor.
 
@@ -1247,8 +1278,14 @@ class TrainingRuntime:
         a 1.5 m reference. ``None`` keeps today's behaviour (the reference
         radius). A value below ``geometry.radius`` is refused: it would loosen
         the limit at the very radius the screen promises it for.
+
+        ``arming_gate`` is asked at every arming, programme or manual, once
+        every other precondition has passed and before the drive is touched:
+        the console passes the session record's free-space check. ``None``:
+        nothing records, nothing to ask.
         """
         self._clock: Clock = clock
+        self._arming_gate: ArmingGate | None = arming_gate
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
         self._limits: RuntimeLimits = limits
@@ -1323,16 +1360,7 @@ class TrainingRuntime:
         self._setpoint_changed_at: Monotonic | None = None
         self._descent_from: Monotonic | None = None
 
-        # --- evidence and output ----------------------------------------
-        self._last_sample: HeartRateSample | None = None
-        self._decision: ControlDecision | None = None
-        self._counters: ZoneCounters = ZoneCounters(
-            in_zone=Seconds(0.0), above_zone=Seconds(0.0), below_zone=Seconds(0.0)
-        )
-        self._attendant_last_seen: Monotonic | None = None
-        self._previous_tick_at: Monotonic | None = None
-        self._latched: SafetyVerdict | None = None
-        self._shutdown: ShutdownReport | None = None
+        self._initialise_evidence()
 
         # --- idle, read-only polling (see _poll_idle) --------------------
         # Separate from _last_status on purpose: the safety observation never
@@ -1370,6 +1398,18 @@ class TrainingRuntime:
         self._idle_status_at: Monotonic | None = None
         self._idle_next_at: Monotonic | None = None
         self._unknown_episode: UnknownEpisode = UnknownEpisode()
+
+    def _initialise_evidence(self) -> None:
+        """Evidence and output, as a runtime nobody has started holds them."""
+        self._last_sample: HeartRateSample | None = None
+        self._decision: ControlDecision | None = None
+        self._counters: ZoneCounters = ZoneCounters(
+            in_zone=Seconds(0.0), above_zone=Seconds(0.0), below_zone=Seconds(0.0)
+        )
+        self._attendant_last_seen: Monotonic | None = None
+        self._previous_tick_at: Monotonic | None = None
+        self._latched: SafetyVerdict | None = None
+        self._shutdown: ShutdownReport | None = None
 
     # =====================================================================
     # Reads
@@ -1492,6 +1532,16 @@ class TrainingRuntime:
     def last_failure(self) -> DriveFailure | None:
         """The most recent drive failure, classified, or ``None`` if there has been none."""
         return self._last_failure
+
+    @property
+    def drive_status(self) -> DriveStatus | None:
+        """The last status the session path read, HOWEVER OLD; ``None`` before the first.
+
+        For the session record only, which writes it next to its freshness.
+        Nothing may decide anything from it: decisions read
+        :meth:`_readable_status`, which forgets an observation once it is stale.
+        """
+        return self._last_status
 
     @property
     def standing(self) -> SafetyVerdict | None:
@@ -1934,7 +1984,8 @@ class TrainingRuntime:
             return SafetyStanding(standing)
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             return AlreadyStarted(state)
-        return None
+        # Last, so the operator is first told what only they can clear.
+        return None if self._arming_gate is None else self._arming_gate()
 
     def _reset_session(self) -> None:
         """Forget the previous session before arming a new one. Link and tracker survive.

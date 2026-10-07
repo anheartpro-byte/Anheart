@@ -106,6 +106,17 @@ jobs:
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           PI_GATE_PROCESSES="$(nproc)" bash raspberry-pi/scripts/check.sh
+      # The nightly run only: a simulated day of sessions with the session
+      # record written, heap, object count and tick cost judged per session
+      # (raspberry-pi/tests/test_record_endurance.py). The same loop runs for
+      # a few simulated minutes in the gate above, on every run.
+      - name: Pi endurance, a simulated day of sessions with the session record written
+        if: ${{ github.event_name == 'schedule' }}
+        timeout-minutes: 35
+        working-directory: raspberry-pi
+        env:
+          ANHEART_ENDURANCE_HOURS: '24'
+        run: .venv/bin/python -m pytest tests/test_record_endurance.py -m slow -s
       # The same list of paths in `pi-gate` and in `simulation-gate`, as when
       # one job published both: it is what keeps each file under its full
       # path inside the artifact (raspberry-pi/coverage.xml, simulation/...).

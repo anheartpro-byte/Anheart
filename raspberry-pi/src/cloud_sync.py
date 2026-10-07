@@ -67,7 +67,7 @@ import json
 import logging
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, cast
@@ -467,6 +467,7 @@ class CloudSync:
         "_online",
         "_programs_enabled",
         "_pushed_rev",
+        "_record_degraded",
         "_refused_launch",
         "_runtime",
         "_said_at",
@@ -488,8 +489,12 @@ class CloudSync:
         tiers: CardiacTiers,
         programs_enabled: bool,
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
+        record_degraded: Callable[[], bool] | None = None,
     ) -> None:
+        """``record_degraded``: whether the local session record is incomplete or cannot
+        be written, read at every heartbeat; ``None`` when this console records nothing."""
         self._clock: Clock = clock
+        self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
         self._runtime: RuntimeView = runtime
         self._surface: ControlSurface = surface
@@ -635,6 +640,10 @@ class CloudSync:
         session = self.current_session_id
         if session is not None:
             body["activeSessionId"] = session
+        if self._record_degraded is not None:
+            # ``record_degraded`` in the wire's own spelling. Top level, never
+            # inside ``live``: that object is validated field by field.
+            body["recordDegraded"] = self._record_degraded()
         sent = await self._transport.post("/api/machine/heartbeat", body)
         self._note(sent)
 

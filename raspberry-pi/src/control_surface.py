@@ -161,6 +161,10 @@ class EventKind(Enum):
     # What the dashboard link turned down on the machine's behalf. Never an
     # answer to something typed at this console, hence not ``refused``.
 
+    RECORDING = "recording"
+    # The session record (the local black box) changed health: degraded, or
+    # back. Raised by the loop about itself, so it carries no operator.
+
 
 @dataclass(frozen=True, slots=True)
 class SessionEvent:
@@ -787,6 +791,14 @@ class ControlSurface:
         screen, which this never is.
         """
         self._publish(EventKind.DASHBOARD, self._clock.monotonic(), "", detail)
+
+    def note_recording(self, detail: str) -> None:
+        """The session record cannot be written as it should, or can again. Say so.
+
+        A message, never a command: the session it is about goes on, and so
+        does every safety rule. Nothing here touches the mailbox or a flag.
+        """
+        self._publish(EventKind.RECORDING, self._clock.monotonic(), "", detail)
 
     def note_presence(self, operator: str) -> Monotonic:
         """Record an attendant presence ping. Returns the instant recorded.
