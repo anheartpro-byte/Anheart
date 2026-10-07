@@ -86,7 +86,10 @@ table Convex `software_releases` ([section 6](#6-enregistrer-la-version-dans-con
 Une version naît le plus souvent `bench`. Quand une revue relève son niveau, ou
 le lui retire, on ne republie rien : une PR ajoute une ligne datée sous la ligne
 « Niveau de validation » de sa section, en citant la revue, et un admin
-enregistre la nouvelle valeur dans Convex avec le motif.
+enregistre la nouvelle valeur dans Convex avec le motif. Convex garde chaque
+niveau que la version a porté, avec son motif, son auteur et sa date : un
+changement de niveau n'efface pas le précédent
+([section 6](#6-enregistrer-la-version-dans-convex)).
 
 ### La règle : quelle machine reçoit quelle version
 
@@ -101,6 +104,11 @@ L'état de validation d'une machine sera tenu par le registre machine (ANH-147).
 
 Une version qui n'est pas enregistrée n'a aucun niveau : seule une machine sans
 état de validation l'accepte.
+
+La règle refuse ce qu'elle ne connaît pas. Un état de machine qui n'est aucun
+des quatre du tableau (une valeur mal écrite, un état ajouté plus tard sans que
+la règle suive) ne reçoit **aucune** version, quel que soit son niveau. Un
+niveau de version qui n'est aucun des trois compte comme une absence de niveau.
 
 **Ce qui applique la règle.** Aujourd'hui, rien d'automatique. La règle est
 codée une seule fois, dans `convex/lib/releaseValidation.ts`
@@ -520,7 +528,13 @@ appartient à la revue M6.
 
 Table `software_releases` ([convex.md, section 2](convex.md#2-le-schéma)) :
 `component`, `version` (le tag), `validationLevel` (Pi seulement), `releasedAt`,
-`notes`, plus `recordedBy` et `updatedAt` pour savoir qui a écrit quoi.
+`notes`, plus `recordedBy` et `updatedAt` pour savoir qui a écrit la ligne en
+dernier. Cette ligne dit le niveau **en vigueur**. La table
+`software_release_levels` dit comment la version y est arrivée : une ligne par
+niveau qu'elle a porté, avec le motif (`reason`, les `notes` données ce
+jour-là), l'auteur (`decidedBy`) et la date (`decidedAt`). Elle ne fait que
+s'allonger : relever ou retirer un niveau y ajoute une ligne et n'efface pas la
+précédente.
 
 La mutation `softwareReleases.recordRelease` est réservée au rôle `admin`, et
 l'autorisation est vérifiée côté serveur. Elle refuse :
@@ -530,9 +544,11 @@ l'autorisation est vérifiée côté serveur. Elle refuse :
 - une date invalide, des notes de plus de 2000 caractères ;
 - un changement de niveau d'une version déjà enregistrée sans `notes` (le motif).
 
-Enregistrer deux fois la même version ne crée qu'une ligne.
-`softwareReleases.listReleases` (admin) relit le registre, la plus récente
-d'abord.
+Enregistrer deux fois la même version ne crée qu'une ligne, et une correction
+qui ne touche pas au niveau (une date, des notes) n'ajoute rien à son
+historique. `softwareReleases.listReleases` (admin) relit le registre, la plus
+récente d'abord ; chaque version y porte `levelHistory`, ses niveaux successifs
+du plus ancien au plus récent.
 
 `scripts/release.sh tag` affiche, pour chaque version, l'argument à passer, par
 exemple :

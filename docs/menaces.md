@@ -251,7 +251,7 @@ F8 · Livraison/Pi · S, T, E, D · Critique, personne directement.
 ## MEN-11 Horloge du Pi manipulée
 
 - Status: OPEN
-- Issues: [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes), [ANH-142](https://linear.app/anheart/issue/ANH-142/controles-pre-vol-automatiques-avant-chaque-seance-variateur-bitalino)
+- Issues: [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes), [ANH-142](https://linear.app/anheart/issue/ANH-142/controles-pre-vol-automatiques-avant-chaque-seance-variateur-bitalino), [ANH-129](https://linear.app/anheart/issue/ANH-129/synchronisation-cloud-par-relecture-du-journal-local-avec-reprise)
 
 F3, F4 · Pi/Convex · T, R, D · Haute, personne via pré-vol ; intégrité des preuves.
 
@@ -259,7 +259,7 @@ F3, F4 · Pi/Convex · T, R, D · Haute, personne via pré-vol ; intégrité des
 
 **Existant vérifié dans le source.** [`RealClock.monotonic` et `unix_millis`](../raspberry-pi/src/clock.py) séparent durées de sécurité et horodatage ; [`SafetySupervisor`](../raspberry-pi/src/training/safety.py) utilise le monotone ; La borne que le serveur appliquait à l'heure des lots ECG a disparu avec la route de l'ancien mode d'enregistrement. L'heure de la télémétrie d'entraînement reste celle du Pi pour toute console d'aujourd'hui : elle est stockée et servie telle quelle, sans borne, et une mesure envoyée en retard ou datée par une horloge fausse n'est pas montrée comme actuelle. Convex sait de plus dater lui-même une séance dont la machine dit l'âge, compté sur son horloge monotone : début, fin et date de mesure sont alors placés sur l'horloge du serveur, et un point ou un événement n'est écrit que s'il est daté dans sa séance sur l'axe de la machine (`machineAxis`, `sessionWindow` dans [`training.ts`](../convex/training.ts), [`journalSync.test.ts`](../convex/journalSync.test.ts)). Aucune console n'envoie encore cet âge ; ce qui borne un âge faux est décrit dans [convex.md](convex.md#deux-horloges). [`_prepare_programme`](../raspberry-pi/src/local_panel.py) transmet l'heure murale à la résolution du profil : toute décision n'est donc pas indépendante de l'heure.
 
-**Manquant.** [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes) heure fiable et indication de confiance ; [ANH-142](https://linear.app/anheart/issue/ANH-142/controles-pre-vol-automatiques-avant-chaque-seance-variateur-bitalino) pré-vol bloque un état d'horloge non fiable avant personne à bord. Un système privilégié compromis reste couvert par MEN-04.
+**Manquant.** [ANH-129](https://linear.app/anheart/issue/ANH-129/synchronisation-cloud-par-relecture-du-journal-local-avec-reprise) la console ne dit pas encore l'âge de sa séance : la borne de cohérence que le serveur sait appliquer (ci-dessus) ne s'applique à aucune console d'aujourd'hui, dont l'heure des points reste stockée sans borne ; [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes) heure fiable et indication de confiance ; [ANH-142](https://linear.app/anheart/issue/ANH-142/controles-pre-vol-automatiques-avant-chaque-seance-variateur-bitalino) pré-vol bloque un état d'horloge non fiable avant personne à bord. Un système privilégié compromis reste couvert par MEN-04.
 
 **Preuve de fermeture attendue.** Horloge murale reculée/avancée sans raccourcir les délais monotones ; démarrage hors réseau signale heure non fiable et bloque le pré-vol occupé.
 
