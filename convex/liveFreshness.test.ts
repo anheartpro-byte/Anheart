@@ -14,6 +14,13 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { LIVE_FRESH_MS } from "../lib/training";
 import {
+  addSession,
+  as,
+  configureAnheartOrganization,
+  seedWorld,
+  type World,
+} from "./test.setup";
+import {
   now,
   trainingFixture as seedTraining,
 } from "./trainingPrivacy.fixtures";
@@ -170,15 +177,18 @@ describe("the last sign of life of a session, dated by the server", () => {
       startedAt: number;
     },
   ): Promise<Id<"sessions">> {
-    return await f.t.run((ctx) =>
-      ctx.db.insert("sessions", {
+    return await f.t.run(async (ctx) => {
+      const machine = await ctx.db.get(f.machineId);
+      return await ctx.db.insert("sessions", {
+        // Like every session, it belongs to its machine's organisation.
+        organizationId: machine?.organizationId,
         machineId: f.machineId,
         userId: f.rider,
         channels: ["ECG"],
         kind: "auto",
         ...fields,
-      }),
-    );
+      });
+    });
   }
 
   const read = (f: Fixture, sessionId: Id<"sessions">) =>
@@ -307,4 +317,109 @@ describe("the last sign of life of a session, dated by the server", () => {
     expect(await asked("outsider")).toBeNull();
     expect(await asked("otherManager")).toBeNull();
   });
+});
+
+describe("the server's dates of a machine and of a session stay in their organisation", () => {
+  afterEach(() => {
+    configureAnheartOrganization(null);
+  });
+
+  /** Centre B's machine in a session that sends: every date these queries serve. */
+  async function centreBSends() {
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.orgBMachine,
+      userId: w.orgBPatient,
+      status: "active",
+      kind: "auto",
+    });
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.orgBMachine, {
+        live: {
+          runMode: "seance",
+          phase: "hold",
+          motorRpm: 1200,
+          outputRpm: 24,
+          setpointMotorRpm: 1200,
+          gLoad: 1.2,
+          safetyAction: "none",
+          sessionId,
+          updatedAt: now,
+        },
+      }),
+    );
+    await w.t.mutation(internal.training.storeTelemetry, {
+      machineId: w.orgBMachine,
+      sessionId,
+      points: [
+        {
+          t: now,
+          elapsedS: 15,
+          phase: "hold",
+          motorRpm: 1200,
+          outputRpm: 24,
+          setpointMotorRpm: 1200,
+          gLoad: 1.2,
+          safetyAction: "none",
+        },
+      ],
+    });
+    return { w, sessionId };
+  }
+
+  /** Everything the six queries tell `actor` about centre B's machine and session. */
+  async function toldTo(
+    w: World,
+    sessionId: Id<"sessions">,
+    actor: Parameters<typeof as>[1],
+  ) {
+    const me = as(w.t, actor);
+    const ofCentreB = <T extends { _id: Id<"machines"> }>(machines: T[]) =>
+      machines.filter((m) => m._id === w.orgBMachine);
+    return {
+      live: await me.query(api.training.getMachineLive, {
+        machineId: w.orgBMachine,
+      }),
+      session: await me.query(api.training.getTrainingSession, { sessionId }),
+      machine: await me.query(api.machines.getMachine, {
+        machineId: w.orgBMachine,
+      }),
+      launchable: ofCentreB(
+        await me.query(api.training.listLaunchableMachines, {}),
+      ),
+      listed: ofCentreB(await me.query(api.machines.listMachines, {})),
+      managed: ofCentreB(
+        await me.query(api.machines.getMachinesForGestionnaire, {
+          gestionnaireId: w.orgBManager,
+        }),
+      ),
+    };
+  }
+
+  it("serves them to the machine's own manager", async () => {
+    const { w, sessionId } = await centreBSends();
+    expect(await toldTo(w, sessionId, "orgBManager")).toMatchObject({
+      live: { serverNow: now, live: { updatedAt: now } },
+      session: { serverNow: now, lastSignalAt: now },
+      machine: { serverNow: now, lastHeartbeat: now },
+      launchable: [{ serverNow: now, lastHeartbeat: now }],
+      listed: [{ serverNow: now, lastHeartbeat: now }],
+      managed: [{ serverNow: now, lastHeartbeat: now }],
+    });
+  });
+
+  it.each(["orgAdmin", "manager", "otherManager", "patient", "stranger"] as const)(
+    "serves none of them to %s of another organisation",
+    async (actor) => {
+      const { w, sessionId } = await centreBSends();
+      expect(await toldTo(w, sessionId, actor)).toEqual({
+        live: null,
+        session: null,
+        machine: null,
+        launchable: [],
+        listed: [],
+        managed: [],
+      });
+    },
+  );
 });
