@@ -386,15 +386,26 @@ $PY -m simulation.live --port 9000
 ```
 
 Le serveur (bibliothèque standard seulement, écoute sur `127.0.0.1`) sert
-`simulation/viewer/index.html` et deux points d'accès :
+`simulation/viewer/index.html` et trois points d'accès :
 
 | Chemin | Rôle |
 |---|---|
-| `/` | redirige vers `/viewer/index.html` en gardant les paramètres |
+| `/` | redirige vers `/viewer/index.html` en gardant les paramètres, ramenés sur une seule ligne |
 | `/api/scenarios` | liste JSON des scénarios |
 | `/stream?scenario=…&speed=…&clock=…` | le flux Server-Sent Events d'une exécution (événements `meta`, `row`, `event`, `final`, `error`, `end`) |
+| `/api/record?path=…` | un dossier d'enregistrement de schéma 2, lu par le lecteur partagé et rendu ligne par ligne pour le visualiseur ; `path` est relatif à `simulation/` |
 
 Chaque connexion navigateur a sa propre exécution, dans son propre thread.
+
+`/api/record` ne lit que sous `simulation/`. Le chemin demandé est résolu, liens
+symboliques suivis, par `resolve_under`
+([`src/record/containment.py`](../raspberry-pi/src/record/containment.py)) ; s'il
+sort de ce dossier, s'il désigne le dossier lui-même ou s'il ne peut pas être un
+nom de fichier, la réponse est 400 `outside_root` et rien n'est lu. Le lecteur
+reçoit le chemin résolu, jamais le texte de la requête. Un dossier de
+`simulation/` qui n'est pas un enregistrement donne 400 avec la raison du
+lecteur. Tests : `raspberry-pi/tests/test_record_containment.py` pour la
+fonction, `simulation/tests/test_cli_and_live.py` pour le serveur.
 
 ### 7.1 Paramètres d'URL du visualiseur
 
@@ -1560,6 +1571,18 @@ dans les filtres : la vue par défaut montre la branche par défaut du dépôt,
 `main`, qui n'est analysée qu'une fois le workflow fusionné dans `main`. Il en
 va de même du passage hebdomadaire : comme le déclenchement nocturne de
 `ci.yml`, GitHub ne le lance que depuis la branche par défaut.
+
+**Traiter un constat.** Un constat est corrigé dans le code quand la donnée
+qu'il suit peut venir d'un tiers, ou quand la correction est simple et rend le
+code sûr de façon évidente. Sinon il est classé dans GitHub (**Dismiss alert**)
+avec sa raison écrite : la liste des constats ouverts ne doit contenir que ce
+qui reste à traiter. `paths-ignore`, dans `.github/codeql/codeql-config.yml`,
+ne sert pas à écarter un constat : il reste réservé au code généré ou installé.
+Pour un nom de fichier reçu de l'extérieur, la forme que l'analyse reconnaît est
+celle de `resolve_under`
+([`src/record/containment.py`](../raspberry-pi/src/record/containment.py)) :
+normaliser le chemin, vérifier qu'il commence par le dossier permis, puis
+n'utiliser que le chemin normalisé.
 
 **Ce que cette analyse bloque.** Rien dans une PR : les jobs `codeql (...)` ne
 sont pas dans la protection de branche de `develop`. Les rendre obligatoires

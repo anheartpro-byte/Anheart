@@ -18,6 +18,8 @@ from simulation import live
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import document, run_file
 from src.record.codec import Privacy
+from src.record.schema import RecordError
+from src.result import Ok, Result
 
 FAST = SCENARIO_DIR / "manual_32_rpm_refused.json"
 FAIL = SCENARIO_DIR / "manual_below_min_run_refused.json"
@@ -161,6 +163,17 @@ def test_the_server_redirects_to_the_viewer_and_serves_it(server: str) -> None:
         assert response.url.endswith("/viewer/index.html")
 
 
+def test_the_redirect_keeps_its_query_on_one_line() -> None:
+    assert live.viewer_location("") == "/viewer/index.html"
+    assert live.viewer_location("live=manual_27_rpm&speed=20") == (
+        "/viewer/index.html?live=manual_27_rpm&speed=20"
+    )
+    assert live.viewer_location("trace=out/x\r\nsecond line\n") == (
+        "/viewer/index.html?trace=out/xsecond line"
+    )
+    assert live.viewer_location("\r\n") == "/viewer/index.html"
+
+
 def test_the_server_lists_the_scenarios(server: str) -> None:
     with _get(server + "/api/scenarios") as response:
         names = json.loads(response.read())  # pyright: ignore[reportAny]
@@ -184,6 +197,67 @@ def test_ex11_server_rejects_invalid_record(server: str) -> None:
     with pytest.raises(HTTPError) as caught:
         _get(server + "/api/record")
     assert caught.value.code == 400
+
+
+def test_the_server_says_why_a_folder_of_its_directory_is_not_a_record(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setattr(live, "ROOT", tmp_path)
+    with pytest.raises(HTTPError) as caught:
+        _get(server + "/api/record?path=empty")
+    assert caught.value.code == 400
+    assert caught.value.reason == "FileNotFoundError"
+
+
+def test_the_server_reads_a_record_at_its_resolved_path_not_at_the_requested_text(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "kept").mkdir()
+    read_at: list[tuple[Path, str]] = []
+
+    def view(root: Path, requested: str) -> Result[str, RecordError]:
+        read_at.append((root, requested))
+        return Ok("")
+
+    monkeypatch.setattr(live, "ROOT", tmp_path)
+    monkeypatch.setattr(live, "view_record", view)
+    with _get(server + "/api/record?path=/elsewhere/../kept") as response:
+        assert response.status == 200
+    assert read_at == [(tmp_path.resolve(), "kept")]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "?path=",
+        "?path=.",
+        "?path=../outside",
+        "?path=..%2Foutside%2Finner",
+        "?path=inside/../../outside",
+        "?path=link",
+        "?path=link/inner",
+        "?path=%00",
+    ],
+)
+def test_the_server_refuses_a_record_outside_its_directory_before_reading_anything(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    root = tmp_path / "root"
+    (tmp_path / "outside" / "inner").mkdir(parents=True)
+    (root / "inside").mkdir(parents=True)
+    (root / "link").symlink_to(tmp_path / "outside", target_is_directory=True)
+
+    def view(_root: Path, _requested: str) -> Result[str, RecordError]:
+        raise AssertionError("a refused request reached the reader")
+
+    monkeypatch.setattr(live, "ROOT", root)
+    monkeypatch.setattr(live, "view_record", view)
+    with pytest.raises(HTTPError) as caught:
+        _get(server + "/api/record" + query)
+    assert caught.value.code == 400
+    assert caught.value.reason == "outside_root"
 
 
 @pytest.mark.parametrize("query", ["speed=200", "speed=fast", "speed=5&clock=sim"])
