@@ -26,6 +26,12 @@
 #
 # The same two steps reproduce the CI on one machine: SIMULATION_GATE_SHARES=0-12/13,
 # then SIMULATION_GATE_COMBINE=13, with the same <dir>.
+#
+# QUALITY_REPORT_DIR=<dir> (optional; the CI jobs set it) keeps in <dir> what
+# the quality report of the run reads (../scripts/ci/quality-report.mjs): how
+# each stage below ended (stages.tsv), the JUnit file of each process started
+# for SIMULATION_GATE_SHARES, and the combined coverage as JSON for
+# SIMULATION_GATE_COMBINE. It changes no verdict.
 set -uo pipefail
 
 SHARES="${SIMULATION_GATE_SHARES:-}"
@@ -47,6 +53,11 @@ fi
 case "$EVIDENCE" in
     "" | /*) ;;
     *) EVIDENCE="$PWD/$EVIDENCE" ;;
+esac
+REPORT="${QUALITY_REPORT_DIR:-}"
+case "$REPORT" in
+    "" | /*) ;;
+    *) REPORT="$PWD/$REPORT" ;;
 esac
 
 cd "$(dirname "$0")/.." || exit 1
@@ -70,12 +81,24 @@ export PYTHONPATH="..:../raspberry-pi${PYTHONPATH:+:$PYTHONPATH}"
 
 failures=()
 
+# Nothing below reads $REPORT back: a directory that cannot be written to is
+# said, and the gate then runs exactly as it does without one.
+if [ -n "$REPORT" ] && ! { mkdir -p "$REPORT" && : > "$REPORT/stages.tsv"; }; then
+    echo "QUALITY_REPORT_DIR: nothing can be kept in $REPORT, the gate runs without it." >&2
+    REPORT=""
+fi
+
 stage() {
     local name="$1"; shift
+    local outcome=passed
     printf '\n=== %s ===\n' "$name"
     if ! "$@"; then
         failures+=("$name")
+        outcome=failed
         printf 'FAILED: %s\n' "$name" >&2
+    fi
+    if [ -n "$REPORT" ]; then
+        printf '%s\t%s\n' "$outcome" "$name" >> "$REPORT/stages.tsv"
     fi
 }
 
@@ -87,11 +110,11 @@ if [ -z "$COMBINE" ]; then
 fi
 
 if [ -n "$SHARES" ]; then
-    stage "scenario battery, shares $SHARES"         "$PY" "$RUNNER" --suite simulation --shares "$SHARES" --evidence "$EVIDENCE"
+    stage "scenario battery, shares $SHARES"         "$PY" "$RUNNER" --suite simulation --shares "$SHARES" --evidence "$EVIDENCE" ${REPORT:+--report "$REPORT"}
 elif [ -n "$COMBINE" ]; then
     stage "parallel runner (its own tests)"          "$PY" -m pytest ../scripts/ci/test_pi_gate_parallel.py
     stage "scenario battery, $COMBINE shares: every test once + coverage" \
-                                                     "$PY" "$RUNNER" --suite simulation --combine "$COMBINE" --evidence "$EVIDENCE" --fail-under 100
+                                                     "$PY" "$RUNNER" --suite simulation --combine "$COMBINE" --evidence "$EVIDENCE" --fail-under 100 ${REPORT:+--report "$REPORT"}
 else
     stage "scenario battery + coverage"              "$PY" -m pytest --cov --cov-branch "$@"
 fi

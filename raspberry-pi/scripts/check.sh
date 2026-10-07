@@ -15,8 +15,21 @@
 # ../scripts/ci/pi_gate_parallel.py. Unset, the test stage is the single
 # pytest it has always been.
 #
+# QUALITY_REPORT_DIR=<dir> (optional; the CI job sets it) keeps in <dir> what
+# the quality report of the run reads (../scripts/ci/quality-report.mjs): how
+# each stage below ended (stages.tsv) and, from the test stage run as several
+# processes, the JUnit file of each process and the coverage as JSON. It
+# changes no verdict.
+#
 # See .claude/skills/anheart-strict-python/SKILL.md
 set -uo pipefail
+
+# Named from where the gate was called, before this script changes directory.
+REPORT="${QUALITY_REPORT_DIR:-}"
+case "$REPORT" in
+    "" | /*) ;;
+    *) REPORT="$PWD/$REPORT" ;;
+esac
 
 cd "$(dirname "$0")/.." || exit 1
 
@@ -36,12 +49,24 @@ fi
 
 failures=()
 
+# Nothing below reads $REPORT back: a directory that cannot be written to is
+# said, and the gate then runs exactly as it does without one.
+if [ -n "$REPORT" ] && ! { mkdir -p "$REPORT" && : > "$REPORT/stages.tsv"; }; then
+    echo "QUALITY_REPORT_DIR: nothing can be kept in $REPORT, the gate runs without it." >&2
+    REPORT=""
+fi
+
 stage() {
     local name="$1"; shift
+    local outcome=passed
     printf '\n=== %s ===\n' "$name"
     if ! "$@"; then
         failures+=("$name")
+        outcome=failed
         printf 'FAILED: %s\n' "$name" >&2
+    fi
+    if [ -n "$REPORT" ]; then
+        printf '%s\t%s\n' "$outcome" "$name" >> "$REPORT/stages.tsv"
     fi
 }
 
@@ -66,8 +91,8 @@ else
 fi
 
 if [ -n "${PI_GATE_PROCESSES:-}" ]; then
-    stage "parallel runner (its own tests)"      "$PY" -m pytest ../scripts/ci/test_pi_gate_parallel.py
-    stage "tests + 100% branch coverage"         "$PY" ../scripts/ci/pi_gate_parallel.py --processes "$PI_GATE_PROCESSES" --fail-under 100
+    stage "parallel runner (its own tests)"      "$PY" -m pytest ../scripts/ci/test_pi_gate_parallel.py ${REPORT:+"--junitxml=$REPORT/junit-gate-runner.xml"}
+    stage "tests + 100% branch coverage"         "$PY" ../scripts/ci/pi_gate_parallel.py --processes "$PI_GATE_PROCESSES" --fail-under 100 ${REPORT:+--report "$REPORT"}
 else
     stage "tests + 100% branch coverage"         "$PY" -m pytest --cov --cov-branch --cov-fail-under=100
 fi

@@ -31,6 +31,13 @@ The shares need not all run on one machine. Three ways to call it:
   that ran the COUNT shares left; steps 3 and 4 on all of them. Whoever calls
   this must also require that each of those jobs succeeded: step 2 is theirs.
 
+``--report DIR`` can be added to any of the three. It leaves in DIR what the
+quality report of the run reads (``scripts/ci/quality-report.mjs``): the JUnit
+file of each process started here, and the coverage of the combined data as
+JSON, once for the files the threshold judges and once for every file that was
+measured. Nothing above reads DIR back: a file that cannot be written there is
+said in the output and changes no verdict.
+
 Two limits, stated rather than hidden. The proof in 3 compares the processes
 with each other, not with a serial run: a test that every process leaves out
 in the same way (a filter in ``PYTEST_ADDOPTS``, say) is not noticed here, any
@@ -114,6 +121,8 @@ class Settings:
     exit_grace: float
     evidence: Path | None
     """Where the records and measures are kept; ``None``: private to this call."""
+    report: Path | None = None
+    """Where what the quality report reads is left; ``None``: nothing is left."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +157,7 @@ class Arguments(argparse.Namespace):
     shares: str | None = None
     combine: int | None = None
     evidence: Path | None = None
+    report: Path | None = None
     suite: str = SUITES[0]
     fail_under: float | None = None
     exit_grace: float = EXIT_GRACE_S
@@ -173,6 +183,7 @@ def parse_arguments(arguments: Sequence[str]) -> Settings:
     what.add_argument("--shares", help="FIRST-LAST/COUNT: only these shares here (see --evidence)")
     what.add_argument("--combine", type=int, help="judge this many shares that other calls ran")
     parser.add_argument("--evidence", type=Path, help="where --shares leaves, --combine reads")
+    parser.add_argument("--report", type=Path, help="where to leave what the quality report reads")
     parser.add_argument("--suite", choices=SUITES, default=SUITES[0], help="whose dealing rule")
     parser.add_argument("--fail-under", type=float, help="required combined coverage, percent")
     parser.add_argument("--exit-grace", type=float, default=EXIT_GRACE_S)
@@ -201,6 +212,7 @@ def parse_arguments(arguments: Sequence[str]) -> Settings:
         fail_under="0" if parsed.fail_under is None else f"{parsed.fail_under:g}",
         exit_grace=parsed.exit_grace,
         evidence=parsed.evidence,
+        report=parsed.report,
     )
 
 
@@ -225,14 +237,57 @@ def forget(record: Record) -> None:
     shutil.rmtree(record.coverage_file.parent, ignore_errors=True)
 
 
+def report_directory(settings: Settings) -> Path | None:
+    """The directory given with ``--report``, created; ``None`` when nothing is to be left.
+
+    What goes there feeds the quality report of the run and nothing else: no
+    verdict of this runner reads it back. So a directory that cannot be created,
+    or that cannot be written to, is said and then done without, never counted
+    as a problem. Being there is not enough: a pytest told to write its JUnit
+    file where it cannot ends with an error, which would fail the gate.
+    """
+    if settings.report is None:
+        return None
+    try:
+        settings.report.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=settings.report):
+            pass
+    except OSError as error:
+        say(f"[gate] quality report: nothing is left in {settings.report} ({error})")
+        return None
+    return settings.report
+
+
+def cleared(target: Path) -> bool:
+    """Remove what an earlier call left at ``target``; say whether the place is free.
+
+    Each call writes the files of the quality report afresh, so that a file
+    that is there is one this call wrote. What cannot be removed (a directory
+    standing in its place) is left alone and said: nothing of the report may
+    stop the gate.
+    """
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as error:
+        say(f"[gate] quality report: {target.name} cannot be replaced ({error})")
+        return False
+    return True
+
+
 def pump(index: int, stream: TextIO) -> None:
     """Copy one process's output to ours, a whole line at a time, labelled."""
     for line in stream:
         say(f"[p{index}] {line.rstrip()}")
 
 
-def start(index: int, count: int, evidence: Path, suite: str = SUITES[0]) -> Running:
+def start(
+    index: int, count: int, evidence: Path, suite: str = SUITES[0], report: Path | None = None
+) -> Running:
     """Start one pytest process on its share of the suite.
+
+    With ``report``, the process also writes its JUnit file there, for the
+    quality report of the run: pytest's own account of each test and of the
+    time it took. No verdict reads it.
 
     The tests must see the environment this runner was started with, as they
     do under the serial gate: whatever is added here is inherited by every
@@ -269,6 +324,13 @@ def start(index: int, count: int, evidence: Path, suite: str = SUITES[0]) -> Run
     # Each share must not judge its own, partial, coverage: the threshold is
     # applied once, to the combined data, by combined_coverage() below.
     command += ["--cov", "--cov-branch", "--cov-fail-under=0", "--cov-report="]
+    if report is not None:
+        junit = report / f"junit-{index}.xml"
+        # Like forget() above: a process that dies before writing its file
+        # must leave none, not the one of an earlier call. Where that file
+        # cannot be removed, this process is not asked for one.
+        if cleared(junit):
+            command += [f"--junitxml={junit}"]
     environment = {**os.environ, **needed_to_start}
     process = subprocess.Popen(  # noqa: S603  # fixed argv, no shell
         command,
@@ -339,10 +401,11 @@ def wait_for_exit(running: Sequence[Running], exit_grace: float) -> Sequence[str
 def run_shares(settings: Settings, evidence: Path) -> tuple[Sequence[Record], Sequence[str]]:
     """Start the shares of this call, wait for them all, stop what is left."""
     running: list[Running] = []
+    report = report_directory(settings)
     try:
         # One by one, so the finally clause can stop whatever did start.
         for index in settings.shares:
-            running.append(start(index, settings.count, evidence, settings.suite))  # noqa: PERF401
+            running.append(start(index, settings.count, evidence, settings.suite, report))  # noqa: PERF401
         say(f"[gate] {len(running)} pytest processes started, one share each")
         problems = wait_for_exit(running, settings.exit_grace)
     finally:
@@ -511,7 +574,28 @@ def run_coverage(merged_file: Path, *arguments: str) -> int:
     return subprocess.run(command, env=environment, check=False).returncode  # noqa: S603  # fixed argv
 
 
-def combined_coverage(records: Sequence[Record], fail_under: str, private: Path) -> Sequence[str]:
+def report_coverage(merged_file: Path, report: Path) -> None:
+    """Leave the combined coverage as JSON for the quality report, twice.
+
+    ``coverage-gate.json`` holds what the threshold is applied to: the files of
+    the project's ``include`` list. ``coverage-all.json`` holds every file that
+    was measured (``--include=*`` replaces that list for this one report),
+    which no threshold judges. Neither can change the verdict: the threshold
+    is applied by the caller, and a report that cannot be written is said, not
+    counted as a problem.
+    """
+    for name, scope in (("coverage-gate.json", ()), ("coverage-all.json", ("--include=*",))):
+        target = report / name
+        written = cleared(target) and (
+            run_coverage(merged_file, "json", "--fail-under=0", *scope, "-o", str(target)) == 0
+        )
+        if not written:
+            say(f"[gate] quality report: {name} could not be written")
+
+
+def combined_coverage(
+    records: Sequence[Record], fail_under: str, private: Path, report: Path | None = None
+) -> Sequence[str]:
     """Merge every share's data, then apply the threshold once to the total."""
     private.mkdir()
     merged_file = private / ".coverage"
@@ -525,6 +609,8 @@ def combined_coverage(records: Sequence[Record], fail_under: str, private: Path)
     # The threshold was applied just above; here only a failure to write counts.
     if run_coverage(merged_file, "xml", "--fail-under=0", "-o", "coverage.xml") != 0:
         problems.append("coverage.xml could not be written")
+    if report is not None:
+        report_coverage(merged_file, report)
     return problems
 
 
@@ -556,7 +642,9 @@ def judge_whole(settings: Settings, private: Path) -> tuple[Sequence[str], str]:
     """Every share here: exit codes, partition, coverage threshold."""
     records, exits = run_shares(settings, private)
     problems = [*exits, *partition_evidence(records)]
-    problems += combined_coverage(records, settings.fail_under, private / "combined")
+    problems += combined_coverage(
+        records, settings.fail_under, private / "combined", report_directory(settings)
+    )
     passed = "every process exited cleanly, every test ran once, combined coverage is sufficient"
     return problems, passed
 
@@ -581,7 +669,9 @@ def judge_combined(settings: Settings, private: Path) -> tuple[Sequence[str], st
     evidence = kept_evidence(settings)
     records = [record_of(index, evidence) for index in range(settings.count)]
     problems = [*partition_evidence(records)]
-    problems += combined_coverage(records, settings.fail_under, private / "combined")
+    problems += combined_coverage(
+        records, settings.fail_under, private / "combined", report_directory(settings)
+    )
     passed = (
         f"every test ran once over the {settings.count} processes gathered, combined coverage "
         "is sufficient (their exit codes were judged where they ran)"
