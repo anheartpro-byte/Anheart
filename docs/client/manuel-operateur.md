@@ -1,7 +1,7 @@
 # Manuel opérateur : la console de la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 7 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
+> Version du 8 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
 > cette date. Aucun client ne l'a encore utilisé.
 >
 > - Les captures d'écran viennent d'essais en simulation (machine simulée),
@@ -162,11 +162,12 @@ est gardé pour cet onglet seulement.
 >   « recovery » après un arrêt en séance programmée, y compris un E-STOP ;
 >   tant que le variateur reste en défaut
 >   ([section 9.5](#95-le-variateur-passe-en-défaut)) ; ou jusqu'au
->   redémarrage de la console avec « go_silent ». Il peut aussi repasser de
->   « REPOS » à « ARRET » après un programme mené à son terme, sans que rien
->   ne soit commandé : si une alerte se verrouille à ce moment-là, par exemple
->   après un clic sur **E-STOP** ou un défaut du variateur, **Mode** affiche
->   « ARRET » pendant la durée d'une phase « recovery ».
+>   redémarrage de la console avec « go_silent ».
+> - Après une séance terminée, une fois **Mode** revenu à « REPOS », un clic
+>   sur **E-STOP** ou un défaut du variateur ne le ramène pas à « ARRET » :
+>   **Mode** reste sur « REPOS ». C'est **Securite** qui affiche l'arrêt
+>   verrouillé, et la console refuse tout démarrage tant qu'il n'est pas
+>   acquitté ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 > - La console ne voit pas l'arrêt d'urgence câblé. À lui seul, il peut ne
 >   rien verrouiller dans le logiciel, et la console peut garder une vitesse
 >   commandée ([Après un arrêt d'urgence câblé](#après-un-arrêt-durgence-câblé)).
@@ -218,10 +219,11 @@ chose est en cours. Rouge : problème ou arrêt.
 
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
-affiche « ARRET ». Et quand **Mode** repasse à « ARRET » après un programme
-mené à son terme, parce qu'un défaut du variateur survient au repos
-([section 9.5](#95-le-variateur-passe-en-défaut)), **Etat** affiche « idle »
-alors que tout démarrage est refusé. Pour savoir où en est la machine, lisez
+affiche « ARRET ». Et aucun des deux ne dit qu'un démarrage sera accepté :
+quand un défaut du variateur survient au repos, après une séance terminée
+([section 9.5](#95-le-variateur-passe-en-défaut)), **Mode** reste sur
+« REPOS » et **Etat** affiche « idle » alors que tout démarrage est refusé.
+C'est **Securite** qui le dit. Pour savoir où en est la machine, lisez
 **Mode**, **Rotation** et **Securite**, pas **Etat**.
 
 ### Les bandeaux en haut de l'écran
@@ -407,10 +409,8 @@ l'écran.*
   faut acquitter une fois **Mode** revenu à « REPOS », puis démarrer une
   nouvelle séance ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 - Une séance manuelle s'arrête seule au bout de 60 minutes, comme après un
-  STOP. Si **Mode** affiche encore « ARRET » 30 secondes après cet arrêt
-  automatique, parce que le bras ralentit depuis une vitesse élevée, l'alerte
-  « session_overrun » se verrouille
-  ([section 9.2](#92-la-console-agit-seule)).
+  STOP. Cet arrêt automatique ne laisse aucune alerte à acquitter, même quand
+  le bras ralentit depuis une vitesse élevée.
 - Après toute fin de séance, la cible revient à 0. Pour repartir, il faut
   redémarrer une séance.
 
@@ -527,10 +527,11 @@ La séance se termine seule à la fin du programme. Pour l'arrêter avant :
 
 À la date de ce brouillon, un arrêt enregistré dans les dernières minutes d'un
 programme, pendant sa phase « recovery », relance une phase « recovery »
-complète : un **STOP**, un **E-STOP**, ou un arrêt décidé par la console. Si
-la séance dure alors plus de 30 secondes au-delà de la durée prévue, l'alerte
-« session_overrun » se déclenche pendant cette phase
-([section 9.2](#92-la-console-agit-seule)).
+complète : un **STOP**, un **E-STOP**, ou un arrêt décidé par la console.
+**Mode** revient alors à « REPOS » plus tard que la durée prévue. Ce retard ne
+déclenche aucune alerte : après un **STOP** il n'y a rien à acquitter, et
+après un **E-STOP** ou un arrêt décidé par la console il reste à acquitter
+celui-là ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 
 ## 7. Séance lancée depuis le site
 
@@ -848,7 +849,7 @@ Les règles que vous verrez le plus souvent sur la ligne « regle » :
 | « loop_stall » | La console a pris du retard dans son propre fonctionnement. | « freeze » verrouillé, qui ne disparaît pas seul, ou « go_silent ». Pour ce « freeze » verrouillé, lisez l'avertissement au-dessus de ce tableau avant d'acquitter. |
 | « drive_fault » | Le variateur est en défaut. | Fin de séance. Voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
 | « comms_lost » | La console ne parvient plus à parler au variateur. | « go_silent ». |
-| « session_overrun » | Une séance en cours dure depuis plus de 30 secondes au-delà de sa durée prévue. | Fin de séance verrouillée. Voir sous ce tableau. |
+| « session_overrun » | Une séance en cours dure depuis plus de 30 secondes au-delà de sa durée prévue, ou une fin de séance ne se termine pas dans le temps que la console lui laisse. | Fin de séance verrouillée. Voir sous ce tableau. |
 
 Les délais de ce tableau sont ceux du logiciel à la date de ce brouillon. Ce
 ne sont pas des recommandations médicales. Pour toute autre règle : arrêtez la
@@ -859,40 +860,36 @@ de la séance. Tant que la séance n'est pas finie, si ce temps dépasse de
 30 secondes la durée prévue (celle du programme, ou 60 minutes pour une séance
 manuelle), elle verrouille l'alerte « session_overrun » : **Securite** affiche
 « ramp_down ». Une fois la séance finie, la console ne déclenche plus cette
-alerte, quel que soit le temps passé à « REPOS ». Elle se déclenche dans les
-cas suivants :
+alerte, quel que soit le temps passé à « REPOS ».
 
-- après un arrêt enregistré tard dans une séance programmée : un **STOP**, à
-  la console ou demandé depuis le site, un **E-STOP**, ou un arrêt décidé par
-  la console. À la date de ce brouillon, un tel arrêt relance une phase
+Une fin de séance déjà enregistrée n'est pas jugée sur la durée prévue. La
+console lui laisse le temps de ramener la vitesse commandée à zéro, puis celui
+de sa phase « recovery », et 30 secondes de plus. Les deux situations
+suivantes ne déclenchent donc pas cette alerte :
+
+- un arrêt enregistré tard dans une séance programmée : un **STOP**, à la
+  console ou demandé depuis le site, un **E-STOP**, ou un arrêt décidé par la
+  console. À la date de ce brouillon, un tel arrêt relance une phase
   « recovery » complète, même si le programme était déjà dans sa propre phase
-  « recovery », bras à l'arrêt. Si cette phase se termine plus de 30 secondes
-  après la durée prévue, l'alerte se déclenche pendant qu'elle dure, alors que
-  **Mode** affiche « ARRET ». Avec les deux programmes fournis par défaut à
-  la date de ce brouillon, c'est le cas d'un arrêt enregistré dans les quatre
-  dernières minutes et demie environ ;
-- en séance manuelle, si **Mode** affiche encore « ARRET » 30 secondes après
-  l'arrêt automatique des 60 minutes, parce que le bras ralentit depuis une
-  vitesse élevée.
+  « recovery », bras à l'arrêt : **Mode** revient à « REPOS » plus tard que la
+  durée prévue, sans alerte de plus ;
+- l'arrêt automatique d'une séance manuelle au bout de 60 minutes, même quand
+  le bras ralentit depuis une vitesse élevée.
 
-Cette alerte se lève comme les autres, une fois la séance finie : attendez
-**Mode** « REPOS », puis acquittez
+Après un arrêt enregistré tard, vous n'avez donc à acquitter que ce qui a
+arrêté la séance : rien après un STOP (**Securite** affiche « none » une fois
+**Mode** revenu à « REPOS »), l'arrêt d'urgence après un E-STOP (règle
+« operator_estop »), et la règle qui a arrêté la séance après un arrêt décidé
+par la console. Un seul acquittement à « REPOS » suffit.
+
+Si l'alerte « session_overrun » s'affiche, la séance ou sa fin ne s'est pas
+déroulée comme prévu : par exemple, la vitesse commandée n'est pas revenue à
+zéro dans le temps laissé. La console ramène alors elle-même la vitesse
+commandée à zéro. Cette alerte se lève comme les autres, une fois la séance
+finie : attendez **Mode** « REPOS », puis acquittez
 ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Un acquittement
-donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt.
-
-Après un arrêt enregistré tard, ce que vous lirez sur la ligne « regle »
-dépend de ce qui a arrêté la séance :
-
-- après un STOP, elle affiche « session_overrun » ;
-- après un E-STOP, elle affiche d'abord « operator_estop ». Acquittés une fois
-  **Mode** revenu à « REPOS », l'arrêt d'urgence et l'alerte
-  « session_overrun » se lèvent ensemble. Si l'arrêt d'urgence est acquitté
-  avant « REPOS », l'alerte « session_overrun » reste, ou apparaît dès que la
-  durée prévue est dépassée de 30 secondes : **Securite** affiche
-  « ramp_down », et il faut acquitter de nouveau une fois **Mode** revenu à
-  « REPOS » ;
-- après un arrêt décidé par la console, elle garde la règle qui a arrêté la
-  séance, et un seul acquittement à « REPOS » suffit.
+donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt. Notez
+l'heure et la ligne « detail », et appelez le support.
 
 Ces comportements ont été vérifiés en simulation et dans des essais sur modèle
 seulement.
@@ -1002,7 +999,10 @@ Le variateur est l'appareil qui alimente le moteur. En cas de défaut :
 - la console termine la séance et verrouille l'arrêt ;
 - si une séance était en cours, **Mode** peut rester sur « ARRET » tant que
   le variateur reste en défaut. C'est alors le réarmement réussi qui le ramène
-  à « REPOS ».
+  à « REPOS » ;
+- si le défaut survient au repos, **Mode** reste sur « REPOS ». Après une
+  séance terminée, programme mené à son terme compris, **Securite** affiche
+  alors l'arrêt verrouillé (« ramp_down », règle « drive_fault »).
 
 Selon le défaut, le variateur peut ne plus freiner le moteur : le bras
 ralentit alors seul, sans contrôle, plus longtemps qu'après un arrêt normal.
@@ -1015,9 +1015,11 @@ Mode affiche « REPOS ». Capture prise en simulation.*
 
 1. Attendez que **Rotation** affiche « a l'arret ». Puis regardez **Mode** :
    - s'il affiche « REPOS », il n'y a pas de phase à attendre : passez à
-     l'étape 2. Au repos, l'écran n'affiche pas de phase : la ligne d'état en
-     bas de l'écran s'arrête au mode, et la carte **Phase** de la page
-     **Seance** affiche un tiret ;
+     l'étape 2. C'est le cas d'un défaut survenu avant toute séance, et d'un
+     défaut survenu après une séance terminée, que le programme ait été mené
+     à son terme ou arrêté. Au repos, l'écran n'affiche pas de phase : la
+     ligne d'état en bas de l'écran s'arrête au mode, et la carte **Phase** de
+     la page **Seance** affiche un tiret ;
    - s'il affiche « ARRET », attendez que la phase soit « done ». Elle se lit
      à la fin de la ligne d'état en bas de l'écran, à gauche du bouton
      **STOP**, ou sur la carte **Phase** de la page **Seance**. Avant « done »,

@@ -194,8 +194,10 @@ nominatif.
    `FAULT_RESET`).
 3. Calcul de la phase de la séance. C'est là aussi que le runtime constate
    qu'une séance est finie : le premier tic où sa phase vaut `DONE`. Le
-   constat est gardé jusqu'au départ suivant (voir `session_overrun` en
-   [5.2](#52-les-18-règles-du-superviseur)).
+   constat est gardé jusqu'au départ suivant. Deux choses le lisent, avec la
+   consigne en vigueur : `session_overrun`, qui ne juge plus une séance finie,
+   et l'ouverture d'une fin de séance, qui ne se fait plus sur une séance
+   finie (voir `session_overrun` en [5.2](#52-les-18-règles-du-superviseur)).
 4. **Évaluation de la sécurité** (`SafetySupervisor.evaluate`) avec une
    observation qui ne contient **aucune** demande de la loi de commande.
 5. **Commande** : un `match` sur l'action du verdict (table ci-dessous). La loi
@@ -360,8 +362,11 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
 * Phase HOLD pendant toute la séance ; au bout de 3600 s
   (`MANUAL_SESSION_LIMIT`), le runtime demande la fin de séance comme un STOP :
   la consigne descend, même sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)).
-  Si la descente dure plus de 30 s, `session_overrun` se verrouille pendant
-  cette descente, à 3630 s, sans rien changer à la rampe : voir
+  Cette fin est jugée par `session_overrun` sur sa propre échéance, et non
+  sur les 3600 s qu'elle vient d'atteindre : la limite, plus la descente
+  depuis le plafond de la séance et la rampe du variateur, plus la
+  récupération, plus 30 s. Une séance menée à sa limite se termine donc sans
+  alerte, à grande vitesse aussi : voir
   [5.2](#52-les-18-règles-du-superviseur).
 * Après une fin de séance, la cible vaut 0 : une nouvelle séance exige un
   nouveau départ. Une consigne ramenée à 0 par un avertissement termine la
@@ -447,11 +452,16 @@ scénarios de simulation. La console copie les profils livrés dans
   `commanded_rpm`, ce qui a été écrit au variateur) et quelques constats du
   runtime sur ce qu'il a lui-même écrit ou décidé (la consigne est en rampe ;
   la consigne est revenue à 0 sans que personne l'ait demandé, champ
-  `stopped_by` ; la séance est finie, champ `session_over`). Aucun de ces
+  `stopped_by` ; la séance est finie, champ `session_over` ; une fin de
+  séance est ouverte, champ `ending`). Aucun de ces
   champs n'est une demande, et `stopped_by` ne peut qu'ajouter un verdict.
   `session_over` ne fait taire qu'une règle, `session_overrun` : il réunit
   deux faits (la séance a atteint la phase `DONE` depuis son départ, et la
-  consigne en vigueur est 0) et vaut « non » par défaut. Raison de la
+  consigne en vigueur est 0) et vaut « non » par défaut. `ending` ne peut que
+  retarder cette même règle, d'une durée finie, jamais l'avancer ni la faire
+  taire : il porte trois valeurs fixées à l'ouverture de la fin (l'instant,
+  le temps laissé à la descente, la durée de la récupération) et vaut
+  « aucune fin » par défaut. Raison de la
   première phrase : lors d'un malaise
   vasovagal la FC **baisse** ; la loi de commande y lit « sous la zone » et
   veut accélérer.
@@ -520,7 +530,7 @@ n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` 
 | `no_load` | consigne ≥ 100 tr/min, sortie active, courant < 0,2 A pendant 3 s (phase ouverte, pas de moteur, mauvais registre) | 0,2 A, 100 tr/min, 3 s | RAMP_DOWN | oui |
 | `tracking_error` | vitesse mesurée hors de l'enveloppe de plus de 60 tr/min moteur pendant 2 s, sortie active | 60 tr/min, 2 s | RAMP_DOWN ; **GO_SILENT** si l'écho LFRD est aussi faux depuis 1 s | oui |
 | `reverse_rotation` | vitesse mesurée de signe opposé à la consigne et > 10 tr/min | 10 tr/min, aucun délai | QUICK_STOP | oui |
-| `session_overrun` | séance en cours (le runtime ne l'a pas constatée finie : `session_over` faux) **et** durée écoulée depuis le départ > durée du programme (3600 s en séance manuelle) + 30 s | 30 s | RAMP_DOWN | oui ; se redéclenche tant que la séance n'est pas finie |
+| `session_overrun` | séance en cours (le runtime ne l'a pas constatée finie : `session_over` faux) **et** durée écoulée depuis le départ > échéance + 30 s. L'échéance est la durée du programme (3600 s en séance manuelle) ; pour une séance qui a ouvert une fin de séance à temps, la plus tardive de cette durée et de l'échéance de la fin (ouverture + descente, plus la récupération une fois la consigne à 0) | 30 s | RAMP_DOWN | oui ; se redéclenche tant que la séance n'est pas finie |
 | `loop_stall` | écart entre deux tics > 3 périodes ; > 15 périodes | 0,6 s → FREEZE ; 3,0 s → GO_SILENT | FREEZE ou GO_SILENT | oui (les deux) |
 | `attendant_absent` | aucun signe de présence de la page depuis… (mesuré depuis le départ s'il n'y en a jamais eu) | > 60 s FREEZE ; > 120 s RAMP_DOWN | FREEZE → RAMP_DOWN | seulement RAMP_DOWN |
 | `setpoint_unconfirmed` | LFRD relu ≠ LFRD écrit pendant 1 s | 1 s | RAMP_DOWN | oui |
@@ -554,13 +564,12 @@ redémarrer la console.
   départ, la phase a atteint `DONE` au moins une fois
   (`TrainingRuntime._advance_phase`, constat gardé jusqu'au départ suivant), et
   la consigne en vigueur est 0. C'est le champ `session_over` de l'observation.
-* **La phase seule ne suffit pas**, dans les deux sens. Un verdict qui arrive
-  au repos après un programme allé à son terme (E-STOP pendant que le passager
-  descend, variateur éteint qui passe en défaut) rouvre une fin de séance : la
-  phase repasse par `RECOVERY` sur une séance finie depuis longtemps, et la
-  règle ne doit pas s'y déclencher. À l'inverse, un runtime devenu silencieux
-  atteint `DONE` avec une consigne qu'il ne peut plus reprendre : la règle
-  continue alors de juger.
+* **La phase seule ne suffit pas.** Un runtime devenu silencieux atteint
+  `DONE` avec une consigne qu'il ne peut plus reprendre : la règle continue
+  alors de juger. (Jusqu'à ANH-185, un verdict arrivé au repos après un
+  programme allé à son terme rouvrait une fin de séance, et la phase repassait
+  par `RECOVERY` sur une séance finie depuis longtemps : c'était le second cas
+  que la phase ne distinguait pas. Il n'existe plus, voir plus bas.)
 * **Rien ne change pendant une séance** : même seuil, même action, même
   verrou, au même instant. Un FREEZE verrouillé ne tient plus un bras en
   vitesse au-delà de la fin du programme : la consigne suit la descente du
@@ -569,16 +578,42 @@ redémarrer la console.
   ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Elle reste la
   seconde barrière derrière cette garde : un test retire la garde et vérifie
   qu'elle ramène encore à 0, dès l'échéance, un bras tenu en vitesse
-  (RAMP_DOWN l'emporte sur FREEZE). Elle se déclenche toujours quand la fin de la séance
-  elle-même dépasse l'échéance, bras déjà arrêté ou en descente : toute fin de
-  séance ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt)
-  rouvre une `RECOVERY` complète (avec le profil standard, une fin ouverte
-  après 1530 s environ mène au verdict à 1830,2 s), et une
-  séance manuelle qui atteint ses 3600 s à grande vitesse descend encore 30 s
-  plus tard (mesuré sur le banc d'essai logiciel : depuis 1344 tr/min moteur,
-  descente d'environ 104 s et verdict à la limite + 30 s ; depuis 300 tr/min
-  moteur, descente de 20 s et aucun verdict). Dans ces cas le verdict ne
-  change rien au mouvement, déjà commandé vers 0.
+  (RAMP_DOWN l'emporte sur FREEZE).
+* **Une fin de séance déjà ouverte est jugée sur sa propre échéance**
+  ([ANH-185](https://linear.app/anheart/issue/ANH-185/fausses-alertes-autour-de-la-fin-de-seance-fin-ouverte-tard-limite)).
+  Toute fin de séance ouverte tard dans un programme (STOP, E-STOP ou verdict
+  d'arrêt) rouvre une `RECOVERY` complète, qui finit après l'échéance du
+  programme (avec le profil standard, pour une fin ouverte après 1530 s) ; et
+  une séance manuelle qui atteint ses 3600 s à grande vitesse met plus de
+  30 s à descendre (environ 104 s depuis 1344 tr/min moteur). La règle se
+  verrouillait alors sur une fin qui se déroulait comme prévu. Le runtime dit
+  maintenant la fin qu'il a ouverte (champ `ending` de l'observation,
+  `TrainingRuntime._ending_in_progress`) : l'instant d'ouverture compté depuis
+  le départ, le temps laissé à la descente (`cooldown_s` du profil ; en
+  séance manuelle, la marche aux limites de mouvement depuis le plafond plus
+  les 4 s de rampe du variateur) et la durée de la récupération. La règle
+  retient la plus tardive de l'échéance du programme et de celle de la fin :
+  ouverture + descente tant que la consigne n'est pas à 0, ouverture +
+  descente + récupération ensuite, plus les 30 s dans les deux cas
+  (`SafetySupervisor._overrun_due`). Avec le profil standard : 240 s de
+  descente et 300 s de récupération.
+* **La règle reste armée.** L'échéance d'une fin ne peut que retarder la
+  règle. Une descente qui ne finit pas n'a droit qu'au temps de la descente :
+  pour un programme, l'échéance reste 1830 s sauf pour une fin ouverte après
+  1560 s sur un bras encore en rotation, et vaut au plus 2100 s ; à la limite
+  d'une séance manuelle, 3600 s plus la descente plus 30 s. Une fin ouverte
+  après le dépassement (plus de 30 s après la durée prévue) ne reporte rien :
+  c'est celle que le verdict de la règle ouvre lui-même. Une valeur qui n'est
+  pas un nombre fini laisse l'échéance du programme.
+* **Un verdict qui arrive sur une séance finie n'ouvre plus de fin de
+  séance** (`TrainingRuntime._begin_ending`). Après un programme allé à son
+  terme, un E-STOP ou un défaut variateur au repos mettaient le mode à `ARRET`
+  et la phase à `RECOVERY` pour toute la récupération du profil, règles de FC
+  de nouveau actives. Ils laissent maintenant le mode à `REPOS` et la phase à
+  `DONE`, comme après une séance terminée par un STOP. Le verdict reste
+  verrouillé, affiché et à acquitter, et refuse tout départ ; la consigne est
+  remise à 0 par l'E-STOP comme avant. « Finie » exige une consigne en vigueur
+  à 0 : avec une vitesse commandée, une vraie fin de séance s'ouvre.
 * **Un verdict levé pendant la séance s'acquitte une fois la séance finie**,
   et l'acquittement tient : la condition n'est plus vraie. Avant la fin
   (mode `ARRET`), l'acquittement est accepté et le verdict revient au tic
@@ -588,8 +623,9 @@ redémarrer la console.
   et le mode reste `ARRET` : la séance y est pourtant finie pour cette règle
   dès la phase `DONE`, consigne à 0.
 
-Mesures avant et après, et ce que le correctif ne couvre pas :
-[securite.md](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
+Mesures avant et après, et ce que les correctifs ne couvrent pas :
+[securite.md, section 8](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)
+et [8.6](securite.md#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185).
 
 **`hr_drop` en détail** (la règle vasovagale). Seules les lectures dont le
 numéro de séquence a avancé et dont la qualité est `good` comptent.
