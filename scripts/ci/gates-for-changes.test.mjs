@@ -35,8 +35,23 @@ test("the site and Convex run their own gates and spare the Python ones", () => 
   assert.deepEqual(gates([...SITE, ...CONVEX, ...DOCS]), NODE_ONLY);
 });
 
+test("what the unit tests of the site are run with belongs to the site", () => {
+  // The document and the stand-ins of test-support/: no Python gate reads them.
+  for (const path of ["test-support/dom.ts", "test-support/render.tsx", "test-support/convex.ts"]) {
+    assert.deepEqual(classify(path), { kind: "site", ...NODE_ONLY }, path);
+  }
+  // Only that folder at the root: the same name elsewhere is a file of no listed kind.
+  assert.deepEqual(gates(["raspberry-pi/test-support/dom.ts"]), EVERYTHING);
+  assert.deepEqual(gates(["test-support.ts"]), EVERYTHING);
+});
+
 test("a Vitest configuration at the root belongs to the site, whatever its suite", () => {
-  for (const path of ["vitest.convex.config.mts", "vitest.ecg.config.mts", "vitest.site.config.mts"]) {
+  for (const path of [
+    "vitest.convex.config.mts",
+    "vitest.ecg.config.mts",
+    "vitest.site.config.mts",
+    "vitest.site-coverage.config.mts",
+  ]) {
     assert.deepEqual(classify(path), { kind: "site", ...NODE_ONLY }, path);
   }
   for (const path of [
