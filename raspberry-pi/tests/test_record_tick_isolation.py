@@ -29,14 +29,14 @@ from typing import Final, Literal
 
 import pytest
 
-import src.record.export as export_module
-import src.record.journal as journal_module
 import src.record.writer as writer_module
 from src.clock import ManualClock, RealClock
 from src.control_surface import EventKind
 from src.ecg_pipeline import treat_off_loop
 from src.local_panel import EXIT_OK, DriveSide, LocalPanel, build_panel
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.record import export as export_module
+from src.record import journal as journal_module
 from src.record.export import RecordEntry
 from src.record.journal import STOP_TIMEOUT, Cause, Journal, Limits
 from src.record.reader import read

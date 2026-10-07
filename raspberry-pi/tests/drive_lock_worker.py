@@ -13,9 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-import src.motor.drive_process_lock as ownership
 from src.clock import ManualClock
 from src.local_config import LocalConfig, load_local_config
+from src.motor import drive_process_lock as ownership
 from src.motor.atv320 import SerialSettings, serial_master
 from src.motor.drive import BadResponse
 from src.motor.drive_process_lock import DriveOwnershipError

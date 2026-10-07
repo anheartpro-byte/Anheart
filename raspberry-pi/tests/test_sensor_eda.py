@@ -16,11 +16,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import src.sensors.eda as eda_module
 from src.clock import ManualClock
 from src.dsp import DspRefused, Signal
 from src.geometry import MachineGeometry
 from src.result import Err, Result
+from src.sensors import eda as eda_module
 from src.sensors.base import SensorKind, SensorReading
 from src.sensors.eda import (
     EDA_GAIN,

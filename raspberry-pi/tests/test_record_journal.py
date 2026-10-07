@@ -26,9 +26,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import src.record.journal as journal_module
-import src.record.writer as writer_module
 from src.clock import ManualClock, RealClock
+from src.record import journal as journal_module
+from src.record import writer as writer_module
 from src.record.codec import Privacy
 from src.record.journal import (
     DRAIN_PERIOD,

@@ -17,7 +17,6 @@ from typing import cast
 
 import pytest
 
-import src.record.journal as journal_module
 from src import local_panel
 from src.bitalino_client import ChannelData, LinkStats, SampleBatch
 from src.clock import ManualClock
@@ -30,6 +29,7 @@ from src.local_panel import (
     open_journal,
 )
 from src.motor.drive import DriveFault
+from src.record import journal as journal_module
 from src.record.journal import (
     MIN_FREE_BYTES,
     STORAGE_STALE_AFTER,
