@@ -1,0 +1,34 @@
+{
+  "name": "stop_operator_auto_under_freeze",
+  "description": "ANH-175, STOP under a FREEZE: the heart rate is lost during WARMUP of the shipped 30-min programme and the operator presses STOP twelve seconds later, while the FREEZE of hr_stale holds the speed. The setpoint must come down on the ordinary ramp from the next tick, still under the FREEZE, and reach zero before the rule's own REDUCE at 30 s. The session ends as an operator stop, and no standstill is latched.",
+  "tags": [
+    "auto",
+    "stop",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 900,
+  "profile": "standard_30_min",
+  "actions": [
+    {
+      "at_s": 420,
+      "do": "ecg_dropout",
+      "duration_s": 27
+    },
+    {
+      "at_s": 432,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "final_state": "finished",
+    "rules": [
+      "hr_stale"
+    ],
+    "forbid_rules": [
+      "session_standstill"
+    ]
+  }
+}
