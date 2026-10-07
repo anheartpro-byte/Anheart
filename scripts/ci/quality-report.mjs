@@ -27,8 +27,15 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { CONVEX, holds, SITE, siteFolders } from "./coverage-thresholds.mjs";
+
 /** The version of `quality-report.json` and of `part.json`. Raised when a field changes meaning or goes. */
 export const SCHEMA_VERSION = 1;
+
+/** The measured folders of the site as a label names them: `lib/`, `hooks/`, `components/`. */
+const SITE_FOLDERS = siteFolders()
+  .map((folder) => `\`${folder}/\``)
+  .join(", ");
 
 /** How many files and tests a summary lists. */
 const LISTED = 10;
@@ -44,7 +51,7 @@ export const PROJECTS = [
   { id: "pi", label: "Console du Pi (tout `src/`)", gates: ["pi-gate"] },
   { id: "simulation", label: "Simulation", gates: ["simulation-gate"] },
   { id: "convex", label: "Convex", gates: ["convex-tests"] },
-  { id: "site", label: "Site (`lib/`, `hooks/`, `components/`)", gates: ["web"] },
+  { id: "site", label: `Site (${SITE_FOLDERS})`, gates: ["web"] },
   { id: "scripts", label: "Scripts (CI et release)", gates: ["changes", "audit", "docs"] },
 ];
 
@@ -140,8 +147,13 @@ export const SUITES = [
  * `include` list of raspberry-pi/pyproject.toml. It is not the whole safety
  * chain: the files that list keeps out for now (`coverage_pending`) are
  * declared part of the chain too, and are shown apart, by name (`Pending`).
+ *
+ * The thresholds of Convex and of the site, the folders of the site and the
+ * Convex files that must hold alone come from scripts/ci/coverage-thresholds.mjs,
+ * the file the gates enforce them from. `file` is the one source file a
+ * measure is that of.
  * @type {readonly {id: string, project: string, job: string, part: string, label: string, main: boolean,
- *   threshold?: number}[]}
+ *   threshold?: number, file?: string}[]}
  */
 export const COVERAGES = [
   { id: "pi", project: "pi", job: "pi-gate", part: "pi", label: "tout `raspberry-pi/src/`", main: true },
@@ -163,8 +175,26 @@ export const COVERAGES = [
     main: true,
     threshold: 100,
   },
-  { id: "convex", project: "convex", job: "convex-tests", part: "convex", label: "`convex/`", main: true },
-  { id: "site", project: "site", job: "web", part: "site", label: "`lib/`, `hooks/`, `components/`", main: true },
+  {
+    id: "convex",
+    project: "convex",
+    job: "convex-tests",
+    part: "convex",
+    label: "`convex/`",
+    main: true,
+    threshold: CONVEX.threshold,
+  },
+  ...CONVEX.alone.map((file) => ({
+    id: `convex:${file}`,
+    project: "convex",
+    job: "convex-tests",
+    part: "convex",
+    label: `chaîne de sécurité côté Convex, \`${file}\` pris seul`,
+    main: false,
+    threshold: CONVEX.threshold,
+    file,
+  })),
+  { id: "site", project: "site", job: "web", part: "site", label: SITE_FOLDERS, main: true, threshold: SITE.threshold },
 ];
 
 /**
@@ -476,9 +506,10 @@ export function pendingOf(listed, measured) {
  * is counted once, covered where any of them covered it. A line is one that
  * starts a statement, as in Istanbul's own count.
  * @param {readonly string[]} paths @param {string} root paths are shown relative to it
- * @returns {CoverageNumbers | undefined} `undefined` unless every file is there and readable
+ * @param {string} [only] the one source file to count, as shown: the measure of that file taken alone
+ * @returns {CoverageNumbers | undefined} `undefined` unless every file is there and readable, and `only` among them
  */
-export function istanbulCoverage(paths, root) {
+export function istanbulCoverage(paths, root, only) {
   if (paths.length === 0) return undefined;
   /** For each source file, the hits of each line that starts a statement and of each branch arm. */
   /** @type {Map<string, {lines: Map<number, number>, arms: Map<string, number>}>} */
@@ -508,15 +539,16 @@ export function istanbulCoverage(paths, root) {
       }
     }
   }
-  if (sources.size === 0) return undefined;
   const covered = (/** @type {Map<unknown, number>} */ hits) => [...hits.values()].filter((times) => times > 0).length;
-  return coverageNumbers(
-    [...sources].map(([file, source]) => ({
+  const files = [...sources]
+    .map(([file, source]) => ({
       file: relative(root, file).split("\\").join("/"),
       lines: { covered: covered(source.lines), total: source.lines.size },
       branches: { covered: covered(source.arms), total: source.arms.size },
-    })),
-  );
+    }))
+    .filter(({ file }) => only === undefined || file === only);
+  // A file that must hold a threshold alone and is not in the measure has no figure: it is not "100 %".
+  return files.length === 0 ? undefined : coverageNumbers(files);
 }
 
 /**
@@ -666,7 +698,12 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
     );
   } else if (part === "convex") {
     suites = { convex: junit("convex.xml") };
-    coverage = { convex: istanbulCoverage(coverageFiles(dir, ["convex"]), root) };
+    const measured = coverageFiles(dir, ["convex"]);
+    coverage = { convex: istanbulCoverage(measured, root) };
+    // Each file of the safety chain, taken alone: the threshold judges it apart from the whole.
+    for (const { id, file } of COVERAGES) {
+      if (file !== undefined && id.startsWith("convex:")) coverage[id] = istanbulCoverage(measured, root, file);
+    }
     checks = stepChecks("types", ["convex"], "convex-tests", "tsc -p convex/tsconfig.json", env.TYPES_OUTCOME);
   } else if (part === "site") {
     suites = {
@@ -674,7 +711,8 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
       "site-components": junit("site-components.xml"),
       "pi-panel": junit("pi-panel.xml"),
     };
-    coverage = { site: istanbulCoverage(coverageFiles(dir, ["site-lib", "site-components"]), root) };
+    // One run of every test of the site: the measure the threshold of `web` judges.
+    coverage = { site: istanbulCoverage(coverageFiles(dir, ["site"]), root) };
     checks = [
       ...stepChecks("types", ["site"], "web", "tsc --noEmit", env.TYPES_OUTCOME),
       // One ESLint run reads the whole repository.
@@ -763,6 +801,12 @@ const CHECK_WORD = { passed: "réussi", failed: "échec", not_run: "non lancé" 
 /** @type {Readonly<Record<string, string>>} */
 const PART_TITLE = { pi: "console du Pi", simulation: "simulation", convex: "Convex", site: "site" };
 
+/**
+ * Whether a measure holds its threshold, as the tables say it.
+ * @param {CoverageNumbers} numbers @param {number} threshold @returns {string}
+ */
+const heldText = (numbers, threshold) => (holds(numbers, threshold) ? "✅ tenu" : "❌ non tenu");
+
 /** @param {Scenarios} runs @returns {string} */
 function scenariosText(runs) {
   // A status is a word the simulation wrote in its report: it is written as text, never as syntax.
@@ -819,7 +863,13 @@ export function renderPart(part) {
         const numbers = part.coverage[measure.id];
         const required = measure.threshold === undefined ? "aucun" : `${measure.threshold} %`;
         if (numbers === undefined) return [measure.label, ...cells(3, "indisponible"), required];
-        return [measure.label, whole(numbers.files), ratioText(numbers.lines), ratioText(numbers.branches), required];
+        return [
+          measure.label,
+          whole(numbers.files),
+          ratioText(numbers.lines),
+          ratioText(numbers.branches),
+          measure.threshold === undefined ? required : `${required} : ${heldText(numbers, measure.threshold)}`,
+        ];
       }),
       "lrrrl",
     ),
@@ -975,6 +1025,8 @@ export function buildReport({ parts, junit, needs, event, run }) {
       label,
       main,
       ...(threshold === undefined ? {} : { threshold }),
+      // Whether the threshold is reached, when there is one and the measure is there to judge.
+      ...(threshold === undefined || numbers === undefined ? {} : { held: holds(numbers, threshold) }),
       state,
       ...(numbers === undefined ? {} : { numbers }),
     };
@@ -1084,9 +1136,6 @@ function checkText(check) {
   return MISSING[check.state] ?? check.state;
 }
 
-/** @param {CoverageNumbers} numbers @returns {boolean} whether nothing is missing, which is what a threshold of 100 % asks */
-const complete = ({ lines, branches }) => lines.covered >= lines.total && branches.covered >= branches.total;
-
 /**
  * What the safety chain of the Pi holds besides the files under the
  * threshold: each file by name with its own figures, then the chain as a
@@ -1113,7 +1162,7 @@ function pendingRows(chain) {
   ];
 }
 
-/** @param {Report} report @returns {string[][]} the safety chain and the simulation, one measure per line */
+/** @param {Report} report @returns {string[][]} each threshold with what it judges, then the simulation: one measure per line */
 function safetyRows(report) {
   /** @type {string[][]} */
   const rows = [];
@@ -1127,7 +1176,7 @@ function safetyRows(report) {
     rows.push([
       `Couverture, ${measure.label}`,
       `${counted(files, "fichier")} : lignes ${ratioText(lines)}, branches ${ratioText(branches)}`,
-      `${required} : ${complete(measure.numbers) ? "✅ tenu" : "❌ non tenu"}`,
+      `${required} : ${heldText(measure.numbers, measure.threshold ?? 0)}`,
     ]);
     if (measure.id === "pi-threshold") rows.push(...pendingRows(report.safety_chain));
   }
@@ -1161,6 +1210,11 @@ function runText(run) {
     words.push(`exécution ${String(run.id)}, tentative ${String(run.attempt)}`);
   return words.join(" · ");
 }
+
+/** What the measure of the site leaves out, said for as long as it does: the pages are a folder like another. */
+const NOT_MEASURED_OF_THE_SITE = siteFolders().includes("app")
+  ? ""
+  : "les pages du site (`app/`), hors des dossiers mesurés ; ";
 
 /** @param {Report} report @returns {string} the summary of the run, in Markdown */
 export function renderReport(report) {
@@ -1238,7 +1292,7 @@ export function renderReport(report) {
   lines.push(
     `Autres gates : ${others.join(" · ")}. Ce qu'elles contrôlent se lit dans leur journal, pas ici.`,
     "",
-    "### Chaîne de sécurité et simulation",
+    "### Seuils de couverture, chaîne de sécurité et simulation",
     "",
     table(["Mesure", "Valeur", "Exigence"], safetyRows(report)),
     "",
@@ -1261,8 +1315,10 @@ export function renderReport(report) {
     "- « sautée » : la règle de chemins a jugé qu'aucun fichier de la PR ne concerne cette gate, qui n'a pas tourné.",
     "- « indisponible » : le job a tourné sans laisser ces chiffres. « non lancé » : le job n'a pas tourné.",
     "- Durée cumulée : la somme des durées de chaque test, tous processus confondus. Ce n'est pas l'attente du job.",
-    "- Couverture de Convex et du site : mesurée, sans seuil. Elle ne fait échouer aucune gate.",
-    "- Non mesuré : la couverture des scripts ; les pages du site (`app/`), qu'aucun test unitaire ne charge ; " +
+    `- Couverture de Convex et du site : ${CONVEX.threshold} % de lignes et de branches exigés par \`convex-tests\` ` +
+      `(sur \`convex/\` et sur chacun de ses ${counted(CONVEX.alone.length, "fichier")} de la chaîne de sécurité pris seul) ` +
+      `et ${SITE.threshold} % par \`web\` (sur ${SITE_FOLDERS}). Sous le seuil, la gate échoue.`,
+    `- Non mesuré : la couverture des scripts ; ${NOT_MEASURED_OF_THE_SITE}` +
       "les tests de release (`npm run test:release`), que la CI ne lance pas.",
     "- Ce rapport ne lit que les jobs de `ci.yml`. Les autres workflows du dépôt (analyse statique, installation " +
       "du Pi, déploiements) n'y figurent pas.",
@@ -1311,7 +1367,7 @@ function chainSentence(report) {
   if (threshold?.numbers === undefined) return undefined;
   const { lines, branches, files } = threshold.numbers;
   const under =
-    `seuil de ${threshold.threshold} % ${complete(threshold.numbers) ? "tenu" : "non tenu"} ` +
+    `seuil de ${threshold.threshold} % ${threshold.held === true ? "tenu" : "non tenu"} ` +
     `(${counted(files, "fichier")} sous le seuil : lignes ${percent(lines)}, branches ${percent(branches)})`;
   const chain = report.safety_chain;
   if (chain === null || chain.listed === null) return `${under} ; fichiers hors du seuil : liste indisponible`;
@@ -1321,6 +1377,31 @@ function chainSentence(report) {
     ...chain.not_measured.map((entry) => `${entry} (non mesuré)`),
   ];
   return `${under} ; dans la chaîne mais hors du seuil : ${outside.join(", ")}`;
+}
+
+/**
+ * The thresholds of Convex or of the site in one sentence: the whole measure,
+ * then each file that must hold alone, by name.
+ * @param {Report} report @param {string} project
+ * @returns {string | undefined} `undefined` when the gate left no measure to judge
+ */
+function thresholdSentence(report, project) {
+  const judged = report.coverage.filter((measure) => measure.project === project && measure.threshold !== undefined);
+  const main = judged.find((measure) => measure.main);
+  if (main?.held === undefined) return undefined;
+  const said = (/** @type {boolean} */ held) => (held ? "tenu" : "non tenu");
+  const alone = judged
+    .filter((measure) => !measure.main)
+    .map((measure) => {
+      const name = measure.id.slice(measure.id.indexOf(":") + 1);
+      if (measure.numbers === undefined || measure.held === undefined) return `${name} non mesuré`;
+      const { lines, branches } = measure.numbers;
+      return `${name} ${said(measure.held)} (lignes ${percent(lines)}, branches ${percent(branches)})`;
+    });
+  return (
+    `seuil de ${main.threshold} % de lignes et de branches ${said(main.held)}` +
+    (alone.length === 0 ? "" : ` ; fichiers jugés seuls : ${alone.join(", ")}`)
+  );
 }
 
 /**
@@ -1374,6 +1455,9 @@ export function renderNotice(report) {
     );
     const chain = project.id === "pi" ? chainSentence(report) : undefined;
     if (chain !== undefined) lines.push(`Chaîne de sécurité du Pi : ${chain}`);
+    const threshold =
+      project.id === "convex" || project.id === "site" ? thresholdSentence(report, project.id) : undefined;
+    if (threshold !== undefined) lines.push(`Couverture, ${label} : ${threshold}`);
   }
   lines.push(
     typeof run.summary_url === "string"

@@ -17,6 +17,11 @@ ne parle **jamais** directement au Raspberry Pi.
 >   ([portée et limites](framework-de-test.md#fraîcheur-de-létat-en-direct-anh-160)).
 >   La même commande exécute les tests du retour des mutations
 >   ([§6](#messages-de-succès-et-déchec)).
+>   Chaque composant, chaque hook et chaque règle de `lib/` a ses tests, sans
+>   navigateur, et la CI exige 80 % de lignes et de branches couvertes sur ces
+>   trois dossiers
+>   ([seuils](framework-de-test.md#seuils-de-couverture-de-convex-et-du-site-anh-203),
+>   [portée et limites](framework-de-test.md#tests-des-composants-du-site-sans-navigateur-anh-203)).
 >   La suite navigateur de bout en bout du tableau de bord reste ANH-83.
 >   Le 2 octobre 2026, toutes les pages du tableau de bord
 >   ont été **ouvertes à la main dans un navigateur**, en local, contre le
@@ -710,7 +715,7 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, horloge du serveur, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur, statut et dernier signal : hook et composants, avec l'horloge du poste et celle du Pi décalées ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, horloge du serveur, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur, statut et dernier signal : hook et composants, avec l'horloge du poste et celle du Pi décalées ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses ; chaque composant : panneau de séance et arrêt, fenêtre de lancement, droits de lancement, formulaires machine et patient, menu par rôle). La CI exige 80 % de lignes et de branches couvertes sur `lib/`, `hooks/` et `components/` ; les pages (`app/`) ne sont pas dans cette mesure. **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
 | Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : l'horloge du poste ne date rien. Pire cas chiffré sur une page qui vient de s'ouvrir : 107 s pour une machine, 37 s pour le panneau (cache de Convex, 17 s d'après son code source), plus le transit de la réponse et un onglet suspendu, **non mesurés**. Panneau : une horloge du Pi en retard de plus de 15 s environ, ou en avance de plus de 5 s environ, affiche le bandeau alors que la machine envoie (sens sûr) ; en avance de X, un point renvoyé en retard peut passer pour actuel jusqu'à 20 s + X après sa mesure (ANH-163). |
 | Statut « En ligne » et « Dernier signal » | Recalculés chaque seconde par le site (§6). Convex n'écrit `offline` qu'au passage de sa tâche (jusqu'à 2,5 min) : le refus d'un lancement par le serveur et la fenêtre de lancement lisent encore ce statut écrit (ANH-144). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
