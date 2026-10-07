@@ -1346,6 +1346,10 @@ journal de finir et regarde toutes les 50 ms, pendant 5 s au plus, s'il a
 fini.
 
 Seul un dossier d'enregistrement directement sous la racine peut être nommé.
+Le nom reçu passe deux contrôles, chacun suffisant seul : il doit avoir la
+forme d'un nom d'enregistrement, puis le chemin qu'il donne est normalisé,
+refusé s'il n'est pas directement dans le dossier des enregistrements, et seul
+ce chemin normalisé est utilisé (`locate`, `src/record/export.py`).
 L'archive est un fichier temporaire à côté des enregistrements, supprimé après
 l'envoi (ou dès qu'elle est prête, si sa requête n'attend plus) ; elle ne
 porte ni le nom ni l'identifiant du compte sous lequel tourne la console.

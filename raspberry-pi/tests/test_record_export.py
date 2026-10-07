@@ -11,6 +11,7 @@ import asyncio
 import errno
 import io
 import os
+import re
 import tarfile
 import tempfile
 import threading
@@ -95,6 +96,39 @@ def test_ex8_only_a_record_directly_under_the_root_can_be_named(tmp_path: Path) 
         refused = build_archive(root, name, NOW)
         assert isinstance(refused, Err)
         assert refused.error == RecordError("read", UNKNOWN_RECORD)
+    assert exports(root) == []
+
+
+def test_ex8_a_name_that_leaves_the_records_directory_is_refused_by_the_path_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second control by itself: the name check is taken away, the path check remains."""
+    root = tmp_path / "records"
+    root.mkdir()
+    record = closed_record(root)
+    outside = closed_record(tmp_path / "outside")
+    (tmp_path / "records-next-door").mkdir()
+    monkeypatch.setattr(export_module, "RECORD_NAME", re.compile(r".*", re.DOTALL))
+    for name in (
+        "",
+        ".",
+        "..",
+        f"../outside/{outside.name}",
+        f"{record.name}/../../outside/{outside.name}",
+        # A sibling whose name starts like the records directory's own.
+        "../records-next-door",
+        str(outside),
+        # Inside, but not a record directly under the root.
+        f"{record.name}/ecg_raw",
+    ):
+        assert locate(root, name) is None, name
+        refused = build_archive(root, name, NOW)
+        assert isinstance(refused, Err), name
+        assert refused.error == RecordError("read", UNKNOWN_RECORD)
+    # What is inside is still found, and under its normalised path however it was spelt.
+    assert locate(root, record.name) == record
+    assert locate(root, f"./{record.name}") == record
+    assert locate(Path(f"{root}/"), record.name) == record
     assert exports(root) == []
 
 

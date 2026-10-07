@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
 import tarfile
 import tempfile
 from collections.abc import Callable
@@ -84,10 +85,26 @@ def listing(root: Path) -> tuple[RecordEntry, ...]:
 
 
 def locate(root: Path, name: str) -> Path | None:
-    """The record directory called ``name`` directly under ``root``, or ``None``."""
+    """The record directory called ``name`` directly under ``root``, or ``None``.
+
+    ``name`` comes from a request. Two controls, each sufficient alone:
+
+    * it must be a record's name, as the writer gives them
+      (:data:`~src.record.retention.RECORD_NAME`: no separator, no dot segment);
+    * the path it gives is normalised, refused unless it is still directly
+      inside the records directory, and that normalised path is the only one
+      this function touches or returns.
+    """
     if RECORD_NAME.fullmatch(name) is None:
         return None
-    path = root / name
+    base = os.path.normpath(root)
+    inside = base + os.sep
+    candidate = os.path.normpath(inside + name)
+    if not candidate.startswith(inside):
+        return None
+    path = Path(candidate)
+    if path.parent != Path(base):
+        return None
     return path if path.is_dir() and not path.is_symlink() else None
 
 
