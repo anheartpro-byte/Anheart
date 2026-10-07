@@ -134,6 +134,8 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
       "sessions.getCompletedSessionsForUser",
+      "softwareReleases.listReleases", // Anheart-wide register, Anheart admin only
+      "softwareReleases.recordRelease", // Anheart-wide register, Anheart admin only
       "training.listLaunchableMachines",
       "users.createPatient", // creates in the caller's organisation
       "users.getCurrentUser",

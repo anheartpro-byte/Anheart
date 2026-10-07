@@ -184,6 +184,10 @@ export default defineSchema({
   // for programmed sessions only receives a Pi version that is
   // `auto_validated` or higher, and a machine validated for a person on board
   // only an `occupied_validated` one.
+  //
+  // Anheart-wide on purpose: no `organizationId`. A released version is the
+  // same for every organisation, and only the Anheart admin reads or writes
+  // the register (`convex/softwareReleases.ts`).
   software_releases: defineTable({
     component: softwareComponentValidator,
     version: v.string(), // the tag of the version, e.g. "pi-0.1.0"

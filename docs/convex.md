@@ -101,7 +101,12 @@ Huit tables portent un champ `organizationId` et un index `by_organization` :
 `users` (organisation principale du compte), `machines`, `sessions`,
 `training_telemetry`, `machine_profiles`, `machine_user_permissions`,
 `machine_gestionnaires` et `user_gestionnaires`. Toute table créée ensuite le
-porte aussi.
+porte aussi, sauf une table **commune à tous les clients**.
+
+Les tables qui ne le portent pas : `software_releases`, le registre des
+versions, commun à tous les clients et réservé à l'admin Anheart ; et
+`ecg_data`, `session_summaries`, `machine_heartbeats`, qu'on n'atteint que par
+leur séance ou leur machine, donc par l'organisation de celle-ci.
 
 - Une **machine appartient à exactement une organisation**. Ce qu'elle écrit
   par les routes machine (séances locales, télémétrie, programmes) et ce qui
@@ -110,8 +115,8 @@ porte aussi.
 - Le champ est **optionnel dans le schéma** pour que les lignes écrites avant
   la migration se chargent encore. Une ligne sans organisation n'est servie à
   personne, sauf à l'admin Anheart ([§3](#3-règles-dautorisation)).
-- La migration `migrations/multiOrganization:attachExistingRowsToAnheart` crée l'organisation
-  « Anheart » et y rattache toutes les lignes existantes
+- La migration `migrations/multiOrganization:attachExistingRowsToAnheart`
+  crée l'organisation « Anheart » et y rattache toutes les lignes existantes
   ([§8](#activer-le-multi-organisation)).
 
 ### `users` : comptes
@@ -153,9 +158,11 @@ machine (`machineId`). `grantedBy`, `createdAt`. Index `by_machine`, `by_user`,
 
 ### `software_releases` : versions publiées
 
-Une ligne par version publiée d'un composant. Écrite seulement par un admin
-(`softwareReleases.recordRelease`), à la fin d'une release
-([release.md](release.md#6-enregistrer-la-version-dans-convex)).
+Une ligne par version publiée d'un composant. Écrite seulement par l'admin
+Anheart (`softwareReleases.recordRelease`), à la fin d'une release
+([release.md](release.md#6-enregistrer-la-version-dans-convex)). Le registre
+vaut pour **tous les clients** : la table n'a pas d'`organizationId`, et
+l'admin d'une organisation cliente ne la lit ni ne l'écrit.
 
 | Champ | Sens |
 |---|---|
@@ -353,7 +360,7 @@ ressource qui n'existe pas.
 | `canAccessMachine(m)` | admin Anheart ; ou, si la machine appartient à l'organisation de l'appelant : admin de cette organisation, ou gestionnaire lié à `m` dans `machine_gestionnaires`. **Un `user` n'a jamais accès par cette règle.** |
 | `canManageMachine(m)` | Identique à `canAccessMachine`. |
 | `canAccessSession(s)` | admin Anheart ; ou, si la séance appartient à l'organisation de l'appelant : son pratiquant, ou qui a accès à sa machine. |
-| `requireGestionnaireAdmin(g)` | admin, et `g` est un compte de rôle `gestionnaire` (sinon « Gestionnaire not found » ou « Target user is not a gestionnaire »). Le rôle de l'appelant est vérifié avant toute lecture de `g`. C'est la seule règle à étendre le jour où un rôle limité à une organisation administre les gestionnaires de la sienne ([ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site)). |
+| `requireGestionnaireAdmin(g)` | admin Anheart, ou admin de l'organisation de `g` ; et `g` tient le rôle `gestionnaire` dans l'organisation où la décision s'applique : celle de l'appelant, ou, pour l'admin Anheart, l'organisation principale de `g`. Sinon « Gestionnaire not found » (compte inconnu, ou, pour un admin d'organisation, compte qui n'est pas membre actif de la sienne : même réponse) ou « Target user is not a gestionnaire ». Le rôle de l'appelant est vérifié avant toute lecture de `g`, et le rôle de `g` est lu dans son appartenance, pas dans le miroir `users.role`. Renvoie l'appelant, `g` et cette organisation. |
 
 Ce que fait un **admin d'organisation** (`org_admin`) : dans son organisation,
 il lit et gère toutes les machines, tous les membres et toutes les séances sans
@@ -545,7 +552,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | `deleteUser` | admin ; gestionnaire pour ses patients seulement | Retrait de l'organisation de l'appelant, ou suppression partout pour l'admin Anheart (voir [§3](#3-règles-dautorisation)). Pas soi-même. |
 | `linkPatientToClerk` | connecté, e-mail vérifié | Lie un patient pré-créé (`clerkId` vide) au compte Clerk, uniquement si l'e-mail **vérifié** de l'appelant est celui du dossier (voir [§3](#3-règles-dautorisation)). **Aucune page ne l'appelle aujourd'hui.** |
 | `assignGestionnaireToUser` / `removeGestionnaireFromUser` | admin ; un gestionnaire pour lui-même | Lien patient ↔ gestionnaire, dans l'organisation de l'appelant ; le patient et le gestionnaire doivent tous deux en être membres actifs, avec ces rôles. Pour l'admin Anheart, le lien se crée dans l'organisation principale du patient. |
-| `listGestionnaires`, `assignPatientsToGestionnaire` | admin | Gestion des gestionnaires de l'organisation. `assignPatientsToGestionnaire` ne remplace que les liens de cette organisation. |
+| `listGestionnaires`, `assignPatientsToGestionnaire` | admin (`requireGestionnaireAdmin` pour la seconde) | Gestion des gestionnaires de l'organisation. `assignPatientsToGestionnaire` ne remplace que les liens de cette organisation. |
 | `getPatientsForGestionnaire`, `getGestionnairesForPatient` | admin / gestionnaire concerné | Lectures. |
 
 ### `machines.ts`
@@ -559,7 +566,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin Anheart | Annule la suppression. |
 | `assignMachineToGestionnaires` | admin | Remplace la liste complète des gestionnaires d'**une machine**, pris dans l'organisation de la machine. |
-| `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire** : compare la liste demandée à ses lignes `machine_gestionnaires`, insère les liens manquants (`isOwner: false`) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire sont lues et écrites : les liens des autres gestionnaires ne bougent pas, et un lien déjà présent n'est pas modifié. Une machine inconnue fait refuser l'appel sans rien écrire. Retourne `{added, removed}`. |
+| `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, ou d'une autre organisation (même réponse), fait refuser l'appel sans rien écrire. Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. Le gestionnaire doit être membre actif de l'organisation de la machine. |
 | `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. |
 
@@ -590,12 +597,15 @@ d'une séance.
 
 ### `softwareReleases.ts` (registre des versions publiées)
 
-Aucune page du site n'appelle encore ces fonctions.
+Aucune page du site n'appelle encore ces fonctions. Elles ne sont **pas
+limitées à une organisation** : le registre est celui d'Anheart, commun à tous
+les clients. « admin » veut dire ici l'admin Anheart seul ; l'admin d'une
+organisation cliente est refusé, en lecture comme en écriture.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `recordRelease` (mutation) | admin | Enregistre une version publiée dans `software_releases`, ou corrige la ligne d'une version déjà connue (une seule ligne par composant et version). Refuse une version qui n'est pas `<composant>-X.Y.Z`, une version du Pi sans niveau de validation, un niveau sur une version `cloud` ou `web`, une date invalide, des notes de plus de 2000 caractères, et un changement de niveau sans `notes`. Erreurs en `ConvexError(message)`. |
-| `listReleases` (query) | admin | Les versions enregistrées, la plus récente d'abord ; filtre `component` optionnel. |
+| `recordRelease` (mutation) | admin Anheart | Enregistre une version publiée dans `software_releases`, ou corrige la ligne d'une version déjà connue (une seule ligne par composant et version). Refuse une version qui n'est pas `<composant>-X.Y.Z`, une version du Pi sans niveau de validation, un niveau sur une version `cloud` ou `web`, une date invalide, des notes de plus de 2000 caractères, et un changement de niveau sans `notes`. Erreurs en `ConvexError(message)`. |
+| `listReleases` (query) | admin Anheart | Les versions enregistrées, la plus récente d'abord ; filtre `component` optionnel. |
 
 `deployedCloudVersion` est une query **interne** : elle répond la constante
 `CLOUD_VERSION` de `convex/cloudVersion.ts`, donc la version du code déployé
@@ -997,7 +1007,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/authorization.matrix.ts` | La **matrice d'autorisation** : la politique de chaque fonction publique, une ligne par rôle, par côté quand l'accès dépend de la propriété, et par organisation. Nom à deux points : non déployé. |
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
 | `convex/organizations.test.ts` | D'où viennent l'organisation et le rôle d'un appel : revendications acceptées et refusées, admin Anheart, premier passage d'un compte, et la transition avant et après `ANHEART_ORG_ID`. |
-| `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations, ce qu'une machine écrit, les lignes sans organisation. |
+| `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
 | `convex/httpRoutes.test.ts` | Les 9 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |

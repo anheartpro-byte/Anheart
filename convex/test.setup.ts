@@ -129,6 +129,9 @@ export const ORG_B_ACTORS = [
 
 export type World = Awaited<ReturnType<typeof seedWorld>>;
 
+/** Machines `seedWorld` creates: `machine`, `otherMachine`, `orgBMachine`. */
+export const WORLD_MACHINE_COUNT = 3;
+
 /** Extra JWT claims a cell adds to its actor's identity (e.g. `email`). */
 export type Claims = Parameters<World["t"]["withIdentity"]>[0];
 

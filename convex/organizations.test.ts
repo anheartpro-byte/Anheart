@@ -536,7 +536,10 @@ describe("EX-2 first sign-in mirrors the membership the token carries", () => {
 const legacy = (w: LegacyWorld, subject: string) =>
   w.t.withIdentity({ subject });
 const migrate = (w: LegacyWorld) =>
-  w.t.mutation(internal.migrations.multiOrganization.attachExistingRowsToAnheart, {});
+  w.t.mutation(
+    internal.migrations.multiOrganization.attachExistingRowsToAnheart,
+    {},
+  );
 
 describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID unset)", () => {
   it("refuses everything organisation-scoped until the migration has run", async () => {
@@ -612,7 +615,6 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
         apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
-        config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
         createdAt: NOW,
       });
     });

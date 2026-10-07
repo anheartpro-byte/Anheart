@@ -746,8 +746,8 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Target user is not a gestionnaire/),
-        note: "the gestionnaire is not one of their organisation",
+        expect: refuse(/Gestionnaire not found/),
+        note: "a gestionnaire of another organisation does not exist for them",
       },
       { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
     ],
@@ -878,6 +878,13 @@ export const MATRIX: Entry[] = [
         throw new Error("List not applied to this gestionnaire");
       if (!linked(w.otherMachine, w.otherManager))
         throw new Error("Another gestionnaire's link was changed");
+      if (!linked(w.orgBMachine, w.orgBManager))
+        throw new Error("Another organisation's link was changed");
+      const added = rows.find(
+        (r) => r.machineId === w.otherMachine && r.gestionnaireId === w.manager,
+      );
+      if (added?.organizationId !== w.orgA)
+        throw new Error("New link not written in the machine's organisation");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -895,6 +902,19 @@ export const MATRIX: Entry[] = [
         note: "not an admin",
       },
       { actor: "admin", expect: ok, note: "admin sets the exact list" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the gestionnaire's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/Gestionnaire not found/),
+        note: "a gestionnaire of another organisation does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
+      },
     ],
   },
   {
@@ -2182,6 +2202,8 @@ export const MATRIX: Entry[] = [
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin records a version" },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
+      { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
     ],
   },
   {
@@ -2213,6 +2235,8 @@ export const MATRIX: Entry[] = [
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin reads the register" },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
+      { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
     ],
   },
 

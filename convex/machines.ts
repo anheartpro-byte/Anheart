@@ -147,7 +147,9 @@ export const assignMachineToGestionnaires = mutation({
 });
 
 /**
- * Set the exact list of machines a gestionnaire manages (admin only).
+ * Set the exact list of machines a gestionnaire manages (admin only: the
+ * Anheart admin, or the admin of the gestionnaire's organisation), among the
+ * machines of that organisation.
  *
  * Only this gestionnaire's rows of `machine_gestionnaires` are read and
  * written: a machine added here keeps its other gestionnaires, and a machine
@@ -164,17 +166,21 @@ export const setGestionnaireMachines = mutation({
     removed: v.number(),
   }),
   handler: async (ctx, args) => {
-    const { currentUser } = await requireGestionnaireAdmin(
+    const { currentUser, organizationId } = await requireGestionnaireAdmin(
       ctx,
       args.gestionnaireId,
     );
 
-    const existingRelations = await ctx.db
-      .query("machine_gestionnaires")
-      .withIndex("by_gestionnaire", (q) =>
-        q.eq("gestionnaireId", args.gestionnaireId),
-      )
-      .collect();
+    // Only the links of the organisation the decision applies to: what this
+    // gestionnaire manages in another organisation is not read nor written.
+    const existingRelations = (
+      await ctx.db
+        .query("machine_gestionnaires")
+        .withIndex("by_gestionnaire", (q) =>
+          q.eq("gestionnaireId", args.gestionnaireId),
+        )
+        .collect()
+    ).filter((r) => r.organizationId === organizationId);
 
     const wanted = new Set(args.machineIds);
     const linked = new Set(existingRelations.map((r) => r.machineId));
@@ -182,10 +188,12 @@ export const setGestionnaireMachines = mutation({
     const toAdd = [...wanted].filter((machineId) => !linked.has(machineId));
     const toRemove = existingRelations.filter((r) => !wanted.has(r.machineId));
 
-    // Every machine to link must exist before anything is written.
+    // Every machine to link must exist, in that organisation, before anything
+    // is written. A machine of another organisation is a machine that does
+    // not exist.
     for (const machineId of toAdd) {
       const machine = await ctx.db.get(machineId);
-      if (!machine) {
+      if (!machine || machine.organizationId !== organizationId) {
         throw new Error("Machine not found");
       }
     }
@@ -197,6 +205,7 @@ export const setGestionnaireMachines = mutation({
     const now = Date.now();
     for (const machineId of toAdd) {
       await ctx.db.insert("machine_gestionnaires", {
+        organizationId,
         machineId,
         gestionnaireId: args.gestionnaireId,
         isOwner: false,

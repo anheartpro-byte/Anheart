@@ -247,12 +247,6 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
     async (actor) => {
       const w = await seedWorld(modules);
       const sessionId = await withCentreBSession(w);
-      const pending = await addSession(w, {
-        machineId: w.orgBMachine,
-        userId: w.orgBPatient,
-        status: "pending",
-        kind: "recording",
-      });
       const me = as(w.t, actor);
       const machineId = w.orgBMachine;
       const before = await snapshotCentreB(w);
@@ -300,13 +294,15 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
           userId: w.patient,
         }),
         me.mutation(api.training.requestStop, { sessionId }),
-        me.mutation(api.sessions.createSession, {
-          machineId,
-          userId: w.patient,
-          channels: ["ECG"],
+        // A gestionnaire of centre B, then a machine of centre B.
+        me.mutation(api.machines.setGestionnaireMachines, {
+          gestionnaireId: w.orgBManager,
+          machineIds: [],
         }),
-        me.mutation(api.sessions.endSession, { sessionId }),
-        me.mutation(api.sessions.cancelSession, { sessionId: pending }),
+        me.mutation(api.machines.setGestionnaireMachines, {
+          gestionnaireId: w.manager,
+          machineIds: [w.machine, machineId],
+        }),
       ];
       const outcomes = await Promise.allSettled(attempts);
 
@@ -361,7 +357,6 @@ type Targets = {
   machineId: Id<"machines">;
   userId: Id<"users">;
   sessionId: Id<"sessions">;
-  pendingSessionId: Id<"sessions">;
 };
 
 /** Identifiers of rows that existed and were deleted: valid, and unknown. */
@@ -372,7 +367,6 @@ async function deletedTargets(w: World): Promise<Targets> {
       apiKey: "synthetic-hash",
       status: "online" as const,
       lastHeartbeat: NOW,
-      config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
       createdAt: NOW,
     });
     const userId = await ctx.db.insert("users", {
@@ -384,18 +378,16 @@ async function deletedTargets(w: World): Promise<Targets> {
       language: "fr" as const,
       createdAt: NOW,
     });
-    const session = {
+    const sessionId = await ctx.db.insert("sessions", {
       machineId,
       status: "active" as const,
       startedAt: NOW,
       channels: ["ECG"],
-    };
-    const sessionId = await ctx.db.insert("sessions", session);
-    const pendingSessionId = await ctx.db.insert("sessions", session);
-    for (const id of [machineId, userId, sessionId, pendingSessionId]) {
+    });
+    for (const id of [machineId, userId, sessionId]) {
       await ctx.db.delete(id);
     }
-    return { machineId, userId, sessionId, pendingSessionId };
+    return { machineId, userId, sessionId };
   });
 }
 
@@ -416,12 +408,6 @@ describe("EX-5 a resource of another organisation answers like one that does not
         machineId: w.orgBMachine,
         userId: w.orgBPatient,
         sessionId: await withCentreBSession(w),
-        pendingSessionId: await addSession(w, {
-          machineId: w.orgBMachine,
-          userId: w.orgBPatient,
-          status: "pending",
-          kind: "recording",
-        }),
       };
       const unknown = await deletedTargets(w);
       const me = as(w.t, actor);
@@ -446,6 +432,16 @@ describe("EX-5 a resource of another organisation answers like one that does not
           me.mutation(api.machines.assignMachineToGestionnaires, {
             machineId: t.machineId,
             gestionnaireIds: [w.manager],
+          }),
+        "machines.setGestionnaireMachines": () =>
+          me.mutation(api.machines.setGestionnaireMachines, {
+            gestionnaireId: w.manager,
+            machineIds: [w.machine, t.machineId],
+          }),
+        "machines.setGestionnaireMachines (gestionnaire)": () =>
+          me.mutation(api.machines.setGestionnaireMachines, {
+            gestionnaireId: t.userId,
+            machineIds: [],
           }),
         "machines.assignGestionnaireToMachine": () =>
           me.mutation(api.machines.assignGestionnaireToMachine, {
@@ -527,24 +523,6 @@ describe("EX-5 a resource of another organisation answers like one that does not
           }),
         "training.requestStop": () =>
           me.mutation(api.training.requestStop, { sessionId: t.sessionId }),
-        "sessions.createSession": () =>
-          me.mutation(api.sessions.createSession, {
-            machineId: t.machineId,
-            userId: w.patient,
-            channels: ["ECG"],
-          }),
-        "sessions.createSession (patient)": () =>
-          me.mutation(api.sessions.createSession, {
-            machineId: w.machine,
-            userId: t.userId,
-            channels: ["ECG"],
-          }),
-        "sessions.endSession": () =>
-          me.mutation(api.sessions.endSession, { sessionId: t.sessionId }),
-        "sessions.cancelSession": () =>
-          me.mutation(api.sessions.cancelSession, {
-            sessionId: t.pendingSessionId,
-          }),
         // --- reads
         "machines.getMachine": () =>
           me.query(api.machines.getMachine, { machineId: t.machineId }),
@@ -677,13 +655,6 @@ describe("EX-5 a machine and an account of two different organisations never com
         gestionnaireId: w.manager,
       }),
     ).rejects.toThrow(/Machine not found/);
-    await expect(
-      as(w.t, "admin").mutation(api.sessions.createSession, {
-        machineId: w.otherMachine,
-        userId: w.otherPatient,
-        channels: ["ECG"],
-      }),
-    ).rejects.toThrow(/Machine not found/);
     // For anyone else it is a machine they have no access to, like a foreign one.
     await expect(
       as(w.t, "otherManager").mutation(api.machines.updateMachine, {
@@ -756,13 +727,6 @@ describe("EX-5 a machine and an account of two different organisations never com
         userId: w.orgBPatient,
       }),
     ).rejects.toThrow(/Not authorized to launch a session for this rider/);
-    await expect(
-      as(w.t, "admin").mutation(api.sessions.createSession, {
-        machineId: w.machine,
-        userId: w.orgBPatient,
-        channels: ["ECG"],
-      }),
-    ).rejects.toThrow(/Not authorized to create session for this patient/);
     const sessions = await w.t.run((ctx) => ctx.db.query("sessions").collect());
     expect(sessions).toEqual([]);
   });
@@ -778,19 +742,19 @@ describe("EX-5 a machine and an account of two different organisations never com
         userId: w.orgBPatient,
       },
     );
-    const byRecording = await as(w.t, "admin").mutation(
-      api.sessions.createSession,
-      { machineId: w.machine, userId: w.patient, channels: ["ECG"] },
+    const byOrgAdmin = await as(w.t, "orgAdmin").mutation(
+      api.training.launchAutoSession,
+      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
     );
 
     const rows = await w.t.run(async (ctx) => ({
-      launched: await ctx.db.get(byAdmin),
-      recording: await ctx.db.get(byRecording),
+      launchedInB: await ctx.db.get(byAdmin),
+      launchedInA: await ctx.db.get(byOrgAdmin),
     }));
     // The Anheart admin acts from the Anheart organisation: the session is
     // nevertheless the machine's, not the caller's.
-    expect(rows.launched?.organizationId).toBe(w.orgB);
-    expect(rows.recording?.organizationId).toBe(w.orgA);
+    expect(rows.launchedInB?.organizationId).toBe(w.orgB);
+    expect(rows.launchedInA?.organizationId).toBe(w.orgA);
   });
 
   it("only links a machine to gestionnaires of the machine's organisation", async () => {
@@ -1308,6 +1272,146 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
   });
 });
 
+describe("EX-5 the machines of a gestionnaire are set inside one organisation", () => {
+  const linksOf = (w: World, gestionnaireId: Id<"users">) =>
+    w.t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("machine_gestionnaires")
+          .withIndex("by_gestionnaire", (q) =>
+            q.eq("gestionnaireId", gestionnaireId),
+          )
+          .collect()
+      ).map((link) => ({
+        machine: link.machineId,
+        organization: link.organizationId,
+        owner: link.isOwner,
+      })),
+    );
+  const setMachines = (
+    w: World,
+    actor: Actor,
+    gestionnaireId: Id<"users">,
+    machineIds: Id<"machines">[],
+  ) =>
+    as(w.t, actor).mutation(api.machines.setGestionnaireMachines, {
+      gestionnaireId,
+      machineIds,
+    });
+
+  it("lets the admin of an organisation set the list among its machines, in that organisation", async () => {
+    const w = await seedWorld(modules);
+
+    const result = await setMachines(w, "orgAdmin", w.manager, [
+      w.machine,
+      w.otherMachine,
+    ]);
+
+    expect(result).toEqual({ added: 1, removed: 0 });
+    expect(await linksOf(w, w.manager)).toEqual([
+      { machine: w.machine, organization: w.orgA, owner: true },
+      { machine: w.otherMachine, organization: w.orgA, owner: false },
+    ]);
+  });
+
+  it("refuses a machine of another organisation and writes nothing, for the Anheart admin too", async () => {
+    const w = await seedWorld(modules);
+    const before = await linksOf(w, w.manager);
+
+    for (const actor of ["orgAdmin", "admin"] as const) {
+      await expect(
+        setMachines(w, actor, w.manager, [w.otherMachine, w.orgBMachine]),
+      ).rejects.toThrow(/Machine not found/);
+    }
+
+    expect(await linksOf(w, w.manager)).toEqual(before);
+    expect(await linksOf(w, w.orgBManager)).toEqual([
+      { machine: w.orgBMachine, organization: w.orgB, owner: true },
+    ]);
+  });
+
+  it("refuses a gestionnaire of another organisation like an account that does not exist", async () => {
+    const w = await seedWorld(modules);
+
+    await expect(setMachines(w, "orgAdmin", w.orgBManager, [])).rejects.toThrow(
+      /Gestionnaire not found/,
+    );
+    // An account of the caller's organisation that is not a gestionnaire.
+    await expect(setMachines(w, "orgAdmin", w.patient, [])).rejects.toThrow(
+      /Target user is not a gestionnaire/,
+    );
+    // The mirror on the account does not make it one.
+    await w.t.run((ctx) => ctx.db.patch(w.patient, { role: "gestionnaire" }));
+    for (const actor of ["orgAdmin", "admin"] as const) {
+      await expect(setMachines(w, actor, w.patient, [])).rejects.toThrow(
+        /Target user is not a gestionnaire/,
+      );
+    }
+    expect(await linksOf(w, w.orgBManager)).toHaveLength(1);
+  });
+
+  it("lets the Anheart admin set the list of any gestionnaire, in the gestionnaire's organisation", async () => {
+    const w = await seedWorld(modules);
+
+    expect(await setMachines(w, "admin", w.orgBManager, [])).toEqual({
+      added: 0,
+      removed: 1,
+    });
+    expect(
+      await setMachines(w, "admin", w.orgBManager, [w.orgBMachine]),
+    ).toEqual({ added: 1, removed: 0 });
+
+    expect(await linksOf(w, w.orgBManager)).toEqual([
+      { machine: w.orgBMachine, organization: w.orgB, owner: false },
+    ]);
+  });
+
+  it("leaves untouched what the gestionnaire manages in another organisation", async () => {
+    const w = await seedWorld(modules);
+    await withSharedAccounts(w);
+    // `manager` is a gestionnaire of both centres, with a machine in each.
+    await w.t.run((ctx) =>
+      ctx.db.insert("machine_gestionnaires", {
+        organizationId: w.orgB,
+        machineId: w.orgBMachine,
+        gestionnaireId: w.manager,
+        isOwner: false,
+        createdAt: NOW,
+        createdBy: w.admin,
+      }),
+    );
+
+    // Centre A empties its list: centre B's link stays.
+    expect(await setMachines(w, "orgAdmin", w.manager, [])).toEqual({
+      added: 0,
+      removed: 1,
+    });
+    expect(await linksOf(w, w.manager)).toEqual([
+      { machine: w.orgBMachine, organization: w.orgB, owner: false },
+    ]);
+    // Centre B cannot give them a machine of centre A.
+    await expect(
+      setMachines(w, "orgBAdmin", w.manager, [w.orgBMachine, w.machine]),
+    ).rejects.toThrow(/Machine not found/);
+    // Centre B keeps its own link when it asks for the same list.
+    expect(
+      await setMachines(w, "orgBAdmin", w.manager, [w.orgBMachine]),
+    ).toEqual({ added: 0, removed: 0 });
+    expect(await linksOf(w, w.manager)).toHaveLength(1);
+  });
+
+  it("refuses an account that has no main organisation to the Anheart admin", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.manager, { organizationId: undefined }),
+    );
+
+    await expect(setMachines(w, "admin", w.manager, [])).rejects.toThrow(
+      /Target user is not a gestionnaire/,
+    );
+  });
+});
+
 describe("EX-5 removing an account never reaches another organisation", () => {
   const stateOf = (w: World, userId: Id<"users">) =>
     w.t.run(async (ctx) => {
@@ -1729,7 +1833,6 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
         apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
-        config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
         createdAt: NOW,
         programsEnabled: true,
       });

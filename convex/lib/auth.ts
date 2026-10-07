@@ -495,26 +495,35 @@ export async function canAccessSession(
 
 /**
  * Require the right to administer a gestionnaire, that is to decide which
- * machines they manage. Returns the caller and the target gestionnaire.
+ * machines and which patients they manage. Returns the caller, the target
+ * gestionnaire and the organisation the decision applies to.
  *
- * Admin only today. This is the single rule to extend when a role scoped to an
- * organisation may administer the gestionnaires of its own organisation.
+ * The Anheart admin administers any gestionnaire, in the gestionnaire's main
+ * organisation. An organisation admin administers the gestionnaires of their
+ * own organisation, in that organisation: an account that is not an active
+ * member of it answers like an account that does not exist.
  */
 export async function requireGestionnaireAdmin(
-  ctx: QueryCtx | MutationCtx,
+  ctx: Ctx,
   gestionnaireId: Id<"users">,
 ) {
   // The role is checked first: a caller who is not allowed learns nothing
   // about the target account.
-  const currentUser = await requireRole(ctx, ["admin"]);
+  const currentUser = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
 
   const gestionnaire = await ctx.db.get(gestionnaireId);
-  if (!gestionnaire) {
+  const organizationId =
+    currentUser.role === "admin"
+      ? gestionnaire?.organizationId
+      : currentUser.organizationId;
+  // The role held in that organisation, never the stored mirror.
+  const role = await organizationRoleOf(ctx, gestionnaireId, organizationId);
+  if (!gestionnaire || (currentUser.role !== "admin" && role === null)) {
     throw new Error("Gestionnaire not found");
   }
-  if (gestionnaire.role !== "gestionnaire") {
+  if (organizationId === undefined || role !== "gestionnaire") {
     throw new Error("Target user is not a gestionnaire");
   }
 
-  return { currentUser, gestionnaire };
+  return { currentUser, gestionnaire, organizationId };
 }

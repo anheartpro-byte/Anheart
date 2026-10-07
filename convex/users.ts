@@ -22,6 +22,7 @@ import {
   inScope,
   organizationFromClaims,
   organizationRoleOf,
+  requireGestionnaireAdmin,
   type CurrentUser,
   type OrganizationRole,
 } from "./lib/auth";
@@ -1013,22 +1014,11 @@ export const assignPatientsToGestionnaire = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
-
-    const organizationId =
-      currentUser.role === "admin"
-        ? (await ctx.db.get(args.gestionnaireId))?.organizationId
-        : currentUser.organizationId;
-
-    // Verify gestionnaire has the correct role in the organisation
-    const gestionnaireRole = await organizationRoleOf(
+    // Verify the caller administers this gestionnaire, and in which organisation
+    const { currentUser, organizationId } = await requireGestionnaireAdmin(
       ctx,
       args.gestionnaireId,
-      organizationId,
     );
-    if (organizationId === undefined || gestionnaireRole !== "gestionnaire") {
-      throw new Error("Target user is not a gestionnaire");
-    }
 
     const now = Date.now();
 

@@ -30,7 +30,10 @@ const ORGANIZATION_TABLES = [
 const LEGACY_ROWS = 14;
 
 const migrate = (w: LegacyWorld, batchSize?: number) =>
-  w.t.mutation(internal.migrations.multiOrganization.attachExistingRowsToAnheart, { batchSize });
+  w.t.mutation(
+    internal.migrations.multiOrganization.attachExistingRowsToAnheart,
+    { batchSize },
+  );
 
 /**
  * The organisation of every row of every organisation-scoped table; null for a
@@ -181,7 +184,6 @@ describe("EX-4 migration: attach existing rows to the Anheart organisation", () 
         apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
-        config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
         createdAt: NOW,
       });
       const member = await ctx.db.insert("users", {
@@ -250,7 +252,6 @@ describe("EX-4 migration: attach existing rows to the Anheart organisation", () 
         apiKey: "synthetic-hash",
         status: "offline" as const,
         lastHeartbeat: 0,
-        config: { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 },
         createdAt: NOW,
       });
       const goneUser = await ctx.db.insert("users", {
