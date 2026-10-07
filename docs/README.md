@@ -33,7 +33,8 @@ Il existe deux sortes de séance :
 | [convex.md](convex.md) | développeur | schéma, fonctions publiques, routes HTTP machine, déploiement |
 | [raspberry-pi.md](raspberry-pi.md) | développeur | modules, boucle de contrôle, superviseur et ses règles, table des défauts variateur, capteurs, configuration, contrat de code |
 | [framework-de-test.md](framework-de-test.md) | développeur | tests, gates, simulation, scénarios, cohorte, matrice de pannes, visualiseur |
-| [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi (Docker) ; ce qui a été vérifié |
+| [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi ; ce qui a été vérifié |
+| [pi-image.md](pi-image.md) | développeur, exploitant | installer un Raspberry Pi par script, versions figées, service systemd qui lance la console à l'allumage, ce que la CI en vérifie |
 | [securite.md](securite.md) | tout le monde | ce qui est garanti, ce qui ne l'est pas, défauts corrigés, résiduel |
 | [menaces.md](menaces.md) | développeur, reviewer, responsable de jalon | modèle STRIDE, protections vérifiées dans le source, menaces ouvertes et tickets Linear |
 | [release.md](release.md) | responsable de release, développeur | versions `pi`, `cloud` et `web`, `scripts/release.sh`, changelog, check-list de release, version validée par machine |

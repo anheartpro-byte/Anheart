@@ -40,12 +40,15 @@ python3.12 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 # le module bitalino n'est pas dans requirements-dev.txt (voir la note du fichier) :
 .venv/bin/pip install pyserial
-.venv/bin/pip install --no-deps bitalino
+.venv/bin/pip install --no-deps bitalino==1.2.6
 )
 ```
 
 `requirements-dev.txt` inclut `requirements-base.txt` et ajoute pytest,
-hypothesis, basedpyright, mypy et ruff. C'est aussi ce que demande la
+hypothesis, basedpyright, mypy et ruff. `requirements-base.txt` fixe chaque
+paquet à une version exacte : ce sont celles de la CI et de l'image du Pi
+([pi-image.md](pi-image.md#2-versions-figées)). Après un changement de ce
+fichier, relancer la commande `pip install -r requirements-dev.txt`. C'est aussi ce que demande la
 [gate](glossaire.md#gate-porte) (`scripts/check.sh`) si le venv manque.
 
 ## 3. Lancer la console locale en simulation complète
@@ -158,7 +161,7 @@ Variables nécessaires :
 | `.env.local` (site) | `NEXT_PUBLIC_CONVEX_URL` | URL `.convex.cloud` du déploiement de développement existant, lue par `components/ConvexClientProvider.tsx` |
 | `.env.local` (site) | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | clés standard de `@clerk/nextjs` |
 | variables du déploiement Convex | `CLERK_JWT_ISSUER_DOMAIN` | domaine émetteur des jetons Clerk (`convex/auth.config.ts`, `applicationID: "convex"`) ; il faut un modèle JWT Clerk nommé `convex` |
-| `raspberry-pi/.env` (Pi) | `CONVEX_URL`, `MACHINE_API_KEY` | pour relier une console : l'hôte **`.convex.site`** (pas `.convex.cloud`) et la clé de 64 caractères affichée une seule fois à la création de la machine |
+| `raspberry-pi/.env` (poste de développement) ou `/etc/anheart/anheart.env` (Pi installé) | `CONVEX_URL`, `MACHINE_API_KEY` | pour relier une console : l'hôte **`.convex.site`** (pas `.convex.cloud`) et la clé de 64 caractères affichée une seule fois à la création de la machine |
 
 **Le premier admin** : un nouveau compte reçoit le rôle `user`. Rien dans le code
 ne crée un admin ; il faut changer le rôle à la main dans le tableau de bord
@@ -251,3 +254,27 @@ Durées, nombres de tests et lancement d'un seul test :
 | Docker sur Mac | ne voit ni le câble FTDI ni le Bluetooth | lancer la console en natif |
 | Tester l'API à la main dans zsh avec un en-tête `-H` stocké dans une variable | réponses 422 | écrire l'en-tête `Content-Type: application/json` directement dans la commande `curl` |
 | Environnements Python dans le dépôt | à exclure de l'analyse JavaScript | `eslint.config.mjs` exclut déjà `**/.venv/**`, `**/.venv-*/**` et `**/venv/**` |
+
+## 8. Installer la console sur un Raspberry Pi
+
+Ce guide ne demande aucun matériel. Pour une vraie machine, un seul chemin :
+flasher l'image Raspberry Pi OS figée, copier le dossier `raspberry-pi/`, puis
+lancer le script d'installation **sur le Pi**.
+
+```sh
+# depuis le poste de développement, dans raspberry-pi/
+bash scripts/pi/deploy.sh <utilisateur>@<adresse du Pi>
+
+# sur le Pi
+cd ~/anheart/raspberry-pi
+sudo bash scripts/install.sh --simulation    # sans matériel : variateur et ECG simulés
+systemctl status anheart                     # en marche, avec la version
+curl -fsS http://127.0.0.1:8090/healthz
+```
+
+Le script installe Docker, construit l'image de la console et installe le
+service systemd `anheart`, qui la lance à chaque allumage. Sans `--simulation`,
+la configuration créée vise le vrai variateur et le vrai BITalino. Versions
+figées, détail du script, passage au matériel réel et état de ce qui a été
+vérifié : [pi-image.md](pi-image.md). Cette installation n'a **pas** encore été
+faite sur un vrai Pi ; la CI l'exécute dans une machine de remplacement.

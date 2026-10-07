@@ -5,9 +5,12 @@ safety supervisor and serves the operator's web page. Its entry point, the
 only one in this directory, is `python -m src.local_panel`.
 
 The [project documentation](../docs/README.md) describes the architecture.
-For deployment, follow [the Pi procedure](../docs/deploiement.md#7-le-raspberry-pi):
-`.env.pi.example`, `scripts/pi/preflight.sh` and `scripts/pi/deploy.sh`.
-The Docker image, Compose service and native systemd unit start `src.local_panel`.
+A Raspberry Pi is installed one way only, by `scripts/install.sh`: the console
+runs in the Docker image of this directory, and the systemd unit
+`scripts/anheart.service` starts that image at power-on. See
+[Installing a Raspberry Pi](#installing-a-raspberry-pi) below and
+[the install reference](../docs/pi-image.md) (pinned versions, what CI checks,
+what is still to be checked on a real Pi).
 
 ## Development setup
 
@@ -19,9 +22,12 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pip install pyserial
-.venv/bin/python -m pip install --no-deps bitalino
+.venv/bin/python -m pip install --no-deps bitalino==1.2.6
 ```
 
+`requirements-base.txt` pins every runtime package to an exact version, the
+same on a development machine, in CI and in the image of the Pi; the image
+installs `requirements-lock.txt`, the full resolution with hashes.
 `requirements-dev.txt` explains the separate BITalino installation. Hardware
 Bluetooth setup depends on the platform and selected transport; use the
 [deployment guide](../docs/deploiement.md) and the supplied Pi configuration.
@@ -84,7 +90,14 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim MACHINE_API_KEY= ARM_RADIUS_M=1.5 \
 
 ## Propriété exclusive du câble variateur
 
-Un seul programme possede la liaison variateur par hote. La console, le banc,
+Un seul programme possède la liaison variateur **parmi ceux qui voient le même
+fichier de verrou**. Sur un poste de développement ou un banc, ce sont tous les
+programmes de l'hôte, et tout ce qui suit s'applique. **Sur un Raspberry Pi
+installé par `scripts/install.sh`, ce n'est pas tout l'hôte** : la console y
+tourne dans un conteneur, lire d'abord
+[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur).
+
+La console, le banc,
 la mesure de latence, `probe_atv320.py` et `scan_modbus.py` prennent le meme
 verrou noyau avant toute ouverture du transport. Un concurrent refuse avec
 `drive cable already owned` et le PID du proprietaire ; aucune commande ni
@@ -115,6 +128,47 @@ handle. Pour un appel direct a `open_ftdi_port`,
 retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
 cela n'autorise aucune reprise automatique du mouvement. Cette protection
 concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
+
+### Sur un Raspberry Pi installé : le verrou est celui du conteneur
+
+Sur un Pi installé par `scripts/install.sh`, la console tourne dans un
+conteneur Docker. `/tmp/anheart-drive.lock` y est le fichier **du conteneur**,
+pas celui du Pi.
+
+- **Dans le conteneur**, la console tient le verrou comme décrit plus haut,
+  dès qu'elle ouvre le câble (`MOTOR_BACKEND=serial`). En simulation elle
+  n'ouvre aucun câble et ne prend aucun verrou.
+- **Un outil lancé sur le Pi lui-même, ou dans un second conteneur, n'est pas
+  refusé par ce verrou** : il ouvre un autre fichier du même nom, et le refus
+  `drive cable already owned` ne se produit pas.
+- Ce qui limite encore un second programme, d'après la lecture du code et
+  **sans essai entre le Pi et le conteneur** : le port série est ouvert en
+  exclusivité (pymodbus le demande à pyserial, qui pose un verrou `flock` sur
+  `/dev/ttyUSB0`, que le conteneur partage par son montage de `/dev`), et avec
+  une adresse `ftdi://` la bibliothèque USB réclame l'interface de
+  l'adaptateur. **Ni l'un ni l'autre n'est tenu entre une fermeture du port et
+  sa réouverture** : pymodbus ferme le port à chaque absence de réponse du
+  variateur et le rouvre à la transaction suivante. Un autre programme peut
+  prendre le câble dans cet intervalle.
+
+**La règle, pour la personne : aucun outil de banc ou de diagnostic
+(`bench_console.py`, `bench_comm_latency.py`, `probe_atv320.py`,
+`scan_modbus.py`, SoMove) sur une machine dont le service tourne.** Arrêter
+d'abord le service, vérifier qu'il est arrêté, et seulement ensuite lancer
+l'outil :
+
+```sh
+sudo systemctl stop anheart
+systemctl is-active anheart     # doit répondre : inactive
+sudo docker ps --all            # ne doit lister aucun conteneur anheart
+```
+
+Après l'intervention : fermer l'outil, puis `sudo systemctl start anheart`.
+
+Faire tenir cette règle par le logiciel (un verrou partagé entre le Pi et le
+conteneur, ou des outils lancés dans le conteneur) reste à concevoir. C'est une
+condition avant de relier au vrai variateur une console lancée par ce service :
+voir [les limites de l'installation](../docs/pi-image.md#8-limites-et-reste-à-faire).
 
 ---
 
@@ -186,52 +240,64 @@ defaults, which is a decision for the medical side, made in `.env`.
 
 ---
 
-## Running as a Service
+## Installing a Raspberry Pi
 
-Docker/Compose and the native unit both launch the operator console. Use the
-[deployment guide](../docs/deploiement.md#7-le-raspberry-pi) for installation and
-permissions. The native unit is `scripts/anheart.service`; its paths and service
-account must match the installation.
-
-### Control Service
+One path, and the only one maintained. On a Raspberry Pi 4 or 5 freshly flashed
+with the pinned Raspberry Pi OS image ([versions](../docs/pi-image.md#2-versions-figées)):
 
 ```bash
-# Start
-sudo systemctl start anheart
+# from the development machine, in raspberry-pi/: copy the sources
+bash scripts/pi/deploy.sh <user>@<pi>
 
-# Stop
-sudo systemctl stop anheart
-
-# Restart
-sudo systemctl restart anheart
-
-# Check status
-sudo systemctl status anheart
-
-# Enable auto-start on boot
-sudo systemctl enable anheart
-
-# View logs
-journalctl -u anheart -f
+# on the Pi
+cd ~/anheart/raspberry-pi
+sudo bash scripts/install.sh                # real hardware
+sudo bash scripts/install.sh --simulation   # no hardware: simulated drive and ECG
 ```
+
+`install.sh` installs Docker, BlueZ and libusb from Debian, creates the system
+account `anheart` and `/var/lib/anheart/{data,records}`, writes
+`/etc/anheart/anheart.env` from `.env.pi.example` (root only, never rewritten,
+never printed), builds the image `anheart-console:<VERSION>`, installs and
+enables the unit, starts it and waits for `GET /healthz`. It is safe to run
+again: nothing that is in place is changed, and a running console is restarted
+only when its image or unit changed and only when it says it is at rest.
+
+The console that starts is at rest. Nothing starts a session at boot or after a
+restart by systemd: a start needs an operator, and the emergency-stop
+attestation is per boot.
+
+### Control the service
+
+```bash
+systemctl status anheart          # state, and the version in its first line
+journalctl -u anheart -f          # the console's log
+sudo systemctl stop anheart       # controlled stop: reference zeroed, link released
+sudo systemctl restart anheart    # at rest only, e.g. after editing /etc/anheart/anheart.env
+curl -fsS http://127.0.0.1:8090/healthz
+sudo bash scripts/pi/preflight.sh # read-only checks of the configuration and links
+sudo bash scripts/uninstall.sh    # removes the service; keeps configuration and data
+```
+
+In `/etc/anheart/anheart.env` a line is `KEY=value` and nothing else: Docker
+passes quotes and trailing comments to the console as part of the value.
+
+`bash scripts/pi/test_install.sh` runs the whole install in a throwaway
+Debian 12 machine (a container with systemd), in simulation; CI runs it on
+arm64 (`.github/workflows/pi-install.yml`).
 
 ---
 
 ## Troubleshooting
 
-### "pip install" fails with PyBluez errors
+### The image fails to build on PyBluez
 
-**Error:** `error: command 'gcc' failed` or `bluetooth/bluetooth.h: No such file`
-
-**Solution:** Install Bluetooth development libraries:
-
-```bash
-# Debian/Ubuntu/Raspberry Pi
-sudo apt install libbluetooth-dev python3-dev
-
-# Then retry
-.venv/bin/python -m pip install -r requirements-prod.txt
-```
+`PyBluez-bitalino` is the one package the image compiles (pulled in by
+`bitalino`). The `Dockerfile` installs what it needs (`libbluetooth-dev`, a C
+compiler) and its build tools are pinned in `requirements-build-lock.txt`. On a
+development machine, install `bitalino` with `--no-deps` as shown above: the
+console only needs PyBluez when it is given a MAC address instead of a serial
+node.
 
 ### Cannot find BITalino device
 

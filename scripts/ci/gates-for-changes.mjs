@@ -58,6 +58,12 @@ export const EVERYTHING = [
     name: "changelog read by the release tooling",
     test: (path) => /(^|\/)changelog\.md$/i.test(path),
   },
+  {
+    // A page of docs/, but read by the Pi gate: raspberry-pi/tests/test_pi_install.py
+    // compares its table of versions with the files that pin those versions.
+    name: "pinned versions of the Pi, read by its tests",
+    test: (path) => path === "docs/pi-image.md",
+  },
 ];
 
 const DOCUMENT_EXTENSIONS = [".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"];

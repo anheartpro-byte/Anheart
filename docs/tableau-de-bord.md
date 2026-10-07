@@ -170,8 +170,9 @@ Recherche ; l'admin peut afficher les machines supprimées.
 
 - **Nouvelle machine** (admin seulement) : nom, lieu, gestionnaires. À la
   création, la **clé API** s'affiche **une seule fois** (« Cette clé ne sera
-  affichée qu'une seule fois! ») avec un bouton Copier. Elle va dans
-  `raspberry-pi/.env` (`MACHINE_API_KEY`).
+  affichée qu'une seule fois! ») avec un bouton Copier. Elle va dans la
+  configuration de la machine (`MACHINE_API_KEY` dans `/etc/anheart/anheart.env`
+  sur un Pi installé, dans `raspberry-pi/.env` sur un poste de développement).
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
 

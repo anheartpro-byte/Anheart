@@ -1,0 +1,65 @@
+name: Pi install
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '.github/workflows/pi-install.yml'
+      - 'raspberry-pi/.dockerignore'
+      - 'raspberry-pi/.env.pi.example'
+      - 'raspberry-pi/Dockerfile'
+      - 'raspberry-pi/VERSION'
+      - 'raspberry-pi/docker/**'
+      - 'raspberry-pi/requirements*.txt'
+      - 'raspberry-pi/scripts/anheart.service'
+      - 'raspberry-pi/scripts/install.sh'
+      - 'raspberry-pi/scripts/pi/test_install.sh'
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time per pull request: a new push replaces the one in progress.
+# A push to develop and a manual run are keyed by their commit: none is
+# cancelled nor left waiting behind another.
+concurrency:
+  group: pi-install-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+# The install of the Raspberry Pi, end to end and without a Raspberry Pi
+# (docs/pi-image.md, "Ce que la CI vérifie"). On an arm64 runner, the
+# architecture of the Pi 4 and 5, a stand-in machine (Debian 12, systemd) is
+# started as a container; the real raspberry-pi/scripts/install.sh is run in
+# it as root and must leave the console enabled at boot, running in
+# simulation, answering GET /healthz and at rest. The script that does it,
+# raspberry-pi/scripts/pi/test_install.sh, can be run on any machine with
+# Docker.
+#
+# Not a gate. The job below is not a required check: a pull request is filtered
+# by path, and a workflow that does not start would leave a required check
+# pending. It runs on pull requests that change what the install is made of,
+# and on every push to develop, where a change of the console's sources that
+# breaks its start in the image is caught. The job may not take the name of a
+# job of ci.yml.
+#
+# Nothing is published, signed or deployed, and no secret is read: the token of
+# each run can only read the repository.
+
+jobs:
+  pi-install:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install the console on a stand-in Raspberry Pi
+        run: |
+          echo "Runner: $(uname -m), $(nproc) CPUs, $(docker --version)"
+          bash raspberry-pi/scripts/pi/test_install.sh

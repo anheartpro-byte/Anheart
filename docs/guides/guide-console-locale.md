@@ -228,55 +228,68 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
 ### 3.4 Sur le vrai Raspberry Pi
 
-> Cette partie vient du code et de `.env.example`. **Elle n'a pas été rejouée sur le
-> Pi pour ce guide.**
+> Cette partie vient du code, de `.env.pi.example` et du script d'installation.
+> **Elle n'a pas été rejouée sur un vrai Pi pour ce guide** ; l'installation est
+> exécutée en simulation par la CI ([pi-image.md](../pi-image.md)).
 
-1. Sur le Pi, dans le dossier du dépôt : `cd raspberry-pi`, puis créer le `venv`
-   comme au 3.1.
-2. Copier le modèle de configuration : `cp .env.example .env`.
-3. Ouvrir `.env` et régler au minimum :
+1. Installer le Pi par le script `scripts/install.sh` : la procédure est dans
+   [pi-image.md](../pi-image.md#6-installer-un-vrai-raspberry-pi). La console est
+   ensuite lancée à chaque allumage par le service `anheart` : il n'y a rien à
+   lancer à la main.
+2. Ouvrir la configuration de la machine, `sudo nano /etc/anheart/anheart.env`, et
+   régler au minimum :
 
    ```sh
    MOTOR_BACKEND=serial
-   MOTOR_PORT=/dev/ttyUSB0          # ou ftdi://schneider:rs485/1 si le noyau ne crée pas ttyUSB0
-   MOTOR_SLAVE_ID=248               # mesuré au banc : le variateur répond sur 248
+   # ou ftdi://schneider:rs485/1 si le noyau ne crée pas ttyUSB0
+   MOTOR_PORT=/dev/ttyUSB0
+   # mesuré au banc : le variateur répond sur 248
+   MOTOR_SLAVE_ID=248
    MODBUS_BAUDRATE=19200
    MODBUS_PARITY=E
    ECG_SOURCE=serial
-   BITALINO_ADDRESS=/dev/rfcomm0    # ou l'adresse MAC du BITalino
-   ARM_RADIUS_M=1.5                 # À MESURER sur la machine, de l'axe à l'occupant
-   LEG_TIP_RADIUS_M=2.43            # À MESURER sur le passager réel
-   MOTOR_MAX_RPM=300                # monter par paliers délibérés pendant la mise en service
-   MACHINE_API_KEY=                 # vide tant qu'on ne veut pas le tableau de bord
+   BITALINO_ADDRESS=/dev/rfcomm0
+   # À MESURER sur la machine, de l'axe à l'occupant
+   ARM_RADIUS_M=1.5
+   # À MESURER sur le passager réel
+   LEG_TIP_RADIUS_M=2.43
+   # monter par paliers délibérés pendant la mise en service
+   MOTOR_MAX_RPM=300
+   # vide tant qu'on ne veut pas le tableau de bord
+   MACHINE_API_KEY=
    ```
 
-4. Lancer, toujours depuis `raspberry-pi/` :
+   Dans ce fichier, une ligne est `CLÉ=valeur` et rien d'autre : ni guillemets,
+   ni commentaire en fin de ligne (ils feraient partie de la valeur).
 
-   ```sh
-   .venv/bin/python -m src.local_panel
-   ```
-
-5. Lire la ligne de résumé : elle doit dire `variateur: /dev/ttyUSB0 @ 19200 ...`,
-   **pas** `simulateur`.
+3. Redémarrer la console, **au repos** : `sudo systemctl restart anheart`.
+4. Lire la ligne de résumé, `journalctl -u anheart -n 20` : elle doit dire
+   `variateur: /dev/ttyUSB0 @ 19200 ...`, **pas** `simulateur`.
 
 **Ouvrir la page :**
 
-* sur l'écran du Pi : <http://127.0.0.1:8080/> ;
-* depuis un autre ordinateur du réseau : mettre dans `.env`
-  `UI_HOST=0.0.0.0` et `UI_TOKEN=` suivi d'au moins 16 caractères, relancer, puis
-  ouvrir `http://<adresse IP du Pi>:8080/` et saisir le jeton dans la page
-  **Configuration** (voir §10). Sans jeton assez long, la console refuse de démarrer.
+* sur l'écran du Pi : <http://127.0.0.1:8090/> (le port `UI_PORT` du modèle de
+  configuration du Pi) ;
+* depuis un autre ordinateur du réseau : mettre dans `/etc/anheart/anheart.env`
+  `UI_HOST=0.0.0.0` et `UI_TOKEN=` suivi d'au moins 16 caractères, redémarrer la
+  console, puis ouvrir `http://<adresse IP du Pi>:8090/` et saisir le jeton dans la
+  page **Configuration** (voir §10). Sans jeton assez long, la console refuse de
+  démarrer.
 
 Ne lancez **jamais** en même temps la console et `scripts/bench_console.py` sur le
 même câble. Sur un même ordinateur, un seul programme à la fois possède la liaison
 avec le variateur : le second lancé est refusé avant toute ouverture du câble
 (`drive cable already owned`, suivi du numéro de processus de celui qui la tient) et
 n'a aucune liaison tant que le premier la tient. Fermez le premier avant de lancer
-l'autre (voir §14).
+l'autre (voir §14). **Sur un Pi installé par `scripts/install.sh`, ce refus ne
+joue pas** pour un outil lancé hors du conteneur de la console : arrêtez d'abord le
+service (`sudo systemctl stop anheart`) et vérifiez qu'il est arrêté
+([pi-image.md](../pi-image.md#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
 
 > Le fichier `scripts/anheart.service` (démarrage automatique par systemd) lance
-> la console `src.local_panel`. Son installation et son activation restent
-> explicites : la présence du fichier ne démarre aucun service sur la machine.
+> l'image de la console `src.local_panel`. Son installation et son activation
+> restent explicites, par `scripts/install.sh` : la présence du fichier ne
+> démarre aucun service sur la machine.
 
 ## 4. Les règles de lecture à connaître avant tout
 

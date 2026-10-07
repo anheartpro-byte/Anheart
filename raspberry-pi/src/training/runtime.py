@@ -68,9 +68,9 @@ timeout the stop is now resting on.
 WHAT THIS MODULE REFUSES TO ASSUME
 ----------------------------------
 
-* **The drive's state at startup.** ``restart: unless-stopped`` in
-  ``docker-compose`` means a crashed process comes back to a machine it did not
-  leave. If ETA reports ``OPERATION_ENABLED``, a previous process died with the
+* **The drive's state at startup.** ``Restart=on-failure`` in
+  ``scripts/anheart.service`` means a crashed process comes back to a machine it
+  did not leave. If ETA reports ``OPERATION_ENABLED``, a previous process died with the
   motor commanded: zero the reference, ramp-stop, latch, refuse to start, and
   require a named operator acknowledgement. There is no automatic fault reset
   anywhere in this file, and nothing resumes by itself behind a latched
@@ -1676,9 +1676,9 @@ class TrainingRuntime:
         so a refusal for a mis-specified programme never leaves a half-armed
         drive behind.
 
-        **The drive's state is read, never assumed.** ``restart:
-        unless-stopped`` in ``docker-compose`` guarantees that a crashed process
-        comes back to a machine it did not leave; if ETA reports
+        **The drive's state is read, never assumed.** ``Restart=on-failure``
+        in ``scripts/anheart.service`` guarantees that a crashed process comes
+        back to a machine it did not leave; if ETA reports
         ``OPERATION_ENABLED`` then the motor is commanded right now, possibly
         with a person in the machine.
 

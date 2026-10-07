@@ -7,7 +7,10 @@
 
 # 3.12 (not 3.11): numpy's bundled type stubs require a 3.12+ target, and the
 # strict type-check gate runs against this same version.
-FROM python:3.12-slim-bookworm
+# The exact release AND its digest: the tag alone moves with every rebuild of
+# the official image. docs/pi-image.md lists this version; to move it, change
+# both here and there (tests/test_pi_install.py compares them).
+FROM python:3.12.15-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 
 # Install Bluetooth and build dependencies. The extra libs (BLAS/LAPACK, HDF5,
 # freetype) let scipy / biosppy install cleanly on ARM if a source build is needed.
@@ -34,16 +37,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first for better caching
-# Both files: requirements-prod.txt starts with `-r requirements-base.txt`,
-# so the base file has to be present in the build context too.
-COPY requirements-base.txt requirements-prod.txt ./
+# The two lock files, not requirements-prod.txt: every package the image
+# installs is named there at an exact version, with its hashes.
+COPY requirements-build-lock.txt requirements-lock.txt ./
 
 # Headless matplotlib backend (BioSPPy imports matplotlib).
 ENV MPLBACKEND=Agg
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-prod.txt
+# Install Python dependencies. pip is the one of the base image, not upgraded.
+# --require-hashes refuses any package that is not in the lock files.
+# PyBluez-bitalino (pulled in by bitalino) is the only package built from
+# source: its build tools are locked too, installed first, and reused
+# (--no-build-isolation) so that pip fetches nothing unpinned to build it.
+RUN pip install --no-cache-dir --require-hashes -r requirements-build-lock.txt && \
+    pip install --no-cache-dir --require-hashes --no-build-isolation -r requirements-lock.txt
 
 # Fail the build early if the on-device DSP stack didn't install correctly.
 RUN python -c "from biosppy.signals import ecg; from scipy import signal; print('DSP stack OK')"
