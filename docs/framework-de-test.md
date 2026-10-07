@@ -2282,7 +2282,7 @@ du site sous le seuil, c'est ajouter son nom à la suite qui lance ses tests
 libellé du rapport suivent.
 
 **Comment c'est appliqué.** Dans chaque job, les tests tournent d'abord sans
-mesure (`npm run test:convex` ; `npm run test:ecg` puis `npm run test:site`).
+mesure (`npm run test:convex` ; `npm run test:lib` puis `npm run test:site`).
 Ce sont les commandes des développeurs : elles ne mesurent rien et restent
 aussi rapides qu'avant. Une étape « Enforce the coverage … » relance ensuite
 les mêmes tests avec la mesure. Vitest compare lui-même le résultat au seuil
@@ -2417,7 +2417,7 @@ sur `develop` qui les précède (37637092583) :
 | `convex-tests` | `npm run test:convex` | 6 s (954 tests) | 6 s | 6 s (1 044 tests) |
 | `convex-tests` | mesure de la couverture | 7 s, sans seuil | 6 s | 7 s, avec le seuil |
 | `convex-tests` | le job entier | 49 s | 45 s | 47 s |
-| `web` | `npm run test:ecg` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
+| `web` | `npm run test:lib` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
 | `web` | `npm run test:site` | 9 s (227 tests) | 10 s | 17 s (1 132 tests) |
 | `web` | mesure de la couverture | 14 s, deux exécutions sans seuil | 13 s | 22 s, une exécution avec le seuil |
 | `web` | le job entier | 105 s | 77 s | 127 s |
@@ -2534,16 +2534,19 @@ branche a avancé (voir
 
 ### Tests unitaires du site
 
-`npm run test:ecg` lance les tests de `lib/` (configuration
-`vitest.ecg.config.mts`, environnement Node), `npm run test:site` ceux de
+`npm run test:lib` lance les tests de `lib/` (configuration
+`vitest.lib.config.mts`, environnement Node), `npm run test:site` ceux de
 `hooks/`, de `components/` et des pages de `app/` (`vitest.site.config.mts`).
 Aucune des deux ne
 mesure la couverture : `npm run coverage:site` lance les deux ensemble avec la
 mesure et son seuil (voir
-[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le nom du script date de la
-bibliothèque ECG du navigateur que ces tests couvraient ; elle a été retirée
-avec l'ancien mode d'enregistrement ECG, et la CI appelle toujours le script
-sous ce nom.
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le premier
+script s'appelait `test:ecg` jusqu'à ANH-183, et sa configuration
+`vitest.ecg.config.mts` : le nom datait de la bibliothèque ECG du navigateur
+que ces tests couvraient, retirée avec l'ancien mode d'enregistrement ECG.
+Un test du workflow (`scripts/ci/ci-workflow.test.mjs`) vérifie que chaque
+`npm run <script>` cité dans la documentation ou dans un workflow existe dans
+`package.json` : un ancien nom recopié fait échouer `docs`.
 
 Les règles des fenêtres du site et les bornes de fraîcheur ont leurs fichiers,
 décrits dans les deux sections suivantes. Deux autres gardent le retrait de
@@ -2590,7 +2593,7 @@ retrait : `raspberry-pi/tests/test_legacy_recorder_retired.py` (gate du Pi) et
 
 ### Règles des fenêtres du site, sans navigateur
 
-`npm run test:ecg` exécute tous les fichiers `lib/**/*.test.ts`. En plus du
+`npm run test:lib` exécute tous les fichiers `lib/**/*.test.ts`. En plus du
 test du retrait de l'ancien mode ECG, il couvre donc les règles qu'une fenêtre
 du site applique avant d'appeler Convex, extraites en fonctions pures dans
 `lib/` pour être testées sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
@@ -2608,11 +2611,11 @@ L'horloge du Pi est décalée elle aussi : de 4 s, sans effet ; de 12 s, 25 s
 ou 10 min, le panneau affiche le bandeau des mesures qui ne sont pas datées
 de maintenant, et aucune valeur :
 
-- `lib/server-clock.test.ts` (`npm run test:ecg`, comme tous les tests de
+- `lib/server-clock.test.ts` (`npm run test:lib`, comme tous les tests de
   `lib/`) : l'heure du serveur reconstituée à partir de `serverNow` et du temps
   compté, horloge du poste décalée, reculée, avancée, poste en veille, réponse
   déjà vue par un autre composant ;
-- `lib/training.test.ts` (`npm run test:ecg`) fixe les bornes de `isFresh`
+- `lib/training.test.ts` (`npm run test:lib`) fixe les bornes de `isFresh`
   (dont le refus d'une date du futur au-delà de la tolérance), celles de
   `datedAfterReception` (un point daté après sa propre réception), les deux
   seuils et le statut affiché ;
@@ -2700,7 +2703,7 @@ retour des mutations, chacun une seule fois :
   dans un fichier qui appelle une mutation un `catch` vide ou réduit à des
   appels `console`. C'est une lecture de texte, pas une analyse du programme :
   elle ne suit pas une erreur avalée dans un autre fichier ;
-- `lib/machineForm.test.ts` (`npm run test:ecg`, comme tous les tests de
+- `lib/machineForm.test.ts` (`npm run test:lib`, comme tous les tests de
   `lib/`) vérifie que l'étape « liste des gestionnaires » de la fenêtre machine
   rend la réponse de la mutation, donc un refus que le hook rapporte sans lever
   d'exception.
@@ -2718,7 +2721,7 @@ d'ANH-83.
 
 Pour tenir le seuil de 80 %, chaque composant de `components/`, chaque hook et
 chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
-(`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
+(`hooks/`, `components/`) et `npm run test:lib` (`lib/`), sans navigateur. Ils
 n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
 
 **Quel test va sur quel document.** Le dépôt a deux documents de test, et un

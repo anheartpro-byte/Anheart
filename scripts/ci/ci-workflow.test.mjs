@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -359,9 +359,9 @@ test("the coverage of Convex and of the site decides their gates: under the thre
     );
   }
   // The measured run of the site is the two plain suites together: each takes its folders from the same list.
-  assert.match(atRoot("vitest.ecg.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.ecg\),$/m);
+  assert.match(atRoot("vitest.lib.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.lib\),$/m);
   assert.match(atRoot("vitest.site.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.site\),$/m);
-  assert.deepEqual(siteFolders(), [...SITE.suites.ecg, ...SITE.suites.site]);
+  assert.deepEqual(siteFolders(), [...SITE.suites.lib, ...SITE.suites.site]);
   assert.deepEqual(testsOf(siteFolders()).length, sourcesOf(siteFolders()).length);
   // 80 % of lines and of branches, on the whole and on each Convex file of the safety chain taken alone.
   const required = { lines: 80, branches: 80 };
@@ -376,11 +376,11 @@ test("the coverage of Convex and of the site decides their gates: under the thre
 
 test("the commands a developer runs to test measure nothing, in the CI as on a desk", () => {
   const scripts = JSON.parse(atRoot("package.json")).scripts;
-  for (const name of ["test:convex", "test:ecg", "test:site"]) {
+  for (const name of ["test:convex", "test:lib", "test:site"]) {
     assert.doesNotMatch(scripts[name], /coverage/, `npm run ${name} measures the coverage`);
   }
   // The two suites of the site hold no measure of their own: one run measures the site.
-  for (const config of ["vitest.ecg.config.mts", "vitest.site.config.mts"]) {
+  for (const config of ["vitest.lib.config.mts", "vitest.site.config.mts"]) {
     assert.doesNotMatch(atRoot(config), /^ *(coverage|thresholds):/m, config);
   }
   // The runs that decide the tests of `convex-tests` and `web` carry no coverage flag either.
@@ -400,6 +400,29 @@ test("the commands a developer runs to test measure nothing, in the CI as on a d
     measuring,
     ENFORCED.map(({ job, step }) => `${job}: name: ${step}`),
   );
+});
+
+test("every npm script the documentation or a workflow names is a script of package.json", () => {
+  // A script that is renamed (`test:ecg` became `test:lib`, ANH-183) leaves its old name in pages and
+  // in steps written meanwhile on other branches: the command they give would not start.
+  const scripts = Object.keys(JSON.parse(atRoot("package.json")).scripts);
+  const root = new URL("../../", import.meta.url);
+  const pages = readdirSync(new URL("docs/", root), { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => `docs/${name.split("\\").join("/")}`);
+  const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => `.github/workflows/${name}`);
+  assert.ok(pages.length >= 10 && workflows.length >= 5, "the documentation and the workflows were not read");
+  let named = 0;
+  for (const file of ["README.md", "raspberry-pi/README.md", ...pages, ...workflows]) {
+    // `npm run test:*` names a family of scripts: one of them at least must exist.
+    for (const [, name = "", family] of atRoot(file).matchAll(/\bnpm run ([a-z][\w:-]*)(\*)?/g)) {
+      named += 1;
+      const defined = family ? scripts.some((script) => script.startsWith(name)) : scripts.includes(name);
+      assert.ok(defined, `${file} names \`npm run ${name}${family ?? ""}\`, which package.json does not define`);
+    }
+  }
+  assert.ok(named >= 30, `${named} mentions of a script were read`);
+  assert.ok(scripts.includes("test:lib") && !scripts.includes("test:ecg"));
 });
 
 test("each suite and each measure of the report is left by the job the report expects it from", () => {

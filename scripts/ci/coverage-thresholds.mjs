@@ -44,7 +44,7 @@ export const CONVEX = {
 
 /**
  * The site: each suite with the folders whose tests it runs
- * (`npm run test:ecg`, `npm run test:site`). Every folder named here is
+ * (`npm run test:lib`, `npm run test:site`). Every folder named here is
  * measured: every source file of it, loaded by a test or not. Only the test
  * files themselves are left out.
  *
@@ -54,7 +54,7 @@ export const CONVEX = {
 export const SITE = {
   threshold: THRESHOLD,
   suites: {
-    ecg: ["lib"],
+    lib: ["lib"],
     site: ["hooks", "components", "app"],
   },
   exclude: ["**/*.test.{ts,tsx}"],

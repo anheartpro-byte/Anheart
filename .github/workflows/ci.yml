@@ -516,7 +516,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/quality"
           node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/pi-panel.xml" raspberry-pi/tests/web/*.test.mjs
-      - run: npm run test:ecg -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-lib.xml"
+      - run: npm run test:lib -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-lib.xml"
       - run: npm run test:site -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-components.xml"
       - run: npm run build
       # Part of the gate: every test of the site once more, in one run,

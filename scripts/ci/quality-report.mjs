@@ -98,7 +98,7 @@ export const SUITES = [
     runner: "pytest",
   },
   { id: "convex", project: "convex", job: "convex-tests", part: "convex", label: "fonctions Convex", runner: "vitest" },
-  { id: "site-lib", project: "site", job: "web", part: "site", label: suiteFolders(SITE.suites.ecg), runner: "vitest" },
+  { id: "site-lib", project: "site", job: "web", part: "site", label: suiteFolders(SITE.suites.lib), runner: "vitest" },
   {
     id: "site-components",
     project: "site",
