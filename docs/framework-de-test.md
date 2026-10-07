@@ -1084,7 +1084,8 @@ par un commit de fusion
 | Job | Contrôles et artefacts |
 |---|---|
 | `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL, ceux des deux workflows de déploiement, ceux du rapport de qualité et ceux du script qui tient `convex/_generated/api.d.ts` |
-| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
+| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
+| `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
@@ -1160,6 +1161,10 @@ cas, à confirmer sur la première PR de chaque sorte fusionnée après celle-ci
 Une PR qui touche le Pi ou la simulation attend `pi-gate` et
 `simulation-gate`.
 
+Depuis ANH-183, les tests de `pi-gate` sont répartis sur deux jobs. Les durées
+mesurées avant sont dans
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183).
+
 Les actions de checkout, d'installation de Node, de publication et de
 récupération des artefacts utilisent le runtime Node.js 24, avec des commits
 complets épinglés dans le workflow. Elles demandent un runner GitHub Actions au
@@ -1170,10 +1175,10 @@ pour l'audit et cache npm explicite. Les artefacts publiés (`pi-gate-N` et
 `simulation-gate-N`, N étant le numéro de tentative) gardent leurs chemins,
 leur rétention de 14 jours et l'échec si aucun fichier attendu n'est produit ;
 les fichiers cachés en restent exclus. Les artefacts intermédiaires
-`simulation-evidence-*` font exception : ils portent la mesure de couverture de
-chaque part, un fichier nommé `.coverage`, et sont donc publiés avec leurs
-fichiers cachés. Ils ne contiennent que le dossier d'enregistrements créé par
-le lanceur.
+`pi-evidence-*` et `simulation-evidence-*` font exception : ils portent la
+mesure de couverture de chaque part, un fichier nommé `.coverage`, et sont donc
+publiés avec leurs fichiers cachés. Ils ne contiennent que le dossier
+d'enregistrements créé par le lanceur.
 
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
 artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
@@ -1181,8 +1186,9 @@ rapport synthétique. Les séances enregistrées de `simulation/scenarios/real/`
 n'ont pas d'étape nocturne à part : `test_real_records.py` les rejoue dans la
 batterie, à chaque exécution (voir [16.5](#165-la-bibliothèque-simulationscenariosreal)).
 
-Budgets d'exécution : 60 minutes pour `pi-gate` (dont, la nuit, 35 minutes au
-plus pour l'étape d'endurance de l'enregistrement), 45 minutes pour chaque job de
+Budgets d'exécution : 60 minutes pour chacun des deux jobs `pi (tests …)` (dont,
+la nuit, 35 minutes au plus pour l'étape d'endurance de l'enregistrement, dans
+`pi (tests 1)`), 15 minutes pour `pi-gate`, 45 minutes pour chaque job de
 la batterie de simulation, 90 minutes pour `simulation (report)` (le budget de
 l'ancien job unique, gardé pour le rapport nocturne avec `--dsp`) et 15 minutes
 pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
@@ -1218,13 +1224,18 @@ trois. Un seul test paramétré,
 `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic` (67 cas
 d'environ 10 s chacun), représente 39 % de ce temps.
 
-Le job lance toujours `bash raspberry-pi/scripts/check.sh`, qui reste la seule
-définition de la gate. Il lui passe `PI_GATE_PROCESSES`, égal au nombre de CPU
-du runner : quatre sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux
-fils chacun). Avec cette variable, l'étape de tests de `check.sh` n'est plus un
-seul pytest : `scripts/ci/pi_gate_parallel.py` lance autant de processus
-`python -m pytest` indépendants, sans aucune dépendance supplémentaire. Sans
-la variable, `check.sh` se comporte exactement comme avant.
+Depuis ANH-183, la CI répartit en plus ces processus sur deux jobs : voir
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183), plus
+bas. Ce qui suit décrit le lanceur et ses trois vérifications, qui sont les
+mêmes sur une machine ou sur deux.
+
+`bash raspberry-pi/scripts/check.sh` reste la seule définition de la gate. Avec
+`PI_GATE_PROCESSES=N`, son étape de tests n'est plus un seul pytest :
+`scripts/ci/pi_gate_parallel.py` lance N processus `python -m pytest`
+indépendants, sans aucune dépendance supplémentaire. C'est le mode d'une seule
+machine ; le job de la CI l'utilisait avec le nombre de CPU du runner, quatre
+sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux fils chacun). Sans
+aucune variable, `check.sh` se comporte exactement comme avant.
 
 Chaque processus collecte toute la suite, comme en série, puis ne garde que
 les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
@@ -1319,11 +1330,12 @@ Deux limites à connaître :
   de la même façon (un `-k` ou un `-m` dans `PYTEST_ADDOPTS`, un test marqué
   `hardware`) passe inaperçu, exactement comme en série : rien ne fixe le
   nombre de tests, seul le seuil de couverture rattrape un test manquant ;
-* **le voisinage des tests dépend du nombre de CPU.** Avec N processus,
+* **le voisinage des tests dépend du nombre de parts.** Avec N processus,
   chacun exécute un test sur N. Un test qui n'échoue qu'à côté de certains
-  voisins peut échouer avec quatre processus et passer avec deux ou en série.
-  Pour reproduire un échec de CI, reprendre le nombre affiché par la ligne
-  `Runner:` du journal.
+  voisins peut échouer avec huit parts et passer avec quatre ou en série.
+  En CI ce nombre est écrit dans le workflow (`PI_SHARES`, huit), il ne
+  dépend plus du runner : pour reproduire un échec, reprendre ce nombre et la
+  part du processus en échec (`[p5]` est la part 5).
 
 La durée se lit dans chaque journal : la ligne `Runner:` donne le nombre de
 CPU et le modèle du processeur, chaque processus affiche son résumé
@@ -1358,8 +1370,8 @@ détecte pas, d'où la deuxième règle.
 * **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
   les CPU du runner sont occupés pendant toute la durée des tests.
 
-En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ce
-mode. Pour reproduire le job avec ses quatre processus :
+En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ces
+modes. Pour lancer toute la gate sur une machine, en quatre processus :
 
 ```sh
 PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
@@ -1368,6 +1380,104 @@ PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
 Hors CI, Hypothesis garde son profil par défaut et sa limite de 200 ms par
 exemple : sous cette charge, un test par propriétés sans `deadline=None` peut
 échouer. La CI utilise le profil `ci`, sans limite de temps.
+
+### Gate Pi répartie sur deux jobs (ANH-183)
+
+Sur un seul runner, le job `pi-gate` a pris de 13 min 34 s à 27 min 04 s le
+7 octobre 2026 : treize exécutions, neuf push sur `develop` et quatre PR (runs
+37620748521 à 37698782634), médiane 19 min 26 s. L'écart vient du processeur
+attribué au runner et du nombre d'exécutions lancées en même temps. C'était la
+vérification obligatoire la plus longue, celle que chaque fusion attendait.
+Détail du run 37696963792 (19 min 26 s) : 24 s de ruff, basedpyright et mypy,
+55 s pour les tests du lanceur, 30 s de collecte dans chaque processus, puis
+**17 min 47 s de tests** sur quatre processus : 4258 tests, 4030 s de pytest
+cumulés.
+
+Les tests sont maintenant coupés en huit parts, exécutées par deux jobs. Le
+mécanisme est celui de la gate de simulation (section suivante) : le même
+lanceur, le même greffon, la même preuve. La règle de partage reste celle du
+Pi : le rang du test dans l'ordre de collecte, modulo le nombre de parts.
+
+| Job | Parts | Ce qu'il exécute |
+|---|---|---|
+| `pi (tests 1)` | 0 à 3 | ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis ses quatre parts, un processus pytest chacune ; la nuit, l'endurance de l'enregistrement de séance |
+| `pi (tests 2)` | 4 à 7 | les mêmes contrôles, puis ses quatre parts |
+| `pi-gate` | aucune | les tests du lanceur, puis le verdict sur les huit parts |
+
+`raspberry-pi/scripts/check.sh` reste la définition de la gate. Deux variables
+d'environnement choisissent l'étape, comme pour la simulation :
+
+* `PI_GATE_SHARES=0-3/8` avec `PI_GATE_EVIDENCE=<dossier>` : les contrôles
+  statiques comme d'habitude, puis seulement les parts 0 à 3 d'une suite coupée
+  en 8 (`pi_gate_parallel.py --shares 0-3/8 --evidence <dossier>`). L'étape
+  échoue si un processus plante, même à l'arrêt de l'interpréteur, s'il ne
+  s'arrête pas 300 s après son dernier test, si un test échoue, si un test a
+  tourné deux fois parmi ces parts, ou si un enregistrement ou une mesure de
+  couverture manque. Elle ne dit rien des autres parts et n'applique aucun
+  seuil : la couverture d'une moitié des tests ne peut pas être jugée ;
+* `PI_GATE_COMBINE=8` avec le même dossier, que le job `pi-gate` remplit avec
+  les artefacts `pi-evidence-*` des deux jobs : aucun test de la console n'est
+  relancé. `check.sh` exécute les tests du lanceur lui-même, puis
+  `pi_gate_parallel.py --combine 8` : la preuve de partition sur les 8 parts
+  (collectes identiques, chaque test exécuté par une part et une seule), la
+  fusion des 8 mesures (une mesure absente, illisible ou vide est une erreur)
+  et `coverage report --fail-under=100`, une seule fois, sur le total.
+
+`check.sh` refuse, avant de lancer quoi que ce soit, deux des trois variables
+`PI_GATE_PROCESSES`, `PI_GATE_SHARES` et `PI_GATE_COMBINE` à la fois, et
+`PI_GATE_EVIDENCE` sans l'une des deux dernières.
+
+**Ce qui ne change pas.**
+
+* Le nom exigé par la protection de branche reste `pi-gate`, et c'est toujours
+  un job simple, pas une matrice. Les deux jobs de tests s'affichent sous
+  d'autres noms (`pi (tests 1)`, `pi (tests 2)`), qui ne sont pas exigés.
+* `pi-gate` exige d'abord que les deux jobs de tests aient réussi, puis juge
+  leurs enregistrements. Cette première étape tourne quoi qu'il soit arrivé au
+  run, annulation comprise (`always()` sur le job et sur l'étape) : un job de
+  tests annulé, en échec, arrêté par sa limite de temps ou sauté alors qu'il
+  ne devait pas l'être laisse `pi-gate` en échec. Une part dont l'artefact
+  manque fait échouer la preuve de partition.
+* Sur une PR que la règle de chemins dispense des gates Python, les trois jobs
+  sont sautés ensemble et `pi-gate` est rapporté « Skipped » sous son nom,
+  comme avant (voir
+  [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)).
+* Le seuil est le même et s'applique au même total : 100 % des branches des
+  fichiers de la liste `include` de `raspberry-pi/pyproject.toml`, une fois, sur
+  les mesures réunies des huit parts. Sur un seul job, le run 37696963792
+  jugeait 13 069 lignes et 2 934 branches, pour 4258 tests ; la même base de
+  code répartie en deux jobs donne les mêmes totaux.
+* Les contrôles statiques sont ceux d'avant, lancés par chacun des deux jobs
+  de tests ; le rapport de qualité les compte une fois.
+
+**Ce qui change.**
+
+* Le voisinage des tests : huit parts au lieu de quatre, et un nombre écrit
+  dans le workflow (`PI_SHARES`) au lieu du nombre de CPU du runner.
+* Les tests du lanceur tournent dans `pi-gate`, avant le verdict, et plus
+  avant les tests de la console.
+* L'étape nocturne d'endurance tourne dans `pi (tests 1)`. Son échec fait
+  échouer ce job, donc `pi-gate`, comme avant.
+* Relancer un job de tests (« Re-run failed jobs ») remplace son artefact :
+  `pi-gate` juge la dernière exécution de chaque job. Relancer `pi-gate` seul
+  après l'expiration des artefacts (14 jours) échoue : il faut alors tout
+  relancer.
+
+Pour reproduire la CI sur une seule machine, avec le même découpage :
+
+```sh
+PI_GATE_SHARES=0-7/8 PI_GATE_EVIDENCE=/tmp/pi-parts bash raspberry-pi/scripts/check.sh
+PI_GATE_COMBINE=8 PI_GATE_EVIDENCE=/tmp/pi-parts bash raspberry-pi/scripts/check.sh
+```
+
+Pour une seule part en échec, la 5 par exemple : `PI_GATE_SHARES=5-5/8`.
+
+Les tests du workflow (`scripts/ci/ci-workflow.test.mjs`) tiennent ce montage :
+chaque part nommée une fois et une seule, la condition et la première étape de
+`pi-gate`, ce que les jobs de tests publient et ce que `pi-gate` récupère, le
+refus par `check.sh` de deux modes à la fois. Les tests du lanceur
+(`scripts/ci/test_pi_gate_parallel.py`) couvrent les parts exécutées par des
+appels séparés (voir la section suivante).
 
 ### Gate de simulation répartie (ANH-184)
 
@@ -1939,7 +2049,7 @@ tableau tel qu'il est affiché.
 
 | Ligne | Ce qui y est compté | Gate affichée |
 |---|---|---|
-| Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
+| Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, ses huit parts réunies par `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
 | Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
 | Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
 | Site | les tests de `lib/`, puis ceux de `hooks/`, de `components/` et des pages de `app/` (vitest, deux suites) | `web` |
@@ -1958,7 +2068,7 @@ avec le job qui la lance) et « Lire ce rapport ».
 | Réussis | ceux qui ont réussi | idem |
 | Échoués | ceux qui ont échoué, en gras dès qu'il y en a un ; leurs noms sont dans le détail du job | idem |
 | Ignorés | les tests sautés par un marqueur (`skip`) et les défauts connus déclarés (`xfail`), qui ne sont ni des réussites ni des échecs | idem |
-| Durée cumulée | la somme des durées de chaque test, tous processus confondus. Ce n'est pas le temps d'attente : `pi-gate` répartit ses tests sur quatre processus, la simulation sur quatre jobs | idem |
+| Durée cumulée | la somme des durées de chaque test, tous processus confondus. Ce n'est pas le temps d'attente : le Pi répartit ses tests sur huit processus et deux jobs, la simulation sur quatre jobs | idem |
 | Lignes couvertes | la part des lignes exécutées par les tests, sur tous les fichiers source du projet, y compris ceux qu'aucun test ne charge | `coverage json` de coverage.py pour le Pi et la simulation, `coverage-final.json` de vitest pour Convex et le site |
 | Branches couvertes | la part des branches prises (chaque issue d'un `if`, d'un `match`, d'un opérateur ternaire) | idem |
 | Lint | l'état des contrôles de style : ruff (`check` et `format`) pour le Pi, la simulation et les fichiers Python des scripts, ESLint pour Convex, le site et les scripts | les étapes enregistrées par `check.sh`, et le résultat de l'étape `npm run lint` du job `web` |
@@ -2143,7 +2253,12 @@ pourcentage se calcule, il n'est pas stocké.
   gate. Sans la variable, les deux scripts se comportent comme avant.
 - `scripts/ci/quality-report.mjs job <projet>` lit ces fichiers dans le job,
   écrit le détail du job et `part.json` ; l'artefact `quality-<projet>` les
-  porte jusqu'au dernier job. Pour le Pi, il lit aussi la liste
+  porte jusqu'au dernier job. Pour le Pi comme pour la simulation, les tests
+  tournent dans d'autres jobs que celui qui juge : chacun laisse ses fichiers
+  JUnit et l'état de ses contrôles dans un dossier `quality-<parts>` de son
+  artefact `pi-evidence-*` ou `simulation-evidence-*`, que la gate lit avec
+  `--parts`. Un contrôle lancé par plusieurs jobs compte une fois, en échec
+  s'il a échoué dans l'un d'eux. Pour le Pi, il lit aussi la liste
   `coverage_pending` de `raspberry-pi/pyproject.toml`, comme du texte (rien
   n'est installé pour lire du TOML) : une liste de chaînes simples, sur une ou
   plusieurs lignes, commentaires admis. Écrite autrement, elle est dite
@@ -3017,7 +3132,7 @@ local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
 sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
 [convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
 acquisition comprise, reste ANH-164 : aucun job vide ne la simule. L'étape
-nocturne de `pi-gate` ne juge que l'enregistrement de séance (ANH-128) : une
+nocturne de `pi (tests 1)` ne juge que l'enregistrement de séance (ANH-128) : une
 journée simulée de séances avec l'écrivain actif, sans le calcul de
 l'acquisition. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
 Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni

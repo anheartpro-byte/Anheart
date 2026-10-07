@@ -624,8 +624,8 @@ const stepChecks = (kind, projects, job, name, outcome) =>
   }));
 
 /**
- * The same check run by several jobs (the simulation lints in each job of its
- * battery) counts once: failed if it failed anywhere.
+ * The same check run by several jobs (the Pi and the simulation lint in each
+ * job that runs shares of their tests) counts once: failed if it failed anywhere.
  * @param {readonly Check[]} checks @returns {Check[]}
  */
 function once(checks) {
@@ -672,7 +672,8 @@ export function scenarios(path) {
  * What one job measured, from the files its tools left.
  * @param {string} part `pi`, `simulation`, `convex` or `site`
  * @param {{dir: string, parts?: string, scenarios?: string, shares?: number, root: string,
- *   env: Readonly<Record<string, string | undefined>>}} from `shares`: how many processes ran the Python suite
+ *   env: Readonly<Record<string, string | undefined>>}} from `shares`: how many processes ran the Python suite;
+ *   `parts`: the evidence the jobs that ran them left, gathered in one directory
  * @returns {Part}
  */
 export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: expected, root, env }) {
@@ -689,26 +690,33 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
     namesIn(directory)
       .filter((name) => /^junit-\d+\.xml$/.test(name))
       .map((name) => join(directory, name));
+  // The jobs that ran the shares of a suite each left a directory inside the evidence:
+  // their stages and one JUnit file per share.
+  const jobsOf = (/** @type {string | undefined} */ evidence) =>
+    namesIn(evidence ?? "")
+      .filter((name) => name.startsWith("quality-"))
+      .map((name) => join(evidence ?? "", name));
   if (part === "pi") {
+    // The gate judges in `dir` what the jobs of `parts` ran. A gate run whole on one
+    // machine (PI_GATE_PROCESSES) left everything in `dir`, and there is no `parts`.
+    const ran = [dir, ...jobsOf(parts)];
     suites = {
-      "pi-pytest": suiteNumbers(shares(dir), expected),
+      "pi-pytest": suiteNumbers(ran.flatMap(shares), expected),
       "scripts-gate-runner": junit("junit-gate-runner.xml"),
     };
     coverage = {
       pi: pythonCoverage(join(dir, "coverage-all.json")),
       "pi-threshold": pythonCoverage(join(dir, "coverage-gate.json")),
     };
-    checks = stageChecks(readText(join(dir, "stages.tsv")), "pi", "pi-gate");
+    // The same checks in each job that ran shares: each counts once, failed if it failed anywhere.
+    checks = once(ran.flatMap((job) => stageChecks(readText(join(job, "stages.tsv")), "pi", "pi-gate")));
     // What the configuration declares in the safety chain and out of the threshold, read from it each time.
     pending = pendingOf(
       pendingList(readText(join(root, "raspberry-pi", "pyproject.toml"))),
       pythonFiles(join(dir, "coverage-all.json")),
     );
   } else if (part === "simulation") {
-    // The jobs of the battery each left a directory: their stages and one JUnit file per share.
-    const jobs = namesIn(parts ?? "")
-      .filter((name) => name.startsWith("quality-"))
-      .map((name) => join(parts ?? "", name));
+    const jobs = jobsOf(parts);
     suites = { "simulation-battery": suiteNumbers(jobs.flatMap(shares), expected) };
     coverage = { simulation: pythonCoverage(join(dir, "coverage-gate.json")) };
     checks = once(

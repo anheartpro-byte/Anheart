@@ -1,8 +1,9 @@
 """Run a test suite as several independent pytest processes, fail closed.
 
-Started by ``raspberry-pi/scripts/check.sh`` when ``PI_GATE_PROCESSES`` is set,
-from the ``raspberry-pi/`` directory, and by ``simulation/scripts/check.sh``
-for the simulation battery, from ``simulation/``. It replaces the single
+Started by ``raspberry-pi/scripts/check.sh`` when one of ``PI_GATE_PROCESSES``,
+``PI_GATE_SHARES`` and ``PI_GATE_COMBINE`` is set, from the ``raspberry-pi/``
+directory, and by ``simulation/scripts/check.sh`` for the simulation battery,
+from ``simulation/``. It replaces the single
 ``pytest --cov --cov-branch --cov-fail-under=<n>`` of the serial gate with:
 
 1. several plain ``python -m pytest`` processes, each running its own share of
@@ -22,7 +23,7 @@ Any of these going wrong makes the exit code 1. Nothing is retried.
 The shares need not all run on one machine. Three ways to call it:
 
 * ``--processes N``: the whole suite here, as N processes, judged here (the
-  Pi gate). Steps 1 to 4.
+  Pi gate on one machine). Steps 1 to 4.
 * ``--shares FIRST-LAST/COUNT --evidence DIR``: only those shares of a suite
   cut into COUNT, here; what they wrote down and measured is left in DIR.
   Steps 1 and 2, and of 3 and 4 what one part can tell: no test ran twice

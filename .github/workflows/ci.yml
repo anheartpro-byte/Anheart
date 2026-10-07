@@ -25,6 +25,10 @@ env:
   # `simulation-battery` must name each of them once (0 to this number minus
   # one): `simulation-gate` fails if a share is missing or if a test ran twice.
   SIMULATION_SHARES: '13'
+  # The tests of the Pi are cut into this many shares, one pytest process
+  # each. The matrix of `pi-tests` must name each of them once, like the one
+  # of the battery: `pi-gate` fails if a share is missing or if a test ran twice.
+  PI_SHARES: '8'
   # For the quality report (see `quality-report` below): what makes
   # `node --test` and vitest keep a JUnit file next to their usual output.
   # Where the file goes follows on each line that uses them.
@@ -41,12 +45,13 @@ env:
 # `changes` failed; without it GitHub would skip the gate and report the
 # required check as passed. `docs` and `audit` never depend on `changes`.
 #
-# `simulation-gate` says `always()` where the others say `!cancelled()`: it
-# waits for other jobs, so a run cancelled while they work would otherwise
-# skip it, and a skipped job passes a required check. It starts instead, and
-# fails because a part did not succeed. The others do not wait for the work
-# of another job: cancelled while they run, they report "cancelled". Only a
-# run cancelled during the few seconds of `changes` leaves them skipped.
+# `pi-gate` and `simulation-gate` say `always()` where the others say
+# `!cancelled()`: each waits for other jobs, so a run cancelled while they
+# work would otherwise skip it, and a skipped job passes a required check. It
+# starts instead, and fails because a part did not succeed. The others do not
+# wait for the work of another job: cancelled while they run, they report
+# "cancelled". Only a run cancelled during the few seconds of `changes` leaves
+# them skipped.
 #
 # The names `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` and
 # `docs` are required by branch protection: each must stay the name of one
@@ -165,11 +170,24 @@ jobs:
           overwrite: true
           path: ${{ runner.temp }}/quality
 
-  pi-gate:
+  # The tests of the Pi gate, cut into PI_SHARES shares, one pytest process
+  # each, four to a runner: as many as it has CPUs. `pi-gate` judges them.
+  pi-tests:
+    name: pi (${{ matrix.part }})
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: tests 1
+            shares: 0-3
+            endurance: true
+          - part: tests 2
+            shares: 4-7
+            endurance: false
     env:
       PYTHONPATH: .:raspberry-pi
     steps:
@@ -188,24 +206,97 @@ jobs:
           uv venv raspberry-pi/.venv
           uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
           uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
-      - name: Pi gate
+      - name: Pi gate, shares ${{ matrix.shares }} of the tests
         env:
           PYTEST_ADDOPTS: --durations=25
-          QUALITY_REPORT_DIR: ${{ runner.temp }}/quality
+          PI_GATE_SHARES: ${{ matrix.shares }}/${{ env.PI_SHARES }}
+          PI_GATE_EVIDENCE: ${{ runner.temp }}/pi-evidence
+          # Inside the evidence, so that it reaches `pi-gate` with it.
+          QUALITY_REPORT_DIR: ${{ runner.temp }}/pi-evidence/quality-${{ matrix.shares }}
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
-          PI_GATE_PROCESSES="$(nproc)" bash raspberry-pi/scripts/check.sh
-      # The nightly run only: a simulated day of sessions with the session
-      # record written, heap, object count and tick cost judged per session
-      # (raspberry-pi/tests/test_record_endurance.py). The same loop runs for
-      # a few simulated minutes in the gate above, on every run.
+          bash raspberry-pi/scripts/check.sh
+      # The nightly run only, and in one part only: a simulated day of
+      # sessions with the session record written, heap, object count and tick
+      # cost judged per session (raspberry-pi/tests/test_record_endurance.py).
+      # The same loop runs for a few simulated minutes in the tests above, on
+      # every run. A failure here fails this part, hence `pi-gate`.
       - name: Pi endurance, a simulated day of sessions with the session record written
-        if: ${{ github.event_name == 'schedule' }}
+        if: ${{ github.event_name == 'schedule' && matrix.endurance }}
         timeout-minutes: 35
         working-directory: raspberry-pi
         env:
           ANHEART_ENDURANCE_HOURS: '24'
         run: .venv/bin/python -m pytest tests/test_record_endurance.py -m slow -s
+      # One artifact per part, replaced when the part is run again: the gate
+      # must judge the latest run of each part, never two runs of the same one.
+      - name: Keep what these shares recorded and measured
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pi-evidence-${{ matrix.shares }}
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+          include-hidden-files: true
+          path: ${{ runner.temp }}/pi-evidence
+
+  # The required check. It passes only if every part above succeeded AND the
+  # records they left prove that every test of the console ran exactly once,
+  # with 100 % of branches covered on the safety chain once their measures
+  # are merged: the threshold is applied here, once, to the total.
+  pi-gate:
+    needs: [changes, pi-tests]
+    if: ${{ always() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: .:raspberry-pi
+    steps:
+      # Runs whatever happened to the run, cancelled included: a part that was
+      # cancelled, that failed, that ran out of time or that was skipped when
+      # it should not have been must leave this required check failed.
+      - name: Every part of the gate succeeded
+        if: ${{ always() }}
+        env:
+          TESTS: ${{ needs.pi-tests.result }}
+        run: |
+          echo "pi tests (all parts): $TESTS"
+          [[ "$TESTS" == success ]]
+      # The steps below run even when a part failed: what did run is still
+      # judged and shown, and the job stays failed because of the step above.
+      # They do not run when the run was cancelled.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: ${{ !cancelled() }}
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        if: ${{ !cancelled() }}
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: pi-gate
+      - name: Install Python dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+      - name: Gather what every share recorded and measured
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: pi-evidence-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/pi-evidence
+      - name: Pi gate, every test once and combined coverage
+        if: ${{ !cancelled() }}
+        env:
+          PI_GATE_COMBINE: ${{ env.PI_SHARES }}
+          PI_GATE_EVIDENCE: ${{ runner.temp }}/pi-evidence
+          QUALITY_REPORT_DIR: ${{ runner.temp }}/quality
+        run: bash raspberry-pi/scripts/check.sh
       # The same list of paths in `pi-gate` and in `simulation-gate`, as when
       # one job published both: it is what keeps each file under its full
       # path inside the artifact (raspberry-pi/coverage.xml, simulation/...).
@@ -224,7 +315,7 @@ jobs:
       - name: Quality report, the numbers of this job
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: node scripts/ci/quality-report.mjs job pi --dir "$RUNNER_TEMP/quality" --shares "$(nproc)"
+        run: node scripts/ci/quality-report.mjs job pi --dir "$RUNNER_TEMP/quality" --parts "$RUNNER_TEMP/pi-evidence" --shares "$PI_SHARES"
       - name: Keep the numbers for the quality report
         if: ${{ !cancelled() }}
         continue-on-error: true

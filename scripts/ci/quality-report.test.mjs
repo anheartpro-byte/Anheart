@@ -581,6 +581,62 @@ test("the Pi gate reports its tests, its whole coverage, the files under its thr
   assert.match(renderPart(none), /pas encore sous le seuil \(`coverage_pending`\) :\n\n- aucun\n/);
 });
 
+test("the Pi gate reports the tests and the checks of every job that ran its shares", (context) => {
+  // ANH-183: two jobs run the shares, a third judges them. The gate's own directory holds what
+  // it measured (the coverage, the tests of the runner); the evidence holds one directory per job.
+  const directory = scratch(context);
+  const evidence = join(directory, "evidence");
+  const left = join(directory, "left");
+  const stages = "passed\tlint (ruff)\npassed\tformat (ruff)\npassed\ttypes (basedpyright, strict, zero Any)\n";
+  const helpers = "passed\tgate helpers: lint (ruff)\npassed\tgate helpers: types (mypy)\n";
+  write(evidence, "quality-0-1/junit-0.xml", PYTEST);
+  write(evidence, "quality-0-1/junit-1.xml", PYTEST_OTHER);
+  write(
+    evidence,
+    "quality-0-1/stages.tsv",
+    `${stages}passed\ttypes (mypy, strict)\n${helpers}passed\ttests, shares 0-1/4\n`,
+  );
+  write(evidence, "quality-2-3/junit-2.xml", PYTEST_OTHER);
+  write(evidence, "quality-2-3/junit-3.xml", PYTEST_OTHER);
+  // The same checks in each job: one of them failed in this one.
+  write(
+    evidence,
+    "quality-2-3/stages.tsv",
+    `${stages}failed\ttypes (mypy, strict)\n${helpers}passed\ttests, shares 2-3/4\n`,
+  );
+  write(evidence, "collected-0.txt", "not a part of the report");
+  write(left, "junit-gate-runner.xml", PYTEST_OTHER);
+  write(left, "stages.tsv", "passed\tparallel runner (its own tests)\npassed\ttests, 4 shares: every test once\n");
+  write(left, "coverage-gate.json", coveragePy([["src/training/safety.py", 300, 300, 120, 120]]));
+  write(left, "coverage-all.json", coveragePy([["src/training/safety.py", 300, 300, 120, 120]]));
+  const options = { dir: left, parts: evidence, root: ROOT, env: {} };
+  const part = buildPart("pi", { ...options, shares: 4 });
+  // One file per share, whichever job ran it: 5 + 2 + 2 + 2 tests.
+  assert.equal(part.suites["pi-pytest"]?.files, 4);
+  assert.equal(part.suites["pi-pytest"]?.tests, 11);
+  assert.equal(part.suites["scripts-gate-runner"]?.tests, 2);
+  assert.deepEqual(part.coverage["pi-threshold"]?.branches, { covered: 120, total: 120 });
+  // Each check once, under the name of the required gate, failed if it failed in a job.
+  assert.deepEqual(
+    part.checks.map(({ kind, project, job, state, name }) => `${kind} ${project} ${job} ${state} ${name}`),
+    [
+      "lint pi pi-gate passed lint (ruff)",
+      "lint pi pi-gate passed format (ruff)",
+      "types pi pi-gate passed types (basedpyright, strict, zero Any)",
+      "types pi pi-gate failed types (mypy, strict)",
+      "lint scripts pi-gate passed gate helpers: lint (ruff)",
+      "types scripts pi-gate passed gate helpers: types (mypy)",
+    ],
+  );
+  // The suite is cut into 8 shares and four files arrived: no count is given for it.
+  assert.equal(buildPart("pi", { ...options, shares: 8 }).suites["pi-pytest"], undefined);
+  // The evidence of a job that did not arrive leaves its shares missing, never counted as zero tests.
+  assert.equal(
+    buildPart("pi", { ...options, parts: join(directory, "absent"), shares: 4 }).suites["pi-pytest"],
+    undefined,
+  );
+});
+
 test("the files of the safety chain outside the threshold are read from the configuration, never named here", () => {
   assert.deepEqual(pendingList(PI_PYPROJECT), ["src/web/*", "src/absent.py"]);
   assert.deepEqual(pendingList('[tool.anheart]\ncoverage_pending = ["a.py", "b#c.py"] # two\n'), ["a.py", "b#c.py"]);
