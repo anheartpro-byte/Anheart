@@ -1,8 +1,8 @@
 # AnHeart Raspberry Pi client - tool configuration.
 #
 # Deliberately NO [project] table. This file exists only to hold tool config in
-# one place; it is not a package definition. The application is still run as
-# `python -m src.main` from this directory, and the Dockerfile still copies
+# one place; it is not a package definition. The application is run as
+# `python -m src.local_panel` from this directory, and the Dockerfile copies
 # requirements-prod.txt before src/ so its layer cache keeps working. Adding
 # [project] would force a src/ -> src/anheart/ rename touching every import.
 #
@@ -14,20 +14,14 @@
 # =========================================================================
 # Strict-check migration
 # =========================================================================
-# The modules below predate this contract and are excluded from BOTH type
-# checkers until they are migrated. They are NOT exempt in spirit:
+# What is listed below predates this contract and is excluded from BOTH type
+# checkers until it is migrated. It is NOT exempt in spirit:
 # signal_processing.py carries the heart rate that drives the motor and is the
 # next to be converted (bitalino_client.py, the other safety-chain module, is
 # done) -- most of its diagnostics are untyped numpy / biosppy calls that the
 # stubs under stubs/ resolve.
 #
-# tests/test_typing_contract.py pins this list exactly, so it can only be
-# changed deliberately and can never quietly grow.
-#
-#   src/signal_processing.py   src/convex_client.py     src/data_buffer.py
-#   src/session_manager.py     src/main.py
-#   tests/test_buffer.py       tests/test_convex_client.py
-#   tests/test_config.py       scripts/*
+#   src/signal_processing.py   scripts/*
 #
 # =========================================================================
 # Static verification - basedpyright (primary)
@@ -50,13 +44,6 @@ exclude = [
     "tests/typing_fixtures",
     # --- pending strict-check migration (see banner above) ---
     "src/signal_processing.py",
-    "src/convex_client.py",
-    "src/data_buffer.py",
-    "src/session_manager.py",
-    "src/main.py",
-    "tests/test_buffer.py",
-    "tests/test_convex_client.py",
-    "tests/test_config.py",
     "scripts",
 ]
 stubPath = "stubs"
@@ -100,13 +87,6 @@ exclude = [
     "tests/typing_fixtures/",
     # --- pending strict-check migration (see banner above) ---
     "src/signal_processing[.]py$",
-    "src/convex_client[.]py$",
-    "src/data_buffer[.]py$",
-    "src/session_manager[.]py$",
-    "src/main[.]py$",
-    "tests/test_buffer[.]py$",
-    "tests/test_convex_client[.]py$",
-    "tests/test_config[.]py$",
     "scripts/",
 ]
 strict = true
@@ -163,24 +143,11 @@ ignore = [
 "scripts/**" = ["ANN001", "ANN201", "ANN202", "ASYNC250", "E501", "PERF401", "PLC0415", "PLR2004", "PLW1510", "PTH100", "PTH120", "RUF059", "S110", "S603", "S607", "SIM105", "T201", "TRY300", "TRY400"]
 
 # --- pending strict-check migration ------------------------------------
-# Same set of modules excluded from the type checkers (see the banner at the
-# top of this file). Listed per-file rather than globally so the rules stay
-# live for every migrated module, and so removing a file from this block is
-# part of migrating it.
-#
-# One entry here is a REAL DEFECT, not style debt, kept visible so it is not
-# lost when the ignore disappears:
-#   * main.py RUF006 - handle_shutdown() calls asyncio.create_task from an OS
-#     signal handler without holding the reference, and with no guarantee a
-#     loop is running; on Windows that raises RuntimeError.
+# Same module excluded from the type checkers (see the banner at the top of
+# this file). Listed per-file rather than globally so the rules stay live for
+# every migrated module, and so removing a file from this block is part of
+# migrating it.
 "src/signal_processing.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR0911", "PLR0912", "PLR2004", "S110", "SIM105", "TRY300", "TRY400"]
-"src/convex_client.py" = ["ANN001", "ANN201", "ANN204", "ASYNC109", "E501", "PLR0917", "PLR2004", "RET504", "TRY300", "TRY301", "TRY400", "TRY401"]
-"src/session_manager.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR2004", "RUF059", "TRY300", "TRY400"]
-"src/data_buffer.py" = ["ANN001", "ANN201", "ANN204", "E501", "PERF401", "PLR2004", "RUF005", "S608", "TRY300"]
-"src/main.py" = ["ANN001", "ANN201", "ANN202", "ARG001", "E501", "F841", "PLC0415", "PLW0602", "PLW0603", "RUF006", "T201", "TRY300", "TRY400", "TRY401"]
-"tests/test_buffer.py" = ["ANN001", "ANN201", "ANN202", "PTH108", "PTH120"]
-"tests/test_convex_client.py" = ["ANN001", "ANN201", "ANN202"]
-"tests/test_config.py" = ["ANN001", "ANN201"]
 
 [tool.ruff.lint.flake8-bugbear]
 # NewType constructors are identity functions erased at runtime, so using one
@@ -243,8 +210,8 @@ skip_covered = false
 # The blocking 100% gate covers the SAFETY CHAIN only: the heart rate that
 # drives the motor comes out of bitalino_client + signal_processing, so a bad
 # column parse or a mis-classified signal quality would make the machine
-# accelerate on noise. Web/Convex/buffer code is reported separately and is
-# not gate-blocking.
+# accelerate on noise. The rest of the web layer is reported separately and
+# is not gate-blocking.
 include = [
     "src/units.py",
     "src/result.py",

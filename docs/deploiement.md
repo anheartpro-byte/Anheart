@@ -379,7 +379,7 @@ raspberry-pi/.venv/bin/pytest deploy/simulation-vercel/tests
 
 | Prêt | Vérifié comment |
 |---|---|
-| L'image Docker lance la **console** (`python -m src.local_panel`), plus l'ancien enregistreur. | Construite pour ARM64 (la même architecture que le Pi 4 et 5), 1,8 Go. |
+| L'image Docker lance la **console** (`python -m src.local_panel`), et rien d'autre. | Construite pour ARM64 (la même architecture que le Pi 4 et 5), 1,8 Go. |
 | `docker-compose.yml` : périphériques, réseau de l'hôte, redémarrage automatique, délai d'arrêt de 60 s. | `docker compose up` en simulation : conteneur « healthy », heartbeat et programmes reçus par Convex de développement. |
 | Arrêt propre. | `docker stop` pendant une séance manuelle simulée : la console met la consigne à zéro, rend la liaison, sort avec le code 0. |
 | Jeton d'accès quand la page n'écoute pas que sur la boucle locale. | 401 sans l'en-tête `x-anheart-token`, 200 avec. |

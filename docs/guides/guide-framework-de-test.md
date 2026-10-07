@@ -269,8 +269,8 @@ S07 (recette 8) : il est attendu, la gate passe.
   (mypy, strict)`). Le code de sortie vaut 0 ou 1.
 * **Couverture.** La gate du Pi exige 100 % de branches sur la **chaîne de
   sécurité** (liste `[tool.coverage.report] include` de
-  `raspberry-pi/pyproject.toml`) ; le code web et le tampon SQLite sont
-  mesurés sans bloquer. La gate simulation exige 100 % sur tout `simulation/`
+  `raspberry-pi/pyproject.toml`) ; le reste du code web est mesuré sans
+  bloquer. La gate simulation exige 100 % sur tout `simulation/`
   sauf `cad/`, `tests/` et `scripts/`. Une ligne ajoutée sans test fait donc
   échouer la gate, même si tous les tests passent.
 * **Durée.** Comptez de 20 à 30 minutes par gate (22 et 27 minutes mesurées,

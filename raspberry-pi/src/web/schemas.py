@@ -24,10 +24,9 @@ Why frozen dataclasses rather than pydantic models
 --------------------------------------------------
 ``pydantic.BaseModel`` declares ``Any`` in its own constructor signature, so
 inheriting from it trips the strict gate on the class statement itself and
-would blind the checker to real leaks in this module (the same reasoning as
-``src/config.py``). FastAPI builds a response model out of a stdlib dataclass
-perfectly well, and a frozen dataclass also means a response cannot be edited
-after it was built from a snapshot.
+would blind the checker to real leaks in this module. FastAPI builds a response
+model out of a stdlib dataclass perfectly well, and a frozen dataclass also
+means a response cannot be edited after it was built from a snapshot.
 """
 
 from __future__ import annotations

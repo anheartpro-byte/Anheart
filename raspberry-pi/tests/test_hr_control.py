@@ -120,7 +120,7 @@ BAND_LOW: Final[Bpm] = Bpm(106)
 BAND_HIGH: Final[Bpm] = Bpm(122)
 
 TICK: Final[Seconds] = Seconds(0.2)
-"""The runtime loop's period: 5 Hz, as ``src/session_manager.py`` drives it."""
+"""The runtime loop's period: 5 Hz, as ``src/local_panel.py`` drives it."""
 
 
 def speed_limits(**overrides: object) -> SpeedLimits:

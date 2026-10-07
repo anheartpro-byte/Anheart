@@ -29,8 +29,8 @@ silently handing the signals back.
 
 **3. ``log_config=None``.** uvicorn's default logging configuration calls
 ``logging.config.dictConfig``, which **disables existing loggers** by default -
-so the session's own logging, configured in ``main.py`` before the web server
-starts, would go quiet the moment the interface came up. Passing ``None`` means
+so the console's own logging, configured in ``src/local_panel.py`` before the web
+server starts, would go quiet the moment the interface came up. Passing ``None`` means
 uvicorn adds nothing and touches nothing.
 """
 

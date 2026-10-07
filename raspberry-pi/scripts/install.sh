@@ -4,9 +4,9 @@ set -e
 INSTALL_DIR="/home/pi/anheart/raspberry-pi"
 SERVICE_NAME="anheart"
 
-echo "==================================="
-echo "AnHeart ECG Monitor - Installation"
-echo "==================================="
+echo "======================================"
+echo "AnHeart operator console - Installation"
+echo "======================================"
 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run with sudo for service installation"
@@ -96,24 +96,24 @@ apt-get install -y ${PYTHON_CMD}-dev ${PYTHON_CMD}-venv 2>/dev/null || apt-get i
 echo "Using Python: $PYTHON_CMD ($($PYTHON_CMD --version))"
 
 # Remove old venv if Python version changed
-if [ -d "${INSTALL_DIR}/venv" ]; then
-    VENV_PYTHON_VERSION=$("${INSTALL_DIR}/venv/bin/python" --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2 || echo "0")
+if [ -d "${INSTALL_DIR}/.venv" ]; then
+    VENV_PYTHON_VERSION=$("${INSTALL_DIR}/.venv/bin/python" --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2 || echo "0")
     CURRENT_PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2)
     
     if [ "$VENV_PYTHON_VERSION" != "$CURRENT_PYTHON_VERSION" ]; then
         echo "Python version changed ($VENV_PYTHON_VERSION -> $CURRENT_PYTHON_VERSION). Recreating venv..."
-        rm -rf "${INSTALL_DIR}/venv"
+        rm -rf "${INSTALL_DIR}/.venv"
     fi
 fi
 
-if [ ! -d "${INSTALL_DIR}/venv" ]; then
+if [ ! -d "${INSTALL_DIR}/.venv" ]; then
     echo "Creating virtual environment with $PYTHON_CMD..."
-    $PYTHON_CMD -m venv "${INSTALL_DIR}/venv"
+    $PYTHON_CMD -m venv "${INSTALL_DIR}/.venv"
 fi
 
 echo "Installing Python dependencies..."
-"${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
-"${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+"${INSTALL_DIR}/.venv/bin/pip" install --upgrade pip
+"${INSTALL_DIR}/.venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
 
 if [ ! -f "${INSTALL_DIR}/.env" ]; then
     echo ""
@@ -151,7 +151,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Configure: nano ${INSTALL_DIR}/.env"
 echo "  2. Pair BITalino: ${INSTALL_DIR}/scripts/pair_device.sh"
-echo "  3. Test manually: cd ${INSTALL_DIR} && ./venv/bin/python -m src.main"
+echo "  3. Test manually: cd ${INSTALL_DIR} && ./.venv/bin/python -m src.local_panel"
 echo "  4. Enable service: systemctl enable ${SERVICE_NAME}"
 echo "  5. Start service: systemctl start ${SERVICE_NAME}"
 echo "  6. Check status: systemctl status ${SERVICE_NAME}"

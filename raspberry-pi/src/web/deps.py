@@ -135,7 +135,8 @@ class WebConfig:
 
         Raises ``ValueError``, not a ``Result``. Startup is not the motor path
         (contract rule 3): no motor is running yet, nothing is commanded, and
-        ``main.py`` turns the exception into an exit code and a readable line.
+        ``src/local_config.py`` turns the exception into a named configuration
+        problem, and the console exits with a readable line.
         A ``Result`` here would be a refusal that a caller could ignore.
         """
         if not MIN_TCP_PORT <= self.port <= MAX_TCP_PORT:

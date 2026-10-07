@@ -1,9 +1,8 @@
 # Anheart Raspberry Pi: operator console
 
 The local console controls the ATV320, acquires the BITalino ECG, applies the
-safety supervisor and serves the operator's web page. Its entry point is
-`python -m src.local_panel`. The separate `python -m src.main` entry point is
-the legacy ECG recorder; it does not control the motor.
+safety supervisor and serves the operator's web page. Its entry point, the
+only one in this directory, is `python -m src.local_panel`.
 
 The [project documentation](../docs/README.md) describes the architecture.
 For deployment, follow [the Pi procedure](../docs/deploiement.md#7-le-raspberry-pi):
@@ -174,31 +173,6 @@ These are current implementation limits, not a statement of a future resume poli
 offered on the dashboard. A zone around 150 bpm needs higher tiers than the
 defaults, which is a decision for the medical side, made in `.env`.
 
-## Legacy ECG recorder configuration
-
-| Variable             | Required | Default   | Description                             |
-| -------------------- | -------- | --------- | --------------------------------------- |
-| CONVEX_URL           | Yes      | -         | Convex deployment URL (.convex.site)    |
-| MACHINE_API_KEY      | Yes      | -         | 64-character API key from dashboard     |
-| BITALINO_MAC         | Yes      | -         | BITalino Bluetooth MAC address          |
-| SAMPLE_RATE          | No       | 1000      | Sample rate in Hz (1, 10, 100, or 1000) |
-| BATCH_INTERVAL_MS    | No       | 1000      | How often to send data (ms)             |
-| HEARTBEAT_INTERVAL_S | No       | 30        | Heartbeat interval (seconds)            |
-| LOG_LEVEL            | No       | INFO      | Logging level (DEBUG, INFO, WARNING)    |
-| BUFFER_DB_PATH       | No       | buffer.db | Path for offline data buffer            |
-
-The recorder defaults to acquisition at 1000 Hz and output at 250 Hz
-(`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`). Acquisition accepts 1, 10, 100 or
-1000 Hz; output must not exceed acquisition. These keys configure `src.main`.
-The local console acquires at fixed `ECG_SAMPLE_RATE=1000` and uses
-`BITALINO_ADDRESS` / `ECG_SOURCE` instead of the recorder's `BITALINO_MAC`.
-See [the configuration reference](../docs/raspberry-pi.md#12-la-configuration-env)
-for the console's keys.
-
-```sh
-.venv/bin/python -m src.main --help
-```
-
 ---
 
 ## Running as a Service
@@ -307,7 +281,7 @@ sudo apt install libbluetooth-dev python3-dev
 1. Check `MACHINE_API_KEY`, the `.convex.site` URL and the console logs.
 2. Verify that the machine appears online in the dashboard.
 3. The console reports local MANUAL and AUTO sessions; only AUTO can start
-   remotely. The legacy recorder has a separate session-polling path.
+   remotely.
 
 ### Signal quality is "Poor"
 
@@ -339,6 +313,6 @@ configured 100% branch-coverage requirement. The current scope and explicit
 migration debt live in `pyproject.toml`; test counts come from collection, not
 a fixed inventory in this README. Hardware-marked tests are excluded by default.
 
-For module structure, entry points and the legacy recorder's data path, see
+For module structure and the entry point, see
 [the Pi reference](../docs/raspberry-pi.md). For trace files shared with the
 simulation, see [the recording format](../docs/enregistrement.md).

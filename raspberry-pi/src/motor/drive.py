@@ -1293,8 +1293,8 @@ class RegisterMap:
     shift the other's addresses.
 
     Construction raises ``ValueError`` on a nonsensical offset rather than
-    returning a ``Result``. That is the boundary ``src/config.py`` already
-    draws: ``Result`` is mandatory in the drive path, where a dropped error
+    returning a ``Result``. That is the boundary the contract draws:
+    ``Result`` is mandatory in the drive path, where a dropped error
     leaves a motor commanded, but this object is built at startup with nothing
     spinning, and refusing to start is the correct response to an addressing
     configuration nobody can vouch for.

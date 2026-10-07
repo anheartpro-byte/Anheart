@@ -2,7 +2,7 @@
 
 This is the seam that closes the loop with no hardware. It wires
 ``src/sim/physiology.py`` (the subject) to ``src/sim/ecg.py`` (the sensor) and
-presents exactly the surface ``src/session_manager.py`` already calls::
+presents exactly the surface the console (``src/local_panel.py``) calls::
 
     BITalinoClient(mac_address=..., channels=[...], sample_rate=...)
     set_disconnect_callback(cb)
@@ -12,10 +12,10 @@ presents exactly the surface ``src/session_manager.py`` already calls::
     is_connected               is_acquiring
 
 and it returns **real** ``src.bitalino_client.SampleBatch`` objects carrying
-real ``ChannelData``, not look-alikes of its own. That matters: the session
-manager builds ``[{"channel": ch.channel, "values": ch.values} for ch in
-batch.channels]`` and hands it straight to ``SignalTreatment.treat_batch``, so
-a simulator with its own record type would be testing its own record type.
+real ``ChannelData``, not look-alikes of its own. That matters: the ECG
+pipeline (``src/ecg_pipeline.py``) reads ``channel`` and ``values`` off the
+batch's ECG channel and hands them straight to ``SignalTreatment.treat_batch``,
+so a simulator with its own record type would be testing its own record type.
 
 **The honest departure from the contract.** Every method below returns a
 ``bool`` or ``None`` where the contract asks for ``Result[T, E]``, and
@@ -55,9 +55,8 @@ index-to-name, so a remap there follows through to here."""
 
 LEGAL_SAMPLE_RATES: Final[frozenset[int]] = frozenset({1, 10, 100, 1000})
 """What the BITalino hardware accepts. Mirrored from the real client's
-validation, because a session manager that is allowed to start a simulated
-session at 500 Hz and not a real one is a session manager whose configuration
-was never tested."""
+validation, because a console that is allowed to start a simulated session at
+500 Hz and not a real one is a console whose configuration was never tested."""
 
 MIN_ANALOG_CHANNEL: Final[int] = 0
 MAX_ANALOG_CHANNEL: Final[int] = 5

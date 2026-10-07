@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 # Authoritative mapping between sensor names and BITalino analog channel indices
 # (A1-A6 -> 0-5). This is the SINGLE source of truth for name<->channel: the
-# session manager, the training plan and the simulator all derive from it.
+# console, the training plan and the simulator all derive from it.
 CHANNEL_MAP: dict[str, int] = {
     "ECG": 0,  # A1 - Electrocardiography (heart)
     "EDA": 1,  # A2 - Electrodermal Activity (skin conductance/stress)
@@ -451,7 +451,7 @@ class BITalinoClient:
 
     The public surface (``connect``/``start_acquisition``/``read_samples``/
     ``stop_acquisition``/``disconnect``, ``is_connected``/``is_acquiring``) is
-    what ``src/session_manager.py`` and the simulator in ``src/sim`` share.
+    what ``src/local_panel.py`` and the simulator in ``src/sim`` share.
     ``is_connected``/``is_acquiring`` are plain attributes written by both the
     event loop and, on give-up, the acquisition thread; single bool stores are
     atomic under the GIL and only ever move towards ``False`` from the thread.

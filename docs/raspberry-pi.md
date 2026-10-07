@@ -22,7 +22,7 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 
 ## Sommaire
 
-1. [Deux programmes dans le même dossier](#1-deux-programmes-dans-le-même-dossier)
+1. [Un seul programme](#1-un-seul-programme)
 2. [Les modules](#2-les-modules)
 3. [La boucle de contrôle](#3-la-boucle-de-contrôle)
 4. [Les séances : manuelle et programmée](#4-les-séances--manuelle-et-programmée)
@@ -38,16 +38,16 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 
 ---
 
-## 1. Deux programmes dans le même dossier
+## 1. Un seul programme
 
 | Commande | Programme | Rôle | État |
 |---|---|---|---|
 | `python -m src.local_panel` | la **console locale** | pilote le variateur, lit le BITalino, sert la page web de l'opérateur, applique la sécurité, se synchronise avec Convex | entrée du `Dockerfile` et de `scripts/anheart.service`, également lançable à la main |
-| `python -m src.main` | l'**ancien enregistreur ECG** | lit le BITalino et envoie l'ECG à Convex ; ne touche jamais le moteur | entrée distincte, lancée explicitement |
 
-Les deux lisent `raspberry-pi/.env`, mais pas les mêmes clés (voir
-[section 12](#12-la-configuration-env)). La console charge le fichier
-`raspberry-pi/.env` quel que soit le dossier courant, puis les variables du
+C'est la seule entrée du dossier : l'ancien enregistreur ECG et ses modules
+(tampon SQLite, client Convex d'origine) ont été retirés. La console lit ses clés
+dans `raspberry-pi/.env` (voir [section 12](#12-la-configuration-env)) : elle
+charge ce fichier quel que soit le dossier courant, puis les variables du
 processus **remplacent** celles du fichier (`load_environment` dans
 `src/local_panel.py`).
 
@@ -68,7 +68,6 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/clock.py` | Le seul module qui lit l'horloge (`RealClock`, `SimClock`, `ManualClock`). | Aucun autre module de `src/` n'appelle `time.monotonic()` ou `time.time()` (test par recherche de texte, `tests/test_clock.py`). Une séance de 30 min se simule en quelques secondes. Porte 100 %. |
 | `src/geometry.py` | `MachineGeometry` : rayon (sans défaut) et rapport (49,79 par défaut). Toute vitesse et tout g passent par là. | Un seul endroit convertit tr/min moteur ↔ tr/min de sortie ↔ Hz ↔ g. Porte 100 %. |
 | `src/local_config.py` | Lit et valide les clés `.env` de la console. | Signale **toutes** les erreurs d'un coup au démarrage. `ARM_RADIUS_M` n'a pas de défaut. Porte 100 %. |
-| `src/config.py` | Configuration de l'ancien enregistreur `src.main`. | Exige `CONVEX_URL`, `MACHINE_API_KEY`, `BITALINO_MAC`. Hors vérification stricte des types (voir [13](#13-le-contrat-de-code-strict-et-la-gate)). |
 
 ### 2.2 Le variateur (`src/motor/`)
 
@@ -114,15 +113,6 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
 | `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
-
-### 2.6 L'ancien enregistreur (hors console)
-
-`src/main.py`, `src/session_manager.py`, `src/convex_client.py`,
-`src/data_buffer.py` : l'enregistreur ECG d'origine (tampon SQLite hors ligne,
-envoi vers Convex). Il ne pilote pas le moteur. Ces fichiers sont exclus des deux
-vérificateurs de types (liste figée par `tests/test_typing_contract.py`).
-`pyproject.toml` signale un vrai défaut dans `main.py` (RUF006 : une tâche créée
-depuis un gestionnaire de signal sans garder la référence).
 
 ---
 
@@ -936,19 +926,19 @@ code et `.env.example`). `UI_PORT` permet de choisir un autre port. Si une
 des trois clés manque, la console affiche une ligne `configuration: CLE: raison`
 par clé fautive et sort avec le code 2.
 
-### 12.3 Clés de l'ancien enregistreur (`src/config.py`, pour `src.main`)
+### 12.3 Clés lues hors du code Python
 
-| Clé | Défaut | Contrainte |
+Deux clés des fichiers `.env` ne sont pas lues par `src/local_config.py` :
+
+| Clé | Lue par | Rôle |
 |---|---|---|
-| `CONVEX_URL` | obligatoire | - |
-| `MACHINE_API_KEY` | obligatoire | - |
-| `BITALINO_MAC` | obligatoire | - |
-| `SAMPLE_RATE` | `1000` | 1, 10, 100 ou 1000 |
-| `OUTPUT_SAMPLE_RATE` | `250` | > 0 et ≤ `SAMPLE_RATE` |
-| `BATCH_INTERVAL_MS` | `1000` | > 0 |
-| `HEARTBEAT_INTERVAL_S` | `30` | > 0 |
-| `LOG_LEVEL` | `INFO` | - |
-| `BUFFER_DB_PATH` | `buffer.db` | - |
+| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh`, `scripts/install.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
+| `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Compose l'exporte depuis `.env` (`env_file`) ; le `Dockerfile` et `scripts/anheart.service` la fixent aussi eux-mêmes |
+
+Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
+`BATCH_INTERVAL_MS`, `HEARTBEAT_INTERVAL_S`, `BUFFER_DB_PATH`, `LOG_LEVEL`) ne
+sont plus lues par rien : restées dans un `.env` existant, elles sont ignorées.
+Le niveau de journalisation de la console est fixe (`INFO`).
 
 ---
 
@@ -983,12 +973,10 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    séance sans que personne l'ait demandé termine la séance (section 5) ; rien
    ne bloque la boucle.
 
-Exceptions en cours (dans `pyproject.toml`, liste figée par
-`tests/test_typing_contract.py`) : `signal_processing.py`, `convex_client.py`,
-`data_buffer.py`, `session_manager.py`, `main.py`, trois fichiers de test et
+Exceptions en cours (dans `pyproject.toml`) : `signal_processing.py` et
 `scripts/` sont hors vérification de types ; `signal_processing.py` est aussi
-hors de la porte de couverture (`coverage_pending`), alors qu'il calcule la FC de
-régulation.
+hors de la porte de couverture (`coverage_pending`, liste figée par
+`tests/test_typing_contract.py`), alors qu'il calcule la FC de régulation.
 
 ### La gate
 
