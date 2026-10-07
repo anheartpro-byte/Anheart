@@ -68,20 +68,67 @@ export const MIN_RIDER_AGE = 18;
 /**
  * A machine state older than this means the machine cannot be relied on to
  * answer (it reports every 10 s). One definition for the server
- * (convex/training.ts) and for the dashboard (hooks/use-freshness.ts).
+ * (convex/training.ts, convex/machines.ts) and for the dashboard
+ * (hooks/use-freshness.ts).
  */
 export const LIVE_FRESH_MS = 90_000;
 
 /**
- * Whether a datum stamped `updatedAt` is still fresh at `now`. Without a
- * timestamp it never is: absence is no reason to show a value as current.
+ * The last sign of life of an active session older than this no longer stands
+ * for "now" (the machine sends its points every 5 s).
+ */
+export const TELEMETRY_FRESH_MS = 20_000;
+
+/**
+ * How far after `now` a date may be and still be believed. Two dates written
+ * by one clock differ by milliseconds; a date further ahead was not written by
+ * that clock, and nothing can be said of its age.
+ */
+export const FUTURE_TOLERANCE_MS = 5_000;
+
+/**
+ * Whether a datum stamped `updatedAt` is still fresh at `now`, both read on
+ * the same clock. Without a timestamp it never is: absence is no reason to
+ * show a value as current. Nor is a date from the future beyond the tolerance.
  */
 export function isFresh(
   updatedAt: number | null | undefined,
   now: number,
   freshMs: number = LIVE_FRESH_MS,
 ): boolean {
-  return typeof updatedAt === "number" && now - updatedAt < freshMs;
+  if (typeof updatedAt !== "number") return false;
+  const age = now - updatedAt;
+  return age < freshMs && age >= -FUTURE_TOLERANCE_MS;
+}
+
+/**
+ * Whether a telemetry point is dated after the server received it, beyond the
+ * tolerance. No point is measured after its own reception: such a date comes
+ * from a machine whose clock is ahead, and tells nothing of the point's age.
+ * Unlike an age, this never changes as time passes: a point dated so does not
+ * become believable a few seconds later.
+ */
+export function datedAfterReception(
+  measuredAt: number,
+  receivedAt: number | null | undefined,
+): boolean {
+  return (
+    typeof receivedAt === "number" &&
+    measuredAt - receivedAt > FUTURE_TOLERANCE_MS
+  );
+}
+
+/**
+ * The status to show for a machine. Its record says "online" or "in_session"
+ * until the server's job notices the silence, up to a minute after the signal
+ * stopped being fresh: a machine whose last signal is not fresh is shown
+ * offline, whatever its record still says.
+ */
+export function shownMachineStatus(
+  status: string,
+  signalFresh: boolean,
+): string {
+  return signalFresh ? status : "offline";
 }
 
 export function armRpm(motorRpm: number): number {

@@ -4,12 +4,11 @@ import { useState, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { useTranslations, useLocale } from "next-intl";
+import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -22,9 +21,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plus, Cpu, Search, Eye } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { fr, enUS } from "date-fns/locale";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
+import {
+  LastSignal,
+  MachineStatusBadge,
+} from "@/components/machines/MachineSignal";
 import {
   useReactTable,
   getCoreRowModel,
@@ -40,13 +41,13 @@ type Machine = {
   name: string;
   status: string;
   lastHeartbeat: number;
+  serverNow: number;
   location?: string;
   isDeleted?: boolean;
 };
 
 export default function MachinesPage() {
   const t = useTranslations();
-  const locale = useLocale();
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
 
@@ -72,7 +73,6 @@ export default function MachinesPage() {
     return allMachines;
   }, [allMachines, isAdmin, showDeleted]);
 
-  const dateLocale = locale === "fr" ? fr : enUS;
   const canCreate = user?.role === "admin"; // Only admin can create machines
 
   const columns = useMemo<ColumnDef<Machine>[]>(
@@ -89,7 +89,7 @@ export default function MachinesPage() {
         header: t("machines.status"),
         cell: ({ row }) => (
           <MachineStatusBadge
-            status={row.original.status}
+            machine={row.original}
             isDeleted={row.original.isDeleted}
           />
         ),
@@ -108,12 +108,7 @@ export default function MachinesPage() {
         header: t("machines.lastHeartbeat"),
         cell: ({ row }) => (
           <span className="text-muted-foreground text-sm">
-            {row.original.lastHeartbeat > 0
-              ? formatDistanceToNow(row.original.lastHeartbeat, {
-                  addSuffix: true,
-                  locale: dateLocale,
-                })
-              : "-"}
+            <LastSignal machine={row.original} />
           </span>
         ),
       },
@@ -131,7 +126,7 @@ export default function MachinesPage() {
         ),
       },
     ],
-    [t, dateLocale],
+    [t],
   );
 
   const table = useReactTable({
@@ -265,41 +260,6 @@ export default function MachinesPage() {
         onOpenChange={setShowCreateModal}
       />
     </div>
-  );
-}
-
-function MachineStatusBadge({
-  status,
-  isDeleted,
-}: {
-  status: string;
-  isDeleted?: boolean;
-}) {
-  const t = useTranslations("machines");
-
-  if (isDeleted) {
-    return <Badge variant="destructive">{t("deleted")}</Badge>;
-  }
-
-  const variants: Record<
-    string,
-    "default" | "secondary" | "destructive" | "outline"
-  > = {
-    online: "default",
-    offline: "destructive",
-    in_session: "secondary",
-  };
-
-  const labels: Record<string, string> = {
-    online: t("online"),
-    offline: t("offline"),
-    in_session: t("inSession"),
-  };
-
-  return (
-    <Badge variant={variants[status] || "outline"}>
-      {labels[status] || status}
-    </Badge>
   );
 }
 

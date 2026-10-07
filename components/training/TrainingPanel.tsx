@@ -37,20 +37,19 @@ import {
   ShieldAlert,
   Timer,
 } from "lucide-react";
-import { useFreshness } from "@/hooks/use-freshness";
-import { formatClock, type TelemetryPoint } from "@/lib/training";
+import { useFreshnessJudge } from "@/hooks/use-freshness";
+import {
+  datedAfterReception,
+  formatClock,
+  TELEMETRY_FRESH_MS,
+  type TelemetryPoint,
+} from "@/lib/training";
 import {
   SessionKindBadge,
   SessionOriginBadge,
   useTrainingLabel,
 } from "./TrainingBadges";
 import { TelemetryCharts } from "./TelemetryCharts";
-
-/**
- * A telemetry point older than this no longer stands for "now" on a live
- * session (the machine sends its points every 5 s).
- */
-const TELEMETRY_FRESH_MS = 20_000;
 
 /**
  * Training view for auto and manual sessions: big readouts, the heart rate
@@ -69,12 +68,25 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
 
   const points: TelemetryPoint[] = telemetry ?? [];
   const last = points.length > 0 ? points[points.length - 1] : null;
-  // The machine's last sign of life on this session: its latest point, or the
-  // start of the session while none has arrived yet.
-  const { fresh: signalFresh, now } = useFreshness(
-    last?.t ?? training?.startedAt,
-    TELEMETRY_FRESH_MS,
-  );
+  // Every date below is aged on the server's clock (`serverNow` of the session's
+  // answer plus the time counted since): never on this computer's.
+  const judge = useFreshnessJudge();
+  const aged = (date: number | null | undefined) =>
+    judge(date, training?.serverNow, TELEMETRY_FRESH_MS);
+  // The machine's last sign of life on this session, as the server dated it:
+  // the reception of its latest point, or its start while none has arrived.
+  // The verdict comes with the session: it does not wait for the telemetry.
+  const { fresh: receivedFresh, now } = aged(training?.lastSignalAt);
+  // A point received this instant is not a point measured this instant: the
+  // machine resends what it queued during a link loss, oldest first, and its
+  // clock may be off. The date it wrote in the point must be recent too, and
+  // not later than the point's own reception.
+  const measuredNow = (measuredAt: number) =>
+    !datedAfterReception(measuredAt, training?.lastSignalAt) &&
+    aged(measuredAt).fresh;
+  const measuredAt = training?.lastMeasuredAt;
+  const measuredFresh =
+    measuredAt === null || measuredAt === undefined || measuredNow(measuredAt);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -87,9 +99,15 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
 
   const isActive = training.status === "active";
   const isPending = training.status === "pending";
-  // An active session whose machine has gone quiet: nothing here is current.
-  const stale = isActive && !signalFresh;
-  const lastFresh = last !== null && !stale;
+  // An active session whose machine has gone quiet, or sends measurements
+  // that are not of now: nothing here is current.
+  const silent = isActive && !receivedFresh;
+  const late = isActive && receivedFresh && !measuredFresh;
+  const stale = silent || late;
+  // The point whose values are printed must itself be dated now: its own `t`
+  // is read again here, whatever the session's answer said of it.
+  const lastFresh =
+    last !== null && !stale && (!isActive || measuredNow(last.t));
   // Only a fresh point may stand for the current heart rate.
   const bpm = lastFresh && last?.bpm !== undefined ? last.bpm : undefined;
 
@@ -216,7 +234,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
         )}
         {stale && (
           <Banner tone="warn" icon={<AlertTriangle className="h-5 w-5" />}>
-            {t("training.live.staleDesc")}
+            {late ? t("training.live.lateDesc") : t("training.live.staleDesc")}
           </Banner>
         )}
         {training.status === "failed" && (
