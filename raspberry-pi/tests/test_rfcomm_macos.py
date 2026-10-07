@@ -765,7 +765,7 @@ def test_the_whole_chain_under_the_client(bluetooth: Bluetooth) -> None:
                 if batch is not None:
                     return list(batch.channels[0].values)
                 await asyncio.sleep(0.005)
-            pytest.fail("no batch")
+            raise AssertionError("no batch")
         finally:
             await client.disconnect()
 

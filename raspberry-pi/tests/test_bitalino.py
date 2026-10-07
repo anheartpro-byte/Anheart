@@ -82,7 +82,7 @@ def encode_frame(seq: int, values: Sequence[int], n_channels: int) -> bytes:
         candidate = bytes([*d[:-1], d[-1] | crc])
         if crc_ok(candidate):
             return candidate
-    pytest.fail("no CRC nibble validates the frame")
+    raise AssertionError("no CRC nibble validates the frame")
 
 
 def stream(values: Sequence[int], *, first_seq: int = 0, skip: Sequence[int] = ()) -> bytes:
@@ -358,7 +358,7 @@ async def next_batch(client: BITalinoClient, count: int) -> SampleBatch:
         if batch is not None:
             return batch
         await asyncio.sleep(POLL_S)
-    pytest.fail("no batch arrived in time")
+    raise AssertionError("no batch arrived in time")
 
 
 async def running(client: BITalinoClient) -> None:

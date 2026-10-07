@@ -77,13 +77,11 @@ class _Positional(Protocol):
 
 def _with(field: str, bad: float) -> MotionLimits:
     """``LIMITS`` with one field replaced, each through its own typed keyword."""
-    match field:
-        case "output_accel":
-            return replace(LIMITS, output_accel=OutputRpmPerSecond(bad))
-        case "g_rate":
-            return replace(LIMITS, g_rate=GLoadPerSecond(bad))
-        case _:
-            return replace(LIMITS, max_interval=Seconds(bad))
+    if field == "output_accel":
+        return replace(LIMITS, output_accel=OutputRpmPerSecond(bad))
+    if field == "g_rate":
+        return replace(LIMITS, g_rate=GLoadPerSecond(bad))
+    return replace(LIMITS, max_interval=Seconds(bad))
 
 
 def test_the_limits_are_frozen_and_keyword_only() -> None:

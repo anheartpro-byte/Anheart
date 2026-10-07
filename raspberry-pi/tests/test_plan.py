@@ -2384,7 +2384,7 @@ def _channel_map_keys() -> frozenset[str]:
             assert isinstance(literal, str)
             names.add(literal)
         return frozenset(names)
-    pytest.fail(f"{CHANNEL_MAP_NAME} was not found in {BITALINO_SOURCE}")
+    raise AssertionError(f"{CHANNEL_MAP_NAME} was not found in {BITALINO_SOURCE}")
 
 
 def test_the_channel_names_match_the_acquisition_layer() -> None:

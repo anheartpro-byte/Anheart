@@ -487,7 +487,7 @@ def _grader_return_strings() -> frozenset[str]:
             assert node.end_lineno is not None, "ast gave the grader no end line"
             body = "\n".join(lines[node.lineno - 1 : node.end_lineno])
             return frozenset(re.findall(r'return "([a-z_]+)"', body))
-    pytest.fail(f"{GRADER_FUNCTION} no longer exists in {SIGNAL_PROCESSING_SOURCE.name}")
+    raise AssertionError(f"{GRADER_FUNCTION} no longer exists in {SIGNAL_PROCESSING_SOURCE.name}")
 
 
 def test_the_quality_members_are_the_strings_the_pipeline_actually_emits() -> None:
