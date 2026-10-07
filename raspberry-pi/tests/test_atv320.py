@@ -2193,7 +2193,7 @@ async def _race_the_executor(
     started = time.perf_counter()
     outcome = drive.emergency_disable_blocking(budget)
     taken = time.perf_counter() - started
-    await opening
+    _ = await opening
     return outcome, taken
 
 
