@@ -1683,8 +1683,10 @@ deux n'a encore tourné : ils ne peuvent être lancés qu'une fois sur `main`.
 | Environnement Vercel visé | Production | Preview |
 | Jobs | `Vérifier la demande (production)`, `Déployer le site (production)`, `Déployer la simulation (production)` | les trois mêmes, suffixés `(préversion)` |
 
-Aucun push ne déploie par ailleurs : le `vercel.json` de la racine coupe les
-déploiements que Vercel lançait à chaque push, pour les deux projets.
+Par ailleurs un push ne déploie plus rien dès que son commit contient le
+`vercel.json` de la racine, qui coupe les déploiements que Vercel lançait à
+chaque push, pour les deux projets (constaté sur une branche de travail, pas
+encore sur `main` : [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)).
 
 **Jobs.** Le premier vérifie la demande sans passer par l'environnement GitHub :
 une demande lancée sur une autre branche, ou sans la confirmation, est refusée

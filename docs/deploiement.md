@@ -300,16 +300,23 @@ ajouté trois comptes de démonstration et quatre séances.
 
 ### 5.1 Comment il se déploie
 
-**Aucun push ne déploie.** Le projet Vercel `anheart` reste relié au dépôt
-GitHub `anheartpro-byte/Anheart`, mais le fichier `vercel.json` de la racine du
-dépôt coupe les déploiements déclenchés par Git, pour toutes les branches
+**Un push ne déploie plus rien dès que son commit contient le `vercel.json` de
+la racine du dépôt.** Le projet Vercel `anheart` reste relié au dépôt GitHub
+`anheartpro-byte/Anheart`, mais ce fichier coupe les déploiements déclenchés
+par Git, pour toutes les branches
 (`git.deploymentEnabled: false`,
 [documentation Vercel](https://vercel.com/docs/project-configuration/git-configuration#turning-off-all-automatic-deployments)).
 Les deux projets Vercel reliés au dépôt, `anheart` (le site) et
 `anheart-simulation` ([section 6](#6-le-moteur-de-simulation-hébergé)),
-construisent depuis la racine du dépôt : ils lisent ce même fichier. Vercel
-lit le fichier **du commit poussé** : la règle vaut pour un commit dès qu'il
-contient le fichier.
+construisent depuis la racine du dépôt : ils lisent ce même fichier.
+
+La règle suit le commit poussé, pas la branche. Constat du 7 octobre 2026 sur
+la PR #40, qui apporte ce fichier : son premier commit, poussé sur une branche
+de travail, n'a reçu de Vercel ni déploiement ni statut, pour aucun des deux
+projets ; un commit d'une autre branche, sans le fichier, poussé quelques
+minutes plus tôt, avait reçu les deux statuts. Ce constat vaut pour une branche de
+travail : aucun push n'a été fait sur `main` (voir
+[plus bas](#avant-et-après-larrivée-sur-main)).
 
 Le site et la simulation se déploient par deux boutons de GitHub, dans l'onglet
 **Actions** du dépôt :
@@ -379,19 +386,22 @@ Ce qui précède dépend de la présence de trois fichiers sur `main` :
   présent sur la branche par défaut du dépôt, `main`. Tant que les deux
   fichiers de workflow n'y sont pas, aucun bouton n'apparaît et rien ne peut
   être déployé depuis GitHub.
-- **Les pushs sur `main`.** La règle suit le commit : un push dont le commit
-  contient `vercel.json` ne déploie rien. `main` ne contient pas encore ce
-  fichier : un push sur `main` qui ne l'apporte pas (une correction faite
-  directement sur `main`, par exemple) **déploie encore le site de production
-  tout seul**. Le commit qui apporte le fichier sur `main` (la fusion de la
-  première release, ou une PR dédiée) n'est pas déployé.
+- **Les pushs sur `main`.** `main` ne contient pas encore `vercel.json` : un
+  push sur `main` qui ne l'apporte pas (une correction faite directement sur
+  `main`, par exemple) **déploie encore le site de production tout seul**. Le
+  commit qui apporte le fichier sur `main` (la fusion de la première release,
+  ou une PR dédiée) ne devrait pas être déployé, puisque la règle suit le
+  commit. **Ce n'est pas constaté** : `main` est la branche de production des
+  deux projets, et aucun push n'y a été fait. Le vérifier au premier push sur
+  `main`, dans Vercel ou sur le commit dans GitHub (aucun statut « Vercel »).
 - **Les autres branches.** Une branche partie de `develop` après ANH-198
   contient `vercel.json` : ses pushs ne déploient rien. Une branche plus
   ancienne crée encore deux préversions à chaque push, jusqu'à ce qu'elle
   reprenne `develop`.
 
-Une fois les trois fichiers sur `main`, plus aucun push ne déploie, et les deux
-boutons sont le seul chemin.
+Une fois les trois fichiers sur `main` et ce constat fait, plus aucun push ne
+déploie : restent les deux boutons, et `deploy.sh` en secours pour la simulation
+([section 6.4](#64-redéployer)).
 
 ### 5.2 Les préversions pointent sur la production
 
@@ -507,10 +517,18 @@ Vercel : créer un nouveau jeton et remplacer la valeur de `VERCEL_TOKEN`.
 (`develop` vers `main`, [release.md](release.md#3-le-déroulé)), qui apporte
 tout ; soit plus tôt, par une PR dédiée vers `main` qui n'ajoute que ces trois
 fichiers. Ce qui reste vrai d'ici là est dit dans
-[Avant et après l'arrivée sur `main`](#avant-et-après-larrivée-sur-main). Avec
-la PR dédiée, `main` ne contient pas encore la simulation hébergée : le bouton
-de production refuse de la déployer (« Simulation absente ») et ne peut
-déployer que le site, tel qu'il est sur `main`.
+[Avant et après l'arrivée sur `main`](#avant-et-après-larrivée-sur-main).
+
+La PR dédiée est la voie prudente. Elle fait constater sur `main` qu'un push
+n'y déploie plus rien, avec un commit qui ne change pas le site : si Vercel
+déployait quand même, il redéploierait le site tel qu'il est déjà sur `main`.
+La première release, elle, apporte le nouveau site : s'il partait en production
+à la fusion, il tournerait contre l'ancien Convex
+([§3.3](#33-vers-la-production)). Sans ce constat préalable, fusionner la
+première release dans la fenêtre du déploiement de Convex. Avec la PR dédiée,
+`main` ne contient pas encore la simulation hébergée : le bouton de production
+refuse de la déployer (« Simulation absente ») et ne peut déployer que le site,
+tel qu'il est sur `main`.
 
 **4. Séparer les variables de l'environnement « Preview » de Vercel**
 ([section 5.2](#52-les-préversions-pointent-sur-la-production)). Tant que ce
@@ -576,8 +594,8 @@ L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 Le projet Vercel `anheart-simulation` est relié au dépôt et construit depuis sa
 racine, avec le preset **FastAPI**. Il lit donc le `vercel.json` de la racine,
 qui coupe ses déploiements Git comme ceux du site
-([section 5.1](#51-comment-il-se-déploie)) : **plus aucun push ne crée de
-préversion de la simulation.**
+([section 5.1](#51-comment-il-se-déploie)) : **un push dont le commit contient
+ce fichier ne crée plus de préversion de la simulation.**
 
 Le dépôt garde deux dispositions de la même application :
 

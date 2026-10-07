@@ -5,8 +5,9 @@ Le moteur de `python -m simulation.live`, servi par une fonction Vercel :
 
 Il se déploie par les deux boutons de GitHub Actions, en choisissant
 `simulation` : « Déployer la préversion (develop) » et « Déployer en production
-(main) ». Aucun push ne le déploie. Le bouton lance `build.sh` sur le commit de
-la branche, puis envoie `dist/` à Vercel.
+(main) ». Un push ne le déploie plus : le `vercel.json` de la racine coupe les
+déploiements Git. Le bouton lance `build.sh` sur le commit de la branche, puis
+envoie `dist/` à Vercel.
 
     ./build.sh            # assemble dist/
     ./deploy.sh           # secours, depuis un poste : préversion

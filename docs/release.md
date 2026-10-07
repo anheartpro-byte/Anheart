@@ -148,8 +148,10 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```
 8. **Enregistrer les versions dans Convex** avec les lignes que le script vient
    d'afficher ([section 6](#6-enregistrer-la-version-dans-convex)).
-9. **Déployer, dans la fenêtre fixée par la check-list.** La fusion dans
-   `main` n'a rien déployé : ni un push ni ce script ne déploient. Dans une
+9. **Déployer, dans la fenêtre fixée par la check-list.** Ni la fusion dans
+   `main` ni ce script ne déploient (pour la toute première fusion dans `main`,
+   voir la précaution de
+   [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)). Dans une
    même fenêtre, **à un moment où aucune séance n'est en cours** : Convex
    d'abord, à la main
    ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), puis
@@ -243,7 +245,7 @@ de ces deux branches, où le push a donc tout lancé. Deux cas en découlent :
 
 Le script ne lit que les check runs. Il **ne lit pas les statuts de commit**.
 Les déploiements que Vercel lançait à chaque push étaient des statuts ; Vercel
-n'en lance plus
+n'en lance plus pour un commit qui contient `vercel.json`
 ([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
 
 La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Ce sont
@@ -343,11 +345,11 @@ la PR n'est pas fusionnée tant qu'une case est ouverte.
 - [ ] **Niveau de validation du Pi justifié.** Le niveau annoncé ci-dessus est
   celui que les revues enregistrées permettent ; au-dessus de `bench`, le
   compte rendu de la revue M5 ou M6 est joint.
-- [ ] **Fenêtre de déploiement fixée.** Fusionner cette PR ne déploie rien. La
-  date et l'heure du déploiement de Convex, puis du site par le bouton
-  « Déployer en production (main) », sont écrites ici : une même fenêtre, à un
-  moment où aucune séance n'est en cours, avec le nom de la personne qui
-  approuve.
+- [ ] **Fenêtre de déploiement fixée.** Le site ne se déploie plus à la
+  fusion. La date et l'heure du déploiement de Convex, puis du site par le
+  bouton « Déployer en production (main) », sont écrites ici : une même
+  fenêtre, à un moment où aucune séance n'est en cours, avec le nom de la
+  personne qui approuve.
 
 ### Comment prouver chaque ligne
 
