@@ -1045,6 +1045,15 @@ Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
 une gate : voir
 [Analyse statique externe](#analyse-statique-externe--codeql-anh-196).
 
+Un troisième, `pi-install.yml`, exécute l'installation du Raspberry Pi de bout
+en bout sur un runner arm64 (job `pi-install`) : le vrai `scripts/install.sh`
+dans une machine de remplacement, la console démarrée en simulation et
+interrogée sur `/healthz`. **Ce n'est pas une gate non plus** : il ne se
+déclenche, sur une PR, que si elle modifie de quoi l'installation est faite, et
+à chaque push sur `develop`. Ce qu'il vérifie, ses permissions et ce qu'il
+implique pour `scripts/release.sh` sont dans
+[pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie).
+
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
 ses propres réglages : une erreur de type visible seulement avec eux passait
@@ -1464,7 +1473,10 @@ Passent avant ces listes et lancent tout :
   l'extension du fichier. Chaque côté a ses propres tests contre ce contrat ;
 * `CHANGELOG.md`, où qu'il soit : c'est du Markdown, mais l'outillage de
   release et ses tests le lisent. Il lance tout tant qu'on ne sait pas quelle
-  gate est seule à le lire.
+  gate est seule à le lire ;
+* `docs/pi-image.md` : une page de documentation, mais
+  `raspberry-pi/tests/test_pi_install.py` compare son tableau de versions aux
+  fichiers qui figent ces versions.
 
 Lancent tout aussi : un fichier d'aucune sorte listée (un scénario JSON,
 `raspberry-pi/config/`, un Dockerfile, la CAO, `deploy/`, un fichier de

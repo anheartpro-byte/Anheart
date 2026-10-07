@@ -9,7 +9,8 @@ tests below pin what its removal means here:
 * ``pyproject.toml`` exempts no file that is not on disk;
 * the ``.env`` templates carry no key that nothing reads;
 * every deployment file starts the console, and the container health check
-  asks the console's own ``/healthz``;
+  asks the console's own ``/healthz`` (the install itself, one path and pinned
+  versions, is ``tests/test_pi_install.py``);
 * the image's command, run as written, answers that health check in simulation
   and stops cleanly on SIGTERM.
 
@@ -39,8 +40,6 @@ from src.result import Err, Ok
 
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 DOCKERFILE: Final[Path] = PROJECT_ROOT / "Dockerfile"
-COMPOSE: Final[Path] = PROJECT_ROOT / "docker-compose.yml"
-COMPOSE_DEV: Final[Path] = PROJECT_ROOT / "docker-compose.dev.yml"
 ENTRYPOINT: Final[Path] = PROJECT_ROOT / "docker" / "entrypoint.sh"
 SERVICE_UNIT: Final[Path] = PROJECT_ROOT / "scripts" / "anheart.service"
 INSTALLER: Final[Path] = PROJECT_ROOT / "scripts" / "install.sh"
@@ -75,9 +74,6 @@ KEYS_READ_OUTSIDE_PYTHON: Final[Mapping[str, str]] = {
     "MPLBACKEND": "matplotlib, imported by BioSPPy",
 }
 
-#: Variables a compose file sets for the interpreter rather than for the console.
-INTERPRETER_VARIABLES: Final[frozenset[str]] = frozenset({"PYTHONUNBUFFERED"})
-
 SCANNED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".py", ".sh", ".toml", ".yml", ".md", ".service", ".txt", ".example", ".mjs", ".js", ".html"}
 )
@@ -106,12 +102,6 @@ def _assigned_keys(path: Path) -> list[str]:
     """Keys a template sets or offers commented out (``KEY=`` and ``# KEY=``)."""
     text = path.read_text(encoding="utf-8")
     return _captures(r"^(?:# ?)?([A-Z][A-Z0-9_]*)=", text)
-
-
-def _environment_keys(path: Path) -> list[str]:
-    """Variables a compose file sets, in mapping (``KEY: v``) or list (``- KEY=v``) form."""
-    text = path.read_text(encoding="utf-8")
-    return _captures(r"^\s+(?:- )?([A-Z][A-Z0-9_]*)\s*[:=]", text)
 
 
 def _instruction(name: str) -> str:
@@ -248,20 +238,6 @@ def test_the_env_templates_carry_only_keys_something_reads(template: Path) -> No
     assert not unread, f"{template.name} sets keys that nothing reads: {unread}"
 
 
-@pytest.mark.parametrize("compose", [COMPOSE, COMPOSE_DEV], ids=[COMPOSE.name, COMPOSE_DEV.name])
-def test_the_compose_files_set_only_variables_something_reads(compose: Path) -> None:
-    known = _console_keys() | frozenset(KEYS_READ_OUTSIDE_PYTHON) | INTERPRETER_VARIABLES
-    keys = _environment_keys(compose)
-    assert "PYTHONUNBUFFERED" in keys, "the environment block was not found"
-    unread = sorted(set(keys) - known)
-    assert not unread, f"{compose.name} sets variables that nothing reads: {unread}"
-
-
-def test_the_dev_override_mounts_no_env_file_of_its_own() -> None:
-    """``.env.docker`` never existed in the repository: compose would mount a directory."""
-    assert ".env.docker" not in COMPOSE_DEV.read_text(encoding="utf-8")
-
-
 # --- Every deployment file starts the console ------------------------------
 
 
@@ -281,25 +257,28 @@ def test_the_container_health_check_asks_the_console_healthz() -> None:
     assert command[:2] == ["python", "-c"]
     assert "/healthz" in command[2]
     assert "UI_PORT" in command[2], "the check must follow the port the console listens on"
-    for compose in (COMPOSE, COMPOSE_DEV):
-        assert "healthcheck" not in compose.read_text(encoding="utf-8"), (
-            f"{compose.name} overrides the image's health check"
-        )
+    # The unit that runs the image leaves that check in place (tests/test_pi_install.py).
+    assert "health" not in SERVICE_UNIT.read_text(encoding="utf-8").lower()
 
 
 def test_the_systemd_unit_and_the_installer_start_the_console() -> None:
-    started = _captures(r"^ExecStart=(.+)$", SERVICE_UNIT.read_text(encoding="utf-8"))
+    """The unit runs the image as it is: its command is the console (see above)."""
+    unit = SERVICE_UNIT.read_text(encoding="utf-8").replace("\\\n", " ")
+    started = _captures(r"^ExecStart=(.+)$", unit)
     assert len(started) == 1
-    interpreter, *arguments = started[0].split()
-    assert arguments == ["-m", CONSOLE_MODULE]
+    words = started[0].split()
+    assert words[:2] == ["/usr/bin/docker", "run"]
+    # The image is the last word: no command and no entrypoint replace the image's own.
+    assert words[-1] == "${ANHEART_IMAGE}"
+    assert "--entrypoint" not in words
 
     installer = INSTALLER.read_text(encoding="utf-8")
-    assert f"-m {CONSOLE_MODULE}" in installer
-    # The installer copies this unit: the environment it builds must be the one
-    # the unit launches from.
-    assert interpreter == "/home/pi/anheart/raspberry-pi/.venv/bin/python"
-    assert 'INSTALL_DIR="/home/pi/anheart/raspberry-pi"' in installer
-    assert '-m venv "${INSTALL_DIR}/.venv"' in installer
+    # The installer builds that image from this directory, under the name the
+    # unit is told to run, and installs this unit.
+    assert 'readonly IMAGE_NAME="anheart-console"' in installer
+    assert 'readonly image="$IMAGE_NAME:$version"' in installer
+    assert "Environment=ANHEART_IMAGE=$image" in installer
+    assert 'install_file "$TREE/scripts/$SERVICE.service" "$UNIT_FILE"' in installer
 
 
 def _dockerfile() -> str:

@@ -5,9 +5,12 @@ safety supervisor and serves the operator's web page. Its entry point, the
 only one in this directory, is `python -m src.local_panel`.
 
 The [project documentation](../docs/README.md) describes the architecture.
-For deployment, follow [the Pi procedure](../docs/deploiement.md#7-le-raspberry-pi):
-`.env.pi.example`, `scripts/pi/preflight.sh` and `scripts/pi/deploy.sh`.
-The Docker image, Compose service and native systemd unit start `src.local_panel`.
+A Raspberry Pi is installed one way only, by `scripts/install.sh`: the console
+runs in the Docker image of this directory, and the systemd unit
+`scripts/anheart.service` starts that image at power-on. See
+[Installing a Raspberry Pi](#installing-a-raspberry-pi) below and
+[the install reference](../docs/pi-image.md) (pinned versions, what CI checks,
+what is still to be checked on a real Pi).
 
 ## Development setup
 
@@ -19,9 +22,12 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pip install pyserial
-.venv/bin/python -m pip install --no-deps bitalino
+.venv/bin/python -m pip install --no-deps bitalino==1.2.6
 ```
 
+`requirements-base.txt` pins every runtime package to an exact version, the
+same on a development machine, in CI and in the image of the Pi; the image
+installs `requirements-lock.txt`, the full resolution with hashes.
 `requirements-dev.txt` explains the separate BITalino installation. Hardware
 Bluetooth setup depends on the platform and selected transport; use the
 [deployment guide](../docs/deploiement.md) and the supplied Pi configuration.
@@ -186,52 +192,64 @@ defaults, which is a decision for the medical side, made in `.env`.
 
 ---
 
-## Running as a Service
+## Installing a Raspberry Pi
 
-Docker/Compose and the native unit both launch the operator console. Use the
-[deployment guide](../docs/deploiement.md#7-le-raspberry-pi) for installation and
-permissions. The native unit is `scripts/anheart.service`; its paths and service
-account must match the installation.
-
-### Control Service
+One path, and the only one maintained. On a Raspberry Pi 4 or 5 freshly flashed
+with the pinned Raspberry Pi OS image ([versions](../docs/pi-image.md#2-versions-figées)):
 
 ```bash
-# Start
-sudo systemctl start anheart
+# from the development machine, in raspberry-pi/: copy the sources
+bash scripts/pi/deploy.sh <user>@<pi>
 
-# Stop
-sudo systemctl stop anheart
-
-# Restart
-sudo systemctl restart anheart
-
-# Check status
-sudo systemctl status anheart
-
-# Enable auto-start on boot
-sudo systemctl enable anheart
-
-# View logs
-journalctl -u anheart -f
+# on the Pi
+cd ~/anheart/raspberry-pi
+sudo bash scripts/install.sh                # real hardware
+sudo bash scripts/install.sh --simulation   # no hardware: simulated drive and ECG
 ```
+
+`install.sh` installs Docker, BlueZ and libusb from Debian, creates the system
+account `anheart` and `/var/lib/anheart/{data,records}`, writes
+`/etc/anheart/anheart.env` from `.env.pi.example` (root only, never rewritten,
+never printed), builds the image `anheart-console:<VERSION>`, installs and
+enables the unit, starts it and waits for `GET /healthz`. It is safe to run
+again: nothing that is in place is changed, and a running console is restarted
+only when its image or unit changed and only when it says it is at rest.
+
+The console that starts is at rest. Nothing starts a session at boot or after a
+restart by systemd: a start needs an operator, and the emergency-stop
+attestation is per boot.
+
+### Control the service
+
+```bash
+systemctl status anheart          # state, and the version in its first line
+journalctl -u anheart -f          # the console's log
+sudo systemctl stop anheart       # controlled stop: reference zeroed, link released
+sudo systemctl restart anheart    # at rest only, e.g. after editing /etc/anheart/anheart.env
+curl -fsS http://127.0.0.1:8090/healthz
+sudo bash scripts/pi/preflight.sh # read-only checks of the configuration and links
+sudo bash scripts/uninstall.sh    # removes the service; keeps configuration and data
+```
+
+In `/etc/anheart/anheart.env` a line is `KEY=value` and nothing else: Docker
+passes quotes and trailing comments to the console as part of the value.
+
+`bash scripts/pi/test_install.sh` runs the whole install in a throwaway
+Debian 12 machine (a container with systemd), in simulation; CI runs it on
+arm64 (`.github/workflows/pi-install.yml`).
 
 ---
 
 ## Troubleshooting
 
-### "pip install" fails with PyBluez errors
+### The image fails to build on PyBluez
 
-**Error:** `error: command 'gcc' failed` or `bluetooth/bluetooth.h: No such file`
-
-**Solution:** Install Bluetooth development libraries:
-
-```bash
-# Debian/Ubuntu/Raspberry Pi
-sudo apt install libbluetooth-dev python3-dev
-
-# Then retry
-.venv/bin/python -m pip install -r requirements-prod.txt
-```
+`PyBluez-bitalino` is the one package the image compiles (pulled in by
+`bitalino`). The `Dockerfile` installs what it needs (`libbluetooth-dev`, a C
+compiler) and its build tools are pinned in `requirements-build-lock.txt`. On a
+development machine, install `bitalino` with `--no-deps` as shown above: the
+console only needs PyBluez when it is given a MAC address instead of a serial
+node.
 
 ### Cannot find BITalino device
 
