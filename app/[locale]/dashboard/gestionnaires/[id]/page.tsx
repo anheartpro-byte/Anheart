@@ -29,6 +29,7 @@ import {
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
 import { MachineStatusBadge } from "@/components/machines/MachineSignal";
 import { machineIdsToSave } from "@/lib/gestionnaireMachines";
+import { patientIdsToSave } from "@/lib/gestionnairePatients";
 
 export default function GestionnaireDetailPage({
   params,
@@ -65,10 +66,12 @@ export default function GestionnaireDetailPage({
   const [selectedMachines, setSelectedMachines] = useState<Id<"machines">[]>(
     [],
   );
-  const [selectedPatients, setSelectedPatients] = useState<string[]>([]);
+  const [selectedPatients, setSelectedPatients] = useState<Id<"users">[]>([]);
   const [saving, setSaving] = useState(false);
   const [machinesError, setMachinesError] = useState<string | null>(null);
   const [machinesSaved, setMachinesSaved] = useState<string | null>(null);
+  const [patientsError, setPatientsError] = useState<string | null>(null);
+  const [patientsSaved, setPatientsSaved] = useState<string | null>(null);
 
   const gestionnaire = gestionnaires?.find((g) => g._id === gestionnaireId);
 
@@ -159,17 +162,49 @@ export default function GestionnaireDetailPage({
     }
   };
 
+  // The patients window needs both lists: the gestionnaire's own patients,
+  // which tick the boxes, and the patients to choose from, which are the
+  // boxes. Until both are known it is neither opened nor saved.
+  const patientsLoaded =
+    gestionnairePatients !== undefined && allPatients !== undefined;
+
+  const openPatientDialog = () => {
+    // The window always opens on the gestionnaire's current patients, never on
+    // boxes left from a cancelled edit.
+    if (!gestionnairePatients || !allPatients) return;
+    setSelectedPatients(gestionnairePatients.map((p) => p._id));
+    setPatientsError(null);
+    setPatientsSaved(null);
+    setShowPatientDialog(true);
+  };
+
   const handleSavePatients = async () => {
+    if (!gestionnairePatients || !allPatients) return;
     setSaving(true);
-    const result = await assignPatients(
-      {
-        gestionnaireId,
-        patientIds: selectedPatients as Id<"users">[],
-      },
-      { success: t("feedback.patientsAssigned") },
-    );
-    if (result.ok) setShowPatientDialog(false);
-    setSaving(false);
+    setPatientsError(null);
+    try {
+      // The server sets this gestionnaire's list exactly and writes only the
+      // links that differ from it.
+      const result = await assignPatients(
+        {
+          gestionnaireId,
+          patientIds: patientIdsToSave({
+            checked: selectedPatients,
+            listed: allPatients.map((p) => p._id),
+            linked: gestionnairePatients.map((p) => p._id),
+          }),
+        },
+        { success: (saved) => t("gestionnaires.patientsSaved", saved) },
+      );
+      if (!result.ok) {
+        setPatientsError(result.message);
+        return;
+      }
+      setShowPatientDialog(false);
+      setPatientsSaved(t("gestionnaires.patientsSaved", result.value));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -265,15 +300,34 @@ export default function GestionnaireDetailPage({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowPatientDialog(true)}
+                onClick={openPatientDialog}
+                disabled={!patientsLoaded}
               >
                 <Pencil className="h-4 w-4 mr-2" />
                 {t("common.edit")}
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            {gestionnairePatients && gestionnairePatients.length > 0 ? (
+          <CardContent className="space-y-3">
+            {patientsSaved && (
+              <div
+                role="status"
+                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
+              >
+                {patientsSaved}
+              </div>
+            )}
+            {gestionnairePatients === undefined && (
+              <p className="text-muted-foreground text-sm">
+                {t("common.loading")}
+              </p>
+            )}
+            {gestionnairePatients?.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                {t("gestionnaires.noPatientsAssigned")}
+              </p>
+            )}
+            {gestionnairePatients && gestionnairePatients.length > 0 && (
               <div className="space-y-2">
                 {gestionnairePatients.map((p) => (
                   <div
@@ -289,10 +343,6 @@ export default function GestionnaireDetailPage({
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                {t("gestionnaires.noPatientsAssigned")}
-              </p>
             )}
           </CardContent>
         </Card>
@@ -370,8 +420,26 @@ export default function GestionnaireDetailPage({
               {t("gestionnaires.assignPatientsDesc")}
             </DialogDescription>
           </DialogHeader>
+          {patientsError && (
+            <div
+              role="alert"
+              className="bg-destructive/10 text-destructive p-3 rounded-md text-sm"
+            >
+              {patientsError}
+            </div>
+          )}
           <div className="max-h-64 overflow-y-auto space-y-2 py-4">
-            {allPatients && allPatients.length > 0 ? (
+            {!patientsLoaded && (
+              <p className="text-muted-foreground text-center py-4">
+                {t("common.loading")}
+              </p>
+            )}
+            {patientsLoaded && allPatients.length === 0 && (
+              <p className="text-muted-foreground text-center py-4">
+                {t("users.noPatients")}
+              </p>
+            )}
+            {patientsLoaded &&
               allPatients.map((patient) => (
                 <div key={patient._id} className="flex items-center space-x-2">
                   <Checkbox
@@ -399,12 +467,7 @@ export default function GestionnaireDetailPage({
                     </span>
                   </label>
                 </div>
-              ))
-            ) : (
-              <p className="text-muted-foreground text-center py-4">
-                {t("users.noPatients")}
-              </p>
-            )}
+              ))}
           </div>
           <DialogFooter>
             <Button
@@ -413,7 +476,10 @@ export default function GestionnaireDetailPage({
             >
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSavePatients} disabled={saving}>
+            <Button
+              onClick={handleSavePatients}
+              disabled={saving || !patientsLoaded}
+            >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {t("common.save")}
             </Button>

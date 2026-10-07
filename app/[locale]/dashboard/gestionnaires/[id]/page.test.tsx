@@ -45,6 +45,9 @@ type Managed = FunctionReturnType<
   typeof api.machines.getMachinesForGestionnaire
 >[number];
 type Patient = FunctionReturnType<typeof api.users.listUsers>[number];
+type OwnPatient = FunctionReturnType<
+  typeof api.users.getPatientsForGestionnaire
+>[number];
 
 /** The sentence of the server for a call that carries no organisation (convex/lib/auth.ts). */
 const NO_ACTIVE_ORGANIZATION =
@@ -57,6 +60,7 @@ const nice = "machine-nice" as Id<"machines">;
 const brest = "machine-brest" as Id<"machines">;
 const rose = "user-rose" as Id<"users">;
 const remi = "user-remi" as Id<"users">;
+const zoe = "user-zoe" as Id<"users">;
 
 const gaston: Gestionnaire = {
   _id: gestionnaireId,
@@ -109,6 +113,18 @@ function patient(id: Id<"users">, firstName: string): Patient {
   };
 }
 
+/** A patient as the server lists them among the manager's own. */
+function ownPatient(id: Id<"users">, firstName: string): OwnPatient {
+  return {
+    _id: id,
+    firstName,
+    lastName: "Rider",
+    email: `${firstName.toLowerCase()}@example.test`,
+    language: "fr",
+    createdAt: NOW,
+  };
+}
+
 /** The server as the page of Gaston reads it: he manages Paris and Lyon, and Rose. */
 function given() {
   answer(api.users.listGestionnaires, [
@@ -125,17 +141,12 @@ function given() {
     managed(lyon, "Lyon"),
   ]);
   answer(api.users.listUsers, [patient(rose, "Rose"), patient(remi, "Remi")]);
-  answer(api.users.getPatientsForGestionnaire, [
-    {
-      _id: rose,
-      firstName: "Rose",
-      lastName: "Rider",
-      email: "rose@example.test",
-      language: "fr",
-      createdAt: NOW,
-    },
-  ]);
+  answer(api.users.getPatientsForGestionnaire, [ownPatient(rose, "Rose")]);
   mutation(api.machines.setGestionnaireMachines).mockResolvedValue({
+    added: 1,
+    removed: 1,
+  });
+  mutation(api.users.assignPatientsToGestionnaire).mockResolvedValue({
     added: 1,
     removed: 1,
   });
@@ -530,19 +541,29 @@ describe("gestionnaire page: assigning patients", () => {
     expect(dialog.queryByRole("checkbox")).toBeNull();
   });
 
-  // What the page does today: it does not tell a list still loading from an
-  // empty one.
-  it("says there is no patient while their list is still loading", async () => {
+  // A list still loading is not an empty one: the window waits for it.
+  it("does not open, and so does not say there is no patient, while the patients to choose from are still loading", async () => {
     given();
     answer(api.users.listUsers, undefined);
-    const { user } = await open();
+    const { user, refresh } = await open();
+    const edit = card(fr.nav.patients).getByRole("button", editButton);
 
-    const dialog = await openPatients(user);
+    expect(edit.hasAttribute("disabled")).toBe(true);
+    await user.click(edit);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(fr.users.noPatients)).toBeNull();
 
-    expect(dialog.getByText(fr.users.noPatients)).toBeTruthy();
+    // Once the list is there, the window opens on it.
+    answer(api.users.listUsers, [patient(rose, "Rose"), patient(remi, "Remi")]);
+    await refresh();
+    await openPatients(user);
+    expect(boxes()).toEqual({
+      "Rose Rider(rose@example.test)": true,
+      "Remi Rider(remi@example.test)": false,
+    });
   });
 
-  it("saves exactly the ticked patients for this manager, and says so", async () => {
+  it("saves exactly the ticked patients for this manager, and confirms on the page what changed", async () => {
     given();
     const { user } = await open();
     const dialog = await openPatients(user);
@@ -558,19 +579,74 @@ describe("gestionnaire page: assigning patients", () => {
         args: { gestionnaireId, patientIds: [remi] },
       },
     ]);
-    expect(feedbackShown()).toEqual([
-      { kind: "success", message: fr.feedback.patientsAssigned },
-    ]);
+    const saved = "Patients enregistrés : 1 ajouté, 1 retiré.";
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(card(fr.nav.patients).getByRole("status").textContent).toBe(saved);
+    expect(feedbackShown()).toEqual([{ kind: "success", message: saved }]);
   });
 
-  it.each(
-    serverFailures(
+  it("confirms with what the server says it changed, in the visitor's language", async () => {
+    given();
+    // A ticked patient the server did not link is not announced as added.
+    mutation(api.users.assignPatientsToGestionnaire).mockResolvedValue({
+      added: 0,
+      removed: 2,
+    });
+    const { user } = await open("admin", "en");
+
+    await user.click(
+      card(en.nav.patients).getByRole("button", { name: en.common.edit }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: en.common.save,
+      }),
+    );
+
+    expect(card(en.nav.patients).getByRole("status").textContent).toBe(
+      "Patients saved: none added, 2 removed.",
+    );
+  });
+
+  it("keeps the link to a patient who has no box, whom nobody could untick", async () => {
+    given();
+    // Gaston also manages Zoe, whom the list of patients to choose from does
+    // not hold: the window has no box for her.
+    answer(api.users.getPatientsForGestionnaire, [
+      ownPatient(rose, "Rose"),
+      ownPatient(zoe, "Zoe"),
+    ]);
+    const { user } = await open();
+    const dialog = await openPatients(user);
+    expect(boxes()).toEqual({
+      "Rose Rider(rose@example.test)": true,
+      "Remi Rider(remi@example.test)": false,
+    });
+
+    await user.click(dialog.getByRole("checkbox", { name: /Remi Rider/ }));
+    await user.click(dialog.getByRole("button", saveButton));
+
+    expect(mutationsSent()).toEqual([
+      {
+        name: "users:assignPatientsToGestionnaire",
+        args: { gestionnaireId, patientIds: [zoe, rose, remi] },
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      where: "with the sentence of a refusal the server words",
+      // What every function of an organisation answers a call without one.
+      error: new ConvexError(NO_ACTIVE_ORGANIZATION),
+      shown: NO_ACTIVE_ORGANIZATION,
+    },
+    ...serverFailures(
       api.users.assignPatientsToGestionnaire,
       "Target user is not a gestionnaire",
     ),
-  )(
-    "keeps the window open, with its boxes, and shows the failure when the save fails $where",
+  ])(
+    "shows the failure in the window, which stays open with its boxes, and confirms nothing: $where",
     async ({ error, shown }) => {
       given();
       mutation(api.users.assignPatientsToGestionnaire).mockRejectedValue(error);
@@ -580,27 +656,51 @@ describe("gestionnaire page: assigning patients", () => {
       await user.click(dialog.getByRole("checkbox", { name: /Remi Rider/ }));
       await user.click(dialog.getByRole("button", saveButton));
 
+      // Read again from the screen: the window is still there.
+      const stillOpen = within(screen.getByRole("dialog"));
+      expect(stillOpen.getByText(fr.gestionnaires.assignPatients)).toBeTruthy();
+      expect(stillOpen.getByRole("alert").textContent).toBe(shown);
       expect(feedbackShown()).toEqual([{ kind: "error", message: shown }]);
       expect(takeLoggedFailures()).toEqual([
         "users:assignPatientsToGestionnaire",
       ]);
-      // Read again from the screen: the window is still there.
-      const stillOpen = within(screen.getByRole("dialog"));
-      expect(stillOpen.getByText(fr.gestionnaires.assignPatients)).toBeTruthy();
+      expect(screen.queryByRole("status")).toBeNull();
       expect(boxes()).toEqual({
         "Rose Rider(rose@example.test)": true,
         "Remi Rider(remi@example.test)": true,
       });
+      // The save can be tried again.
       expect(
         stillOpen.getByRole("button", saveButton).hasAttribute("disabled"),
       ).toBe(false);
     },
   );
 
+  it("forgets the refusal and the confirmation of an earlier save when the window is opened again", async () => {
+    given();
+    const save = mutation(api.users.assignPatientsToGestionnaire);
+    save.mockRejectedValueOnce(new ConvexError(NO_ACTIVE_ORGANIZATION));
+    const { user } = await open();
+
+    let dialog = await openPatients(user);
+    await user.click(dialog.getByRole("button", saveButton));
+    expect(dialog.getByRole("alert")).toBeTruthy();
+    takeLoggedFailures();
+    await user.click(dialog.getByRole("button", { name: fr.common.cancel }));
+
+    dialog = await openPatients(user);
+    expect(dialog.queryByRole("alert")).toBeNull();
+    await user.click(dialog.getByRole("button", saveButton));
+    expect(card(fr.nav.patients).getByRole("status")).toBeTruthy();
+
+    await openPatients(user);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("cannot be saved twice while the server has not answered", async () => {
     given();
     // The server answers only when the test says so.
-    const server = Promise.withResolvers<null>();
+    const server = Promise.withResolvers<{ added: number; removed: number }>();
     mutation(api.users.assignPatientsToGestionnaire).mockReturnValue(
       server.promise,
     );
@@ -616,59 +716,117 @@ describe("gestionnaire page: assigning patients", () => {
     await user.click(save);
     expect(mutationsSent()).toHaveLength(1);
 
-    await act(async () => server.resolve(null));
+    await act(async () => server.resolve({ added: 0, removed: 0 }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  // What the page does today, unlike the machines window, whose button waits
-  // for the manager's own machines: the patients window opens before the
-  // manager's own patients are known, with no box ticked, and saving it then
-  // sends an empty list.
-  it("lets the patients be edited before the manager's own are known, and then saves none", async () => {
+  // The first way the window used to save a list nobody chose: opened and
+  // saved before the manager's own patients had arrived, it sent none.
+  it("does not let the patients be edited before the manager's own are known, and sends nothing", async () => {
     given();
     answer(api.users.getPatientsForGestionnaire, undefined);
-    const { user } = await open();
-    expect(
-      card(fr.nav.patients).getByText(fr.gestionnaires.noPatientsAssigned),
-    ).toBeTruthy();
+    const { user, refresh } = await open();
+    const patients = card(fr.nav.patients);
 
-    const dialog = await openPatients(user);
+    // The card says it is loading, not that the manager has no patient.
+    expect(patients.getByText(fr.common.loading)).toBeTruthy();
+    expect(
+      patients.queryByText(fr.gestionnaires.noPatientsAssigned),
+    ).toBeNull();
+    const edit = patients.getByRole("button", editButton);
+    expect(edit.hasAttribute("disabled")).toBe(true);
+    await user.click(edit);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mutationsSent()).toEqual([]);
+
+    // Once they are known, the window opens on them.
+    answer(api.users.getPatientsForGestionnaire, [ownPatient(rose, "Rose")]);
+    await refresh();
+    expect(card(fr.nav.patients).queryByText(fr.common.loading)).toBeNull();
+    await openPatients(user);
     expect(boxes()).toEqual({
-      "Rose Rider(rose@example.test)": false,
+      "Rose Rider(rose@example.test)": true,
       "Remi Rider(remi@example.test)": false,
     });
-    await user.click(dialog.getByRole("button", saveButton));
-
-    expect(mutationsSent()).toEqual([
-      {
-        name: "users:assignPatientsToGestionnaire",
-        args: { gestionnaireId, patientIds: [] },
-      },
-    ]);
   });
 
-  // What the page does today, unlike the machines window: the boxes left by
-  // a cancelled edit are still there when the window is opened again, so a
-  // later save sends them.
-  it("opens again on the boxes left by a cancelled edit, not on the manager's own patients", async () => {
+  it.each([
+    ["the manager's own patients", api.users.getPatientsForGestionnaire],
+    ["the patients to choose from", api.users.listUsers],
+  ] as const)(
+    "cannot be saved once %s are loading again, and says so in place of the boxes",
+    async (_name, query) => {
+      given();
+      const { user, refresh } = await open();
+      await openPatients(user);
+
+      answer(query, undefined);
+      await refresh();
+
+      const dialog = within(screen.getByRole("dialog"));
+      const save = dialog.getByRole("button", saveButton);
+      expect(save.hasAttribute("disabled")).toBe(true);
+      await user.click(save);
+      expect(mutationsSent()).toEqual([]);
+      expect(dialog.getByText(fr.common.loading)).toBeTruthy();
+      expect(dialog.queryByText(fr.users.noPatients)).toBeNull();
+      expect(dialog.queryByRole("checkbox")).toBeNull();
+    },
+  );
+
+  // The second way: the boxes of a cancelled edit used to be still there when
+  // the window was opened again, and a save then removed the unticked patients.
+  it("sends nothing when the window is cancelled, and opens again on the manager's own patients", async () => {
     given();
     const { user } = await open();
     let dialog = await openPatients(user);
 
     await user.click(dialog.getByRole("checkbox", { name: /Rose Rider/ }));
+    await user.click(dialog.getByRole("checkbox", { name: /Remi Rider/ }));
     await user.click(dialog.getByRole("button", { name: fr.common.cancel }));
     expect(mutationsSent()).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     dialog = await openPatients(user);
     expect(boxes()).toEqual({
-      "Rose Rider(rose@example.test)": false,
+      "Rose Rider(rose@example.test)": true,
       "Remi Rider(remi@example.test)": false,
     });
+    // Saved as it opened, the window sends the manager's own patients.
     await user.click(dialog.getByRole("button", saveButton));
     expect(mutationsSent()).toEqual([
       {
         name: "users:assignPatientsToGestionnaire",
-        args: { gestionnaireId, patientIds: [] },
+        args: { gestionnaireId, patientIds: [rose] },
+      },
+    ]);
+  });
+
+  it("takes its boxes from the server again when the manager's patients change while it is open", async () => {
+    given();
+    const { user, refresh } = await open();
+    const dialog = await openPatients(user);
+    await user.click(dialog.getByRole("checkbox", { name: /Rose Rider/ }));
+
+    // Another admin gives Remi to this manager meanwhile.
+    answer(api.users.getPatientsForGestionnaire, [
+      ownPatient(rose, "Rose"),
+      ownPatient(remi, "Remi"),
+    ]);
+    await refresh();
+
+    // The boxes are the server's again: what is saved is what is on screen.
+    expect(boxes()).toEqual({
+      "Rose Rider(rose@example.test)": true,
+      "Remi Rider(remi@example.test)": true,
+    });
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", saveButton),
+    );
+    expect(mutationsSent()).toEqual([
+      {
+        name: "users:assignPatientsToGestionnaire",
+        args: { gestionnaireId, patientIds: [rose, remi] },
       },
     ]);
   });
