@@ -88,7 +88,9 @@ SLOW_SECONDS: Final[Mapping[str, int]] = {
     "tests/test_battery.py[fault_ecg_electrode_off_dsp]": 380,
     "tests/test_quick.py[fault_ecg_mains_burst_dsp]": 310,
     "tests/test_quick.py[fault_ecg_electrode_off_dsp]": 240,
+    "tests/test_real_records.py[auto_jog_150_dsp]": 225,
     "tests/test_battery.py[auto_jog_150_dsp]": 220,
+    "tests/test_real_records.py[fault_ecg_electrode_off_dsp]": 155,
     "tests/test_failures.py[ecg_dsp_corrupted]": 120,
     "tests/test_properties.py::test_any_heart_rate_the_sensor_reports_keeps_every_invariant": 120,
     "tests/test_failures.py[ecg_dsp_mains]": 105,
@@ -107,6 +109,8 @@ SLOW_SECONDS: Final[Mapping[str, int]] = {
 
 Measured on CI (run 37539316521 of 6 October 2026, four processes on a 4-CPU
 runner): the runs through the real signal processing and the property tests.
+The two ``test_real_records.py`` lines are the replays of recorded sessions,
+which go through the same signal processing (run 37548774542 of 7 October).
 A handful of them weigh as much as everything else, so dealing the tests out
 in turn left one process with fifteen minutes of work and another with three.
 These numbers only steer the dealing. A name that is no longer collected is

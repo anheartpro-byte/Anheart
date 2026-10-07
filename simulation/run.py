@@ -4,11 +4,22 @@
     python -m simulation.run jog_150_nominal --csv      # plus a CSV of the rows
     python -m simulation.run --list                     # the battery
     python -m simulation.run --all                      # every scenario + out/summary.md
+    python -m simulation.run --replay out/<folder>      # a record against today's runtime
+    python -m simulation.run --replay <file>.tar.gz --json
+    python -m simulation.run --export-real              # remake the simulated library records
 
 Recordings go to ``simulation/out/<UTC>_<local_ref>/`` (git-ignored); open
 them with the live viewer's ``?trace=out/<folder>``. The optional CSV uses
 the opaque local reference as its filename. The exit code is 0 only when
 every invariant and every expectation held.
+
+``--replay`` gives a recorded session back to the real runtime and compares what
+it decides with what was recorded (:mod:`simulation.replay`): exit code 0 when
+they match, 1 on a difference or a divergence, 2 when the record cannot be
+replayed at all. ``--export-real [NAME ...]`` runs battery scenarios and puts
+their records in the library the gate replays (:mod:`simulation.real_records`);
+with no name it remakes every simulated record the library already holds. An
+archive that already holds exactly the record is left alone (``unchanged``).
 """
 
 from __future__ import annotations
@@ -16,17 +27,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
 from simulation.harness import RunResult, run_scenario
 from simulation.invariants import Metrics, Violation, check_expectations, check_invariants, measure
+from simulation.real_records import REAL_DIR, export, replay_path, simulated
 from simulation.scenario import load_scenario, resolve, scenario_paths
 from src.record.codec import Privacy
 from src.result import Err
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out"
+
+EXIT_MATCH: Final[int] = 0
+EXIT_DIFFERENT: Final[int] = 1
+"""The runtime no longer decides what the record says: a finding, not a failure of the tool."""
+
+EXIT_UNUSABLE: Final[int] = 2
+"""The record cannot be replayed at all."""
 
 
 def _fmt(value: float | None, digits: int = 2) -> str:
@@ -101,6 +121,31 @@ def summary_table(entries: Sequence[tuple[RunResult, Metrics, tuple[Violation, .
     return "\n".join(lines)
 
 
+def replay_command(record: Path, *, as_json: bool) -> int:
+    """``--replay``: print the report (text, or one line of JSON) and say how it went."""
+    result = replay_path(record)
+    if isinstance(result, Err):
+        print(f"replay impossible: {result.error.detail}", file=sys.stderr)
+        return EXIT_UNUSABLE
+    report = result.value
+    print(report.to_json() if as_json else report.to_text(), end="")
+    return EXIT_MATCH if report.matches else EXIT_DIFFERENT
+
+
+def export_command(names: Sequence[str], library: Path) -> int:
+    """``--export-real``: remake the named records, or every simulated one of the library."""
+    failed = False
+    for name in names or simulated(library):
+        exported = export(name, library)
+        if isinstance(exported, Err):
+            print(f"{name}: {exported.error}", file=sys.stderr)
+            failed = True
+        else:
+            state = "written" if exported.value.rewritten else "unchanged"
+            print(f"{name}: {state} {exported.value.archive}")
+    return 1 if failed else 0
+
+
 class _Args(argparse.Namespace):
     """The parsed command line, typed (a bare ``Namespace`` is all ``Any``)."""
 
@@ -109,6 +154,10 @@ class _Args(argparse.Namespace):
     list: bool = False
     csv: bool = False
     out: Path = OUT_DIR
+    replay: Path | None = None
+    json: bool = False
+    export_real: Sequence[str] | None = None
+    library: Path = REAL_DIR
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -118,8 +167,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="list the scenarios")
     parser.add_argument("--csv", action="store_true", help="also write a CSV of the rows")
     parser.add_argument("--out", type=Path, default=OUT_DIR, help="output directory")
+    parser.add_argument(
+        "--replay", type=Path, metavar="RECORD", help="replay a record folder or its .tar.gz"
+    )
+    parser.add_argument("--json", action="store_true", help="with --replay: the report as JSON")
+    parser.add_argument(
+        "--export-real",
+        nargs="*",
+        metavar="NAME",
+        help="put the records of these battery scenarios in the library (none: remake all)",
+    )
+    parser.add_argument("--library", type=Path, default=REAL_DIR, help="the library directory")
     args = parser.parse_args(argv, namespace=_Args())
     out_dir = args.out
+    if args.replay is not None:
+        return replay_command(args.replay, as_json=args.json)
+    if args.export_real is not None:
+        return export_command(args.export_real, args.library)
     if args.list:
         for path in scenario_paths():
             print(path.stem)

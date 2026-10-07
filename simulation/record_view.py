@@ -68,7 +68,9 @@ def view_record(root: Path, requested: str) -> Result[str, RecordError]:
         )
     lines: list[JsonValue] = [
         meta,
-        *(row.to_json() for row in record.rows),
+        # The session only: the ticks of before the start command (t <= 0) are
+        # there for a replay, and the viewer's time axis starts at the start.
+        *(row.to_json() for row in record.rows if row.t > 0.0),
         *(event.to_json() for event in record.events),
         final,
         *warnings,

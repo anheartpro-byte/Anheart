@@ -34,6 +34,11 @@ simulation/
   invariants.py               physical invariants, scenario expectations, metrics
   tracefile.py                shared schema-2 recordings, legacy JSONL export and CSV
   run.py                      CLI: python -m simulation.run
+  replay.py                   replay a schema-2 record against the REAL runtime, and compare its decisions
+  replay_tape.py              the record as a drive (recorded answers, checked calls) and as an ECG source
+  replay_compare.py           recorded against replayed decisions, with the two documented tolerances
+  replay_report.py            the replay report (text and JSON)
+  real_records.py             the library of recorded sessions the gate replays (scenarios/real/*.tar.gz)
   live.py                     2D viewer server + live streaming (stdlib only)
   viewer/index.html           Layer 2: the 2D view (single static file)
   scenarios/*.json            the battery (scenarios/_profiles.json: extra profiles)
@@ -172,6 +177,8 @@ $PY -m simulation.cohort.generate [--check]      # regenerate (or verify) cohort
 $PY -m simulation.run --list                     # the scenarios
 $PY -m simulation.run manual_27_rpm --csv        # schema-2 directory + optional CSV in simulation/out/
 $PY -m simulation.run --all                      # every scenario + simulation/out/summary.md
+$PY -m simulation.run --replay simulation/out/<folder>   # a record against today's runtime (0 match, 1 differs, 2 unusable)
+$PY -m simulation.run --export-real              # remake the simulated records of scenarios/real/
 ```
 
 `run` prints the start/end, peak speed, peak g at both radii, peak setpoint
@@ -281,6 +288,16 @@ The harness records what the OPERATOR is told in `RunResult.messages` and trace
 events of kind `verdict`, `drive_fault`, `refusal` or `end`: every new verdict with its sentence, every drive
 fault with its mnemonic and LFT code, every refused start/target/reset worded by
 `src.local_panel.describe_*`, and the shutdown report.
+
+What is ASKED of the runtime is recorded apart, as events of kind
+`operator_action`, `remote_command` or `verdict_ack` whose `detail` is one
+command of a closed vocabulary (`raspberry-pi/src/record/commands.py`: `start_manual
+ceiling_motor_rpm=1380`, `manual_target output_rpm=27.0`, `estop`...). What a
+scenario does to the PLANT (an injected drive fault, a comms loss) is a
+`warning` event prefixed `simulation:`. A record also keeps the idle ticks and
+the ECG blocks of before the start (`t` <= 0). Together they make a record
+replayable: see `docs/framework-de-test.md`, section 16, and
+`docs/enregistrement.md`.
 
 `known_defect` marks a scenario whose expectations describe correct behaviour
 that `raspberry-pi/src` does not deliver today: the battery runs it as a strict
