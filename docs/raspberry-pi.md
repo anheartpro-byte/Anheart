@@ -1000,7 +1000,7 @@ sort avec le code 2.
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
-| `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
+| `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation). Dans l'image Docker, le script d'entrée la règle sur le contenu de `VERSION` quand la configuration ne la règle pas ([pi-image.md](pi-image.md#la-version)) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
 par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale

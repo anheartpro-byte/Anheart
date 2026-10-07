@@ -90,7 +90,14 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim MACHINE_API_KEY= ARM_RADIUS_M=1.5 \
 
 ## Propriété exclusive du câble variateur
 
-Un seul programme possede la liaison variateur par hote. La console, le banc,
+Un seul programme possède la liaison variateur **parmi ceux qui voient le même
+fichier de verrou**. Sur un poste de développement ou un banc, ce sont tous les
+programmes de l'hôte, et tout ce qui suit s'applique. **Sur un Raspberry Pi
+installé par `scripts/install.sh`, ce n'est pas tout l'hôte** : la console y
+tourne dans un conteneur, lire d'abord
+[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur).
+
+La console, le banc,
 la mesure de latence, `probe_atv320.py` et `scan_modbus.py` prennent le meme
 verrou noyau avant toute ouverture du transport. Un concurrent refuse avec
 `drive cable already owned` et le PID du proprietaire ; aucune commande ni
@@ -121,6 +128,47 @@ handle. Pour un appel direct a `open_ftdi_port`,
 retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
 cela n'autorise aucune reprise automatique du mouvement. Cette protection
 concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
+
+### Sur un Raspberry Pi installé : le verrou est celui du conteneur
+
+Sur un Pi installé par `scripts/install.sh`, la console tourne dans un
+conteneur Docker. `/tmp/anheart-drive.lock` y est le fichier **du conteneur**,
+pas celui du Pi.
+
+- **Dans le conteneur**, la console tient le verrou comme décrit plus haut,
+  dès qu'elle ouvre le câble (`MOTOR_BACKEND=serial`). En simulation elle
+  n'ouvre aucun câble et ne prend aucun verrou.
+- **Un outil lancé sur le Pi lui-même, ou dans un second conteneur, n'est pas
+  refusé par ce verrou** : il ouvre un autre fichier du même nom, et le refus
+  `drive cable already owned` ne se produit pas.
+- Ce qui limite encore un second programme, d'après la lecture du code et
+  **sans essai entre le Pi et le conteneur** : le port série est ouvert en
+  exclusivité (pymodbus le demande à pyserial, qui pose un verrou `flock` sur
+  `/dev/ttyUSB0`, que le conteneur partage par son montage de `/dev`), et avec
+  une adresse `ftdi://` la bibliothèque USB réclame l'interface de
+  l'adaptateur. **Ni l'un ni l'autre n'est tenu entre une fermeture du port et
+  sa réouverture** : pymodbus ferme le port à chaque absence de réponse du
+  variateur et le rouvre à la transaction suivante. Un autre programme peut
+  prendre le câble dans cet intervalle.
+
+**La règle, pour la personne : aucun outil de banc ou de diagnostic
+(`bench_console.py`, `bench_comm_latency.py`, `probe_atv320.py`,
+`scan_modbus.py`, SoMove) sur une machine dont le service tourne.** Arrêter
+d'abord le service, vérifier qu'il est arrêté, et seulement ensuite lancer
+l'outil :
+
+```sh
+sudo systemctl stop anheart
+systemctl is-active anheart     # doit répondre : inactive
+sudo docker ps --all            # ne doit lister aucun conteneur anheart
+```
+
+Après l'intervention : fermer l'outil, puis `sudo systemctl start anheart`.
+
+Faire tenir cette règle par le logiciel (un verrou partagé entre le Pi et le
+conteneur, ou des outils lancés dans le conteneur) reste à concevoir. C'est une
+condition avant de relier au vrai variateur une console lancée par ce service :
+voir [les limites de l'installation](../docs/pi-image.md#8-limites-et-reste-à-faire).
 
 ---
 

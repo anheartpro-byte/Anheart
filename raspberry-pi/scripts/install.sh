@@ -16,7 +16,9 @@
 #     it holds the machine's API key. Only its owner and mode are set again.
 #   * a console that is running is restarted only when its image or its unit
 #     changed, and only when it says it is at rest. Replacing the software of a
-#     machine that turns is not something a script decides.
+#     machine that turns is not something a script decides. That holds for a
+#     console the service did not start too (a container named `anheart` run
+#     by hand, or left by an older way of running the image).
 #
 # This script never talks to the drive and starts no session. The console it
 # starts comes up at rest, as it does after every start (docs/pi-image.md).
@@ -29,6 +31,7 @@ set -euo pipefail
 readonly SERVICE="anheart"
 readonly ACCOUNT="anheart"
 readonly IMAGE_NAME="anheart-console"
+readonly CONTAINER="anheart"
 
 # The system this script is written for (docs/pi-image.md, "Versions figées").
 readonly OS_CODENAME="bookworm"
@@ -158,12 +161,22 @@ console_get() {
 
 service_active() { systemctl is-active --quiet "$SERVICE"; }
 
+# A console running in a container the service does not account for: started by
+# hand, or left by an older way of running the image. The unit stops any
+# container of that name before it starts its own, so this one is asked first
+# too. Docker may not be installed yet: then there is none.
+container_running() {
+    [ "$(docker container inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" = "true" ]
+}
+
+console_running() { service_active || container_running; }
+
 require_idle_console() {
     local status
     status="$(console_get /api/status 2>/dev/null || true)"
     case "$status" in
         *'"run_state":"idle"'*) note "the running console is at rest" ;;
-        *) die "the console is running and does not say it is at rest: nothing is restarted. End the session at the machine (or stop the service on purpose: sudo systemctl stop $SERVICE), then run this script again." ;;
+        *) die "the console is running and does not say it is at rest: nothing is restarted. End the session at the machine, or stop the console on purpose (sudo systemctl stop $SERVICE; for a console the service did not start: sudo docker stop -t 60 $CONTAINER), then run this script again." ;;
     esac
 }
 
@@ -314,19 +327,24 @@ EOF
 }
 
 start_service() {
-    if ! service_active; then
-        note "starting $SERVICE"
-        systemctl start "$SERVICE.service"
-        started=true
-    elif $changed; then
-        # Asked again, right before acting: the build above took minutes.
+    if service_active && ! $changed; then
+        note "$SERVICE is running and nothing changed: left alone"
+        return
+    fi
+    # Asked again, right before acting: the build above took minutes.
+    if console_running; then
         require_idle_console
+    fi
+    if service_active; then
         note "restarting $SERVICE on the new image or unit"
         systemctl restart "$SERVICE.service"
-        started=true
     else
-        note "$SERVICE is running and nothing changed: left alone"
+        # The unit first stops and removes a container named $CONTAINER, if one
+        # is there: the console that was just found at rest.
+        note "starting $SERVICE"
+        systemctl start "$SERVICE.service"
     fi
+    started=true
 }
 
 start_test() {
@@ -372,7 +390,7 @@ done
 require_root
 check_platform
 read_version
-if service_active; then
+if console_running; then
     say "A console is running"
     require_idle_console
 fi

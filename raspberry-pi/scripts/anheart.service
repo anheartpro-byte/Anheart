@@ -21,15 +21,21 @@ Type=simple
 # Replaced by the drop-in. Left as it is, the start fails on a missing image
 # rather than run a version nobody chose.
 Environment=ANHEART_IMAGE=anheart-console:not-installed
-# A container left behind by a client that died is stopped the way the console
-# is always stopped (SIGTERM: controlled ramp-down), then removed. Nothing to
-# do, and nothing reported as failed, when there is none.
+# One console at a time: the container is always named anheart, and one of
+# that name found at a start (left behind by a client that died, or started
+# another way) is stopped the way the console is always stopped (SIGTERM:
+# controlled ramp-down), then removed. This unit does not ask it whether it is
+# at rest; scripts/install.sh does, before it starts or restarts this unit.
+# Nothing to do, and nothing reported as failed, when there is none.
 ExecStartPre=/bin/sh -c 'if /usr/bin/docker container inspect anheart >/dev/null 2>&1; then /usr/bin/docker stop -t 60 anheart; /usr/bin/docker rm anheart 2>/dev/null; fi; exit 0'
 # --privileged, /dev and the host's D-Bus: the USB-RS485 adapter of the ATV320
 # and the BITalino's RFCOMM node. --network host: the page binds to the Pi's
 # own loopback (UI_HOST=127.0.0.1). The journal already keeps what the console
-# prints, so Docker keeps no second copy (--log-driver none).
+# prints, so Docker keeps no second copy (--log-driver none). --pull never: an
+# image that is not on this machine fails the start at once; nothing is ever
+# fetched from a registry.
 ExecStart=/usr/bin/docker run --rm --name anheart --log-driver none \
+    --pull never \
     --privileged --network host \
     --volume /var/run/dbus:/var/run/dbus \
     --volume /dev:/dev \

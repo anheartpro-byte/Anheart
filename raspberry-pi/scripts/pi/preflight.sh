@@ -116,8 +116,12 @@ else
             if [ -z "$contract" ]; then
                 fail "src/contract.py: this console's contract version could not be read"
             else
-                answer="$(curl -s --max-time 10 -w '\n%{http_code}' "$url/api/machine/training/poll" \
-                    -H "Authorization: Bearer $key" -H "X-Anheart-Contract: $contract")"
+                # The key reaches curl on its standard input (`-H @-`), never
+                # on its command line, which every user of the machine can read
+                # in the process list. printf is the shell's own: no process.
+                answer="$(printf 'Authorization: Bearer %s\n' "$key" \
+                    | curl -s --max-time 10 -w '\n%{http_code}' "$url/api/machine/training/poll" \
+                        -H @- -H "X-Anheart-Contract: $contract")"
                 code="${answer##*$'\n'}"
                 server="$(printf '%s' "${answer%$'\n'*}" \
                     | sed -nE 's/.*"server_contract_version"[[:space:]]*:[[:space:]]*"([0-9]+\.[0-9]+)".*/\1/p' | head -n 1)"

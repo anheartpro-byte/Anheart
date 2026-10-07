@@ -281,7 +281,10 @@ même câble. Sur un même ordinateur, un seul programme à la fois possède la 
 avec le variateur : le second lancé est refusé avant toute ouverture du câble
 (`drive cable already owned`, suivi du numéro de processus de celui qui la tient) et
 n'a aucune liaison tant que le premier la tient. Fermez le premier avant de lancer
-l'autre (voir §14).
+l'autre (voir §14). **Sur un Pi installé par `scripts/install.sh`, ce refus ne
+joue pas** pour un outil lancé hors du conteneur de la console : arrêtez d'abord le
+service (`sudo systemctl stop anheart`) et vérifiez qu'il est arrêté
+([pi-image.md](../pi-image.md#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
 
 > Le fichier `scripts/anheart.service` (démarrage automatique par systemd) lance
 > l'image de la console `src.local_panel`. Son installation et son activation

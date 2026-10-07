@@ -13,7 +13,8 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 > - **Vérifié en CI, sans Raspberry Pi** : le script d'installation est exécuté
 >   pour de bon dans une machine de remplacement (Debian 12, systemd, arm64) ;
 >   la console y démarre en simulation, répond sur `/healthz`, revient au repos
->   après un arrêt brutal et après une coupure d'alimentation simulée
+>   après un arrêt du service en pleine séance, après un arrêt brutal, et
+>   après l'arrêt puis le rallumage de la machine de remplacement
 >   ([section 5](#5-ce-que-la-ci-vérifie)). Premier passage : job `pi-install`
 >   de la PR #37, run 37607234436.
 > - **Pas vérifié** : aucune installation sur un vrai Raspberry Pi, ni avec le
@@ -193,14 +194,14 @@ Dans l'ordre :
 |---|---|---|
 | Système | refuse tout autre système que Debian 12 ; avertit si l'architecture n'est pas arm64 ou si la référence Raspberry Pi OS diffère | idem |
 | Version | lit `raspberry-pi/VERSION` ; refuse une version qui ne peut pas nommer une image | idem |
-| Console en marche | si le service tourne déjà, demande à la console si elle est au repos ; **refuse de continuer sinon** | idem |
+| Console en marche | si le service tourne déjà, ou si un conteneur nommé `anheart` tourne sans lui (lancé à la main, ou resté d'une autre façon de lancer l'image), demande à la console si elle est au repos ; **refuse de continuer sinon**, y compris quand elle ne répond pas | idem |
 | Paquets | installe `docker.io`, `bluez`, `libusb-1.0-0`, `ca-certificates`, `curl` ; active Docker et le Bluetooth | rien à installer : `apt` n'est pas appelé |
 | Compte | crée le compte système `anheart` (sans connexion) | déjà là |
 | Dossiers | `/var/lib/anheart/data` (profils locaux) et `/var/lib/anheart/records` (enregistrements de séance, mode 700), propriété de `anheart` | propriétaire et mode remis |
 | Configuration | écrit `/etc/anheart/anheart.env` à partir de `.env.pi.example`, lisible par root seul (mode 600) | **le fichier existant n'est jamais réécrit ni affiché** ; propriétaire et mode remis |
 | Image | construit `anheart-console:<version>` depuis le dossier | couches en cache : même image, rien ne change |
 | Service | installe `anheart.service` et le fichier qui porte la version ; active le service au démarrage | fichiers identiques : inchangés |
-| Démarrage | démarre le service ; s'il tournait, ne le redémarre **que si l'image ou l'unité a changé**, et seulement si la console se dit au repos | console inchangée : laissée en marche |
+| Démarrage | démarre le service ; s'il tournait, ne le redémarre **que si l'image ou l'unité a changé** ; dans les deux cas, une console en marche est interrogée une seconde fois juste avant, et doit se dire au repos | console inchangée : laissée en marche |
 | Test de démarrage | attend que `GET /healthz` réponde (180 s au plus) ; si le script vient de démarrer la console, exige qu'elle se dise au repos ; vérifie que le service est activé au démarrage | idem |
 
 Le script ne parle jamais au variateur et ne lance aucune séance.
@@ -219,7 +220,9 @@ que les clés, s'il en trouve.
 (`MACHINE_API_KEY`) et, si la page est ouverte au réseau, son jeton
 (`UI_TOKEN`). Le script ne les affiche jamais. Quand il interroge une console
 protégée par un jeton, le jeton passe par l'entrée standard de `curl`, jamais
-par sa ligne de commande. Le fichier créé a une clé de machine **vide** : la
+par sa ligne de commande, que tout utilisateur de la machine peut lire dans la
+liste des processus. `scripts/pi/preflight.sh` donne la clé de la machine à
+`curl` de la même façon. Le fichier créé a une clé de machine **vide** : la
 console d'un Pi neuf n'est reliée à aucun tableau de bord tant qu'une personne
 n'a pas écrit la clé.
 
@@ -280,6 +283,18 @@ construite. Le même fichier est copié dans l'image (`/app/VERSION`) et l'image
 porte l'étiquette `org.opencontainers.image.version`. Le test de bout en bout
 compare les trois.
 
+**Les enregistrements de séance portent cette version.** Le script d'entrée de
+l'image (`docker/entrypoint.sh`) donne à la console `ANHEART_SOFTWARE_VERSION`,
+lue dans `/app/VERSION`, sauf si la configuration de la machine règle déjà
+cette clé. Le manifeste de chaque enregistrement (`software_version`) porte
+donc la version de l'image, et non plus `unversioned`. Un fichier `VERSION`
+absent ou mal formé ne change rien : la console démarre quand même et écrit
+`unversioned`.
+
+**Une image absente ne se télécharge pas.** L'unité lance `docker run` avec
+`--pull never` : si l'image de la version installée n'est pas sur la machine,
+le démarrage échoue tout de suite, et rien n'est jamais demandé à un registre.
+
 ### Le contrôle de santé
 
 L'image interroge elle-même `GET /healthz` toutes les 30 s (instruction
@@ -303,6 +318,53 @@ pas redémarrée. Le chien de garde est le ticket ANH-162.
 la consigne à zéro et rend la liaison au variateur, puis attend 60 s avant de
 forcer. Arrêter le Pi proprement (`sudo poweroff`) passe par le même chemin.
 
+Le test de bout en bout arrête le service **pendant une séance simulée**
+(étape 4) : la console écrit elle-même `shutdown complete` dans le journal,
+sort avec le code 0 en quelques secondes, systemd constate un arrêt propre,
+l'enregistrement de la séance est clos (raison `shutdown`, sommes de contrôle
+écrites), et au démarrage suivant la console est au repos, sans attestation.
+En simulation seulement : la descente du vrai moteur pendant cet arrêt reste à
+constater sur la machine.
+
+### Une seule console à la fois
+
+Le conteneur de la console s'appelle toujours `anheart`, et Docker refuse deux
+conteneurs du même nom : le service ne peut pas lancer une seconde console à
+côté d'une première.
+
+Si un conteneur de ce nom existe quand le service démarre, ou subsiste quand
+il s'arrête (le client Docker du service est mort en laissant la console en
+marche, ou quelqu'un a lancé l'image à la main), **l'unité l'arrête par l'arrêt
+contrôlé (SIGTERM, 60 s) et le retire avant de lancer le sien**. Qui pose la
+question « au repos ? » :
+
+| Qui démarre le service | La console trouvée est-elle interrogée avant d'être arrêtée ? |
+|---|---|
+| `scripts/install.sh` | **oui**, deux fois : avant de toucher à quoi que ce soit, puis juste avant le démarrage. En séance, ou sans réponse : le script refuse et rien n'est arrêté (test de bout en bout, étape 7) |
+| `sudo systemctl start anheart` tapé à la main, ou la relance automatique après la mort du client Docker | **non**. Une console trouvée en séance est arrêtée sur sa rampe contrôlée : la séance s'arrête. C'est un arrêt, jamais un départ, et jamais un arrêt brutal |
+
+C'est une limite assumée : l'unité ne lit pas la configuration de la machine
+et ne sait donc pas interroger la console. Avant un `systemctl start` à la
+main, vérifier qu'aucune console ne tourne : `sudo docker ps --all`.
+
+### Outils de banc et de diagnostic : arrêter le service d'abord
+
+**Aucun outil de banc ou de diagnostic (`bench_console.py`,
+`bench_comm_latency.py`, `probe_atv320.py`, `scan_modbus.py`, SoMove) sur une
+machine dont le service tourne.** Le verrou qui interdit deux programmes sur le
+câble du variateur est un fichier du conteneur de la console : un outil lancé
+sur le Pi lui-même, ou dans un autre conteneur, **n'est pas refusé**
+([README du Pi](../raspberry-pi/README.md#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur)).
+
+```sh
+sudo systemctl stop anheart
+systemctl is-active anheart     # doit répondre : inactive
+sudo docker ps --all            # ne doit lister aucun conteneur anheart
+```
+
+Lancer l'outil seulement ensuite. Après l'intervention : fermer l'outil, puis
+`sudo systemctl start anheart`.
+
 ### Allumage et redémarrage : rien ne repart seul
 
 Le service démarre la console, et rien d'autre. À l'allumage, ou après un
@@ -321,9 +383,10 @@ Comment c'est vérifié :
 | Quoi | Preuve |
 |---|---|
 | L'unité ne fait que lancer l'image ; elle ne redémarre pas sur une erreur de configuration (code 2) | `tests/test_pi_install.py` |
-| Une console tuée en pleine séance simulée est relancée par systemd **au repos**, sans attestation | test de bout en bout, étape 4 |
-| Après une coupure d'alimentation simulée, la console revient seule, **au repos**, sans attestation | test de bout en bout, étape 6 |
-| Le script d'installation ne remplace pas une console qui n'est pas au repos | `tests/test_pi_install.py` et test de bout en bout, étape 3 |
+| Le service arrêté en pleine séance simulée, puis redémarré : console **au repos**, sans attestation | test de bout en bout, étape 4 |
+| Une console tuée en pleine séance simulée est relancée par systemd **au repos**, sans attestation | test de bout en bout, étape 5 |
+| Après l'arrêt puis le rallumage de la machine de remplacement, la console revient seule, **au repos**, sans attestation | test de bout en bout, étape 8 |
+| Le script d'installation ne remplace pas une console qui n'est pas au repos, que le service l'ait lancée ou non | `tests/test_pi_install.py` et test de bout en bout, étapes 3 et 7 |
 | Un variateur trouvé activé au démarrage est mis à zéro et verrouillé | gate du Pi (`tests/test_runtime.py` : `test_a_drive_found_already_enabled_is_stopped_latched_and_refused`, `test_a_drive_found_enabled_while_idle_is_stopped_latched_and_disabled`) |
 
 Règles de redémarrage de l'unité : relance 10 s après une sortie en erreur
@@ -332,7 +395,10 @@ refusée : la console liste les problèmes et sort ; les lire avec
 `journalctl -u anheart`).
 
 Non couvert : ces vérifications se font en simulation. Le comportement avec le
-vrai variateur à l'allumage reste à constater sur la machine.
+vrai variateur à l'allumage reste à constater sur la machine. L'étape 8 est un
+arrêt **ordonné** de la machine de remplacement : une coupure franche de
+l'alimentation, en plein milieu d'une écriture, n'est pas simulée. C'est
+l'étape 6 de la [marche à suivre sur un vrai Pi](#6-installer-un-vrai-raspberry-pi).
 
 ### Sous quel compte
 
@@ -358,11 +424,13 @@ Le workflow `.github/workflows/pi-install.yml` lance
 | Étape | Ce qui doit être vrai |
 |---|---|
 | 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; le contrôle de santé de l'image passe à `healthy` |
-| 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console |
-| 3. Séance en cours | une séance manuelle simulée tourne ; son enregistrement s'écrit dans `/var/lib/anheart/records` ; une installation qui remplacerait la console **refuse** et ne touche à rien |
-| 4. Arrêt brutal | la console est tuée en pleine séance ; systemd la relance ; elle est au repos, sans attestation |
-| 5. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
-| 6. Coupure d'alimentation | la machine de remplacement est arrêtée puis rallumée ; la console revient seule, au repos |
+| 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console ; le `curl` de Debian 12 envoie bien un en-tête lu sur son entrée standard |
+| 3. Séance en cours | une séance manuelle simulée tourne ; son enregistrement s'écrit dans `/var/lib/anheart/records`, avec la version de l'image ; une installation qui remplacerait la console **refuse** et ne touche à rien |
+| 4. Service arrêté en pleine séance | `systemctl stop anheart` rend la main en moins de 60 s ; systemd constate un arrêt propre (code 0) ; le journal porte le `shutdown complete` de la console ; l'enregistrement est clos, raison `shutdown` ; aucun conteneur ne reste ; redémarrée, la console est au repos, sans attestation |
+| 5. Arrêt brutal | la console est tuée en pleine séance ; systemd la relance ; elle est au repos, sans attestation |
+| 6. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
+| 7. Console que le service n'a pas lancée | un conteneur `anheart` lancé à la main tourne une séance : l'installation **refuse**, ne le touche pas, ne démarre pas le service ; une fois la séance terminée, l'installation passe, l'unité arrête et retire ce conteneur puis lance le sien |
+| 8. Arrêt puis rallumage | la machine de remplacement est arrêtée (arrêt ordonné) puis rallumée ; la console revient seule, au repos |
 
 Rien n'y touche du matériel ni un tableau de bord : variateur simulé, ECG
 simulé, clé de machine vide.
@@ -399,8 +467,10 @@ la console : compter environ 2 Go de disque, rendus à la fin.
 script contre un dossier racine d'essai (`ANHEART_ROOT`), avec des commandes
 système scriptées : première installation, relance sans effet, configuration
 existante gardée et secrets jamais affichés, refus sous une console qui n'est
-pas au repos, échec du test de démarrage. Il vérifie aussi l'unité, les
-versions figées (dont cette page) et le workflow.
+pas au repos (lancée par le service ou non), échec du test de démarrage. Il
+exécute aussi le script d'entrée de l'image (la version donnée aux
+enregistrements) et vérifie l'unité, les versions figées (dont cette page) et
+le workflow.
 
 ---
 
@@ -446,6 +516,11 @@ variateur ni BITalino.
    - appairer le BITalino : `bash scripts/pair_device.sh <adresse MAC>` ;
    - `sudo bash scripts/pi/preflight.sh` ;
    - `sudo systemctl restart anheart`, puis les constats de l'étape 5.
+8. **Avant tout outil de banc ou de diagnostic sur cette machine** (banc,
+   mesure de latence, sonde ou balayage Modbus, SoMove) : arrêter le service et
+   vérifier qu'il est arrêté. La console ne refuse pas un outil lancé hors de
+   son conteneur
+   ([section 4](#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
 
 Ce que ces étapes ne couvrent pas : l'écran en plein écran au démarrage
 ([deploiement.md](deploiement.md#75-vérifier-puis-démarrer)), le durcissement
@@ -493,6 +568,8 @@ nouvelles versions.
 | Relancer une console qui ne répond plus (chien de garde) | ANH-162 |
 | Horloge fiable, journaux persistants et bornés | ANH-163 |
 | Mises à jour à distance | ANH-116, ANH-168, ANH-169 |
-| Le verrou du câble du variateur (`/tmp/anheart-drive.lock`) est celui du conteneur : un outil de banc lancé sur le Pi **hors** du conteneur ne serait pas refusé par la console. L'installation ne met aucun outil de banc sur le Pi | à décider, dans la suite de ANH-74 |
+| Le verrou du câble du variateur (`/tmp/anheart-drive.lock`) est celui du conteneur : un outil de banc lancé sur le Pi **hors** du conteneur n'est pas refusé par la console. D'ici là, la règle est pour la personne : **aucun outil de banc ou de diagnostic tant que le service tourne** ([section 4](#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)). Les sources de ces outils arrivent sur le Pi avec le dossier copié, mais rien n'y est installé pour les lancer (Python 3.11 du système, aucun environnement), et ils ne sont pas dans l'image | à concevoir (verrou partagé entre le Pi et le conteneur, ou outils lancés dans le conteneur), dans la suite de ANH-74 ; **condition avant de relier au vrai variateur une console lancée par ce service** |
+| Un `systemctl start anheart` à la main, ou la relance après la mort du client Docker, arrête une console trouvée en marche sans lui demander si elle est au repos ([section 4](#une-seule-console-à-la-fois)) | limite assumée ; `scripts/install.sh`, lui, pose la question |
+| Une coupure franche de l'alimentation n'est pas simulée par la CI (l'étape 8 est un arrêt ordonné) | une personne avec le matériel, [section 6](#6-installer-un-vrai-raspberry-pi), étape 6 |
 | Raspberry Pi OS 12 est la série « Legacy » ; la série courante est Debian 13. En changer se fait en [section 7](#7-mettre-à-jour-changer-une-version-figée) | décision du chef de projet |
 | Figer les outils de développement (`requirements-dev.txt`) | ticket d'hygiène de la CI (ANH-183) |

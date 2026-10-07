@@ -13,7 +13,10 @@ here, without a Pi and without Docker:
   (``ANHEART_ROOT``) with scripted system commands first on ``PATH``: what a
   first run creates, that a second run changes and restarts nothing, that an
   existing configuration is never rewritten and its secret never shown, and
-  that a console which does not say it is at rest is never restarted;
+  that a console which does not say it is at rest is never restarted, whether
+  the service started it or not;
+* **the image's entrypoint**, run for real under ``sh``: the session records
+  are stamped with the version the image was built from;
 * **the CI test**: its workflow starts the end-to-end script, can only read
   the repository and takes no name of a required check.
 
@@ -36,7 +39,13 @@ from typing import Final
 
 import pytest
 
-from src.local_config import EcgSource, MotorBackend, load_local_config
+from src.local_config import (
+    RECORD_VERSION,
+    UNVERSIONED,
+    EcgSource,
+    MotorBackend,
+    load_local_config,
+)
 from src.result import Ok
 
 CONSOLE: Final[Path] = Path(__file__).resolve().parents[1]
@@ -45,6 +54,7 @@ INSTALLER: Final[Path] = CONSOLE / "scripts" / "install.sh"
 SERVICE_UNIT: Final[Path] = CONSOLE / "scripts" / "anheart.service"
 END_TO_END: Final[Path] = CONSOLE / "scripts" / "pi" / "test_install.sh"
 DOCKERFILE: Final[Path] = CONSOLE / "Dockerfile"
+ENTRYPOINT: Final[Path] = CONSOLE / "docker" / "entrypoint.sh"
 ENV_TEMPLATE: Final[Path] = CONSOLE / ".env.pi.example"
 VERSION_FILE: Final[Path] = CONSOLE / "VERSION"
 LOCK: Final[Path] = CONSOLE / "requirements-lock.txt"
@@ -56,6 +66,11 @@ WORKFLOW: Final[Path] = WORKFLOWS / "pi-install.yml"
 BASH: Final[str | None] = shutil.which("bash")
 needs_bash: Final[pytest.MarkDecorator] = pytest.mark.skipif(
     BASH is None, reason="install.sh is a bash script"
+)
+
+SH: Final[str | None] = shutil.which("sh")
+needs_sh: Final[pytest.MarkDecorator] = pytest.mark.skipif(
+    SH is None, reason="the entrypoint is a POSIX shell script"
 )
 
 # Synthetic, for these tests only.
@@ -90,12 +105,15 @@ case "$name" in
         case "$1" in
             is-active) has active ;;
             is-enabled) has enabled ;;
-            start | restart) : > "$STUB_STATE/active" ;;
+            # The unit first stops and removes any container named anheart.
+            start | restart) rm -f "$STUB_STATE/foreign-console"; : > "$STUB_STATE/active" ;;
             enable) case "$*" in *anheart.service*) : > "$STUB_STATE/enabled" ;; esac ;;
             status) echo "scripted status" ;;
         esac ;;
     docker)
         case "$1" in
+            # `docker container inspect --format {{.State.Running}} anheart`
+            container) has foreign-console || exit 1; printf true ;;
             image)
                 has "image.$(printf '%s' "$last" | tr ':' '_')" || exit 1
                 cat "$STUB_STATE/image.$(printf '%s' "$last" | tr ':' '_')" ;;
@@ -108,7 +126,7 @@ case "$name" in
         esac ;;
     curl)
         case "$*" in *"--config -"*) cat >> "$STUB_STATE/curl-stdin" ;; esac
-        has active || exit 7
+        has active || has foreign-console || exit 7
         case "$last" in
             */healthz) has healthz || exit 22; cat "$STUB_STATE/healthz" ;;
             */api/status) cat "$STUB_STATE/status" ;;
@@ -498,6 +516,61 @@ def test_a_console_at_rest_is_restarted_when_its_image_changed(machine: Machine)
 
 @pytest.mark.slow
 @needs_bash
+@pytest.mark.parametrize("answer", [RUNNING, ""])
+def test_a_console_the_service_did_not_start_is_asked_before_anything_is_touched(
+    machine: Machine, answer: str
+) -> None:
+    """A container named ``anheart`` run another way: the unit would stop it at its start."""
+    machine.set("foreign-console")
+    machine.set("status", answer)
+
+    refused = machine.install()
+    assert refused.exit_code == 1
+    assert refused.called("docker container inspect", "anheart")
+    assert "does not say it is at rest: nothing is restarted" in refused.output
+    assert "sudo docker stop -t 60 anheart" in refused.output, "how to stop it on purpose"
+    for never in ("apt-get", "useradd", "docker build", "systemctl start", "systemctl restart"):
+        assert not refused.called(never), never
+    assert not machine.unit.exists()
+    assert not machine.env_file.exists()
+
+
+@pytest.mark.slow
+@needs_bash
+def test_a_console_the_service_did_not_start_is_replaced_only_at_rest(machine: Machine) -> None:
+    """At rest it is asked twice: before anything, and again right before the unit starts."""
+    machine.set("foreign-console")
+
+    done = machine.install()
+    assert done.exit_code == 0, done.output
+    names = [call.split(" ", 2)[:2] for call in done.calls]
+    asked = [index for index, call in enumerate(done.calls) if "/api/status" in call]
+    built = names.index(["docker", "build"])
+    started = names.index(["systemctl", "start"])
+    assert asked[0] < names.index(["dpkg-query", "--show"]), "asked before anything is installed"
+    assert any(built < index < started for index in asked), "asked again after the build"
+    assert not done.called("systemctl restart")
+    assert "the console is at rest" in done.output
+
+
+@pytest.mark.slow
+@needs_bash
+def test_a_console_the_service_did_not_start_is_left_alone_if_a_session_began_meanwhile(
+    machine: Machine,
+) -> None:
+    machine.set("foreign-console")
+    machine.set("status-after-build", RUNNING)
+
+    refused = machine.install()
+    assert refused.exit_code == 1
+    assert refused.called("docker build")
+    assert not refused.called("systemctl start")
+    assert not refused.called("systemctl restart")
+    assert "does not say it is at rest: nothing is restarted" in refused.output
+
+
+@pytest.mark.slow
+@needs_bash
 def test_the_start_test_fails_when_the_console_never_answers_healthz(machine: Machine) -> None:
     """EX-2, start test: a service that is started but does not answer is a failed install."""
     machine.unset("healthz")
@@ -607,6 +680,15 @@ def test_one_way_to_run_the_console_on_a_pi_remains() -> None:
     assert "--entrypoint" not in words
 
 
+def test_the_unit_never_fetches_an_image() -> None:
+    """An image that is not on the machine fails the start at once: nothing is pulled."""
+    words = _directive("ExecStart")[0].split()
+    assert ("--pull", "never") in set(itertools.pairwise(words))
+    assert words.index("--pull") < words.index("${ANHEART_IMAGE}")
+    # The image the unit names when no version was installed exists nowhere.
+    assert _directive("Environment") == ["ANHEART_IMAGE=anheart-console:not-installed"]
+
+
 def test_the_unit_gives_the_console_its_configuration_and_its_two_directories() -> None:
     words = _directive("ExecStart")[0].split()
     pairs = set(itertools.pairwise(words))
@@ -649,6 +731,105 @@ def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:
     dockerfile = _read(DOCKERFILE)
     assert re.search(r"^HEALTHCHECK .*\n\s+CMD .*/healthz", dockerfile, re.MULTILINE)
     assert '"$(console_url)/healthz"' in _read(INSTALLER), "the start test asks /healthz too"
+
+
+# =========================================================================
+# The version the session records are stamped with
+# =========================================================================
+
+UNSET: Final[str] = "<unset>"
+
+
+def _stamped(directory: Path, *, built: str | None, configured: str | None = None) -> str:
+    """What the entrypoint, run in ``directory``, hands the console as its software version.
+
+    ``built`` is the content of the ``VERSION`` file there (``None``: no file),
+    ``configured`` what the machine's configuration sets (``None``: nothing).
+    """
+    assert SH is not None
+    if built is not None:
+        (directory / "VERSION").write_text(built, encoding="utf-8")
+    environment = {"PATH": os.environ["PATH"]}
+    if configured is not None:
+        environment["ANHEART_SOFTWARE_VERSION"] = configured
+    done = subprocess.run(  # noqa: S603  # fixed argv, the entrypoint of this repository
+        [SH, str(ENTRYPOINT), SH, "-c", f'printf %s "${{ANHEART_SOFTWARE_VERSION-{UNSET}}}"'],
+        cwd=directory,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+@needs_sh
+def test_the_image_stamps_its_records_with_the_version_it_was_built_from(tmp_path: Path) -> None:
+    """Without this the records of an installed Pi all said ``unversioned``."""
+    version = _version()
+    stamped = _stamped(tmp_path, built=_read(VERSION_FILE))
+    assert stamped == version
+    loaded = load_local_config(
+        {
+            "MOTOR_BACKEND": "sim",
+            "ECG_SOURCE": "sim",
+            "ARM_RADIUS_M": "1.5",
+            "ANHEART_SOFTWARE_VERSION": stamped,
+        }
+    )
+    assert isinstance(loaded, Ok)
+    assert loaded.value.record.software_version == version
+    assert version != UNVERSIONED
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    "built",
+    [
+        "pi-1.4.2\n",
+        "pi-1.4.2",
+        "1.0+build_7\n",
+        "x" * 128 + "\n",
+        "x" * 129 + "\n",
+        "",
+        "\n",
+        "pi 1.4.2\n",
+        "pi/1.4.2\n",
+        "pi-1.4.2\nsecond line\n",
+        "pi-\u00e9\n",
+        "$(id)\n",
+    ],
+)
+def test_the_image_only_stamps_a_version_the_console_accepts(tmp_path: Path, built: str) -> None:
+    """A value the console refuses would stop it at startup (exit 2): never exported."""
+    # The shell reads the file the way ``$(cat VERSION)`` does: trailing newlines off.
+    read = built.rstrip("\n")
+    accepted = RECORD_VERSION.fullmatch(read) is not None
+    assert _stamped(tmp_path, built=built) == (read if accepted else UNSET)
+
+
+@needs_sh
+def test_the_image_stamps_nothing_without_a_version_file(tmp_path: Path) -> None:
+    assert _stamped(tmp_path, built=None) == UNSET
+
+
+@needs_sh
+def test_a_version_set_in_the_configuration_is_kept(tmp_path: Path) -> None:
+    """The key stays the machine's to set; a blank one counts as not set, as for the console."""
+    assert _stamped(tmp_path, built="pi-1.4.2\n", configured="set-by-hand") == "set-by-hand"
+    assert _stamped(tmp_path, built="pi-1.4.2\n", configured="") == "pi-1.4.2"
+
+
+def test_the_entrypoint_finds_the_version_file_where_the_image_puts_it() -> None:
+    """``VERSION`` is read from the working directory: ``/app``, which the unit leaves alone."""
+    dockerfile = _read(DOCKERFILE)
+    assert dockerfile.index("\nWORKDIR /app\n") < dockerfile.index("\nCOPY VERSION ./VERSION\n")
+    assert len(_captures(r"^(WORKDIR) ", dockerfile)) == 1
+    words = _directive("ExecStart")[0].split()
+    assert "--workdir" not in words
+    assert "-w" not in words
 
 
 # =========================================================================
@@ -820,6 +1001,15 @@ def test_the_workflow_runs_the_end_to_end_install_on_arm64() -> None:
         '"attested":false',
         "systemctl status anheart",
         "/var/lib/anheart/records -mindepth 2 -maxdepth 2 -name manifest.json",
+        # The record is stamped with the version; the service stopped during a
+        # session; a console the service did not start.
+        r"\"software_version\":\"$version\"",
+        "in_machine systemctl stop anheart",
+        "Result=success",
+        "shutdown complete: emergency zero",
+        '"end_reason":"shutdown"',
+        '--name anheart --network host --env-file "$ENV_FILE"',
+        "{{.HostConfig.AutoRemove}}",
         "docker stop -t 120",
     ):
         assert proof in script, proof
