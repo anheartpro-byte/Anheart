@@ -64,7 +64,7 @@ async def test_storage_wait_keeps_motor_responsive_and_serializes_revisions(
             release.set()
             if cancel_first:
                 with pytest.raises(asyncio.CancelledError):
-                    await first
+                    await asyncio.wait_for(first, 2)
             else:
                 assert (await first).status_code == 200
 

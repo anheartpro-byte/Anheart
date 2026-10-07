@@ -220,7 +220,7 @@ async def test_inflight_read_and_emergency_count_both_requests_and_keep_emergenc
         stopped = await asyncio.to_thread(drive.emergency_disable_blocking, drive.emergency_budget)
     finally:
         entered.release.set()
-        await reading
+        await asyncio.wait_for(reading, 5.0)
     # Then
     assert stopped is EmergencyStopOutcome.ACKNOWLEDGED
     assert before.possible_frames == 1
