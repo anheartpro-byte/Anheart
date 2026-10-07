@@ -138,7 +138,7 @@ jobs:
       - name: Make room for the numbers of the quality report
         run: mkdir -p "$RUNNER_TEMP/quality"
       - name: Test the path rule, the workflows and the quality report
-        run: node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs
+        run: node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
       - name: Decide which gates this run needs
         id: rule
         env:
@@ -453,6 +453,14 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      # Part of the gate: convex/_generated/api.d.ts, which is committed, must
+      # be what the files of convex/ imply (scripts/ci/convex-generated-api.mjs).
+      # The command of the package that writes it needs a deployment, and this
+      # workflow has none and reaches none: the script derives the file from
+      # the tree. Before the type-check, which a stale file would otherwise
+      # fail without saying why, or not fail at all.
+      - name: Check the committed bindings of the Convex functions
+        run: node scripts/ci/convex-generated-api.mjs
       - name: Type-check the Convex functions
         id: types
         run: npx tsc -p convex/tsconfig.json --noEmit
