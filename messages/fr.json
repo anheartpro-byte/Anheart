@@ -498,6 +498,7 @@
       "stale": "Données périmées",
       "staleDesc": "Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées.",
       "noData": "La machine n'a encore rapporté aucun état.",
+      "offlineNoData": "Aucun état en direct : la machine n'envoie plus de signal.",
       "runMode": "Mode",
       "phase": "Phase",
       "heartRate": "Fréquence cardiaque",

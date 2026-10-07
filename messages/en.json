@@ -498,6 +498,7 @@
       "stale": "Stale",
       "staleDesc": "No recent heartbeat from the machine: the values shown may be out of date.",
       "noData": "The machine has not reported any state yet.",
+      "offlineNoData": "No live state: the machine has stopped sending.",
       "runMode": "Mode",
       "phase": "Phase",
       "heartRate": "Heart rate",

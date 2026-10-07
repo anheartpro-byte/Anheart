@@ -19,6 +19,9 @@ import {
 } from "./lib/auth";
 import { generateApiKey } from "./lib/crypto";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
+// One threshold for the server's job and for the dashboard, which reads the
+// age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
+import { LIVE_FRESH_MS } from "../lib/training";
 
 /**
  * Create a new machine (Raspberry Pi) - Anheart admin only
@@ -285,6 +288,8 @@ export const getMachine = query({
       softwareVersion: v.optional(v.string()),
       contractVersion: v.optional(v.string()),
       lastVersionSeenAt: v.optional(v.number()),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       gestionnaires: v.array(
         v.object({
           _id: v.id("users"),
@@ -348,6 +353,7 @@ export const getMachine = query({
       softwareVersion: machine.softwareVersion,
       contractVersion: machine.contractVersion,
       lastVersionSeenAt: machine.lastVersionSeenAt,
+      serverNow: Date.now(),
       gestionnaires: validGestionnaires,
     };
   },
@@ -373,6 +379,8 @@ export const listMachines = query({
       name: v.string(),
       status: v.string(),
       lastHeartbeat: v.number(),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       location: v.optional(v.string()),
       isDeleted: v.optional(v.boolean()),
     }),
@@ -425,11 +433,13 @@ export const listMachines = query({
       allMachines = allMachines.filter((m) => m.status === args.status);
     }
 
+    const serverNow = Date.now();
     return allMachines.map((m) => ({
       _id: m._id,
       name: m.name,
       status: m.status,
       lastHeartbeat: m.lastHeartbeat,
+      serverNow,
       location: m.location,
       isDeleted: m.isDeleted,
     }));
@@ -644,7 +654,7 @@ export const checkOfflineMachines = internalMutation({
   }),
   handler: async (ctx) => {
     const now = Date.now();
-    const cutoff = now - 90000; // 90 seconds ago
+    const cutoff = now - LIVE_FRESH_MS;
 
     // Get online machines
     const onlineMachines = await ctx.db
@@ -894,6 +904,8 @@ export const getMachinesForGestionnaire = query({
       name: v.string(),
       status: v.string(),
       lastHeartbeat: v.number(),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       location: v.optional(v.string()),
       isOwner: v.boolean(),
     }),
@@ -926,6 +938,7 @@ export const getMachinesForGestionnaire = query({
       )
       .collect();
 
+    const serverNow = Date.now();
     const machines = await Promise.all(
       relations.map(async (r) => {
         const m = await ctx.db.get(r.machineId);
@@ -936,6 +949,7 @@ export const getMachinesForGestionnaire = query({
           name: m.name,
           status: m.status,
           lastHeartbeat: m.lastHeartbeat,
+          serverNow,
           location: m.location,
           isOwner: r.isOwner,
         };

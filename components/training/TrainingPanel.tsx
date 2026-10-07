@@ -38,19 +38,17 @@ import {
   Timer,
 } from "lucide-react";
 import { useFreshness } from "@/hooks/use-freshness";
-import { formatClock, type TelemetryPoint } from "@/lib/training";
+import {
+  formatClock,
+  TELEMETRY_FRESH_MS,
+  type TelemetryPoint,
+} from "@/lib/training";
 import {
   SessionKindBadge,
   SessionOriginBadge,
   useTrainingLabel,
 } from "./TrainingBadges";
 import { TelemetryCharts } from "./TelemetryCharts";
-
-/**
- * A telemetry point older than this no longer stands for "now" on a live
- * session (the machine sends its points every 5 s).
- */
-const TELEMETRY_FRESH_MS = 20_000;
 
 /**
  * Training view for auto and manual sessions: big readouts, the heart rate
@@ -69,10 +67,13 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
 
   const points: TelemetryPoint[] = telemetry ?? [];
   const last = points.length > 0 ? points[points.length - 1] : null;
-  // The machine's last sign of life on this session: its latest point, or the
-  // start of the session while none has arrived yet.
+  // The machine's last sign of life on this session, as the server dated it:
+  // the reception of its latest point, or its start while none has arrived.
+  // Neither the `t` the machine writes in a point nor this computer's clock is
+  // read, and the verdict does not wait for the telemetry to load.
   const { fresh: signalFresh, now } = useFreshness(
-    last?.t ?? training?.startedAt,
+    training?.lastSignalAt,
+    training?.serverNow,
     TELEMETRY_FRESH_MS,
   );
 

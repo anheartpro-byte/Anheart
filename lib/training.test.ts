@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { isFresh, LIVE_FRESH_MS } from "./training";
+import {
+  FUTURE_TOLERANCE_MS,
+  isFresh,
+  LIVE_FRESH_MS,
+  shownMachineStatus,
+  TELEMETRY_FRESH_MS,
+} from "./training";
 
 const NOW = 1_800_000_000_000;
 
 describe("isFresh", () => {
   it("holds a machine state for 90 s, the delay the guides give", () => {
     expect(LIVE_FRESH_MS).toBe(90_000);
+  });
+
+  it("holds the last sign of life of a session for 20 s, the delay the guides give", () => {
+    expect(TELEMETRY_FRESH_MS).toBe(20_000);
   });
 
   it("is fresh below the threshold and stale from the threshold on", () => {
@@ -27,8 +37,33 @@ describe("isFresh", () => {
   );
 
   it("keeps a datum stamped slightly ahead of this clock fresh", () => {
-    // The server stamps the state; a browser clock a little behind sees it in
-    // the future. That is a state just received, not a stale one.
+    // Two servers of one deployment may differ by a few milliseconds: that is
+    // a state just received, not a stale one.
     expect(isFresh(NOW + 500, NOW)).toBe(true);
+    expect(isFresh(NOW + FUTURE_TOLERANCE_MS, NOW)).toBe(true);
   });
+
+  it("never calls fresh a datum dated from the future beyond the tolerance", () => {
+    // Such a date was not written by the clock it is compared with (a machine
+    // whose clock is ahead, say): nothing can be said of its age.
+    expect(isFresh(NOW + FUTURE_TOLERANCE_MS + 1, NOW)).toBe(false);
+    expect(isFresh(NOW + 600_000, NOW)).toBe(false);
+    expect(isFresh(NOW + 600_000, NOW, TELEMETRY_FRESH_MS)).toBe(false);
+  });
+});
+
+describe("shownMachineStatus", () => {
+  it.each(["online", "in_session", "offline", "some_future_status"])(
+    "shows the record's status while the signal is fresh (%s)",
+    (status) => {
+      expect(shownMachineStatus(status, true)).toBe(status);
+    },
+  );
+
+  it.each(["online", "in_session", "offline", "some_future_status"])(
+    "shows offline once the signal is not fresh, whatever the record says (%s)",
+    (status) => {
+      expect(shownMachineStatus(status, false)).toBe("offline");
+    },
+  );
 });

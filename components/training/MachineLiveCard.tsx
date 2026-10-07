@@ -4,7 +4,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistance } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import {
   Card,
@@ -124,8 +124,8 @@ export function MachineLiveCard({ machineId }: { machineId: Id<"machines"> }) {
   const data = useQuery(api.training.getMachineLive, { machineId });
   // On the clock: the query only runs again when the machine's record changes,
   // so its own `stale` lags a machine that has gone quiet. It still counts when
-  // it says stale: that catches a browser clock running behind.
-  const { fresh } = useFreshness(data?.live?.updatedAt);
+  // it says stale: a state the server called stale never becomes fresh again.
+  const { fresh, now } = useFreshness(data?.live?.updatedAt, data?.serverNow);
   const stale = !fresh || data?.stale === true;
 
   return (
@@ -152,7 +152,7 @@ export function MachineLiveCard({ machineId }: { machineId: Id<"machines"> }) {
             <LiveReadouts live={data.live} stale={stale} />
             <p className="text-xs text-muted-foreground">
               {t("updated", {
-                time: formatDistanceToNow(data.live.updatedAt, {
+                time: formatDistance(data.live.updatedAt, now, {
                   addSuffix: true,
                   locale: locale === "fr" ? fr : enUS,
                 }),

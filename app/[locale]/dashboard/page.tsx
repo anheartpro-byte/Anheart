@@ -12,6 +12,7 @@ import { Cpu, Activity, Users, Clock } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { useLocale } from "next-intl";
+import { OnlineMachinesCount } from "@/components/machines/MachineSignal";
 
 export default function DashboardPage() {
   const t = useTranslations();
@@ -26,8 +27,6 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  const onlineMachines =
-    machines?.filter((m) => m.status === "online").length ?? 0;
   const activeSessions =
     sessions?.filter((s) => s.status === "active").length ?? 0;
 
@@ -52,7 +51,9 @@ export default function DashboardPage() {
                 <Cpu className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{onlineMachines}</div>
+                <div className="text-2xl font-bold">
+                  <OnlineMachinesCount machines={machines ?? []} />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   / {machines?.length ?? 0} total
                 </p>

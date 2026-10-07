@@ -351,6 +351,11 @@ export const listLaunchableMachines = query({
       name: v.string(),
       location: v.optional(v.string()),
       status: v.string(),
+      // Server-dated, with the server's clock in this answer: the dashboard
+      // judges the age of the signal and of `live` on them, never on the
+      // clock of the computer it runs on.
+      lastHeartbeat: v.number(),
+      serverNow: v.number(),
       programsEnabled: v.boolean(),
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
@@ -397,6 +402,8 @@ export const listLaunchableMachines = query({
         name: machine.name,
         location: machine.location,
         status: machine.status,
+        lastHeartbeat: machine.lastHeartbeat,
+        serverNow: now,
         programsEnabled: machine.programsEnabled ?? false,
         live:
           machine.live && now - machine.live.updatedAt < LIVE_FRESH_MS
@@ -589,6 +596,8 @@ export const getMachineLive = query({
       programsEnabled: v.boolean(),
       live: v.union(liveStateValidator, v.null()),
       stale: v.boolean(),
+      // The server's clock in this answer (see listLaunchableMachines).
+      serverNow: v.number(),
     }),
     v.null(),
   ),
@@ -598,11 +607,13 @@ export const getMachineLive = query({
     const machine = await ctx.db.get(args.machineId);
     if (!machine) return null;
     const live = await authorizedMachineLive(ctx, me, machine);
+    const now = Date.now();
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
       live,
-      stale: live === null || Date.now() - live.updatedAt > LIVE_FRESH_MS,
+      stale: live === null || now - live.updatedAt > LIVE_FRESH_MS,
+      serverNow: now,
     };
   },
 });
@@ -656,6 +667,29 @@ export const getSessionTelemetry = query({
   },
 });
 
+/**
+ * When the server last heard of an active session from its machine: the
+ * reception of its latest telemetry point (the date the server gave the row,
+ * not the `t` the machine wrote in it), or its start while no point has
+ * arrived. A session the machine registered itself carries the machine's own
+ * start date: the server's date for it is the creation of its row.
+ */
+async function lastSignalAt(
+  ctx: QueryCtx,
+  session: Doc<"sessions">,
+): Promise<number | null> {
+  if (session.status !== "active") return null;
+  const latest = await ctx.db
+    .query("training_telemetry")
+    .withIndex("by_session_and_t", (q) => q.eq("sessionId", session._id))
+    .order("desc")
+    .first();
+  if (latest) return Math.floor(latest._creationTime);
+  return session.origin === "local"
+    ? Math.floor(session._creationTime)
+    : session.startedAt;
+}
+
 /** The training fields of one session, for the live and detail pages. */
 export const getTrainingSession = query({
   args: { sessionId: v.id("sessions") },
@@ -676,6 +710,11 @@ export const getTrainingSession = query({
       subjectLabel: v.optional(v.string()),
       operatorName: v.optional(v.string()),
       startedAt: v.number(),
+      // When the server last heard of an active session from its machine, on
+      // the server's clock (null for a session that is not active), and that
+      // clock in this answer. The machine's own clock dates neither.
+      lastSignalAt: v.union(v.number(), v.null()),
+      serverNow: v.number(),
       endedAt: v.optional(v.number()),
       stopRequestedAt: v.optional(v.number()),
       endReason: v.optional(v.string()),
@@ -707,6 +746,8 @@ export const getTrainingSession = query({
       subjectLabel: s.subjectLabel,
       operatorName: s.operatorName,
       startedAt: s.startedAt,
+      lastSignalAt: await lastSignalAt(ctx, s),
+      serverNow: Date.now(),
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,
       endReason: s.endReason,

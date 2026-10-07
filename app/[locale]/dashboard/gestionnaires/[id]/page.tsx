@@ -27,7 +27,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
-import { useMachineStatusLabel } from "@/components/dashboard/statusLabels";
+import { MachineStatusBadge } from "@/components/machines/MachineSignal";
 import { machineIdsToSave } from "@/lib/gestionnaireMachines";
 
 export default function GestionnaireDetailPage({
@@ -37,7 +37,6 @@ export default function GestionnaireDetailPage({
 }) {
   const { id } = use(params);
   const t = useTranslations();
-  const statusLabel = useMachineStatusLabel();
 
   const gestionnaireId = id as Id<"users">;
   const user = useQuery(api.users.getCurrentUser);
@@ -237,11 +236,7 @@ export default function GestionnaireDetailPage({
                     className="flex items-center justify-between p-2 rounded-md bg-muted/50"
                   >
                     <span className="font-medium">{m.name}</span>
-                    <Badge
-                      variant={m.status === "online" ? "default" : "secondary"}
-                    >
-                      {statusLabel(m.status)}
-                    </Badge>
+                    <MachineStatusBadge machine={m} />
                   </div>
                 ))}
               </div>
@@ -347,11 +342,7 @@ export default function GestionnaireDetailPage({
                     </span>
                   )}
                 </label>
-                <Badge
-                  variant={machine.status === "online" ? "default" : "outline"}
-                >
-                  {statusLabel(machine.status)}
-                </Badge>
+                <MachineStatusBadge machine={machine} />
               </div>
             ))}
           </div>
