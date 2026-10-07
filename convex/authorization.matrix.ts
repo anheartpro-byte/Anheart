@@ -601,6 +601,46 @@ export const MATRIX: Entry[] = [
     ],
   },
   {
+    id: "machines.setGestionnaireMachines",
+    ref: api.machines.setGestionnaireMachines,
+    kind: "mutation",
+    // The caller asks that `manager` manage exactly `otherMachine`.
+    build: async (w) => ({
+      gestionnaireId: w.manager,
+      machineIds: [w.otherMachine],
+    }),
+    onSuccess: async (_res, w) => {
+      const rows = await w.t.run((ctx) =>
+        ctx.db.query("machine_gestionnaires").collect(),
+      );
+      const linked = (machineId: Id<"machines">, gestionnaireId: Id<"users">) =>
+        rows.some(
+          (r) => r.machineId === machineId && r.gestionnaireId === gestionnaireId,
+        );
+      if (!linked(w.otherMachine, w.manager) || linked(w.machine, w.manager))
+        throw new Error("List not applied to this gestionnaire");
+      if (!linked(w.otherMachine, w.otherManager))
+        throw new Error("Another gestionnaire's link was changed");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "self",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin, even for their own list",
+      },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin sets the exact list" },
+    ],
+  },
+  {
     id: "machines.regenerateApiKey",
     ref: api.machines.regenerateApiKey,
     kind: "mutation",

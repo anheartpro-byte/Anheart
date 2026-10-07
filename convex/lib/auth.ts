@@ -220,3 +220,29 @@ export async function canManageMachine(
 
   return false;
 }
+
+/**
+ * Require the right to administer a gestionnaire, that is to decide which
+ * machines they manage. Returns the caller and the target gestionnaire.
+ *
+ * Admin only today. This is the single rule to extend when a role scoped to an
+ * organisation may administer the gestionnaires of its own organisation.
+ */
+export async function requireGestionnaireAdmin(
+  ctx: QueryCtx | MutationCtx,
+  gestionnaireId: Id<"users">,
+) {
+  // The role is checked first: a caller who is not allowed learns nothing
+  // about the target account.
+  const currentUser = await requireRole(ctx, ["admin"]);
+
+  const gestionnaire = await ctx.db.get(gestionnaireId);
+  if (!gestionnaire) {
+    throw new Error("Gestionnaire not found");
+  }
+  if (gestionnaire.role !== "gestionnaire") {
+    throw new Error("Target user is not a gestionnaire");
+  }
+
+  return { currentUser, gestionnaire };
+}
