@@ -72,6 +72,12 @@ disk, and a disk that fills up, refuses or hangs costs the record, never the
 session: the operator is told, the dashboard heartbeat says so, and every
 safety rule goes on as before.
 
+The drive's frames reach that same thread without passing through the loop:
+the native driver reports its own exchanges into a bounded list, and a backend
+that reports none (the simulator) is wrapped by a tap that notes each call
+(:mod:`src.record.drive_tap`). What is asked at the console while no session
+is recorded goes to the logbook (:mod:`src.record.logbook`).
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -87,6 +93,8 @@ from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event as ThreadEvent
+from threading import Thread
 from typing import Final, Protocol, assert_never, final
 
 from dotenv import dotenv_values
@@ -139,9 +147,17 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.drive_tap import tap_drive
 from src.record.export import RecordExporter
-from src.record.journal import STOP_TIMEOUT, Journal
-from src.record.session import SessionRecorder, SessionRequest, stamp_for, storage_gate
+from src.record.journal import STOP_TIMEOUT, Activity, Journal
+from src.record.session import (
+    RecordInodesLow,
+    RecordJournalBusy,
+    SessionRecorder,
+    SessionRequest,
+    stamp_for,
+    storage_gate,
+)
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -252,6 +268,10 @@ PROGRAMS_DISABLED: Final[str] = (
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_CONFIG: Final[int] = 2
+
+EXIT_GRACE: Final[Seconds] = Seconds(5.0)
+"""Once the console has stopped (the drive first, then the session record), the
+process has this long to leave by itself. See :func:`bound_exit`."""
 
 ESTOP_SOURCE: Final[str] = "console web: e-stop"
 
@@ -750,6 +770,9 @@ class LocalPanel:
         sent back to the dashboard as a failed session.
         """
         operator = command.operator
+        if self._recorder is not None:
+            # A refusal below may quote the programme's identifier.
+            self._recorder.withhold(command.profile_id)
         prepared = self._prepare_programme(command)
         if isinstance(prepared, Err):
             self._refuse_programme(command, prepared.error)
@@ -1100,15 +1123,25 @@ def build_panel(
     in production). ``None``: nothing is recorded and no arming is refused for
     lack of disk space, which is what a test that is not about the record
     wants. Its thread is started by :meth:`LocalPanel.run`, not here.
+
+    With a journal the drive is listened to (:func:`~src.record.drive_tap.tap_drive`):
+    the runtime is given what that returns, which is the backend itself when
+    it reports its own exchanges, and a delegating tap otherwise. The SDK's
+    transport calls are kept only when ``RECORD_DRIVE_SDK_FRAMES`` asks.
     """
     motion = load_panel_motion_limits(config)
     drive = build_drive(config, clock) if drive is None else drive
     safety = SafetyLimits(
         hard_max_bpm=config.tiers.hard_max_bpm, critical_bpm=config.tiers.critical_bpm
     )
+    backend = drive.backend
+    if journal is not None:
+        tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
+        backend = tapped.backend
+        journal.listen(tapped.source)
     runtime = TrainingRuntime(
         clock=clock,
-        drive=drive.backend,
+        drive=backend,
         geometry=config.geometry,
         limits=RUNTIME_LIMITS,
         safety=safety,
@@ -1332,10 +1365,23 @@ def describe_record_storage(refusal: RecordStorageLow) -> str:
     megabyte = 1_000_000
     where = refusal.where
     free = refusal.free_bytes
-    if refusal.stale_for is not None:
+    stale = refusal.stale_for
+    if stale is not None:
+        if isinstance(refusal, RecordJournalBusy):
+            return (
+                f"enregistrement de seance impossible pour l'instant : {_BUSY[refusal.doing]} "
+                f"sous {where}, derniere mesure de l'espace libre il y a {stale:.0f} s. "
+                "Reessayer dans un instant"
+            )
         return (
             f"enregistrement de seance impossible, espace libre sous {where} mesure il y a "
-            f"{refusal.stale_for:.0f} s : le disque ne repond plus"
+            f"{stale:.0f} s : le disque ne repond plus"
+        )
+    if isinstance(refusal, RecordInodesLow):
+        return (
+            "plus assez de fichiers libres pour l'enregistrement de seance : "
+            f"{refusal.free_inodes} inodes libres sous {where}, {refusal.required_inodes} requis "
+            "(une seance cree des milliers de petits fichiers). Liberer de l'espace"
         )
     if free is None:
         return (
@@ -1346,6 +1392,14 @@ def describe_record_storage(refusal: RecordStorageLow) -> str:
         f"espace disque insuffisant pour l'enregistrement de seance : {free // megabyte} Mo "
         f"libres sous {where}, {refusal.required_bytes // megabyte} Mo requis. Liberer de l'espace"
     )
+
+
+_BUSY: Final[Mapping[Activity, str]] = {
+    Activity.IDLE: "l'ecriture des enregistrements est occupee",
+    Activity.CLOSING: "la fermeture d'un enregistrement est en cours",
+    Activity.PURGING: "la purge des enregistrements deposes est en cours",
+}
+"""What the journal thread said it was starting, in words for the operator."""
 
 
 def rider_age_refusal(age: int | None, minimum: int) -> str | None:
@@ -1495,16 +1549,67 @@ def install_stop_signals(stop: asyncio.Event) -> Callable[[], None]:
     return undo
 
 
-async def run_console(config: LocalConfig, *, stop: asyncio.Event | None = None) -> int:
-    """Build the console on the real clock and run it until a signal."""
+def bound_exit(
+    code: int, grace: Seconds = EXIT_GRACE, leave: Callable[[int], None] = os._exit
+) -> Thread:
+    """The console has stopped: let nothing hold the process more than ``grace`` longer.
+
+    Called once :meth:`LocalPanel.run` has returned, so the drive is already
+    stopped and the session record closed; nothing here comes before either.
+
+    What is left can still wait for ever, and was measured to
+    (``tests/test_exit_deadline.py``): a worker thread of the web server that
+    is on a file when the disk stops answering is not a daemon, and the
+    interpreter waits for it before it exits. A console that never leaves is
+    never restarted by its supervisor. So a daemon thread waits ``grace``,
+    says so, and ends the process with the exit code it was going to have.
+    When the process leaves by itself first, which is every ordinary exit,
+    that thread dies with it and nothing was forced.
+
+    ``leave`` ends the process without running anything else: what is still
+    pending at that point is what is stuck.
+    """
+
+    def expire() -> None:
+        ThreadEvent().wait(grace)
+        _logger.error(
+            "console exit forced %.0f s after the console stopped: a thread did not come "
+            "back (a disk or a link that no longer answers). Exit code %d",
+            grace,
+            code,
+        )
+        leave(code)
+
+    deadline = Thread(target=expire, name="exit-deadline", daemon=True)
+    deadline.start()
+    return deadline
+
+
+async def run_console(
+    config: LocalConfig,
+    *,
+    stop: asyncio.Event | None = None,
+    stopped: Callable[[int], object] | None = None,
+) -> int:
+    """Build the console on the real clock and run it until a signal.
+
+    ``stopped`` is called with the exit code as soon as the console has
+    stopped, whatever happens to this coroutine's caller afterwards: the entry
+    point gives :func:`bound_exit`. ``None``, which is what a test wants: the
+    process is left alone.
+    """
     event = asyncio.Event() if stop is None else stop
     clock = RealClock()
     panel = build_panel(config, clock=clock, journal=open_journal(config, clock))
     undo = install_stop_signals(event)
+    code = EXIT_FAILED
     try:
-        return await panel.run(event, UvicornRunner(panel.services, config))
+        code = await panel.run(event, UvicornRunner(panel.services, config))
     finally:
         undo()
+        if stopped is not None:
+            stopped(code)
+    return code
 
 
 def describe_config(config: LocalConfig) -> str:
@@ -1539,7 +1644,7 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         return EXIT_CONFIG
     config = loaded.value
     _logger.warning("%s", describe_config(config))
-    return asyncio.run(run_console(config))
+    return asyncio.run(run_console(config, stopped=bound_exit))
 
 
 if __name__ == "__main__":

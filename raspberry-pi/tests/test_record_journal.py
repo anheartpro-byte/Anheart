@@ -16,7 +16,6 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
 from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
@@ -43,7 +42,6 @@ from src.record.journal import (
     Item,
     Journal,
     Limits,
-    Progress,
     RawBatch,
     Scribe,
     Sensors,
@@ -779,12 +777,10 @@ def test_ex3_a_failed_cycle_does_not_raise_and_the_stall_detector_sees_it(
     real = Scribe.cycle
     failing = [True]
 
-    def broken(
-        self: Scribe, queue: deque[Item], dropped: int, publish: Callable[[Progress], None]
-    ) -> None:
+    def broken(self: Scribe, queue: deque[Item], dropped: int, unlogged: int) -> None:
         if failing[0]:
             raise RuntimeError("injected: a bug in the cycle")
-        real(self, queue, dropped, publish)
+        real(self, queue, dropped, unlogged)
 
     monkeypatch.setattr(Scribe, "cycle", broken)
     journal.submit(row())

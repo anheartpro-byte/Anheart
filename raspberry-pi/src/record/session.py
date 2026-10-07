@@ -11,6 +11,11 @@ fed once per control tick (:meth:`SessionRecorder.observe`), and closed on the
 tick that sees the session's phase reach ``DONE``, or at the console's exit
 (:meth:`SessionRecorder.finish`).
 
+A closed record never changes again. What is asked and answered at the console
+while no record is open (an acknowledgement, a fault reset, a start that is
+refused) goes to the logbook instead (:mod:`src.record.logbook`), by the same
+queue and with the same rules about names.
+
 ``DONE`` and not the runtime's FINISHED state, on purpose. After an ordinary
 stop they are the same tick. Behind a latched drive fault the runtime stays
 ENDING until an operator resets the fault, which can be the next morning: the
@@ -28,11 +33,13 @@ What is NOT written, on purpose:
 * the operator's name. The manifest and the events carry
   :func:`operator_alias`, a stable opaque stand-in; a name typed at the console
   is also removed from every event's text, with any e-mail address;
-* the drive's Modbus frames: ``drive_frames.jsonl`` stays empty on the console
-  until the exchange log is bounded and drained (follow-up ticket);
 * the geometry snapshot: the console knows its reference radius and the leg
   tip, not the capsule and counterweight radii the snapshot requires, and
   nothing here invents them. The applied geometry is part of ``config_hash``.
+
+The drive's frames are not written from here either, and do not go through
+this object at all: they wait in :mod:`src.record.drive_tap` and the journal
+thread takes them.
 """
 
 from __future__ import annotations
@@ -61,7 +68,9 @@ from src.motor.drive import DriveStatus
 from src.record.codec import IDENTIFIER, Privacy
 from src.record.journal import (
     MIN_FREE_BYTES,
+    MIN_FREE_INODES,
     STORAGE_STALE_AFTER,
+    Activity,
     Cause,
     Closing,
     Journal,
@@ -69,6 +78,7 @@ from src.record.journal import (
     RawBatch,
     Sensors,
 )
+from src.record.logbook import note
 from src.record.rows import JsonValue, Row
 from src.record.schema import Clocks, EndObservation, Event, EventKind, Manifest, Profile
 from src.sensors.base import SensorReading
@@ -334,15 +344,44 @@ def _why(status: JournalStatus) -> str:
     return f"erreur d'ecriture ({error.operation} : {error.detail})"
 
 
+@dataclass(frozen=True, slots=True)
+class RecordInodesLow(RecordStorageLow):
+    """There are bytes, but too few files can still be created for a whole session.
+
+    A refinement of the runtime's :class:`~src.training.runtime.RecordStorageLow`:
+    the runtime only needs to know that the record has nowhere to go, and the
+    console says which of the two ran out.
+    """
+
+    free_inodes: int = 0
+    required_inodes: int = MIN_FREE_INODES
+
+
+@dataclass(frozen=True, slots=True)
+class RecordJournalBusy(RecordStorageLow):
+    """The measurement is too old, and the journal thread had said what it was starting.
+
+    Also a :class:`~src.training.runtime.RecordStorageLow` with ``stale_for``
+    set. The disk may well be answering: finalising a long record reads
+    thousands of files back, and one step of it took longer than the
+    measurement stays good. ``doing`` is never ``IDLE``.
+    """
+
+    doing: Activity = Activity.CLOSING
+
+
 def storage_gate(journal: Journal, clock: Clock) -> Callable[[], RecordStorageLow | None]:
-    """The arming gate: at least 500 MB free under the records directory, measured lately.
+    """The arming gate: room for a whole record under the records directory, measured lately.
 
-    Refuses under 500 MB, when the space could not be measured, and when the
-    measurement is older than :data:`~src.record.journal.STORAGE_STALE_AFTER`:
-    a journal thread stuck on a dead disk leaves its last number behind, and
-    that number would otherwise go on saying there is room.
+    Refuses under 500 MB free, under :data:`~src.record.journal.MIN_FREE_INODES`
+    free inodes where the file system counts them, when nothing could be
+    measured, and when the measurement is older than
+    :data:`~src.record.journal.STORAGE_STALE_AFTER`: a journal thread stuck on
+    a dead disk leaves its last numbers behind, and they would otherwise go on
+    saying there is room. A stale measurement is told apart by what that thread
+    last said it was starting, so the refusal says what is true.
 
-    It reads the journal thread's last measurement and the clock, and returns
+    It reads the journal thread's last publication and the clock, and returns
     at once: no file-system call, the gate runs in the control task.
     """
 
@@ -352,9 +391,15 @@ def storage_gate(journal: Journal, clock: Clock) -> Callable[[], RecordStorageLo
         age = elapsed(storage.measured_at, clock.monotonic())
         where = str(journal.root)
         if age > STORAGE_STALE_AFTER:
-            return RecordStorageLow(free, MIN_FREE_BYTES, where, stale_for=age)
+            doing = journal.activity
+            if doing is Activity.IDLE:
+                return RecordStorageLow(free, MIN_FREE_BYTES, where, stale_for=age)
+            return RecordJournalBusy(free, MIN_FREE_BYTES, where, stale_for=age, doing=doing)
         if free is None or free < MIN_FREE_BYTES:
             return RecordStorageLow(free, MIN_FREE_BYTES, where)
+        inodes = storage.free_inodes
+        if inodes is not None and inodes < MIN_FREE_INODES:
+            return RecordInodesLow(free, MIN_FREE_BYTES, where, free_inodes=inodes)
         return None
 
     return gate
@@ -427,6 +472,7 @@ class SessionRecorder:
     __slots__ = (
         "_clock",
         "_faults",
+        "_idle_names",
         "_journal",
         "_leg_tip",
         "_link_stats",
@@ -464,6 +510,8 @@ class SessionRecorder:
         self._said: tuple[Cause | None, str | None] = (None, None)
         self._notice: str | None = None
         self._faults: int = 0
+        # The names last typed at the console outside a session, kept out of the logbook's text.
+        self._idle_names: tuple[str, ...] = ()
 
     @property
     def journal(self) -> Journal:
@@ -477,7 +525,12 @@ class SessionRecorder:
 
     @property
     def degraded(self) -> bool:
-        """Whether the record is incomplete or cannot be written, as of the last tick."""
+        """Whether the record is incomplete or cannot be written, as of the last tick.
+
+        About the record in progress or, between two sessions, the last one:
+        every count behind it starts again when the next record is opened, so a
+        recorder that works again says so.
+        """
         return self._status.degraded or self._faults > 0
 
     def is_degraded(self) -> bool:
@@ -503,6 +556,8 @@ class SessionRecorder:
     def begin(self, request: SessionRequest) -> None:
         """The runtime has just armed a session: open its record."""
         clock = self._clock
+        # A new record: what the recorder itself got wrong was about the previous one.
+        self._faults = 0
         if self._live is not None:
             # The previous session's end was never observed; close what is open.
             self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None))
@@ -578,13 +633,14 @@ class SessionRecorder:
 
     @_total
     def note_event(self, event: SessionEvent) -> None:
-        """A console event (request, refusal, acknowledgement) while a session is recorded."""
+        """A console event (request, refusal, acknowledgement), session or not.
+
+        During a session it goes into the session's record. With no record
+        open it goes to the logbook: a closed record no longer changes, and
+        what follows it must be written somewhere.
+        """
         live = self._live
-        if live is None:
-            return
-        fresh = tuple(name for name in names_of(event.operator) if name not in live.names)
-        if fresh and len(live.names) <= MAX_NAMES:
-            live.names = (*live.names, *fresh)
+        known = self._withheld(names_of(event.operator))
         kind = record_kind(event.kind)
         if kind is None:
             return
@@ -593,7 +649,49 @@ class SessionRecorder:
             actor = REMOTE
             if kind is EventKind.OPERATOR_ACTION:
                 kind = EventKind.REMOTE_COMMAND
-        self._event(live, event.at, kind, f"{event.kind.value}: {event.detail}", actor)
+        detail = f"{event.kind.value}: {event.detail}"
+        if live is not None:
+            self._event(live, event.at, kind, detail, actor)
+            return
+        if event.kind is SurfaceEvent.START_REQUESTED:
+            # The words of a start request name a programme by its identifier, which
+            # the format keeps out of a record: that a start was asked is all that is kept.
+            detail = event.kind.value
+        self._journal.log(
+            note(
+                wall_clock=event.wall_clock,
+                at=event.at,
+                kind=kind,
+                detail=_cleaned(known, detail),
+                actor=actor,
+            )
+        )
+
+    @_total
+    def withhold(self, word: str) -> None:
+        """Keep ``word`` out of the text written from now on, like an operator's name.
+
+        For what identifies without being a name typed by an operator: the
+        identifier of the programme a start asks for, which a refusal may quote.
+        """
+        self._withheld((word,) if word.strip() else ())
+
+    def _withheld(self, words: tuple[str, ...]) -> tuple[str, ...]:
+        """Add ``words`` to what is kept out of the text, and return all of it.
+
+        In a session, past :data:`MAX_NAMES` nothing is added and the text
+        itself is withheld. Between sessions the console may stay up for weeks:
+        the most recent :data:`MAX_NAMES` are kept, and the text is written.
+        """
+        live = self._live
+        if live is None:
+            fresh = tuple(word for word in words if word not in self._idle_names)
+            self._idle_names = (*self._idle_names, *fresh)[-MAX_NAMES:]
+            return self._idle_names
+        fresh = tuple(word for word in words if word not in live.names)
+        if fresh and len(live.names) <= MAX_NAMES:
+            live.names = (*live.names, *fresh)
+        return live.names
 
     @_total
     def note_batch(self, batch: SampleBatch) -> None:
@@ -674,9 +772,7 @@ class SessionRecorder:
     # --- internals -----------------------------------------------------------
 
     def _text(self, live: _Live, text: str) -> str:
-        if len(live.names) > MAX_NAMES:
-            return WITHHELD
-        return redact(text[:MAX_TEXT], live.names)
+        return _cleaned(live.names, text)
 
     def _event(self, live: _Live, at: Monotonic, kind: EventKind, detail: str, actor: str) -> None:
         self._journal.submit(
@@ -754,6 +850,13 @@ class SessionRecorder:
             hr_quality="no_signal" if sample is None else sample.quality.value,
             drive_status_word=None if fresh is None else int(fresh.status_word),
         )
+
+
+def _cleaned(names: tuple[str, ...], text: str) -> str:
+    """``text`` as it may be written: cut, and without any of ``names``; withheld past the bound."""
+    if len(names) > MAX_NAMES:
+        return WITHHELD
+    return redact(text[:MAX_TEXT], names)
 
 
 def _seconds(live: _Live, at: Monotonic) -> float:

@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from simulation.recording import FrameKind
 from simulation.replay import replay
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import document, load, obj, run
@@ -28,6 +29,7 @@ from src.local_panel import LocalPanel, build_panel
 from src.record.codec import Privacy
 from src.record.journal import Journal
 from src.record.reader import read
+from src.record.retention import records
 from src.record.schema import EventKind
 from src.result import Err, Ok
 from src.training.runtime import RuntimeState
@@ -118,9 +120,9 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
         await _ticks(panel, journal, clock, 60.0)
         assert _state(panel) is RuntimeState.FINISHED
     await panel.close()
-    records = [path for path in journal.root.iterdir() if not path.name.startswith(".")]
-    assert len(records) == 1
-    return records[0]
+    found = records(journal.root)
+    assert len(found) == 1
+    return found[0]
 
 
 def _simulation_record(tmp_path: Path, name: str, seconds: float) -> Path:
@@ -191,10 +193,12 @@ def test_anh131_a_record_the_console_writes_today_is_refused_by_the_replay_with_
 ) -> None:
     """Same structure is not yet "replayable": the replay says what is missing, all of it.
 
-    The console writes what it was ASKED in prose, records nothing of what the
-    drive answered, and has no full geometry to give. The replay refuses such a
-    record (exit code 2 on the command line) instead of replaying half of it
-    into a difference nobody could explain.
+    The console writes what it was ASKED in prose and has no full geometry to
+    give. The replay refuses such a record (exit code 2 on the command line)
+    instead of replaying half of it into a difference nobody could explain.
+
+    What the drive answered IS in the record since ANH-191 (EX-2): the replay
+    no longer says that the record holds no drive exchange.
     """
     for programme in (False, True):
         home = tmp_path / ("programme" if programme else "manual")
@@ -206,9 +210,43 @@ def test_anh131_a_record_the_console_writes_today_is_refused_by_the_replay_with_
                 "the operator_action event at t=0.000 s is not replayable: "
                 "not a command of the replay vocabulary"
             ),
-            "the record holds no drive exchange: nothing says what the drive answered",
             "the manifest holds no geometry: the runtime cannot be built as it was",
         ]
+
+
+type _Shape = tuple[int | tuple[int, ...] | None, int]
+"""The registers a frame names, and how many values it carries."""
+
+
+def _frame_shapes(record: Path) -> dict[str, set[_Shape]]:
+    """Per kind of drive frame in ``record``: every shape it was written with."""
+    loaded = read(record)
+    assert isinstance(loaded, Ok), loaded
+    seen: dict[str, set[_Shape]] = {}
+    for frame in loaded.value.frames:
+        width = len(frame.value) if isinstance(frame.value, tuple) else 1
+        seen.setdefault(frame.kind, set()).add((frame.register, width))
+    return seen
+
+
+def test_anh191_ex2_the_console_writes_the_drive_calls_the_harness_writes(tmp_path: Path) -> None:
+    """The same file, by two producers: same keys on every line, same vocabulary of calls.
+
+    The console's tap (``src.record.drive_tap``) and the harness's
+    ``RecordingDrive`` are two pieces of code; this is what keeps them one format.
+    """
+    console = asyncio.run(_console_record(tmp_path, programme=False))
+    simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 30.0)
+    keys = {("kind", "latency_ms", "ok", "raw_hex", "register", "t", "value")}
+    assert _line_keys(console / "drive_frames.jsonl") == keys
+    assert _line_keys(simulation / "drive_frames.jsonl") == keys
+
+    ours, theirs = _frame_shapes(console), _frame_shapes(simulation)
+    assert set(ours) <= {kind.value for kind in FrameKind}
+    shared = set(ours) & set(theirs)
+    assert {"read_status", "speed", "command"} <= shared
+    for kind in shared:
+        assert ours[kind] == theirs[kind], kind
 
 
 def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simulation(

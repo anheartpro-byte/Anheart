@@ -3,7 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
-from typing import Literal, Protocol, runtime_checkable
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from src.clock import Clock
 from src.units import Monotonic, RawRegister, RegisterAddress
@@ -36,12 +36,50 @@ class Exchange:
     raw_hex: str | None = None
 
 
-class ExchangeLog:
-    """Opt-in in-memory observations; worker and emergency threads append under a lock."""
+TRANSPORT_KINDS: Final[frozenset[ExchangeKind]] = frozenset(
+    {ExchangeKind.SEND, ExchangeKind.RECEIVE_CHUNK}
+)
+"""The SDK's own calls, as opposed to the register transactions they carry."""
 
-    def __init__(self, clock: Clock) -> None:
+
+@dataclass(frozen=True, slots=True)
+class Drained:
+    """What :meth:`ExchangeLog.drain` took out, and what the log had to refuse so far."""
+
+    entries: tuple[Exchange, ...]
+    refused: int
+    """Exchanges refused because the log was full, since the log was created."""
+
+
+class ExchangeLog:
+    """Opt-in in-memory observations; worker and emergency threads append under a lock.
+
+    ``capacity`` bounds what waits in memory. A consumer that runs as long as
+    the drive does (the console's session record) gives one and calls
+    :meth:`drain` regularly; past the bound the newest exchange is refused and
+    counted, so a consumer that stops coming costs observations, never memory.
+    ``None`` keeps everything, for a short run that reads :attr:`entries` at
+    its end.
+
+    ``transport=False`` keeps the register transactions only. The SDK's own
+    calls (each request sent, each chunk of an answer received) are then not
+    kept, and take no room under the bound: they are about three lines in
+    four, and what they add is the bytes on the wire, which a bench diagnostic
+    of the link wants and a session record does not need.
+
+    The lock is held for one list operation, never across anything that waits:
+    whoever appends (a Modbus worker, the emergency thread) is not kept from
+    the drive by whoever drains.
+    """
+
+    def __init__(
+        self, clock: Clock, capacity: int | None = None, *, transport: bool = True
+    ) -> None:
         self.clock: Clock = clock
+        self._capacity: int | None = capacity
+        self._transport: bool = transport
         self._entries: list[Exchange] = []
+        self._refused: int = 0
         self._lock: Lock = Lock()
 
     @property
@@ -50,8 +88,20 @@ class ExchangeLog:
             return tuple(self._entries)
 
     def append(self, exchange: Exchange) -> None:
+        if not self._transport and exchange.kind in TRANSPORT_KINDS:
+            return
         with self._lock:
+            if self._capacity is not None and len(self._entries) >= self._capacity:
+                self._refused += 1
+                return
             self._entries.append(exchange)
+
+    def drain(self) -> Drained:
+        """Take everything out, oldest first. The log goes on from empty."""
+        with self._lock:
+            entries = self._entries
+            self._entries = []
+            return Drained(tuple(entries), self._refused)
 
     def send(self, request: bytes, call: Callable[[], int]) -> int:
         started = self.clock.monotonic()

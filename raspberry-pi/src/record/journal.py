@@ -28,7 +28,20 @@ split, and is tested:
 
 Between sessions the same thread applies the local retention
 (:mod:`src.record.retention`): a record deposited AND confirmed longer ago than
-the retention is removed; one that was not deposited never is.
+the retention is removed; one that was not deposited never is. And it writes
+the logbook (:mod:`src.record.logbook`): what is asked and answered at the
+console while no record is open, which a closed record can no longer take.
+
+The drive's frames do not go through the queue. They wait in a bounded list of
+their own (:mod:`src.record.drive_tap`), filled by whoever talks to the drive,
+and the journal thread takes them at every cycle: nothing is put on the control
+tick for them.
+
+A long operation (closing a record of thousands of files, the retention) is
+still one cycle, but not a silent one: between two files the thread measures
+the disk and publishes when either is due (:meth:`Scribe._pulse`), and it says
+what it is doing (:class:`Activity`). The arming gate then refuses on a
+measurement that is really old, and says why in words that are true.
 
 The producer side (:meth:`Journal.open`, :meth:`Journal.submit`,
 :meth:`Journal.close`, :meth:`Journal.status`) belongs to the event loop
@@ -38,7 +51,9 @@ thread, and to it alone: the bound relies on there being one producer.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import sys
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -50,7 +65,9 @@ from typing import Final, assert_never
 
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
+from src.record.drive_tap import FrameSource, Taken
 from src.record.ecg import Header, RawBlock
+from src.record.logbook import Logbook, Note, note
 from src.record.retention import purge
 from src.record.rows import Row
 from src.record.schema import DriveFrame, EndObservation, Event, EventKind, Manifest, RecordError
@@ -94,6 +111,32 @@ would see nothing consumed for its whole length and call it a stall."""
 
 MIN_FREE_BYTES: Final[int] = 500_000_000
 """Below 500 MB free under the records directory, no session is armed."""
+
+RAW_BLOCKS_PER_SECOND: Final[int] = 5
+"""Files a session adds every second: one raw block per acquisition batch, and the
+console acquires every 0.2 s. Everything else is appended to files that exist."""
+
+FIXED_ENTRIES: Final[int] = 8
+"""What a record takes besides its raw blocks: its directory, ``ecg_raw/``, the
+manifest, the four streams and the checksums."""
+
+LONGEST_SESSION: Final[Seconds] = Seconds(3600.0)
+"""The longest session the gate plans for: the hour after which the runtime ends a
+manual session by itself (``MANUAL_SESSION_LIMIT``)."""
+
+SESSION_ENTRIES: Final[int] = round(RAW_BLOCKS_PER_SECOND * LONGEST_SESSION) + FIXED_ENTRIES
+"""Inodes one such session takes: 18 008."""
+
+MIN_FREE_INODES: Final[int] = 2 * SESSION_ENTRIES
+"""Below this many free inodes under the records directory, no session is armed: 36 016.
+
+A file system can run out of inodes long before it runs out of bytes, and a
+record is thousands of small files: every write is then refused although
+megabytes are free. The gate is asked once, at arming, so it must leave room
+for the whole session being armed: one :data:`SESSION_ENTRIES`. And as much
+again for what it cannot know: a programme longer than an hour, the descent
+and the monitored recovery after it, the logbook, and whatever else shares the
+file system (on the Pi, the system itself)."""
 
 PRIVATE_MODE: Final[int] = 0o700
 """The records directory belongs to the service user alone (interim rule, ANH-128 EX-7)."""
@@ -162,7 +205,7 @@ class Closing:
     observation: EndObservation | None
 
 
-type Item = Opening | Closing | Entry
+type Item = Opening | Closing | Entry | Note
 
 
 # =========================================================================
@@ -179,6 +222,23 @@ class Storage:
 
     measured_at: Monotonic
     """On the injected clock. Whoever reads the number decides whether it is still fresh."""
+
+    free_inodes: int | None = None
+    """Files that can still be created. ``None``: this file system does not count them
+    (it has no fixed number of inodes), or nothing could be measured at all."""
+
+
+class Activity(StrEnum):
+    """What the journal thread said it was starting, the last time it published."""
+
+    IDLE = "idle"
+    """Its ordinary cycle: write what is queued, flush, measure."""
+
+    CLOSING = "closing"
+    """Finalising a record: every file of it is read back for the checksums."""
+
+    PURGING = "purging"
+    """Applying the retention: removing records deposited long enough ago."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +266,12 @@ class Progress:
 
     path: Path | None = None
     """The record directory of that session, once created."""
+
+    frames_lost: int = 0
+    """Drive observations that session's record did not get: refused by their bounded
+    list, or impossible to build."""
+
+    activity: Activity = Activity.IDLE
 
 
 class Cause(StrEnum):
@@ -237,7 +303,8 @@ class JournalStatus:
 
     error: RecordError | None
     dropped: int
-    """Values refused because the queue was full, this session."""
+    """Values refused because the queue was full, this session: rows, events, blocks,
+    lines of the logbook, and the drive observations their own list refused."""
 
     failures: int
     """Values the disk refused or that had no record to go to, this session."""
@@ -245,6 +312,7 @@ class JournalStatus:
     pending: int
     path: Path | None
     free_bytes: int | None
+    free_inodes: int | None = None
 
 
 def prepare_root(root: Path) -> None:
@@ -256,9 +324,21 @@ def prepare_root(root: Path) -> None:
 def measure(root: Path, at: Monotonic) -> Storage:
     """The free space under ``root`` at ``at``; ``free_bytes`` is ``None`` when unreadable."""
     try:
-        return Storage(shutil.disk_usage(root).free, at)
+        return Storage(shutil.disk_usage(root).free, at, free_inodes(root))
     except OSError:
         return Storage(None, at)
+
+
+def free_inodes(root: Path) -> int | None:
+    """Files this user may still create under ``root``. Raises ``OSError``.
+
+    ``None`` where the question has no answer: a file system that allocates
+    its inodes as it goes reports none in total, and Windows has no such call.
+    """
+    if sys.platform == "win32":
+        return None
+    stats = os.statvfs(root)
+    return stats.f_favail if stats.f_files > 0 else None
 
 
 def raw_block(batch: RawBatch) -> RawBlock:
@@ -294,18 +374,26 @@ def _sample_count(item: Item) -> int:
 class Scribe:
     """Everything the journal thread owns. Mutable, and never read by the producer.
 
-    The producer reads only the :class:`Progress` this returns, a frozen value
-    swapped in by one attribute assignment.
+    The producer reads only the :class:`Progress` this publishes, a frozen
+    value swapped in by one attribute assignment.
     """
 
     __slots__ = (
+        "_activity",
         "_clock",
         "_consumed",
         "_discarded",
         "_error",
         "_failures",
+        "_frames",
+        "_frames_lost",
+        "_frames_lost_before",
+        "_logbook",
+        "_logbook_synced_at",
         "_path",
         "_probed_at",
+        "_publish",
+        "_published_at",
         "_purged_at",
         "_retention_days",
         "_root",
@@ -313,27 +401,43 @@ class Scribe:
         "_session",
         "_storage",
         "_synced_at",
+        "_unlogged",
         "_warned",
         "_writer",
     )
 
-    def __init__(self, root: Path, clock: Clock, retention_days: int | None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        clock: Clock,
+        retention_days: int | None,
+        publish: Callable[[Progress], None],
+    ) -> None:
         self._root: Path = root
         self._clock: Clock = clock
         self._retention_days: int | None = retention_days
+        self._publish: Callable[[Progress], None] = publish
         # Due at once: the first idle cycle after startup applies the retention.
         self._purged_at: Monotonic = Monotonic(clock.monotonic() - PURGE_PERIOD)
         self._writer: Writer | None = None
+        self._logbook: Logbook = Logbook(root)
+        self._frames: FrameSource | None = None
+        self._activity: Activity = Activity.IDLE
         self._session: int = 0
         self._consumed: int = 0
         self._samples: int = 0
         self._failures: int = 0
         self._discarded: int = 0
         self._warned: int = 0
+        self._unlogged: int = 0
+        self._frames_lost: int = 0
+        self._frames_lost_before: int = 0
         self._error: RecordError | None = None
         self._path: Path | None = None
         self._synced_at: Monotonic = clock.monotonic()
+        self._logbook_synced_at: Monotonic = clock.monotonic()
         self._probed_at: Monotonic = clock.monotonic()
+        self._published_at: Monotonic = clock.monotonic()
         self._storage: Storage = self._claim_root()
 
     def _claim_root(self) -> Storage:
@@ -343,6 +447,10 @@ class Scribe:
             _logger.warning("records directory unusable: %s", describe_os_error(error))
             return Storage(None, self._probed_at)
         return measure(self._root, self._probed_at)
+
+    def listen(self, frames: FrameSource) -> None:
+        """Where the drive's observations wait. Set once, when the console is built."""
+        self._frames = frames
 
     def progress(self) -> Progress:
         return Progress(
@@ -354,39 +462,90 @@ class Scribe:
             discarded=self._discarded,
             error=self._error,
             path=self._path,
+            frames_lost=self._frames_lost - self._frames_lost_before,
+            activity=self._activity,
         )
 
-    def cycle(self, queue: deque[Item], dropped: int, publish: Callable[[Progress], None]) -> None:
+    def cycle(self, queue: deque[Item], dropped: int, unlogged: int) -> None:
         """Write everything queued when the cycle began, then the periodic work.
 
-        ``publish`` receives the progress every :data:`PUBLISH_PERIOD` while the
-        cycle lasts, and once at the end.
+        The progress is published every :data:`PUBLISH_PERIOD` while the cycle
+        lasts, and once at the end.
+
+        The drive's observations are taken first, and go to the record that
+        was open when they were taken: a closing queued behind them does not
+        cost the last frames of its session. With no record open they wait for
+        the queue, which may open one (the frames of an arming belong to the
+        session it armed); if it does not, nobody is recording and they are
+        let go.
         """
         now = self._clock.monotonic()
-        published = now
+        taken = self._taken()
+        open_before = self._writer
+        if open_before is not None:
+            self._write_frames(open_before, taken)
         for _ in range(len(queue)):
             item = queue.popleft()
             self._consumed += 1
             self._samples += _sample_count(item)
-            self._note(self._take(item, now, dropped))
-            moment = self._clock.monotonic()
-            if moment - published >= PUBLISH_PERIOD:
-                published = moment
-                publish(self.progress())
+            self._note(self._take(item, now, dropped, unlogged))
+            self._pulse()
+        opened = self._writer
+        if open_before is None and opened is not None:
+            self._write_frames(opened, taken)
         self._checkpoint(now, dropped)
-        publish(self.progress())
+        self._published_at = self._clock.monotonic()
+        self._publish(self.progress())
+
+    def _pulse(self) -> None:
+        """Between two steps of anything long: measure the disk and publish, when due.
+
+        Without it a cycle that lasts (a backlog on a slow card, a close, the
+        retention) would leave the last measurement to go stale, and the arming
+        gate to refuse on a disk that is only busy.
+        """
+        moment = self._clock.monotonic()
+        if moment - self._probed_at >= PROBE_PERIOD:
+            self._probed_at = moment
+            self._storage = measure(self._root, moment)
+        if moment - self._published_at >= PUBLISH_PERIOD:
+            self._published_at = moment
+            self._publish(self.progress())
 
     def _note(self, outcome: Result[None, RecordError]) -> None:
         if isinstance(outcome, Err):
             self._failures += 1
             self._error = outcome.error
 
-    def _take(self, item: Item, now: Monotonic, dropped: int) -> Result[None, RecordError]:
+    def _taken(self) -> Taken:
+        """The drive observations waiting now. The count of the lost is kept either way."""
+        frames = self._frames
+        if frames is None:
+            return _NO_FRAMES
+        taken = frames()
+        self._frames_lost = taken.lost
+        return taken
+
+    def _write_frames(self, writer: Writer, taken: Taken) -> None:
+        origin = Monotonic(writer.manifest.clocks.monotonic_start)
+        for observation in taken.observations:
+            try:
+                written = writer.frame(observation.frame(origin))
+            except Exception as error:  # one frame the format refuses costs that frame
+                written = Err(RecordError("append", type(error).__name__))
+            self._note(written)
+            self._pulse()
+
+    def _take(
+        self, item: Item, now: Monotonic, dropped: int, unlogged: int
+    ) -> Result[None, RecordError]:
         try:
             if isinstance(item, Opening):
                 return self._open(item, now)
             if isinstance(item, Closing):
                 return self._close(item, now, dropped)
+            if isinstance(item, Note):
+                return self._log(item, now, unlogged)
             return self._append(item)
         except Exception as error:  # a recording bug costs one value, never the thread
             _logger.exception("session journal: one value could not be written")
@@ -410,18 +569,33 @@ class Scribe:
                 return writer.sensors(entry.at, entry.readings)
         raise assert_never(entry)
 
+    def _log(self, entry: Note, now: Monotonic, unlogged: int) -> Result[None, RecordError]:
+        """One line of the logbook; before it, what the logbook missed, if anything new."""
+        if unlogged and unlogged != self._unlogged:
+            missed = note(
+                wall_clock=self._clock.unix_millis(),
+                at=now,
+                kind=EventKind.WARNING,
+                detail=f"logbook: dropped={unlogged}",
+                actor="system",
+            )
+            if isinstance(self._logbook.append(missed), Ok):
+                self._unlogged = unlogged
+        return self._logbook.append(entry)
+
     def _open(self, opening: Opening, now: Monotonic) -> Result[None, RecordError]:
         previous = self._writer
         if previous is not None:
             # The producer closes a session before opening the next. One that
             # was left open is still finalised, and says how it ended.
             self._writer = None
-            self._note(previous.close(self._clock, "superseded"))
-            self._note(previous.sync())
+            self._note(self._finalise(previous, self._clock, "superseded", None))
         self._session = opening.session
         self._failures = 0
         self._discarded = 0
         self._warned = 0
+        self._unlogged = 0
+        self._frames_lost_before = self._frames_lost
         self._error = None
         self._path = None
         try:
@@ -443,11 +617,29 @@ class Scribe:
             return Ok(None)
         self._writer = None
         self._warn(writer, now, dropped)
-        closed = writer.close(
-            ManualClock(epoch_millis=closing.ended_at), closing.end_reason, closing.observation
+        return self._finalise(
+            writer,
+            ManualClock(epoch_millis=closing.ended_at),
+            closing.end_reason,
+            closing.observation,
         )
-        synced = writer.sync()
+
+    def _finalise(
+        self, writer: Writer, clock: Clock, reason: str, observation: EndObservation | None
+    ) -> Result[None, RecordError]:
+        """Close ``writer`` and flush it, saying so first: the index reads every file back."""
+        self._begin(Activity.CLOSING)
+        try:
+            closed = writer.close(clock, reason, observation, pulse=self._pulse)
+            synced = writer.sync()
+        finally:
+            self._activity = Activity.IDLE
         return synced if isinstance(closed, Ok) else closed
+
+    def _begin(self, activity: Activity) -> None:
+        """Say what is starting BEFORE starting it: whoever waits can then name it."""
+        self._activity = activity
+        self._publish(self.progress())
 
     def _checkpoint(self, now: Monotonic, dropped: int) -> None:
         writer = self._writer
@@ -455,13 +647,18 @@ class Scribe:
             self._synced_at = now
             self._warn(writer, now, dropped)
             self._note(writer.sync())
-        if now - self._probed_at >= PROBE_PERIOD:
-            self._probed_at = now
-            self._storage = measure(self._root, now)
+        if now - self._logbook_synced_at >= FSYNC_PERIOD:
+            self._logbook_synced_at = now
+            self._note(self._logbook.sync())
+        self._pulse()
         retention = self._retention_days
         if writer is None and retention is not None and now - self._purged_at >= PURGE_PERIOD:
             self._purged_at = now
-            report = purge(self._root, self._clock.unix_millis(), retention)
+            self._begin(Activity.PURGING)
+            try:
+                report = purge(self._root, self._clock.unix_millis(), retention, self._pulse)
+            finally:
+                self._activity = Activity.IDLE
             if report.removed or report.failed:
                 _logger.warning(
                     "local retention (%d days): removed %s, could not remove %s",
@@ -472,18 +669,23 @@ class Scribe:
 
     def _warn(self, writer: Writer, now: Monotonic, dropped: int) -> None:
         """Say in the record itself what it is missing, once per change, if the disk lets us."""
-        lost = dropped + self._failures
+        frames = self._frames_lost - self._frames_lost_before
+        lost = dropped + self._failures + frames
         if lost == self._warned:
             return
         error = self._error
         last = "" if error is None else f" last={error.operation}:{error.detail}"
+        unheard = f" drive_frames_lost={frames}" if frames else ""
         warning = Event(
             t=round(now - writer.manifest.clocks.monotonic_start, 3),
             kind=EventKind.WARNING,
-            detail=f"record_degraded: dropped={dropped} failures={self._failures}{last}",
+            detail=f"record_degraded: dropped={dropped} failures={self._failures}{unheard}{last}",
         )
         if isinstance(writer.event(warning), Ok):
             self._warned = lost
+
+
+_NO_FRAMES: Final[Taken] = Taken((), 0)
 
 
 # =========================================================================
@@ -495,9 +697,9 @@ class Journal:
     """The bounded queue and its thread. See the module docstring.
 
     Mutable. The fields below are written by the event loop thread only, except
-    ``_progress``, which the journal thread replaces whole; ``_dropped`` is the
-    one producer field that thread reads (an ``int``, for the warning it writes
-    into the record).
+    ``_progress``, which the journal thread replaces whole; ``_dropped`` and
+    ``_unlogged`` are the two producer fields that thread reads (two ``int``,
+    for the warnings it writes into the record and into the logbook).
     """
 
     __slots__ = (
@@ -516,6 +718,7 @@ class Journal:
         "_session",
         "_stopping",
         "_thread",
+        "_unlogged",
     )
 
     def __init__(
@@ -540,13 +743,14 @@ class Journal:
         self._limits: Limits = limits
         self._period: Seconds = period
         self._queue: deque[Item] = deque()
-        self._scribe: Scribe = Scribe(root, clock, retention_days)
+        self._scribe: Scribe = Scribe(root, clock, retention_days, self._publish)
         self._progress: Progress = self._scribe.progress()
         self._session: int = 0
         self._open: bool = False
         self._put: int = 0
         self._put_samples: int = 0
         self._dropped: int = 0
+        self._unlogged: int = 0
         self._mark: tuple[int, Monotonic] = (0, clock.monotonic())
         self._stopping: ThreadEvent = ThreadEvent()
         self._thread: Thread | None = None
@@ -556,6 +760,14 @@ class Journal:
         """The records directory."""
         return self._root
 
+    def listen(self, frames: FrameSource) -> None:
+        """Take the drive's observations from ``frames`` at every cycle, off the loop.
+
+        Called once, where the console is built, before anything turns: from
+        then on only the journal thread calls ``frames``.
+        """
+        self._scribe.listen(frames)
+
     # --- the producer: event loop thread only -----------------------------
 
     def open(self, manifest: Manifest, privacy: Privacy) -> None:
@@ -563,6 +775,7 @@ class Journal:
         self._session += 1
         self._open = True
         self._dropped = 0
+        self._unlogged = 0
         self._enqueue(Opening(self._session, manifest, privacy))
 
     def close(self, closing: Closing) -> None:
@@ -590,6 +803,19 @@ class Journal:
         self._enqueue(entry)
         return True
 
+    def log(self, entry: Note) -> bool:
+        """Queue one line of the logbook, session or not. ``False``: no room.
+
+        Never blocks and never raises, like :meth:`submit`, and bounded by the
+        same queue. A line refused is counted with the dropped values, and the
+        logbook says so before its next line.
+        """
+        if self._put - self._progress.consumed >= self._limits.entries:
+            self._unlogged += 1
+            return False
+        self._enqueue(entry)
+        return True
+
     def _enqueue(self, item: Item) -> None:
         self._put += 1
         self._queue.append(item)
@@ -611,12 +837,13 @@ class Journal:
         current = progress.session == self._session
         failures = progress.failures + progress.discarded if current else 0
         error = progress.error if current else None
+        dropped = self._dropped + self._unlogged + (progress.frames_lost if current else 0)
         cause: Cause | None = None
         if stalled:
             cause = Cause.STALLED
         elif failures:
             cause = Cause.WRITE_FAILED
-        elif self._dropped:
+        elif dropped:
             cause = Cause.QUEUE_FULL
         elif progress.storage.free_bytes is None:
             cause = Cause.STORAGE_UNAVAILABLE
@@ -625,17 +852,23 @@ class Journal:
             degraded=cause is not None,
             cause=cause,
             error=error,
-            dropped=self._dropped,
+            dropped=dropped,
             failures=failures,
             pending=pending,
             path=progress.path if current else None,
             free_bytes=progress.storage.free_bytes,
+            free_inodes=progress.storage.free_inodes,
         )
 
     @property
     def storage(self) -> Storage:
         """The journal thread's last measurement of the records directory. Memory only."""
         return self._progress.storage
+
+    @property
+    def activity(self) -> Activity:
+        """What the journal thread last said it was starting. Memory only."""
+        return self._progress.activity
 
     # --- the thread --------------------------------------------------------
 
@@ -668,7 +901,7 @@ class Journal:
 
         Public for the tests that run without the thread, one cycle at a time.
         """
-        self._scribe.cycle(self._queue, self._dropped, self._publish)
+        self._scribe.cycle(self._queue, self._dropped, self._unlogged)
 
     def _publish(self, progress: Progress) -> None:
         """The journal thread's one write to the producer's side: a whole value, swapped in."""

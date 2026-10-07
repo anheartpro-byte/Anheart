@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +43,7 @@ from pydantic.dataclasses import dataclass as validated
 
 from src.record.codec import IDENTIFIER
 from src.record.schema import RecordError
-from src.record.writer import describe_os_error
+from src.record.writer import create_private, describe_os_error
 from src.result import Err, Ok, Result
 from src.units import UnixMillis
 
@@ -125,8 +126,7 @@ def confirm_deposit(record: Path, storage_id: str, at: UnixMillis) -> Result[Non
             confirmed_at=_stamp(at),
             checksum=_content_checksum(record),
         )
-        with marker_of(record).open("xb") as handle:
-            handle.write(_DEPOSIT.dump_json(deposit) + b"\n")
+        create_private(marker_of(record), _DEPOSIT.dump_json(deposit) + b"\n")
     except OSError as error:
         return Err(RecordError("close", describe_os_error(error)))
     return Ok(None)
@@ -154,12 +154,20 @@ def purgeable(record: Path, now: UnixMillis, retention_days: int) -> bool:
     return now - confirmed_ms >= retention_days * MILLIS_PER_DAY
 
 
-def purge(root: Path, now: UnixMillis, retention_days: int) -> PurgeReport:
+def purge(
+    root: Path,
+    now: UnixMillis,
+    retention_days: int,
+    pulse: Callable[[], None] | None = None,
+) -> PurgeReport:
     """Remove every record under ``root`` that :func:`purgeable` allows. Never raises.
 
     The record goes first and its marker after: stopped in between, what is
     left is a marker with no record, which the next purge removes. The other
     order could leave a deposited record with no marker, kept for ever.
+
+    ``pulse`` is called after each record looked at: removing a long session is
+    thousands of files, and the caller has periodic work of its own.
     """
     try:
         candidates = records(root)
@@ -170,15 +178,17 @@ def purge(root: Path, now: UnixMillis, retention_days: int) -> PurgeReport:
     failed: list[str] = []
     kept = 0
     for record in candidates:
-        if not purgeable(record, now, retention_days):
-            kept += 1
-            continue
-        try:
-            shutil.rmtree(record)
-        except OSError:
-            failed.append(record.name)
+        if purgeable(record, now, retention_days):
+            try:
+                shutil.rmtree(record)
+            except OSError:
+                failed.append(record.name)
+            else:
+                removed.append(record.name)
         else:
-            removed.append(record.name)
+            kept += 1
+        if pulse is not None:
+            pulse()
     for marker in markers:
         if not marker.with_name(marker.name.removesuffix(MARKER_SUFFIX)).exists():
             _forget(marker)
