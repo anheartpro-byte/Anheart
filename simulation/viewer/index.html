@@ -342,6 +342,18 @@ function startLive(name, speed) {
   es.addEventListener("end", () => { es.close(); S.es = null; S.live = false; renderEvents(); });
 }
 
+// Where a `trace` parameter is read from: always a path of the server that
+// served this page, never an address the parameter gives. A JSONL export is a
+// file under that server's root (out/<name>.jsonl, with or without a leading
+// slash); anything else names a record, which /api/record resolves under the
+// same root. null when a .jsonl value does not name a file under the root.
+function traceUrl(trace) {
+  if (!trace.endsWith(".jsonl")) return "/api/record?path=" + encodeURIComponent(trace);
+  const names = (trace.startsWith("/") ? trace.slice(1) : trace).split("/");
+  const plain = (name) => name !== "" && name !== "." && name !== "..";
+  return names.every(plain) ? "../" + names.map(encodeURIComponent).join("/") : null;
+}
+
 (async function init() {
   const q = new URLSearchParams(location.search);
   try {
@@ -352,8 +364,9 @@ function startLive(name, speed) {
   if (q.get("live")) startLive(q.get("live"), q.get("speed") || "20");
   else if (q.get("trace")) {
     const trace = q.get("trace");
-    const url = trace.endsWith(".jsonl") ? (trace.startsWith("/") ? trace : "../" + trace) : "/api/record?path=" + encodeURIComponent(trace);
     try {
+      const url = traceUrl(trace);
+      if (url === null) throw new Error("hors du dossier servi");
       const response = await fetch(url);
       if (!response.ok) throw new Error("HTTP " + response.status);
       loadText(await response.text(), trace);
