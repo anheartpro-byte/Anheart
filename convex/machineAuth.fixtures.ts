@@ -1,11 +1,17 @@
 import { convexTest } from "convex-test";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 
+/**
+ * An admin account written before organisations existed, on a deployment where
+ * Clerk Organizations is not configured (`ANHEART_ORG_ID` unset), after the
+ * multi-organisation migration (ANH-114) has run once.
+ */
 export async function machineFixture(
   modules: Record<string, () => Promise<unknown>>,
 ) {
+  delete process.env.ANHEART_ORG_ID;
   const t = convexTest(schema, modules);
   await t.run(async (ctx) => {
     await ctx.db.insert("users", {
@@ -18,6 +24,7 @@ export async function machineFixture(
       createdAt: 1_800_000_000_000,
     });
   });
+  await t.mutation(internal.migrations.multiOrganization.attachExistingRowsToAnheart, {});
   const admin = t.withIdentity({ subject: "machine-admin" });
   const created = await admin.mutation(api.machines.createMachine, {
     name: "Synthetic authentication machine",

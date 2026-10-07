@@ -7,7 +7,7 @@
  */
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
+import { getCurrentUserOrThrow, canAccessSession } from "./lib/auth";
 
 // ============================================
 // Shared validators for treated ECG batches
@@ -63,12 +63,9 @@ export const getSessionAllData = query({
       return [];
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -113,12 +110,12 @@ export const getRecentEcgData = query({
       return [];
     }
 
-    // Check access
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
     const isPatient = currentUser._id === session.userId;
     const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
 
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -176,12 +173,9 @@ export const getSessionEcgRange = query({
       return [];
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -234,12 +228,9 @@ export const getSessionDataStats = query({
       return null;
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 
@@ -304,12 +295,12 @@ export const getLatestEcgBatch = query({
       return null;
     }
 
-    // Check access
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
     const isPatient = currentUser._id === session.userId;
     const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
 
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 

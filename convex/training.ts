@@ -34,9 +34,14 @@ import {
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   canAccessMachine,
+  canAccessSession,
   canAccessUser,
   canManageMachine,
   getCurrentUserOrThrow,
+  inScope,
+  organizationRoleOf,
+  sameOrganization,
+  type CurrentUser,
 } from "./lib/auth";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
@@ -122,16 +127,31 @@ async function hasLaunchRight(
   return row !== null;
 }
 
+/**
+ * A user's launch right on a machine counts only inside the machine's
+ * organisation: the right, the machine and the call are all of the same one.
+ */
+async function holdsLaunchRight(
+  ctx: QueryCtx | MutationCtx,
+  user: CurrentUser,
+  machineId: Id<"machines">,
+): Promise<boolean> {
+  const machine = await ctx.db.get(machineId);
+  return (
+    machine !== null &&
+    sameOrganization(user, machine.organizationId) &&
+    (await hasLaunchRight(ctx, machineId, user._id))
+  );
+}
+
 /** Admin, gestionnaire of the machine, or a user holding the launch right. */
 async function canSeeMachineTraining(
   ctx: QueryCtx | MutationCtx,
-  user: Doc<"users">,
+  user: CurrentUser,
   machineId: Id<"machines">,
 ): Promise<boolean> {
-  if (await canAccessMachine(ctx, machineId)) return true;
-  return (
-    user.role === "user" && (await hasLaunchRight(ctx, machineId, user._id))
-  );
+  if (await canAccessMachine(ctx, machineId, user)) return true;
+  return user.role === "user" && (await holdsLaunchRight(ctx, user, machineId));
 }
 
 function fullName(user: Pick<Doc<"users">, "firstName" | "lastName">) {
@@ -143,24 +163,31 @@ export const grantLaunchRight = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const me = await getCurrentUserOrThrow(ctx);
-    if (!(await canManageMachine(ctx, args.machineId))) {
+    if (!(await canManageMachine(ctx, args.machineId, me))) {
       throw new ConvexError(
         "Only an admin or a manager of this machine can grant launch rights",
       );
     }
-    const target = await ctx.db.get(args.userId);
-    if (!target) throw new ConvexError("User not found");
-    if (target.role !== "user") {
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) throw new ConvexError("Machine not found");
+    // The right goes to a user of the machine's organisation.
+    const targetRole = await organizationRoleOf(
+      ctx,
+      args.userId,
+      machine.organizationId,
+    );
+    if (targetRole !== "user") {
       throw new ConvexError(
         "Launch rights are granted to users; managers and admins already have them",
       );
     }
     // A gestionnaire may only grant rights to a patient they manage.
-    if (!(await canAccessUser(ctx, args.userId))) {
+    if (!(await canAccessUser(ctx, args.userId, me))) {
       throw new ConvexError("You do not manage this user");
     }
     if (await hasLaunchRight(ctx, args.machineId, args.userId)) return null;
     await ctx.db.insert("machine_user_permissions", {
+      organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: args.userId,
       grantedBy: me._id,
@@ -174,8 +201,8 @@ export const revokeLaunchRight = mutation({
   args: { machineId: v.id("machines"), userId: v.id("users") },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await getCurrentUserOrThrow(ctx);
-    if (!(await canManageMachine(ctx, args.machineId))) {
+    const me = await getCurrentUserOrThrow(ctx);
+    if (!(await canManageMachine(ctx, args.machineId, me))) {
       throw new ConvexError(
         "Only an admin or a manager of this machine can revoke launch rights",
       );
@@ -204,8 +231,8 @@ export const listLaunchRights = query({
     }),
   ),
   handler: async (ctx, args) => {
-    await getCurrentUserOrThrow(ctx);
-    if (!(await canAccessMachine(ctx, args.machineId))) return [];
+    const me = await getCurrentUserOrThrow(ctx);
+    if (!(await canAccessMachine(ctx, args.machineId, me))) return [];
     const rows = await ctx.db
       .query("machine_user_permissions")
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
@@ -241,7 +268,7 @@ export const setUserPhysiology = mutation({
     const me = await getCurrentUserOrThrow(ctx);
     if (me.role === "user")
       throw new ConvexError("Only a manager can set physiology");
-    if (!(await canAccessUser(ctx, args.userId))) {
+    if (!(await canAccessUser(ctx, args.userId, me))) {
       throw new ConvexError("You do not manage this user");
     }
     const patch: Partial<Pick<Doc<"users">, "hrMax" | "birthYear">> = {};
@@ -312,8 +339,9 @@ export const listMachineProfiles = query({
 
 /**
  * Machines the current user may launch an auto session on, with their live
- * state and presets. Admin: every machine. Gestionnaire: the ones they manage.
- * User: the ones they hold the launch right for.
+ * state and presets. Anheart admin: every machine. Inside the caller's
+ * organisation only: every machine for its admin, the ones they manage for a
+ * gestionnaire, the ones they hold the launch right for for a user.
  */
 export const listLaunchableMachines = query({
   args: {},
@@ -334,6 +362,15 @@ export const listLaunchableMachines = query({
     let machineIds: Id<"machines">[];
     if (me.role === "admin") {
       machineIds = (await ctx.db.query("machines").collect()).map((m) => m._id);
+    } else if (me.role === "org_admin") {
+      machineIds = (
+        await ctx.db
+          .query("machines")
+          .withIndex("by_organization", (q) =>
+            q.eq("organizationId", me.organizationId),
+          )
+          .collect()
+      ).map((m) => m._id);
     } else if (me.role === "gestionnaire") {
       machineIds = (
         await ctx.db
@@ -354,6 +391,7 @@ export const listLaunchableMachines = query({
     for (const id of machineIds) {
       const machine = await ctx.db.get(id);
       if (!machine || machine.isDeleted) continue;
+      if (!inScope(me, machine.organizationId)) continue;
       result.push({
         _id: machine._id,
         name: machine.name,
@@ -398,16 +436,16 @@ export const launchAutoSession = mutation({
     if (me.role === "user") {
       if (riderId !== me._id)
         throw new ConvexError("You can only launch a session for yourself");
-      if (!(await hasLaunchRight(ctx, args.machineId, me._id))) {
+      if (!(await holdsLaunchRight(ctx, me, args.machineId))) {
         throw new ConvexError(
           "You have not been given the right to launch sessions on this machine",
         );
       }
     } else {
-      if (!(await canAccessMachine(ctx, args.machineId))) {
+      if (!(await canAccessMachine(ctx, args.machineId, me))) {
         throw new ConvexError("Not authorized to use this machine");
       }
-      if (!(await canAccessUser(ctx, riderId))) {
+      if (!(await canAccessUser(ctx, riderId, me))) {
         throw new ConvexError(
           "Not authorized to launch a session for this rider",
         );
@@ -417,6 +455,14 @@ export const launchAutoSession = mutation({
     const machine = await ctx.db.get(args.machineId);
     if (!machine || machine.isDeleted)
       throw new ConvexError("Machine not found");
+    // The rider is an active member of the machine's organisation.
+    if (
+      (await organizationRoleOf(ctx, riderId, machine.organizationId)) === null
+    ) {
+      throw new ConvexError(
+        "Not authorized to launch a session for this rider",
+      );
+    }
     if (machine.status === "offline")
       throw new ConvexError("Machine is offline");
     if (machine.status === "in_session")
@@ -473,6 +519,7 @@ export const launchAutoSession = mutation({
     }
 
     return await ctx.db.insert("sessions", {
+      organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: riderId,
       startedById: me._id,
@@ -506,10 +553,11 @@ export const requestStop = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const me = await getCurrentUserOrThrow(ctx);
+    // A session of another organisation is a session that does not exist.
     const session = await ctx.db.get(args.sessionId);
-    if (!session) throw new ConvexError("Session not found");
-    const isRider = session.userId === me._id;
-    if (!isRider && !(await canAccessMachine(ctx, session.machineId))) {
+    if (!session || !inScope(me, session.organizationId))
+      throw new ConvexError("Session not found");
+    if (!(await canAccessSession(ctx, session, me))) {
       throw new ConvexError("Not authorized to stop this session");
     }
     const now = Date.now();
@@ -583,9 +631,7 @@ export const getSessionTelemetry = query({
     const me = await getCurrentUserOrThrow(ctx);
     const session = await ctx.db.get(args.sessionId);
     if (!session) return [];
-    const isRider = session.userId === me._id;
-    if (!isRider && !(await canAccessMachine(ctx, session.machineId)))
-      return [];
+    if (!(await canAccessSession(ctx, session, me))) return [];
     const limit = Math.min(Math.max(args.limit ?? 3600, 1), 7200);
     const rows = await ctx.db
       .query("training_telemetry")
@@ -641,9 +687,9 @@ export const getTrainingSession = query({
     const me = await getCurrentUserOrThrow(ctx);
     const s = await ctx.db.get(args.sessionId);
     if (!s) return null;
-    const isRider = s.userId === me._id;
-    const onMachine = await canAccessMachine(ctx, s.machineId);
-    if (!isRider && !onMachine) return null;
+    // Whoever may read the session may stop it: its rider, or whoever can
+    // access its machine, in the session's organisation.
+    if (!(await canAccessSession(ctx, s, me))) return null;
     const machine = await ctx.db.get(s.machineId);
     return {
       _id: s._id,
@@ -664,9 +710,7 @@ export const getTrainingSession = query({
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,
       endReason: s.endReason,
-      canStop:
-        (s.status === "pending" || s.status === "active") &&
-        (isRider || onMachine),
+      canStop: s.status === "pending" || s.status === "active",
     };
   },
 });
@@ -700,6 +744,9 @@ export const syncProfiles = internalMutation({
   },
   returns: v.object({ count: v.number() }),
   handler: async (ctx, args) => {
+    // What a machine writes inherits the machine's organisation.
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) throw machineError("machine_not_found", "Machine not found");
     const existing = await ctx.db
       .query("machine_profiles")
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
@@ -708,6 +755,7 @@ export const syncProfiles = internalMutation({
     const now = Date.now();
     for (const p of args.profiles) {
       await ctx.db.insert("machine_profiles", {
+        organizationId: machine.organizationId,
         machineId: args.machineId,
         ...p,
         storeRev: args.storeRev,
@@ -721,7 +769,10 @@ export const syncProfiles = internalMutation({
   },
 });
 
-/** Riders the local panel may pick from: users holding the launch right. */
+/**
+ * Riders the local panel may pick from: users holding the launch right who are
+ * still active members of the machine's organisation.
+ */
 export const getRoster = internalQuery({
   args: { machineId: v.id("machines") },
   returns: v.array(
@@ -736,10 +787,17 @@ export const getRoster = internalQuery({
       .query("machine_user_permissions")
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
       .collect();
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) return [];
     const now = Date.now();
     const result = [];
     for (const row of rows) {
-      const user = await ctx.db.get(row.userId);
+      const role = await organizationRoleOf(
+        ctx,
+        row.userId,
+        machine.organizationId,
+      );
+      const user = role === null ? null : await ctx.db.get(row.userId);
       if (!user) continue;
       result.push({
         userId: user._id,
@@ -845,10 +903,19 @@ export const registerLocalSession = internalMutation({
     if (existing) return existing._id;
     const machine = await ctx.db.get(args.machineId);
     if (!machine) throw machineError("machine_not_found", "Machine not found");
-    const userId = args.userId
+    const claimedRider = args.userId
       ? ctx.db.normalizeId("users", args.userId)
       : null;
+    // The rider the machine names is kept only if they are an active member
+    // of the machine's organisation; the session is recorded either way.
+    const userId =
+      claimedRider &&
+      (await organizationRoleOf(ctx, claimedRider, machine.organizationId)) !==
+        null
+        ? claimedRider
+        : null;
     const id = await ctx.db.insert("sessions", {
+      organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: userId ?? undefined,
       status: "active",
@@ -932,6 +999,7 @@ export const storeTelemetry = internalMutation({
       throw machineError("session_not_found", "Session not found");
     for (const p of args.points) {
       await ctx.db.insert("training_telemetry", {
+        organizationId: s.organizationId,
         sessionId: args.sessionId,
         machineId: args.machineId,
         ...p,

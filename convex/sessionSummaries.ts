@@ -8,7 +8,7 @@
  */
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
+import { getCurrentUserOrThrow, canAccessSession } from "./lib/auth";
 
 /**
  * Get session summary
@@ -38,12 +38,9 @@ export const getSummary = query({
     const session = await ctx.db.get(args.sessionId);
     if (!session) return null;
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 
@@ -100,12 +97,9 @@ export const getSummaryWithEcg = query({
     const session = await ctx.db.get(args.sessionId);
     if (!session) return null;
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 

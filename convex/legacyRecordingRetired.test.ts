@@ -29,6 +29,7 @@ import {
   NOW,
   seedMachineWorld,
   seedWorld,
+  WORLD_MACHINE_COUNT,
 } from "./test.setup";
 
 // Every deployable source of the backend, as text.
@@ -317,7 +318,7 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
 
     const result = await migrate(w);
 
-    expect(result).toEqual({ machinesChecked: 2, sessionsFailed: 2 });
+    expect(result).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, sessionsFailed: 2 });
     for (const id of [pending, active]) {
       const session = await read(w, id);
       expect(session?.status).toBe("failed");
@@ -429,7 +430,7 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
     vi.setSystemTime(NOW + 60_000);
     const second = await migrate(w);
 
-    expect(second).toEqual({ machinesChecked: 2, sessionsFailed: 0 });
+    expect(second).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, sessionsFailed: 0 });
     expect(await read(w, pending)).toEqual(after);
   });
 
@@ -505,7 +506,7 @@ describe("ANH-135 migration: the recorder settings leave the machines", () => {
 
     const result = await migrate(w);
 
-    expect(result).toEqual({ machinesChecked: 2, machinesCleared: 2 });
+    expect(result).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, machinesCleared: 2 });
     const after = await w.t.run(async (ctx) => [
       await ctx.db.get(w.machine),
       await ctx.db.get(w.otherMachine),
@@ -524,12 +525,12 @@ describe("ANH-135 migration: the recorder settings leave the machines", () => {
     await w.t.run((ctx) => ctx.db.patch(w.machine, { config: CONFIG }));
 
     expect(await migrate(w)).toEqual({
-      machinesChecked: 2,
+      machinesChecked: WORLD_MACHINE_COUNT,
       machinesCleared: 1,
     });
     const after = await w.t.run((ctx) => ctx.db.query("machines").collect());
     expect(await migrate(w)).toEqual({
-      machinesChecked: 2,
+      machinesChecked: WORLD_MACHINE_COUNT,
       machinesCleared: 0,
     });
     expect(await w.t.run((ctx) => ctx.db.query("machines").collect())).toEqual(
