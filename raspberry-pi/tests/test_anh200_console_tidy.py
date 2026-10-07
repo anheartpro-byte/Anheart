@@ -339,8 +339,9 @@ def test_a_class_that_defines_every_member_still_satisfies_the_protocol() -> Non
 
 
 def test_a_command_that_is_not_one_fails_loudly_in_its_row() -> None:
+    not_a_command: Command = cast("Command", "bogus")
     with pytest.raises(AssertionError):
-        _ = CommandRow.of(cast("Command", "bogus"))
+        _ = CommandRow.of(not_a_command)
 
 
 INCOMPLETE_MATCH: Final[str] = '''"""Deliberately wrong: ``words_for`` forgets ``BadCrc``."""
