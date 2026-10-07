@@ -5,7 +5,7 @@ n'utilisent pas de vocabulaire technique et ne supposent aucune connaissance du
 logiciel.
 
 > **Brouillons, en attente de validation par la semaine pilote.**
-> Version du 6 octobre 2026. Ces guides décrivent le logiciel tel qu'il existe
+> Version du 7 octobre 2026. Ces guides décrivent le logiciel tel qu'il existe
 > à cette date. Ils seront validés quand un client pilote aura utilisé la
 > machine pendant une semaine avec ces seuls documents et le support.
 

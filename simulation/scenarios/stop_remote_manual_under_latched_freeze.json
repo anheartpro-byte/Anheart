@@ -1,0 +1,38 @@
+{
+  "name": "stop_remote_manual_under_latched_freeze",
+  "description": "ANH-175, a stop sent from the site under a LATCHED FREEZE: empty capsule at 27 rpm, the control loop stalls 1.4 s (loop_stall, which latches), then the end of the session is requested off the machine. The setpoint must walk down to zero at the motion limits from the next tick, under the FREEZE; before the fix it was held at 27 rpm until an emergency stop.",
+  "tags": [
+    "manual",
+    "stop",
+    "fault"
+  ],
+  "kind": "manual",
+  "duration_s": 400,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "loop_stall",
+      "duration_s": 1.4
+    },
+    {
+      "at_s": 160,
+      "do": "remote_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "final_state": "finished",
+    "rules": [
+      "loop_stall"
+    ],
+    "forbid_rules": [
+      "session_standstill"
+    ]
+  }
+}

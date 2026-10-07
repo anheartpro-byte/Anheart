@@ -50,6 +50,12 @@ and `560px`. This extraction does not rename the existing raw spacing values.
   `#manual-controls` contains the draft/target controls. A snapshot in `repos`
   returns to idle even when its last manual-session record remains available.
   A manual ramp in `arret` remains displayed until the machine returns to rest.
+  The `rampe` line has three wordings: a ramp in progress with its arrival
+  time, `cible atteinte` when the setpoint of the snapshot is the target, and
+  `consigne maintenue, cible non atteinte` when a `freeze` holds the setpoint
+  away from a non-zero target (`ramping` false with target and setpoint
+  different). The ramp banner follows `ramping` alone, so it is not shown over
+  a held setpoint.
 
 ## 6. Motion and interaction
 
