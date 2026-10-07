@@ -1043,7 +1043,7 @@ par un commit de fusion
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
-| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/` et `components/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
+| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
@@ -1834,7 +1834,7 @@ tableau tel qu'il est affiché.
 | Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
 | Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
 | Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
-| Site | les tests de `lib/`, puis ceux de `hooks/` et `components/` (vitest, deux suites) | `web` |
+| Site | les tests de `lib/`, puis ceux de `hooks/`, de `components/` et des pages de `app/` (vitest, deux suites) | `web` |
 | Scripts | les tests de `scripts/ci` lancés par `changes`, `audit` et `docs` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
 
 Sous le tableau, une ligne donne l'état d'`audit` et de `docs`, sans rien de ce
@@ -1973,9 +1973,10 @@ lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
   `simulation/cad/`, `simulation/scripts/` et les tests sont écartés de la
   mesure par sa configuration, et `simulation_app.py`, à la racine du dépôt,
   est hors du paquet. Le « 100 % » de la simulation ne dit rien d'eux.
-- Les pages du site (`app/`), `i18n/` et `proxy.ts` : ils sont hors des
-  dossiers mesurés, donc ni comptés ni jugés par le seuil du site. Les pages
-  sont le sujet d'ANH-204 ; le parcours dans un navigateur, celui d'ANH-83.
+- `i18n/` et `proxy.ts` (le middleware Clerk et next-intl, à la racine du
+  dépôt) : ils sont hors des dossiers mesurés, donc ni comptés ni jugés par le
+  seuil du site. Les pages (`app/`) sont mesurées et jugées depuis ANH-204 ; le
+  parcours dans un navigateur est le sujet d'ANH-83.
 - Les tests de release (`npm run test:release`) : la CI ne les lance pas
   ([release.md](release.md#8-limites-et-reste-à-faire)), ils ne sont donc pas
   dans la ligne des scripts.
@@ -2116,7 +2117,7 @@ qualité, qui montrait le site à 21 % de lignes.
 | `convex-tests` | `convex/training.ts`, pris seul | 80 % de lignes et 80 % de branches |
 | `convex-tests` | `convex/http.ts`, pris seul | 80 % de lignes et 80 % de branches |
 | `convex-tests` | `convex/lib/auth.ts`, pris seul | 80 % de lignes et 80 % de branches |
-| `web` | `lib/`, `hooks/` et `components/`, réunis | 80 % de lignes et 80 % de branches |
+| `web` | `lib/`, `hooks/`, `components/` et `app/`, réunis | 80 % de lignes et 80 % de branches |
 
 Les trois fichiers Convex jugés seuls sont la part Convex de la chaîne de
 sécurité : ce qu'une machine peut écrire, la demande d'arrêt, les contrôles
@@ -2153,8 +2154,9 @@ et rien n'a été retiré pour atteindre le chiffre :
 
 Ces exclusions existaient dans la mesure d'ANH-199 ; elles sont maintenant
 écrites à un seul endroit. Sont hors des dossiers mesurés, donc ni comptés ni
-jugés : les pages (`app/`, sujet d'ANH-204), `i18n/`, `proxy.ts`, et
-`test-support/`, qui ne contient que des outils de test. Un cas à connaître :
+jugés : `i18n/`, `proxy.ts`, et `test-support/`, qui ne contient que des outils
+de test. Les pages (`app/`) sont dans la mesure depuis ANH-204. Un cas à
+connaître :
 `components/markup.test-helpers.ts` est un outil de test rangé dans
 `components/` ; il était compté comme une source dans la mesure d'ANH-199 et
 il l'est resté (17 lignes).
@@ -2176,8 +2178,9 @@ de sa configuration et termine en erreur s'il n'est pas atteint ; l'étape n'a
 pas de `continue-on-error`, donc le job échoue.
 
 Pour le site, la mesure est **une seule exécution** de tous ses tests
-(`vitest.site-coverage.config.mts` : ceux de `lib/`, de `hooks/` et de
-`components/`), et non plus deux mesures que le rapport additionnait. C'est le
+(`vitest.site-coverage.config.mts` : ceux de `lib/`, de `hooks/`, de
+`components/` et de `app/`), et non plus deux mesures que le rapport
+additionnait. C'est le
 choix le plus simple et le plus sûr des deux possibles : aucun code du dépôt
 ne calcule ni ne juge le chiffre, et le chiffre jugé est celui que la même
 commande affiche sur le poste d'un développeur. L'autre voie, garder deux
@@ -2216,7 +2219,8 @@ dossier mal écrit. Le rapport, de son côté, écrit « indisponible », jamais
 Ce contrôle lit les listes et le disque, pas le résultat de la mesure : il
 tient pour mesuré ce que les listes disent mesurer. Le jour où il a été
 écrit, les deux ensembles étaient les mêmes (21 fichiers pour Convex, 78 pour
-le site, comparés au rapport de couverture).
+le site, comparés au rapport de couverture ; 99 pour le site depuis que
+`app/` est dans la liste).
 
 **Lancer le même contrôle en local.**
 
@@ -2257,7 +2261,7 @@ figurer dans le tableau ci-dessus avec sa raison, sans quoi un test de la CI
 sécurité et simulation » a une ligne par mesure jugée, dans les mêmes termes
 que celles du Pi : « Couverture, `convex/` », une ligne « Couverture, chaîne
 de sécurité côté Convex, `convex/training.ts` pris seul » par fichier jugé
-seul, et « Couverture, `lib/`, `hooks/`, `components/` », chacune avec ses
+seul, et « Couverture, `lib/`, `hooks/`, `components/`, `app/` », chacune avec ses
 chiffres et « 80 % exigé par `convex-tests` » ou « par `web` », suivi de
 « ✅ tenu » ou de « ❌ non tenu ». L'annotation « Rapport de qualité » le redit
 en une ligne par projet, et `quality-report.json` porte `threshold` et `held`
@@ -2276,14 +2280,21 @@ première mesure du rapport de qualité) et après, en lignes puis en branches :
 | site, `hooks/` | 72,2 % (26 sur 36), 100 % (11 sur 11) | 100 % (36 sur 36), 100 % (11 sur 11) |
 | site, `components/` | 13,5 % (153 sur 1 133), 20,7 % (221 sur 1 067) | 99,7 % (1 130 sur 1 133), 98,1 % (1 047 sur 1 067) |
 | site, les trois dossiers | 21,2 % (273 sur 1 283), 25,2 % (297 sur 1 177) | 99,7 % (1 280 sur 1 283), 98,2 % (1 156 sur 1 177) |
+| site, `app/` (ANH-204) | 0 % (0 sur 573), 0 % (0 sur 470) | 100 % (573 sur 573), 97,0 % (456 sur 470) |
+| site, les quatre dossiers, ce que `web` juge | 14,7 % (273 sur 1 856), 18,0 % (297 sur 1 647) | 99,8 % (1 853 sur 1 856), 97,9 % (1 612 sur 1 647) |
 
-Aucun fichier du site n'est sous 80 % : le moins couvert en branches est
-`components/ui/globe.tsx` (84,6 %, 11 sur 13). Les branches qui restent sont,
+Aucun fichier de `lib/`, de `hooks/` ni de `components/` n'est sous 80 % : le
+moins couvert en branches est `components/ui/globe.tsx` (84,6 %, 11 sur 13).
+Trois fichiers de `app/` le sont en branches, tous à 100 % de lignes, pour des
+branches que l'écran ne peut pas produire (la liste est dans
+[Tests des pages du site](#tests-des-pages-du-site-anh-204)) : la liste des
+patients (11 sur 14), la FAQ (1 sur 2) et la mise en page racine (3 sur 4). Le
+seuil, global, les laisse passer. Les branches qui restent sont,
 pour l'essentiel, des gardes qu'aucun parcours n'atteint (une référence
 d'élément nulle dans un gestionnaire de clic, un texte de repli derrière une
 traduction qui existe, un bouton désactivé dont le gestionnaire revérifie la
 condition) : elles n'ont pas été forcées. Le site est passé de 329 tests à 1 321, Convex de
-954 à 1 044.
+954 à 1 044. Avec les tests des pages (ANH-204), le site en compte 1 707.
 
 **Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les deux exécutions
 de la PR #45 (37648336769 puis 37648970197), comparées étape par étape au push
@@ -2343,8 +2354,9 @@ seuil.
   tests exécutent, pas ce qu'ils affirment. La relecture reste ce qui écarte
   un test sans affirmation.
 - Les composants sont testés sans navigateur (voir
-  [Tests unitaires du site](#tests-unitaires-du-site)) : ce qui est couvert est
-  la logique des composants, pas leur rendu dans un navigateur.
+  [Tests unitaires du site](#tests-unitaires-du-site)), les pages dans un DOM
+  simulé (voir [Tests des pages du site](#tests-des-pages-du-site-anh-204)) : ce
+  qui est couvert est leur logique, pas leur rendu dans un navigateur.
 - Le seuil du site est global : il ne protège pas un fichier en particulier.
   Seuls les trois fichiers Convex de la chaîne de sécurité ont leur seuil
   propre.
@@ -2412,7 +2424,8 @@ branche a avancé (voir
 
 `npm run test:ecg` lance les tests de `lib/` (configuration
 `vitest.ecg.config.mts`, environnement Node), `npm run test:site` ceux de
-`hooks/` et de `components/` (`vitest.site.config.mts`). Aucune des deux ne
+`hooks/`, de `components/` et des pages de `app/` (`vitest.site.config.mts`).
+Aucune des deux ne
 mesure la couverture : `npm run coverage:site` lance les deux ensemble avec la
 mesure et son seuil (voir
 [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le nom du script date de la
@@ -2570,9 +2583,14 @@ retour des mutations, chacun une seule fois :
   rend la réponse de la mutation, donc un refus que le hook rapporte sans lever
   d'exception.
 
-Ces tests ne montent aucune page : l'affichage réel du message et le scénario
-de bout en bout (suppression refusée d'une machine en séance) restent à faire
-dans le job navigateur d'ANH-83.
+Ces tests ne montent aucune page. Ceux des pages
+([Tests des pages du site](#tests-des-pages-du-site-anh-204)) le font : ils
+vérifient, page par page, que le refus du serveur arrive dans la liste des
+messages (une suppression refusée d'une machine en séance, par exemple) et que
+la page ne fait pas comme si l'action avait réussi. Le dessin du message par
+`components/FeedbackToaster.tsx` dans un vrai navigateur, et le scénario de
+bout en bout contre un vrai serveur, restent à faire dans le job navigateur
+d'ANH-83.
 
 ### Tests des composants du site, sans navigateur (ANH-203)
 
@@ -2581,17 +2599,18 @@ chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
 (`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
 n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
 
-**Quel test va sur quel document.** Les composants, les hooks et les règles
-de `lib/` sont testés sur le document minimal de `test-support/`, décrit
-ci-dessous : ce sont, à ce jour, les seuls tests unitaires du site. Les pages
-(`app/`) n'en ont pas encore. ANH-204 doit les ajouter avec la bibliothèque
-standard (jsdom et testing-library, activés fichier par fichier) ; tant que
-ce travail n'est pas fusionné, le dépôt ne contient pas ces bibliothèques, et
-c'est à lui de mettre ce paragraphe à jour. Pour un nouveau test de
-composant : le document minimal convient tant que le test n'a besoin de rien
-de ce que ce document n'implémente pas (la liste est sous « Limites »). Sinon
-le test attend la bibliothèque standard ou la suite navigateur (ANH-83) : on
-n'étend pas le document minimal pour imiter un navigateur.
+**Quel test va sur quel document.** Le dépôt a deux documents de test, et un
+test n'en utilise qu'un. Les composants, les hooks et les règles de `lib/` sont
+testés sur le document minimal de `test-support/`, décrit ci-dessous. Les
+pages (`app/`) sont testées avec la bibliothèque standard (jsdom et
+Testing Library, que chaque fichier de test de page demande lui-même), décrite
+dans [Tests des pages du site](#tests-des-pages-du-site-anh-204). Le
+remplaçant de Convex, lui, est le même pour tous (`test-support/convex.ts`).
+Pour un nouveau test de composant : le document minimal convient tant que le
+test n'a besoin de rien de ce que ce document n'implémente pas (la liste est
+sous « Limites »). Sinon le test s'écrit avec la bibliothèque standard, comme
+ceux des pages, ou attend la suite navigateur (ANH-83) : on n'étend pas le
+document minimal pour imiter un navigateur.
 
 **Le document des tests : `test-support/`.** Le rendu en HTML statique des
 sections précédentes ne suffit pas à un formulaire : il ne garde pas d'état
@@ -2607,6 +2626,7 @@ lequel le vrai React tourne (état, effets, nouveau rendu après un événement)
 | `test-support/radix.tsx` | des remplaçants pour les primitives Radix, pour tester nos propres enveloppes de `components/ui/` |
 | `test-support/browser.ts` | ce qu'un navigateur ajoute et que certains composants demandent : horloge d'images d'animation, canevas, largeur de fenêtre, observateurs. Chaque pièce est installée et pilotée par le test |
 | `test-support/markup.ts` | lecture d'un rendu statique comme un arbre, pour les composants sans état |
+| `test-support/pages.tsx` | l'aide des tests de pages, qui tournent dans jsdom et non sur ce document : rendu d'une page, navigation remplacée, et les fonctions de Convex nommées par leur référence, par-dessus `test-support/convex.ts` (voir [Tests des pages du site](#tests-des-pages-du-site-anh-204)) |
 
 Ce dossier est hors de la mesure de couverture (ce ne sont pas des sources du
 site) et la règle de chemins le range avec le site.
@@ -2725,6 +2745,147 @@ prouve donc rien de ce qui suit, quel que soit son résultat :
   canevas, images d'animation, observateurs, presse-papiers, largeur de
   fenêtre. Ils viennent de remplaçants nommés (`test-support/ui.tsx`,
   `radix.tsx`, `browser.ts`), installés par le test qui en a besoin.
+
+### Tests des pages du site (ANH-204)
+
+`npm run test:site` exécute aussi un fichier de test par page de `app/` : les
+19 pages et les 2 mises en page (`layout.tsx`), soit 21 fichiers source, 22
+fichiers de test et 386 tests au 7 octobre 2026. Chaque fichier est à côté de la
+page qu'il teste (`page.test.tsx` à côté de `page.tsx`). Next.js ne prend pour
+une route qu'un fichier nommé exactement `page`, `layout` ou `route` : un
+fichier `page.test.tsx` n'en crée pas.
+
+**Un DOM, pour les pages seulement.** Une page a un état, des effets et des
+fenêtres Radix réelles : le document minimal des composants ne les fait pas
+tourner. Les tests des pages tournent donc dans `jsdom`, avec Testing Library
+(`@testing-library/react`, `@testing-library/user-event`) : un clic est un
+vrai clic sur le vrai bouton, une fenêtre est la vraie fenêtre, une liste
+déroulante la vraie liste. Chaque fichier de test de page demande cet
+environnement lui-même, par sa première ligne
+(`// @vitest-environment jsdom`) : la suite reste sur l'environnement `node`
+pour `hooks/` et `components/`.
+
+**Ce qui est remplacé, et ce qui ne l'est pas.** L'aide des pages est
+`test-support/pages.tsx`.
+
+| Élément | Dans les tests des pages |
+|---|---|
+| Convex (`convex/react`) | le remplaçant de tout le site, `test-support/convex.ts` : il n'y en a qu'un. `test-support/pages.tsx` n'y ajoute qu'une couche qui nomme une fonction par sa référence (`api.machines.getMachine`) au lieu d'un texte : `answer(référence, valeur)`, `argsAsked(référence)` (les arguments donnés par la page, `"skip"` compris), `mutation(référence)`, `mutationsSent()` (chaque mutation envoyée, dans l'ordre, avec ses arguments exacts), `sessionIs(état)` |
+| Réponses du serveur | celles des **requêtes** sont typées par le type de retour de la fonction Convex (`FunctionReturnType`) : une réponse de test que le serveur ne peut pas rendre ne compile pas (`npx tsc --noEmit`). Celles des mutations ne le sont pas |
+| Échec d'une mutation | sous les formes que le client Convex livre, jamais une erreur nue : une `ConvexError` portant la phrase du serveur quand le serveur formule le refus (lancement, arrêt, rôles, organisation), et sinon l'erreur de serveur masquée en production ou détaillée sur un déploiement de développement (`serverFailures`, qui donne les deux avec le message attendu pour chacune) |
+| Navigation (`@/i18n/navigation`) | remplacée : un lien est une ancre qui porte l'adresse donnée par la page, avant le préfixe de langue ; `router.push` est lu par le test |
+| Messages | les vrais : fournisseur `next-intl` et catalogues `messages/fr.json` et `messages/en.json`. Un message demandé et absent du catalogue fait échouer le test |
+| Retour des mutations | le vrai hook `useMutationWithFeedback` et la vraie liste de messages (`lib/feedback.ts`), lue par `feedbackShown()` |
+| Rôle du visiteur | `signedInAs("admin" \| "org_admin" \| "gestionnaire" \| "user")` fait répondre ce compte à `users.getCurrentUser` ; un compte sans ligne Convex se dit `answer(api.users.getCurrentUser, null)` |
+| Composants de `components/ui/` (boutons, fenêtres, listes, cases, onglets) | les vrais, Radix compris |
+| Fenêtre de lancement et panneau d'entraînement | les vrais sur « Mes machines », la page d'une machine et la vue en direct : le lancement et l'arrêt affirmés sont ceux que la page envoie vraiment |
+| Autres cartes et fenêtres de `components/` qui ont leurs propres requêtes et mutations (fenêtres machine et patient, droits de lancement, physiologie, état en direct, programmes, carte Entraînement) | remplacées par un marqueur (`standIn`) qui garde les propriétés reçues : le test lit ce que la page leur donne (`propsOf`) et appelle ce qu'elle écoute. Leur propre comportement a ses tests dans `components/` |
+| Courbes (Recharts), globe, particules, faisceaux, rayons | remplacés : ils dessinent sur un canevas ou demandent une vraie mise en page |
+| Horloge | la date du poste est fixée (`NOW`) ; les minuteries tournent normalement |
+| `console.error` | une ligne inattendue (avertissement de React, erreur que rien n'attrape) fait échouer le test ; l'échec d'une mutation, que le hook journalise, doit être lu par `takeLoggedFailures()`, sans quoi le test échoue aussi |
+
+**Limites du remplaçant de Convex, à connaître avant de s'appuyer sur ces
+tests.** Elles s'ajoutent à celles que la section précédente donne pour
+`test-support/convex.ts`.
+
+- Une réponse est rangée par nom de fonction, pas par arguments. Une page qui
+  demanderait la bonne fonction avec de mauvais arguments recevrait la même
+  réponse : un argument faux n'est vu que là où le test lit `argsAsked`. Les
+  tests le font pour chaque requête dont les arguments décident de ce que le
+  serveur rend (identifiant de la route, `includeDeleted`, filtre de rôle,
+  `"skip"`), par discipline et non par construction.
+- Changer les arguments d'une requête ne repasse pas par le chargement. Le
+  vrai client rend `undefined` jusqu'à la nouvelle réponse (le filtre de rôle
+  de la liste des utilisateurs, `includeDeleted` de la liste des machines quand
+  le rôle arrive) ; ici la nouvelle réponse est là au rendu suivant. L'état
+  intermédiaire de ces deux pages n'est donc pas exercé.
+- L'état « on ne sait pas encore si le visiteur est connecté » existe
+  (`sessionIs("loading")`) et la page d'accueil est testée dans cet état. Les
+  pages du tableau de bord ne le lisent pas : elles attendent
+  `users.getCurrentUser`.
+
+**Ce qu'un test de page affirme.** Pour chaque page : ce qu'elle demande à
+Convex et avec quels arguments ; ses états de chargement, vide et
+introuvable ; ce que chaque action envoie (la mutation et ses arguments
+exacts), ce qu'elle affiche ensuite, où elle mène ; ce qu'elle n'envoie pas
+quand la confirmation est refusée ou que le bouton est grisé ; ce qu'elle
+affiche quand le serveur refuse, la fenêtre concernée relue à l'écran après
+le refus. Pour les pages qui lisent le rôle du visiteur (accueil du tableau de
+bord, liste et page des machines, « Mes machines », gestionnaires, fiches
+patient et utilisateur, paramètres) : ce qu'elles montrent et cachent à chacun
+des quatre rôles (admin d'Anheart, admin d'une organisation cliente,
+gestionnaire, patient) et à un compte sans ligne Convex. Les trois pages de
+séances, les listes des patients et des utilisateurs et Rapports ne lisent
+aucun rôle : elles montrent ce que le serveur rend (le droit d'arrêter une
+séance, `canStop`, compris), et leurs tests le disent ainsi.
+
+Un test qui monte une page sans rien affirmer d'elle n'a pas sa place : chaque
+test porte dans son nom le comportement qu'il vérifie et échoue si ce
+comportement est cassé. Deux échantillons de mutations l'ont vérifié le
+7 octobre 2026, en cassant un comportement à la fois dans les pages (un rôle
+élargi, un argument faux, une confirmation ignorée, un filtre retiré, un bouton
+laissé actif pendant l'envoi, une fenêtre fermée malgré un refus) : 56 par
+l'auteur, tous détectés ; 71 par la revue indépendante, dont 68 détectés, les
+trois autres ayant depuis leur test.
+
+Une organisation ne change rien à ce qu'une page dessine : c'est le serveur qui
+ne rend que les machines, les comptes et les séances de l'organisation de
+l'appelant ([convex.md](convex.md#3-règles-dautorisation)). Les tests des
+pages vérifient ce que la page fait d'une réponse vide ou nulle, qui est ce
+que le serveur rend pour une ressource d'une autre organisation.
+
+**Comportement actuel, noté comme tel.** Quand un test décrit ce que la page
+fait aujourd'hui sans que ce soit forcément voulu, un commentaire au-dessus de
+lui commence par « What the page does today » ou « Known and filed ». Corriger
+ce comportement fera échouer ce test, et c'est attendu : le test se change avec
+la correction. Sont notés ainsi, entre autres : aucune page ne connaît le rôle
+d'admin d'une organisation cliente, qui voit donc ce que voit un patient ; la
+fenêtre « Assigner des patients » rouvre sur les cases d'une modification
+annulée, et s'ouvre avant que les patients du gestionnaire soient connus ;
+plusieurs textes sont écrits en anglais dans les pages ; les durées « il y a… »
+de quatre pages se comptent sur l'horloge du poste ; aucune page n'a d'écran
+d'erreur (il n'y a pas de `error.tsx` sous `app/`), si bien qu'une requête
+refusée remonte à ce qui entoure la page.
+
+**Les parties serveur.** `app/` n'a ni gestionnaire de route (`route.ts`), ni
+fichier de métadonnées, ni `error.tsx`, ni `loading.tsx`. Ses deux mises en
+page sont testées ainsi :
+
+| Fichier | Comment il est testé | Ce que ces tests n'exercent pas |
+|---|---|---|
+| `app/[locale]/layout.tsx` (composant serveur, fonction asynchrone) | `layout.test.tsx`, sans jsdom : la fonction est appelée comme telle et son résultat est rendu en balisage. Langue du document, refus d'une langue inconnue avant toute lecture de messages, ordre des fournisseurs, langue des fenêtres Clerk, objet `metadata`, `generateStaticParams` | le chargement des polices (`next/font/google` demande le compilateur de Next.js), la feuille de style (elle passe par la chaîne PostCSS de la construction), les vrais fournisseurs (Clerk, client Convex, lecture des messages de la requête), l'injection de `metadata` dans la page par Next.js |
+| `app/[locale]/dashboard/layout.tsx` (composant client) | `layout.test.tsx` dans jsdom (témoin `sidebar_state`, place de la page dans le cadre) et `layout.server.test.tsx` sans jsdom (rendu serveur, sans document : barre latérale ouverte) | la barre latérale elle-même (`components/ui/sidebar`), l'en-tête et le menu, remplacés par des marqueurs |
+
+`proxy.ts` (connexion exigée pour le tableau de bord, préfixe de langue) est à
+la racine du dépôt, hors de `app/` : il n'est ni testé ici ni mesuré.
+
+**Ce que jsdom ne montre pas.** Ni la mise en page ni le style (une colonne
+tronquée, un bouton hors de l'écran), ni le dessin des courbes, ni la
+navigation réelle (préfixe de langue, retour arrière), ni un vrai abonnement
+Convex (reconnexion, ordre d'arrivée des réponses), ni les fenêtres de Clerk,
+ni le presse-papiers du navigateur (celui du test est un double). Tout cela
+attend la suite navigateur (ANH-83).
+
+**Couverture de `app/`.** Avant ces tests, aucun test ne chargeait une page :
+0 ligne sur 573. Au 7 octobre 2026 : 573 lignes sur 573, et 456 branches sur
+470 (97,0 %). Les 14 branches non atteintes sont des cas que la page ne peut
+pas produire à l'écran : une garde derrière un bouton grisé ou une fenêtre
+fermée (6), l'en-tête de regroupement de la bibliothèque de tableaux, que ces
+tableaux à une ligne d'en-tête n'ont pas (4), une langue autre que `fr` et
+`en`, que la mise en page racine refuse (2), un libellé du catalogue qui
+serait vide (1), un rôle que le serveur ne rend pas (1). Elles ne sont pas
+retirées de la mesure. `app/` est sous le seuil de 80 % du site, avec
+`lib/`, `hooks/` et `components/`
+([Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)).
+
+**Temps ajouté au job `web`.** Chaque fichier de test de page ouvre son propre
+DOM et charge la page avec ses composants, et les tests des pages tournent
+deux fois, une fois sans mesure et une fois avec. Mesuré sur l'exécution
+37652958943 du 7 octobre 2026 (PR #42, avant la fusion du seuil, quand la
+suite ne comptait que les tests d'origine et ceux des pages) :
+`npm run test:site` 41 s et la mesure de couverture 50 s, contre 9 s et 14 s
+sur `develop` ; le job entier 2 min 54 s, contre 1 min 25 s à 1 min 47 s sur
+les trois exécutions de `develop` qui précèdent.
 
 ### Infrastructure encore dépendante d'autres tickets
 

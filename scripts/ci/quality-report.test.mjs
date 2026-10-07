@@ -753,7 +753,7 @@ test("Convex and the site report their tests, their coverage against its thresho
   );
   assert.match(
     renderPart(stopped),
-    /^\| `lib\/`, `hooks\/`, `components\/` \| indisponible \| indisponible \| indisponible \| 80 % \|$/m,
+    /^\| `lib\/`, `hooks\/`, `components\/`, `app\/` \| indisponible \| indisponible \| indisponible \| 80 % \|$/m,
   );
   // The measure of the site is one run of all its tests: one file, where `web` leaves it.
   write(
@@ -772,7 +772,7 @@ test("Convex and the site report their tests, their coverage against its thresho
   assert.deepEqual(Object.keys(site.coverage), ["site"]);
   assert.match(
     renderPart(site),
-    /^\| `lib\/`, `hooks\/`, `components\/` \| 2 \| 75,0 % \(3 sur 4\) \| 50,0 % \(2 sur 4\) \| 80 % : ❌ non tenu \|$/m,
+    /^\| `lib\/`, `hooks\/`, `components\/`, `app\/` \| 2 \| 75,0 % \(3 sur 4\) \| 50,0 % \(2 sur 4\) \| 80 % : ❌ non tenu \|$/m,
   );
   assert.throws(() => buildPart("audit", { dir: directory, root: ROOT, env: {} }), /unknown part/);
 });
@@ -931,7 +931,7 @@ test("the table of the run has one line per project and the columns of the ticke
       "| Console du Pi (tout `src/`)",
       "| Simulation",
       "| Convex",
-      "| Site (`lib/`, `hooks/`, `components/`)",
+      "| Site (`lib/`, `hooks/`, `components/`, `app/`)",
       "| Scripts (CI et release)",
     ],
   );
@@ -1008,12 +1008,15 @@ test("the table of the run has one line per project and the columns of the ticke
     "| Couverture, chaîne de sécurité côté Convex, `convex/training.ts` pris seul | 1 fichier : lignes 95,4 % (270 sur 283), branches 92,1 % (222 sur 241) | 80 % exigé par `convex-tests` : ✅ tenu |",
     "| Couverture, chaîne de sécurité côté Convex, `convex/http.ts` pris seul | 1 fichier : lignes 100 % (98 sur 98), branches 93,2 % (96 sur 103) | 80 % exigé par `convex-tests` : ✅ tenu |",
     "| Couverture, chaîne de sécurité côté Convex, `convex/lib/auth.ts` pris seul | 1 fichier : lignes 100 % (122 sur 122), branches 100 % (102 sur 102) | 80 % exigé par `convex-tests` : ✅ tenu |",
-    "| Couverture, `lib/`, `hooks/`, `components/` | 3 fichiers : lignes 84,9 % (1 090 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ✅ tenu |",
+    "| Couverture, `lib/`, `hooks/`, `components/`, `app/` | 3 fichiers : lignes 84,9 % (1 090 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ✅ tenu |",
   ]);
   assert.match(
     markdown,
-    /^- Couverture de Convex et du site : 80 % de lignes et de branches exigés par `convex-tests` \(sur `convex\/` et sur chacun de ses 3 fichiers de la chaîne de sécurité pris seul\) et 80 % par `web` \(sur `lib\/`, `hooks\/`, `components\/`\)\. Sous le seuil, la gate échoue\.$/m,
+    /^- Couverture de Convex et du site : 80 % de lignes et de branches exigés par `convex-tests` \(sur `convex\/` et sur chacun de ses 3 fichiers de la chaîne de sécurité pris seul\) et 80 % par `web` \(sur `lib\/`, `hooks\/`, `components\/`, `app\/`\)\. Sous le seuil, la gate échoue\.$/m,
   );
+  // The pages are measured like any other folder of the site: the report no longer lists them as left out.
+  assert.match(markdown, /^- Non mesuré : la couverture des scripts ; les tests de release /m);
+  assert.doesNotMatch(markdown, /pages du site/);
   assert.doesNotMatch(markdown, /sans seuil/, "the coverage of Convex and of the site is no longer only read");
   assert.match(markdown, /^- Ce rapport ne lit que les jobs de `ci\.yml`\. Les autres workflows du dépôt /m);
   assert.match(
@@ -1315,7 +1318,7 @@ test("a measure of Convex or of the site under 80 % reads « non tenu », the wh
   for (const expected of [
     "| Couverture, `convex/` | 3 fichiers : lignes 96,6 % (1 356 sur 1 403), branches 87,3 % (863 sur 988) | 80 % exigé par `convex-tests` : ✅ tenu |",
     "| Couverture, chaîne de sécurité côté Convex, `convex/training.ts` pris seul | 1 fichier : lignes 95,4 % (270 sur 283), branches 79,6 % (192 sur 241) | 80 % exigé par `convex-tests` : ❌ non tenu |",
-    "| Couverture, `lib/`, `hooks/`, `components/` | 3 fichiers : lignes 79,9 % (1 026 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ❌ non tenu |",
+    "| Couverture, `lib/`, `hooks/`, `components/`, `app/` | 3 fichiers : lignes 79,9 % (1 026 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ❌ non tenu |",
   ]) {
     assert.ok(markdown.split("\n").includes(expected), expected);
   }
@@ -1331,7 +1334,7 @@ test("a measure of Convex or of the site under 80 % reads « non tenu », the wh
     said.join("\n"),
   );
   assert.ok(
-    said.includes("Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches non tenu"),
+    said.includes("Couverture, Site (lib/, hooks/, components/, app/) : seuil de 80 % de lignes et de branches non tenu"),
   );
   // For a machine: each measure with its threshold and whether it holds.
   const held = Object.fromEntries(report.coverage.map((measure) => [measure.id, [measure.threshold, measure.held]]));
@@ -1378,11 +1381,24 @@ test("the thresholds, the measured folders and the files judged alone are writte
   });
   assert.deepEqual(vitestThresholds(SITE), { lines: 80, branches: 80 });
   // The site: the folders of its two suites, tests and sources of each.
-  assert.deepEqual(siteFolders(), ["lib", "hooks", "components"]);
+  assert.deepEqual(siteFolders(), ["lib", "hooks", "components", "app"]);
   assert.deepEqual(testsOf(["lib"]), ["lib/**/*.test.{ts,tsx}"]);
-  assert.deepEqual(sourcesOf(siteFolders()), ["lib/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}", "components/**/*.{ts,tsx}"]);
+  assert.deepEqual(sourcesOf(siteFolders()), [
+    "lib/**/*.{ts,tsx}",
+    "hooks/**/*.{ts,tsx}",
+    "components/**/*.{ts,tsx}",
+    "app/**/*.{ts,tsx}",
+  ]);
   // The report names what the gates judge, from the same lists.
-  assert.equal(PROJECTS.find(({ id }) => id === "site")?.label, "Site (`lib/`, `hooks/`, `components/`)");
+  assert.equal(PROJECTS.find(({ id }) => id === "site")?.label, "Site (`lib/`, `hooks/`, `components/`, `app/`)");
+  // Each suite of the site is named by the folders whose tests it runs.
+  assert.deepEqual(
+    SUITES.filter(({ project }) => project === "site").map(({ id, label }) => [id, label]),
+    [
+      ["site-lib", "`lib/`"],
+      ["site-components", "`hooks/`, `components/` et `app/`"],
+    ],
+  );
   assert.deepEqual(
     COVERAGES.filter(({ project }) => project === "convex").map(({ id, threshold, file }) => [id, threshold, file]),
     [["convex", 80, undefined], ...CONVEX.alone.map((file) => [`convex:${file}`, 80, file])],
@@ -1580,8 +1596,8 @@ test("the essentials of the run are also said in plain text, one line per projec
     "Convex : 925 tests, 0 en échec ; lignes 96,6 %, branches 87,3 % ; lint réussi ; types réussis ; gate réussie",
     // The threshold of Convex: the whole, then each file of the safety chain judged alone, by name.
     "Couverture, Convex : seuil de 80 % de lignes et de branches tenu ; fichiers jugés seuls : convex/training.ts tenu (lignes 95,4 %, branches 92,1 %), convex/http.ts tenu (lignes 100 %, branches 93,2 %), convex/lib/auth.ts tenu (lignes 100 %, branches 100 %)",
-    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint réussi ; types réussis ; gate réussie",
-    "Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches tenu",
+    "Site (lib/, hooks/, components/, app/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint réussi ; types réussis ; gate réussie",
+    "Couverture, Site (lib/, hooks/, components/, app/) : seuil de 80 % de lignes et de branches tenu",
     "Scripts (CI et release) : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
     "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
   ]);
@@ -1609,8 +1625,8 @@ test("the essentials of the run are also said in plain text, one line per projec
     "Console du Pi (tout src/) : 40 tests (une partie des suites), 0 en échec ; couverture sautée ; lint sauté ; types sautés ; gate sautée",
     "Simulation : sautée par la règle de chemins",
     "Convex : tests indisponibles ; couverture indisponible ; lint réussi ; types indisponibles ; gate réussie",
-    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint en échec ; types réussis ; gate en échec",
-    "Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches tenu",
+    "Site (lib/, hooks/, components/, app/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint en échec ; types réussis ; gate en échec",
+    "Couverture, Site (lib/, hooks/, components/, app/) : seuil de 80 % de lignes et de branches tenu",
     "Scripts (CI et release) : 148 tests (une partie des suites), 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
   ]);
   assert.doesNotMatch(renderNotice(partly), /Chaîne de sécurité/, "nothing is said of a chain that was not measured");

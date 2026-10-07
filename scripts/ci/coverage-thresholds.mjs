@@ -55,7 +55,7 @@ export const SITE = {
   threshold: THRESHOLD,
   suites: {
     ecg: ["lib"],
-    site: ["hooks", "components"],
+    site: ["hooks", "components", "app"],
   },
   exclude: ["**/*.test.{ts,tsx}"],
 };
