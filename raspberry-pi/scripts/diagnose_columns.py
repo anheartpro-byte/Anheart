@@ -57,10 +57,12 @@ def diagnose(mac: str, channels: list[int], fs: int, seconds: float) -> None:
     print(f"Starting acquisition: channels={channels}, rate={fs} Hz")
     device.start(fs, channels)
 
-    # Warm up (discard the first read; startup frames can be partial)
+    # Warm up: the first read is discarded.
     try:
         device.read(fs // 10)
     except Exception:
+        # Startup frames can be partial: a warm-up read that fails is expected,
+        # and nothing is kept from it either way.
         pass
 
     collected: list[np.ndarray] = []

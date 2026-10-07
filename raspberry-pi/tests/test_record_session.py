@@ -590,10 +590,14 @@ def test_ex5_a_batch_lost_by_the_bitalino_is_a_warning_with_the_loss_counters(
     assert isinstance(loaded, Ok)
     warnings = [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
     assert warnings == [
-        "bitalino_loss: filled_samples=+0 dropped_backlog_samples=+0 sync_losses=+0 "
-        "skipped_bytes=+0 reconnects=+0 totals=3/0/0/0/0",
-        "bitalino_loss: filled_samples=+16 dropped_backlog_samples=+200 sync_losses=+2 "
-        "skipped_bytes=+7 reconnects=+1 totals=19/200/2/7/1",
+        (
+            "bitalino_loss: filled_samples=+0 dropped_backlog_samples=+0 sync_losses=+0 "
+            "skipped_bytes=+0 reconnects=+0 totals=3/0/0/0/0"
+        ),
+        (
+            "bitalino_loss: filled_samples=+16 dropped_backlog_samples=+200 sync_losses=+2 "
+            "skipped_bytes=+7 reconnects=+1 totals=19/200/2/7/1"
+        ),
     ]
 
 
