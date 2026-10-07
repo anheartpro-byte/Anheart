@@ -339,6 +339,11 @@ Règles :
 - **L'année de naissance est obligatoire pour toute séance auto**, même avec une
   FC max mesurée : elle sert au contrôle d'âge (18 ans minimum, voir
   [securite.md](securite.md)).
+- Les deux valeurs sont des **entiers** : la carte et le serveur refusent tout
+  autre nombre. Une valeur déjà enregistrée qui n'en est pas un compte comme
+  non renseignée : la carte affiche « Non renseignée », marque le champ, et
+  n'enregistre rien tant qu'il n'est pas corrigé ou vidé
+  ([convex.md §4](convex.md#4-fonctions-de-trainingts)).
 
 ### 5.2 Donner le droit de lancement à un patient
 
@@ -364,9 +369,10 @@ Depuis **Mes machines** ou le détail d'une machine : **Lancer une séance auto*
 La fenêtre **bloque** le bouton **Lancer** et explique pourquoi quand : la
 machine n'est pas lançable, est hors ligne, est déjà en séance, a les
 programmes désactivés, n'a aucun programme, la FC max ou l'année de naissance
-manque, ou le pratiquant a moins de 18 ans. Elle **avertit** si la zone dépasse
-90 % de la FC max ou si la FC limite du programme dépasse la FC max (« Le
-serveur refusera ce lancement. »).
+manque (ou la valeur enregistrée n'est pas un entier, pour un patient comme
+pour « Moi-même »), ou le pratiquant a moins de 18 ans. Elle **avertit** si la
+zone dépasse 90 % de la FC max ou si la FC limite du programme dépasse la FC
+max (« Le serveur refusera ce lancement. »).
 
 Après **Lancer** :
 
