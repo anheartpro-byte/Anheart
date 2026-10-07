@@ -114,8 +114,6 @@ START_RULES: Final[tuple[str, ...]] = (
 )
 """Every rule the start gate can refuse under."""
 
-ALL_PRESENCE_RULES: Final[tuple[str, ...]] = tuple(dict.fromkeys((*MOTION_RULES, *START_RULES)))
-
 _MOTION_LABELS: Final[Mapping[MotionState, str]] = MappingProxyType(
     {
         MotionState.AT_REST: "est a l'arret",

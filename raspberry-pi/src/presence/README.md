@@ -189,7 +189,8 @@ Three gaps, each worked around here and each worth a small supervisor change:
 2. **`ALL_RULES` is closed and presence ids are not in it.** That is harmless
    (thread trips bypass the trackers), but dashboards that enumerate
    `ALL_RULES` will not list `presence_*`. **Recommended:** export this
-   package's `ALL_PRESENCE_RULES` next to it wherever rule ids are catalogued.
+   package's rule ids (`MOTION_RULES` and `START_RULES`, each id once) next to
+   it wherever rule ids are catalogued.
 3. **Two latches, one acknowledgement.** The presence monitor keeps its own
    latch (the start gate needs it, and it outlives a supervisor ack that the
    runtime refused). `PresenceAcknowledger` clears both together, and clears
