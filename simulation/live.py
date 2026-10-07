@@ -37,16 +37,28 @@ from simulation.record_view import view_record
 from simulation.scenario import load_scenario, resolve, scenario_paths
 from simulation.tracefile import JsonValue, Row
 from src.clock import SimClock
+from src.record.containment import resolve_under
 from src.result import Err
 
 ROOT: Final[Path] = Path(__file__).resolve().parent
 """``simulation/``: the viewer is ``viewer/index.html``, traces are ``out/*.jsonl``."""
+
+VIEWER: Final[str] = "/viewer/index.html"
 
 DEFAULT_PORT: Final[int] = 8765
 MAX_SPEED: Final[float] = 200.0
 
 type Message = tuple[str, Mapping[str, JsonValue]] | None
 """``(event, payload)`` for the stream, ``None`` for the end of it."""
+
+
+def viewer_location(query: str) -> str:
+    """Where ``/`` redirects: the viewer, with the query it was asked with.
+
+    The query goes into a response header: it is kept on one line, whatever it holds.
+    """
+    kept = query.replace("\r", "").replace("\n", "")
+    return VIEWER + (f"?{kept}" if kept else "")
 
 
 def run_into(
@@ -99,9 +111,7 @@ class Handler(SimpleHTTPRequestHandler):
         parts = urlsplit(self.path)
         if parts.path in {"", "/"}:
             self.send_response(HTTPStatus.FOUND)
-            self.send_header(
-                "Location", "/viewer/index.html" + (f"?{parts.query}" if parts.query else "")
-            )
+            self.send_header("Location", viewer_location(parts.query))
             self.end_headers()
             return
         if parts.path == "/api/scenarios":
@@ -117,7 +127,15 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parts.path == "/api/record":
             requested = (parse_qs(parts.query).get("path") or [""])[0]
-            result = view_record(ROOT, requested)
+            # Relative to ``simulation/``, as the viewer's ``trace`` parameter is.
+            located = resolve_under(ROOT, requested.lstrip("/"))
+            if located is None:
+                self.send_error(HTTPStatus.BAD_REQUEST, "outside_root")
+                return
+            # The record is read at the path just resolved, given as the
+            # directory that holds it and its name: the text of the request
+            # goes no further than this handler.
+            result = view_record(located.parent, located.name)
             if isinstance(result, Err):
                 self.send_error(HTTPStatus.BAD_REQUEST, result.error.detail)
                 return
