@@ -1154,7 +1154,7 @@ Ces deux routes lisent le disque sur deux fils qui leur sont réservés, jamais
 sur la boucle de contrôle ni sur les fils du traitement ECG. 503 : les deux
 sont pris, la requête est refusée tout de suite. 504 : le disque n'a pas
 répondu à temps. Détail dans
-[raspberry-pi.md](raspberry-pi.md#146-export).
+[raspberry-pi.md](raspberry-pi.md#156-export).
 
 ### WebSocket `/ws/telemetry`
 
@@ -1218,7 +1218,7 @@ La console écrit chaque séance sur le disque du Pi pendant qu'elle se déroule
 ce que la machine a fait à chaque tic, les verdicts, les défauts du variateur,
 les gestes de l'opérateur, les échantillons bruts du BITalino. C'est la boîte
 noire de la machine. Le détail technique (file d'écriture, cadence, format) est
-dans [raspberry-pi.md](raspberry-pi.md#14-lenregistrement-de-séance-boîte-noire-locale)
+dans [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale)
 et [enregistrement.md](enregistrement.md).
 
 > Vérifié par les tests automatiques sur la console en simulation, y compris

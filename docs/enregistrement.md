@@ -7,7 +7,7 @@ aussi depuis ANH-128 : elle écrit un dossier par séance sous `data/records/`,
 par une file bornée et un fil d'écriture à part, sans jamais écrire dans la
 boucle de contrôle. Ce branchement (file, cadence de `fsync`, comportement en
 cas d'erreur, refus de départ, rétention, export) est décrit dans
-[raspberry-pi.md](raspberry-pi.md#14-lenregistrement-de-séance-boîte-noire-locale).
+[raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
 Ce document-ci ne décrit que le format.
 
 ## Arborescence
@@ -69,7 +69,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `clocks` | objet décrit ci-dessous |
 | `started_at` | horodatage ISO 8601 UTC terminé par `Z` |
 | `ended_at` | horodatage UTC `Z`, ou `null` avant fermeture |
-| `end_reason` | motif de fin, ou `null` avant fermeture ; les valeurs écrites par la console du Pi, dont `interrupted` et `superseded`, sont dans [raspberry-pi.md](raspberry-pi.md#141-où-et-quand) |
+| `end_reason` | motif de fin, ou `null` avant fermeture ; les valeurs écrites par la console du Pi, dont `interrupted` et `superseded`, sont dans [raspberry-pi.md](raspberry-pi.md#151-où-et-quand) |
 | `preflight` | liste de `{check, passed}` pour les contrôles réellement faits, ou `null` |
 | `geometry` | copie typée de la géométrie appliquée décrite ci-dessous, ou `null` si non observée |
 | `end_observation` | observation finale typée décrite ci-dessous, ou `null` si absente |
@@ -348,7 +348,7 @@ dossiers). Un ajout que le disque refuse en cours de ligne est retiré (retour
 milieu d'un fichier ; si même ce retrait est refusé, le flux est abandonné et
 sa fin tronquée se lit comme une troncature ordinaire. Sur la console, le
 propriétaire unique est le fil du journal de séance
-([raspberry-pi.md](raspberry-pi.md#14-lenregistrement-de-séance-boîte-noire-locale)).
+([raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale)).
 
 ## Frontière de confidentialité
 
@@ -394,7 +394,7 @@ de consentement ou de conformité réglementaire. Pas de dépôt Storage,
 synchronisation, rejeu ni capture RTU native : ces fonctionnalités relèvent
 des tickets suivants. Le branchement de la console réelle et la rétention
 locale existent (ANH-128) et sont décrits dans
-[raspberry-pi.md](raspberry-pi.md#14-lenregistrement-de-séance-boîte-noire-locale).
+[raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
 
 La relecture indépendante de ce document et du SHA final reste une étape
 d'acceptation du ticket ; ce document ne vaut pas signature de reviewer.

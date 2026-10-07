@@ -37,7 +37,7 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 12. [La configuration (`.env`)](#12-la-configuration-env)
 13. [Le contrat de code strict et la gate](#13-le-contrat-de-code-strict-et-la-gate)
 14. [Versions et compatibilité](#14-versions-et-compatibilité)
-14. [L'enregistrement de séance (boîte noire locale)](#14-lenregistrement-de-séance-boîte-noire-locale)
+15. [L'enregistrement de séance (boîte noire locale)](#15-lenregistrement-de-séance-boîte-noire-locale)
 
 ---
 
@@ -123,10 +123,10 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | Module | Rôle | Garanties |
 |---|---|---|
 | `record/schema.py`, `rows.py`, `codec.py`, `ecg.py`, `writer.py`, `reader.py` | Le format d'enregistrement, schéma 2, partagé avec la simulation ([enregistrement.md](enregistrement.md)). | Le writer rend ses erreurs par `Result` ; rien n'est poussé vers le disque avant `sync()`. Porte 100 %. |
-| `record/journal.py` | La file bornée et le fil d'écriture `record-journal` de la console. | Remettre une valeur ne prend ni verrou ni fichier et n'attend jamais ; `fsync` toutes les 2 s ; une erreur d'écriture coûte l'enregistrement, jamais la séance ([section 14](#14-lenregistrement-de-séance-boîte-noire-locale)). Porte 100 %. |
+| `record/journal.py` | La file bornée et le fil d'écriture `record-journal` de la console. | Remettre une valeur ne prend ni verrou ni fichier et n'attend jamais ; `fsync` toutes les 2 s ; une erreur d'écriture coûte l'enregistrement, jamais la séance ([section 15](#15-lenregistrement-de-séance-boîte-noire-locale)). Porte 100 %. |
 | `record/session.py` | L'enregistreur côté boucle : ce que la console voit, mis au format. | Ses points d'entrée ne lèvent jamais ; aucun nom d'opérateur n'est écrit. Porte 100 %. |
 | `record/retention.py` | La rétention locale. | Un enregistrement sans dépôt confirmé n'est jamais purgé. Porte 100 %. |
-| `record/export.py` | La liste des enregistrements et l'archive `.tar.gz` de l'un d'eux, pour les routes d'export, et les fils qui les lisent (`RecordIo`). | Lues sur deux fils réservés (`record-io`), jamais sur la boucle ni sur les fils du traitement ECG ; une lecture de plus est refusée, jamais mise en attente ; seul un dossier d'enregistrement peut être nommé ([14.6](#146-export)). Porte 100 %. |
+| `record/export.py` | La liste des enregistrements et l'archive `.tar.gz` de l'un d'eux, pour les routes d'export, et les fils qui les lisent (`RecordIo`). | Lues sur deux fils réservés (`record-io`), jamais sur la boucle ni sur les fils du traitement ECG ; une lecture de plus est refusée, jamais mise en attente ; seul un dossier d'enregistrement peut être nommé ([15.6](#156-export)). Porte 100 %. |
 
 ---
 
@@ -155,7 +155,7 @@ est un observateur, un bogue de report ne doit pas arrêter une séance.
 Un fil à part, `record-journal`, écrit l'enregistrement de séance sur disque.
 Ce n'est pas une tâche de la boucle : aucune des tâches ci-dessus n'ouvre ni
 n'écrit un fichier d'enregistrement, elles remettent des valeurs à une file en
-mémoire ([section 14](#14-lenregistrement-de-séance-boîte-noire-locale)).
+mémoire ([section 15](#15-lenregistrement-de-séance-boîte-noire-locale)).
 `LocalPanel.run` le démarre, la sortie de la console l'arrête après avoir
 arrêté le variateur.
 
@@ -263,7 +263,7 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
 5. Sur la console : au moins 500 Mo libres sous le dossier d'enregistrement de
    séance, d'après la dernière mesure du fil du journal ; refus aussi si cet
    espace n'a pas pu être mesuré, ou si la mesure a plus de 15 s
-   (`RecordStorageLow`, [14.4](#144-départ-refusé-sous-500-mo)). Demandée en
+   (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
 6. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
@@ -806,7 +806,7 @@ tableau de bord.
 
 | Sens | Quoi | Route Convex | Cadence |
 |---|---|---|---|
-| Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([14.3](#143-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
+| Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous une référence locale (pas de doublon après une coupure) | `POST /api/machine/training/local` | au départ |
 | Pi → Convex | confirmation du départ d'une séance lancée à distance | `POST /api/machine/training/start` | au départ |
@@ -951,7 +951,7 @@ sort avec le code 2.
 | `MACHINE_API_KEY` | vide | clé de la machine sur le tableau de bord ; vide = pas de lien | - |
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
 | `MOTION_LIMITS_PATH` | `config/motion_limits.json` | limites anti-nausée (relatif à `raspberry-pi/`) | fichier illisible = la console refuse de démarrer |
-| `RECORD_ROOT` | `data/records` | dossier des enregistrements de séance (relatif à `raspberry-pi/` s'il n'est pas absolu) | créé en mode 700 ; s'il est inutilisable, la console démarre et **refuse tout départ** ([14.4](#144-départ-refusé-sous-500-mo)) |
+| `RECORD_ROOT` | `data/records` | dossier des enregistrements de séance (relatif à `raspberry-pi/` s'il n'est pas absolu) | créé en mode 700 ; s'il est inutilisable, la console démarre et **refuse tout départ** ([15.4](#154-départ-refusé-sous-500-mo)) |
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
@@ -1131,9 +1131,10 @@ les deux côtés.
 
 Non fait par ce logiciel :
 
-* L'écriture dans `events.jsonl` : la console n'écrit pas encore
-  l'enregistrement de séance (ticket ANH-128). L'incompatibilité passe par le
-  flux d'événements de la console, celui que cet enregistrement consignera.
+* Hors séance, l'incompatibilité n'est écrite dans aucun enregistrement :
+  `events.jsonl` n'existe que pendant une séance. Pendant une séance, elle y
+  est consignée comme un événement `warning` dont le détail commence par
+  `dashboard:` ([15.1](#151-où-et-quand)).
 * Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
   utilisent un transport factice des deux côtés.
 * Sous un 426, les lots de télémétrie et la fin de séance sont abandonnés
@@ -1143,7 +1144,7 @@ Non fait par ce logiciel :
 
 ---
 
-## 14. L'enregistrement de séance (boîte noire locale)
+## 15. L'enregistrement de séance (boîte noire locale)
 
 Pendant toute séance, manuelle ou programmée, banc ou personne à bord, la
 console écrit l'enregistrement de la séance sur le disque du Pi, au fil de
@@ -1160,7 +1161,7 @@ puisse jamais ralentir ni arrêter la boucle de contrôle**.
 > coupure de courant ne sont pas connus. Le test de coupure tue le processus
 > (`SIGKILL`) ; il ne coupe pas l'alimentation.
 
-### 14.1 Où, et quand
+### 15.1 Où, et quand
 
 Un dossier par séance sous `RECORD_ROOT` (défaut `data/records/`, relatif à
 `raspberry-pi/`), nommé par l'heure UTC du début et l'identifiant de la
@@ -1174,7 +1175,7 @@ locale aléatoire.
 | Chaque tic (5 Hz) | une ligne de `ticks.csv` ; un événement à chaque changement de phase, de verdict ou de défaut variateur |
 | Chaque lot du BITalino | un bloc brut `ecg_raw/NNNNNN.bin.gz`, toutes voies, **avant** tout traitement |
 | Chaque seconde | les indicateurs des capteurs dans `sensors.csv` |
-| Événement de la console pendant la séance | demande de fin, E-STOP, réarmement, attestation (`operator_action`, ou `remote_command` si elle vient du tableau de bord) ; acquittement (`verdict_ack`) ; refus (`refusal`) |
+| Événement de la console pendant la séance | demande de fin, E-STOP, réarmement, attestation (`operator_action`, ou `remote_command` si elle vient du tableau de bord) ; acquittement (`verdict_ack`) ; refus (`refusal`) ; nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` (`warning`, détail préfixé `dashboard:` : ce n'est pas le refus d'une demande faite sur la console, et le format n'a pas de type propre pour elle) |
 | La phase de la séance atteint `DONE` | événement `end`, manifeste final (`ended_at`, `end_reason`, observation finale), `checksums.sha256` |
 | Sortie de la console en cours de séance | même fermeture, **après** l'arrêt du variateur, avec le motif du runtime (`shutdown` si rien d'autre n'avait déjà mis fin à la séance) et le compte rendu de l'arrêt ; la sortie attend le fil du journal au plus 5 s, sans emprunter de fil à personne |
 
@@ -1198,7 +1199,7 @@ enregistrement alors que le précédent n'a pas été fermé). Aucune des deux
 n'est attendue en fonctionnement normal : les voir dans un manifeste signale
 un défaut à examiner.
 
-### 14.2 Aucune écriture dans la boucle
+### 15.2 Aucune écriture dans la boucle
 
 Deux objets, deux fils :
 
@@ -1218,7 +1219,7 @@ au-delà, la valeur la plus récente est refusée et comptée.
 
 Ce que le fil du journal fait aussi, parce que ce sont des accès au disque :
 mesurer l'espace libre toutes les 5 s, et appliquer la rétention entre deux
-séances (14.5). La porte de départ et l'état affiché ne font que lire sa
+séances (15.5). La porte de départ et l'état affiché ne font que lire sa
 dernière publication.
 
 Ce qu'un arrêt brutal peut faire perdre : ce qui n'avait pas encore été vidé
@@ -1226,7 +1227,7 @@ de la file (0,2 s au plus) si le processus est tué ; jusqu'à 2 s de plus si
 l'alimentation tombe avec lui. Le reader relit le reste, signale l'absence de
 checksums et, s'il y en a une, la dernière ligne ou le dernier bloc coupé.
 
-### 14.3 Quand le disque refuse, se remplit ou se tait
+### 15.3 Quand le disque refuse, se remplit ou se tait
 
 **La séance et la sécurité continuent dans tous les cas.** Une erreur
 d'écriture n'est jamais une exception dans la boucle : elle est comptée par le
@@ -1253,7 +1254,7 @@ façon : ses points d'entrée ne lèvent jamais, la faute est journalisée une
 fois, l'enregistrement est déclaré dégradé
 (`… erreur interne de l'enregistreur …`).
 
-### 14.4 Départ refusé sous 500 Mo
+### 15.4 Départ refusé sous 500 Mo
 
 Porte d'armement du runtime ([4.2](#42-portes-communes-à-tout-départ-_refuse_arming-_arm)),
 pour toute séance : si le dernier espace libre mesuré sous le dossier
@@ -1277,7 +1278,7 @@ trois mesures manquées), la porte refuse, quoi que dise ce chiffre :
 `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus`
 
 Le refus se lève de lui-même à la mesure suivante. Limite connue : le fil du
-journal ne mesure pas pendant qu'il applique la rétention (14.5), donc une
+journal ne mesure pas pendant qu'il applique la rétention (15.5), donc une
 purge qui durerait plus de 15 s refuserait les départs jusqu'à sa fin, avec
 cette même phrase. Aujourd'hui rien ne pose le marqueur de dépôt : la purge ne
 supprime rien et dure quelques millisecondes.
@@ -1288,7 +1289,7 @@ système de fichiers à blocs de 4 ko, parce que chaque lot brut de 0,2 s est un
 petit fichier. Soit environ 40 Mo et 9 000 fichiers pour 30 minutes. La porte
 compte les octets libres, **pas les inodes libres**.
 
-### 14.5 Rétention : rien n'est purgé sans dépôt confirmé
+### 15.5 Rétention : rien n'est purgé sans dépôt confirmé
 
 Un enregistrement n'est retiré du disque que si les trois conditions sont
 réunies (`src/record/retention.py`) :
@@ -1310,11 +1311,11 @@ regarde que les dossiers d'enregistrement directement sous la racine.
 > **Aujourd'hui, rien n'écrit ce marqueur.** Le dépôt hors de la machine
 > (Convex Storage, ANH-130) n'existe pas encore et attend un avis juridique.
 > Tant qu'il n'appelle pas `confirm_deposit()`, **aucun enregistrement n'est
-> jamais purgé** et le disque se remplit, jusqu'au refus de départ de 14.4.
-> D'ici là, libérer de la place est un geste manuel : exporter (14.6), puis
+> jamais purgé** et le disque se remplit, jusqu'au refus de départ de 15.4.
+> D'ici là, libérer de la place est un geste manuel : exporter (15.6), puis
 > supprimer le dossier à la main.
 
-### 14.6 Export
+### 15.6 Export
 
 `GET /api/records` liste les enregistrements, le plus récent d'abord ;
 `GET /api/records/{nom}/archive` rend un dossier en `.tar.gz`. Les deux routes
@@ -1354,7 +1355,7 @@ L'archive est un fichier temporaire à côté des enregistrements, supprimé apr
 l'envoi (ou dès qu'elle est prête, si sa requête n'attend plus) ; elle ne
 porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
-### 14.7 Ce que l'enregistrement dit des personnes, et sa protection
+### 15.7 Ce que l'enregistrement dit des personnes, et sa protection
 
 - **Opérateur** : jamais le nom saisi. Le manifeste et les événements portent
   un alias, `op-` suivi de 16 chiffres hexadécimaux, dérivé du nom (le même
@@ -1377,7 +1378,7 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni
   le jeton de la console n'y entrent.
 
-### 14.8 Ce qui n'est pas enregistré aujourd'hui
+### 15.8 Ce qui n'est pas enregistré aujourd'hui
 
 - Les trames Modbus du variateur : `drive_frames.jsonl` existe et reste vide
   sur la console (le journal des échanges du pilote n'a ni borne ni vidage).
