@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import math
+from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, cast, override
@@ -367,13 +368,17 @@ def test_the_window_is_the_one_the_legacy_dsp_keeps() -> None:
 
     class _Window(Protocol):
         @property
-        def maxlen(self) -> int | None: ...
+        @abstractmethod
+        def maxlen(self) -> int | None:
+            """How many samples the window keeps."""
 
     class _Processor(Protocol):
         _window: _Window
 
     class _Factory(Protocol):
-        def __call__(self, channel: str, fs_in: int, fs_out: int) -> _Processor: ...
+        @abstractmethod
+        def __call__(self, channel: str, fs_in: int, fs_out: int) -> _Processor:
+            """The processor of one channel, from ``fs_in`` to ``fs_out`` hertz."""
 
     class _Module(Protocol):
         ChannelProcessor: _Factory

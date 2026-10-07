@@ -30,6 +30,7 @@ import ast
 import asyncio
 import threading
 import time
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -467,7 +468,9 @@ class BusFactory(Protocol):
     even in a fixture type.
     """
 
-    def __call__(self, *, offset: int = 0, eta: int = ETA_SWITCH_ON_DISABLED) -> FakeBus: ...
+    @abstractmethod
+    def __call__(self, *, offset: int = 0, eta: int = ETA_SWITCH_ON_DISABLED) -> FakeBus:
+        """A new fake drive at ``offset`` whose status word reads ``eta``."""
 
 
 SETTINGS: Final[SerialSettings] = SerialSettings(port="COM-NONE")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from abc import abstractmethod
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -72,7 +73,9 @@ def test_the_defaults_are_the_plans_numbers() -> None:
 
 
 class _Positional(Protocol):
-    def __call__(self, output_accel: float, g_rate: float, min_run: int, /) -> MotionLimits: ...
+    @abstractmethod
+    def __call__(self, output_accel: float, g_rate: float, min_run: int, /) -> MotionLimits:
+        """The limits built from their fields given by position."""
 
 
 def _with(field: str, bad: float) -> MotionLimits:
