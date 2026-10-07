@@ -2256,26 +2256,30 @@ traduction qui existe, un bouton désactivé dont le gestionnaire revérifie la
 condition) : elles n'ont pas été forcées. Le site est passé de 329 tests à 1 304, Convex de
 954 à 1 044.
 
-**Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur la première exécution
-de la PR #45 (37648336769), comparée étape par étape au push sur `develop` qui
-la précède (37637092583) :
+**Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les deux exécutions
+de la PR #45 (37648336769 puis 37648970197), comparées étape par étape au push
+sur `develop` qui les précède (37637092583) :
 
-| Job | Étape | Sur `develop` | Sur la PR |
-|---|---|---|---|
-| `convex-tests` | `npm run test:convex` | 6 s (954 tests) | 6 s (1 044 tests) |
-| `convex-tests` | mesure de la couverture | 7 s, sans seuil | 6 s, avec le seuil |
-| `web` | `npm run test:ecg` | 1 s (102 tests) | 1 s (172 tests) |
-| `web` | `npm run test:site` | 9 s (227 tests) | 10 s (1 132 tests) |
-| `web` | mesure de la couverture | 14 s, deux exécutions sans seuil | 13 s, une exécution avec le seuil |
+| Job | Étape | Sur `develop` | PR, première exécution | PR, seconde exécution |
+|---|---|---|---|---|
+| `convex-tests` | `npm run test:convex` | 6 s (954 tests) | 6 s | 6 s (1 044 tests) |
+| `convex-tests` | mesure de la couverture | 7 s, sans seuil | 6 s | 7 s, avec le seuil |
+| `convex-tests` | le job entier | 49 s | 45 s | 47 s |
+| `web` | `npm run test:ecg` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
+| `web` | `npm run test:site` | 9 s (227 tests) | 10 s | 17 s (1 132 tests) |
+| `web` | mesure de la couverture | 14 s, deux exécutions sans seuil | 13 s | 22 s, une exécution avec le seuil |
+| `web` | le job entier | 105 s | 77 s | 127 s |
 
-Le seuil lui-même n'ajoute pas d'étape : la mesure existait depuis le rapport
-de qualité, elle est seulement jugée. Les 975 tests ajoutés au site coûtent
-environ une seconde à `npm run test:site`, et la mesure du site, faite en une
-exécution au lieu de deux, ne dure pas plus qu'avant. Les jobs entiers ont
-duré 45 s (`convex-tests`, 49 s sur `develop`) et 77 s (`web`, 105 s) : cet
-écart vient de l'installation et de la construction, qui varient d'un runner à
-l'autre, pas de ce travail. Une seule exécution de chaque côté : c'est un
-ordre de grandeur, pas une moyenne.
+Pour Convex, rien ne change : la mesure existait depuis le rapport de qualité,
+elle est seulement jugée, et 90 tests de plus ne se voient pas. Pour `web`, le
+seuil n'ajoute pas d'étape non plus, mais les 975 tests ajoutés au site
+tournent deux fois, une fois sans mesure et une fois avec. Ce qu'ils coûtent
+dépend du runner. La seconde exécution a eu un runner comparable à celui de
+`develop` (`tsc` 11 s contre 10 s, lint 14 s contre 12 s, construction 25 s
+contre 24 s) : `npm run test:site` y prend 8 s de plus et la mesure 8 s de
+plus, soit environ 16 s sur `web`. La première a eu un runner plus rapide
+(`tsc` 7 s, lint 8 s, construction 15 s) et ne montre presque aucun écart.
+Trois exécutions en tout : c'est un ordre de grandeur, pas une moyenne.
 
 **Tests du mécanisme.** `scripts/ci/ci-workflow.test.mjs` tient la chaîne :
 les deux étapes existent, n'ont pas de `continue-on-error`, lancent le script
