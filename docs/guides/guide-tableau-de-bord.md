@@ -877,8 +877,8 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 | « La machine est déjà en séance. » | Une séance tourne. | Attendre la fin, ou l'arrêter. |
 | « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | La machine refuse les séances auto (réglage de la machine). | Voir [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Aucun programme reçu. | Créer un programme à la console de la machine. |
-| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Ni FC max ni année de naissance. | [Procédure P7](#p7-renseigner-la-fc-max-et-lannée-de-naissance). |
-| « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | FC max saisie mais pas l'année de naissance. L'année est **toujours** obligatoire (contrôle de l'âge). | Idem. |
+| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Ni FC max ni année de naissance. Aussi quand la FC max enregistrée n'est pas un nombre entier : elle compte comme non renseignée. | [Procédure P7](#p7-renseigner-la-fc-max-et-lannée-de-naissance). |
+| « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | FC max saisie mais pas l'année de naissance. L'année est **toujours** obligatoire (contrôle de l'âge). Aussi quand l'année enregistrée n'est pas un nombre entier. | Idem. |
 | « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Pratiquant trop jeune. | Aucune séance auto possible. |
 
 **Avertissements** (encadré rouge, le bouton **Lancer** reste actif mais le
@@ -894,7 +894,8 @@ Les deux règles : **zone haute ≤ 90 % de la FC max** (arrondi à l'entier
 inférieur) et **FC limite du programme ≤ FC max**.
 
 > Pour « Moi-même », la fenêtre ne contrôle pas l'âge à l'avance : c'est le
-> serveur qui refusera si votre année de naissance manque.
+> serveur qui refusera si votre année de naissance manque. Elle bloque
+> seulement si votre année enregistrée n'est pas un nombre entier.
 
 **Après « Lancer »** : le serveur refait tous les contrôles ; en cas de refus,
 son message (en anglais, voir [§7](#7-tableau-des-messages)) s'affiche en rouge
@@ -1291,8 +1292,8 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 | Élément | Règle |
 |---|---|
 | **FC max mesurée (bpm)** | Nombre entier entre 100 et 220, sinon « La FC max doit être comprise entre 100 et 220 bpm ». Vide : pas de FC max mesurée. |
-| **Année de naissance** | L'âge obtenu (année en cours moins année saisie) doit être entre 10 et 100 ans, sinon « Année de naissance invalide ». |
-| **FC max retenue** | Aperçu de ce que le serveur utilisera : la FC max mesurée si elle existe (« mesurée »), sinon l'estimation par l'âge (« estimée (208 − 0,7 × âge) »), sinon « Non renseignée ». |
+| **Année de naissance** | Nombre entier. L'âge obtenu (année en cours moins année saisie) doit être entre 10 et 100 ans, sinon « Année de naissance invalide ». |
+| **FC max retenue** | Aperçu de ce que le serveur utilisera : la FC max mesurée si elle existe (« mesurée »), sinon l'estimation par l'âge (« estimée (208 − 0,7 × âge) »), sinon « Non renseignée ». Une valeur déjà enregistrée qui n'est pas un nombre entier compte comme non renseignée : son champ affiche son message d'erreur (lignes ci-dessus), et **Enregistrer** reste inactif tant qu'il n'est pas corrigé ou vidé. |
 | **Enregistrer** | Actif seulement après une modification valide. N'envoie que les champs touchés. Pendant l'envoi : sablier ; après : « Enregistré » avec une coche. Une erreur du serveur s'affiche en rouge en haut de la carte. |
 
 Pour **effacer** une valeur : videz le champ, puis **Enregistrer**.
@@ -2132,8 +2133,8 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « La machine est déjà en séance. » | Idem | Séance en cours. | Attendre ou arrêter. |
 | « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | Fenêtre de lancement | Voir plus haut. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Fenêtre de lancement | Idem. | P9. |
-| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente. | P7. |
-| « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire). | P7. |
+| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente, ou FC max enregistrée qui n'est pas un nombre entier. | P7. |
+| « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire), ou année enregistrée qui n'est pas un nombre entier. | P7. |
 | « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Fenêtre de lancement | Trop jeune. | Aucune séance auto. |
 | « La zone monte à ... bpm, au delà de 90 % de la FC max du pratiquant ... Le serveur refusera ce lancement. » | Fenêtre de lancement | Programme trop intense pour ce pratiquant. | Choisir un programme plus doux, ou mesurer la FC max réelle (P7). |
 | « La FC limite du programme (...) dépasse la FC max du pratiquant (...). Le serveur refusera ce lancement. » | Fenêtre de lancement | Idem. | Idem. |
@@ -2161,8 +2162,8 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 | « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **Tous**, trouver la séance en attente et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
 | « This machine does not accept programmed sessions yet (manual only, at the machine) » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « This programme is not on the machine » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
-| « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente. | P7. |
-| « The rider's birth year must be set by a manager before an auto session » | Année de naissance absente. | P7. |
+| « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
+| « The rider's birth year must be set by a manager before an auto session » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
 | « Rider is N: auto sessions require at least 18 years » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
 | « Zone up to N bpm exceeds 90% of this rider's max heart rate (... → ceiling ... bpm) » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
 | « Programme hard maximum N bpm is above this rider's max heart rate (N bpm) » | FC limite du programme au dessus de la FC max. | Idem. |
@@ -2180,7 +2181,9 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 | « You do not manage this user » | Patient non rattaché à vous. | P4. |
 | « User not found » | Compte supprimé. | Recharger. |
 | « Only a manager can set physiology » | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
+| « Max heart rate must be a whole number of bpm » | FC max qui n'est pas un nombre entier. | Corriger. |
 | « Max heart rate must be within 100-220 bpm » | FC max hors bornes. | Corriger. |
+| « Birth year must be a whole number » | Année de naissance qui n'est pas un nombre entier. | Corriger. |
 | « Birth year gives an implausible age » | Âge hors de 10 à 100 ans. | Corriger. |
 | « Email already in use by an existing ... account (...) » | Adresse déjà utilisée. | Retrouver la fiche existante. |
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |

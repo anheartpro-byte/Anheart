@@ -157,18 +157,31 @@ export function formatMinutes(totalSeconds: number): string {
   return `${h} h ${String(minutes % 60).padStart(2, "0")}`;
 }
 
-/** Measured maximum if valid, else the Tanaka estimate (208 - 0.7 x age). */
+/**
+ * Whether a max heart rate or a birth year is one the server uses: a finite
+ * whole number, as convex/training.ts requires of both. Any other value on
+ * record counts as not set.
+ */
+export function isWholeNumber(value: unknown): value is number {
+  return Number.isInteger(value);
+}
+
+/**
+ * Measured maximum if valid, else the Tanaka estimate (208 - 0.7 x age). A
+ * measured value that cannot be used (out of range, not a whole number) gives
+ * nothing: it is not replaced by the estimate.
+ */
 export function effectiveHrMax(
   hrMax: number | undefined | null,
   birthYear: number | undefined | null,
   now: number,
 ): { value: number; source: "measured" | "estimated" } | null {
   if (hrMax !== undefined && hrMax !== null) {
-    return hrMax >= HR_MAX_MIN && hrMax <= HR_MAX_MAX
+    return isWholeNumber(hrMax) && hrMax >= HR_MAX_MIN && hrMax <= HR_MAX_MAX
       ? { value: hrMax, source: "measured" }
       : null;
   }
-  if (birthYear === undefined || birthYear === null) return null;
+  if (!isWholeNumber(birthYear)) return null;
   const age = new Date(now).getUTCFullYear() - birthYear;
   if (age < MIN_AGE || age > MAX_AGE) return null;
   return { value: Math.round(208 - 0.7 * age), source: "estimated" };

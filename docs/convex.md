@@ -129,8 +129,8 @@ leur séance ou leur machine, donc par l'organisation de celle-ci.
 | `gestionnaireId` | id users, optionnel | **Ancien champ**, gardé pour compatibilité ; remplacé par la table `user_gestionnaires`. |
 | `firstName`, `lastName`, `email` | string | Identité. |
 | `language` | `"fr"` \| `"en"` | Langue. |
-| `hrMax` | number, optionnel | FC max **mesurée** (bpm). Prioritaire sur l'estimation. |
-| `birthYear` | number, optionnel | Année de naissance. Sert à l'estimation Tanaka et au contrôle d'âge. |
+| `hrMax` | number, optionnel | FC max **mesurée** (bpm), un entier. Prioritaire sur l'estimation. |
+| `birthYear` | number, optionnel | Année de naissance, un entier. Sert à l'estimation Tanaka et au contrôle d'âge. |
 | `createdAt` | number | ms Unix. |
 
 Index : `by_clerk_id`, `by_gestionnaire`, `by_role`, `by_organization`.
@@ -470,13 +470,24 @@ arrive intact dans le navigateur, même en production.
 | `MIN_RIDER_AGE` | 18 | Âge minimum d'un lancement auto distant. **[MED]** : l'abaisser est une décision médicale. Le Pi a sa propre valeur (`MIN_RIDER_AGE` dans `.env`) et fait foi. |
 | `LIVE_FRESH_MS` | 90 000 ms | Au-delà, l'état en direct est « périmé » et la machine « hors ligne ». Une seule définition, dans `lib/training.ts`, importée par `convex/training.ts`, par la tâche `checkOfflineMachines` de `convex/machines.ts` et par le site, qui recalcule la fraîcheur chaque seconde sur l'horloge du serveur ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). `lib/training.ts` doit donc rester sans import `@/` ni code réservé au navigateur. |
 
-**FC max retenue** (`effectiveHrMax`) : la FC max mesurée si elle est dans
-100-220 ; sinon, si l'année de naissance est connue, l'estimation de Tanaka
-`round(208 − 0,7 × âge)` avec `âge = année courante − année de naissance` ;
+**Valeur utilisable.** Une FC max et une année de naissance sont des **entiers
+finis** : des battements par minute et des années se comptent.
+`setUserPhysiology` n'enregistre rien d'autre, et toute lecture d'un compte
+applique la même règle : une valeur enregistrée qui n'est pas un entier fini
+compte comme **non renseignée**. Les contrôles ci-dessous comparent donc
+toujours des nombres. Pour les valeurs enregistrées avant ce contrôle, voir
+[deploiement.md](deploiement.md#35-vérifier-la-physiologie-déjà-enregistrée).
+
+**FC max retenue** (`effectiveHrMax`) : si une FC max mesurée est enregistrée,
+c'est elle, à condition d'être un entier de 100 à 220 ; sinon rien (une valeur
+mesurée inutilisable n'est pas remplacée par l'estimation). Sans FC max
+mesurée, l'estimation de Tanaka `round(208 − 0,7 × âge)` avec
+`âge = année courante − année de naissance`, pour un âge de 10 à 100 ans ;
 sinon rien.
 
-**Âge pour le contrôle** (`ageFrom`) : `année courante − année de naissance − 1`.
-On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
+**Âge pour le contrôle** (`ageFrom`) : `année courante − année de naissance − 1`,
+ou rien si l'année n'est pas renseignée ou n'est pas un entier fini. On suppose
+l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
 
 **Refus de zone** (`zoneRefusal`), dans cet ordre :
 
@@ -485,6 +496,10 @@ On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
 2. `hardMaxBpm > FC max` → « Programme hard maximum … is above this rider's max
    heart rate … ».
 
+Chaque règle est écrite comme ce qui est accepté : un programme ne passe que si
+sa valeur est connue comme inférieure ou égale à la limite. Une valeur qui
+n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
+
 ### Queries et mutations publiques
 
 | Fonction | Type | Arguments | Autorisation | Effet / retour |
@@ -492,7 +507,7 @@ On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
 | `grantLaunchRight` | mutation | `machineId`, `userId` | admin ou gestionnaire de la machine **et** de l'utilisateur ; cible de rôle `user` | Insère le droit. Sans effet s'il existe déjà. |
 | `revokeLaunchRight` | mutation | `machineId`, `userId` | admin ou gestionnaire de la machine | Supprime le droit s'il existe. |
 | `listLaunchRights` | query | `machineId` | admin ou gestionnaire de la machine (sinon `[]`) | `[{userId, name, email, hrMax (retenue ou null), grantedByName, createdAt}]`. |
-| `setUserPhysiology` | mutation | `userId`, `hrMax?` (nombre ou `null` pour effacer), `birthYear?` (idem) | pas un `user` ; `canAccessUser` | Valide FC max 100-220, âge 10-100 ans. Erreurs : « Only a manager can set physiology », « You do not manage this user », « Max heart rate must be within 100-220 bpm », « Birth year gives an implausible age ». |
+| `setUserPhysiology` | mutation | `userId`, `hrMax?` (nombre ou `null` pour effacer), `birthYear?` (idem) | pas un `user` ; `canAccessUser` | Pour chaque valeur fournie : `null` l'efface ; sinon elle doit être un entier fini, puis dans ses bornes (FC max 100-220, âge 10-100 ans). Rien n'est écrit si l'une des deux est refusée. Erreurs : « Only a manager can set physiology », « You do not manage this user », « Max heart rate must be a whole number of bpm », « Max heart rate must be within 100-220 bpm », « Birth year must be a whole number », « Birth year gives an implausible age ». |
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
 | `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow` (voir `getMachineLive`), `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. |
@@ -515,8 +530,12 @@ On suppose l'anniversaire pas encore passé : l'âge n'est jamais surestimé.
    manager before an auto session », puis le refus de zone, puis « The rider's
    birth year must be set by a manager before an auto session » (l'année est
    exigée **même** si la FC max est mesurée), puis « Rider is N: auto sessions
-   require at least 18 years ».
-5. Durée : « Duration must be positive ».
+   require at least 18 years ». Une valeur enregistrée qui n'est pas un entier
+   fini compte comme non renseignée (voir « Valeur utilisable » plus haut) : le
+   lancement est refusé par le premier de ces messages pour la FC max, ou pour
+   l'année de naissance sans FC max mesurée, et par le troisième pour l'année
+   de naissance à côté d'une FC max mesurée. Rien n'est mis en file.
+5. Durée : « Duration must be positive » (un nombre fini, strictement positif).
 
 La séance créée copie le programme (zone, durée, ou la durée demandée),
 `subjectHrMax`, `subjectAge`, `subjectLabel` (nom du pratiquant) et

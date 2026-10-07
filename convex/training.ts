@@ -62,32 +62,55 @@ const HR_MAX_MAX = 220;
 const MIN_AGE = 10;
 const MAX_AGE = 100;
 
-/** Measured maximum if known, else the Tanaka estimate (208 - 0.7 x age). */
+/**
+ * A max heart rate and a birth year are counted, not measured in fractions:
+ * each is a finite whole number, or it is not a value. It is the only kind
+ * `setUserPhysiology` stores, and the only kind read back from an account: a
+ * value on record that is anything else counts as not set, so that every
+ * check below compares numbers.
+ */
+function isWholeNumber(value: unknown): value is number {
+  return Number.isInteger(value);
+}
+
+/**
+ * Measured maximum if known, else the Tanaka estimate (208 - 0.7 x age). A
+ * measured value that cannot be used (out of range, not a whole number) gives
+ * nothing: it is not replaced by the estimate.
+ */
 export function effectiveHrMax(
   user: Pick<Doc<"users">, "hrMax" | "birthYear">,
   now: number,
 ): number | null {
   if (user.hrMax !== undefined) {
-    return user.hrMax >= HR_MAX_MIN && user.hrMax <= HR_MAX_MAX
+    return isWholeNumber(user.hrMax) &&
+      user.hrMax >= HR_MAX_MIN &&
+      user.hrMax <= HR_MAX_MAX
       ? user.hrMax
       : null;
   }
-  if (user.birthYear === undefined) return null;
+  if (!isWholeNumber(user.birthYear)) return null;
   const age = new Date(now).getUTCFullYear() - user.birthYear;
   if (age < MIN_AGE || age > MAX_AGE) return null;
   return Math.round(208 - 0.7 * age);
 }
 
-/** Why a programme is unsafe for this rider, or null if it is acceptable. */
+/**
+ * Why a programme is unsafe for this rider, or null if it is acceptable.
+ *
+ * Each rule is written as what is accepted, negated: a programme passes only
+ * if its value is known to be at or under the limit. A value that is not a
+ * number on either side is therefore a refusal.
+ */
 export function zoneRefusal(
   profile: { zoneHighBpm: number; hardMaxBpm: number },
   hrMax: number,
 ): string | null {
   const ceiling = Math.floor(ZONE_CEILING_FRACTION * hrMax);
-  if (profile.zoneHighBpm > ceiling) {
+  if (!(profile.zoneHighBpm <= ceiling)) {
     return `Zone up to ${profile.zoneHighBpm} bpm exceeds 90% of this rider's max heart rate (${hrMax} bpm → ceiling ${ceiling} bpm)`;
   }
-  if (profile.hardMaxBpm > hrMax) {
+  if (!(profile.hardMaxBpm <= hrMax)) {
     return `Programme hard maximum ${profile.hardMaxBpm} bpm is above this rider's max heart rate (${hrMax} bpm)`;
   }
   return null;
@@ -100,12 +123,15 @@ export function zoneRefusal(
  */
 export const MIN_RIDER_AGE = 18;
 
-/** Age in whole years from a birth year (the later birthday assumed: never older). */
+/**
+ * Age in whole years from a birth year (the later birthday assumed: never
+ * older). Null when the birth year is not set, or is not a whole number.
+ */
 export function ageFrom(
   birthYear: number | undefined,
   now: number,
 ): number | null {
-  if (birthYear === undefined) return null;
+  if (!isWholeNumber(birthYear)) return null;
   return new Date(now).getUTCFullYear() - birthYear - 1;
 }
 
@@ -271,25 +297,31 @@ export const setUserPhysiology = mutation({
     if (!(await canAccessUser(ctx, args.userId, me))) {
       throw new ConvexError("You do not manage this user");
     }
+    // Each value is a whole number first, then within its range; null clears
+    // it. Both are checked before anything is written.
     const patch: Partial<Pick<Doc<"users">, "hrMax" | "birthYear">> = {};
     if (args.hrMax !== undefined) {
-      if (
-        args.hrMax !== null &&
-        (args.hrMax < HR_MAX_MIN || args.hrMax > HR_MAX_MAX)
-      ) {
-        throw new ConvexError(
-          `Max heart rate must be within ${HR_MAX_MIN}-${HR_MAX_MAX} bpm`,
-        );
+      if (args.hrMax !== null) {
+        if (!isWholeNumber(args.hrMax)) {
+          throw new ConvexError("Max heart rate must be a whole number of bpm");
+        }
+        if (args.hrMax < HR_MAX_MIN || args.hrMax > HR_MAX_MAX) {
+          throw new ConvexError(
+            `Max heart rate must be within ${HR_MAX_MIN}-${HR_MAX_MAX} bpm`,
+          );
+        }
       }
       patch.hrMax = args.hrMax ?? undefined;
     }
     if (args.birthYear !== undefined) {
-      const year = new Date().getUTCFullYear();
-      if (
-        args.birthYear !== null &&
-        (year - args.birthYear < MIN_AGE || year - args.birthYear > MAX_AGE)
-      ) {
-        throw new ConvexError("Birth year gives an implausible age");
+      if (args.birthYear !== null) {
+        if (!isWholeNumber(args.birthYear)) {
+          throw new ConvexError("Birth year must be a whole number");
+        }
+        const age = new Date().getUTCFullYear() - args.birthYear;
+        if (age < MIN_AGE || age > MAX_AGE) {
+          throw new ConvexError("Birth year gives an implausible age");
+        }
       }
       patch.birthYear = args.birthYear ?? undefined;
     }
@@ -499,6 +531,8 @@ export const launchAutoSession = mutation({
     const rider = await ctx.db.get(riderId);
     if (!rider) throw new ConvexError("Rider not found");
     const now = Date.now();
+    // Both helpers give null for a value on record that is not a finite whole
+    // number: what is compared below, and copied to the session, always is one.
     const hrMax = effectiveHrMax(rider, now);
     if (hrMax === null) {
       throw new ConvexError(

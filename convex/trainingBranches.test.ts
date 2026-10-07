@@ -362,6 +362,67 @@ describe("a launch is refused when the rider's physiology does not allow the pro
     await expectNothingQueued(w, () => launch(w), "Rider not found");
   });
 
+  // ANH-205. A value on record counts only as a finite whole number. Any
+  // other one is read as not set: it is compared with nothing, and a max
+  // heart rate that cannot be used is not replaced by the estimate.
+  const NOT_WHOLE: Array<[string, number]> = [
+    ["not a number", Number.NaN],
+    ["infinite", Number.POSITIVE_INFINITY],
+    ["infinite and negative", Number.NEGATIVE_INFINITY],
+  ];
+  const UNUSABLE_ON_RECORD: Array<[string, Physiology, string]> = [
+    ...NOT_WHOLE.concat([["a fraction of a year", 1990.5]]).flatMap(
+      ([what, birthYear]): Array<[string, Physiology, string]> => [
+        [
+          `a birth year on record that is ${what}, and a measured max heart rate`,
+          { hrMax: 180, birthYear },
+          BIRTH_YEAR_MISSING,
+        ],
+        [
+          `a birth year on record that is ${what}, and no max heart rate`,
+          { birthYear },
+          PHYSIOLOGY_MISSING,
+        ],
+      ],
+    ),
+    ...NOT_WHOLE.concat([["a fraction of a beat", 180.5]]).flatMap(
+      ([what, hrMax]): Array<[string, Physiology, string]> => [
+        [
+          `a max heart rate on record that is ${what}, whatever their birth year`,
+          { hrMax, birthYear: turning(37) },
+          PHYSIOLOGY_MISSING,
+        ],
+        [
+          `a max heart rate on record that is ${what}, and no birth year`,
+          { hrMax },
+          PHYSIOLOGY_MISSING,
+        ],
+      ],
+    ),
+  ];
+
+  it.each(UNUSABLE_ON_RECORD)(
+    "refuses a launch for a rider with %s",
+    async (_name, physiology, words) => {
+      const w = await seedWorld(modules);
+      await withPhysiology(w, w.patient, physiology);
+
+      await expectNothingQueued(w, () => launch(w), words);
+      // The rider is refused the same way when launching for themselves.
+      await expectNothingQueued(
+        w,
+        () =>
+          as(w.t, "patient").mutation(api.training.launchAutoSession, {
+            machineId: w.machine,
+            profileId: w.profileId,
+          }),
+        words,
+      );
+      // The machine is offered nothing.
+      expect(await offeredTo(w, w.machine)).toBeNull();
+    },
+  );
+
   it("queues the estimated max heart rate when only the birth year is known, and offers it to the machine", async () => {
     const w = await seedWorld(modules);
     await withPhysiology(w, w.patient, { birthYear: turning(37) });
@@ -467,6 +528,19 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     [{ birthYear: turning(9) }, null],
     [{ birthYear: turning(101) }, null],
     [{}, null],
+    // ANH-205: only a finite whole number is a value. A measured one that is
+    // not gives nothing, with a usable birth year too...
+    [{ hrMax: Number.NaN }, null],
+    [{ hrMax: Number.NaN, birthYear: turning(37) }, null],
+    [{ hrMax: Number.POSITIVE_INFINITY, birthYear: turning(37) }, null],
+    [{ hrMax: Number.NEGATIVE_INFINITY, birthYear: turning(37) }, null],
+    [{ hrMax: 150.5 }, null],
+    [{ hrMax: 150.5, birthYear: turning(37) }, null],
+    // ...and no estimate is made from a birth year that is not one.
+    [{ birthYear: Number.NaN }, null],
+    [{ birthYear: Number.POSITIVE_INFINITY }, null],
+    [{ birthYear: Number.NEGATIVE_INFINITY }, null],
+    [{ birthYear: turning(37) + 0.5 }, null],
   ])("effectiveHrMax(%o) is %s", (physiology, expected) => {
     expect(effectiveHrMax(physiology, NOW)).toBe(expected);
   });
@@ -484,6 +558,28 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 182 }, 181)).toMatch(
       /^Zone up to 163 bpm/,
     );
+  });
+
+  it("ANH-205: refuses a zone when the max heart rate, the top of the zone or the hard maximum is not a number", () => {
+    const fits = { zoneHighBpm: 162, hardMaxBpm: 181 };
+    expect(zoneRefusal(fits, 181)).toBeNull();
+
+    expect(zoneRefusal(fits, Number.NaN)).toMatch(/^Zone up to 162 bpm/);
+    expect(zoneRefusal({ ...fits, zoneHighBpm: Number.NaN }, 181)).toMatch(
+      /^Zone up to NaN bpm/,
+    );
+    expect(zoneRefusal({ ...fits, hardMaxBpm: Number.NaN }, 181)).toMatch(
+      /^Programme hard maximum NaN bpm/,
+    );
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    turning(37) + 0.5,
+  ])("ANH-205: counts no age from a birth year of %s", (birthYear) => {
+    expect(ageFrom(birthYear, NOW)).toBeNull();
   });
 
   it("counts an age in whole years on the UTC year, the later birthday assumed", () => {
@@ -515,13 +611,72 @@ describe("the physiology a manager sets for a rider", () => {
       ...values,
     });
 
-  it.each([99, 221, 0, -150, Number.POSITIVE_INFINITY])(
+  it.each([99, 221, 0, -150])(
     "refuses a max heart rate of %s bpm and keeps the stored one",
     async (hrMax) => {
       const w = await seedWorld(modules);
 
       expect(await refusalOf(set(w, { hrMax }))).toBe(
         "Max heart rate must be within 100-220 bpm",
+      );
+      expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
+    },
+  );
+
+  // ANH-205. A whole number first, then the range: a value that is not a
+  // finite whole number is refused as such, in the range or out of it.
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    150.5,
+    99.5,
+    220.5,
+  ])(
+    "requires a whole number of bpm: refuses a max heart rate of %s and keeps the stored one",
+    async (hrMax) => {
+      const w = await seedWorld(modules);
+
+      expect(await refusalOf(set(w, { hrMax }))).toBe(
+        "Max heart rate must be a whole number of bpm",
+      );
+      expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
+    },
+  );
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    1990.5,
+    turning(9) + 0.5,
+    turning(101) - 0.5,
+  ])(
+    "requires a whole year: refuses a birth year of %s and keeps the stored one",
+    async (birthYear) => {
+      const w = await seedWorld(modules);
+
+      expect(await refusalOf(set(w, { birthYear }))).toBe(
+        "Birth year must be a whole number",
+      );
+      expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
+    },
+  );
+
+  it.each<[string, unknown]>([
+    ["a text", "180"],
+    ["a 64-bit integer", BigInt(180)],
+    ["a boolean", true],
+    ["a list", [180]],
+  ])(
+    "takes a number or null for each value: %s is refused before anything is read or written",
+    async (_name, value) => {
+      const w = await seedWorld(modules);
+      const given = value as number;
+
+      expect(await refusalOf(set(w, { hrMax: given }))).toMatch(/Validator/);
+      expect(await refusalOf(set(w, { birthYear: given }))).toMatch(
+        /Validator/,
       );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
@@ -575,6 +730,14 @@ describe("the physiology a manager sets for a rider", () => {
     expect(await refusalOf(set(w, { hrMax: 300, birthYear: 1985 }))).toBe(
       "Max heart rate must be within 100-220 bpm",
     );
+    expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
+    // ANH-205: the same when one of the two is not a whole number.
+    expect(await refusalOf(set(w, { hrMax: 150, birthYear: Number.NaN }))).toBe(
+      "Birth year must be a whole number",
+    );
+    expect(
+      await refusalOf(set(w, { hrMax: Number.NaN, birthYear: 1985 })),
+    ).toBe("Max heart rate must be a whole number of bpm");
     expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
   });
 
@@ -756,6 +919,53 @@ describe("launch rights are granted once and revoked quietly", () => {
       { userId: w.stranger, name: "stranger Synthetic", hrMax: 182 },
     ]);
   });
+
+  it.each<[string, Physiology]>([
+    ["a birth year that is not a number", { birthYear: Number.NaN }],
+    ["a fraction of a year as birth year", { birthYear: turning(37) + 0.5 }],
+    [
+      "a max heart rate that is not a number",
+      { hrMax: Number.NaN, birthYear: turning(37) },
+    ],
+    [
+      "a fraction of a beat as max heart rate",
+      { hrMax: 180.5, birthYear: turning(37) },
+    ],
+  ])(
+    "ANH-205: gives no max heart rate, wherever one is shown or served, for a rider with %s on record",
+    async (_name, physiology) => {
+      const w = await seedWorld(modules);
+      await withPhysiology(w, w.patient, physiology);
+
+      // The manager's list of rights, and the manager's view of the account.
+      const listed = await as(w.t, "manager").query(
+        api.training.listLaunchRights,
+        { machineId: w.machine },
+      );
+      expect(listed.map((right) => [right.userId, right.hrMax])).toEqual([
+        [w.patient, null],
+      ]);
+      expect(
+        await as(w.t, "manager").query(api.users.getUserById, {
+          userId: w.patient,
+        }),
+      ).toMatchObject({ effectiveHrMax: null });
+      // The rider's own machines.
+      const mine = await as(w.t, "patient").query(
+        api.training.listLaunchableMachines,
+        {},
+      );
+      expect(mine.map((machine) => [machine._id, machine.myHrMax])).toEqual([
+        [w.machine, null],
+      ]);
+      // The machine's list of riders.
+      expect(
+        await w.t.query(internal.training.getRoster, { machineId: w.machine }),
+      ).toEqual([
+        { userId: w.patient, name: "patient Synthetic", hrMax: null },
+      ]);
+    },
+  );
 
   it("leaves out a right whose account no longer exists", async () => {
     const w = await seedWorld(modules);

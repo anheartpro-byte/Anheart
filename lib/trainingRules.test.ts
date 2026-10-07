@@ -6,6 +6,7 @@ import {
   formatMinutes,
   GEAR_RATIO,
   isTrainingKind,
+  isWholeNumber,
   MIN_RIDER_AGE,
   readOptionalNumber,
   readOptionalString,
@@ -104,6 +105,55 @@ describe("ANH-203 effectiveHrMax: the max heart rate a launch is vetted against"
     expect(effectiveHrMax(undefined, 2017, Date.UTC(2027, 0, 1))).toEqual({
       value: 201,
       source: "estimated",
+    });
+  });
+});
+
+describe("ANH-205 a max heart rate and a birth year count only as finite whole numbers", () => {
+  it.each([100, 172, 1986, 0, -5])("%s is a whole number", (value) => {
+    expect(isWholeNumber(value)).toBe(true);
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    172.5,
+    "172",
+    null,
+    undefined,
+  ])("%s is not", (value) => {
+    expect(isWholeNumber(value)).toBe(false);
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    172.5,
+  ])(
+    "gives nothing for a measured value of %s: it is not replaced by an estimate",
+    (hrMax) => {
+      expect(effectiveHrMax(hrMax, 1986, NOW)).toBeNull();
+      expect(effectiveHrMax(hrMax, undefined, NOW)).toBeNull();
+    },
+  );
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    1986.5,
+  ])("estimates nothing from a birth year of %s", (birthYear) => {
+    expect(effectiveHrMax(undefined, birthYear, NOW)).toBeNull();
+    expect(effectiveHrMax(null, birthYear, NOW)).toBeNull();
+  });
+
+  it("still keeps a measured whole number beside a birth year that is not one", () => {
+    // The launch window refuses that rider on the birth year itself.
+    expect(effectiveHrMax(172, Number.NaN, NOW)).toEqual({
+      value: 172,
+      source: "measured",
     });
   });
 });
