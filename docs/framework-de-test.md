@@ -2185,12 +2185,37 @@ maintenir entre la mesure et le verdict. Ce qui reste écrit ici, ce sont la
 liste (`coverage-thresholds.mjs`) et les tests qui tiennent la chaîne, de la
 liste à l'étape qui fait échouer le job.
 
-Une précaution : Vitest tient pour atteint le seuil d'un nom de fichier qui ne
-correspond à aucun fichier mesuré. Un fichier de la chaîne de sécurité
-renommé sans mettre la liste à jour laisserait donc son seuil sans objet. Un
-test vérifie que chaque fichier jugé seul existe et n'est pas exclu de la
-mesure, et le rapport écrit « indisponible », jamais « tenu », pour un fichier
-qu'il ne trouve pas dans la mesure.
+**Un seuil sans objet arrête la commande.** Vitest tient pour atteint le seuil
+d'un nom qui ne correspond à aucun fichier mesuré, et un dossier qui ne
+contient aucun fichier sort de la mesure sans un mot. Renommer
+`convex/training.ts` sans mettre la liste à jour, ou mal écrire un dossier du
+site, laisserait donc la gate verte. Chaque configuration qui applique un
+seuil appelle pour cela `assertMeasured` (`scripts/ci/coverage-thresholds.mjs`)
+avant de se donner à Vitest : sur les listes mêmes qu'elle mesure, elle
+vérifie que chaque fichier jugé seul est un fichier mesuré (présent, inclus,
+non exclu) et que chaque dossier mesuré contient au moins un fichier mesuré.
+Sinon la commande ne démarre pas et rend le code 1 :
+
+```
+Startup Error
+Error: Coverage threshold without an object (scripts/ci/coverage-thresholds.mjs):
+- "convex/training-renamed.ts" must reach the threshold alone but is not a measured file (renamed, removed or excluded?): its threshold would count as reached
+```
+
+Le contrôle est donc dans l'étape qui applique le seuil, dans les jobs
+obligatoires `convex-tests` et `web`, et non dans le seul job `changes`, qui
+n'est pas une vérification obligatoire. Pour Convex, `npm run test:convex`
+lit la même configuration : il s'arrête lui aussi, avec le même message.
+Observé en local le 7 octobre 2026 avec un nom changé dans la liste : avant
+ce contrôle, `npm run coverage:convex` rendait 0 sans rien dire ; avec lui,
+1 et le message ci-dessus. Même chose pour `npm run coverage:site` avec un
+dossier mal écrit. Le rapport, de son côté, écrit « indisponible », jamais
+« tenu », pour un fichier qu'il ne trouve pas dans la mesure.
+
+Ce contrôle lit les listes et le disque, pas le résultat de la mesure : il
+tient pour mesuré ce que les listes disent mesurer. Le jour où il a été
+écrit, les deux ensembles étaient les mêmes (21 fichiers pour Convex, 78 pour
+le site, comparés au rapport de couverture).
 
 **Lancer le même contrôle en local.**
 
@@ -2212,7 +2237,10 @@ ERROR: Coverage for branches (75.51%) does not meet "convex/training.ts" thresho
 
 « global » désigne l'ensemble de la mesure ; un nom de fichier entre
 guillemets, ce fichier pris seul. Si un test échoue, la même étape est rouge
-aussi, mais l'étape des tests l'est déjà au-dessus : commencer par elle.
+aussi, mais l'étape des tests l'est déjà au-dessus : commencer par elle. Si
+l'étape s'arrête sur « Startup Error » et « Coverage threshold without an
+object », aucun test n'a tourné : un fichier ou un dossier nommé par la liste
+n'est plus mesuré (voir « Un seuil sans objet arrête la commande »).
 
 Pour savoir quoi couvrir : le résumé du job (« Détail de la qualité ») liste
 les dix fichiers les moins couverts ; le rapport ligne par ligne est dans
@@ -2253,7 +2281,7 @@ Aucun fichier du site n'est sous 80 % : le moins couvert en branches est
 pour l'essentiel, des gardes qu'aucun parcours n'atteint (une référence
 d'élément nulle dans un gestionnaire de clic, un texte de repli derrière une
 traduction qui existe, un bouton désactivé dont le gestionnaire revérifie la
-condition) : elles n'ont pas été forcées. Le site est passé de 329 tests à 1 304, Convex de
+condition) : elles n'ont pas été forcées. Le site est passé de 329 tests à 1 321, Convex de
 954 à 1 044.
 
 **Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les deux exécutions
@@ -2292,7 +2320,11 @@ rien ; la couverture n'est mesurée nulle part ailleurs dans le workflow.
 79,9 % ne l'est pas, sur les lignes comme sur les branches), l'affichage
 « tenu », « non tenu » et « indisponible », que chaque fichier jugé seul
 existe et reste dans la mesure, et que cette section nomme le seuil, chaque
-dossier, chaque fichier jugé seul et chaque exclusion.
+dossier, chaque fichier jugé seul et chaque exclusion. Il exerce aussi
+`assertMeasured` sur un petit dépôt d'essai (fichier renommé, fichier exclu,
+dossier vide ou ne contenant que des tests), et `ci-workflow.test.mjs`
+vérifie que les deux configurations l'appellent, avant de se définir et sans
+l'adoucir.
 
 Ces tests lisent des fichiers : ils ne lancent pas Vitest (le job `changes`
 n'installe rien). Que la commande échoue réellement sous le seuil a été
@@ -2548,16 +2580,17 @@ chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
 (`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
 n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
 
-**Deux sortes de tests, deux documents.** Les composants, les hooks et les
-règles de `lib/` sont testés sur le document minimal de `test-support/`,
-décrit ci-dessous. Les pages (`app/`) le sont avec la bibliothèque standard,
-jsdom et testing-library, activée fichier par fichier : elle arrive avec
-ANH-204 (`test-support/pages.tsx`), dont la PR est fusionnée après celle-ci.
-Les deux coexistent dans `npm run test:site`. Pour un nouveau test : un
-composant va sur le document minimal tant qu'il n'a besoin de rien de ce que
-ce document n'implémente pas (la liste est sous « Limites ») ; sinon il va sur
-la bibliothèque standard. On n'étend pas le document minimal pour imiter un
-navigateur.
+**Quel test va sur quel document.** Les composants, les hooks et les règles
+de `lib/` sont testés sur le document minimal de `test-support/`, décrit
+ci-dessous : ce sont, à ce jour, les seuls tests unitaires du site. Les pages
+(`app/`) n'en ont pas encore. ANH-204 doit les ajouter avec la bibliothèque
+standard (jsdom et testing-library, activés fichier par fichier) ; tant que
+ce travail n'est pas fusionné, le dépôt ne contient pas ces bibliothèques, et
+c'est à lui de mettre ce paragraphe à jour. Pour un nouveau test de
+composant : le document minimal convient tant que le test n'a besoin de rien
+de ce que ce document n'implémente pas (la liste est sous « Limites »). Sinon
+le test attend la bibliothèque standard ou la suite navigateur (ANH-83) : on
+n'étend pas le document minimal pour imiter un navigateur.
 
 **Le document des tests : `test-support/`.** Le rendu en HTML statique des
 sections précédentes ne suffit pas à un formulaire : il ne garde pas d'état
@@ -2568,7 +2601,7 @@ lequel le vrai React tourne (état, effets, nouveau rendu après un événement)
 |---|---|
 | `test-support/dom.ts` | le document : ce que React demande à un document (éléments, texte, attributs, événements qui descendent et remontent), et rien de ce qu'un navigateur ajoute (ni mise en page, ni focus, ni CSS) |
 | `test-support/render.tsx` | `render(<Composant />)` sous le vrai fournisseur `next-intl` avec les vrais `messages/`, puis `click`, `type`, `submit`, `fire`, et de quoi lire l'écran (`screen.text()`, `screen.button(libellé)`, `screen.field(id)`). Doit être le premier import du fichier de test : React décide au chargement s'il a un document |
-| `test-support/convex.ts` | ce qui remplace `convex/react` : `answer(nom, valeur)` fixe la réponse d'une requête, `mutation(nom)` est la fonction appelée, `asks(nom)` les arguments demandés (ou `"skip"`). `useMutationWithFeedback` reste le vrai, par-dessus |
+| `test-support/convex.ts` | ce qui remplace `convex/react` : `answer(nom, valeur)` fixe la réponse d'une requête, `mutation(nom)` est la fonction appelée, `asks(nom)` les arguments demandés (ou `"skip"`), `sessionIs(état)` dit si le visiteur est connecté (`Authenticated`, `Unauthenticated`, `AuthLoading`, `useConvexAuth`). `useMutation` rend la même fonction à chaque rendu, comme le vrai. `useMutationWithFeedback` reste le vrai, par-dessus |
 | `test-support/ui.tsx` | des remplaçants nommés pour nos fenêtres, listes de choix et cases à cocher (`components/ui/dialog`, `select`, `checkbox`), pour tester le composant qui s'en sert |
 | `test-support/radix.tsx` | des remplaçants pour les primitives Radix, pour tester nos propres enveloppes de `components/ui/` |
 | `test-support/browser.ts` | ce qu'un navigateur ajoute et que certains composants demandent : horloge d'images d'animation, canevas, largeur de fenêtre, observateurs. Chaque pièce est installée et pilotée par le test |
@@ -2620,6 +2653,9 @@ restaurée).
   `components/ConvexClientProvider.test.tsx`.
 - `components/ui/` : un fichier de test par composant, ou par petit groupe
   (`plain-elements.test.tsx`).
+- `hooks/use-mutation-with-feedback.stable.test.tsx` (la fonction rendue par
+  le hook est la même à chaque rendu : une page peut la nommer dans les
+  dépendances d'un effet) ;
 - `hooks/use-mobile.test.tsx` ; `lib/trainingRules.test.ts` (FC max retenue,
   plafond de zone, durées), `lib/feedback.test.ts`, `lib/version.test.ts`.
 - Convex : `convex/trainingBranches.test.ts` (`npm run test:convex`) couvre les
@@ -2637,28 +2673,50 @@ restaurée).
   documentation, pas d'après une exécution.
 - Le document minimal a été écrit d'après ce que React lui demande. Aucun test
   ne le compare à un vrai DOM.
+- Le remplaçant de Convex (`test-support/convex.ts`) n'a pas de serveur : une
+  réponse ne change que si le test appelle `answer` et rend de nouveau (aucun
+  abonnement), les arguments ne sont pas comparés aux validateurs d'une
+  fonction, un nom mal écrit dans `answer` ne répond rien sans le dire, et
+  aucune règle de `convex/` ne tourne. Il ne fournit que ce que le site
+  importe de `convex/react` aujourd'hui : ni action, ni requête paginée, ni
+  mise à jour optimiste.
 
 **Ce que le document minimal n'implémente pas.** Un test écrit dessus ne
 prouve donc rien de ce qui suit, quel que soit son résultat :
 
 - **Aucune action par défaut du navigateur.** Un clic sur un bouton d'envoi
   n'envoie pas le formulaire, la touche Entrée non plus : les tests appellent
-  `submit(formulaire)`. Un bouton du mauvais `type`, ou un formulaire sans
-  bouton d'envoi, n'est donc pas vu. Un clic sur un libellé ne donne pas le
-  focus à son champ, un lien ne navigue pas, une case native ne se coche pas.
+  `submit(formulaire)`. Un bouton du mauvais `type` n'est donc pas vu par un
+  test qui agit seulement : un bouton « Annuler » sans `type="button"`
+  enverrait le formulaire dans un navigateur, et rien ici ne le montrerait.
+  Les tests des quatre formulaires (lancement, machine, patient, physiologie)
+  lisent pour cela le type de chaque bouton (`buttonsOf(formulaire)`) : un
+  seul envoie, tous les autres sont de simples boutons. Tout nouveau
+  formulaire doit avoir ce test. Un clic sur un libellé ne donne pas le focus
+  à son champ, un lien ne navigue pas, une case native ne se coche pas.
 - **Aucune mise en page ni CSS.** Chaque élément est un point à l'origine, de
   taille nulle ; une classe est un texte. `screen.text()` lit tout ce qui est
-  dans l'arbre, y compris ce qu'une classe cacherait à l'écran : un test
-  prouve qu'un élément est présent ou absent, pas qu'il est visible.
+  dans l'arbre, y compris ce qu'une classe ou un style cacherait à l'écran
+  (`hidden`, `sr-only`, `display: none`) : un test prouve qu'un élément est
+  présent ou absent, pas qu'il est visible.
 - **Aucune règle de focus ni de clavier.** `focus()` note l'élément, rien de
   plus : pas d'ordre de tabulation, pas de focus retenu dans une fenêtre.
 - **Un seul événement à la fois.** `click` envoie `click`, sans les événements
   de pointeur qui le précèdent dans un navigateur ; `type` envoie `input` et
   `change`, sans les touches. Un élément `disabled` n'est respecté que par
   l'outil `click`.
-- **Aucune validation native** (`required`, `min`, `max`, `type="email"`),
-  aucune liste `<select>` native, aucun sélecteur (`querySelector`), aucune
-  lecture de HTML (`innerHTML`).
+- **Aucun champ ne filtre ni ne valide.** Dans un navigateur, un champ
+  `type="number"` ne rend jamais un texte comme « abc » (il rend une valeur
+  vide), et `min`, `max`, `step`, `required` ou `type="email"` empêchent
+  l'envoi d'une valeur hors règle. Ici `type(champ, texte)` écrit n'importe
+  quel texte dans n'importe quel champ et `submit` l'envoie. Un test qui tape
+  « abc » ou « 12.5 » dans la durée d'un lancement prouve ce que le composant
+  fait si une telle valeur lui parvient, pas qu'un utilisateur peut la
+  saisir : ces cas sont nommés ainsi dans `LaunchTrainingModal.test.tsx`, qui
+  lit par ailleurs les attributs `type`, `min` et `step` du champ sans les
+  exercer.
+- **Aucune liste `<select>` native, aucun sélecteur (`querySelector`), aucune
+  lecture de HTML (`innerHTML`).**
 - **Aucun arbre d'accessibilité.** Un rôle ou un nom accessible est un
   attribut lu tel qu'il est écrit : rien ne calcule ce qu'un lecteur d'écran
   annoncerait.
