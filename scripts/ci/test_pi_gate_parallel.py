@@ -19,7 +19,10 @@ real suite. Three kinds of test:
   against a throwaway battery;
 * a suite whose shares are run by several calls, as the CI jobs of the
   simulation gate do (``--shares`` then ``--combine``): the green case, then
-  once for each way the calls together must NOT be able to pass.
+  once for each way the calls together must NOT be able to pass;
+* what ``--report`` leaves for the quality report of the run, and that it
+  changes no verdict: a red run stays red, a report that cannot be written
+  leaves a green run green.
 
 Several of the throwaway scenarios are built so that ONE check is all that
 stands between them and a pass: process 0 alone covers the whole of the
@@ -31,13 +34,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from coverage import CoverageData
@@ -48,6 +52,7 @@ from pi_gate_parallel import (
     parse_arguments,
     parse_shares,
     read_lines,
+    report_coverage,
 )
 from pi_gate_shard import (
     ALONE_IN_PROCESS_ZERO,
@@ -838,9 +843,12 @@ def test_each_way_to_call_the_runner_is_told_apart(tmp_path: Path) -> None:
     whole = parse_arguments(["--processes", "4", "--fail-under", "100"])
     assert (whole.mode, whole.shares, whole.count) == (Mode.WHOLE, range(4), 4)
     assert (whole.suite, whole.evidence, whole.fail_under) == ("pi", None, "100")
+    assert whole.report is None
+    reported = parse_arguments(["--processes", "4", "--fail-under", "100", "--report", directory])
+    assert (reported.mode, reported.report) == (Mode.WHOLE, tmp_path)
     part = parse_arguments(["--shares", "5-8/13", "--evidence", directory, "--suite", "simulation"])
     assert (part.mode, part.shares, part.count) == (Mode.PART, range(5, 9), 13)
-    assert (part.suite, part.evidence) == ("simulation", tmp_path)
+    assert (part.suite, part.evidence, part.report) == ("simulation", tmp_path, None)
     combine = parse_arguments(["--combine", "13", "--evidence", directory, "--fail-under", "99.5"])
     assert (combine.mode, combine.shares, combine.count) == (Mode.COMBINE, range(0), 13)
     assert (combine.evidence, combine.fail_under) == (tmp_path, "99.5")
@@ -1037,3 +1045,195 @@ def test_what_an_earlier_call_left_for_a_share_is_not_judged_again(
     assert "process 1 left no record of what it collected and ran" in again.stdout
     assert not (kept / "executed-1.txt").exists()
     assert combine(project, kept).returncode == 1
+
+
+# --- What is left for the quality report of the run ------------------------
+
+OUTSIDE_THE_THRESHOLD: Final[Mapping[str, str]] = {
+    # The threshold judges src/lib.py alone, as the real project judges its
+    # safety chain alone; src/extra.py is measured and has a branch no test takes.
+    "pyproject.toml": PROJECT["pyproject.toml"] + 'include = ["src/lib.py"]\n',
+    "src/extra.py": (
+        "def clamp(value: int) -> int:\n    if value > 9:\n        return 9\n    return value\n"
+    ),
+    "tests/test_extra.py": (
+        "from src.extra import clamp\n\n\ndef test_small() -> None:\n    assert clamp(3) == 3\n"
+    ),
+}
+
+
+WHOLE: Final[Sequence[str]] = ("--processes", "2", "--fail-under", "100")
+"""The whole throwaway suite in one call, as the Pi gate runs the real one."""
+
+
+def json_object(value: object) -> Mapping[str, object]:
+    """A JSON object read back, its values still to be told apart."""
+    assert isinstance(value, dict)
+    return cast("Mapping[str, object]", value)
+
+
+def coverage_report(path: Path) -> tuple[Collection[str], Mapping[str, object]]:
+    """The files a coverage JSON report names, and its totals."""
+    report = json_object(recorded(path))
+    return set(json_object(report["files"])), json_object(report["totals"])
+
+
+def junit_counts(path: Path) -> tuple[int, int]:
+    """How many tests, and how many failures, pytest's own JUnit file states."""
+    suite = re.search(
+        r'<testsuite [^>]*failures="(\d+)"[^>]* tests="(\d+)"', path.read_text("utf-8")
+    )
+    assert suite is not None, path
+    return int(suite.group(2)), int(suite.group(1))
+
+
+def test_a_report_holds_each_process_and_both_coverages(project: Path, kept: Path) -> None:
+    for name, content in OUTSIDE_THE_THRESHOLD.items():
+        (project / name).write_text(content, encoding="utf-8")
+
+    result = run_runner(project, *WHOLE, "--report", str(kept))
+
+    # The hole is outside what the threshold judges: the verdict is that of a run with no report.
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    counts = [junit_counts(kept / f"junit-{index}.xml") for index in range(2)]
+    assert sum(tests for tests, _ in counts) == 7
+    assert [failures for _, failures in counts] == [0, 0]
+    judged, judged_totals = coverage_report(kept / "coverage-gate.json")
+    assert judged == {"src/lib.py"}
+    assert judged_totals["missing_lines"] == 0
+    assert judged_totals["missing_branches"] == 0
+    measured, measured_totals = coverage_report(kept / "coverage-all.json")
+    assert {"src/lib.py", "src/extra.py"} <= set(measured)
+    assert measured_totals["missing_lines"] == 1
+    assert measured_totals["missing_branches"] == 1
+
+
+def test_a_report_does_not_make_a_red_run_green(project: Path, kept: Path) -> None:
+    remove_the_only_test_of_the_negative_branch(project)
+    with (project / "tests/test_lib.py").open("a", encoding="utf-8") as tests:
+        tests.write("\n\ndef test_broken() -> None:\n    assert sign(1) == -1\n")
+
+    result = run_runner(project, *WHOLE, "--report", str(kept))
+
+    assert result.returncode == 1
+    assert "combined coverage is below the required 100%" in result.stdout
+    assert "1 tests failed or errored according to the processes' records" in result.stdout
+    # What went wrong is in the report too: it is read whatever the verdict.
+    assert sum(junit_counts(kept / f"junit-{index}.xml")[1] for index in range(2)) == 1
+    _, judged_totals = coverage_report(kept / "coverage-gate.json")
+    assert judged_totals["missing_lines"] == 1
+
+
+def test_a_report_that_cannot_be_written_changes_no_verdict(project: Path) -> None:
+    """The directory asked for is under a file: nothing can be created there."""
+    nowhere = project / "pyproject.toml" / "report"
+
+    result = run_runner(project, *WHOLE, "--report", str(nowhere))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[gate] quality report: nothing is left in {nowhere}" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+
+
+def test_a_report_directory_that_cannot_be_written_to_changes_no_verdict(
+    project: Path, kept: Path
+) -> None:
+    """The directory is there and closed: a pytest told to write there would end in error."""
+    if os.geteuid() == 0:
+        pytest.skip("no directory is closed to root")
+    kept.mkdir(parents=True)
+    kept.chmod(0o555)
+    try:
+        result = run_runner(project, *WHOLE, "--report", str(kept))
+    finally:
+        kept.chmod(0o755)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[gate] quality report: nothing is left in {kept}" in result.stdout
+    assert "[gate] process 0 ended: exit code 0" in result.stdout
+    assert "[gate] process 1 ended: exit code 0" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert list(kept.iterdir()) == []
+
+
+def test_a_coverage_report_that_cannot_be_written_is_said_and_stops_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``coverage json`` fails on both reports: there is no data where it is told to read."""
+    report_coverage(tmp_path / "no data here" / ".coverage", tmp_path)
+
+    said = capsys.readouterr().out
+    assert "[gate] quality report: coverage-gate.json could not be written" in said
+    assert "[gate] quality report: coverage-all.json could not be written" in said
+    assert not (tmp_path / "coverage-gate.json").exists()
+    assert not (tmp_path / "coverage-all.json").exists()
+
+
+def test_a_report_file_that_cannot_be_replaced_changes_no_verdict(
+    project: Path, kept: Path
+) -> None:
+    """A directory stands where a file of the report goes: it is neither removed nor written.
+
+    One of the two coverage reports and the JUnit file of process 1. The
+    verdict is that of a run with no report, and what can be written is.
+    """
+    (kept / "coverage-gate.json" / "in the way").mkdir(parents=True)
+    (kept / "junit-1.xml" / "in the way").mkdir(parents=True)
+
+    result = run_runner(project, *WHOLE, "--report", str(kept))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[gate] quality report: junit-1.xml cannot be replaced" in result.stdout
+    assert "[gate] quality report: coverage-gate.json cannot be replaced" in result.stdout
+    assert "[gate] quality report: coverage-gate.json could not be written" in result.stdout
+    assert "[gate] process 1 ended: exit code 0" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert junit_counts(kept / "junit-0.xml") == (4, 0)
+    assert coverage_report(kept / "coverage-all.json")[0] == {"src/__init__.py", "src/lib.py"}
+    assert (kept / "coverage-gate.json" / "in the way").is_dir()
+    assert (kept / "junit-1.xml" / "in the way").is_dir()
+
+
+def test_shares_report_their_tests_and_the_combining_call_the_coverage(
+    project: Path, kept: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    parts = kept / "quality"
+    assert run_shares_reporting(project, "0-0/2", kept, parts).returncode == 0
+    assert run_shares_reporting(project, "1-1/2", kept, parts).returncode == 0
+    assert sum(junit_counts(parts / f"junit-{index}.xml")[0] for index in range(2)) == 6
+    assert not (parts / "coverage-gate.json").exists(), "a part cannot speak of the whole"
+
+    whole = tmp_path_factory.mktemp("report")
+    arguments = ["--combine", "2", "--evidence", str(kept), "--fail-under", "100"]
+    result = run_runner(project, *arguments, "--report", str(whole))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert coverage_report(whole / "coverage-gate.json")[0] == {"src/__init__.py", "src/lib.py"}
+    assert coverage_report(whole / "coverage-all.json")[0] == {"src/__init__.py", "src/lib.py"}
+    assert not list(whole.glob("junit-*.xml")), "no test is run by the combining call"
+
+
+def run_shares_reporting(
+    project: Path, shares: str, kept: Path, report: Path
+) -> subprocess.CompletedProcess[str]:
+    arguments = ["--shares", shares, "--evidence", str(kept), "--report", str(report)]
+    return run_runner(project, *arguments)
+
+
+def test_the_report_of_an_earlier_call_is_not_left_for_a_process_that_wrote_none(
+    project: Path, kept: Path
+) -> None:
+    parts = kept / "quality"
+    assert run_shares_reporting(project, "0-1/2", kept, parts).returncode == 0
+    assert junit_counts(parts / "junit-1.xml") == (2, 0)
+    misbehave_in_process_one(project, "pytest_sessionfinish", "os._exit(0)", first=True)
+
+    again = run_shares_reporting(project, "1-1/2", kept, parts)
+
+    assert again.returncode == 1
+    assert not (parts / "junit-1.xml").exists()
+    assert junit_counts(parts / "junit-0.xml") == (4, 0), "the other process's file is not ours"

@@ -16,6 +16,7 @@ export default defineConfig([
     "out/**",
     "build/**",
     "simulation/out/**",
+    "coverage/**",
     "next-env.d.ts",
   ]),
 ]);
