@@ -14,8 +14,20 @@ import vm from "node:vm";
 
 const [pagePath, ...addresses] = process.argv.slice(2);
 const html = readFileSync(pagePath, "utf8");
-const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
-if (!script) throw new Error(`${pagePath}: no inline script`);
+
+// The page holds one inline script, between a bare opening tag and its
+// closing tag. Anything else (a second script, an attribute, no script) is
+// said: this harness would otherwise run something other than the page does.
+const OPENING = "<script>";
+const CLOSING = "</script>";
+const lower = html.toLowerCase();
+const opening = lower.indexOf(OPENING);
+const closing = lower.indexOf(CLOSING, opening);
+const tags = lower.split("<script").length - 1;
+if (opening === -1 || closing === -1 || tags !== 1 || lower.split(CLOSING).length - 1 !== 1) {
+  throw new Error(`${pagePath}: expected exactly one inline <script>...</script>`);
+}
+const script = html.slice(opening + OPENING.length, closing);
 
 /** An element as the script uses it before any trace is loaded. */
 function element() {
