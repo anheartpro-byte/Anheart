@@ -13,44 +13,74 @@ const SCANNED_DIRECTORIES = ["app", "components"];
 
 const DIRECT_MUTATION = /\buseMutation\b/;
 const ANY_MUTATION = /\buseMutation(WithFeedback)?\b/;
-/** Nothing, or only calls to the console. */
-const NOTHING_SHOWN =
-  /^(?:\s*console\.\w+\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*;?)*\s*$/;
 
 function withoutComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
-/** The text between the bracket at `open` and the bracket that closes it. */
-function enclosed(source: string, open: number): string {
+/** Where the bracket at `open` is closed, or -1 when it never is. */
+function closingIndex(source: string, open: number): number {
   const opening = source[open];
   const closing = opening === "{" ? "}" : ")";
   let depth = 0;
   for (let i = open; i < source.length; i++) {
     if (source[i] === opening) depth++;
-    else if (source[i] === closing && --depth === 0) {
-      return source.slice(open + 1, i);
-    }
+    else if (source[i] === closing && --depth === 0) return i;
   }
-  return source.slice(open + 1);
+  return -1;
+}
+
+/** The text between the bracket at `open` and the bracket that closes it. */
+function enclosed(source: string, open: number): string {
+  const close = closingIndex(source, open);
+  return source.slice(open + 1, close === -1 ? undefined : close);
+}
+
+/**
+ * Whether a handler body shows nothing: it is empty, or it holds only calls to
+ * the console. Read one call at a time, each character once, so that a long or
+ * odd body cannot stall the check.
+ */
+function showsNothing(body: string): boolean {
+  const consoleCall = /console\.\w+\s*\(/y;
+  let at = 0;
+  const skipSpaces = () => {
+    while (at < body.length && body[at].trim() === "") at++;
+  };
+  skipSpaces();
+  while (at < body.length) {
+    consoleCall.lastIndex = at;
+    const call = consoleCall.exec(body);
+    if (!call) return false;
+    const close = closingIndex(body, at + call[0].length - 1);
+    if (close === -1) return false;
+    at = close + 1;
+    skipSpaces();
+    if (body[at] === ";") at++;
+    skipSpaces();
+  }
+  return true;
 }
 
 /** The body of every `catch` block and of every `.catch(...)` handler. */
 function errorHandlers(source: string): string[] {
   const handlers: string[] = [];
-  for (const block of source.matchAll(/\bcatch\s*(?:\([^)]*\))?\s*\{/g)) {
+  for (const block of source.matchAll(/\bcatch\s*(?:\([^)]*\)\s*)?\{/g)) {
     handlers.push(enclosed(source, block.index + block[0].length - 1));
   }
   for (const call of source.matchAll(/\.catch\s*\(/g)) {
     const handler = enclosed(source, call.index + call[0].length - 1).trim();
-    const arrow = handler.match(/=>\s*([\s\S]*)$/);
-    if (!arrow) {
+    const arrowAt = handler.indexOf("=>");
+    if (arrowAt === -1) {
       // A function passed by name: only the console is known to show nothing.
       handlers.push(/^console\.\w+$/.test(handler) ? `${handler}()` : handler);
-    } else if (arrow[1].startsWith("{")) {
-      handlers.push(enclosed(arrow[1], 0));
+      continue;
+    }
+    const returned = handler.slice(arrowAt + 2).trimStart();
+    if (returned.startsWith("{")) {
+      handlers.push(enclosed(returned, 0));
     } else {
-      handlers.push(/^(undefined|null|void 0)$/.test(arrow[1]) ? "" : arrow[1]);
+      handlers.push(/^(undefined|null|void 0)$/.test(returned) ? "" : returned);
     }
   }
   return handlers.map(withoutComments);
@@ -66,7 +96,7 @@ export function silentMutationProblems(source: string): string[] {
   }
   if (!ANY_MUTATION.test(source)) return problems;
   for (const handler of errorHandlers(source)) {
-    if (NOTHING_SHOWN.test(handler)) {
+    if (showsNothing(handler)) {
       problems.push(
         handler.trim() === ""
           ? "an error handler is empty"
@@ -174,6 +204,36 @@ describe("ANH-156 EX-2 detection of a silent mutation", () => {
     expect(
       silentMutationProblems(throughHook.replace("HANDLER", handler)),
     ).toEqual([]);
+  });
+
+  it("answers at once on a handler holding thousands of console calls", () => {
+    // The check reads each character once: its time grows with the body.
+    const calls = "console.a()" + " console.a()".repeat(5000);
+    const handler = (body: string) =>
+      throughHook.replace(
+        "HANDLER",
+        `try { await copyKey(); } catch (e) { ${body} }`,
+      );
+
+    const started = performance.now();
+    const onlyLogs = silentMutationProblems(handler(calls));
+    const thenShows = silentMutationProblems(handler(`${calls} setError(e);`));
+    const elapsedMs = performance.now() - started;
+
+    expect(onlyLogs).toEqual(["an error handler only writes to the console"]);
+    expect(thenShows).toEqual([]);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("reads console calls whatever the depth of their brackets", () => {
+    expect(
+      silentMutationProblems(
+        throughHook.replace(
+          "HANDLER",
+          "try { await copyKey(); } catch (e) { console.error(a(b(c(d(e))))); }",
+        ),
+      ),
+    ).toEqual(["an error handler only writes to the console"]);
   });
 
   it("leaves a file without any mutation alone", () => {
