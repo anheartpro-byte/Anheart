@@ -28,7 +28,6 @@ from typing import Final, cast
 
 import pytest
 
-import src.training.runtime as runtime_module
 from src.local_panel import describe_reset_refusal
 from src.motor.drive import (
     CommTimeout,
@@ -38,6 +37,7 @@ from src.motor.drive import (
     DriveStatus,
 )
 from src.result import Err, Ok, is_ok
+from src.training import runtime as runtime_module
 from src.training.motion import DEFAULT_MOTION_LIMITS, motor_rate_limit
 from src.training.runtime import (
     RULE_DRIVE_PRECOMMANDED,

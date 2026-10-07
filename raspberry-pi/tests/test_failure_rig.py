@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from abc import abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -203,11 +204,17 @@ def backend(drive: DriveBackend) -> DriveBackend:
 class SteppedClock(Protocol):
     """A clock the test moves: ``ManualClock``, or :class:`JumpClock`."""
 
-    def monotonic(self) -> Monotonic: ...
+    @abstractmethod
+    def monotonic(self) -> Monotonic:
+        """Seconds from an arbitrary origin, never going back."""
 
-    def unix_millis(self) -> UnixMillis: ...
+    @abstractmethod
+    def unix_millis(self) -> UnixMillis:
+        """Wall-clock milliseconds since the Unix epoch."""
 
-    def advance(self, delta: Seconds) -> Monotonic: ...
+    @abstractmethod
+    def advance(self, delta: Seconds) -> Monotonic:
+        """Move the clock forward by ``delta``; the new monotonic reading."""
 
 
 @final

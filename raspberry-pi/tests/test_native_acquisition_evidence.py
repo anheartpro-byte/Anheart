@@ -86,7 +86,8 @@ async def test_failed_reopen_retains_prior_latch_and_address_proof(
 ) -> None:
     # Given
     if previous_proof:
-        assert isinstance(await drive.open(), Ok)
+        opened = await drive.open()
+        assert isinstance(opened, Ok)
     drive.emergency_disable_blocking(drive.emergency_budget)
     before = drive.acquisition_evidence
     bus.sticky_reads = parameter_exception()
@@ -105,7 +106,8 @@ async def test_valid_eta_reacquires_a_latched_link_without_writing(
     # Given
     drive = build_drive(clock, bus, failure_threshold=1)
     bus.script_reads.append(parameter_exception())
-    assert isinstance(await drive.open(), Err)
+    opened = await drive.open()
+    assert isinstance(opened, Err)
     was_lost = drive.link_lost
     assert was_lost
     # When
@@ -152,7 +154,8 @@ async def test_partial_status_then_transport_refusal_retains_possible_traffic(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
     # Given
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     bus.script_reads.extend([Behave.NORMALLY, connection_exception()])
     # When
     outcome = await drive.read_status()
@@ -185,11 +188,14 @@ async def test_close_and_reopen_preserve_proof_and_monotone_frame_count(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
     # Given
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     # When
-    assert isinstance(await drive.close(), Ok)
+    close_result = await drive.close()
+    assert isinstance(close_result, Ok)
     closed = drive.acquisition_evidence
-    assert isinstance(await drive.open(), Ok)
+    reopened = await drive.open()
+    assert isinstance(reopened, Ok)
     # Then
     assert closed.address_proven
     assert closed.possible_frames > 1
@@ -214,7 +220,7 @@ async def test_inflight_read_and_emergency_count_both_requests_and_keep_emergenc
         stopped = await asyncio.to_thread(drive.emergency_disable_blocking, drive.emergency_budget)
     finally:
         entered.release.set()
-        await reading
+        _ = await reading
     # Then
     assert stopped is EmergencyStopOutcome.ACKNOWLEDGED
     assert before.possible_frames == 1

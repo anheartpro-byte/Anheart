@@ -102,7 +102,8 @@ async def test_cancel_initial_inspection_stops_only_observed_motion(
     assert isinstance(held, HeldInspection)
     held.hold_open = case.hold_open
     if case.precommanded:
-        assert isinstance(await rig.simulator.open(), Ok)
+        opened = await rig.simulator.open()
+        assert isinstance(opened, Ok)
         for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
             assert isinstance(await rig.simulator.write_command(word), Ok)
         assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)
@@ -152,7 +153,8 @@ async def test_cancelled_unreadable_acquired_drive_is_stopped_without_resumption
     assert isinstance(held, HeldInspection)
     held.fail_read = True
     if precommanded:
-        assert isinstance(await rig.simulator.open(), Ok)
+        opened = await rig.simulator.open()
+        assert isinstance(opened, Ok)
         for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
             assert isinstance(await rig.simulator.write_command(word), Ok)
         assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)

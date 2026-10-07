@@ -2167,7 +2167,7 @@ def test_the_signal_hook_check_reports_an_unneutralised_hook(
     the ``capture_signals`` context manager - and an override of a method that
     no longer exists neutralises nothing, silently.
     """
-    import src.web.app as app_module  # noqa: PLC0415
+    from src.web import app as app_module  # noqa: PLC0415
 
     monkeypatch.setattr(app_module, "SIGNAL_HOOK_HINT", "serve")
     assert app_module.unneutralised_signal_hooks()
@@ -2177,7 +2177,7 @@ def test_building_a_server_refuses_an_unneutralised_hook(
     rig: Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """And the refusal happens where the server is built, not at the first signal."""
-    import src.web.app as app_module  # noqa: PLC0415
+    from src.web import app as app_module  # noqa: PLC0415
 
     monkeypatch.setattr(app_module, "SIGNAL_HOOK_HINT", "serve")
     with pytest.raises(RuntimeError, match="signal machinery"):

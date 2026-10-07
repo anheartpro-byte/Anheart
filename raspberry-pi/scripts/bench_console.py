@@ -273,18 +273,22 @@ class BusWorker(threading.Thread):
     async def _zero_setpoint(self) -> str | None:
         """LFRD = 0, verified by read-back. None on success, else why not."""
         self.snap.setpoint_rpm = 0
-        match await self._built.drive.write_speed(MotorRpm(0)):
+        written = await self._built.drive.write_speed(MotorRpm(0))
+        match written:
             case Ok():
                 return None
             case Err(error):
                 return describe_error(error)
+        raise assert_never(written)
 
     async def _command(self, word: ControlWord) -> str | None:
-        match await self._built.drive.write_command(word):
+        sent = await self._built.drive.write_command(word)
+        match sent:
             case Ok():
                 return None
             case Err(error):
                 return describe_error(error)
+        raise assert_never(sent)
 
     async def _do_enable(self) -> str:
         # LFRD = 0 FIRST. The start sequence ends with CMD = 15, and 15 with a
@@ -294,20 +298,24 @@ class BusWorker(threading.Thread):
         failed = await self._zero_setpoint()
         if failed is not None:
             return f"ECHEC: LFRD=0 non confirme ({failed}); activation NON tentee"
-        match await self._built.drive.enable():
+        enabled = await self._built.drive.enable()
+        match enabled:
             case Ok():
                 return "ok (LFRD=0 puis 6 -> 7 -> 15, chaque etape verifiee sur ETA)"
             case Err(error):
                 return f"ECHEC activation: {describe_error(error)}"
+        raise assert_never(enabled)
 
     async def _do_speed(self, rpm: int) -> str:
         rpm = max(0, min(self.max_rpm, rpm))
-        match await self._built.drive.write_speed(MotorRpm(rpm)):
+        written = await self._built.drive.write_speed(MotorRpm(rpm))
+        match written:
             case Ok():
                 self.snap.setpoint_rpm = rpm
                 return "ok (relu sur LFRD)"
             case Err(error):
                 return f"ECHEC consigne {rpm}: {describe_error(error)}"
+        raise assert_never(written)
 
     async def _await_standstill(self) -> tuple[bool, str]:
         """Poll RFRD until it READS 0. (confirmed, what was last seen)."""
@@ -398,8 +406,7 @@ class BusWorker(threading.Thread):
                 return await self._do_estop()
             case "fault_reset":
                 return await self._do_fault_reset()
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(cmd.action)
 
     # --- the cycle -------------------------------------------------------
     def _plausible_rpm(self, rpm: MotorRpm) -> int | None:

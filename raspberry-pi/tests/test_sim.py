@@ -41,6 +41,7 @@ import asyncio
 import importlib
 import inspect
 import math
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -113,13 +114,17 @@ SIM_DIR: Final[Path] = PROJECT_ROOT / "src" / "sim"
 
 
 class _TreatmentLike(Protocol):
+    @abstractmethod
     def treat_batch(
         self, samples: Sequence[Mapping[str, object]]
-    ) -> tuple[Sequence[Mapping[str, object]], Mapping[str, Mapping[str, object]]]: ...
+    ) -> tuple[Sequence[Mapping[str, object]], Mapping[str, Mapping[str, object]]]:
+        """The treated samples, and the metrics of each channel."""
 
 
 class _TreatmentFactory(Protocol):
-    def __call__(self, *, fs_in: int, fs_out: int) -> _TreatmentLike: ...
+    @abstractmethod
+    def __call__(self, *, fs_in: int, fs_out: int) -> _TreatmentLike:
+        """A treatment that takes ``fs_in`` hertz in and gives ``fs_out`` hertz out."""
 
 
 class _SignalProcessingModule(Protocol):

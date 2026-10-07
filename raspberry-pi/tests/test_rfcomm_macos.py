@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 import types
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -605,11 +606,19 @@ class FakeNSDate:
 class RfcommDelegate(Protocol):
     """The delegate methods IOBluetooth calls, as the runtime-built class has them."""
 
-    def rfcommChannelOpenComplete_status_(self, channel: object, status: int, /) -> None: ...  # noqa: N802
+    @abstractmethod
+    def rfcommChannelOpenComplete_status_(self, channel: object, status: int, /) -> None:  # noqa: N802
+        """The channel finished opening, with the framework's status."""
+
+    @abstractmethod
     def rfcommChannelData_data_length_(  # noqa: N802
         self, channel: object, data: object, length: int, /
-    ) -> None: ...
-    def rfcommChannelClosed_(self, channel: object, /) -> None: ...  # noqa: N802
+    ) -> None:
+        """``length`` bytes arrived on the channel."""
+
+    @abstractmethod
+    def rfcommChannelClosed_(self, channel: object, /) -> None:  # noqa: N802
+        """The channel was closed."""
 
 
 @final
@@ -765,7 +774,7 @@ def test_the_whole_chain_under_the_client(bluetooth: Bluetooth) -> None:
                 if batch is not None:
                     return list(batch.channels[0].values)
                 await asyncio.sleep(0.005)
-            pytest.fail("no batch")
+            raise AssertionError("no batch")
         finally:
             await client.disconnect()
 
@@ -895,7 +904,9 @@ class Recorder:
 
 
 class ObjCDelegate(RfcommDelegate, Protocol):
-    def respondsToSelector_(self, selector: bytes, /) -> bool: ...  # noqa: N802
+    @abstractmethod
+    def respondsToSelector_(self, selector: bytes, /) -> bool:  # noqa: N802
+        """Whether the Objective-C object implements ``selector``."""
 
 
 @darwin_only

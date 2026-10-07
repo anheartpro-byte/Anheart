@@ -54,7 +54,8 @@ def test_ex11_shared_writer_closes_with_actual_observations_without_inferring_un
     )
     created = Writer.create(tmp_path, replace(manifest(), geometry=geometry()))
     assert isinstance(created, Ok)
-    assert isinstance(created.value.close(ManualClock(), "operator_stop", observed), Ok)
+    closed = created.value.close(ManualClock(), "operator_stop", observed)
+    assert isinstance(closed, Ok)
     loaded = read(created.value.path)
     assert isinstance(loaded, Ok)
     actual = loaded.value.manifest.end_observation
@@ -71,7 +72,8 @@ def test_ex10_context_diagnostics_use_the_same_identity_redaction_boundary(tmp_p
     )
     assert isinstance(created, Ok)
     observed = EndObservation(t=1, shutdown_detail=f"{sentinel} {email}")
-    assert isinstance(created.value.close(ManualClock(), "done", observed), Ok)
+    closed = created.value.close(ManualClock(), "done", observed)
+    assert isinstance(closed, Ok)
     for member in created.value.path.rglob("*"):
         if member.is_file():
             assert sentinel.encode() not in member.read_bytes()

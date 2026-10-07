@@ -979,7 +979,7 @@ async def test_an_ended_session_waits_for_its_telemetry_to_go(tmp_path: Path) ->
 
 def test_an_unknown_surface_refusal_fails_loudly() -> None:
     with pytest.raises(AssertionError):
-        describe_surface_refusal(cast("StartRefusal", object()))
+        describe_surface_refusal(cast(StartRefusal, object()))
 
 
 def test_an_unknown_end_reason_fails_loudly() -> None:

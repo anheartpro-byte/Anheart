@@ -64,7 +64,7 @@ async def test_cancel_after_arming_word_stops_and_disables(
             # When the task is cancelled during that pending reply.
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                _ = await task
             await rig.panel.close()
             # Then no reference or energized output survives the exit.
             assert rig.simulator.commanded_setpoint == 0

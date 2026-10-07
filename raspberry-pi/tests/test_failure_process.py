@@ -263,7 +263,7 @@ FAST_TTO: Final[Seconds] = Seconds(1.0)
 
 
 class FakeWeb:
-    """A :class:`~src.local_panel.WebRunner` that serves nothing, or dies after ``fail_after``."""
+    """A :class:`~src.panel_lifecycle.WebRunner` serving nothing, or dying after ``fail_after``."""
 
     def __init__(self, fail_after: float | None) -> None:
         self.fail_after: float | None = fail_after

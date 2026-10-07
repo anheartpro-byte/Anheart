@@ -139,7 +139,7 @@ def test_every_hold_that_is_no_verdict_has_words_of_its_own() -> None:
 
 def test_a_hold_that_is_not_one_fails_loudly() -> None:
     """A hold the runtime gains later, with no words written for it, is an error and not a blank."""
-    unknown = cast("Holding", "not-a-hold")
+    unknown = cast(Holding, "not-a-hold")
     with pytest.raises(AssertionError):
         describe_target_refusal(HeldAtStandstill(unknown))
     with pytest.raises(AssertionError):
