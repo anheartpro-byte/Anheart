@@ -756,7 +756,8 @@ def test_a_class_missing_a_method_is_not_a_backend() -> None:
 async def test_a_backend_reports_results_rather_than_raising() -> None:
     """Every fallible operation hands back a value the caller has to look at."""
     backend = _RecordingBackend()
-    assert isinstance(await backend.open(), Ok)
+    opened = await backend.open()
+    assert isinstance(opened, Ok)
     assert isinstance(await backend.write_command(ControlWord.ENABLE_OPERATION), Ok)
     assert isinstance(await backend.write_speed(MotorRpm(600)), Ok)
 
@@ -764,7 +765,8 @@ async def test_a_backend_reports_results_rather_than_raising() -> None:
     assert isinstance(status, Ok)
     assert status.value.state == DriveState.OPERATION_ENABLED
     assert await backend.read_limits() == Ok(BENCH_LIMITS)
-    assert isinstance(await backend.close(), Ok)
+    closed = await backend.close()
+    assert isinstance(closed, Ok)
 
     assert backend.commands == [ControlWord.ENABLE_OPERATION]
     assert backend.speeds == [MotorRpm(600)]

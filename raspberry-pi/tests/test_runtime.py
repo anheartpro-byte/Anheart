@@ -2121,7 +2121,8 @@ async def test_an_idle_runtime_still_proves_the_link_and_commands_nothing() -> N
     rig = _rig()
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     # Open the link without starting a session, the way a UI's health check would.
-    assert is_ok(await rig.drive.open())
+    opened = await rig.drive.open()
+    assert is_ok(opened)
     await rig.step(feed=False)
     assert rig.runtime.applied_rpm == 0
     assert rig.phase() is Phase.DONE

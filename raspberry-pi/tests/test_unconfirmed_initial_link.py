@@ -78,7 +78,8 @@ async def test_normal_close_stops_an_acquired_drive_whose_initial_status_was_unr
     assert isinstance(held, HeldInspection)
     held.fail_read = True
     held.release.set()
-    assert isinstance(await rig.simulator.open(), Ok)
+    opened = await rig.simulator.open()
+    assert isinstance(opened, Ok)
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         assert isinstance(await rig.simulator.write_command(word), Ok)
     assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)
@@ -101,7 +102,8 @@ async def test_failed_retry_cannot_erase_an_acquired_drives_unknown_state(
     held.clock = rig.clock
     held.fail_read = True
     held.release.set()
-    assert isinstance(await rig.simulator.open(), Ok)
+    opened = await rig.simulator.open()
+    assert isinstance(opened, Ok)
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         assert isinstance(await rig.simulator.write_command(word), Ok)
     assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)
@@ -135,7 +137,8 @@ async def test_an_unconfirmed_stop_never_claims_the_unknown_output_is_disabled(
     assert isinstance(held, CloseUnconfirmed)
     held.fail_read = True
     held.release.set()
-    assert isinstance(await rig.simulator.open(), Ok)
+    opened = await rig.simulator.open()
+    assert isinstance(opened, Ok)
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         assert isinstance(await rig.simulator.write_command(word), Ok)
     assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)

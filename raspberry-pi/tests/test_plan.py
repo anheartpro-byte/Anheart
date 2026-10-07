@@ -1586,7 +1586,8 @@ def test_a_stale_revision_is_refused_rather_than_overwriting(tmp_path: Path) -> 
 
 def test_deleting_removes_a_profile_and_bumps_the_revision(tmp_path: Path) -> None:
     store = _written_store(tmp_path)
-    assert _ok(store.delete("standard_45_min", expected_rev=store.rev)) == StoreRev(2)
+    deleted = store.delete("standard_45_min", expected_rev=store.rev)
+    assert _ok(deleted) == StoreRev(2)
     assert "standard_45_min" not in [profile.profile_id for profile in store.list_profiles()]
     reopened = _store(tmp_path)
     _ok(reopened.load())

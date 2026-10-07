@@ -127,7 +127,8 @@ async def test_proven_address_permits_only_one_terminal_emergency_zero(
     clock: ManualClock, bus: FakeBus
 ) -> None:
     drive = build_drive(clock, bus)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     runtime = runtime_for(clock, drive)
     bus.sticky_reads = parameter_exception()
     for _ in range(3):

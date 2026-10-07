@@ -22,9 +22,8 @@ from tests.record_support import manifest, row, writer
 def test_ex1_ex2_ex8_closed_record_has_exact_members_and_independent_hashes(tmp_path: Path) -> None:
     recording = writer(tmp_path)
     assert isinstance(recording.tick(row()), Ok)
-    assert isinstance(
-        recording.close(ManualClock(epoch_millis=UnixMillis(1791195100000)), "operator_stop"), Ok
-    )
+    closed = recording.close(ManualClock(epoch_millis=UnixMillis(1791195100000)), "operator_stop")
+    assert isinstance(closed, Ok)
     assert recording.path.name == "2026-10-05T101112Z_local-4"
     assert {p.name for p in recording.path.iterdir()} == {
         "manifest.json",

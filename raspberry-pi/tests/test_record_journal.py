@@ -638,7 +638,8 @@ def test_writer_sync_flushes_each_written_file_once_and_its_directories(
     assert sorted(flushed) == ["000001.bin.gz", "ecg_raw"]
     flushed.clear()
 
-    assert isinstance(recording.close(ManualClock(), "done"), Ok)
+    closed = recording.close(ManualClock(), "done")
+    assert isinstance(closed, Ok)
     assert isinstance(recording.sync(), Ok)
     assert sorted(flushed) == sorted(["checksums.sha256", "manifest.json", recording.path.name])
 

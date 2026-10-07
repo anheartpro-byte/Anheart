@@ -22,7 +22,8 @@ async def test_native_observer_retains_partial_status_and_actual_write_outcomes(
     bus = FakeBus(clock, RegisterMap())
     bus.registers.update({3201: 64, 8602: 0, 8604: 0, 3204: 0, 7121: 0, 8501: 0})
     drive = build_drive(clock, bus)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     log = ExchangeLog(clock)
     drive.observe_exchanges(log)
     bus.latency = Seconds(0.025)
@@ -46,7 +47,8 @@ async def test_native_observer_preserves_emergency_outcomes(failure: str) -> Non
     bus = FakeBus(clock, RegisterMap())
     bus.registers.update({3201: 64, 8602: 0, 8604: 0, 3204: 0, 7121: 0, 8501: 0})
     drive = build_drive(clock, bus)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     log = ExchangeLog(clock)
     drive.observe_exchanges(log)
     if failure == "connection":
@@ -76,7 +78,8 @@ async def test_native_observer_reaches_the_real_sdk_transport() -> None:
     log = ExchangeLog(clock)
     drive.observe_exchanges(log)
     try:
-        assert isinstance(await drive.open(), Ok)
+        opened = await drive.open()
+        assert isinstance(opened, Ok)
         assert [entry.kind for entry in log.entries] == [
             ExchangeKind.SEND,
             ExchangeKind.RECEIVE_CHUNK,
@@ -97,7 +100,8 @@ async def test_native_observer_refuses_an_invalid_internal_result(
     bus = FakeBus(clock, RegisterMap())
     bus.registers.update({3201: 64, 8602: 0, 8604: 0, 3204: 0, 8501: 0})
     drive = build_drive(clock, bus)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     log = ExchangeLog(clock)
     drive.observe_exchanges(log)
 

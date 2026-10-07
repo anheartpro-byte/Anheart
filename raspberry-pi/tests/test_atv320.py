@@ -670,7 +670,8 @@ def test_the_driver_refuses_tuning_that_would_verify_nothing(
 async def test_the_slave_address_is_on_every_transaction(clock: ManualClock, bus: FakeBus) -> None:
     """A wrong unit address talks confidently to a different drive on the bus."""
     drive = build_drive(clock, bus, settings=SerialSettings(port="p", slave_address=7))
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert [t.slave for t in bus.log] == [7]
 
 
@@ -683,7 +684,8 @@ async def test_open_proves_the_addressing_with_a_read_and_commands_nothing(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
     """A wrong offset found by writing has already written a speed somewhere."""
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert bus.connect_calls == 1
     assert bus.writes() == []
     assert bus.reads() == [RegisterMap().eta]
@@ -702,7 +704,8 @@ async def test_open_reports_a_port_that_will_not_open(drive: ATV320Drive, bus: F
 
 async def test_open_reports_a_raising_connect(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.raise_on_connect = connection_exception()
-    assert isinstance(await drive.open(), Err)
+    opened = await drive.open()
+    assert isinstance(opened, Err)
 
 
 async def test_open_reports_a_wrong_register_offset(clock: ManualClock, bus: FakeBus) -> None:
@@ -718,11 +721,14 @@ async def test_open_reports_a_wrong_register_offset(clock: ManualClock, bus: Fak
 
 async def test_open_after_close_works(drive: ATV320Drive, bus: FakeBus) -> None:
     """close() shuts the executor down; open() must leave the object usable."""
-    assert isinstance(await drive.open(), Ok)
-    assert isinstance(await drive.close(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     latched_by_close = drive.link_lost
     assert latched_by_close
-    assert isinstance(await drive.open(), Ok)
+    reopened = await drive.open()
+    assert isinstance(reopened, Ok)
     latched_after_reopen = drive.link_lost
     assert not latched_after_reopen
     assert bus.connect_calls == 2
@@ -1359,7 +1365,8 @@ async def test_a_link_that_heals_itself_is_not_permission_to_resume(
     assert isinstance(await drive.read_status(), Err)
     still_latched = drive.link_lost
     assert still_latched, "a healthy bus is not permission to resume"
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     latched_after_reopen = drive.link_lost
     assert not latched_after_reopen
     assert isinstance(await drive.read_status(), Ok)
@@ -1687,7 +1694,8 @@ async def test_close_ramps_to_a_stop_before_it_drops_the_output_stage(
     regs = RegisterMap()
     assert isinstance(await drive.enable(), Ok)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
 
     assert [(t.access, t.address, t.value) for t in bus.log] == [
         (Access.WRITE, regs.lfrd, 0),
@@ -1746,7 +1754,8 @@ async def test_close_stops_as_soon_as_the_shaft_has_stopped(
     # reads the fake's RFRD register of 0.
     bus.script_reads.extend([read_reply([600]), read_reply([600])])
 
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert len(bus.reads()) == 3, "it stopped polling the moment RFRD read zero"
     assert bus.command_words() == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
 
@@ -1761,7 +1770,8 @@ async def test_close_treats_one_rpm_as_stopped(clock: ManualClock, bus: FakeBus)
     drive = build_drive(clock, bus)
     assert isinstance(await drive.enable(), Ok)
     bus.registers[regs.rfrd] = 0xFFFF  # -1 rpm, signed
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.command_words()[-2:] == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
 
 
@@ -1804,7 +1814,8 @@ async def test_close_reports_a_failure_to_remove_the_run_command(
     """Both words are attempted: the shaft is already stopped, so 6 is safe."""
     regs = RegisterMap()
     bus.script_writes.extend([Behave.NORMALLY, io_exception()])
-    assert isinstance(await drive.close(), Err)
+    closed = await drive.close()
+    assert isinstance(closed, Err)
     assert bus.writes() == [
         (regs.lfrd, 0),
         (regs.cmd, ControlWord.SWITCH_ON.value),
@@ -1830,7 +1841,8 @@ async def test_close_releases_the_port_even_if_releasing_it_raises(
     """A driver that will not let go of a port because close() threw is a
     driver nobody can restart."""
     bus.raise_on_close = OSError("handle already gone")
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.close_calls == 1
     assert drive.link_lost
 
@@ -1848,7 +1860,8 @@ async def test_close_on_a_latched_link_still_attempts_the_stop(
     regs = RegisterMap()
     await latch_the_link(drive, bus)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.writes() == [
         (regs.lfrd, 0),
         (regs.cmd, ControlWord.SWITCH_ON.value),
@@ -1866,11 +1879,14 @@ async def test_close_is_idempotent_and_does_not_raise_the_second_time(
     ``RuntimeError: cannot schedule new futures after shutdown`` - out of a
     shutdown handler, which is where an exception has nobody left to catch it.
     """
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     transactions = len(bus.log)
 
-    assert isinstance(await drive.close(), Ok)
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert len(bus.log) == transactions, "a second close must not touch the wire"
     assert bus.close_calls == 1
 
@@ -1892,10 +1908,13 @@ async def test_a_second_close_repeats_the_first_verdict(drive: ATV320Drive, bus:
 
 async def test_reopening_after_a_close_clears_the_close(drive: ATV320Drive, bus: FakeBus) -> None:
     """open() is the one place any latch is cleared, this one included."""
-    assert isinstance(await drive.close(), Ok)
-    assert isinstance(await drive.open(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.writes()[0] == (RegisterMap().lfrd, 0), "the stop was attempted again"
 
 
