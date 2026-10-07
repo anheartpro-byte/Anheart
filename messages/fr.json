@@ -499,6 +499,7 @@
     "noPatientsAssigned": "Aucun patient assigné",
     "assignMachines": "Assigner des Machines",
     "assignMachinesDesc": "Sélectionner les machines auxquelles ce gestionnaire peut accéder",
+    "machinesSaved": "Machines enregistrées : {added, plural, =0 {aucune ajoutée} one {# ajoutée} other {# ajoutées}}, {removed, plural, =0 {aucune retirée} one {# retirée} other {# retirées}}.",
     "assignPatients": "Assigner des Patients",
     "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer"
   },

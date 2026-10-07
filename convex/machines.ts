@@ -11,6 +11,7 @@ import {
   canAccessMachine,
   canManageMachine,
   isGestionnaireOfMachine,
+  requireGestionnaireAdmin,
 } from "./lib/auth";
 import { generateApiKey } from "./lib/crypto";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
@@ -127,6 +128,72 @@ export const assignMachineToGestionnaires = mutation({
     }
 
     return null;
+  },
+});
+
+/**
+ * Set the exact list of machines a gestionnaire manages (admin only).
+ *
+ * Only this gestionnaire's rows of `machine_gestionnaires` are read and
+ * written: a machine added here keeps its other gestionnaires, and a machine
+ * removed here stays managed by them. A link that already exists is left as it
+ * is, with its `isOwner`. A new link is never an owner link.
+ */
+export const setGestionnaireMachines = mutation({
+  args: {
+    gestionnaireId: v.id("users"),
+    machineIds: v.array(v.id("machines")),
+  },
+  returns: v.object({
+    added: v.number(),
+    removed: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const { currentUser } = await requireGestionnaireAdmin(
+      ctx,
+      args.gestionnaireId,
+    );
+
+    const existingRelations = await ctx.db
+      .query("machine_gestionnaires")
+      .withIndex("by_gestionnaire", (q) =>
+        q.eq("gestionnaireId", args.gestionnaireId),
+      )
+      .collect();
+
+    const wanted = new Set(args.machineIds);
+    const linked = new Set(existingRelations.map((r) => r.machineId));
+
+    const toAdd = [...wanted].filter((machineId) => !linked.has(machineId));
+    const toRemove = existingRelations.filter((r) => !wanted.has(r.machineId));
+
+    // Every machine to link must exist before anything is written.
+    for (const machineId of toAdd) {
+      const machine = await ctx.db.get(machineId);
+      if (!machine) {
+        throw new Error("Machine not found");
+      }
+    }
+
+    for (const relation of toRemove) {
+      await ctx.db.delete(relation._id);
+    }
+
+    const now = Date.now();
+    for (const machineId of toAdd) {
+      await ctx.db.insert("machine_gestionnaires", {
+        machineId,
+        gestionnaireId: args.gestionnaireId,
+        isOwner: false,
+        createdAt: now,
+        createdBy: currentUser._id,
+      });
+    }
+
+    return {
+      added: toAdd.length,
+      removed: new Set(toRemove.map((r) => r.machineId)).size,
+    };
   },
 });
 
