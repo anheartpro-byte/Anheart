@@ -1383,33 +1383,30 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
 
-def _classify_refusal(refusal: StartRefusal) -> str:
+def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
     """One exhaustive match over ``StartRefusal``. Adding a variant breaks the build."""
-    label: str
     match refusal:
         case AlreadyStarted():
-            label = "already_started"
+            return "already_started"
         case NotAttested():
-            label = "not_attested"
+            return "not_attested"
         case SafetyStanding():
-            label = "safety_standing"
+            return "safety_standing"
         case LimitsMismatch():
-            label = "limits_mismatch"
+            return "limits_mismatch"
         case PlanUnusable():
-            label = "plan_unusable"
+            return "plan_unusable"
         case DriveUnavailable():
-            label = "drive_unavailable"
+            return "drive_unavailable"
         case DriveParameterRefused():
-            label = "drive_parameter_refused"
+            return "drive_parameter_refused"
         case DrivePrecommanded():
-            label = "drive_precommanded"
+            return "drive_precommanded"
         case DriveInFault():
-            label = "drive_in_fault"
+            return "drive_in_fault"
         case RecordStorageLow():
-            label = "record_storage_low"
-        case _ as unreachable:
-            assert_never(unreachable)
-    return label
+            return "record_storage_low"
+    raise assert_never(refusal)
 
 
 # =========================================================================
@@ -2335,19 +2332,16 @@ def test_every_acknowledgement_refusal_is_handled() -> None:
 
 def _classify_ack(refusal: AcknowledgeRefusal) -> str:
     """One exhaustive match over the supervisor's refusal union."""
-    label: str
     match refusal:
         case Unattributed():
-            label = "unattributed"
+            return "unattributed"
         case NothingLatched():
-            label = "nothing"
+            return "nothing"
         case GoSilentIsTerminal():
-            label = "silent"
+            return "silent"
         case EmergencyStopStillLatched():
-            label = "estop"
-        case _ as unreachable:
-            assert_never(unreachable)
-    return label
+            return "estop"
+    raise assert_never(refusal)
 
 
 # =========================================================================
