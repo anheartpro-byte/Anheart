@@ -287,7 +287,7 @@ def execute(job: Job) -> RunReport:
         case JobKind.COHORT:
             return _cohort_job(job)
         case _ as unreachable:
-            assert_never(unreachable)
+            raise assert_never(unreachable)
 
 
 def cohort_jobs(subjects: Sequence[CohortSubject]) -> list[Job]:

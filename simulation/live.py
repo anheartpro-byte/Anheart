@@ -199,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        # Ctrl-C is how this server is stopped: its normal end, not an error.
         pass
     finally:
         server.server_close()

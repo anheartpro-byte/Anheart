@@ -473,7 +473,7 @@ def _wire_ecg(
             )
             return _EcgWiring(sensor=None, bitalino=client, bridge=bridge, source=source)
         case _ as unreachable:
-            assert_never(unreachable)
+            raise assert_never(unreachable)
 
 
 # =========================================================================
@@ -932,7 +932,7 @@ class Session:
                 self._request(at, "fault_reset", expect, reset)
                 return None
             case _ as unreachable:
-                assert_never(unreachable)
+                raise assert_never(unreachable)
 
     def _request(
         self,
