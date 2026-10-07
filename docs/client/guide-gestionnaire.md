@@ -398,13 +398,9 @@ donc toujours plusieurs secondes de retard.
 > d'Internet. La surveillance de la séance se fait à la machine, par
 > l'opérateur.
 
-Sous le panneau, un bloc vient d'un ancien mode d'enregistrement : les cartes
-« Qualité du signal », « Fréquence cardiaque (BPM) » et « Lots de données »,
-puis un encadré « En attente des données ECG ». Il reste vide pour une séance
-d'entraînement. Ignorez-le, y compris son message qui demande de vérifier le
-capteur : pour la fréquence cardiaque d'une séance d'entraînement, seul le
-panneau **Séance d'entraînement** compte. Pour la même raison, le badge
-« Connexion... » en haut de la page ne dit rien de la machine.
+Les captures de ce guide montrent encore, sous le panneau et en haut de la
+page, des éléments d'un ancien mode d'enregistrement. Ils n'existent plus : la
+page ne montre que le panneau **Séance d'entraînement**.
 
 ### Signaux d'alerte
 
@@ -505,10 +501,8 @@ courbes. Capture du site d'essai, machine simulée, prise avant la
 traduction : le statut et les blocs qui entourent la carte Entraînement y
 sont encore en anglais.*
 
-Regardez la carte **Entraînement**. Les autres blocs de la page viennent d'un
-ancien mode d'enregistrement : les cartes du haut (dont « Lots de données »)
-et le bloc « Enregistrement ECG » restent vides ou sans intérêt pour une
-séance d'entraînement.
+Regardez la carte **Entraînement**. La capture montre encore, autour d'elle,
+des cartes d'un ancien mode d'enregistrement : elles n'existent plus.
 
 Pour une séance de statut « Échouée », la page affiche en haut un encadré
 rouge « Session échouée ». Son texte parle d'une erreur, même quand la séance
@@ -556,16 +550,12 @@ celles de statut « Échouée »).
 ![La page Rapports](../guides/img/site-21-rapports.png)
 
 *La page Rapports. Capture du site d'essai, vue par un administrateur, prise
-avant la traduction : la ligne de chiffres sous une carte y est encore en
-anglais.*
+avant la traduction : elle montre encore un bouton de téléchargement et une
+ligne de chiffres qui n'existent plus.*
 
 - **Voir** ouvre le détail de la séance, décrit ci-dessus. C'est là que se
   trouvent les courbes.
-- **Télécharger PDF** produit un fichier intitulé « Rapport de session ECG ».
-  C'est le rapport de l'ancien mode d'enregistrement : il donne l'identité,
-  les horaires et les canaux, mais ni le programme, ni le motif de fin, ni les
-  courbes d'une séance d'entraînement. Pour relire une séance, utilisez
-  **Voir**.
+- Le site ne produit pas de fichier à télécharger pour une séance.
 
 ### 9.4 Ce que vous ne verrez pas
 
@@ -587,12 +577,6 @@ aucun patient. Le patient ne la voit donc pas dans son compte.
 | Un patient absent de votre liste | Il ne vous est pas rattaché. | Voyez avec votre administrateur. |
 | Sur le **Tableau de bord**, la carte **Patients** affiche un tiret et « Chargement... » | Ce compteur ne fonctionne pas encore. | Ouvrez la page **Patients**. |
 | Un message rouge en anglais | Le site a refusé une action. | Notez le texte exact. Vérifiez vos droits. Appelez le support si vous ne comprenez pas. |
-
-> **N'utilisez pas le bouton « Nouvelle session » de la page Sessions.** Il
-> vient d'un ancien mode d'enregistrement. Il crée une séance qui reste en
-> attente pour toujours, que le site ne permet pas d'annuler, et qui empêche
-> ensuite tout lancement de séance auto sur cette machine. Si cela vous
-> arrive, appelez le support.
 
 ## 11. Qui appeler
 

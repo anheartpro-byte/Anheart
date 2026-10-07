@@ -75,8 +75,6 @@
     "french": "French (fr)",
     "languages": "French, English",
     "heartbeatTimeout": "Heartbeat timeout",
-    "defaultSampleRate": "Default sample rate",
-    "defaultBatchInterval": "Default batch interval",
     "general": "General",
     "appearance": "Appearance",
     "notifications": "Notifications",
@@ -258,9 +256,6 @@
     "regenerate": "Regenerate",
     "regenerateKeyDesc": "Generate a new API key. Old key will stop working.",
     "config": "Configuration",
-    "sampleRate": "Sample Rate",
-    "channels": "Channels",
-    "batchInterval": "Batch Interval (ms)",
     "noMachines": "No machines found",
     "deleteConfirm": "Delete this machine?",
     "deleteConfirmDesc": "This machine will be deactivated. An administrator can restore it later if needed.",
@@ -287,36 +282,21 @@
       "createDescription": "Configure a new Raspberry Pi machine",
       "namePlaceholder": "Raspberry Pi 1",
       "locationPlaceholder": "Room 101",
-      "nameRequired": "Name is required",
-      "channelRequired": "Select at least one channel"
+      "nameRequired": "Name is required"
     }
   },
   "sessions": {
     "title": "ECG Sessions",
-    "create": "New Session",
-    "createDescription": "Start a new ECG recording session",
     "active": "Active",
     "completed": "Completed",
     "failed": "Failed",
     "pending": "Pending",
-    "selectMachine": "Select Machine",
-    "selectMachinePlaceholder": "Select a machine",
-    "selectPatient": "Select Patient",
-    "selectPatientPlaceholder": "Select a patient",
-    "selectChannels": "Channels to Record",
-    "start": "Start Session",
-    "end": "End Session",
     "duration": "Duration",
     "startedAt": "Started At",
     "endedAt": "Ended At",
-    "notes": "Notes",
-    "notesPlaceholder": "Optional notes...",
     "viewLive": "View Live",
     "viewReport": "View Report",
     "noSessions": "No sessions found",
-    "noOnlineMachines": "No machines are currently online. Please wait for a machine to connect.",
-    "noPatients": "No patients found. Please create a patient first.",
-    "endConfirm": "Are you sure you want to end this session?",
     "patient": "Patient",
     "machine": "Machine",
     "startedBy": "Started by",
@@ -327,167 +307,29 @@
       "failed": "Failed"
     },
     "notFound": "Session not found",
-    "inProgress": "In progress",
-    "form": {
-      "machineRequired": "Please select a machine",
-      "patientRequired": "Please select a patient",
-      "channelRequired": "Select at least one channel"
-    },
-    "channelOptions": {
-      "ECG": {
-        "name": "ECG (Heart)",
-        "description": "Electrocardiography: 3 electrodes on chest"
-      },
-      "EDA": {
-        "name": "EDA (Stress)",
-        "description": "Electrodermal Activity: 2 finger bands"
-      },
-      "SpO2": {
-        "name": "SpO2 (Oxygen)",
-        "description": "Pulse Oximetry: finger clip sensor"
-      },
-      "RESP": {
-        "name": "Respiration",
-        "description": "Breathing: chest band sensor"
-      },
-      "EMG": {
-        "name": "EMG (Muscle)",
-        "description": "Electromyography: muscle sensor"
-      },
-      "LUX": {
-        "name": "Light",
-        "description": "Ambient light sensor"
-      }
-    }
-  },
-  "ecg": {
-    "liveView": "Live View",
-    "delayedView": "Delayed View (5s)",
-    "heartRate": "Heart Rate",
-    "bpm": "BPM",
-    "avgHeartRate": "Avg Heart Rate",
-    "minHeartRate": "Min Heart Rate",
-    "maxHeartRate": "Max Heart Rate",
-    "hrv": "Heart Rate Variability (HRV)",
-    "live": "Live",
-    "delay": "5s delay",
-    "waitingForChannel": "Waiting for {channel} data...",
-    "connectDevice": "Connect BITalino to see waveform"
-  },
-  "recording": {
-    "dataBatches": "Data Batches",
-    "samples": "{channels, plural, =0 {Samples recorded} =1 {Samples recorded} other {Samples recorded, all channels combined}}",
-    "samplesPartial": "{channels, plural, =0 {Samples} =1 {Samples} other {Samples, all channels combined}} ({loaded, number} of {total, number} batches loaded)",
-    "partialNote": "Counted over the {loaded, number} loaded batches, out of {total, number} in total.",
-    "sampleRateHz": "Sample Rate (Hz)",
-    "sampleRateHzPartial": "Sample Rate (Hz, loaded batches)",
-    "acquisitionRate": "Configured acquisition rate: {rate} Hz"
+    "inProgress": "In progress"
   },
   "sessionDetail": {
     "failedTitle": "Session Failed",
-    "failedDescription": "This session encountered an error and was terminated. Any data recorded before the failure is shown below.",
+    "failedDescription": "This session encountered an error and was terminated.",
     "pendingTitle": "Waiting for Device",
-    "pendingDescription": "This session is waiting for the recording device to connect and start capturing data.",
-    "ecgRecording": "ECG Recording",
-    "channelTitle": "{channel} Channel",
-    "samplesRecorded": "{count, plural, =0 {No samples recorded} one {# sample recorded} other {# samples recorded}}",
-    "noChannelData": "No data for {channel}",
-    "sessionActive": "Session is active",
-    "viewLiveRecording": "View Live Recording",
-    "waitingForDevice": "Waiting for device to start recording...",
     "noEcgData": "No ECG data recorded for this session",
     "timing": "Session Timing",
     "started": "Started",
     "ended": "Ended",
-    "recordingDevice": "Recording Device",
     "recordedChannels": "Recorded Channels",
     "notes": "Session Notes",
-    "summary": "Recording Summary",
     "dataDuration": "Data Duration",
     "seconds": "{seconds, number}s",
-    "recordedRange": "Data recorded from {start} to {end}"
+    "recordedRange": "Data recorded from {start} to {end}",
+    "legacyTitle": "Former ECG recording",
+    "legacyDescription": "This session comes from the former ECG recording mode, which has been removed. It is kept read-only.",
+    "dataBatches": "Data Batches"
   },
   "sessionLive": {
-    "notActive": "Session is not active",
     "viewDetails": "View Session Details",
     "started": "Started {time}",
-    "connecting": "Connecting...",
-    "mainsTitle": "Signal dominated by electrical interference: check electrode contact",
-    "poorTitle": "Poor signal quality: check electrode connection",
-    "warningDescription": "The ECG signal is mostly powerline hum or noise rather than a heartbeat. This usually means:",
-    "cause1": "ECG electrodes are not connected to the patient",
-    "cause2": "Electrodes have poor skin contact (try adding gel)",
-    "cause3": "Cables are loose or disconnected",
-    "tipLabel": "Tip:",
-    "tipText": "connect red to the right arm, black to the left arm and white to the right leg",
-    "qualityGood": "Good",
-    "qualityPoor": "Poor",
-    "signalQuality": "Signal Quality",
-    "heartRateBpm": "Heart Rate (BPM)",
-    "waitingTitle": "Waiting for ECG Data",
-    "waitingDescription": "Make sure the BITalino device is connected and the Raspberry Pi client is running. Data should appear here within a few seconds.",
-    "explainTitle": "Understanding the ECG Data",
-    "yAxisLabelTreated": "Y-axis ({unit}):",
-    "yAxisTextTreated": "electrical signal from the heart, filtered and converted by the machine before sending. This is not the heart rate.",
-    "yAxisLabelRaw": "Y-axis:",
-    "yAxisTextRaw": "raw sensor values, filtered for display. They represent the electrical signal from the heart, not the heart rate.",
-    "xAxisLabel": "X-axis (seconds):",
-    "xAxisText": "time window showing the last 5 seconds of data. The graph scrolls as new data arrives.",
-    "sampleRateLabel": "Sample Rate:",
-    "sampleRateText": "{rate} Hz, read from the received data.",
-    "heartRateLabel": "Heart Rate:",
-    "heartRateText": "estimated by detecting R-wave peaks in the ECG signal.",
-    "endDialogTitle": "End Recording Session?",
-    "endDialogDescription": "This will stop recording ECG data for patient {name}. The recorded data will be saved and available for review.",
-    "ending": "Ending..."
-  },
-  "sensors": {
-    "noSignal": "No signal",
-    "normal": "Normal",
-    "bpm": "BPM",
-    "ecg": {
-      "title": "ECG: Heart Activity",
-      "bradycardia": "Bradycardia",
-      "elevated": "Elevated",
-      "tachycardia": "Tachycardia",
-      "hrv": "HRV (RMSSD)",
-      "waiting": "Waiting for ECG data...",
-      "scale": "Vertical scale adjusts automatically",
-      "rPeaks": "R-peaks detected: {count, number}"
-    },
-    "eda": {
-      "title": "EDA: Stress Response",
-      "skinConductance": "Skin Conductance",
-      "scrUnit": "SCRs",
-      "responses": "Responses",
-      "stress": {
-        "low": "LOW",
-        "moderate": "MODERATE",
-        "high": "HIGH",
-        "unknown": "UNKNOWN"
-      },
-      "waiting": "Waiting for EDA data...",
-      "legend": "SCR = Skin Conductance Response (emotional arousal indicator)"
-    },
-    "spo2": {
-      "title": "SpO2: Blood Oxygen",
-      "low": "Low",
-      "critical": "Critical",
-      "pulse": "Pulse",
-      "perfusionIndex": "PI",
-      "waiting": "Waiting for SpO2 data...",
-      "legend": "PPG waveform • PI = Perfusion Index (signal quality)"
-    },
-    "resp": {
-      "title": "Respiration: Breathing",
-      "slow": "Slow",
-      "fast": "Fast",
-      "rapid": "Rapid",
-      "perMinute": "/min",
-      "regularity": "Regularity",
-      "waiting": "Waiting for respiration data...",
-      "legend": "Normal: 12-20 breaths/min • Deep breathing improves HRV"
-    }
+    "legacyRecording": "This session comes from the former ECG recording mode: it has no live view."
   },
   "gestionnaires": {
     "title": "Gestionnaire Management",
@@ -529,53 +371,14 @@
   },
   "reports": {
     "title": "Session Reports",
-    "description": "View and download your completed session reports",
-    "download": "Download PDF",
-    "generating": "Generating...",
+    "description": "View your completed sessions",
     "patientInfo": "Patient Information",
     "sessionInfo": "Session Information",
     "metrics": "Metrics",
-    "ecgOverview": "ECG Overview",
     "sessionReport": "Session Report",
     "noReports": "No reports available yet",
     "view": "View",
-    "batches": "{count, plural, one {# data batch} other {# data batches}}",
-    "recordingSeconds": "{seconds, number}s of recording",
-    "samples": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined}}",
-    "samplesPartial": "{count, plural, =0 {no samples} one {# sample} other {# samples}}{channels, plural, =0 {} =1 {} other {, all channels combined,}} over the {loaded, number} loaded batches ({total, number} in total)",
-    "durationMinutes": "{minutes, number} min",
-    "pdf": {
-      "title": "ECG Session Report",
-      "reportId": "Report ID: {id}",
-      "generatedAt": "Generated: {date}",
-      "patientInfo": "Patient Information",
-      "name": "Name",
-      "email": "Email",
-      "sessionDetails": "Session Details",
-      "machine": "Machine",
-      "started": "Started",
-      "ended": "Ended",
-      "duration": "Duration",
-      "durationValue": "{minutes} min {seconds} s",
-      "channels": "Channels",
-      "statistics": "Recording Statistics",
-      "totalBatches": "Data Batches",
-      "recordingDuration": "Recording Duration",
-      "recordingDurationValue": "{seconds} s",
-      "sampleRate": "Sample Rate",
-      "sampleRateValue": "{rate} Hz",
-      "sampleRateValuePartial": "{rate} Hz (from the loaded batches)",
-      "sampleRateUnknown": "Not recorded in the data",
-      "samples": "Samples recorded",
-      "samplesValue": "{count}{channels, plural, =0 {} =1 {} other { (all channels combined)}}",
-      "samplesPartial": "{count} ({channels, plural, =0 {} =1 {} other {all channels combined, }}counted over {loaded} loaded batches, {total} in total)",
-      "waveformPreview": "ECG Waveform Preview",
-      "channelPreview": "{channel} Channel (first {count} samples)",
-      "notes": "Notes",
-      "footer": "Gaura ECG Monitoring System, page {page} of {total}",
-      "notAvailable": "Not available",
-      "fileName": "ECG_Report_{id}_{date}.pdf"
-    }
+    "durationMinutes": "{minutes, number} min"
   },
   "privacy": {
     "title": "Privacy Policy",

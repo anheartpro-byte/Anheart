@@ -91,7 +91,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 |---|---|
 | **Séance auto** | Séance sur un **programme** enregistré. La machine ajuste seule la vitesse pour garder la fréquence cardiaque du pratiquant dans la **zone cible** du programme. C'est la seule séance lançable depuis le site. |
 | **Séance manuelle** | L'opérateur choisit la vitesse à la console. Jamais lancée depuis le site ; visible sur le site une fois démarrée. |
-| **Séance d'enregistrement** | Ancien mode, enregistrement ECG seul, sans entraînement. Toujours présent sur le site (bouton « Nouvelle session »). |
+| **Séance d'enregistrement** | Ancien mode, enregistrement ECG seul, sans entraînement. **Retiré** : le site ne permet plus d'en créer. Les anciennes séances restent visibles en lecture seule, avec le badge « Enregistrement ». |
 | **Pratiquant** | La personne à bord. C'est en général un patient. |
 | **FC max** | Fréquence cardiaque maximale du pratiquant. Mesurée, ou à défaut estimée par l'âge (formule de Tanaka : 208 moins 0,7 fois l'âge). Sert à vérifier qu'un programme n'est pas trop intense. |
 
@@ -149,10 +149,10 @@ un message d'accès refusé.
 | Machines `/fr/dashboard/machines` | Voit toutes les machines ; **Nouvelle machine** ; **Afficher les machines supprimées**. | Voit ses machines, sans création. | Pas dans le menu. Par l'adresse : liste vide. |
 | Détail machine `/fr/dashboard/machines/{id}` | Tout : **Lancer une séance auto**, **Modifier**, **Droits de lancement**, **Régénérer**, **Supprimer**, **Restaurer**. | Ses machines : idem sauf **Restaurer**. | Pas prévu (« Machine not found »). |
 | Mes machines `/fr/dashboard/my-machines` | Toutes les machines ; **Lancer une séance auto**, **Détails**. | Ses machines ; idem. | Les machines où il a le droit ; **Lancer une séance auto** pour lui même. |
-| Sessions `/fr/dashboard/sessions` | Toutes les séances ; **Nouvelle session** (enregistrement ECG). | Séances de ses machines ; **Nouvelle session**. | Ses séances. |
+| Sessions `/fr/dashboard/sessions` | Toutes les séances. | Séances de ses machines. | Ses séances. |
 | Séance en direct `/fr/dashboard/sessions/{id}/live` | Voit ; **Annuler la séance** / **Arrêter la séance**. | Séances de ses machines ; idem. | Ses séances ; idem. |
 | Détail séance `/fr/dashboard/sessions/{id}` | Voit. | Séances de ses machines. | Ses séances. |
-| Rapports `/fr/dashboard/reports` | Séances terminées ; **Voir**, **Télécharger PDF**. | Séances terminées de ses machines. | Ses séances terminées. |
+| Rapports `/fr/dashboard/reports` | Séances terminées ; **Voir**. | Séances terminées de ses machines. | Ses séances terminées. |
 
 ### 2.3 Qui peut lancer une séance auto, pour qui
 
@@ -237,13 +237,17 @@ la gestion du compte Clerk (adresse, mot de passe).
 
 > Quelques textes restent en anglais quelle que soit la langue : les messages
 > du serveur, le nom « Unknown », certains libellés des fiches utilisateur et
-> gestionnaire. Ils sont signalés page par page. La fiche machine, les fiches
-> de séance, le bloc ECG de la vue en direct et le rapport PDF sont traduits
-> depuis ANH-123.
+> gestionnaire. Ils sont signalés page par page. La fiche machine et les
+> fiches de séance sont traduites depuis ANH-123.
 >
 > **Les captures de ce guide datent du 2 octobre 2026, avant cette
 > traduction.** Quand une capture montre un ancien libellé anglais, le texte et
 > les schémas font foi ; une phrase le rappelle sous chaque capture concernée.
+>
+> **Elles sont aussi antérieures au retrait de l'ancien mode d'enregistrement
+> ECG.** Le bouton « Nouvelle session », le bloc ECG des séances, le bouton
+> « Télécharger PDF » et les champs Fréquence, Intervalle et Canaux d'une
+> machine, qu'elles montrent encore, n'existent plus.
 
 ### 3.3 Le thème clair ou sombre
 
@@ -514,6 +518,8 @@ l'administrateur, un second bouton **Nouvelle machine**.
 
 *Capture antérieure à la traduction (ANH-123) : elle montre encore la description en anglais et l'exemple « Room 101 ».*
 
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : elle montre encore les champs Fréquence d'échantillonnage, Intervalle de batch et Canaux, retirés de la fenêtre.*
+
 S'ouvre depuis **Machines** (bouton **Nouvelle machine**) ou depuis le détail
 d'une machine (bouton **Modifier** de la carte Configuration).
 
@@ -524,9 +530,6 @@ d'une machine (bouton **Modifier** de la carte Configuration).
 │                                                  │
 │ Nom de la machine *   <Raspberry Pi 1>           │
 │ Emplacement           <Salle 101>                │
-│ Fréquence d'échantillonnage (Hz) <100>           │
-│ Intervalle de batch (ms)         <1000>          │
-│ Canaux *  [ECG] [EDA] [SpO2] [RESP] [EMG] [LUX]  │
 │ Assigner aux Gestionnaires                        │
 │   Sélectionner les gestionnaires qui peuvent ...  │
 │   ☐ Claire Petit   ☐ Marc Roux                    │
@@ -539,9 +542,6 @@ d'une machine (bouton **Modifier** de la carte Configuration).
 |---|---|
 | **Nom de la machine** * | Obligatoire (message « Le nom est obligatoire » s'il est vide). |
 | **Emplacement** | Facultatif. Affiché sous le nom partout. |
-| **Fréquence d'échantillonnage (Hz)** | Hérité du mode enregistrement ECG. Entre 100 et 10 000. **Sans effet sur les séances d'entraînement.** Laissez la valeur proposée. |
-| **Intervalle de batch (ms)** | Idem, entre 100 et 5 000. Laissez la valeur proposée. |
-| **Canaux** * | Boutons à bascule. Au moins un (« Sélectionnez au moins un canal »). Hérité du mode enregistrement. Laissez **ECG**. |
 | **Assigner aux Gestionnaires** | Cases à cocher, visibles seulement pour un administrateur et s'il existe des gestionnaires. **Le premier coché devient « Propriétaire ».** |
 
 Boutons : **Créer** (ou **Enregistrer** en modification), **Annuler**.
@@ -598,6 +598,8 @@ rouge en haut de la fenêtre, qui reste ouverte.
 
 *Captures antérieures à la traduction (ANH-123) : toutes trois montrent encore « Details » dans le fil d'Ariane, le statut brut (`online`, `offline`), « Created », « Danger Zone » et l'état brut du variateur.*
 
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : la carte Configuration y montre encore la fréquence, l'intervalle et les canaux.*
+
 **Adresse** : `/fr/dashboard/machines/{id}`. **Pour qui** : administrateur,
 gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 **Retour**.
@@ -611,10 +613,8 @@ gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 │ ┌───────────────────────────────┐ ┌───────────────────────────────┐   │
 │ │ Configuration     [ ✎ Modifier ]│ │ Gestionnaires                 │   │
 │ │ Statut En ligne  Dernier signal│ │ Claire Petit   (Propriétaire) │   │
-│ │ Fréquence 1000 Hz Interv. 1000 ms│ │ Marc Roux                     │   │
-│ │ Canaux (ECG)                   │ └───────────────────────────────┘   │
-│ │ Créée le 1 octobre 2026        │                                     │
-│ └───────────────────────────────┘                                     │
+│ │ Créée le 1 octobre 2026        │ │ Marc Roux                     │   │
+│ └───────────────────────────────┘ └───────────────────────────────┘   │
 │ ┌───────────────────────────────┐ ┌───────────────────────────────┐   │
 │ │ ⦿ État en direct   (● En direct)│ │ ☰ Programmes                  │   │
 │ │ Rapporté par la machine à ...  │ │ Programmes auto synchronisés ..│   │
@@ -661,8 +661,7 @@ programmes, ni droits, ni zone de danger.
 #### Carte « Configuration »
 
 Statut (« En ligne », « Hors ligne » ou « En session » ; une valeur que le
-site ne connaît pas s'afficherait telle quelle), Dernier signal,
-Fréquence d'échantillonnage, Intervalle de batch (ms), Canaux, « Créée le »
+site ne connaît pas s'afficherait telle quelle), Dernier signal, « Créée le »
 (date de création). Bouton **Modifier** : fenêtre du
 [§4.5](#45-fenêtre-nouvelle-machine--modifier).
 
@@ -907,13 +906,15 @@ sur la **vue en direct** de la nouvelle séance, au statut **en attente**.
 
 *Captures antérieures à la traduction (ANH-123) : elles montrent encore les statuts de ligne au pluriel (« Terminées », « Échouées ») ; ils s'affichent maintenant au singulier.*
 
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : la première montre encore le bouton « Nouvelle session », retiré.*
+
 **Adresse** : `/fr/dashboard/sessions`. **Pour qui** : tous (chacun voit ce
 que ses droits permettent).
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ Sessions ECG                                         [ + Nouvelle session ]│
-│ 12 sessions                                     (admin, gestionnaire) │
+│ Sessions ECG                                                           │
+│ 12 sessions                                                            │
 │ [ Tous | Actives | Terminées | Échouées ]   🔍 <Rechercher>            │
 │ ┌────────────────────────────────────────────────────────────────────┐│
 │ │Patient │Machine │Type              │Statut     │Démarrée à │Durée │Actions││
@@ -925,7 +926,8 @@ que ses droits permettent).
 ```
 
 Le titre dit « Sessions ECG » (hérité), mais la page liste **toutes** les
-séances : auto, manuelles, enregistrements.
+séances : auto, manuelles, et les anciens enregistrements ECG (en lecture
+seule).
 
 | Élément | Effet |
 |---|---|
@@ -938,30 +940,26 @@ séances : auto, manuelles, enregistrements.
 | **Voir en direct** (séance active) | Ouvre la vue en direct. |
 | Icône **œil** (autres statuts) | Ouvre le détail. |
 | Clic sur la ligne | Même effet. |
-| **Nouvelle session** (administrateur, gestionnaire) | Ouvre la fenêtre d'**enregistrement ECG** ([§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg)). **Ce n'est pas un lancement d'entraînement.** |
 
 La liste montre au plus les 100 séances les plus récentes. « Aucune session
-trouvée » si vide.
+trouvée » si vide. Cette page ne crée aucune séance : une séance auto se lance
+depuis une machine ([§4.8](#48-fenêtre-lancer-une-séance-auto)), une séance
+manuelle depuis la console.
 
 <a id="410-fenêtre-nouvelle-session-enregistrement-ecg"></a>
 
-### 4.10 Fenêtre « Nouvelle session » (enregistrement ECG)
+### 4.10 Fenêtre « Nouvelle session » (retirée)
 
-« Démarrer une nouvelle session d'enregistrement ECG ». Champs : **Sélectionner
-une machine** * (seulement les machines **En ligne**), **Sélectionner un
-patient** *, **Canaux à enregistrer** *, **Notes**. Boutons **Démarrer la
-session** et **Annuler**. Messages : « Aucune machine n'est actuellement en
-ligne. Veuillez attendre qu'une machine se connecte. », « Aucun patient trouvé.
-Veuillez d'abord créer un patient. ».
+Cette fenêtre créait une séance de l'ancien mode d'enregistrement ECG. Elle a
+été retirée avec ce mode : le bouton **Nouvelle session** n'existe plus, et le
+site ne crée une séance que par **Lancer une séance auto**.
 
-> **Attention : n'utilisez pas ce bouton avec la console d'entraînement.** Il
-> crée une séance « Enregistrement » en attente, destinée à l'ancien client
-> d'enregistrement ECG du Raspberry Pi. La console d'entraînement ne la prend
-> pas : elle reste **en attente pour toujours**, le site n'offre **aucun
-> bouton pour l'annuler**, et tant qu'elle existe, **tout lancement auto sur
-> cette machine est refusé** (« A session is already waiting for this
-> machine ») et la machine ne peut pas être supprimée. Seule une intervention
-> dans la console d'administration de Convex peut la débloquer.
+> **Attention : séance « Enregistrement » restée en attente.** Si une telle
+> séance a été créée avant le retrait, elle reste **en attente**, le site
+> n'offre **aucun bouton pour l'annuler**, et tant qu'elle existe, **tout
+> lancement auto sur cette machine est refusé** (« A session is already waiting
+> for this machine ») et la machine ne peut pas être supprimée. Seule une
+> intervention dans la console d'administration de Convex peut la débloquer.
 
 ### 4.11 Vue en direct d'une séance
 
@@ -971,7 +969,9 @@ et **Retour**.
 
 La page a plusieurs visages selon le type et le statut de la séance.
 
-*Captures antérieures à la traduction (ANH-123) : celles de cette section montrent encore le fil d'Ariane « Details › Live », l'en-tête « Started ... ago », le badge « Connecting... » et le bloc ECG en anglais.*
+*Captures antérieures à la traduction (ANH-123) : celles de cette section montrent encore le fil d'Ariane « Details › Live » et l'en-tête « Started ... ago ».*
+
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : celles de cette section montrent encore le badge « Connecting... » et, sous le panneau, le bloc ECG, retirés tous les deux.*
 
 #### a) Séance auto en attente
 
@@ -1031,7 +1031,7 @@ fenêtre) ou **Annuler la séance** (confirme). La séance passe au statut
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ Marie Martin                          (5s de délai)(● En direct)       │
+│ Marie Martin                                                           │
 │ Centri Paris • Démarrée il y a 3 minutes (Auto)(Tableau de bord)       │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ ↻ Séance d'entraînement · 30 min              [ ⯃ Arrêter la séance ]│ │
@@ -1052,15 +1052,11 @@ fenêtre) ou **Annuler la séance** (confirme). La séance passe au statut
 │ │ Vitesse du bras                                                    │ │
 │ │   ┄┄┄┄ Consigne (tr/min)   ──── Mesurée (tr/min)                   │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ [bloc ECG hérité, vide pour une séance d'entraînement]                │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
 **En tête de page** : nom du pratiquant (ou « Pratiquant non précisé »),
-machine, « Démarrée il y a ... », badges de type et d'origine. À droite :
-badge « 5s de délai » pour un gestionnaire, et badge « En direct » ou
-« Connexion... » (ces deux badges concernent **l'ECG brut** : pour une séance
-d'entraînement, il reste sur « Connexion... », c'est normal).
+machine, « Démarrée il y a ... », badges de type et d'origine.
 
 **Panneau « Séance d'entraînement »** :
 
@@ -1100,15 +1096,8 @@ machine confirmera l'arrêt. », **Annuler** ou **Arrêter la séance**. Ensuite
 console de la machine ». Elle peut être **arrêtée** depuis le site (la machine
 décélère), jamais démarrée.
 
-**Bloc ECG hérité** sous le panneau : cartes « Qualité du signal »,
-« Fréquence cardiaque (BPM) », « Durée », « Lots de données », « Échantillons
-enregistrés », tracé ECG, encadrés « En attente des données ECG » et
-« Comprendre les données ECG ». Le nombre d'échantillons est compté sur les
-lots affichés (les 10 dernières secondes) et la carte le dit (« lots chargés
-sur ... ») ; tant que le serveur n'a pas donné le nombre de lots, elle affiche
-« - ». **Pour une séance d'entraînement, ce bloc reste vide** : la console
-d'entraînement n'envoie pas l'ECG brut au site, seulement la télémétrie.
-Ignorez le.
+Sous le panneau, la page n'affiche rien d'autre : la console d'entraînement
+n'envoie pas l'ECG brut au site, seulement la télémétrie.
 
 #### c) Séance d'entraînement terminée ou échouée
 
@@ -1123,14 +1112,11 @@ Même en tête, bouton **Voir le détail**, et le panneau avec un bandeau :
 - rouge « **Séance échouée** » et le motif (par exemple « refusee par la
   machine : ... »).
 
-#### d) Séance d'enregistrement ECG
+#### d) Séance de l'ancien mode d'enregistrement ECG
 
-Tracé ECG en direct, cartes du bloc ECG, bouton **Terminer la session**
-(administrateur, gestionnaire) avec la fenêtre « Terminer la session
-d'enregistrement ? ». Un gestionnaire voit les données avec 5 s de retard
-(badge « 5s de délai »). Hors du statut actif : « La session n'est pas
-active » et **Voir le détail de la session**. Cette vue n'a pas été observée
-avec une session réellement active depuis la traduction.
+Pas de vue en direct. La page affiche « Cette séance vient de l'ancien mode
+d'enregistrement ECG : elle n'a pas de vue en direct. » et le bouton **Voir le
+détail de la session**.
 
 ### 4.12 Détail d'une séance
 
@@ -1138,7 +1124,9 @@ avec une session réellement active depuis la traduction.
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
-*Capture antérieure à la traduction (ANH-123) : elle montre encore le badge « Completed », les cartes « Duration », « Data Batches », « Total Samples », « Sample Rate 1000 » et les titres « ECG Recording », « Patient Information », « Session Timing ».*
+*Capture antérieure à la traduction (ANH-123) : elle montre encore le badge « Completed » et les titres « Patient Information », « Session Timing ».*
+
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : elle montre encore les cinq cartes du haut (« Duration », « Data Batches », « Total Samples »...), le bloc « ECG Recording » et la carte de l'appareil d'enregistrement, retirés.*
 
 **Adresse** : `/fr/dashboard/sessions/{id}`. **Pour qui** : comme la vue en
 direct.
@@ -1151,7 +1139,6 @@ direct.
 │ │ ⚠ Session échouée ... (si échouée : motif en police fixe)          │ │
 │ │ 🕑 En attente de l'appareil ... (si en attente)                    │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ [Durée 30m 2s][Lots de données 0][Échantillons 0][Canaux 1][Échantillonnage -]│
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ ◔ Entraînement      (Auto)(Tableau de bord)                        │ │
 │ │ Programme 30 min   Zone cible 118 à 138 bpm   Durée prévue 30 min  │ │
@@ -1159,21 +1146,19 @@ direct.
 │ │ Motif de fin : programme_complete                                  │ │
 │ │ Télémétrie : courbes Fréquence cardiaque et Vitesse du bras        │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
-│ Enregistrement ECG : Aucune donnée ECG enregistrée pour cette session │
-│ Informations patient · Chronologie · Appareil d'enregistrement · Notes│
+│ Informations patient · Chronologie de la session · Notes de session   │
 └───────────────────────────────────────────────────────────────────────┘
- * « Voir en direct » : si la séance est active, ou auto en attente.
+ * « Voir en direct » : si la séance d'entraînement est active ou en attente.
 ```
 
 | Bloc | Contenu |
 |---|---|
-| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut (Active, Terminée, En attente, Échouée), badges de type et d'origine, machine et date. **Voir en direct** si la séance est active (ou auto en attente). |
+| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut (Active, Terminée, En attente, Échouée), badges de type et d'origine, machine et date. **Voir en direct** si la séance d'entraînement est active ou en attente. |
 | « Session échouée » | Si échouée : texte générique et **motif précis** en police fixe. |
-| « En attente de l'appareil » | Si en attente ; pour une séance d'entraînement, le texte est « En attente que la machine arme la séance… ». |
-| Cinq cartes | Durée (« En cours » si non finie), Lots de données, Échantillons enregistrés, Canaux, Échantillonnage (Hz). Le nombre d'échantillons et la fréquence sont lus dans les lots chargés (200 au plus), jamais calculés à partir d'une constante. Au-delà de 200 lots, les cartes le disent (« lots chargés sur ... », « Hz, lots chargés »). Tant que le serveur n'a pas donné le nombre de lots, elles affichent « - ». Avec plusieurs canaux, le libellé précise « tous canaux confondus ». Héritées de l'ECG : **sans intérêt pour une séance d'entraînement** (0 lot, fréquence « - »). |
+| « En attente de l'appareil » | Séance d'entraînement en attente : « En attente que la machine arme la séance… ». |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
-| « Enregistrement ECG » | Tracé ECG pour un enregistrement, une carte par canal avec son nombre d'échantillons (« - » tant que le nombre de lots n'est pas connu). Pour l'entraînement : « Aucune donnée ECG enregistrée pour cette session ». |
-| « Informations patient », « Chronologie de la session », « Appareil d'enregistrement », « Notes de session », « Résumé de l'enregistrement » | Nom et adresse, début, durée, fin, « Démarrée par », machine (avec « Fréquence d'acquisition configurée : N Hz »), canaux, notes, puis le résumé des lots et des échantillons. |
+| Carte **Ancien enregistrement ECG** (séances de l'ancien mode seulement, à la place de la carte Entraînement) | « Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule. » ; « Canaux enregistrés » ; puis, si des données existent, « Lots de données », « Durée des données » et « Données enregistrées de ... à ... ». Sinon « Aucune donnée ECG enregistrée pour cette session ». Le tracé n'est plus affiché. |
+| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (« En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
 
 **Lire le motif de fin** (champ « Motif de fin ») :
 
@@ -1440,17 +1425,17 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
-*Capture antérieure à la traduction (ANH-123) : elle montre encore la ligne « 126 data batches • 133s of recording • ~12600 samples », en anglais et avec un nombre d'échantillons faux.*
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : elle montre encore le bouton « Download PDF », le badge du canal et la ligne « 126 data batches • 133s of recording • ~12600 samples », retirés.*
 
 **Adresse** : `/fr/dashboard/reports`. **Pour qui** : tous.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │ Rapports de sessions                                                   │
-│ Consultez et téléchargez vos rapports de sessions terminées           │
+│ Consultez vos sessions terminées                                       │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
-│ │ 🗎 Rapport de session - 7K2QX9A1          [👁 Voir] [⤓ Télécharger PDF]│ │
-│ │ 👤 Marie Martin  ▢ Centri Paris  📅 01/10/2026  🕑 30 min  (ECG)    │ │
+│ │ 🗎 Rapport de session - 7K2QX9A1                            [👁 Voir] │ │
+│ │ 👤 Marie Martin  ▢ Centri Paris  📅 01/10/2026  🕑 30 min           │ │
 │ └───────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -1459,25 +1444,9 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   plus parmi les 100 plus récentes. Titre : « Rapport de session » et les 8
   derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
-- **Télécharger PDF** : génère un PDF dans votre navigateur et le télécharge
-  (le bouton garde son libellé et affiche une icône qui tourne pendant ce
-  temps). Le bouton reste grisé tant
-  que les données de la séance ne sont pas chargées. Le PDF suit la langue de
-  l'interface (en français : « Rapport de session ECG », fichier
-  `Rapport_ECG_{identifiant}_{date}.pdf`) et contient l'identité, les horaires,
-  les canaux, les statistiques d'enregistrement, les notes et un aperçu ECG.
-- Sous la carte d'une séance qui a des données ECG : « N lots de données •
-  N s d'enregistrement • N échantillons ». Le nombre d'échantillons, comme la
-  fréquence d'échantillonnage du PDF, est lu dans les lots chargés pour le
-  rapport (50 au plus). Au-delà, la ligne le dit : « sur les 50 lots chargés
-  (N au total) ». Le PDF le dit avec ses propres mots : « comptés sur 50 lots
-  chargés, N au total ».
-- « Aucun rapport disponible pour le moment » si vide.
-
-> Pour une séance **d'entraînement**, le PDF ne contient **ni courbe de
-> fréquence cardiaque ni télémétrie** (il ne sait lire que l'ECG, que la
-> console d'entraînement n'envoie pas). Pour relire une séance d'entraînement,
-> utilisez **Voir** : la carte **Entraînement** du détail contient les courbes.
+- Il n'y a plus de bouton **Télécharger PDF** : l'ancien rapport, construit
+  sur les données ECG, a été retiré avec le mode d'enregistrement. Le rapport
+  d'une séance d'entraînement n'existe pas encore sur le site.
 
 ### 4.20 Paramètres
 
@@ -1512,7 +1481,7 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 |---|---|
 | **Votre Compte** | Vos nom, adresse, rôle, langue. Lecture seule. |
 | **Gestion des Rôles** | **Sélectionner un Utilisateur** (tous les comptes sauf vous, « Nom - Rôle »), **Nouveau Rôle** (Administrateur, Gestionnaire, Patient), bouton **Mettre à jour le Rôle** (« Chargement... » pendant l'envoi). En cas de succès, les deux listes se vident. **Aucun message de confirmation ni d'erreur** ne s'affiche : vérifiez dans **Utilisateurs**. |
-| **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version, langues, « Délai d'expiration du heartbeat: 90s », « Fréquence d'échantillonnage par défaut: 1000 Hz », « Intervalle de batch par défaut: 1000 ms ». |
+| **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version, langues, « Délai d'expiration du heartbeat: 90s ». |
 
 Il n'y a **aucun autre réglage** sur le site : ni notifications, ni mot de passe
 (géré par Clerk, menu de l'avatar), ni réglage de machine (fait sur la
@@ -1635,15 +1604,14 @@ Un patient peut avoir plusieurs gestionnaires : cochez le chez chacun.
 
 1. **Machines** → **Nouvelle machine**.
 2. **Nom de la machine** (par exemple « Centri Paris »), **Emplacement**.
-3. Laissez Fréquence, Intervalle et Canaux tels quels.
-4. **Assigner aux Gestionnaires** : cochez le ou les gestionnaires (le premier
+3. **Assigner aux Gestionnaires** : cochez le ou les gestionnaires (le premier
    coché sera « Propriétaire »).
-5. **Créer**.
-6. **Copiez la clé** (**Copier**) et gardez la en lieu sûr. **Fermer**.
-7. Sur le Raspberry Pi, dans le fichier `raspberry-pi/.env`, renseignez :
+4. **Créer**.
+5. **Copiez la clé** (**Copier**) et gardez la en lieu sûr. **Fermer**.
+6. Sur le Raspberry Pi, dans le fichier `raspberry-pi/.env`, renseignez :
    `MACHINE_API_KEY=<la clé>` et `CONVEX_URL=https://<déploiement>.convex.site`
    (voir [guide-console-locale.md](guide-console-locale.md)).
-8. Redémarrez la console de la machine.
+7. Redémarrez la console de la machine.
 
 **Ce que vous devez voir** : dans la minute, la machine passe **En ligne** dans
 **Machines**, la carte **État en direct** se remplit (badge **En direct**) et la
@@ -1921,19 +1889,20 @@ Pour l'historique d'un seul patient : **Patients** → le patient → carte
   **n'apparaît pas** chez le patient : la machine n'envoie pas encore le
   pratiquant (voir [§6.4](#64-séances-démarrées-à-la-machine-manuelles-ou-auto)).
 
-### P14. Lire et télécharger les rapports
+### P14. Lire les rapports
 
 **Qui** : tous.
 
 1. **Rapports**.
 2. Repérez la séance (nom, machine, date, durée).
-3. **Voir** pour ouvrir le détail, ou **Télécharger PDF**.
+3. **Voir** pour ouvrir le détail.
 
-**Ce que vous devez voir** : un fichier PDF « Rapport de session ECG » téléchargé.
+**Ce que vous devez voir** : le détail de la séance, avec la carte
+**Entraînement** et ses courbes.
 
-**Limite** : pour une séance d'entraînement, le PDF n'a pas de courbe. Seul le
-détail (**Voir**) montre les courbes. Pour garder une trace, faites une capture
-d'écran de la carte **Entraînement** ou imprimez la page du navigateur.
+**Limite** : le site ne produit plus de fichier PDF (l'ancien rapport ECG a été
+retiré avec le mode d'enregistrement). Pour garder une trace, faites une
+capture d'écran de la carte **Entraînement** ou imprimez la page du navigateur.
 
 ### P15. Régler les paramètres (changer un rôle)
 
@@ -2138,7 +2107,7 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée.
 |---|---|---|
 | « Machine is offline » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Machine is already in a session » | Séance en cours sur la machine. | Attendre ou arrêter. |
-| « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **Tous**, trouver la séance en attente et l'annuler (P12). Si c'est un « Enregistrement », voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
+| « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **Tous**, trouver la séance en attente et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
 | « This machine does not accept programmed sessions yet (manual only, at the machine) » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « This programme is not on the machine » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
 | « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente. | P7. |
@@ -2253,13 +2222,10 @@ pendant toute l'année 2026.
 Une séance démarrée à la console n'est pas encore rattachée au patient (§6.4).
 Son gestionnaire la voit, avec « Unknown ».
 
-**Le rapport PDF est vide de courbes.**
-Le PDF ne sait lire que l'ECG, que la console d'entraînement n'envoie pas.
-Ouvrez le détail de la séance (**Voir**) : les courbes y sont.
-
-**Le badge dit « Connexion... » en permanence sur la vue en direct.**
-Ce badge concerne l'ancien flux ECG, pas l'entraînement. Regardez le panneau
-**Séance d'entraînement**.
+**Où est le rapport PDF d'une séance ?**
+Il n'y en a plus : l'ancien rapport ne savait lire que l'ECG, que la console
+d'entraînement n'envoie pas, et il a été retiré. Ouvrez le détail de la séance
+(**Voir**) : les courbes y sont.
 
 **Faut il recharger la page pour voir les nouvelles valeurs ?**
 Non, tout se met à jour seul. Les courbes avancent par paquets de 5 s.
@@ -2302,7 +2268,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 |---|---|
 | Nouveau code en production | **Pas encore** : attend le redéploiement (**ANH-82**). |
 | Ouverture du nouveau code dans un navigateur contre un vrai serveur | **Faite le 2 octobre 2026**, en local, contre le serveur de développement : les 17 pages du tableau de bord, les fenêtres, les trois rôles. Voir le [§9.4](#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026). |
-| Tests du site | Unitaires seulement : fonctions ECG et règles de `lib/` (`npm run test:ecg`), fraîcheur de l'état en direct (`npm run test:site`). **Aucun** test dans un navigateur ni de bout en bout. |
+| Tests du site | Unitaires seulement : règles de `lib/` et retrait de l'ancien mode ECG (`npm run test:ecg`), fraîcheur de l'état en direct (`npm run test:site`). **Aucun** test dans un navigateur ni de bout en bout. |
 | Lancement auto de bout en bout (serveur, machine simulée, moteur simulé) | **Exécuté le 1er octobre 2026** sur le serveur de développement, sans passer par les pages du site : lancement, refus, télémétrie, arrêt à distance. Voir [deploiement.md](../deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026). |
 | Lancement auto observé sur les pages du site | **Fait le 2 octobre 2026** : séance en attente, active, arrêtée, annulée, vues par l'administrateur et par la patiente. Le lancement lui-même a été envoyé au serveur sans cliquer le bouton **Lancer**. |
 | Lancement auto sur une vraie machine | **Jamais exécuté.** |
@@ -2315,7 +2281,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 |---|---|---|---|
 | 1 | (Corrigé dans le code le 1er octobre 2026, à vérifier au redéploiement.) La lecture de « l'utilisateur connecté » ne déclarait ni FC max ni année de naissance. | Aurait bloqué le tableau de bord de tout compte dont la physiologie est saisie. | Vérifier après le redéploiement avec un patient dont la physiologie est saisie. |
 | 2 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) **Assigner des Machines** (fiche gestionnaire) remplaçait tous les gestionnaires de chaque machine cochée, et ne retirait rien quand on décochait. | Des gestionnaires perdaient l'accès sans le savoir. | Jusqu'au redéploiement : passer par **Modifier** sur le détail de la machine (P6). |
-| 3 | **Nouvelle session** crée un enregistrement ECG en attente que la console d'entraînement ne prend jamais, et que le site ne sait pas annuler. | La machine devient **inlançable** et **non supprimable**. | Ne pas utiliser ce bouton. Nettoyage via la console Convex. |
+| 3 | (Corrigé par le retrait de l'ancien mode d'enregistrement ECG : le bouton **Nouvelle session** n'existe plus.) Une séance « Enregistrement » créée avant ce retrait et restée en attente n'est prise par aucune console, et le site ne sait pas l'annuler. | La machine concernée reste **inlançable** et **non supprimable**. | Nettoyage via la console Convex. |
 | 4 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) Un gestionnaire qui **Modifiait** une machine recevait une erreur alors que la modification était enregistrée. | Confusion. | Jusqu'au redéploiement : vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |
@@ -2324,11 +2290,11 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 9 | Messages du serveur en anglais, et peut être masqués en production. | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | Listes des patients et gestionnaires : le serveur prend les 50 à 100 séances **les plus récentes de toute la base**, puis filtre. | Sur une base active, un patient ou un gestionnaire peut ne pas voir ses séances plus anciennes. | Aucun. |
-| 12 | Rapport PDF sans télémétrie ; cartes ECG inutiles sur les séances d'entraînement. (Corrigé par ANH-123 : rapport et cartes traduits ; fréquence et nombre d'échantillons lus dans les lots enregistrés, avec une mention quand seuls certains lots sont chargés.) | Rapports inexploitables pour l'entraînement. | Utiliser le détail de la séance. |
+| 12 | (Retirés avec l'ancien mode d'enregistrement ECG.) Le rapport PDF, sans télémétrie, et les cartes ECG, inutiles sur les séances d'entraînement, n'existent plus. Il n'y a pas encore de rapport pour une séance d'entraînement. | Pas de fichier à télécharger. | Utiliser le détail de la séance. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
 | 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Restent au rythme du serveur : le statut « En ligne » (jusqu'à environ 2,5 min) et « Dernier signal ». | Une machine muette garde le statut « En ligne » un moment, à côté du badge « Données périmées ». | Se fier au badge « Données périmées ». |
-| 16 | La fenêtre **Nouvelle machine** propose 100 Hz par défaut alors que le serveur et **Paramètres** annoncent 1000 Hz. | Sans effet sur l'entraînement. | Aucun. |
+| 16 | (Sans objet depuis le retrait de l'ancien mode d'enregistrement ECG.) La fenêtre **Nouvelle machine** proposait 100 Hz par défaut alors que le serveur et **Paramètres** annonçaient 1000 Hz : ni l'une ni l'autre n'affichent plus de fréquence. | Aucun. | Aucun. |
 | 17 | Mutations sans écran : rattacher ou détacher un seul gestionnaire d'un patient ou d'une machine, modifier son propre profil. | Moins de souplesse. | Passer par les assignations complètes. |
 
 ### 9.3 Écarts entre le code et la référence `docs/tableau-de-bord.md`
@@ -2336,8 +2302,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 Pour le mainteneur de la documentation technique :
 
 - elle ne signale pas le défaut de **Assigner des Machines** (§9.2 n°2), ni
-  l'erreur affichée au gestionnaire qui modifie une machine (n°4), ni le
-  blocage durable causé par **Nouvelle session** (n°3) ;
+  l'erreur affichée au gestionnaire qui modifie une machine (n°4) ;
 - elle dit que la fenêtre bloque le lancement pour un pratiquant de moins de 18
   ans : ce contrôle ne vaut que pour un patient choisi dans la liste, pas pour
   « Moi-même » ;
@@ -2374,8 +2339,8 @@ complète. Rien ici ne concerne une vraie machine.
 **Écarts et défauts visibles**
 
 Ces constats datent du 2 octobre 2026. Depuis, ANH-123 a corrigé les constats
-1 à 3 et les statuts au pluriel du constat 8 ; le constat 4 demeure, avec des
-libellés traduits (« Connexion... », « En attente des données ECG »).
+1 à 3 et les statuts au pluriel du constat 8 ; le constat 4 a disparu avec le
+retrait de l'ancien mode d'enregistrement ECG (le bloc ECG n'existe plus).
 
 | # | Constat | Où |
 |---|---|---|

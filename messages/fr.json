@@ -75,8 +75,6 @@
     "french": "Français (fr)",
     "languages": "Français, Anglais",
     "heartbeatTimeout": "Délai d'expiration du heartbeat",
-    "defaultSampleRate": "Fréquence d'échantillonnage par défaut",
-    "defaultBatchInterval": "Intervalle de batch par défaut",
     "general": "Général",
     "appearance": "Apparence",
     "notifications": "Notifications",
@@ -258,9 +256,6 @@
     "regenerate": "Régénérer",
     "regenerateKeyDesc": "Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner.",
     "config": "Configuration",
-    "sampleRate": "Fréquence d'échantillonnage",
-    "channels": "Canaux",
-    "batchInterval": "Intervalle de batch (ms)",
     "noMachines": "Aucune machine trouvée",
     "deleteConfirm": "Supprimer cette machine?",
     "deleteConfirmDesc": "Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire.",
@@ -287,36 +282,21 @@
       "createDescription": "Configurer une nouvelle machine Raspberry Pi",
       "namePlaceholder": "Raspberry Pi 1",
       "locationPlaceholder": "Salle 101",
-      "nameRequired": "Le nom est obligatoire",
-      "channelRequired": "Sélectionnez au moins un canal"
+      "nameRequired": "Le nom est obligatoire"
     }
   },
   "sessions": {
     "title": "Sessions ECG",
-    "create": "Nouvelle session",
-    "createDescription": "Démarrer une nouvelle session d'enregistrement ECG",
     "active": "Actives",
     "completed": "Terminées",
     "failed": "Échouées",
     "pending": "En attente",
-    "selectMachine": "Sélectionner une machine",
-    "selectMachinePlaceholder": "Sélectionner une machine",
-    "selectPatient": "Sélectionner un patient",
-    "selectPatientPlaceholder": "Sélectionner un patient",
-    "selectChannels": "Canaux à enregistrer",
-    "start": "Démarrer la session",
-    "end": "Terminer la session",
     "duration": "Durée",
     "startedAt": "Démarrée à",
     "endedAt": "Terminée à",
-    "notes": "Notes",
-    "notesPlaceholder": "Notes optionnelles...",
     "viewLive": "Voir en direct",
     "viewReport": "Voir le rapport",
     "noSessions": "Aucune session trouvée",
-    "noOnlineMachines": "Aucune machine n'est actuellement en ligne. Veuillez attendre qu'une machine se connecte.",
-    "noPatients": "Aucun patient trouvé. Veuillez d'abord créer un patient.",
-    "endConfirm": "Êtes-vous sûr de vouloir terminer cette session?",
     "patient": "Patient",
     "machine": "Machine",
     "startedBy": "Démarrée par",
@@ -327,167 +307,29 @@
       "failed": "Échouée"
     },
     "notFound": "Session introuvable",
-    "inProgress": "En cours",
-    "form": {
-      "machineRequired": "Veuillez sélectionner une machine",
-      "patientRequired": "Veuillez sélectionner un patient",
-      "channelRequired": "Sélectionnez au moins un canal"
-    },
-    "channelOptions": {
-      "ECG": {
-        "name": "ECG (cœur)",
-        "description": "Électrocardiographie : 3 électrodes sur la poitrine"
-      },
-      "EDA": {
-        "name": "EDA (stress)",
-        "description": "Activité électrodermale : 2 bagues au doigt"
-      },
-      "SpO2": {
-        "name": "SpO2 (oxygène)",
-        "description": "Oxymétrie de pouls : capteur pince au doigt"
-      },
-      "RESP": {
-        "name": "Respiration",
-        "description": "Respiration : ceinture thoracique"
-      },
-      "EMG": {
-        "name": "EMG (muscle)",
-        "description": "Électromyographie : capteur musculaire"
-      },
-      "LUX": {
-        "name": "Lumière",
-        "description": "Capteur de lumière ambiante"
-      }
-    }
-  },
-  "ecg": {
-    "liveView": "Vue en direct",
-    "delayedView": "Vue différée (5s)",
-    "heartRate": "Fréquence cardiaque",
-    "bpm": "BPM",
-    "avgHeartRate": "FC moyenne",
-    "minHeartRate": "FC minimum",
-    "maxHeartRate": "FC maximum",
-    "hrv": "Variabilité cardiaque (HRV)",
-    "live": "En direct",
-    "delay": "5s de délai",
-    "waitingForChannel": "En attente des données {channel}...",
-    "connectDevice": "Connectez le BITalino pour voir le tracé"
-  },
-  "recording": {
-    "dataBatches": "Lots de données",
-    "samples": "{channels, plural, =0 {Échantillons enregistrés} =1 {Échantillons enregistrés} other {Échantillons enregistrés, tous canaux confondus}}",
-    "samplesPartial": "{channels, plural, =0 {Échantillons} =1 {Échantillons} other {Échantillons, tous canaux confondus}} ({loaded, number} lots chargés sur {total, number})",
-    "partialNote": "Comptés sur les {loaded, number} lots chargés, sur {total, number} au total.",
-    "sampleRateHz": "Échantillonnage (Hz)",
-    "sampleRateHzPartial": "Échantillonnage (Hz, lots chargés)",
-    "acquisitionRate": "Fréquence d'acquisition configurée : {rate} Hz"
+    "inProgress": "En cours"
   },
   "sessionDetail": {
     "failedTitle": "Session échouée",
-    "failedDescription": "Cette session a rencontré une erreur et a été interrompue. Les données enregistrées avant l'échec sont affichées ci-dessous.",
+    "failedDescription": "Cette session a rencontré une erreur et a été interrompue.",
     "pendingTitle": "En attente de l'appareil",
-    "pendingDescription": "Cette session attend que l'appareil d'enregistrement se connecte et commence à capturer des données.",
-    "ecgRecording": "Enregistrement ECG",
-    "channelTitle": "Canal {channel}",
-    "samplesRecorded": "{count, plural, =0 {Aucun échantillon enregistré} one {# échantillon enregistré} other {# échantillons enregistrés}}",
-    "noChannelData": "Aucune donnée pour {channel}",
-    "sessionActive": "La session est active",
-    "viewLiveRecording": "Voir l'enregistrement en direct",
-    "waitingForDevice": "En attente du démarrage de l'enregistrement par l'appareil...",
     "noEcgData": "Aucune donnée ECG enregistrée pour cette session",
     "timing": "Chronologie de la session",
     "started": "Début",
     "ended": "Fin",
-    "recordingDevice": "Appareil d'enregistrement",
     "recordedChannels": "Canaux enregistrés",
     "notes": "Notes de session",
-    "summary": "Résumé de l'enregistrement",
     "dataDuration": "Durée des données",
     "seconds": "{seconds, number} s",
-    "recordedRange": "Données enregistrées de {start} à {end}"
+    "recordedRange": "Données enregistrées de {start} à {end}",
+    "legacyTitle": "Ancien enregistrement ECG",
+    "legacyDescription": "Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule.",
+    "dataBatches": "Lots de données"
   },
   "sessionLive": {
-    "notActive": "La session n'est pas active",
     "viewDetails": "Voir le détail de la session",
     "started": "Démarrée {time}",
-    "connecting": "Connexion...",
-    "mainsTitle": "Signal dominé par des interférences électriques : vérifiez le contact des électrodes",
-    "poorTitle": "Signal de mauvaise qualité : vérifiez le branchement des électrodes",
-    "warningDescription": "Le signal ECG est surtout composé de ronflement du secteur ou de bruit, et non de battements cardiaques. Cela signifie généralement :",
-    "cause1": "Les électrodes ECG ne sont pas branchées sur le patient",
-    "cause2": "Les électrodes adhèrent mal à la peau (essayez d'ajouter du gel)",
-    "cause3": "Des câbles sont desserrés ou débranchés",
-    "tipLabel": "Conseil :",
-    "tipText": "branchez le rouge sur le bras droit, le noir sur le bras gauche et le blanc sur la jambe droite",
-    "qualityGood": "Bon",
-    "qualityPoor": "Mauvais",
-    "signalQuality": "Qualité du signal",
-    "heartRateBpm": "Fréquence cardiaque (BPM)",
-    "waitingTitle": "En attente des données ECG",
-    "waitingDescription": "Vérifiez que l'appareil BITalino est connecté et que le client Raspberry Pi est en cours d'exécution. Les données devraient apparaître ici en quelques secondes.",
-    "explainTitle": "Comprendre les données ECG",
-    "yAxisLabelTreated": "Axe vertical ({unit}) :",
-    "yAxisTextTreated": "signal électrique du cœur, filtré et converti par la machine avant l'envoi. Ce n'est pas la fréquence cardiaque.",
-    "yAxisLabelRaw": "Axe vertical :",
-    "yAxisTextRaw": "valeurs brutes du capteur, filtrées à l'affichage. Elles représentent le signal électrique du cœur, pas la fréquence cardiaque.",
-    "xAxisLabel": "Axe horizontal (secondes) :",
-    "xAxisText": "fenêtre des 5 dernières secondes de données. Le graphique défile à mesure que les données arrivent.",
-    "sampleRateLabel": "Fréquence d'échantillonnage :",
-    "sampleRateText": "{rate} Hz, valeur lue dans les données reçues.",
-    "heartRateLabel": "Fréquence cardiaque :",
-    "heartRateText": "estimée par détection des pics R dans le signal ECG.",
-    "endDialogTitle": "Terminer la session d'enregistrement ?",
-    "endDialogDescription": "L'enregistrement des données ECG du patient {name} sera arrêté. Les données enregistrées seront conservées et resteront consultables.",
-    "ending": "Arrêt en cours..."
-  },
-  "sensors": {
-    "noSignal": "Pas de signal",
-    "normal": "Normale",
-    "bpm": "BPM",
-    "ecg": {
-      "title": "ECG : activité cardiaque",
-      "bradycardia": "Bradycardie",
-      "elevated": "Élevée",
-      "tachycardia": "Tachycardie",
-      "hrv": "HRV (RMSSD)",
-      "waiting": "En attente des données ECG...",
-      "scale": "Échelle verticale ajustée automatiquement",
-      "rPeaks": "Pics R détectés : {count, number}"
-    },
-    "eda": {
-      "title": "EDA : réponse au stress",
-      "skinConductance": "Conductance cutanée",
-      "scrUnit": "SCR",
-      "responses": "Réponses",
-      "stress": {
-        "low": "FAIBLE",
-        "moderate": "MODÉRÉ",
-        "high": "ÉLEVÉ",
-        "unknown": "INCONNU"
-      },
-      "waiting": "En attente des données EDA...",
-      "legend": "SCR = réponse de conductance cutanée (indicateur d'activation émotionnelle)"
-    },
-    "spo2": {
-      "title": "SpO2 : oxygène sanguin",
-      "low": "Basse",
-      "critical": "Critique",
-      "pulse": "Pouls",
-      "perfusionIndex": "IP",
-      "waiting": "En attente des données SpO2...",
-      "legend": "Onde PPG • IP = indice de perfusion (qualité du signal)"
-    },
-    "resp": {
-      "title": "Respiration",
-      "slow": "Lente",
-      "fast": "Rapide",
-      "rapid": "Très rapide",
-      "perMinute": "/min",
-      "regularity": "Régularité",
-      "waiting": "En attente des données de respiration...",
-      "legend": "Normale : 12 à 20 respirations/min • Une respiration profonde améliore la HRV"
-    }
+    "legacyRecording": "Cette séance vient de l'ancien mode d'enregistrement ECG : elle n'a pas de vue en direct."
   },
   "gestionnaires": {
     "title": "Gestion des Gestionnaires",
@@ -529,53 +371,14 @@
   },
   "reports": {
     "title": "Rapports de sessions",
-    "description": "Consultez et téléchargez vos rapports de sessions terminées",
-    "download": "Télécharger PDF",
-    "generating": "Génération en cours...",
+    "description": "Consultez vos sessions terminées",
     "patientInfo": "Informations patient",
     "sessionInfo": "Informations session",
     "metrics": "Métriques",
-    "ecgOverview": "Aperçu ECG",
     "sessionReport": "Rapport de session",
     "noReports": "Aucun rapport disponible pour le moment",
     "view": "Voir",
-    "batches": "{count, plural, one {# lot de données} other {# lots de données}}",
-    "recordingSeconds": "{seconds, number} s d'enregistrement",
-    "samples": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}}{channels, plural, =0 {} =1 {} other {, tous canaux confondus}}",
-    "samplesPartial": "{count, plural, =0 {aucun échantillon} one {# échantillon} other {# échantillons}}{channels, plural, =0 {} =1 {} other {, tous canaux confondus,}} sur les {loaded, number} lots chargés ({total, number} au total)",
-    "durationMinutes": "{minutes, number} min",
-    "pdf": {
-      "title": "Rapport de session ECG",
-      "reportId": "Rapport n° {id}",
-      "generatedAt": "Généré le {date}",
-      "patientInfo": "Informations patient",
-      "name": "Nom",
-      "email": "Email",
-      "sessionDetails": "Détails de la session",
-      "machine": "Machine",
-      "started": "Début",
-      "ended": "Fin",
-      "duration": "Durée",
-      "durationValue": "{minutes} min {seconds} s",
-      "channels": "Canaux",
-      "statistics": "Statistiques d'enregistrement",
-      "totalBatches": "Lots de données",
-      "recordingDuration": "Durée d'enregistrement",
-      "recordingDurationValue": "{seconds} s",
-      "sampleRate": "Fréquence d'échantillonnage",
-      "sampleRateValue": "{rate} Hz",
-      "sampleRateValuePartial": "{rate} Hz (d'après les lots chargés)",
-      "sampleRateUnknown": "Non renseignée dans les données",
-      "samples": "Échantillons enregistrés",
-      "samplesValue": "{count}{channels, plural, =0 {} =1 {} other { (tous canaux confondus)}}",
-      "samplesPartial": "{count} ({channels, plural, =0 {} =1 {} other {tous canaux confondus, }}comptés sur {loaded} lots chargés, {total} au total)",
-      "waveformPreview": "Aperçu du tracé ECG",
-      "channelPreview": "Canal {channel} ({count} premiers échantillons)",
-      "notes": "Notes",
-      "footer": "Système de surveillance ECG Gaura, page {page} sur {total}",
-      "notAvailable": "Non disponible",
-      "fileName": "Rapport_ECG_{id}_{date}.pdf"
-    }
+    "durationMinutes": "{minutes, number} min"
   },
   "privacy": {
     "title": "Politique de Confidentialité",
