@@ -532,9 +532,10 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
    exigée **même** si la FC max est mesurée), puis « Rider is N: auto sessions
    require at least 18 years ». Une valeur enregistrée qui n'est pas un entier
    fini compte comme non renseignée (voir « Valeur utilisable » plus haut) : le
-   lancement est refusé par le premier de ces messages pour la FC max, ou pour
-   l'année de naissance sans FC max mesurée, et par le troisième pour l'année
-   de naissance à côté d'une FC max mesurée. Rien n'est mis en file.
+   lancement est refusé par « The rider's max heart rate (or birth year) must
+   be set… » pour la FC max, ou pour l'année de naissance sans FC max mesurée,
+   et par « The rider's birth year must be set… » pour l'année de naissance à
+   côté d'une FC max mesurée. Rien n'est mis en file.
 5. Durée : « Duration must be positive » (un nombre fini, strictement positif).
 
 La séance créée copie le programme (zone, durée, ou la durée demandée),
