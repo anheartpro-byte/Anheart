@@ -1304,8 +1304,8 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
 def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
     """Why the start was refused, without the words that say it was."""
     match refusal:
-        case AlreadyStarted(state=state):
-            return f"la machine est deja {state.value}"
+        case AlreadyStarted():
+            return f"la machine est deja {refusal.state.value}"
         case NotAttested():
             return "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
@@ -1365,8 +1365,8 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
 def describe_resolve_error(error: ResolveError) -> str:
     """One line for a programme that could not be resolved. Exhaustive."""
     match error:
-        case UnknownProfile(profile_id=profile_id):
-            return f"demarrage refuse : programme {profile_id!r} inconnu sur cette machine"
+        case UnknownProfile():
+            return f"demarrage refuse : programme {error.profile_id!r} inconnu sur cette machine"
         case Rejected(detail=detail):
             return f"demarrage refuse : programme inadapte a ce passager ({detail})"
     raise assert_never(error)
@@ -1375,8 +1375,8 @@ def describe_resolve_error(error: ResolveError) -> str:
 def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
     """One line for a refused manual target."""
     match refusal:
-        case NoManualSession(state=state):
-            return f"consigne refusee : pas de session manuelle ({state.value})"
+        case NoManualSession():
+            return f"consigne refusee : pas de session manuelle ({refusal.state.value})"
         case ManualEnding(detail=detail):
             return f"consigne refusee : {detail}"
         case TargetOutOfRange(requested=requested, min_run=low, ceiling=high):
@@ -1404,9 +1404,11 @@ def _held_by(by: Holding) -> str:
     a hold added later has no words until somebody writes them here.
     """
     match by:
-        case SafetyVerdict(rule=rule, latched=latched):
-            wait = "L'acquitter une fois sa cause levee" if latched else "Attendre qu'il soit leve"
-            return f"le verdict {rule} tient le bras a l'arret. {wait}"
+        case SafetyVerdict():
+            wait = (
+                "L'acquitter une fois sa cause levee" if by.latched else "Attendre qu'il soit leve"
+            )
+            return f"le verdict {by.rule} tient le bras a l'arret. {wait}"
         case RiseHold.NO_HEART_RATE:
             return (
                 "pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. "
@@ -1436,8 +1438,11 @@ def _held_by(by: Holding) -> str:
 def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
     """One line for a refused fault reset."""
     match refusal:
-        case ResetWhileCommanded(state=state, phase=phase):
-            return f"reset refuse : mouvement encore commande ({state.value}, {phase.value})"
+        case ResetWhileCommanded():
+            return (
+                "reset refuse : mouvement encore commande "
+                f"({refusal.state.value}, {refusal.phase.value})"
+            )
         case ResetBehindVerdict(verdict=verdict):
             return f"reset refuse : acquitter d'abord le verdict {verdict.rule}"
         case NoFaultToReset(state=state):
