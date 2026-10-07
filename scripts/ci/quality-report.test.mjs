@@ -43,6 +43,20 @@ import {
   suiteNumbers,
   SUITES,
 } from "./quality-report.mjs";
+import {
+  assertMeasured,
+  CONVEX,
+  globToRegExp,
+  holds,
+  measuredFiles,
+  SITE,
+  siteFolders,
+  sourcesOf,
+  testsOf,
+  THRESHOLD,
+  unjudged,
+  vitestThresholds,
+} from "./coverage-thresholds.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -260,7 +274,7 @@ test("the coverage of a Python project is read from coverage json, lines and bra
   assert.equal(pythonCoverage(write(directory, "other.json", '{"files": {}, "totals": {}}')), undefined);
 });
 
-test("the coverage of the site counts a line once, covered if either of its two suites covers it", (context) => {
+test("a coverage read from several runs counts a line once, covered if one of them covers it", (context) => {
   const directory = scratch(context);
   const root = "/home/runner/work/Anheart/Anheart";
   const lib = write(
@@ -291,6 +305,14 @@ test("the coverage of the site counts a line once, covered if either of its two 
   );
   assert.equal(istanbulCoverage([lib, join(directory, "absent.json")], root), undefined);
   assert.equal(istanbulCoverage([], root), undefined);
+  // One file taken alone, for a threshold that judges it apart from the whole.
+  const alone = istanbulCoverage([lib, components], root, "lib/training.ts");
+  assert.deepEqual(
+    [alone?.files, alone?.lines, alone?.branches],
+    [1, { covered: 2, total: 2 }, { covered: 1, total: 2 }],
+  );
+  // A file that is not in the measure has no figure: nothing says "100 %" of it.
+  assert.equal(istanbulCoverage([lib, components], root, "lib/gone.ts"), undefined);
 });
 
 test("a percentage is never rounded up, and a duration reads in minutes", () => {
@@ -531,7 +553,7 @@ test("the Pi gate reports its tests, its whole coverage, the files under its thr
   // The 100 % is that of the files the threshold judges, and is named so: the chain holds more.
   assert.match(
     summary,
-    /^\| chaîne de sécurité du Pi, fichiers sous le seuil \| 1 \| 100 % \(300 sur 300\) \| 100 % \(120 sur 120\) \| 100 % \|$/m,
+    /^\| chaîne de sécurité du Pi, fichiers sous le seuil \| 1 \| 100 % \(300 sur 300\) \| 100 % \(120 sur 120\) \| 100 % : ✅ tenu \|$/m,
   );
   assert.match(
     summary,
@@ -681,43 +703,76 @@ test("the simulation gate reports the battery of every job, its coverage, and th
   assert.equal(buildPart("simulation", { ...options, scenarios: join(directory, "absent.json") }).scenarios, undefined);
 });
 
-test("Convex and the site report their tests, their coverage without threshold and the outcome of their checks", (context) => {
+test("Convex and the site report their tests, their coverage against its threshold and the outcome of their checks", (context) => {
   const directory = scratch(context);
   write(directory, "convex.xml", VITEST);
+  // Two of the three files of the safety chain are measured: one whole, one with an arm never taken.
   write(
     directory,
     "coverage-convex/coverage-final.json",
-    istanbul([istanbulFile(`${ROOT}/convex/training.ts`, [1, 1, 0], [1, 0])]),
+    istanbul([
+      istanbulFile(`${ROOT}/convex/training.ts`, [1, 1, 1], [1, 1]),
+      istanbulFile(`${ROOT}/convex/http.ts`, [1, 1, 0], [1, 0]),
+    ]),
   );
   const convex = buildPart("convex", { dir: directory, root: ROOT, env: { TYPES_OUTCOME: "success" } });
   assert.equal(convex.suites.convex?.tests, 3);
   assert.equal(convex.suites.convex?.skipped, 1);
   assert.deepEqual(convex.coverage.convex?.least_covered, [
-    { file: "convex/training.ts", lines: { covered: 2, total: 2 }, branches: { covered: 1, total: 2 } },
+    { file: "convex/http.ts", lines: { covered: 2, total: 2 }, branches: { covered: 1, total: 2 } },
   ]);
   assert.deepEqual(convex.checks, [
     { kind: "types", project: "convex", job: "convex-tests", name: "tsc -p convex/tsconfig.json", state: "passed" },
   ]);
-  assert.match(renderPart(convex), /^\| `convex\/` \| 1 \| 100 % \(2 sur 2\) \| 50,0 % \(1 sur 2\) \| aucun \|$/m);
+  // The whole, then each file of the safety chain judged alone: the one that holds, the one that
+  // does not, and the one the measure does not hold at all, which is given no figure.
+  assert.deepEqual(Object.keys(convex.coverage), ["convex", "convex:convex/training.ts", "convex:convex/http.ts"]);
+  const detail = renderPart(convex).split("\n");
+  for (const expected of [
+    "| `convex/` | 2 | 100 % (4 sur 4) | 75,0 % (3 sur 4) | 80 % : ❌ non tenu |",
+    "| chaîne de sécurité côté Convex, `convex/training.ts` pris seul | 1 | 100 % (2 sur 2) | 100 % (2 sur 2) | 80 % : ✅ tenu |",
+    "| chaîne de sécurité côté Convex, `convex/http.ts` pris seul | 1 | 100 % (2 sur 2) | 50,0 % (1 sur 2) | 80 % : ❌ non tenu |",
+    "| chaîne de sécurité côté Convex, `convex/lib/auth.ts` pris seul | indisponible | indisponible | indisponible | 80 % |",
+  ]) {
+    assert.ok(detail.includes(expected), expected);
+  }
 
   write(directory, "site-lib.xml", VITEST);
   write(directory, "site-components.xml", VITEST);
-  write(
-    directory,
-    "coverage-site-lib/coverage-final.json",
-    istanbul([istanbulFile(`${ROOT}/lib/training.ts`, [1, 0, 0], [0, 0])]),
-  );
-  // The type check failed, so the job stopped: the lint did not run, and one of the two coverage files is not there.
-  const site = buildPart("site", {
+  // The type check failed, so the job stopped: the lint did not run, and the coverage was not measured.
+  const stopped = buildPart("site", {
     dir: directory,
     root: ROOT,
     env: { TYPES_OUTCOME: "failure", LINT_OUTCOME: "skipped" },
   });
-  assert.deepEqual(Object.keys(site.suites), ["site-lib", "site-components"]);
-  assert.deepEqual(site.coverage, {}, "a total over one of the two suites would read lower than what was measured");
+  assert.deepEqual(Object.keys(stopped.suites), ["site-lib", "site-components"]);
+  assert.deepEqual(stopped.coverage, {});
   assert.deepEqual(
-    site.checks.map(({ kind, project, state }) => `${kind} ${project} ${state}`),
+    stopped.checks.map(({ kind, project, state }) => `${kind} ${project} ${state}`),
     ["types site failed", "lint site not_run", "lint convex not_run", "lint scripts not_run"],
+  );
+  assert.match(
+    renderPart(stopped),
+    /^\| `lib\/`, `hooks\/`, `components\/` \| indisponible \| indisponible \| indisponible \| 80 % \|$/m,
+  );
+  // The measure of the site is one run of all its tests: one file, where `web` leaves it.
+  write(
+    directory,
+    "coverage-site/coverage-final.json",
+    istanbul([
+      istanbulFile(`${ROOT}/lib/training.ts`, [1, 1, 1], [1, 1]),
+      istanbulFile(`${ROOT}/components/Card.tsx`, [1, 0, 0], [0, 0]),
+    ]),
+  );
+  const site = buildPart("site", {
+    dir: directory,
+    root: ROOT,
+    env: { TYPES_OUTCOME: "success", LINT_OUTCOME: "success" },
+  });
+  assert.deepEqual(Object.keys(site.coverage), ["site"]);
+  assert.match(
+    renderPart(site),
+    /^\| `lib\/`, `hooks\/`, `components\/` \| 2 \| 75,0 % \(3 sur 4\) \| 50,0 % \(2 sur 4\) \| 80 % : ❌ non tenu \|$/m,
   );
   assert.throws(() => buildPart("audit", { dir: directory, root: ROOT, env: {} }), /unknown part/);
 });
@@ -784,14 +839,20 @@ const everyPart = () => ({
     schema: SCHEMA_VERSION,
     part: "convex",
     suites: { convex: numbers(925, 0, 0, 3.8) },
-    coverage: { convex: covered(1356, 1403, 863, 988) },
+    coverage: {
+      convex: covered(1356, 1403, 863, 988),
+      // The three files of the safety chain, each judged alone.
+      "convex:convex/training.ts": { ...covered(270, 283, 222, 241), files: 1 },
+      "convex:convex/http.ts": { ...covered(98, 98, 96, 103), files: 1 },
+      "convex:convex/lib/auth.ts": { ...covered(122, 122, 102, 102), files: 1 },
+    },
     checks: [check("types", "convex", "convex-tests")],
   },
   site: {
     schema: SCHEMA_VERSION,
     part: "site",
     suites: { "site-lib": numbers(75), "site-components": numbers(61), "pi-panel": numbers(40) },
-    coverage: { site: covered(193, 1211, 230, 1125) },
+    coverage: { site: covered(1090, 1283, 960, 1177) },
     checks: [
       check("types", "site", "web"),
       check("lint", "site", "web"),
@@ -908,7 +969,7 @@ test("the table of the run has one line per project and the columns of the ticke
     "✅ réussi",
     "✅ réussie : `convex-tests`",
   ]);
-  assert.deepEqual(line(markdown, "Site").slice(6, 8), ["15,9 %", "20,4 %"]);
+  assert.deepEqual(line(markdown, "Site").slice(6, 8), ["84,9 %", "81,5 %"]);
   // No tool measures the coverage of the scripts: it is said, not shown as zero.
   assert.deepEqual(line(markdown, "Scripts").slice(1), [
     "250",
@@ -929,7 +990,8 @@ test("the table of the run has one line per project and the columns of the ticke
     5583,
   );
   // EX-4: each threshold with what it judges and whether it holds, the scenarios, the battery.
-  const safety = markdown.slice(markdown.indexOf("### Chaîne de sécurité"), markdown.indexOf("### Détail par suite"));
+  const safety = markdown.slice(markdown.indexOf("### Seuils de couverture"), markdown.indexOf("### Détail par suite"));
+  assert.equal(safety.split("\n")[0], "### Seuils de couverture, chaîne de sécurité et simulation");
   assert.deepEqual(safety.split("\n").slice(4, 8), [
     "| Couverture, chaîne de sécurité du Pi, fichiers sous le seuil | 3 fichiers : lignes 100 % (7 000 sur 7 000), branches 100 % (2 000 sur 2 000) | 100 % exigé par `pi-gate` : ✅ tenu |",
     // The 100 % is not left to stand for the whole chain: what is declared in it and outside the
@@ -939,6 +1001,20 @@ test("the table of the run has one line per project and the columns of the ticke
     "| Couverture, code de la simulation | 3 fichiers : lignes 100 % (4 000 sur 4 000), branches 100 % (1 500 sur 1 500) | 100 % exigé par `simulation-gate` : ✅ tenu |",
   ]);
   assert.doesNotMatch(safety, /chaîne de sécurité du Pi \| lignes 100 %/, "100 % is never said of the chain itself");
+  // ANH-203: the thresholds of Convex and of the site, in the same words as those of the Pi. Convex as a
+  // whole, each of its three files of the safety chain taken alone, then the measured folders of the site.
+  assert.deepEqual(safety.split("\n").slice(8, 13), [
+    "| Couverture, `convex/` | 3 fichiers : lignes 96,6 % (1 356 sur 1 403), branches 87,3 % (863 sur 988) | 80 % exigé par `convex-tests` : ✅ tenu |",
+    "| Couverture, chaîne de sécurité côté Convex, `convex/training.ts` pris seul | 1 fichier : lignes 95,4 % (270 sur 283), branches 92,1 % (222 sur 241) | 80 % exigé par `convex-tests` : ✅ tenu |",
+    "| Couverture, chaîne de sécurité côté Convex, `convex/http.ts` pris seul | 1 fichier : lignes 100 % (98 sur 98), branches 93,2 % (96 sur 103) | 80 % exigé par `convex-tests` : ✅ tenu |",
+    "| Couverture, chaîne de sécurité côté Convex, `convex/lib/auth.ts` pris seul | 1 fichier : lignes 100 % (122 sur 122), branches 100 % (102 sur 102) | 80 % exigé par `convex-tests` : ✅ tenu |",
+    "| Couverture, `lib/`, `hooks/`, `components/` | 3 fichiers : lignes 84,9 % (1 090 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ✅ tenu |",
+  ]);
+  assert.match(
+    markdown,
+    /^- Couverture de Convex et du site : 80 % de lignes et de branches exigés par `convex-tests` \(sur `convex\/` et sur chacun de ses 3 fichiers de la chaîne de sécurité pris seul\) et 80 % par `web` \(sur `lib\/`, `hooks\/`, `components\/`\)\. Sous le seuil, la gate échoue\.$/m,
+  );
+  assert.doesNotMatch(markdown, /sans seuil/, "the coverage of Convex and of the site is no longer only read");
   assert.match(markdown, /^- Ce rapport ne lit que les jobs de `ci\.yml`\. Les autres workflows du dépôt /m);
   assert.match(
     markdown,
@@ -1206,6 +1282,210 @@ test("a gate that failed keeps its numbers and reads « échec »", () => {
   assert.match(read(renderNotice(whole)), / ; aucun fichier de la chaîne hors du seuil$/m);
 });
 
+test("a measure of Convex or of the site under 80 % reads « non tenu », the whole and each file judged alone", () => {
+  // The rule itself: lines and branches, each at 80 % or more, never rounded up.
+  const ratio = (/** @type {number} */ lines, /** @type {number} */ branches) => ({
+    lines: { covered: lines, total: 1000 },
+    branches: { covered: branches, total: 1000 },
+  });
+  assert.equal(holds(ratio(800, 800), 80), true, "80 % is reached at 80 %");
+  assert.equal(holds(ratio(799, 1000), 80), false, "79,9 % of lines is under, whatever the branches");
+  assert.equal(holds(ratio(1000, 799), 80), false, "79,9 % of branches is under, whatever the lines");
+  assert.equal(
+    holds({ lines: { covered: 3, total: 3 }, branches: { covered: 0, total: 0 } }, 80),
+    true,
+    "no branch to take",
+  );
+  assert.equal(holds(ratio(999, 1000), 100), false);
+  assert.equal(holds(ratio(1000, 1000), 100), true);
+
+  // `convex-tests` failed on its threshold: `training.ts` alone fell to 79,6 % of branches, the whole still holds.
+  // `web` failed on its own: the site is at 79,9 % of lines.
+  const parts = everyPart();
+  parts.convex.coverage["convex:convex/training.ts"] = { ...covered(270, 283, 192, 241), files: 1 };
+  parts.site.coverage.site = covered(1026, 1283, 960, 1177);
+  const report = buildReport({
+    parts,
+    junit: everyScript(),
+    needs: needs({ "convex-tests": "failure", web: "failure" }),
+    event: "pull_request",
+    run: RUN,
+  });
+  const markdown = read(renderReport(report));
+  for (const expected of [
+    "| Couverture, `convex/` | 3 fichiers : lignes 96,6 % (1 356 sur 1 403), branches 87,3 % (863 sur 988) | 80 % exigé par `convex-tests` : ✅ tenu |",
+    "| Couverture, chaîne de sécurité côté Convex, `convex/training.ts` pris seul | 1 fichier : lignes 95,4 % (270 sur 283), branches 79,6 % (192 sur 241) | 80 % exigé par `convex-tests` : ❌ non tenu |",
+    "| Couverture, `lib/`, `hooks/`, `components/` | 3 fichiers : lignes 79,9 % (1 026 sur 1 283), branches 81,5 % (960 sur 1 177) | 80 % exigé par `web` : ❌ non tenu |",
+  ]) {
+    assert.ok(markdown.split("\n").includes(expected), expected);
+  }
+  assert.equal(line(markdown, "Convex").at(-1), "❌ échec : `convex-tests`");
+  assert.equal(line(markdown, "Site").at(-1), "❌ échec : `web`");
+  const said = read(renderNotice(report)).split("\n");
+  assert.ok(
+    said.includes(
+      "Couverture, Convex : seuil de 80 % de lignes et de branches tenu ; fichiers jugés seuls : " +
+        "convex/training.ts non tenu (lignes 95,4 %, branches 79,6 %), convex/http.ts tenu (lignes 100 %, branches 93,2 %), " +
+        "convex/lib/auth.ts tenu (lignes 100 %, branches 100 %)",
+    ),
+    said.join("\n"),
+  );
+  assert.ok(
+    said.includes("Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches non tenu"),
+  );
+  // For a machine: each measure with its threshold and whether it holds.
+  const held = Object.fromEntries(report.coverage.map((measure) => [measure.id, [measure.threshold, measure.held]]));
+  assert.deepEqual(held, {
+    pi: [undefined, undefined],
+    "pi-threshold": [100, true],
+    simulation: [100, true],
+    convex: [80, true],
+    "convex:convex/training.ts": [80, false],
+    "convex:convex/http.ts": [80, true],
+    "convex:convex/lib/auth.ts": [80, true],
+    site: [80, false],
+  });
+
+  // A file of the safety chain the measure does not hold (renamed, or left out of it) is never read as
+  // holding: no figure, no « tenu », and the notice names it.
+  const gone = everyPart();
+  delete gone.convex.coverage["convex:convex/lib/auth.ts"];
+  const without = buildReport({ parts: gone, junit: everyScript(), needs: needs(), event: "push", run: RUN });
+  assert.ok(
+    read(renderReport(without))
+      .split("\n")
+      .includes(
+        "| Couverture, chaîne de sécurité côté Convex, `convex/lib/auth.ts` pris seul | indisponible | 80 % exigé par `convex-tests` |",
+      ),
+  );
+  assert.match(read(renderNotice(without)), /, convex\/lib\/auth\.ts non mesuré$/m);
+  assert.equal(without.coverage.find(({ id }) => id === "convex:convex/lib/auth.ts")?.held, undefined);
+  // A gate that left no measure at all: nothing is said of its threshold in the notice.
+  const none = buildReport({ parts: { pi: gone.pi }, junit: {}, needs: needs(), event: "push", run: RUN });
+  assert.doesNotMatch(renderNotice(none), /Couverture, (Convex|Site)/);
+});
+
+test("the thresholds, the measured folders and the files judged alone are written once, and the report reads them there", () => {
+  assert.equal(THRESHOLD, 80);
+  assert.deepEqual([CONVEX.threshold, SITE.threshold], [80, 80]);
+  // What Vitest is given: lines and branches, for the whole and for each file that must hold alone.
+  assert.deepEqual(vitestThresholds(CONVEX), {
+    lines: 80,
+    branches: 80,
+    "convex/training.ts": { lines: 80, branches: 80 },
+    "convex/http.ts": { lines: 80, branches: 80 },
+    "convex/lib/auth.ts": { lines: 80, branches: 80 },
+  });
+  assert.deepEqual(vitestThresholds(SITE), { lines: 80, branches: 80 });
+  // The site: the folders of its two suites, tests and sources of each.
+  assert.deepEqual(siteFolders(), ["lib", "hooks", "components"]);
+  assert.deepEqual(testsOf(["lib"]), ["lib/**/*.test.{ts,tsx}"]);
+  assert.deepEqual(sourcesOf(siteFolders()), ["lib/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}", "components/**/*.{ts,tsx}"]);
+  // The report names what the gates judge, from the same lists.
+  assert.equal(PROJECTS.find(({ id }) => id === "site")?.label, "Site (`lib/`, `hooks/`, `components/`)");
+  assert.deepEqual(
+    COVERAGES.filter(({ project }) => project === "convex").map(({ id, threshold, file }) => [id, threshold, file]),
+    [["convex", 80, undefined], ...CONVEX.alone.map((file) => [`convex:${file}`, 80, file])],
+  );
+  assert.equal(COVERAGES.find(({ id }) => id === "site")?.threshold, SITE.threshold);
+  // Each file judged alone is a source file that exists and that the measure holds: Vitest judges a
+  // name that matches nothing as reached, so a file renamed without this list would leave its threshold idle.
+  for (const file of CONVEX.alone) {
+    assert.ok(existsSync(join(ROOT, file)), `${file} does not exist`);
+    assert.ok(file.startsWith("convex/") && file.endsWith(".ts"), `${file} is not a source file of convex/`);
+    assert.ok(!/\.test\.ts$|\.fixtures\.ts$|^convex\/_generated\//.test(file), `${file} is left out of the measure`);
+    assert.ok(!CONVEX.exclude.includes(file), `${file} is left out of the measure`);
+  }
+  for (const folder of siteFolders()) assert.ok(existsSync(join(ROOT, folder)), `${folder}/ does not exist`);
+});
+
+test("a threshold that names something the measure does not hold stops the command instead of passing", (context) => {
+  // The globs of the lists, read as Vitest reads them.
+  const matches = (/** @type {string} */ glob, /** @type {string} */ file) => globToRegExp(glob).test(file);
+  for (const [glob, file, expected] of /** @type {const} */ ([
+    ["convex/**/*.ts", "convex/training.ts", true],
+    ["convex/**/*.ts", "convex/lib/auth.ts", true],
+    ["convex/**/*.ts", "convex/lib/deep/er.ts", true],
+    ["convex/**/*.ts", "convex/training.tsx", false],
+    ["convex/**/*.ts", "elsewhere/convex/training.ts", false],
+    ["convex/_generated/**", "convex/_generated/api.d.ts", true],
+    ["convex/_generated/**", "convex/generated.ts", false],
+    ["convex/**/*.test.ts", "convex/lib/auth.test.ts", true],
+    ["convex/**/*.test.ts", "convex/testing.ts", false],
+    ["convex/test.setup.ts", "convex/test.setup.ts", true],
+    ["convex/test.setup.ts", "convex/testXsetup.ts", false],
+    ["components/**/*.{ts,tsx}", "components/ui/button.tsx", true],
+    ["components/**/*.{ts,tsx}", "components/ui/button.css", false],
+    ["**/*.test.{ts,tsx}", "lib/training.test.ts", true],
+    ["**/*.test.{ts,tsx}", "components/ui/button.test.tsx", true],
+    ["**/*.test.{ts,tsx}", "components/ui/button.tsx", false],
+    ["lib/*.ts", "lib/sub/file.ts", false],
+  ])) {
+    assert.equal(matches(glob, file), expected, `${glob} against ${file}`);
+  }
+
+  // A small repository: two sources, a test, a generated file, an installed one.
+  const root = scratch(context);
+  for (const file of [
+    "convex/training.ts",
+    "convex/lib/auth.ts",
+    "convex/lib/auth.test.ts",
+    "convex/_generated/api.ts",
+    "convex/node_modules/pkg/index.ts",
+    "lib/training.ts",
+    "lib/training.test.ts",
+  ]) {
+    write(root, file, "");
+  }
+  const convex = {
+    include: ["convex/**/*.ts"],
+    exclude: ["convex/_generated/**", "convex/**/*.test.ts"],
+    alone: ["convex/training.ts", "convex/lib/auth.ts"],
+  };
+  assert.deepEqual(measuredFiles(root, convex), ["convex/lib/auth.ts", "convex/training.ts"]);
+  assert.deepEqual(unjudged(root, convex), []);
+  assert.doesNotThrow(() => assertMeasured(root, convex));
+
+  // The file of the safety chain is renamed and the list is not: Vitest would count its threshold as reached.
+  const renamed = { ...convex, alone: ["convex/trainingSessions.ts", "convex/lib/auth.ts"] };
+  assert.deepEqual(unjudged(root, renamed), [
+    '"convex/trainingSessions.ts" must reach the threshold alone but is not a measured file ' +
+      "(renamed, removed or excluded?): its threshold would count as reached",
+  ]);
+  assert.throws(
+    () => assertMeasured(root, renamed),
+    /^Error: Coverage threshold without an object \(scripts\/ci\/coverage-thresholds\.mjs\):\n- "convex\/trainingSessions\.ts" must reach/,
+  );
+  // A file that exists but that an exclusion takes out of the measure is not judged either.
+  assert.match(
+    unjudged(root, { ...convex, exclude: [...convex.exclude, "convex/lib/**"] }).join("\n"),
+    /"convex\/lib\/auth\.ts" must reach/,
+  );
+  assert.match(
+    unjudged(root, { ...convex, alone: ["convex/lib/auth.test.ts"] }).join("\n"),
+    /auth\.test\.ts" must reach/,
+  );
+  assert.match(unjudged(root, { ...convex, alone: ["convex/_generated/api.ts"] }).join("\n"), /api\.ts" must reach/);
+  // A folder of the site mistyped, or emptied of its sources: it would leave the measure without a word.
+  const site = { include: ["lib/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}"], exclude: ["**/*.test.{ts,tsx}"] };
+  assert.deepEqual(measuredFiles(root, site), ["lib/training.ts"]);
+  assert.deepEqual(unjudged(root, site), [
+    '"hooks/**/*.{ts,tsx}" matches no measured file: nothing of it would be judged',
+  ]);
+  assert.throws(() => assertMeasured(root, site), /"hooks\/\*\*\/\*\.\{ts,tsx\}" matches no measured file/);
+  write(root, "hooks/use-thing.test.ts", "");
+  assert.equal(unjudged(root, site).length, 1, "a folder that holds only tests holds nothing to measure");
+  write(root, "hooks/use-thing.ts", "");
+  assert.deepEqual(unjudged(root, site), []);
+
+  // The lists of the repository as they are: everything they name is measured.
+  assert.deepEqual(unjudged(ROOT, CONVEX), []);
+  assert.deepEqual(unjudged(ROOT, { include: sourcesOf(siteFolders()), exclude: SITE.exclude }), []);
+  const measured = measuredFiles(ROOT, CONVEX);
+  for (const file of CONVEX.alone) assert.ok(measured.includes(file), file);
+  assert.ok(!measured.some((file) => /\.test\.ts$|\.fixtures\.ts$|_generated/.test(file)));
+});
+
 test("a job that left no artifact reads « indisponible », and one that did not run « non lancé »", () => {
   const { pi, site } = everyPart();
   const junit = { "scripts-ci": numbers(120), "scripts-men": numbers(14) };
@@ -1298,7 +1578,10 @@ test("the essentials of the run are also said in plain text, one line per projec
     "Chaîne de sécurité du Pi : seuil de 100 % tenu (3 fichiers sous le seuil : lignes 100 %, branches 100 %) ; dans la chaîne mais hors du seuil : src/signal.py (lignes 82,5 %, branches 64,0 %)",
     "Simulation : 1 024 tests, 0 en échec ; lignes 100 %, branches 100 % ; lint réussi ; types réussis ; gate réussie",
     "Convex : 925 tests, 0 en échec ; lignes 96,6 %, branches 87,3 % ; lint réussi ; types réussis ; gate réussie",
-    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint réussi ; types réussis ; gate réussie",
+    // The threshold of Convex: the whole, then each file of the safety chain judged alone, by name.
+    "Couverture, Convex : seuil de 80 % de lignes et de branches tenu ; fichiers jugés seuls : convex/training.ts tenu (lignes 95,4 %, branches 92,1 %), convex/http.ts tenu (lignes 100 %, branches 93,2 %), convex/lib/auth.ts tenu (lignes 100 %, branches 100 %)",
+    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint réussi ; types réussis ; gate réussie",
+    "Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches tenu",
     "Scripts (CI et release) : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
     "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
   ]);
@@ -1320,13 +1603,14 @@ test("the essentials of the run are also said in plain text, one line per projec
     { python: "false", node: "true" },
   );
   const partly = buildReport({ parts: { site }, junit: everyScript(), needs: states, event: "pull_request", run: RUN });
-  assert.deepEqual(read(renderNotice(partly)).split("\n").slice(0, 6), [
+  assert.deepEqual(read(renderNotice(partly)).split("\n").slice(0, 7), [
     "324 tests lancés, 0 en échec. 3 gates réussies sur 6 (pi-gate sautée, simulation-gate sautée, web en échec).",
     // The panel of the console, tested by `web`: counted, and said to be part of the project only.
     "Console du Pi (tout src/) : 40 tests (une partie des suites), 0 en échec ; couverture sautée ; lint sauté ; types sautés ; gate sautée",
     "Simulation : sautée par la règle de chemins",
     "Convex : tests indisponibles ; couverture indisponible ; lint réussi ; types indisponibles ; gate réussie",
-    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint en échec ; types réussis ; gate en échec",
+    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint en échec ; types réussis ; gate en échec",
+    "Couverture, Site (lib/, hooks/, components/) : seuil de 80 % de lignes et de branches tenu",
     "Scripts (CI et release) : 148 tests (une partie des suites), 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
   ]);
   assert.doesNotMatch(renderNotice(partly), /Chaîne de sécurité/, "nothing is said of a chain that was not measured");
@@ -1571,4 +1855,27 @@ test("the documentation describes every column of the table and the format of qu
   // The 100 % of the Pi is that of the files under the threshold: the documentation says what that leaves out.
   assert.match(section, /`coverage_pending`/);
   assert.match(section, /fichiers sous le seuil/);
+});
+
+test("the documentation gives the thresholds of Convex and of the site, what they judge and what is left out of the measure", () => {
+  const docs = readFileSync(join(ROOT, "docs/framework-de-test.md"), "utf8");
+  const section = /^### Seuils de couverture de Convex et du site.*\n[\s\S]*?(?=^### )/m.exec(docs)?.[0] ?? "";
+  assert.ok(section.length > 0, "docs/framework-de-test.md has no section on the thresholds of Convex and of the site");
+  assert.ok(section.includes(`${THRESHOLD} %`), "the threshold is not given");
+  // What each threshold judges: the folders of the site, and each Convex file judged alone.
+  for (const folder of siteFolders())
+    assert.ok(section.includes(`\`${folder}/\``), `the folder ${folder}/ is not named`);
+  for (const file of CONVEX.alone) assert.ok(section.includes(`\`${file}\``), `${file} is not named`);
+  // Nothing leaves the measure without a line that says why: every exclusion of the two measures is listed.
+  for (const glob of [...CONVEX.exclude, ...SITE.exclude]) {
+    assert.ok(section.includes(`| \`${glob}\` |`), `the exclusion ${glob} is not listed with its reason`);
+  }
+  // The same check on a developer's machine, and where the lists are written.
+  for (const told of ["npm run coverage:convex", "npm run coverage:site", "scripts/ci/coverage-thresholds.mjs"]) {
+    assert.ok(section.includes(told), `"${told}" is not given`);
+  }
+  // How a failure reads: the line Vitest ends on.
+  assert.match(section, /does not meet global threshold/);
+  // The section on the report no longer says that nothing is enforced.
+  assert.doesNotMatch(docs, /lue, pas exigée|sans seuil\. Rien de cela|Aucun seuil ne\s+s'applique à ces deux mesures/);
 });

@@ -44,7 +44,9 @@ fonctions Convex et ouvre le tableau de bord Convex.
 - Pi, depuis `raspberry-pi/` : `./scripts/check.sh`.
 - Simulation, depuis la racine : `simulation/scripts/check.sh`.
 - Site, depuis la racine : `npm run lint`, `npm run build`,
-  `npm run test:convex`, `npm run test:ecg` et `npm run test:site`.
+  `npm run test:convex`, `npm run test:ecg` et `npm run test:site`. La
+  couverture exigée par la CI (80 % de lignes et de branches) se vérifie avec
+  `npm run coverage:convex` et `npm run coverage:site`.
 - Processus de release, depuis la racine : `npm run test:release`
   ([docs/release.md](docs/release.md)).
 

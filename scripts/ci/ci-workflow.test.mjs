@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { CONVEX, SITE, siteFolders, sourcesOf, testsOf, vitestThresholds } from "./coverage-thresholds.mjs";
 import { COVERAGES, GATES, SUITES } from "./quality-report.mjs";
 
 const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -173,9 +174,7 @@ const stepsOf = (id) => (jobs.get(id) ?? "").split(/^ {6}- /m).slice(1);
 const titleOf = (step) => step.split("\n")[0];
 /** A step the quality report adds to a job that is not its own. @param {string} step */
 const addedForTheReport = (step) =>
-  /^name: (Quality report, the numbers of this job|Keep the numbers for the quality report|Measure the coverage of )/.test(
-    step,
-  );
+  /^name: (Quality report, the numbers of this job|Keep the numbers for the quality report)/.test(step);
 
 test("the report job waits for every gate, runs whatever happened to them, and nothing waits for it", () => {
   assert.deepEqual(GATES, REQUIRED, "the report shows the checks branch protection requires");
@@ -237,8 +236,8 @@ test("what the report adds to a gate cannot change the verdict of that gate", ()
     if (id === REPORT) continue;
     for (const step of stepsOf(id)) {
       const forTheReport = addedForTheReport(step);
-      // Its script, its artifacts and the coverage it measures are only reached from the steps it added.
-      const reaches = /quality-report\.mjs|^ {10}name: quality-|npm run coverage:/m.test(step);
+      // Its script and its artifacts are only reached from the steps it added.
+      const reaches = /quality-report\.mjs|^ {10}name: quality-/m.test(step);
       assert.equal(reaches, forTheReport, `${id}: ${titleOf(step)}`);
       if (!forTheReport) continue;
       added += 1;
@@ -252,19 +251,138 @@ test("what the report adds to a gate cannot change the verdict of that gate", ()
       }
     }
   }
-  assert.ok(added >= 13, `${added} steps of the report were read`);
-  // Coverage of Convex and of the site is read, never enforced: no threshold in the measures.
-  for (const config of ["vitest.convex.config.mts", "vitest.ecg.config.mts", "vitest.site.config.mts"]) {
-    const text = readFileSync(new URL(`../../${config}`, import.meta.url), "utf8");
-    assert.match(text, /^ {4}coverage: \{$/m, `${config} measures no coverage`);
-    assert.doesNotMatch(text, /thresholds|enabled:/, `${config} must only measure, and only when asked`);
+  assert.ok(added >= 11, `${added} steps of the report were read`);
+});
+
+// --- The thresholds of Convex and of the site (ANH-203; docs/framework-de-test.md,
+// "Seuils de couverture de Convex et du site") ---
+//
+// Unlike the report, they decide: `convex-tests` and `web` fail under 80 % of
+// lines or of branches. What follows holds the chain from the one place the
+// threshold is written to the step that fails the job. A later edit could cut
+// it anywhere (a `continue-on-error`, a configuration that stops reading the
+// list, a script without its flag) and leave every gate green.
+
+/** A file at the root of the repository, as text. @param {string} name */
+const atRoot = (name) => readFileSync(new URL(`../../${name}`, import.meta.url), "utf8");
+
+/** The steps that measure the coverage of a job and fail it under the threshold. */
+const ENFORCED = [
+  {
+    job: "convex-tests",
+    step: "Enforce the coverage of the Convex functions",
+    script: "coverage:convex",
+    config: "vitest.convex.config.mts",
+    measure: "CONVEX",
+    left: "coverage-convex",
+  },
+  {
+    job: "web",
+    step: "Enforce the coverage of the site",
+    script: "coverage:site",
+    config: "vitest.site-coverage.config.mts",
+    measure: "SITE",
+    left: "coverage-site",
+  },
+];
+
+test("the coverage of Convex and of the site decides their gates: under the threshold the job fails", () => {
+  const scripts = JSON.parse(atRoot("package.json")).scripts;
+  for (const { job, step: name, script, config, measure, left } of ENFORCED) {
+    const step = stepsOf(job).find((text) => text.startsWith(`name: ${name}\n`)) ?? "";
+    assert.ok(step !== "", `${job}: no step "${name}"`);
+    // Nothing lets the job pass when the command fails.
+    assert.doesNotMatch(step, /continue-on-error/, `${job}: ${name}`);
+    // It runs after a failed test too, so that the report keeps its measure; never on a cancelled run.
+    assert.equal(stepCondition(job, name), "${{ !cancelled() }}", `${job}: ${name}`);
+    // The command of the package, and the measure left where the report reads it.
+    assert.match(
+      step,
+      new RegExp(
+        `^ {8}run: npm run ${script} -- --reporter=default --coverage\\.reportsDirectory="\\$RUNNER_TEMP/quality/${left}"$`,
+        "m",
+      ),
+      `${job}: ${name}`,
+    );
+    // No flag on that line takes the threshold away or changes what is measured.
+    assert.doesNotMatch(step, /thresholds|coverage\.(include|exclude|enabled)/, `${job}: ${name}`);
+    assert.equal(scripts[script], `vitest run --config ${config} --coverage`);
+    // The configuration takes what it measures and its threshold from the one list, and from nowhere else.
+    const text = atRoot(config);
+    assert.match(text, new RegExp(`^ {6}thresholds: vitestThresholds\\(${measure}\\),$`, "m"), config);
+    assert.equal(text.match(/\bthresholds\s*:/g)?.length, 1, `${config} sets a threshold of its own`);
+    assert.match(text, /from "\.\/scripts\/ci\/coverage-thresholds\.mjs";$/m, config);
+    assert.match(text, /^ {6}provider: "v8",$/m, config);
+    // A run with failing tests still leaves its measure.
+    assert.match(text, /^ {6}reportOnFailure: true,$/m, config);
+    // Never switched on by the file itself: a plain test run measures nothing.
+    assert.doesNotMatch(text, /enabled:|autoUpdate|perFile/, config);
   }
-  // The runs that decide `convex-tests` and `web` do not measure it: their commands carry no coverage flag.
+  // What each configuration measures is the list, not a copy of it.
+  const convex = atRoot("vitest.convex.config.mts");
+  assert.match(convex, /^ {6}include: CONVEX\.include,\n {6}exclude: CONVEX\.exclude,$/m);
+  const site = atRoot("vitest.site-coverage.config.mts");
+  assert.match(site, /^ {4}include: testsOf\(siteFolders\(\)\),$/m, "the measured run runs every test of the site");
+  assert.match(site, /^const measure = \{ include: sourcesOf\(siteFolders\(\)\), exclude: SITE\.exclude \};$/m);
+  assert.match(site, /^ {6}include: measure\.include,\n {6}exclude: measure\.exclude,$/m);
+  // Each command that enforces a threshold refuses to start when what the threshold names is not
+  // measured: Vitest would count the threshold of a name that matches no file as reached. The check is
+  // made by the configuration itself, on the lists it measures with, before the configuration is given.
+  for (const [text, call] of /** @type {const} */ ([
+    [convex, "assertMeasured(import.meta.dirname, CONVEX);"],
+    [site, "assertMeasured(import.meta.dirname, measure);"],
+  ])) {
+    const at = text.indexOf(`\n${call}\n`);
+    assert.ok(at > 0, `${call} is not called`);
+    assert.ok(at < text.indexOf("\nexport default defineConfig("), `${call} must come before the configuration`);
+    assert.doesNotMatch(
+      text,
+      /try \{|catch|\/\/ *assertMeasured|if \(.*\) assertMeasured/,
+      "the check must not be softened",
+    );
+  }
+  // The measured run of the site is the two plain suites together: each takes its folders from the same list.
+  assert.match(atRoot("vitest.ecg.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.ecg\),$/m);
+  assert.match(atRoot("vitest.site.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.site\),$/m);
+  assert.deepEqual(siteFolders(), [...SITE.suites.ecg, ...SITE.suites.site]);
+  assert.deepEqual(testsOf(siteFolders()).length, sourcesOf(siteFolders()).length);
+  // 80 % of lines and of branches, on the whole and on each Convex file of the safety chain taken alone.
+  const required = { lines: 80, branches: 80 };
+  assert.deepEqual(vitestThresholds(SITE), required);
+  assert.deepEqual(vitestThresholds(CONVEX), {
+    ...required,
+    ...Object.fromEntries(
+      ["convex/training.ts", "convex/http.ts", "convex/lib/auth.ts"].map((file) => [file, required]),
+    ),
+  });
+});
+
+test("the commands a developer runs to test measure nothing, in the CI as on a desk", () => {
+  const scripts = JSON.parse(atRoot("package.json")).scripts;
+  for (const name of ["test:convex", "test:ecg", "test:site"]) {
+    assert.doesNotMatch(scripts[name], /coverage/, `npm run ${name} measures the coverage`);
+  }
+  // The two suites of the site hold no measure of their own: one run measures the site.
+  for (const config of ["vitest.ecg.config.mts", "vitest.site.config.mts"]) {
+    assert.doesNotMatch(atRoot(config), /^ *(coverage|thresholds):/m, config);
+  }
+  // The runs that decide the tests of `convex-tests` and `web` carry no coverage flag either.
   for (const id of ["convex-tests", "web"]) {
     const deciding = stepsOf(id).filter((step) => /^run: npm run test:/.test(step));
     assert.ok(deciding.length >= 1, id);
-    for (const step of deciding) assert.doesNotMatch(step, /coverage/, `${id}: ${titleOf(step)}`);
+    // The command itself: the comment that follows it in the file belongs to the next step.
+    for (const step of deciding) assert.doesNotMatch(titleOf(step) ?? "", /coverage/, `${id}: ${titleOf(step)}`);
   }
+  // Coverage is measured in those two steps and nowhere else in the workflow.
+  const measuring = [...jobs].flatMap(([id]) =>
+    stepsOf(id)
+      .filter((step) => /npm run coverage:|--coverage\b/.test(step))
+      .map((step) => `${id}: ${titleOf(step)}`),
+  );
+  assert.deepEqual(
+    measuring,
+    ENFORCED.map(({ job, step }) => `${job}: name: ${step}`),
+  );
 });
 
 test("each suite and each measure of the report is left by the job the report expects it from", () => {

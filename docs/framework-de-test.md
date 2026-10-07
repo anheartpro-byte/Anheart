@@ -1042,8 +1042,8 @@ par un commit de fusion
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
-| `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production |
-| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
+| `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
+| `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/` et `components/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
@@ -1066,9 +1066,11 @@ Vercel quand une personne le demande, et jamais autrement : voir
 [Déploiement Vercel par bouton](#déploiement-vercel-par-bouton-anh-198).
 
 Chaque gate garde aussi, pour le rapport de qualité, ce que ses outils ont
-mesuré (artefacts `quality-*`), et `convex-tests` et `web` mesurent en plus la
-couverture de leurs tests, sans seuil. Rien de cela ne change le verdict d'une
-gate : voir [Rapport de qualité](#rapport-de-qualité-anh-199).
+mesuré (artefacts `quality-*`). Rien de ce que le rapport ajoute ne change le
+verdict d'une gate : voir [Rapport de qualité](#rapport-de-qualité-anh-199).
+La couverture de Convex et celle du site, elles, décident : `convex-tests` et
+`web` échouent sous 80 % (voir
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)).
 
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
@@ -1471,7 +1473,7 @@ listée comme ne pouvant pas l'affecter :
 | Sorte | Fichiers | `pi-gate`, `simulation-gate` | `web`, `convex-tests` |
 |---|---|---|---|
 | documentation | tout fichier `.md`, sauf `CHANGELOG.md` (voir plus bas) ; sous `docs/`, les fichiers `.md`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp` et `.pdf` | sautées | sautées |
-| site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json` et les configurations Vitest `vitest.<suite>.config.mts` | sautées | lancées |
+| site | `app/`, `components/`, `hooks/`, `i18n/`, `lib/`, `messages/`, `public/`, `test-support/` ; à la racine : `next.config.ts`, `proxy.ts`, `tsconfig.json`, `eslint.config.mjs`, `postcss.config.mjs`, `components.json` et les configurations Vitest `vitest.<suite>.config.mts` | sautées | lancées |
 | Convex | `convex/` | sautées | lancées |
 | Python | sous `raspberry-pi/` ou `simulation/`, les fichiers `.py` et `.pyi`, et eux seuls | lancées | sautées |
 
@@ -1836,9 +1838,9 @@ tableau tel qu'il est affiché.
 | Scripts | les tests de `scripts/ci` lancés par `changes`, `audit` et `docs` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
 
 Sous le tableau, une ligne donne l'état d'`audit` et de `docs`, sans rien de ce
-qu'ils ont trouvé, puis trois parties : « Chaîne de sécurité et simulation »,
-« Détail par suite de tests » (une ligne par suite, avec le job qui la lance)
-et « Lire ce rapport ».
+qu'ils ont trouvé, puis trois parties : « Seuils de couverture, chaîne de
+sécurité et simulation », « Détail par suite de tests » (une ligne par suite,
+avec le job qui la lance) et « Lire ce rapport ».
 
 **Ce que dit chaque colonne.**
 
@@ -1885,8 +1887,12 @@ Un pourcentage n'est jamais arrondi vers le haut : 99,96 % s'affiche 99,9 %, et
 - « rapport indisponible » : l'outil du rapport lui-même a échoué. Aucune gate
   ne dépend de lui ; son journal dit pourquoi.
 
-**Chaîne de sécurité et simulation.** La colonne de couverture du Pi porte sur
-tout `raspberry-pi/src/`. La chaîne de sécurité est donnée à part, en trois
+**Seuils de couverture, chaîne de sécurité et simulation.** Cette partie donne
+chaque seuil exigé par une gate, ce qu'il juge et s'il est tenu : la chaîne de
+sécurité du Pi, la simulation, puis Convex et le site (leurs lignes sont
+décrites dans
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)).
+La colonne de couverture du Pi porte sur tout `raspberry-pi/src/`. La chaîne de sécurité est donnée à part, en trois
 temps, parce que le seuil de 100 % ne la juge pas encore en entier :
 
 - « fichiers sous le seuil » : la liste `include` de
@@ -1923,22 +1929,15 @@ par fichier, est dans l'artefact `quality-<projet>` du job : `coverage-all.json`
 et `coverage-gate.json` pour le Pi et la simulation, le rapport HTML de vitest
 pour Convex (`coverage-convex/index.html`) et pour le site.
 
-**Couverture de Convex et du site : lue, pas exigée.** Aucun seuil ne
-s'applique à ces deux mesures, et elles ne peuvent faire échouer aucune gate :
-les seuils se décideront après les premiers chiffres. Dans `convex-tests` et
-`web`, les tests qui décident la gate tournent comme avant, sans mesure ; une
-étape séparée les relance ensuite avec la mesure, et continue même si elle
-échoue. Pour le site, la mesure porte sur `lib/`, `hooks/` et `components/` :
-les deux suites sont additionnées, une ligne couverte par l'une ou par l'autre
-compte une fois. En local :
+**Couverture de Convex et du site : exigée.** Ces deux mesures ont été lues
+sans seuil pendant une journée (le premier rapport, 7 octobre 2026), puis un
+seuil de 80 % leur a été donné : il est décrit, avec ce qu'il juge et la
+commande pour le vérifier en local, dans
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203).
+Le rapport lit la mesure que la gate vient de juger ; il ne la refait pas et
+ne décide toujours rien.
 
-```bash
-npm run coverage:convex   # rapport dans coverage/convex/index.html
-npm run coverage:ecg      # les tests de lib/, rapport dans coverage/site-lib/
-npm run coverage:site     # ceux de hooks/ et components/, dans coverage/site-components/
-```
-
-**Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les trois exécutions
+**Temps ajouté aux jobs par le rapport.** Mesuré le 7 octobre 2026 sur les trois exécutions
 de la PR #41 (37617756948, 37621116038 et 37623954237), comparées aux deux
 push sur `develop` de la même heure (37620748521 et 37622721443), qui n'ont pas
 le rapport.
@@ -1974,9 +1973,9 @@ lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
   `simulation/cad/`, `simulation/scripts/` et les tests sont écartés de la
   mesure par sa configuration, et `simulation_app.py`, à la racine du dépôt,
   est hors du paquet. Le « 100 % » de la simulation ne dit rien d'eux.
-- Les pages du site (`app/`), `i18n/` et `proxy.ts` : aucun test unitaire ne
-  les charge, ils ne sont donc pas dans la couverture du site. Ils attendent la
-  suite navigateur (ANH-83).
+- Les pages du site (`app/`), `i18n/` et `proxy.ts` : ils sont hors des
+  dossiers mesurés, donc ni comptés ni jugés par le seuil du site. Les pages
+  sont le sujet d'ANH-204 ; le parcours dans un navigateur, celui d'ANH-83.
 - Les tests de release (`npm run test:release`) : la CI ne les lance pas
   ([release.md](release.md#8-limites-et-reste-à-faire)), ils ne sont donc pas
   dans la ligne des scripts.
@@ -2007,7 +2006,7 @@ lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
 | `jobs` | l'état de `changes` et de chaque gate : `passed`, `failed`, `cancelled`, `skipped` (par la règle de chemins), `not_run`, `unknown` |
 | `projects` | une entrée par ligne du tableau : `id`, `label`, `gate` (`state`, et `jobs` avec l'état de chacun), `tests` (`total`, `passed`, `failed`, `skipped`, `duration_s`, et `complete`, faux si une suite du projet manque) ou `null`, `tests_state`, `coverage` (`lines` et `branches`, chacun `covered` et `total`) ou `null`, `coverage_state`, `lint` et `types` (`state`, `complete`, `checks`) |
 | `suites` | une entrée par suite de tests : `id`, `project`, `job`, `label`, `runner`, `state` (`measured`, `skipped`, `not_run`, `unavailable`) et, si elle est mesurée, `numbers` : `tests`, `passed`, `failed`, `skipped`, `expected_failures`, `duration_s`, `files` (le nombre de fichiers JUnit lus), `slowest`, `failed_tests` |
-| `coverage` | une entrée par mesure (`pi` : tout `raspberry-pi/src/` ; `pi-threshold` : les fichiers sous le seuil ; `simulation` ; `convex` ; `site`) : `id`, `project`, `job`, `label`, `main` (vrai pour celle du tableau), `threshold` s'il y en a un, `state` et, si elle est mesurée, `numbers` : `lines`, `branches`, `files`, `least_covered` |
+| `coverage` | une entrée par mesure (`pi` : tout `raspberry-pi/src/` ; `pi-threshold` : les fichiers sous le seuil ; `simulation` ; `convex` ; `convex:<fichier>` : chaque fichier Convex de la chaîne de sécurité pris seul ; `site`) : `id`, `project`, `job`, `label`, `main` (vrai pour celle du tableau), `threshold` s'il y en a un, `held` (vrai si le seuil est tenu ; absent sans seuil ou sans mesure), `state` et, si elle est mesurée, `numbers` : `lines`, `branches`, `files`, `least_covered` |
 | `safety_chain` | ce que la chaîne de sécurité du Pi contient hors du seuil : `listed` (la liste `coverage_pending` telle que lue, `null` si elle n'a pas pu l'être), `pending` (chaque fichier mesuré qu'elle nomme, avec `lines` et `branches`), `not_measured` (ses entrées sans fichier mesuré), `whole` (les fichiers sous le seuil et ceux-là réunis, `null` s'il manque une partie) ; `null` si `pi-gate` n'a rien laissé |
 | `scenarios` | le rapport synthétique de la simulation : `runs`, `by_status`, `by_group` ; `null` s'il n'a pas été lu |
 
@@ -2041,8 +2040,9 @@ pourcentage se calcule, il n'est pas stocké.
 
 **Ce que le rapport ne peut pas faire.** Il ne décide aucune gate. Les étapes
 qu'il ajoute aux gates (« Quality report, the numbers of this job », « Keep the
-numbers for the quality report », « Measure the coverage ») portent toutes
-`continue-on-error: true`. Le workflow ne reçoit aucune permission de plus :
+numbers for the quality report ») portent toutes `continue-on-error: true`.
+Les étapes « Enforce the coverage » de `convex-tests` et de `web` ne sont pas
+les siennes : elles font partie de leur gate et peuvent la faire échouer. Le workflow ne reçoit aucune permission de plus :
 lecture seule, pas de commentaire posté dans la PR. Un dossier de rapport
 impossible à créer ou à écrire, ou un fichier de rapport impossible à
 remplacer, est signalé dans le journal de la gate, qui juge ensuite comme sans
@@ -2067,9 +2067,9 @@ installation) nourrit l'outil avec des fichiers écrits comme les outils les
 une gate en échec, un artefact absent, une exécution dont on ne sait rien. Il
 exécute aussi la fonction `stage` des deux `check.sh`, et vérifie que cette
 section décrit chaque colonne. `scripts/ci/ci-workflow.test.mjs` vérifie que
-chaque étape ajoutée continue sur erreur, que chaque suite est écrite par le
-job dont le rapport l'attend, et que le job `audit` ne transmet que les
-fichiers JUnit de ses deux fichiers de test. `scripts/ci/test_pi_gate_parallel.py`
+chaque étape ajoutée par le rapport continue sur erreur, que chaque suite est
+écrite par le job dont le rapport l'attend, et que le job `audit` ne transmet
+que les fichiers JUnit de ses deux fichiers de test. `scripts/ci/test_pi_gate_parallel.py`
 vérifie que `--report` ne change aucun verdict : dossier impossible à créer ou
 fermé en écriture, fichier impossible à remplacer, `coverage json` en échec.
 `quality-report.test.mjs` vérifie aussi que la liste des fichiers hors du seuil
@@ -2100,12 +2100,262 @@ vient de la configuration, et qu'un nom hostile ressort en texte.
   instruction) : deux pourcentages de projets différents ne se comparent pas au
   dixième près.
 
+### Seuils de couverture de Convex et du site (ANH-203)
+
+Depuis le 7 octobre 2026, la couverture de Convex et celle du site décident
+leurs gates : `convex-tests` et `web` échouent sous **80 % de lignes** ou sous
+**80 % de branches**. Décision du chef de projet devant le premier rapport de
+qualité, qui montrait le site à 21 % de lignes.
+
+**Ce que chaque seuil juge.**
+
+| Gate | Mesure | Exigé |
+|---|---|---|
+| `convex-tests` | tout `convex/` | 80 % de lignes et 80 % de branches |
+| `convex-tests` | `convex/training.ts`, pris seul | 80 % de lignes et 80 % de branches |
+| `convex-tests` | `convex/http.ts`, pris seul | 80 % de lignes et 80 % de branches |
+| `convex-tests` | `convex/lib/auth.ts`, pris seul | 80 % de lignes et 80 % de branches |
+| `web` | `lib/`, `hooks/` et `components/`, réunis | 80 % de lignes et 80 % de branches |
+
+Les trois fichiers Convex jugés seuls sont la part Convex de la chaîne de
+sécurité : ce qu'une machine peut écrire, la demande d'arrêt, les contrôles
+d'accès. Jugés seulement dans l'ensemble, ils pourraient baisser sans que rien
+ne le dise, portés par les autres fichiers : avec trois fichiers de tests en
+moins, `convex/` tient encore le seuil (80,7 % de branches) alors que
+`training.ts` seul tombe à 75,5 %. 80 % est un plancher, pas un objectif : le
+jour où le seuil a été posé, ces trois fichiers étaient à 100 % de lignes et de
+branches. Le seuil de 100 % de la chaîne de sécurité du Pi et celui de la
+simulation ne changent pas.
+
+Le seuil du site porte sur l'ensemble de ses dossiers mesurés, pas sur chaque
+fichier : un fichier peut rester sous 80 % si le reste le compense. Le détail
+du job (« Fichiers les moins couverts ») les nomme.
+
+**Ce qui est compté.** Tous les fichiers source des dossiers mesurés, qu'un
+test les charge ou non : un fichier sans aucun test compte pour zéro, il ne
+disparaît pas de la mesure. Une ligne est une ligne où commence une
+instruction ; une branche est chaque issue d'un `if`, d'un opérateur ternaire,
+d'un `&&`, d'un `||`, d'un `??` ou d'une valeur par défaut. Vitest affiche aussi
+les instructions et les fonctions : le seuil ne les juge pas.
+
+**Ce qui est laissé hors de la mesure**, et pourquoi. Rien d'autre ne l'est,
+et rien n'a été retiré pour atteindre le chiffre :
+
+| Mesure | Exclusion | Raison |
+|---|---|---|
+| Convex | `convex/_generated/**` | liaisons générées par Convex, pas écrites ici |
+| Convex | `convex/**/*.test.ts` | les tests |
+| Convex | `convex/**/*.fixtures.ts` | données d'essai, chargées par les tests seulement |
+| Convex | `convex/test.setup.ts` | mise en place des tests |
+| Convex | `convex/authorization.matrix.ts` | le tableau des droits attendus, lu par son test seulement |
+| Site | `**/*.test.{ts,tsx}` | les tests |
+
+Ces exclusions existaient dans la mesure d'ANH-199 ; elles sont maintenant
+écrites à un seul endroit. Sont hors des dossiers mesurés, donc ni comptés ni
+jugés : les pages (`app/`, sujet d'ANH-204), `i18n/`, `proxy.ts`, et
+`test-support/`, qui ne contient que des outils de test. Un cas à connaître :
+`components/markup.test-helpers.ts` est un outil de test rangé dans
+`components/` ; il était compté comme une source dans la mesure d'ANH-199 et
+il l'est resté (17 lignes).
+
+**Où c'est écrit.** Une seule fois, dans `scripts/ci/coverage-thresholds.mjs` :
+le seuil, les dossiers du site (par suite de tests), les fichiers Convex jugés
+seuls, les exclusions. Les configurations Vitest et le rapport de qualité le
+lisent là ; aucun autre fichier n'en garde une copie. Mettre un autre dossier
+du site sous le seuil, c'est ajouter son nom à la suite qui lance ses tests
+(`SITE.suites`) : les tests lancés, les fichiers mesurés, le seuil et le
+libellé du rapport suivent.
+
+**Comment c'est appliqué.** Dans chaque job, les tests tournent d'abord sans
+mesure (`npm run test:convex` ; `npm run test:ecg` puis `npm run test:site`).
+Ce sont les commandes des développeurs : elles ne mesurent rien et restent
+aussi rapides qu'avant. Une étape « Enforce the coverage … » relance ensuite
+les mêmes tests avec la mesure. Vitest compare lui-même le résultat au seuil
+de sa configuration et termine en erreur s'il n'est pas atteint ; l'étape n'a
+pas de `continue-on-error`, donc le job échoue.
+
+Pour le site, la mesure est **une seule exécution** de tous ses tests
+(`vitest.site-coverage.config.mts` : ceux de `lib/`, de `hooks/` et de
+`components/`), et non plus deux mesures que le rapport additionnait. C'est le
+choix le plus simple et le plus sûr des deux possibles : aucun code du dépôt
+ne calcule ni ne juge le chiffre, et le chiffre jugé est celui que la même
+commande affiche sur le poste d'un développeur. L'autre voie, garder deux
+mesures et faire juger leur somme par un script, aurait ajouté un programme à
+maintenir entre la mesure et le verdict. Ce qui reste écrit ici, ce sont la
+liste (`coverage-thresholds.mjs`) et les tests qui tiennent la chaîne, de la
+liste à l'étape qui fait échouer le job.
+
+**Un seuil sans objet arrête la commande.** Vitest tient pour atteint le seuil
+d'un nom qui ne correspond à aucun fichier mesuré, et un dossier qui ne
+contient aucun fichier sort de la mesure sans un mot. Renommer
+`convex/training.ts` sans mettre la liste à jour, ou mal écrire un dossier du
+site, laisserait donc la gate verte. Chaque configuration qui applique un
+seuil appelle pour cela `assertMeasured` (`scripts/ci/coverage-thresholds.mjs`)
+avant de se donner à Vitest : sur les listes mêmes qu'elle mesure, elle
+vérifie que chaque fichier jugé seul est un fichier mesuré (présent, inclus,
+non exclu) et que chaque dossier mesuré contient au moins un fichier mesuré.
+Sinon la commande ne démarre pas et rend le code 1 :
+
+```
+Startup Error
+Error: Coverage threshold without an object (scripts/ci/coverage-thresholds.mjs):
+- "convex/training-renamed.ts" must reach the threshold alone but is not a measured file (renamed, removed or excluded?): its threshold would count as reached
+```
+
+Le contrôle est donc dans l'étape qui applique le seuil, dans les jobs
+obligatoires `convex-tests` et `web`, et non dans le seul job `changes`, qui
+n'est pas une vérification obligatoire. Pour Convex, `npm run test:convex`
+lit la même configuration : il s'arrête lui aussi, avec le même message.
+Observé en local le 7 octobre 2026 avec un nom changé dans la liste : avant
+ce contrôle, `npm run coverage:convex` rendait 0 sans rien dire ; avec lui,
+1 et le message ci-dessus. Même chose pour `npm run coverage:site` avec un
+dossier mal écrit. Le rapport, de son côté, écrit « indisponible », jamais
+« tenu », pour un fichier qu'il ne trouve pas dans la mesure.
+
+Ce contrôle lit les listes et le disque, pas le résultat de la mesure : il
+tient pour mesuré ce que les listes disent mesurer. Le jour où il a été
+écrit, les deux ensembles étaient les mêmes (21 fichiers pour Convex, 78 pour
+le site, comparés au rapport de couverture).
+
+**Lancer le même contrôle en local.**
+
+```bash
+npm run coverage:convex   # échoue sous le seuil ; rapport dans coverage/convex/index.html
+npm run coverage:site     # tous les tests du site en une fois ; rapport dans coverage/site/index.html
+```
+
+Les deux commandes rendent le code 1 sous le seuil, comme dans la CI.
+
+**Lire un échec.** L'étape « Enforce the coverage of the Convex functions »
+(job `convex-tests`) ou « Enforce the coverage of the site » (job `web`) est
+rouge. Ses dernières lignes disent quelle mesure manque, et de combien :
+
+```
+ERROR: Coverage for branches (79.25%) does not meet global threshold (80%)
+ERROR: Coverage for branches (75.51%) does not meet "convex/training.ts" threshold (80%)
+```
+
+« global » désigne l'ensemble de la mesure ; un nom de fichier entre
+guillemets, ce fichier pris seul. Si un test échoue, la même étape est rouge
+aussi, mais l'étape des tests l'est déjà au-dessus : commencer par elle. Si
+l'étape s'arrête sur « Startup Error » et « Coverage threshold without an
+object », aucun test n'a tourné : un fichier ou un dossier nommé par la liste
+n'est plus mesuré (voir « Un seuil sans objet arrête la commande »).
+
+Pour savoir quoi couvrir : le résumé du job (« Détail de la qualité ») liste
+les dix fichiers les moins couverts ; le rapport ligne par ligne est dans
+l'artefact du job (`quality-convex` : `coverage-convex/index.html` ;
+`quality-site` : `coverage-site/index.html`), et en local dans
+`coverage/convex/` ou `coverage/site/`. La réponse est d'écrire le test qui
+manque, ou de retirer du code qui ne sert plus. Baisser le seuil ou sortir un
+fichier de la mesure est une décision à part : une exclusion nouvelle doit
+figurer dans le tableau ci-dessus avec sa raison, sans quoi un test de la CI
+échoue.
+
+**Dans le rapport de qualité.** La partie « Seuils de couverture, chaîne de
+sécurité et simulation » a une ligne par mesure jugée, dans les mêmes termes
+que celles du Pi : « Couverture, `convex/` », une ligne « Couverture, chaîne
+de sécurité côté Convex, `convex/training.ts` pris seul » par fichier jugé
+seul, et « Couverture, `lib/`, `hooks/`, `components/` », chacune avec ses
+chiffres et « 80 % exigé par `convex-tests` » ou « par `web` », suivi de
+« ✅ tenu » ou de « ❌ non tenu ». L'annotation « Rapport de qualité » le redit
+en une ligne par projet, et `quality-report.json` porte `threshold` et `held`
+pour chaque mesure.
+
+**Chiffres.** Mesurés le 7 octobre 2026, avant ce travail (commit `fbfc1b5`,
+première mesure du rapport de qualité) et après, en lignes puis en branches :
+
+| Mesure | Avant | Après |
+|---|---|---|
+| `convex/` | 96,6 % (1 366 sur 1 413), 87,4 % (869 sur 994) | 97,8 % (1 382 sur 1 413), 92,7 % (922 sur 994) |
+| `convex/training.ts` | 94,3 % (267 sur 283), 80,9 % (195 sur 241) | 100 % (283 sur 283), 100 % (241 sur 241) |
+| `convex/http.ts` | 100 % (98 sur 98), 93,2 % (96 sur 103) | 100 % (98 sur 98), 100 % (103 sur 103) |
+| `convex/lib/auth.ts` | 100 % (122 sur 122), 100 % (102 sur 102) | inchangé |
+| site, `lib/` | 82,4 % (94 sur 114), 65,6 % (65 sur 99) | 100 % (114 sur 114), 98,9 % (98 sur 99) |
+| site, `hooks/` | 72,2 % (26 sur 36), 100 % (11 sur 11) | 100 % (36 sur 36), 100 % (11 sur 11) |
+| site, `components/` | 13,5 % (153 sur 1 133), 20,7 % (221 sur 1 067) | 99,7 % (1 130 sur 1 133), 98,1 % (1 047 sur 1 067) |
+| site, les trois dossiers | 21,2 % (273 sur 1 283), 25,2 % (297 sur 1 177) | 99,7 % (1 280 sur 1 283), 98,2 % (1 156 sur 1 177) |
+
+Aucun fichier du site n'est sous 80 % : le moins couvert en branches est
+`components/ui/globe.tsx` (84,6 %, 11 sur 13). Les branches qui restent sont,
+pour l'essentiel, des gardes qu'aucun parcours n'atteint (une référence
+d'élément nulle dans un gestionnaire de clic, un texte de repli derrière une
+traduction qui existe, un bouton désactivé dont le gestionnaire revérifie la
+condition) : elles n'ont pas été forcées. Le site est passé de 329 tests à 1 321, Convex de
+954 à 1 044.
+
+**Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les deux exécutions
+de la PR #45 (37648336769 puis 37648970197), comparées étape par étape au push
+sur `develop` qui les précède (37637092583) :
+
+| Job | Étape | Sur `develop` | PR, première exécution | PR, seconde exécution |
+|---|---|---|---|---|
+| `convex-tests` | `npm run test:convex` | 6 s (954 tests) | 6 s | 6 s (1 044 tests) |
+| `convex-tests` | mesure de la couverture | 7 s, sans seuil | 6 s | 7 s, avec le seuil |
+| `convex-tests` | le job entier | 49 s | 45 s | 47 s |
+| `web` | `npm run test:ecg` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
+| `web` | `npm run test:site` | 9 s (227 tests) | 10 s | 17 s (1 132 tests) |
+| `web` | mesure de la couverture | 14 s, deux exécutions sans seuil | 13 s | 22 s, une exécution avec le seuil |
+| `web` | le job entier | 105 s | 77 s | 127 s |
+
+Pour Convex, rien ne change : la mesure existait depuis le rapport de qualité,
+elle est seulement jugée, et 90 tests de plus ne se voient pas. Pour `web`, le
+seuil n'ajoute pas d'étape non plus, mais les 975 tests ajoutés au site
+tournent deux fois, une fois sans mesure et une fois avec. Ce qu'ils coûtent
+dépend du runner. La seconde exécution a eu un runner comparable à celui de
+`develop` (`tsc` 11 s contre 10 s, lint 14 s contre 12 s, construction 25 s
+contre 24 s) : `npm run test:site` y prend 8 s de plus et la mesure 8 s de
+plus, soit environ 16 s sur `web`. La première a eu un runner plus rapide
+(`tsc` 7 s, lint 8 s, construction 15 s) et ne montre presque aucun écart.
+Trois exécutions en tout : c'est un ordre de grandeur, pas une moyenne.
+
+**Tests du mécanisme.** `scripts/ci/ci-workflow.test.mjs` tient la chaîne :
+les deux étapes existent, n'ont pas de `continue-on-error`, lancent le script
+du `package.json` sans option qui retire le seuil ou change ce qui est mesuré ;
+chaque script lance la configuration attendue avec `--coverage` ; chaque
+configuration prend ses fichiers et son seuil dans la liste et n'en fixe aucun
+elle-même ; les commandes `npm run test:*` et leurs configurations ne mesurent
+rien ; la couverture n'est mesurée nulle part ailleurs dans le workflow.
+`scripts/ci/quality-report.test.mjs` vérifie la règle (80 % est tenu à 80 %,
+79,9 % ne l'est pas, sur les lignes comme sur les branches), l'affichage
+« tenu », « non tenu » et « indisponible », que chaque fichier jugé seul
+existe et reste dans la mesure, et que cette section nomme le seuil, chaque
+dossier, chaque fichier jugé seul et chaque exclusion. Il exerce aussi
+`assertMeasured` sur un petit dépôt d'essai (fichier renommé, fichier exclu,
+dossier vide ou ne contenant que des tests), et `ci-workflow.test.mjs`
+vérifie que les deux configurations l'appellent, avant de se définir et sans
+l'adoucir.
+
+Ces tests lisent des fichiers : ils ne lancent pas Vitest (le job `changes`
+n'installe rien). Que la commande échoue réellement sous le seuil a été
+vérifié à la main le 7 octobre 2026, avec les commandes ci-dessus et l'option
+`--exclude` de Vitest pour retirer des tests : le site sans les tests de
+`components/modals/` ni de `components/ui/` (41,0 % de lignes, 47,4 % de
+branches) a rendu le code 1 avec les deux lignes « does not meet global
+threshold » ; Convex sans trois de ses fichiers de tests a rendu le code 1 sur
+`convex/training.ts` seul (75,5 % de branches), l'ensemble tenant encore le
+seuil.
+
+**Limites.**
+
+- Une ligne exécutée n'est pas une ligne vérifiée : le seuil compte ce que les
+  tests exécutent, pas ce qu'ils affirment. La relecture reste ce qui écarte
+  un test sans affirmation.
+- Les composants sont testés sans navigateur (voir
+  [Tests unitaires du site](#tests-unitaires-du-site)) : ce qui est couvert est
+  la logique des composants, pas leur rendu dans un navigateur.
+- Le seuil du site est global : il ne protège pas un fichier en particulier.
+  Seuls les trois fichiers Convex de la chaîne de sécurité ont leur seuil
+  propre.
+
 ### Lire un échec et relancer
 
 Dans la PR, ouvrir **Checks**, puis le job rouge et la première étape en échec.
 Les gates continuent après une erreur afin de montrer tous les contrôles cassés.
 Pour la couverture, télécharger l'artefact et lire les lignes/branches manquantes
-avec le rapport terminal ; ne pas baisser le seuil. Pour le rapport simulation,
+avec le rapport terminal ; ne pas baisser le seuil. Pour celle de Convex et du
+site, voir « Lire un échec » dans
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203). Pour le rapport simulation,
 ouvrir `report.html` et retrouver le scénario par son identifiant. Une entrée
 `XFAIL` reste une anomalie connue, pas une réussite de sécurité.
 
@@ -2159,8 +2409,12 @@ branche a avancé (voir
 
 ### Tests unitaires du site
 
-`npm run test:ecg` lance les tests de `lib/**/*.test.ts` (configuration
-`vitest.ecg.config.mts`, environnement Node). Le nom du script date de la
+`npm run test:ecg` lance les tests de `lib/` (configuration
+`vitest.ecg.config.mts`, environnement Node), `npm run test:site` ceux de
+`hooks/` et de `components/` (`vitest.site.config.mts`). Aucune des deux ne
+mesure la couverture : `npm run coverage:site` lance les deux ensemble avec la
+mesure et son seuil (voir
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le nom du script date de la
 bibliothèque ECG du navigateur que ces tests couvraient ; elle a été retirée
 avec l'ancien mode d'enregistrement ECG, et la CI appelle toujours le script
 sous ce nom.
@@ -2272,9 +2526,12 @@ de maintenant, et aucune valeur :
   partagé par une autre valeur : la tâche `checkOfflineMachines` doit la
   suivre.
 
-Limites. Le dépôt n'a pas de bibliothèque de test avec DOM : le hook tourne sur
-un hôte minimal (un composant qui ne rend rien), et les composants sont rendus
-en HTML statique, une fois à la réception d'une réponse et une fois plus tard.
+Limites. Ces tests n'utilisent pas de bibliothèque de test avec DOM : le
+hook tourne sur un hôte minimal (un composant qui ne rend rien), et les
+composants sont rendus en HTML statique, une fois à la réception d'une réponse
+et une fois plus tard. Les tests écrits depuis montent les composants sur le
+document de `test-support/` (voir
+[Tests des composants du site, sans navigateur](#tests-des-composants-du-site-sans-navigateur-anh-203)).
 Le passage de « En direct » à « Données périmées » **à l'écran**, sans
 recharger la page, est donc prouvé en trois morceaux (le hook bascule à
 l'horloge, chaque composant affiche ce que le hook dit, le rendu refait plus
@@ -2315,6 +2572,158 @@ retour des mutations, chacun une seule fois :
 Ces tests ne montent aucune page : l'affichage réel du message et le scénario
 de bout en bout (suppression refusée d'une machine en séance) restent à faire
 dans le job navigateur d'ANH-83.
+
+### Tests des composants du site, sans navigateur (ANH-203)
+
+Pour tenir le seuil de 80 %, chaque composant de `components/`, chaque hook et
+chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
+(`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
+n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
+
+**Quel test va sur quel document.** Les composants, les hooks et les règles
+de `lib/` sont testés sur le document minimal de `test-support/`, décrit
+ci-dessous : ce sont, à ce jour, les seuls tests unitaires du site. Les pages
+(`app/`) n'en ont pas encore. ANH-204 doit les ajouter avec la bibliothèque
+standard (jsdom et testing-library, activés fichier par fichier) ; tant que
+ce travail n'est pas fusionné, le dépôt ne contient pas ces bibliothèques, et
+c'est à lui de mettre ce paragraphe à jour. Pour un nouveau test de
+composant : le document minimal convient tant que le test n'a besoin de rien
+de ce que ce document n'implémente pas (la liste est sous « Limites »). Sinon
+le test attend la bibliothèque standard ou la suite navigateur (ANH-83) : on
+n'étend pas le document minimal pour imiter un navigateur.
+
+**Le document des tests : `test-support/`.** Le rendu en HTML statique des
+sections précédentes ne suffit pas à un formulaire : il ne garde pas d'état
+entre deux actions. `test-support/` fournit donc un document minimal sur
+lequel le vrai React tourne (état, effets, nouveau rendu après un événement) :
+
+| Fichier | Ce qu'il fournit |
+|---|---|
+| `test-support/dom.ts` | le document : ce que React demande à un document (éléments, texte, attributs, événements qui descendent et remontent), et rien de ce qu'un navigateur ajoute (ni mise en page, ni focus, ni CSS) |
+| `test-support/render.tsx` | `render(<Composant />)` sous le vrai fournisseur `next-intl` avec les vrais `messages/`, puis `click`, `type`, `submit`, `fire`, et de quoi lire l'écran (`screen.text()`, `screen.button(libellé)`, `screen.field(id)`). Doit être le premier import du fichier de test : React décide au chargement s'il a un document |
+| `test-support/convex.ts` | ce qui remplace `convex/react` : `answer(nom, valeur)` fixe la réponse d'une requête, `mutation(nom)` est la fonction appelée, `asks(nom)` les arguments demandés (ou `"skip"`), `sessionIs(état)` dit si le visiteur est connecté (`Authenticated`, `Unauthenticated`, `AuthLoading`, `useConvexAuth`). `useMutation` rend la même fonction à chaque rendu, comme le vrai. `useMutationWithFeedback` reste le vrai, par-dessus |
+| `test-support/ui.tsx` | des remplaçants nommés pour nos fenêtres, listes de choix et cases à cocher (`components/ui/dialog`, `select`, `checkbox`), pour tester le composant qui s'en sert |
+| `test-support/radix.tsx` | des remplaçants pour les primitives Radix, pour tester nos propres enveloppes de `components/ui/` |
+| `test-support/browser.ts` | ce qu'un navigateur ajoute et que certains composants demandent : horloge d'images d'animation, canevas, largeur de fenêtre, observateurs. Chaque pièce est installée et pilotée par le test |
+| `test-support/markup.ts` | lecture d'un rendu statique comme un arbre, pour les composants sans état |
+
+Ce dossier est hors de la mesure de couverture (ce ne sont pas des sources du
+site) et la règle de chemins le range avec le site.
+
+**Ce qui est remplacé, et pourquoi.** Les primitives Radix (fenêtre, liste,
+menu, infobulle) demandent un navigateur : mise en page, focus, portails. Elles
+ne tournent pas sur ce document. Un test de composant remplace donc l'enveloppe
+concernée par un remplaçant nommé qui garde ce dont le test a besoin (une
+fenêtre n'affiche son contenu qu'ouverte et peut être fermée, un choix peut
+être fait) ; l'enveloppe réelle a son propre test dans `components/ui/`, où
+c'est la primitive Radix qui est remplacée. De même pour les graphiques
+(`recharts`), le globe et les animations : le test lit ce que notre code leur
+donne à dessiner. Tout le reste est réel : React, `next-intl` et les
+catalogues, `react-hook-form` et `zod`, `date-fns`, les règles de `lib/`.
+
+**Ce que chaque test doit affirmer.** Ce que l'écran montre pour un rôle et un
+état donnés (chargement, vide, erreur, données périmées), ce qu'une action
+envoie (la mutation exacte et ses arguments), ce qui est refusé avant tout
+envoi, et le message affiché ensuite. Un test qui monte un composant sans rien
+affirmer ne compte pas. Un échantillon de ces tests a été vérifié par mutation
+(on casse le comportement dans la source, le test doit échouer, la source est
+restaurée).
+
+**Les fichiers.**
+
+- Séance, lancement, arrêt, droits : `components/training/TrainingPanel.test.tsx`
+  (la fenêtre de confirmation de l'arrêt avec son état réel, qui voit le
+  bouton, ce que le panneau dit de chaque état d'une séance),
+  `components/modals/LaunchTrainingModal.test.tsx` (qui peut être choisi comme
+  pratiquant par chaque rôle, ce qui bloque un lancement avant tout envoi, ce
+  qui est envoyé, le refus du serveur), `components/training/LaunchRightsCard.test.tsx`
+  (un gestionnaire ne se voit proposer que ses patients, accorder et retirer),
+  `components/training/PhysiologyCard.test.tsx`,
+  `components/training/TelemetryCharts.test.tsx`,
+  `components/training/training-cards.test.tsx` (détail d'une séance,
+  programmes, type et origine, valeurs en direct, bouton de lancement de « Mes
+  machines »).
+- Formulaires : `components/modals/MachineFormModal.test.tsx` (création, clé
+  API affichée une fois, liste des gestionnaires envoyée par un administrateur
+  seulement) et `components/modals/PatientFormModal.test.tsx`.
+- Cadre du site : `components/dashboard/dashboard-shell.test.tsx` (le menu de
+  chaque rôle, le fil d'Ariane, les libellés de statut),
+  `components/landing/landing.test.tsx`, `components/site-shell.test.tsx`
+  (messages après une action, langue, thème),
+  `components/ConvexClientProvider.test.tsx`.
+- `components/ui/` : un fichier de test par composant, ou par petit groupe
+  (`plain-elements.test.tsx`).
+- `hooks/use-mutation-with-feedback.stable.test.tsx` (la fonction rendue par
+  le hook est la même à chaque rendu : une page peut la nommer dans les
+  dépendances d'un effet) ;
+- `hooks/use-mobile.test.tsx` ; `lib/trainingRules.test.ts` (FC max retenue,
+  plafond de zone, durées), `lib/feedback.test.ts`, `lib/version.test.ts`.
+- Convex : `convex/trainingBranches.test.ts` (`npm run test:convex`) couvre les
+  refus d'un lancement, la demande d'arrêt jusqu'à la machine, les droits, la
+  physiologie et ce qu'une machine peut écrire.
+
+**Limites.**
+
+- Ce document n'est pas un navigateur. Ce qui est prouvé est la logique des
+  composants : ce qu'ils affichent, envoient et refusent. Le rendu réel, le
+  focus, le clavier, les fenêtres Radix telles qu'un navigateur les ouvre et
+  la mise en page restent à vérifier dans la suite navigateur (ANH-83).
+- Un remplaçant ne vaut que par sa fidélité à ce qu'il remplace : un
+  comportement attribué à une primitive Radix dans un test l'est d'après sa
+  documentation, pas d'après une exécution.
+- Le document minimal a été écrit d'après ce que React lui demande. Aucun test
+  ne le compare à un vrai DOM.
+- Le remplaçant de Convex (`test-support/convex.ts`) n'a pas de serveur : une
+  réponse ne change que si le test appelle `answer` et rend de nouveau (aucun
+  abonnement), les arguments ne sont pas comparés aux validateurs d'une
+  fonction, un nom mal écrit dans `answer` ne répond rien sans le dire, et
+  aucune règle de `convex/` ne tourne. Il ne fournit que ce que le site
+  importe de `convex/react` aujourd'hui : ni action, ni requête paginée, ni
+  mise à jour optimiste.
+
+**Ce que le document minimal n'implémente pas.** Un test écrit dessus ne
+prouve donc rien de ce qui suit, quel que soit son résultat :
+
+- **Aucune action par défaut du navigateur.** Un clic sur un bouton d'envoi
+  n'envoie pas le formulaire, la touche Entrée non plus : les tests appellent
+  `submit(formulaire)`. Un bouton du mauvais `type` n'est donc pas vu par un
+  test qui agit seulement : un bouton « Annuler » sans `type="button"`
+  enverrait le formulaire dans un navigateur, et rien ici ne le montrerait.
+  Les tests des quatre formulaires (lancement, machine, patient, physiologie)
+  lisent pour cela le type de chaque bouton (`buttonsOf(formulaire)`) : un
+  seul envoie, tous les autres sont de simples boutons. Tout nouveau
+  formulaire doit avoir ce test. Un clic sur un libellé ne donne pas le focus
+  à son champ, un lien ne navigue pas, une case native ne se coche pas.
+- **Aucune mise en page ni CSS.** Chaque élément est un point à l'origine, de
+  taille nulle ; une classe est un texte. `screen.text()` lit tout ce qui est
+  dans l'arbre, y compris ce qu'une classe ou un style cacherait à l'écran
+  (`hidden`, `sr-only`, `display: none`) : un test prouve qu'un élément est
+  présent ou absent, pas qu'il est visible.
+- **Aucune règle de focus ni de clavier.** `focus()` note l'élément, rien de
+  plus : pas d'ordre de tabulation, pas de focus retenu dans une fenêtre.
+- **Un seul événement à la fois.** `click` envoie `click`, sans les événements
+  de pointeur qui le précèdent dans un navigateur ; `type` envoie `input` et
+  `change`, sans les touches. Un élément `disabled` n'est respecté que par
+  l'outil `click`.
+- **Aucun champ ne filtre ni ne valide.** Dans un navigateur, un champ
+  `type="number"` ne rend jamais un texte comme « abc » (il rend une valeur
+  vide), et `min`, `max`, `step`, `required` ou `type="email"` empêchent
+  l'envoi d'une valeur hors règle. Ici `type(champ, texte)` écrit n'importe
+  quel texte dans n'importe quel champ et `submit` l'envoie. Un test qui tape
+  « abc » ou « 12.5 » dans la durée d'un lancement prouve ce que le composant
+  fait si une telle valeur lui parvient, pas qu'un utilisateur peut la
+  saisir : ces cas sont nommés ainsi dans `LaunchTrainingModal.test.tsx`, qui
+  lit par ailleurs les attributs `type`, `min` et `step` du champ sans les
+  exercer.
+- **Aucune liste `<select>` native, aucun sélecteur (`querySelector`), aucune
+  lecture de HTML (`innerHTML`).**
+- **Aucun arbre d'accessibilité.** Un rôle ou un nom accessible est un
+  attribut lu tel qu'il est écrit : rien ne calcule ce qu'un lecteur d'écran
+  annoncerait.
+- **Rien de ce que le test n'installe pas** : primitives Radix, portails,
+  canevas, images d'animation, observateurs, presse-papiers, largeur de
+  fenêtre. Ils viennent de remplaçants nommés (`test-support/ui.tsx`,
+  `radix.tsx`, `browser.ts`), installés par le test qui en a besoin.
 
 ### Infrastructure encore dépendante d'autres tickets
 

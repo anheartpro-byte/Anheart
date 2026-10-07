@@ -59,6 +59,12 @@ env:
 # those steps carries `continue-on-error: true`: none can turn a gate red.
 # `quality-report`, the last job, is not a required check, and no step of it
 # can fail it.
+#
+# The coverage of Convex and of the site is another matter: it is part of
+# their gates (docs/framework-de-test.md, "Seuils de couverture de Convex et
+# du site"). The steps named "Enforce the coverage" of `convex-tests` and of
+# `web` fail under the threshold written in scripts/ci/coverage-thresholds.mjs
+# and carry no `continue-on-error`. The report reads the measure they leave.
 
 jobs:
   # The table of the run, one line per project, written on the page of the
@@ -451,11 +457,13 @@ jobs:
         id: types
         run: npx tsc -p convex/tsconfig.json --noEmit
       - run: npm run test:convex -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/convex.xml"
-      # Read, not enforced: a second run of the same tests, apart from the one
-      # above that decides the gate. No threshold, and it continues on error.
-      - name: Measure the coverage of the Convex functions
+      # Part of the gate: the same tests once more, measured this time. The
+      # command fails under 80 % of lines or of branches, on `convex/` as a
+      # whole or on one of the three files of the safety chain taken alone
+      # (scripts/ci/coverage-thresholds.mjs). It runs even when a test above
+      # failed, so that the quality report still has its measure.
+      - name: Enforce the coverage of the Convex functions
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: npm run coverage:convex -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-convex"
       - name: Quality report, the numbers of this job
         if: ${{ !cancelled() }}
@@ -503,14 +511,14 @@ jobs:
       - run: npm run test:ecg -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-lib.xml"
       - run: npm run test:site -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-components.xml"
       - run: npm run build
-      # Read, not enforced: a second run of the same tests, apart from the two
-      # above that decide the gate. No threshold, and it continues on error.
-      - name: Measure the coverage of the site
+      # Part of the gate: every test of the site once more, in one run,
+      # measured this time. The command fails under 80 % of lines or of
+      # branches on the measured folders of the site
+      # (scripts/ci/coverage-thresholds.mjs). It runs even when a step above
+      # failed, so that the quality report still has its measure.
+      - name: Enforce the coverage of the site
         if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: |
-          npm run coverage:ecg -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-site-lib"
-          npm run coverage:site -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-site-components"
+        run: npm run coverage:site -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-site"
       - name: Quality report, the numbers of this job
         if: ${{ !cancelled() }}
         continue-on-error: true

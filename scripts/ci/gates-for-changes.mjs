@@ -67,7 +67,17 @@ export const EVERYTHING = [
 ];
 
 const DOCUMENT_EXTENSIONS = [".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"];
-const SITE_DIRECTORIES = ["app/", "components/", "hooks/", "i18n/", "lib/", "messages/", "public/"];
+// `test-support/`: what the unit tests of the site are run with, read by no Python gate.
+const SITE_DIRECTORIES = [
+  "app/",
+  "components/",
+  "hooks/",
+  "i18n/",
+  "lib/",
+  "messages/",
+  "public/",
+  "test-support/",
+];
 const SITE_FILES = [
   "next.config.ts",
   "proxy.ts",
