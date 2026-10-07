@@ -41,8 +41,10 @@ class DriveOwnershipError(RuntimeError):
         self.error: LockError = error
         match error:
             case DriveBusy(owner):
+                # The owner is read from the lock file as written, line ending
+                # included: the refusal is shown to the operator on one line.
                 super().__init__(
-                    f"drive cable already owned ({owner}); close the other console/tool"
+                    f"drive cable already owned ({owner.strip()}); close the other console/tool"
                 )
             case LockUnavailable(detail=reason):
                 super().__init__(f"drive ownership unavailable: {reason}")

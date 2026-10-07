@@ -78,6 +78,23 @@ def test_same_process_second_owner_is_refused_without_overwriting_pid() -> None:
         lease.close()
 
 
+def test_the_busy_refusal_names_the_owner_on_one_line() -> None:
+    """ANH-183 EX-2: the line ending of the lock file does not reach the operator's message."""
+    lease = DriveLease.claim()
+    try:
+        with pytest.raises(DriveOwnershipError) as refused:
+            DriveLease.claim()
+    finally:
+        lease.close()
+    message = str(refused.value)
+    assert message == (
+        f"drive cable already owned (PID {os.getpid()}); close the other console/tool"
+    )
+    # What was read from the file is kept as read: only the message is tidied.
+    assert refused.value.error == DriveBusy(f"PID {os.getpid()}\n")
+    assert "\n" not in str(DriveOwnershipError(DriveBusy(" PID 7 \r\n")))
+
+
 def test_stale_pid_does_not_allow_stealing_an_active_kernel_lock() -> None:
     lease = DriveLease.claim()
     try:

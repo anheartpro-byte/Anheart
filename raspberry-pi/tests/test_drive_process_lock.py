@@ -135,7 +135,9 @@ def test_second_process_is_refused_before_transport_open(tmp_path: Path, backend
             )
             # Then: it refuses before reaching the physical opener.
             assert contender.returncode == 3, contender.stdout + contender.stderr
-            assert str(owner.pid) in contender.stdout + contender.stderr
+            # ANH-183 EX-2: the owner is named inside one line, whoever prints the refusal.
+            said = contender.stdout + contender.stderr
+            assert f"drive cable already owned (PID {owner.pid}); close the other" in said
             assert not (tmp_path / "attempt-opened").exists()
         finally:
             owner.stdin.close()
