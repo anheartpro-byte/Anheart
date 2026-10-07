@@ -809,11 +809,14 @@ verdict sur un programme) a une borne de plus : il marche vers la demande de la
 loi de commande, qui descend sur sa propre rampe, `floor(slew × dt)` tr/min
 entiers par tic (2 ou 3 à 5 Hz avec les 15 tr/min/s livrés, contre 2,48 pour
 les limites de mouvement), après une avance de `slew` fois l'âge de sa
-dernière décision. Tant que cette avance dure, les deux descentes ont les
-mêmes consignes, tic pour tic ; quand elle est épuisée, le retour au calme
-sans verdict va au rythme de la loi et arrive après : jusqu'à 2,6 s plus tard,
-mesuré sur le banc d'essai logiciel avec le profil livré, à 9 des 26 positions
-de l'entrée en COOLDOWN dans la période de régulation.
+dernière décision (2 à 77 tr/min relevés sur le banc d'essai logiciel). Tant
+que cette avance dure, les deux descentes ont les mêmes consignes, tic pour
+tic ; quand elle est épuisée, le retour au calme sans verdict va au rythme de
+la loi et arrive après. L'écart dépend de la vitesse de départ. Mesuré sur le
+banc d'essai logiciel avec le profil livré, sur 27 positions de l'entrée en
+COOLDOWN dans la période de régulation : depuis 193 tr/min moteur, jusqu'à
+2,6 s plus tard, à 9 positions ; depuis le plafond du profil (276 tr/min
+moteur), jusqu'à 4,4 s plus tard, à 16 positions.
 
 La séance se termine alors comme un programme mené à son terme : aucun
 `session_standstill`, aucun `session_overrun`, fin `programme_complete` à la

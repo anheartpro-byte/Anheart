@@ -890,8 +890,9 @@ tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme a
 sa phase `cooldown`, la vitesse commandée se met à baisser, sur la rampe douce des
 limites de mouvement et jamais plus vite, que le gel soit verrouillé ou non. Elle part
 de la vitesse gelée et ne remonte pas. Elle n'est jamais en retard sur un retour au
-calme sans gel, et peut avoir un peu d'avance sur lui (jusqu'à 2,6 s mesurés en
-simulation avec le profil standard). Vous lisez alors : **Mode** `SEANCE`, phase `cooldown`, pastille Securite
+calme sans gel, et peut avoir un peu d'avance sur lui : mesuré en simulation avec le
+profil standard, jusqu'à 2,6 s en partant de 193 tr/min moteur, et jusqu'à 4,4 s en
+partant du plafond du profil, 276 tr/min moteur. Vous lisez alors : **Mode** `SEANCE`, phase `cooldown`, pastille Securite
 `freeze`, et une vitesse commandée puis mesurée qui baissent ; pas de bandeau
 **REPRISE AUTOMATIQUE POSSIBLE**. Si la cause du gel cesse à temps (fréquence
 cardiaque relue, onglet rouvert), la séance se termine ensuite normalement : phase

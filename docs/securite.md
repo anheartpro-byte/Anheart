@@ -686,22 +686,29 @@ Ce qui ne change pas :
   en a deux. Il marche aux limites de mouvement vers la demande de la loi de
   commande, et cette demande descend sur la rampe propre de la loi : elle prend
   d'abord une avance égale à `RuntimeLimits.slew` fois l'âge de la dernière
-  décision de la loi (3 à 78 tr/min avec les 15 tr/min/s et la période de 5 s
-  livrés), puis elle baisse d'un nombre entier de tr/min par cycle,
+  décision de la loi, arrondie au tr/min entier inférieur (2 à 77 tr/min
+  relevés sur le banc d'essai logiciel, avec les 15 tr/min/s et la période de
+  5 s livrés), puis elle baisse d'un nombre entier de tr/min par cycle,
   `floor(slew × dt)`, soit 2 ou 3 tr/min à 5 Hz selon la durée mesurée du
   cycle. Tant que l'avance dure, seules les limites de mouvement comptent et
   les deux descentes ont les mêmes consignes, cycle pour cycle. Quand elle est
   épuisée, le retour au calme ordinaire va au rythme de la loi de commande et
   arrive après. La descente sous FREEZE n'est donc jamais au-dessus d'un
   retour au calme ordinaire au même cycle, et elle peut être **en avance** sur
-  lui, avec les réglages livrés aussi. Mesuré sur le banc d'essai logiciel,
-  profil livré, depuis 193 tr/min moteur, en déplaçant l'entrée en `cooldown`
-  cycle par cycle sur une période de régulation (26 positions) : 75 cycles
-  sous FREEZE à chaque position ; sans verdict, 75 cycles à 17 positions et 76
-  à 88 aux 9 autres, soit jusqu'à 2,6 s de plus (sur ce banc la loi y baisse
-  sa demande de 2 tr/min par cycle). Avec une rampe de la loi plus lente,
-  l'écart grandit. Le STOP sous FREEZE de 7.7 prend la même descente : la même
-  remarque vaut pour lui.
+  lui, avec les réglages livrés aussi. L'avance dépend de la vitesse de
+  départ : une descente plus longue épuise une avance plus grande de la loi.
+  Mesuré sur le banc d'essai logiciel, profil livré, en déplaçant l'entrée en
+  `cooldown` cycle par cycle sur une période de régulation (27 positions ; sur
+  ce banc la loi y baisse sa demande de 2 tr/min par cycle) :
+  - depuis 193 tr/min moteur (personne simulée à bord) : 75 cycles sous FREEZE
+    à chaque position ; sans verdict, 75 cycles à 18 positions et 76 à 88 aux
+    9 autres, soit jusqu'à 2,6 s de plus ;
+  - depuis le plafond du profil, 276 tr/min moteur : 108 cycles sous FREEZE à
+    chaque position ; sans verdict, 108 cycles à 11 positions et 109 à 130 aux
+    16 autres, soit jusqu'à 4,4 s de plus.
+
+  Avec une rampe de la loi plus lente, l'écart grandit. Le STOP sous FREEZE de
+  7.7 prend la même descente : la même remarque vaut pour lui.
 - Un FREEZE qui apparaît pendant un retour au calme déjà commencé ne le fige
   pas : la descente continue aux limites de mouvement, jamais au-dessus de ce
   qu'elle aurait été sans lui. Un FREEZE qui se lève, ou qui est acquitté,

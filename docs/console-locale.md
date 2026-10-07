@@ -861,8 +861,9 @@ niveau suivant de sa règle. Si la cause dure, la règle continue de compter com
 `ramp_down` à 120 s, et ce `ramp_down` verrouillé termine la séance (mode `ARRET`,
 verdict à acquitter). La descente sous `freeze` ne va jamais plus vite que les limites
 de mouvement ; elle peut être en avance sur un retour au calme sans avertissement,
-jusqu'à 2,6 s mesurés sur le banc d'essai logiciel avec le profil standard, parce que
-celui-ci est en plus borné par la rampe de la régulation
+parce que celui-ci est en plus borné par la rampe de la régulation. Mesuré sur le banc
+d'essai logiciel avec le profil standard : jusqu'à 2,6 s d'avance depuis 193 tr/min
+moteur, et jusqu'à 4,4 s depuis le plafond du profil, 276 tr/min moteur
 ([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Les actions plus sévères
 décident toujours en premier, et une séance manuelle n'a pas de retour au calme
 propre : un `freeze` y tient la consigne jusqu'à un STOP ou une cible de 0 (section 5).
