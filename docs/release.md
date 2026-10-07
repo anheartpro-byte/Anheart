@@ -244,9 +244,8 @@ SHA précis, qui dit qu'un agent indépendant a relu ce commit-là.
   l'exige, sur le commit de `develop` que `main` a reçu (le commit de fusion
   de `main`, lui, est neuf et n'a été relu par personne). Le script ne pose
   jamais ce statut.
-- **Qui le pose.** Pas l'auteur de la préparation, et pas le script. Aucun
-  document ne dit aujourd'hui qui pose ce statut pour une release : à décider
-  avant la première ([section 8](#8-limites-et-reste-à-faire)).
+- **Qui le pose.** Aucun document ne le dit aujourd'hui pour une release : à
+  décider avant la première ([section 8](#8-limites-et-reste-à-faire)).
 
 ### Si `develop` a bougé pendant la release
 
