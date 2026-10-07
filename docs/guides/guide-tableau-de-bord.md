@@ -1414,9 +1414,26 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   fenêtre, qui reste ouverte.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner
   les patients que ce gestionnaire peut gérer », une case par patient,
-  **Annuler** / **Enregistrer**. La liste cochée **remplace** la précédente :
-  décocher un patient le retire à ce gestionnaire.
+  **Annuler** / **Enregistrer**. La fenêtre s'ouvre toujours sur les patients
+  que le gestionnaire a **à ce moment** : après **Annuler**, elle ne garde
+  rien de ce que vous aviez coché ou décoché. Les cases cochées deviennent la
+  liste des patients de ce gestionnaire : cocher un patient le lui rattache,
+  le décocher le lui retire, et les autres ne changent pas. La fiche confirme
+  ensuite, par exemple « Patients enregistrés : 1 ajouté, 1 retiré. ». Si le
+  serveur refuse, son message s'affiche en rouge dans la fenêtre, qui reste
+  ouverte.
+- Tant que les patients ne sont pas chargés, la carte Patients affiche
+  « Chargement... » et son bouton **Modifier** est inactif.
 - « Aucune machine assignée », « Aucun patient assigné » si vide.
+
+> **Attention : corrigé dans le code le 8 octobre 2026, pas encore en
+> production.** Tant que le redéploiement n'a pas eu lieu, la fenêtre
+> **Assigner des Patients** en ligne garde son ancien comportement : après
+> **Annuler**, elle rouvre sur les cases que vous aviez laissées, pas sur les
+> patients du gestionnaire, et **Enregistrer** retire alors les patients
+> décochés ; ouverte dès l'arrivée sur la fiche, elle peut aussi s'afficher sans
+> aucune case cochée. Il n'y a pas d'annulation. D'ici là, **rechargez la page
+> avant d'ouvrir la fenêtre** et vérifiez les cases avant d'enregistrer.
 
 > **Attention : corrigé dans le code le 6 octobre 2026, pas encore en
 > production.** Tant que le redéploiement n'a pas eu lieu, la fenêtre
@@ -1598,16 +1615,27 @@ administrateur, il n'est rattaché à personne (faites [P4](#p4-rattacher-des-pa
 **Qui** : administrateur.
 
 1. **Gestionnaires** → cliquez le gestionnaire.
-2. Carte **Patients** → **Modifier**.
-3. Cochez **tous** les patients que ce gestionnaire doit gérer (la liste
-   remplace la précédente ; ceux déjà rattachés sont précochés).
+2. Carte **Patients** → **Modifier** (le bouton est inactif tant que la carte
+   affiche « Chargement... »).
+3. Les patients déjà rattachés sont précochés. Cochez ceux à rattacher,
+   décochez ceux à retirer : un patient dont vous ne touchez pas la case ne
+   change pas.
 4. **Enregistrer**.
 
-**Ce que vous devez voir** : « N patients assignés » et la liste à jour. Le
-gestionnaire voit ces patients dans **Patients**.
+**Ce que vous devez voir** : la confirmation « Patients enregistrés : … » avec
+le nombre de patients ajoutés et retirés, « N patients assignés » et la liste à
+jour. Le gestionnaire voit ces patients dans **Patients**. Si le décompte
+n'est pas celui que vous attendiez (par exemple « aucun ajouté » alors que vous
+avez coché un patient), ce patient n'appartient pas à l'organisation du
+gestionnaire : il n'a pas été rattaché.
 
-**Si ça ne marche pas** : la fenêtre reste ouverte et un message d'échec
-s'affiche en bas à droite de l'écran. Rechargez la page et recommencez.
+**Si ça ne marche pas** : la fenêtre reste ouverte avec vos cases, le message
+du serveur s'affiche en rouge dans la fenêtre et en bas à droite de l'écran.
+Corrigez ou recommencez ; **Annuler** n'enregistre rien.
+
+> Ce comportement est celui du code corrigé le 8 octobre 2026 ; pour le site en
+> ligne avant le redéploiement, voir l'avertissement du
+> [§4.18](#418-fiche-dun-gestionnaire).
 
 Un patient peut avoir plusieurs gestionnaires : cochez le chez chacun.
 
@@ -2351,6 +2379,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Le statut « En ligne », le compteur « Machines en ligne » et « Dernier signal » restaient au rythme du serveur : corrigé par ANH-193, ils sont recalculés chaque seconde, sur l'heure du serveur.) Reste : le serveur accepte encore un lancement sur une machine muette depuis moins de 2,5 min environ, depuis la fenêtre ouverte sur le détail de cette machine. | Une séance lancée sur une machine muette reste « en attente ». | L'annuler ([§6.3](#63-si-la-machine-est-hors-ligne)). |
 | 16 | (Sans objet depuis le retrait de l'ancien mode d'enregistrement ECG.) La fenêtre **Nouvelle machine** proposait 100 Hz par défaut alors que le serveur et **Paramètres** annonçaient 1000 Hz : ni l'une ni l'autre n'affichent plus de fréquence. | Aucun. | Aucun. |
 | 17 | Mutations sans écran : rattacher ou détacher un seul gestionnaire d'un patient ou d'une machine, modifier son propre profil. | Moins de souplesse. | Passer par les assignations complètes. |
+| 18 | (Corrigé dans le code le 8 octobre 2026, à vérifier au redéploiement.) **Assigner des Patients** (fiche gestionnaire) rouvrait sur les cases d'une modification annulée, et pouvait s'ouvrir avant que les patients du gestionnaire soient chargés. | Un enregistrement pouvait retirer des patients à un gestionnaire sans que l'administrateur l'ait voulu, sans annulation possible. Aucun compte, aucune séance, aucune donnée de santé n'était touché. | Jusqu'au redéploiement : recharger la page avant d'ouvrir la fenêtre et vérifier les cases avant d'enregistrer ([§4.18](#418-fiche-dun-gestionnaire)). |
 
 ### 9.3 Écarts entre le code et la référence `docs/tableau-de-bord.md`
 

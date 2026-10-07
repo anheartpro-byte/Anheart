@@ -1003,16 +1003,31 @@ export const listGestionnaires = query({
 });
 
 /**
- * Assign patients to a gestionnaire (admin only) - replaces all existing
- * assignments of the organisation (the caller's; for the Anheart admin, the
- * gestionnaire's main organisation)
+ * Set the exact list of patients a gestionnaire manages (admin only: the
+ * Anheart admin, or the admin of the gestionnaire's organisation), in one
+ * organisation (the caller's; for the Anheart admin, the gestionnaire's main
+ * organisation).
+ *
+ * Only the difference with the gestionnaire's links of that organisation is
+ * written: a patient who is sent and not yet linked gets a link, a link whose
+ * patient is not sent is deleted, and a link that already exists is left as
+ * it is, with its author and its date. The same list sent again writes
+ * nothing.
+ *
+ * Only an active patient of that organisation gets a link. Any other
+ * identifier (an account that does not exist, a patient of another
+ * organisation, an account that is not a patient) is left out, and nothing
+ * in the answer tells these apart.
  */
 export const assignPatientsToGestionnaire = mutation({
   args: {
     gestionnaireId: v.id("users"),
     patientIds: v.array(v.id("users")),
   },
-  returns: v.null(),
+  returns: v.object({
+    added: v.number(),
+    removed: v.number(),
+  }),
   handler: async (ctx, args) => {
     // Verify the caller administers this gestionnaire, and in which organisation
     const { currentUser, organizationId } = await requireGestionnaireAdmin(
@@ -1020,37 +1035,47 @@ export const assignPatientsToGestionnaire = mutation({
       args.gestionnaireId,
     );
 
-    const now = Date.now();
+    // Only the links of the organisation the decision applies to: the
+    // patients this gestionnaire has in another organisation are not written.
+    const existingRelations = (
+      await ctx.db
+        .query("user_gestionnaires")
+        .withIndex("by_gestionnaire", (q) =>
+          q.eq("gestionnaireId", args.gestionnaireId),
+        )
+        .collect()
+    ).filter((r) => r.organizationId === organizationId);
 
-    // Remove existing relations for this gestionnaire in the organisation
-    const existingRelations = await ctx.db
-      .query("user_gestionnaires")
-      .withIndex("by_gestionnaire", (q) =>
-        q.eq("gestionnaireId", args.gestionnaireId),
-      )
-      .collect();
+    const wanted = new Set(args.patientIds);
+    const linked = new Set(existingRelations.map((r) => r.userId));
 
-    for (const relation of existingRelations) {
-      if (relation.organizationId === organizationId) {
-        await ctx.db.delete(relation._id);
-      }
-    }
-
-    // Add new relations
-    for (const patientId of new Set(args.patientIds)) {
+    const toRemove = existingRelations.filter((r) => !wanted.has(r.userId));
+    const toAdd: Id<"users">[] = [];
+    for (const patientId of wanted) {
+      if (linked.has(patientId)) continue;
       const role = await organizationRoleOf(ctx, patientId, organizationId);
-      if (role === "user") {
-        await ctx.db.insert("user_gestionnaires", {
-          organizationId,
-          userId: patientId,
-          gestionnaireId: args.gestionnaireId,
-          createdAt: now,
-          createdBy: currentUser._id,
-        });
-      }
+      if (role === "user") toAdd.push(patientId);
     }
 
-    return null;
+    for (const relation of toRemove) {
+      await ctx.db.delete(relation._id);
+    }
+
+    const now = Date.now();
+    for (const patientId of toAdd) {
+      await ctx.db.insert("user_gestionnaires", {
+        organizationId,
+        userId: patientId,
+        gestionnaireId: args.gestionnaireId,
+        createdAt: now,
+        createdBy: currentUser._id,
+      });
+    }
+
+    return {
+      added: toAdd.length,
+      removed: new Set(toRemove.map((r) => r.userId)).size,
+    };
   },
 });
 

@@ -33,7 +33,6 @@
     "roleUpdated": "Rôle mis à jour.",
     "patientCreated": "Patient créé.",
     "patientUpdated": "Patient mis à jour.",
-    "patientsAssigned": "Patients assignés.",
     "launchRightGranted": "Droit de lancement accordé.",
     "launchRightRevoked": "Droit de lancement retiré.",
     "physiologySaved": "Physiologie enregistrée.",
@@ -362,7 +361,8 @@
     "assignMachinesDesc": "Sélectionner les machines auxquelles ce gestionnaire peut accéder",
     "machinesSaved": "Machines enregistrées : {added, plural, =0 {aucune ajoutée} one {# ajoutée} other {# ajoutées}}, {removed, plural, =0 {aucune retirée} one {# retirée} other {# retirées}}.",
     "assignPatients": "Assigner des Patients",
-    "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer"
+    "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer",
+    "patientsSaved": "Patients enregistrés : {added, plural, =0 {aucun ajouté} one {# ajouté} other {# ajoutés}}, {removed, plural, =0 {aucun retiré} one {# retiré} other {# retirés}}."
   },
   "users": {
     "title": "Gestion des utilisateurs",

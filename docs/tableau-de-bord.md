@@ -304,6 +304,33 @@ gestionnaire. Après l'enregistrement, la fiche confirme, par exemple
 message du serveur s'affiche dans la fenêtre, qui reste ouverte. La règle des
 cases est dans `lib/gestionnaireMachines.ts`.
 
+**Assigner des patients** : une case par patient de la liste de l'admin,
+cochée si le gestionnaire le gère déjà. La fenêtre se comporte comme celle des
+machines :
+
+- elle s'ouvre toujours sur les patients actuels du gestionnaire, jamais sur
+  les cases d'une modification annulée ; si ces patients changent sur le
+  serveur pendant qu'elle est ouverte, les cases reprennent celles du serveur
+  (une modification en cours et pas encore enregistrée est alors à refaire) ;
+- tant que les patients du gestionnaire ou la liste des patients à choisir ne
+  sont pas chargés, **Modifier** et **Enregistrer** sont inactifs, et la carte
+  affiche « Chargement... » au lieu de « Aucun patient assigné » ;
+- **Enregistrer** envoie la liste cochée à `users.assignPatientsToGestionnaire`,
+  qui n'écrit que la différence : cocher ajoute le lien, décocher le retire, un
+  lien déjà présent n'est pas réécrit. Un patient du gestionnaire qui n'a pas
+  de case dans la fenêtre garde son lien ;
+- après l'enregistrement, la fiche confirme ce que le serveur a écrit, par
+  exemple « Patients enregistrés : 1 ajouté, 1 retiré. » ; en cas de refus, le
+  message du serveur s'affiche dans la fenêtre, qui reste ouverte avec ses
+  cases.
+
+Le serveur ne lie que les patients actifs de l'organisation du gestionnaire :
+un patient d'une autre organisation coché par l'admin Anheart n'est pas lié, et
+le décompte affiché ne le compte pas. Il n'y a ni journal ni annulation de ces
+changements. Deux admins qui enregistrent l'un après l'autre : la liste du
+dernier enregistrement s'applique en entier. La règle des cases est dans
+`lib/gestionnairePatients.ts`.
+
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
@@ -638,7 +665,7 @@ succès, 12 s pour un échec) ou par sa croix.
 
 | Cas | Ce qui s'affiche |
 |---|---|
-| Succès | Le texte fourni par l'appelant, en français ou en anglais (`feedback.*`, `machines.*Success` et `gestionnaires.machinesSaved` dans `messages/*.json`). L'appelant donne un texte, ou une fonction qui le compose à partir de la réponse de la mutation (le décompte de « Machines enregistrées : … »). Une mutation de fond (création de la ligne du compte à l'arrivée sur la page d'accueil) n'en fournit pas, pas plus que la liste des gestionnaires envoyée après une modification de machine : leur succès reste muet, leur échec non. |
+| Succès | Le texte fourni par l'appelant, en français ou en anglais (`feedback.*`, `machines.*Success`, `gestionnaires.machinesSaved` et `gestionnaires.patientsSaved` dans `messages/*.json`). L'appelant donne un texte, ou une fonction qui le compose à partir de la réponse de la mutation (le décompte de « Machines enregistrées : … » et de « Patients enregistrés : … »). Une mutation de fond (création de la ligne du compte à l'arrivée sur la page d'accueil) n'en fournit pas, pas plus que la liste des gestionnaires envoyée après une modification de machine : leur succès reste muet, leur échec non. |
 | Échec avec un code stable | La traduction du code si `messages/*.json` contient la clé `errors.<code>`. Le code est lu dans la `ConvexError` du serveur : la chaîne elle-même, ou le champ `code` (à défaut `error`) d'un objet. |
 | Échec avec un texte | Sans traduction du code, le texte du serveur : la chaîne de la `ConvexError`, le champ `message` de l'objet, ou sur un déploiement de développement la ligne « Uncaught Error: … ». Ces textes sont encore en anglais. |
 | Échec masqué | En production, Convex masque le texte d'une erreur qui n'est pas une `ConvexError` (comportement documenté par Convex, pas encore observé sur ce projet). Le site affiche alors « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : {identifiant}. » |
@@ -650,10 +677,12 @@ retrouver l'erreur dans les journaux du déploiement.
 Les fenêtres et les cartes qui affichaient déjà l'erreur dans un encadré rouge
 (lancement, arrêt, droits de lancement, physiologie, formulaires machine et
 patient, fenêtre « Assigner des machines ») le gardent : il reçoit le même
-message que la notification. De même, trois écrans gardent leur propre
-confirmation durable en plus de la notification : « Machines enregistrées : … »
-sur la fiche d'un gestionnaire, « Machine mise à jour avec succès » sur la fiche
-d'une machine, et le bouton « Enregistré » de la carte Physiologie.
+message que la notification. La fenêtre « Assigner des patients » a le même
+encadré depuis ANH-208. De même, trois écrans gardent leur propre confirmation
+durable en plus de la notification : « Machines enregistrées : … » et
+« Patients enregistrés : … » sur la fiche d'un gestionnaire, « Machine mise à
+jour avec succès » sur la fiche d'une machine, et le bouton « Enregistré » de la
+carte Physiologie.
 
 **Arrêter ou annuler une séance** donne un seul message, quel que soit l'état
 que la page affichait : « Demande envoyée. L'état de la séance s'affiche sur

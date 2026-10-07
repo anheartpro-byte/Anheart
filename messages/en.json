@@ -33,7 +33,6 @@
     "roleUpdated": "Role updated.",
     "patientCreated": "Patient created.",
     "patientUpdated": "Patient updated.",
-    "patientsAssigned": "Patients assigned.",
     "launchRightGranted": "Launch right granted.",
     "launchRightRevoked": "Launch right revoked.",
     "physiologySaved": "Physiology saved.",
@@ -362,7 +361,8 @@
     "assignMachinesDesc": "Select which machines this gestionnaire can access",
     "machinesSaved": "Machines saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}.",
     "assignPatients": "Assign Patients",
-    "assignPatientsDesc": "Select which patients this gestionnaire can manage"
+    "assignPatientsDesc": "Select which patients this gestionnaire can manage",
+    "patientsSaved": "Patients saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}."
   },
   "users": {
     "title": "User Management",
