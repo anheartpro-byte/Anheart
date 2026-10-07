@@ -12,6 +12,9 @@ ne parle **jamais** directement au Raspberry Pi.
 >   `npm run test:ecg` ([portée et limites](framework-de-test.md#régression-ecg-du-navigateur-anh-71)).
 >   La même commande exécute les tests unitaires des règles de `lib/`
 >   extraites des fenêtres du site.
+>   La fraîcheur de l'état en direct (§6) a des tests unitaires, sans
+>   navigateur : `npm run test:site`
+>   ([portée et limites](framework-de-test.md#fraîcheur-de-létat-en-direct-anh-160)).
 >   La suite navigateur de bout en bout du tableau de bord reste ANH-83.
 >   Le 2 octobre 2026, toutes les pages du tableau de bord
 >   ont été **ouvertes à la main dans un navigateur**, en local, contre le
@@ -49,7 +52,7 @@ Sommaire :
 | Lancer une séance **auto** (programme piloté par la fréquence cardiaque). | Lancer une séance **manuelle** : il n'existe aucun bouton ni aucune fonction pour cela. Le manuel se démarre **uniquement** à la console de la machine ([console-locale.md](console-locale.md)). |
 | Demander l'arrêt d'une séance (auto ou manuelle). La machine décélère sur sa rampe de sécurité. | Arrêter la machine instantanément. Ce n'est pas un arrêt d'urgence : le Pi reçoit la demande par interrogation toutes les 3 s environ. |
 | Annuler une séance encore « en attente ». | Forcer un départ : le Pi revérifie tout et peut refuser. |
-| Afficher l'état en direct et la télémétrie à 1 Hz. | Afficher une valeur périmée comme actuelle : un état de plus de 90 s est marqué « Données périmées ». |
+| Afficher l'état en direct et la télémétrie à 1 Hz. | Afficher une valeur périmée comme actuelle : un état de plus de 90 s est marqué « Données périmées », 90 s après le dernier signal (§6). |
 | Régler la FC max et l'année de naissance d'un patient. | Modifier les programmes : ils viennent du Pi et sont en lecture seule. |
 
 ---
@@ -156,7 +159,7 @@ Admin et gestionnaire de la machine.
 | Bouton **Lancer une séance auto** | Ouvre la fenêtre de lancement (§5). | admin, gestionnaire |
 | Configuration | Statut (« En ligne », « Hors ligne », « En session »), dernier signal, fréquence, intervalle, canaux, « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
-| **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » ; « Mis à jour il y a … ». L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
+| **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | Zone de danger | **Régénérer la clé** (l'ancienne cesse de fonctionner ; la nouvelle s'affiche une fois) ; **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
@@ -187,7 +190,8 @@ patient = celles où il a le droit.
   renseignée : demandez à votre gestionnaire… ».
 - Aucune machine : « Vous n'avez encore aucun droit de lancement… » (patient)
   ou « Aucune machine disponible. ».
-- Par machine : nom, lieu, état en direct, nombre de programmes, bouton
+- Par machine : nom, lieu, état en direct avec son badge « En direct » /
+  « Données périmées » (§6), nombre de programmes, bouton
   **Lancer une séance auto**, lien **Détails**.
 
 ### Sessions : `/fr/dashboard/sessions`
@@ -207,7 +211,9 @@ locale ne la prend pas.
 - Séance d'entraînement **en attente** : « En attente que la machine arme la
   séance… » et le bouton **Annuler la séance**.
 - Séance d'entraînement **active** : le **panneau d'entraînement** (§6) avec
-  gros indicateurs, courbes et bouton **Arrêter la séance**.
+  gros indicateurs, courbes et bouton **Arrêter la séance**. Sans point reçu
+  depuis 20 s, il affiche « Aucun signal récent de la machine… » et grise ses
+  indicateurs (§6).
 - Sous le panneau, la page affiche aussi l'ancien bloc ECG (qualité du signal,
   FC, durée, lots de données, échantillons). **Pour une séance d'entraînement,
   ce bloc reste vide** (« Connexion... ») : la console locale n'envoie pas l'ECG
@@ -386,8 +392,53 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 | **Manuel** (icône main, ambre) | Séance à vitesse fixée par l'opérateur, démarrée à la machine. |
 | **Enregistrement** | Ancienne séance ECG seule. |
 | **Tableau de bord** / **Machine** | Origine : lancée depuis le site, ou démarrée à la console. |
-| **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu il y a moins / plus de 90 s. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » |
+| **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu il y a moins de 90 s / 90 s ou plus. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Détail d'une machine et Mes machines. Voir « Fraîcheur » ci-dessous. |
 | Statut de séance | En attente, Active, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |
+
+### Fraîcheur recalculée à l'horloge
+
+Une machine qui se tait n'envoie plus rien : aucune donnée ne change, donc
+aucune query Convex ne se relance. Le site ne peut pas attendre un changement de
+donnée pour dire qu'un état est périmé. Il le recalcule lui-même **chaque
+seconde** :
+
+- un seul hook, `useFreshness` (`hooks/use-freshness.ts`), compare l'horodatage
+  de la donnée à l'horloge du navigateur (`useNow(1000)`) ;
+- un seul seuil pour l'état de la machine, `LIVE_FRESH_MS` = 90 s, défini dans
+  `lib/training.ts` et importé par `convex/training.ts` : le serveur et le site
+  ne peuvent pas diverger ;
+- la carte « État en direct », chaque carte de Mes machines et le panneau
+  d'entraînement lisent ce hook. Le badge « En direct » de l'état d'une machine
+  n'est jamais affiché sans lui (l'ancien bloc ECG fait exception, voir les
+  limites).
+
+| Moment | Ce que le site affiche |
+|---|---|
+| Moins de 90 s après le dernier état | Badge « En direct », valeurs normales. |
+| 90 s après le dernier état, à la seconde près | Badge « Données périmées », valeurs grisées, cœur gris, « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Sur le détail d'une machine, « Mis à jour il y a … » continue d'avancer. |
+| État suivant reçu (heartbeat toutes les 10 s) | Retour immédiat à « En direct ». |
+
+Sur le détail d'une machine, le verdict `stale` du serveur compte aussi quand il
+dit « périmé » : si l'horloge du navigateur retarde, le site n'est jamais plus
+lent qu'avant ce recalcul. Sur Mes machines, le serveur retire l'état quand la
+query se relance (au passage hors ligne) : la carte affiche alors « La machine
+n'a encore rapporté aucun état. »
+
+Limites :
+
+- La fraîcheur compare l'heure du serveur (état de la machine) ou du Pi
+  (télémétrie) à l'**horloge du navigateur**. Un poste dont l'horloge retarde
+  voit « Données périmées » plus tard (pour l'état d'une machine, jamais plus
+  tard qu'au passage hors ligne, voir ci-dessus). Un poste dont l'horloge
+  avance le voit plus tôt : au delà de 80 s d'avance environ, il l'affiche
+  alors que la machine envoie encore. L'écart n'est ni mesuré ni corrigé.
+- Le **statut** « En ligne » / « Hors ligne » et « Dernier signal » ne sont pas
+  concernés : le statut est écrit par le serveur une fois par minute (hors
+  ligne entre 1,5 et 2,5 min après le dernier signal) et « Dernier signal » ne
+  se rafraîchit qu'au prochain changement de donnée. Entre 90 s et ce passage,
+  une machine peut donc être « En ligne » et « Données périmées » à la fois.
+- L'ancien bloc ECG de la vue en direct (badge « En direct » de l'en-tête) ne
+  lit pas ce hook.
 
 ### Panneau d'entraînement (vue en direct)
 
@@ -405,6 +456,22 @@ Bandeaux : en attente, arrêt demandé, séance échouée (avec motif), séance
 terminée (avec motif), et pour le manuel « Manuel : uniquement depuis la console
 de la machine ».
 
+**Séance active sans signal récent.** Le panneau lit le même hook de fraîcheur
+que les badges, avec le seuil de la télémétrie : 20 s (`TELEMETRY_FRESH_MS`,
+`components/training/TrainingPanel.tsx` ; le Pi envoie ses points toutes les
+5 s). Le dernier signe de vie est le dernier point reçu, ou le début de la
+séance tant qu'aucun point n'est arrivé. Passé 20 s, à la seconde près :
+
+- bandeau orange « Aucun signal récent de la machine : les valeurs affichées
+  peuvent être dépassées. » ;
+- les cinq indicateurs sont grisés ; fréquence cardiaque, vitesse du bras et
+  charge passent à « - » ; la phase garde sa dernière valeur connue, grisée ;
+- l'icône du titre ne tourne plus.
+
+Le chronomètre continue : la séance reste « Active » côté serveur et la machine
+suit ses propres règles. Au point suivant, tout revient. Une séance terminée ou
+échouée n'est pas concernée : ses dernières valeurs sont son résultat.
+
 ### Courbes (`components/training/TelemetryCharts.tsx`)
 
 - **Fréquence cardiaque** : la FC dans le temps, avec la **zone cible** en bande
@@ -415,7 +482,8 @@ de la machine ».
 - Axe du temps en minutes:secondes depuis le début. Au plus les 3600 derniers
   points (1 h à 1 Hz).
 
-Le site ne recalcule rien : il affiche ce que le Pi envoie. Voir le
+Le site ne recalcule aucune mesure : il affiche ce que le Pi envoie. L'âge des
+données, lui, est calculé par le site (« Fraîcheur » plus haut). Voir le
 [glossaire](glossaire.md) pour « zone », « g résultant », « consigne ».
 
 ---
@@ -458,7 +526,9 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement : `npm run test:ecg` (fonctions ECG et règles de `lib/` extraites des fenêtres). **Aucun test dans un navigateur** (ANH-83). |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (fonctions ECG et règles de `lib/` extraites des fenêtres) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants). **Aucun test dans un navigateur** : la coupure d'une console simulée suivie de 90 s d'attente n'est pas rejouée de bout en bout (ANH-83). |
+| Fraîcheur et horloge du poste | La fraîcheur est jugée sur l'horloge du navigateur (§6) ; l'écart avec l'heure du serveur n'est ni mesuré ni corrigé. |
+| Statut « En ligne » et « Dernier signal » | Non recalculés à l'horloge (§6) : le statut suit le serveur (jusqu'à 2,5 min), « Dernier signal » ne bouge qu'au prochain changement de donnée. |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
 | Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |

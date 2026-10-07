@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Clock,
   Gauge,
@@ -35,7 +36,7 @@ import {
   ShieldAlert,
   Timer,
 } from "lucide-react";
-import { useNow } from "@/hooks/use-now";
+import { useFreshness } from "@/hooks/use-freshness";
 import {
   convexErrorMessage,
   formatClock,
@@ -48,7 +49,10 @@ import {
 } from "./TrainingBadges";
 import { TelemetryCharts } from "./TelemetryCharts";
 
-/** A telemetry point older than this no longer stands for "now" on a live session. */
+/**
+ * A telemetry point older than this no longer stands for "now" on a live
+ * session (the machine sends its points every 5 s).
+ */
 const TELEMETRY_FRESH_MS = 20_000;
 
 /**
@@ -58,7 +62,6 @@ const TELEMETRY_FRESH_MS = 20_000;
 export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   const t = useTranslations();
   const label = useTrainingLabel();
-  const now = useNow(1000);
 
   const training = useQuery(api.training.getTrainingSession, { sessionId });
   const telemetry = useQuery(api.training.getSessionTelemetry, {
@@ -66,6 +69,15 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
     limit: 3600,
   });
   const requestStop = useMutation(api.training.requestStop);
+
+  const points: TelemetryPoint[] = telemetry ?? [];
+  const last = points.length > 0 ? points[points.length - 1] : null;
+  // The machine's last sign of life on this session: its latest point, or the
+  // start of the session while none has arrived yet.
+  const { fresh: signalFresh, now } = useFreshness(
+    last?.t ?? training?.startedAt,
+    TELEMETRY_FRESH_MS,
+  );
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -76,12 +88,11 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   }
   if (training === null) return null;
 
-  const points: TelemetryPoint[] = telemetry ?? [];
-  const last = points.length > 0 ? points[points.length - 1] : null;
   const isActive = training.status === "active";
   const isPending = training.status === "pending";
-  const lastFresh =
-    last !== null && (!isActive || now - last.t < TELEMETRY_FRESH_MS);
+  // An active session whose machine has gone quiet: nothing here is current.
+  const stale = isActive && !signalFresh;
+  const lastFresh = last !== null && !stale;
   // Only a fresh point may stand for the current heart rate.
   const bpm = lastFresh && last?.bpm !== undefined ? last.bpm : undefined;
 
@@ -138,7 +149,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <div className="space-y-1">
             <CardTitle className="flex items-center gap-2">
               <RotateCw
-                className={`h-4 w-4 ${isActive && !stopRequested ? "animate-spin [animation-duration:3s]" : ""}`}
+                className={`h-4 w-4 ${isActive && !stopRequested && !stale ? "animate-spin [animation-duration:3s]" : ""}`}
               />
               {t("training.session.panelTitle")}
               {training.profileName && (
@@ -205,6 +216,11 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
             {t("training.session.stopRequested")}
           </Banner>
         )}
+        {stale && (
+          <Banner tone="warn" icon={<AlertTriangle className="h-5 w-5" />}>
+            {t("training.live.staleDesc")}
+          </Banner>
+        )}
         {training.status === "failed" && (
           <Banner tone="error" icon={<AlertCircle className="h-5 w-5" />}>
             <span className="font-semibold">
@@ -235,7 +251,9 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
         )}
 
         {/* Big readouts */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div
+          className={`grid grid-cols-2 lg:grid-cols-5 gap-4 ${stale ? "opacity-60" : ""}`}
+        >
           <BigReadout
             icon={<Heart className={`h-5 w-5 ${zoneColor}`} />}
             label={t("training.live.heartRate")}

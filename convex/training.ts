@@ -41,6 +41,9 @@ import {
 } from "./lib/auth";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
+// A heartbeat older than this means the machine cannot be relied on to answer.
+// The dashboard judges freshness on the same value (hooks/use-freshness.ts).
+import { LIVE_FRESH_MS } from "../lib/training";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -100,9 +103,6 @@ export function ageFrom(
   if (birthYear === undefined) return null;
   return new Date(now).getUTCFullYear() - birthYear - 1;
 }
-
-/** A heartbeat older than this means the machine cannot be relied on to answer. */
-const LIVE_FRESH_MS = 90_000;
 
 // ---------------------------------------------------------------------------
 // Rights
