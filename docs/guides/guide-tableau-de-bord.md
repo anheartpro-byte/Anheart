@@ -680,21 +680,25 @@ vient du Raspberry Pi, envoyé toutes les 10 s environ.
 | Indicateur | Contenu |
 |---|---|
 | Badge **En direct** (point vert clignotant) | Le dernier état reçu a moins de 90 s. |
-| Badge **Données périmées** (gris) | Le dernier état a plus de 90 s. Les valeurs sont grisées et une ligne orange dit « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » |
+| Badge **Données périmées** (gris) | Le dernier état a 90 s ou plus. Les valeurs sont grisées et une ligne orange dit « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Le badge revient à **En direct** dès l'état suivant. |
 | **Mode** | Repos, Manuel, Séance, Arrêt. |
 | **Phase** | Mesure de référence, Échauffement, Maintien, Retour au calme, Récupération, Inactif, Terminé. |
 | **Fréquence cardiaque** | En bpm, cœur rouge si la valeur est fraîche. Un tiret « - » à la place du nombre quand la machine n'a pas de fréquence cardiaque fiable : le site n'affiche jamais une vieille valeur comme actuelle. |
 | **Vitesse du bras** | tr/min du bras (une décimale). Dessous : « Moteur N tr/min · Consigne N » (la consigne est en tr/min moteur). |
 | **Charge** | En g, deux décimales. |
 | **Action de sécurité** | « Aucune » en temps normal. Sinon en orange avec un bouclier : « Vitesse figée » (`freeze`), « Réduction » (`reduce`), « Décélération » (`ramp_down`), « Arrêt rapide (rampe du variateur) » (`quick_stop`), « Mise en silence (arrêt par le variateur) » (`go_silent`). Dessous : « Variateur : ... », l'état du variateur traduit (Non prêt, Mise en marche verrouillée, Prêt, Enclenché, En fonctionnement, Défaut, Communication perdue). Une valeur que le site ne connaît pas s'affiche telle quelle. |
-| « Mis à jour il y a ... » | Âge du dernier état. **Ce texte ne se rafraîchit qu'au prochain changement de donnée**, pas chaque seconde. |
+| « Mis à jour il y a ... » | Âge du dernier état, recalculé chaque seconde. |
 
 « La machine n'a encore rapporté aucun état. » : la machine n'a jamais envoyé
 d'état (neuve, ou jamais connectée depuis la console d'entraînement).
 
-> Le passage en « Données périmées » n'est pas instantané quand une machine se
-> tait : il apparaît au plus tard quand le serveur la déclare hors ligne, soit
-> entre 1,5 et 2,5 minutes environ après son dernier signal.
+> Quand une machine se tait, le passage en « Données périmées » arrive 90 s
+> après son dernier état, à la seconde près : le site le recalcule chaque
+> seconde sur l'horloge du navigateur, sans attendre qu'une donnée change. Le
+> **statut** de la machine, lui, ne passe « Hors ligne » qu'entre 1,5 et
+> 2,5 minutes après le dernier signal : pendant ce délai, une machine peut être
+> « En ligne » et « Données périmées » à la fois. Si l'horloge du poste retarde,
+> le badge retarde d'autant.
 
 #### Carte « Programmes »
 
@@ -797,7 +801,7 @@ Quelles machines sont listées :
 |---|---|
 | Badge **Votre FC max : N bpm** (patient) | La FC max retenue pour vous (mesurée, ou estimée par l'âge sans le préciser ici). En rouge « Non renseignée » si rien n'est saisi. |
 | Encadré orange (patient) | « Votre FC max n'est pas renseignée : demandez à votre gestionnaire de la saisir avant de lancer une séance auto. » |
-| Carte machine | Nom, lieu, badge de statut, badge **En direct** si l'état a moins de 90 s ; les mêmes indicateurs que la carte « État en direct » ([§4.6](#carte--état-en-direct-)) ; sinon « La machine n'a encore rapporté aucun état. » (également affiché quand l'état est périmé). |
+| Carte machine | Nom, lieu, badge de statut, badge **En direct** si l'état a moins de 90 s ; les mêmes indicateurs que la carte « État en direct » ([§4.6](#carte--état-en-direct-)). À 90 s sans nouvel état : badge **Données périmées**, valeurs grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Sans état, ou une fois la machine passée « Hors ligne » : « La machine n'a encore rapporté aucun état. » |
 | « Programmes · N programmes » | La liste des programmes de la machine, comme sur le détail. « Aucun programme » si vide. |
 | **Lancer une séance auto** | Ouvre la fenêtre de lancement. **Grisé** si la machine n'est pas « En ligne », si les programmes sont désactivés, ou s'il n'y a aucun programme. |
 | **Détails** (administrateur, gestionnaire) | Ouvre le détail de la machine. |
@@ -1062,7 +1066,8 @@ d'entraînement, il reste sur « Connexion... », c'est normal).
 
 | Élément | Contenu |
 |---|---|
-| Titre | « Séance d'entraînement · {programme} ». L'icône tourne tant que la séance est active et qu'aucun arrêt n'est demandé. |
+| Titre | « Séance d'entraînement · {programme} ». L'icône tourne tant que la séance est active, qu'aucun arrêt n'est demandé et qu'un point est arrivé depuis moins de 20 s. |
+| Bandeau orange « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | Séance active sans point reçu depuis 20 s (recalculé chaque seconde). Les cinq indicateurs sont grisés ; fréquence cardiaque, vitesse et charge passent à « - » ; la phase garde sa dernière valeur. Tout revient au point suivant. |
 | Ligne sous le titre | Badges Auto / Manuel et Tableau de bord / Machine ; « Cible {bas}-{haut} bpm » ; « · Opérateur {nom} ». |
 | **Fréquence cardiaque** | Dernière valeur **fraîche** (moins de 20 s). Couleur et texte : **vert « Dans la zone »**, **bleu « Sous la zone »**, **rouge « Au-dessus de la zone »**. Un tiret « - » et « Pas de fréquence cardiaque fiable » si la machine n'en a pas. |
 | **Vitesse du bras** | tr/min du bras ; dessous « Moteur N tr/min ». |
@@ -1857,7 +1862,7 @@ patient (pour lui même, avec le droit de lancement).
 | Tiret « - » et « Pas de fréquence cardiaque fiable » | La machine ne reçoit plus de FC fiable (capteur, électrodes), ou aucun point depuis 20 s. | Prévenir la personne à côté de la machine. La machine applique sa propre sécurité. |
 | Rouge « Au-dessus de la zone » qui dure | La FC dépasse la zone. | La machine réduit d'elle même ; surveiller ; arrêter si besoin. |
 | Bouclier orange et « Action de sécurité : ... » | La machine applique une action de sécurité. | Suivre ; l'action est décidée par la machine. |
-| Chiffres figés, plus de nouveaux points | Liaison Internet de la machine coupée, ou machine arrêtée. | Voir [§6.3](#63-si-la-machine-est-hors-ligne). |
+| Chiffres figés, plus de nouveaux points, puis au bout de 20 s le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | Liaison Internet de la machine coupée, ou machine arrêtée. | Voir [§6.3](#63-si-la-machine-est-hors-ligne). |
 
 ### P12. Annuler ou arrêter une séance à distance
 
@@ -2011,7 +2016,7 @@ Internet, le site ne peut rien lui demander.**
 | Statut **En ligne** | Signal de la machine | Signal toutes les 10 s. |
 | Statut **Hors ligne** | Serveur, faute de signal | Plus de 90 s sans signal, vérifié chaque minute : entre 1,5 et 2,5 min après le dernier signal. |
 | Carte **État en direct** (mode, phase, FC, vitesses, charge, action de sécurité, variateur) | Machine, avec chaque signal | Toutes les 10 s. |
-| **Données périmées** | Serveur | État de plus de 90 s (visible au plus tard au passage hors ligne). |
+| **Données périmées** | Site, sur l'horloge du navigateur | 90 s après le dernier état, à la seconde près. Sur le panneau de la vue en direct : 20 s après le dernier point. |
 | **Programmes** et « Programmes auto désactivés » | Machine | À chaque modification sur la machine, et au démarrage de sa console. |
 | Passage **en attente → active** | Machine | La machine interroge toutes les 3 s. |
 | Refus d'une machine qui n'a ni démarré ni refusé | Machine | 60 s après la prise en charge. |
@@ -2020,9 +2025,11 @@ Internet, le site ne peut rien lui demander.**
 | Prise en compte de **Arrêter la séance** | Machine | La machine vérifie toutes les 3 s, puis décélère sur sa rampe (plusieurs secondes). |
 | Passage au statut **Terminée** / **Échouée** | Machine | Quand la machine a fini (bras arrêté). |
 
-Le site **ne recalcule rien** : il affiche ce que la machine envoie. Les seuls
-calculs du site sont des **vérifications à l'avance** (FC max, zone, âge) que le
-serveur et la machine refont de toute façon.
+Le site **ne recalcule aucune mesure** : il affiche ce que la machine envoie.
+Les seuls calculs du site sont des **vérifications à l'avance** (FC max, zone,
+âge) que le serveur et la machine refont de toute façon, et l'**âge des
+données** : chaque seconde, il compare l'heure du dernier état à l'horloge du
+navigateur pour dire « En direct » ou « Données périmées ».
 
 ### 6.3 Si la machine est hors ligne
 
@@ -2030,7 +2037,7 @@ serveur et la machine refont de toute façon.
 |---|---|---|
 | Machine hors ligne **avant** le lancement | Le bouton **Lancer une séance auto** est grisé (**Mes machines**), ou le serveur refuse (« Machine is offline »). | Vérifier l'alimentation, le réseau, et que la console de la machine tourne. |
 | Machine qui se coupe **pendant** l'attente | La séance reste **en attente** : personne ne la prend. | **L'annuler** ([P12](#p12-annuler-ou-arrêter-une-séance-à-distance)). **Ne la laissez pas traîner** : si la machine revient en ligne plus tard, elle la prendra et tentera de démarrer, même des heures après. |
-| Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis sont remplacés par « - » au bout de 20 s ; l'état passe « Données périmées » puis « Hors ligne ». La machine, elle, continue selon ses propres règles de sécurité. Elle garde jusqu'à une heure de points et les renvoie au retour de la liaison. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
+| Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis, au bout de 20 s, sont remplacés par « - » et grisés sous le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » ; l'état de la machine passe « Données périmées » à 90 s, puis son statut « Hors ligne ». La machine, elle, continue selon ses propres règles de sécurité. Elle garde jusqu'à une heure de points et les renvoie au retour de la liaison. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
 | Arrêt demandé pendant une coupure | La demande attend sur le serveur ; la machine l'exécutera à son retour si la séance tourne encore. | Agir à la machine. |
 
 ### 6.4 Séances démarrées à la machine (manuelles ou auto)
@@ -2092,8 +2099,9 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Aucun rapport disponible pour le moment » | Rapports | Aucune séance terminée visible. | Normal au début. |
 | « Accès refusé. Réservé aux administrateurs. » | Paramètres | Vous n'êtes pas administrateur. | Demander à un administrateur. |
 | « Une erreur est survenue: Admin access required » | Gestionnaires | Idem. | Idem. |
-| « La machine n'a encore rapporté aucun état. » | Détail machine, Mes machines | Aucun état reçu (ou état périmé sur Mes machines). | Vérifier que la console de la machine tourne et que sa clé est installée. |
-| « Données périmées » + « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | État en direct | Plus de 90 s sans nouvel état. | Vérifier la machine et son réseau. |
+| « La machine n'a encore rapporté aucun état. » | Détail machine, Mes machines | Aucun état reçu (ou, sur Mes machines, machine passée hors ligne). | Vérifier que la console de la machine tourne et que sa clé est installée. |
+| « Données périmées » + « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | État en direct, Mes machines | 90 s sans nouvel état. | Vérifier la machine et son réseau. |
+| « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » (bandeau) | Vue en direct | Séance active sans point reçu depuis 20 s. | Voir [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Programmes auto désactivés sur cette machine » | Programmes, Mes machines | La machine refuse les séances auto. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme synchronisé depuis la machine » | Programmes | Aucun programme reçu. | Créer un programme à la console (P9). |
 | « Aucun patient ne détient ce droit. » | Droits de lancement | Liste vide. | P8 si un patient doit lancer lui même. |
@@ -2294,7 +2302,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 |---|---|
 | Nouveau code en production | **Pas encore** : attend le redéploiement (**ANH-82**). |
 | Ouverture du nouveau code dans un navigateur contre un vrai serveur | **Faite le 2 octobre 2026**, en local, contre le serveur de développement : les 17 pages du tableau de bord, les fenêtres, les trois rôles. Voir le [§9.4](#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026). |
-| Tests du site | **Aucun** (ni unitaire, ni navigateur, ni de bout en bout). |
+| Tests du site | Unitaires seulement : fonctions ECG et règles de `lib/` (`npm run test:ecg`), fraîcheur de l'état en direct (`npm run test:site`). **Aucun** test dans un navigateur ni de bout en bout. |
 | Lancement auto de bout en bout (serveur, machine simulée, moteur simulé) | **Exécuté le 1er octobre 2026** sur le serveur de développement, sans passer par les pages du site : lancement, refus, télémétrie, arrêt à distance. Voir [deploiement.md](../deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026). |
 | Lancement auto observé sur les pages du site | **Fait le 2 octobre 2026** : séance en attente, active, arrêtée, annulée, vues par l'administrateur et par la patiente. Le lancement lui-même a été envoyé au serveur sans cliquer le bouton **Lancer**. |
 | Lancement auto sur une vraie machine | **Jamais exécuté.** |
@@ -2319,7 +2327,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 12 | Rapport PDF sans télémétrie ; cartes ECG inutiles sur les séances d'entraînement. (Corrigé par ANH-123 : rapport et cartes traduits ; fréquence et nombre d'échantillons lus dans les lots enregistrés, avec une mention quand seuls certains lots sont chargés.) | Rapports inexploitables pour l'entraînement. | Utiliser le détail de la séance. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
-| 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. | Une machine muette paraît vivante un moment. | Regarder « Dernier signal » et le statut. |
+| 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Restent au rythme du serveur : le statut « En ligne » (jusqu'à environ 2,5 min) et « Dernier signal ». | Une machine muette garde le statut « En ligne » un moment, à côté du badge « Données périmées ». | Se fier au badge « Données périmées ». |
 | 16 | La fenêtre **Nouvelle machine** propose 100 Hz par défaut alors que le serveur et **Paramètres** annoncent 1000 Hz. | Sans effet sur l'entraînement. | Aucun. |
 | 17 | Mutations sans écran : rattacher ou détacher un seul gestionnaire d'un patient ou d'une machine, modifier son propre profil. | Moins de souplesse. | Passer par les assignations complètes. |
 

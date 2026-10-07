@@ -5,6 +5,9 @@ import { ConvexError } from "convex/values";
  * The Pi is the authority on every value here; these helpers only format what
  * it reports and mirror the checks convex/training.ts runs so the dashboard can
  * warn before the server refuses.
+ *
+ * convex/training.ts imports LIVE_FRESH_MS from this file: keep it free of
+ * browser-only code and of "@/" imports, which the Convex bundle cannot resolve.
  */
 
 /** Motor shaft turns per arm turn (the gearbox). Arm rpm = motor rpm / ratio. */
@@ -62,6 +65,25 @@ export type TelemetryPoint = {
 
 /** Youngest rider an auto launch accepts (the server and the Pi check again). */
 export const MIN_RIDER_AGE = 18;
+
+/**
+ * A machine state older than this means the machine cannot be relied on to
+ * answer (it reports every 10 s). One definition for the server
+ * (convex/training.ts) and for the dashboard (hooks/use-freshness.ts).
+ */
+export const LIVE_FRESH_MS = 90_000;
+
+/**
+ * Whether a datum stamped `updatedAt` is still fresh at `now`. Without a
+ * timestamp it never is: absence is no reason to show a value as current.
+ */
+export function isFresh(
+  updatedAt: number | null | undefined,
+  now: number,
+  freshMs: number = LIVE_FRESH_MS,
+): boolean {
+  return typeof updatedAt === "number" && now - updatedAt < freshMs;
+}
 
 export function armRpm(motorRpm: number): number {
   return motorRpm / GEAR_RATIO;

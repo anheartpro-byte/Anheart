@@ -15,10 +15,14 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, Gauge, Radio, ShieldAlert, AlertTriangle } from "lucide-react";
+import { useFreshness } from "@/hooks/use-freshness";
 import { type LiveState } from "@/lib/training";
 import { LiveFreshBadge, useTrainingLabel } from "./TrainingBadges";
 
-/** The machine's live readouts. `bpm` absent renders a dash, never a stale number. */
+/**
+ * The machine's live readouts. `bpm` absent renders a dash, never a stale
+ * number. `stale` (from useFreshness) greys every value and says why.
+ */
 export function LiveReadouts({
   live,
   stale,
@@ -31,8 +35,19 @@ export function LiveReadouts({
   const safetyActive = live.safetyAction !== "none";
 
   return (
-    <div className={stale ? "opacity-60" : undefined}>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+    <>
+      {stale && (
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {t("live.staleDesc")}
+        </p>
+      )}
+      <div
+        className={`grid grid-cols-2 sm:grid-cols-3 gap-4 ${stale ? "opacity-60" : ""}`}
+      >
         <Readout label={t("live.runMode")}>
           {label("runMode", live.runMode)}
         </Readout>
@@ -83,7 +98,7 @@ export function LiveReadouts({
           )}
         </Readout>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -107,6 +122,11 @@ export function MachineLiveCard({ machineId }: { machineId: Id<"machines"> }) {
   const t = useTranslations("training.live");
   const locale = useLocale();
   const data = useQuery(api.training.getMachineLive, { machineId });
+  // On the clock: the query only runs again when the machine's record changes,
+  // so its own `stale` lags a machine that has gone quiet. It still counts when
+  // it says stale: that catches a browser clock running behind.
+  const { fresh } = useFreshness(data?.live?.updatedAt);
+  const stale = !fresh || data?.stale === true;
 
   return (
     <Card>
@@ -119,7 +139,7 @@ export function MachineLiveCard({ machineId }: { machineId: Id<"machines"> }) {
             </CardTitle>
             <CardDescription>{t("description")}</CardDescription>
           </div>
-          {data && data.live && <LiveFreshBadge stale={data.stale} />}
+          {data && data.live && <LiveFreshBadge stale={stale} />}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -129,13 +149,7 @@ export function MachineLiveCard({ machineId }: { machineId: Id<"machines"> }) {
           <p className="text-sm text-muted-foreground">{t("noData")}</p>
         ) : (
           <>
-            {data.stale && (
-              <p className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-                <AlertTriangle className="h-4 w-4 shrink-0" />
-                {t("staleDesc")}
-              </p>
-            )}
-            <LiveReadouts live={data.live} stale={data.stale} />
+            <LiveReadouts live={data.live} stale={stale} />
             <p className="text-xs text-muted-foreground">
               {t("updated", {
                 time: formatDistanceToNow(data.live.updatedAt, {

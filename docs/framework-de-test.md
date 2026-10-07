@@ -1563,6 +1563,36 @@ d'appeler Convex, extraites en fonctions pures dans `lib/` pour être testées
 sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
 reste à prouver par la suite navigateur (ANH-83).
 
+### Fraîcheur de l'état en direct (ANH-160)
+
+`npm run test:site` (job `web` de la CI, `vitest.site.config.mts`) exécute les
+tests de `hooks/` et de `components/`, sans navigateur. Avec deux tests des
+suites voisines, il couvre la fraîcheur de l'état en direct :
+
+- `hooks/use-freshness.test.ts` monte le hook `useFreshness` dans le vrai React
+  avec une **horloge simulée** : l'état devient périmé 90 s après le dernier
+  heartbeat sans qu'aucune donnée ne change, redevient frais au heartbeat
+  suivant, reste frais tant que les heartbeats arrivent, applique le seuil de
+  20 s de la télémétrie et arrête son horloge au démontage ;
+- `components/training/live-freshness.test.tsx` rend la carte « État en
+  direct », une carte de Mes machines et le panneau d'entraînement avec les
+  vrais textes de `messages/` : badge, valeurs grisées et bandeau à 90 s (20 s
+  pour le panneau), y compris quand la query du serveur dit encore « frais » ;
+- `lib/training.test.ts` (`npm run test:ecg`, comme tous les tests de `lib/`)
+  fixe les bornes de `isFresh` ;
+- `convex/liveFreshness.test.ts` (`npm run test:convex`) vérifie que le serveur
+  juge sur le même seuil `LIVE_FRESH_MS` que le site.
+
+Limites. Le dépôt n'a pas de bibliothèque de test avec DOM : le hook tourne sur
+un hôte minimal (un composant qui ne rend rien), et les composants sont rendus
+en HTML statique à une heure donnée. Le passage de « En direct » à « Données
+périmées » **à l'écran**, sans recharger la page, est donc prouvé en deux
+moitiés (le hook bascule à l'horloge, les composants affichent ce que le hook
+dit), pas d'un seul tenant. Le test de bout en bout prévu (couper la console
+simulée, attendre 90 s simulées, lire le badge dans un navigateur) attend
+l'infrastructure d'ANH-83. L'écart entre l'horloge du poste et celle du serveur
+n'est pas testé.
+
 ### Infrastructure encore dépendante d'autres tickets
 
 Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
