@@ -2589,12 +2589,14 @@ class SafetySupervisor:
         "In progress" means: until the session's phase machine has reached
         ``DONE`` with a setpoint of zero in force. So everything this rule
         caught while a session ran, it still catches, at the same instant: a
-        phase that never advanced, a descent that never finished (a latched
-        ``FREEZE`` holds the setpoint past the end of the timeline, and this
-        ``RAMP_DOWN`` outranks it), a recovery pushed past the deadline by an
-        ending opened late (a STOP, an e-stop, a verdict that stops). A verdict
-        raised then is acknowledged once that session is over, and the
-        acknowledgement holds, because the condition is no longer true.
+        phase that never advanced, a descent that never finished (a runtime
+        gone silent keeps a setpoint it can no longer take back; a latched
+        ``FREEZE`` is no longer such a case, the runtime follows a programme's
+        planned descent under it, ANH-189), a recovery pushed past the
+        deadline by an ending opened late (a STOP, an e-stop, a verdict that
+        stops). A verdict raised then is acknowledged once that session is
+        over, and the acknowledgement holds, because the condition is no
+        longer true.
         """
         limits = self._limits
         deadline = Seconds(observation.total_duration + limits.overrun_grace)
@@ -2639,6 +2641,12 @@ class SafetySupervisor:
         ``GO_SILENT`` at the longer gap is the one action that does not depend
         on this process working correctly, which is the right answer to "this
         process has demonstrated that it may not be".
+
+        The sentence of the ``FREEZE`` level is written once, here, and the
+        operator reads it for as long as the latch stands. So it says what is
+        true for that long: the setpoint is held, and the two things the
+        runtime follows under a ``FREEZE`` still bring it down, a stop
+        somebody asked for (ANH-175) and a programme's own descent (ANH-189).
         """
         gap = self._tick_gap
         if gap is None:
@@ -2657,7 +2665,10 @@ class SafetySupervisor:
             consequence = "no further writes will be sent; the drive's ttO timeout stops it"
         else:
             action = SafetyAction.FREEZE
-            consequence = "the setpoint is held where it was"
+            consequence = (
+                "the setpoint is held where it was (it still comes down on a stop asked "
+                "for, and on the programme's own descent)"
+            )
         return SafetyVerdict(
             action=action,
             rule=RULE_LOOP_STALL,

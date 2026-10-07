@@ -142,8 +142,10 @@ for the arm to come down - an operator's STOP at the console or from the site,
 any ending already begun, a manual target of zero - the setpoint walks to zero
 at the motion limits from the next tick, under a FREEZE exactly as with no
 verdict (:meth:`TrainingRuntime._stop_under_freeze`), and a FREEZE that appears
-during that walk does not pause it. With no such request the FREEZE arm is
-what it was, and every stronger verdict still decides first.
+during that walk does not pause it. A programme asks for the same thing by
+itself when its timeline enters COOLDOWN, and is followed the same way, from
+that tick (ANH-189). With no such request the FREEZE arm is what it was, and
+every stronger verdict still decides first.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -2871,7 +2873,8 @@ class TrainingRuntime:
                 await self._follow_controller(now, allow_increase=True, cap=None)
             case SafetyAction.FREEZE if self._stop_asked():
                 # A FREEZE holds a speed somebody still wants. It never holds
-                # one the operator has asked to bring down (ANH-175).
+                # one the operator has asked to bring down (ANH-175), nor one
+                # the programme itself is bringing down (ANH-189).
                 await self._stop_under_freeze(now, previous)
             case SafetyAction.FREEZE:
                 # Hold the last commanded speed and do not consult the controller
@@ -2942,16 +2945,21 @@ class TrainingRuntime:
         setpoint that is already zero, and nothing else touches one outside
         an ending.
 
-        Not asked: a programme's own cooldown on its timeline, with no ending.
-        Under a FREEZE that one is still held, as before (ANH-175 is about a
-        stop somebody requested, and leaves the rest of a FREEZE alone).
+        Or asked by the programme itself (ANH-189): from the entry into
+        ``COOLDOWN`` its timeline wants the arm down, and no phase after that
+        one asks for speed again (:func:`motion_is_over`, the test
+        :meth:`_note_standstill` already reads to call that zero the
+        programme's own). A FREEZE is there to keep a speed somebody still
+        wants from being raised or regulated; from there on nobody wants one.
+        An ending always shows one of those phases too, and a manual session
+        shows one only while it is ending.
 
         With the setpoint already at zero there is nothing to bring down, and
         the hold arm keeps it there exactly as it always has.
         """
         if self._applied_rpm == 0:
             return False
-        if self._ending is not None:
+        if self._ending is not None or motion_is_over(self._phase):
             return True
         return self._manual is not None and self._manual_target == 0
 
@@ -2978,6 +2986,8 @@ class TrainingRuntime:
         zero at ``RuntimeLimits.slew``; with the shipped limits that demand
         runs ahead and the motion limits are what binds, so the two descents
         are the same, and this one is never faster than the motion limits.
+        It is therefore also the walk of that cooldown itself when the
+        timeline reaches it, or goes on with it, under a FREEZE (ANH-189).
 
         The time base. The hold arm leaves the profiler none, and a REDUCE on
         a programme walks its own ramp and leaves a stale one. Followed

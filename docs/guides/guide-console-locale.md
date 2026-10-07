@@ -29,6 +29,10 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > simulation et de mesures sur le banc d'essai logiciel. Il n'a pas été rejoué dans un
 > navigateur et n'a pas de capture.
 >
+> L'ajout du 7 octobre 2026 sur le retour au calme d'un programme pendant un gel (§4,
+> §11, ticket ANH-189) vient du code et des tests automatiques sur la console en
+> simulation. Il n'a pas été rejoué dans un navigateur et n'a pas de capture.
+>
 > Les ajouts du 7 octobre 2026 sur l'affichage décrivent ce que la page affiche de
 > plus : la note de la carte Mode MANUEL qui suit la réponse de la machine, l'encadré
 > `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE`, les bandeaux `ARRET D'URGENCE NON
@@ -348,7 +352,7 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `EN ROTATION` (orange) | le bras tourne |
 | | `VITESSE INCONNUE` (rouge) | le variateur n'a pas été lu récemment : **ne jamais lire « arrêté »** |
 | **Securite** | `none` (vert) | aucune règle ne demande rien |
-| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse. Si elle n'est pas verrouillée (ligne `verrouille` à `non`, page Securite), elle **se lève seule** quand sa cause disparaît, et la vitesse **remonte alors sans aucun clic** vers la cible ou vers ce que demande le programme, tant que le bras tourne. Un bandeau orange **REPRISE AUTOMATIQUE POSSIBLE** le dit en haut de toutes les pages tant que c'est le cas (§11). Si un `reduce` amène la vitesse commandée à 0, la séance est terminée (`session_standstill`, §11) : rien ne repart. Un `freeze` tient la vitesse, pas un arrêt demandé : **STOP**, ou une cible manuelle remise à 0, **fait baisser la vitesse même quand la pastille dit `freeze`** (§13.5) |
+| | `freeze`, `reduce` (orange) | une règle gèle ou réduit la vitesse. Si elle n'est pas verrouillée (ligne `verrouille` à `non`, page Securite), elle **se lève seule** quand sa cause disparaît, et la vitesse **remonte alors sans aucun clic** vers la cible ou vers ce que demande le programme, tant que le bras tourne. Un bandeau orange **REPRISE AUTOMATIQUE POSSIBLE** le dit en haut de toutes les pages tant que c'est le cas (§11). Si un `reduce` amène la vitesse commandée à 0, la séance est terminée (`session_standstill`, §11) : rien ne repart. Un `freeze` tient la vitesse, pas un arrêt demandé : **STOP**, ou une cible manuelle remise à 0, **fait baisser la vitesse même quand la pastille dit `freeze`** (§13.5). Il ne retient pas non plus la fin prévue d'un programme : à partir de la phase `cooldown`, la vitesse commandée descend même si la pastille dit `freeze` (§11) |
 | | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle termine la séance : arrêt en douceur (`ramp_down`), arrêt d'urgence (`quick_stop`), ou arrêt définitif pour ce processus (`go_silent`). Avec le `ramp_down` de la règle `session_standstill`, la vitesse commandée est déjà à 0 quand la pastille passe au rouge et la vitesse mesurée suit. Dans tous les cas, c'est Rotation qui dit que le bras est arrêté |
 | **Console** | `mouvement actif` (orange) | la console peut commander le moteur (cas normal aujourd'hui) |
 | | `LECTURE SEULE` | la console refuse tout mouvement (n'arrive pas avec la console actuelle) |
@@ -881,6 +885,20 @@ sur les pages Seance et Securite seulement ; elle reste écrite sur un bras manu
 pas un bras qui s'arrête. Un STOP, lui, fait baisser la vitesse même quand la pastille
 Securite dit `freeze` (§13.5).
 
+**Pendant un gel, un programme fait quand même son retour au calme.** Un gel `freeze`
+tient la vitesse d'un programme pendant `warmup` et `hold`. Quand le programme arrive à
+sa phase `cooldown`, la vitesse commandée se met à baisser, sur la même rampe douce que
+sans gel, que le gel soit verrouillé ou non. Elle part de la vitesse gelée et ne
+remonte pas. Vous lisez alors : **Mode** `SEANCE`, phase `cooldown`, pastille Securite
+`freeze`, et une vitesse commandée puis mesurée qui baissent ; pas de bandeau
+**REPRISE AUTOMATIQUE POSSIBLE**. La séance se termine ensuite normalement : phase
+`recovery`, puis `REPOS` à la durée prévue, sans rien de plus à acquitter. Un gel
+verrouillé (par exemple `loop_stall`) reste affiché à `REPOS` : acquittez-le par votre
+nom avant la séance suivante (§13.6) ; cet acquittement ne met rien en mouvement. En
+séance manuelle il n'y a pas de retour au calme prévu : pendant un gel, seuls **STOP**
+ou une cible de 0 font baisser la vitesse (§13.5). Vérifié par les tests automatiques
+sur la console en simulation, pas dans un navigateur ni sur la vraie machine.
+
 **Un bras qui s'est arrêté en cours de séance ne repart jamais seul.** Si un `reduce`,
 ou la régulation cardiaque d'une séance programmée, ramène la vitesse commandée à 0
 sans que personne l'ait demandé, la séance est **terminée** au cycle suivant : règle
@@ -928,10 +946,6 @@ Vous pouvez encore voir ce verdict (`ramp_down`, verrouillé, détail
 `the session has run 1830 s against a programme of 1800 s plus 30 s of grace: the phase machine has lost track`)
 **pendant** une séance :
 
-* un gel verrouillé que personne n'acquitte tient le bras en vitesse après la fin du
-  programme, et personne ne demande l'arrêt : la règle fait alors descendre la vitesse,
-  c'est son rôle. N'attendez pas ce moment : **STOP** fait descendre la vitesse tout de
-  suite, même pendant ce gel (§13.5) ;
 * une fin de séance ouverte tard dans un programme (§5) : un STOP, à la console ou
   demandé depuis le site, un E-STOP, ou un arrêt décidé par une règle. Toute fin de
   séance relance une récupération complète ; si elle dépasse la durée prévue de plus
