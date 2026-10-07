@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
+import { machineHeaders } from "./machineAuth.fixtures";
 import type { CurrentUser } from "./lib/auth";
 import {
   ANHEART_CLERK_ORG,
@@ -1766,11 +1767,32 @@ describe("EX-5 what a machine writes inherits the machine's organisation", () =>
       w.t.fetch(path, {
         method,
         headers: {
-          Authorization: `Bearer ${w.machineKey}`,
+          ...machineHeaders(w.machineKey),
           "Content-Type": "application/json",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
+
+    // The contract check comes first: a request that does not announce a
+    // served contract is refused before anything is written.
+    const withoutContract = await w.t.fetch("/api/machine/training/local", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${w.machineKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        localRef: "route-no-contract",
+        kind: "manual",
+        startedAt: NOW,
+        operatorName: "Operator",
+        userId: w.patient,
+      }),
+    });
+    expect(withoutContract.status).toBe(426);
+    expect(await w.t.run((ctx) => ctx.db.query("sessions").collect())).toEqual(
+      [],
+    );
 
     const roster = (await (
       await call("GET", "/api/machine/roster")

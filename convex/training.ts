@@ -746,7 +746,7 @@ export const syncProfiles = internalMutation({
   handler: async (ctx, args) => {
     // What a machine writes inherits the machine's organisation.
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) throw new ConvexError("Machine not found");
+    if (!machine) throw machineError("machine_not_found", "Machine not found");
     const existing = await ctx.db
       .query("machine_profiles")
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
