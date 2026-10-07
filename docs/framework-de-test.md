@@ -1027,7 +1027,13 @@ Le workflow `.github/workflows/ci.yml` s'exécute sur les PR vers `main` et
 actif lorsque le workflow est présent sur la branche par défaut de GitHub.
 Les jobs sont parallèles. Six noms sont exigés par la protection de branche
 de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
-`docs`.
+`docs`. La protection de `main` exige les six mêmes, et les deux branches
+exigent en plus `agent-review/R1`, qui n'est pas un job
+([Lire un échec et relancer](#lire-un-échec-et-relancer)). Ce qui les
+distingue, relevé le 7 octobre 2026 : `develop` exige aussi un historique
+linéaire et une branche à jour, `main` non, pour que la release s'y fusionne
+par un commit de fusion
+([deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main)).
 
 | Job | Contrôles et artefacts |
 |---|---|
