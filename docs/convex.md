@@ -619,6 +619,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
 | `convex/httpRoutes.test.ts` | Les 14 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
+| `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71). |

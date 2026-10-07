@@ -8,6 +8,8 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
+import { submitGestionnaireList } from "@/lib/machineForm";
+import { convexErrorMessage } from "@/lib/training";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -83,6 +85,7 @@ export function MachineFormModal({
   const [copied, setCopied] = useState(false);
 
   const gestionnaires = useQuery(api.users.listGestionnaires);
+  const currentUser = useQuery(api.users.getCurrentUser);
   const createMachine = useMutation(api.machines.createMachine);
   const updateMachine = useMutation(api.machines.updateMachine);
   const assignMachineToGestionnaires = useMutation(
@@ -137,13 +140,20 @@ export function MachineFormModal({
             batchInterval: values.batchInterval,
           },
         });
-        // Update gestionnaire assignments
-        if (values.gestionnaireIds) {
-          await assignMachineToGestionnaires({
-            machineId: machine._id,
-            gestionnaireIds: values.gestionnaireIds as Id<"users">[],
-          });
-        }
+        // The gestionnaire list is an admin-only call. Whether it is made is
+        // decided in lib/machineForm.ts, never here: only for a caller
+        // allowed to choose the gestionnaires, and only when the list
+        // changed. A gestionnaire saving the name or the place never makes it.
+        await submitGestionnaireList({
+          role: currentUser?.role,
+          current: machine.gestionnaires?.map((g) => g._id) ?? [],
+          selected: values.gestionnaireIds as Id<"users">[] | undefined,
+          assign: (gestionnaireIds) =>
+            assignMachineToGestionnaires({
+              machineId: machine._id,
+              gestionnaireIds,
+            }),
+        });
         onOpenChange(false);
         onSuccess?.();
       } else {
@@ -160,8 +170,9 @@ export function MachineFormModal({
         setApiKey(result.apiKey);
       }
     } catch (error) {
+      // The server's own sentence, not the transport wrapping around it.
       form.setError("root", {
-        message: error instanceof Error ? error.message : t("common.error"),
+        message: convexErrorMessage(error, t("common.error")),
       });
     }
   };
