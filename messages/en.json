@@ -24,6 +24,22 @@
     "signOut": "Sign out",
     "signUp": "Sign up"
   },
+  "feedback": {
+    "failed": "The action failed. Try again.",
+    "failedWithReference": "The action failed. Try again. Reference to pass on if the problem persists: {requestId}.",
+    "machineRestored": "Machine restored.",
+    "apiKeyRegenerated": "New API key generated.",
+    "userDeleted": "Account deleted.",
+    "roleUpdated": "Role updated.",
+    "patientCreated": "Patient created.",
+    "patientUpdated": "Patient updated.",
+    "patientsAssigned": "Patients assigned.",
+    "launchRightGranted": "Launch right granted.",
+    "launchRightRevoked": "Launch right revoked.",
+    "physiologySaved": "Physiology saved.",
+    "sessionLaunched": "Session created. It is waiting for the machine to arm it.",
+    "stopRequestSent": "Request sent. This page shows the state of the session."
+  },
   "nav": {
     "dashboard": "Dashboard",
     "machines": "Machines",

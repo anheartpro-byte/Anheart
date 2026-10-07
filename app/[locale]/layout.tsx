@@ -7,6 +7,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { frFR, enUS } from "@clerk/localizations";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { FeedbackToaster } from "@/components/FeedbackToaster";
 import { routing } from "@/i18n/routing";
 import { notFound } from "next/navigation";
 
@@ -73,6 +74,7 @@ export default async function LocaleLayout({
             <ConvexClientProvider>
               <NextIntlClientProvider messages={messages}>
                 {children}
+                <FeedbackToaster />
               </NextIntlClientProvider>
             </ConvexClientProvider>
           </ClerkProvider>

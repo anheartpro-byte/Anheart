@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
@@ -28,7 +29,6 @@ import { AlertCircle, AlertTriangle, Hand, Info, Loader2 } from "lucide-react";
 import {
   MIN_RIDER_AGE,
   armRpm,
-  convexErrorMessage,
   effectiveHrMax,
   formatMinutes,
   readOptionalNumber,
@@ -116,7 +116,7 @@ function LaunchForm({
     api.training.listLaunchRights,
     me && isManager ? { machineId } : "skip",
   );
-  const launch = useMutation(api.training.launchAutoSession);
+  const launch = useMutationWithFeedback(api.training.launchAutoSession);
 
   const [selectedProfile, setSelectedProfile] = useState(
     initialProfileId ?? "",
@@ -237,22 +237,26 @@ function LaunchForm({
     if (!canSubmit || !profile) return;
     setSubmitting(true);
     setError(null);
-    try {
-      const sessionId = await launch({
+    const result = await launch(
+      {
         machineId,
         profileId: profile.profileId,
         userId: riderIsPatient ? (rider as Id<"users">) : undefined,
         totalDurationS:
           parsedMinutes !== null ? Math.round(parsedMinutes * 60) : undefined,
         notes: notes.trim() || undefined,
-      });
-      onClose();
-      if (onLaunched) onLaunched(sessionId);
-      else router.push(`/dashboard/sessions/${sessionId}/live`);
-    } catch (err) {
-      setError(convexErrorMessage(err, t("common.error")));
+      },
+      { success: t("feedback.sessionLaunched") },
+    );
+    if (!result.ok) {
+      setError(result.message);
       setSubmitting(false);
+      return;
     }
+    const sessionId = result.value;
+    onClose();
+    if (onLaunched) onLaunched(sessionId);
+    else router.push(`/dashboard/sessions/${sessionId}/live`);
   };
 
   return (

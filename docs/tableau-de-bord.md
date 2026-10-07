@@ -15,6 +15,8 @@ ne parle **jamais** directement au Raspberry Pi.
 >   La fraîcheur de l'état en direct (§6) a des tests unitaires, sans
 >   navigateur : `npm run test:site`
 >   ([portée et limites](framework-de-test.md#fraîcheur-de-létat-en-direct-anh-160)).
+>   La même commande exécute les tests du retour des mutations
+>   ([§6](#messages-de-succès-et-déchec)).
 >   La suite navigateur de bout en bout du tableau de bord reste ANH-83.
 >   Le 2 octobre 2026, toutes les pages du tableau de bord
 >   ont été **ouvertes à la main dans un navigateur**, en local, contre le
@@ -479,6 +481,66 @@ Le site ne recalcule aucune mesure : il affiche ce que le Pi envoie. L'âge des
 données, lui, est calculé par le site (« Fraîcheur » plus haut). Voir le
 [glossaire](glossaire.md) pour « zone », « g résultant », « consigne ».
 
+### Messages de succès et d'échec
+
+Aucune **mutation** du site n'échoue en silence. Cela vaut pour les mutations
+seulement : une lecture Convex qui échoue, la copie d'une clé dans le
+presse-papiers ou toute action qui n'écrit rien ne passent pas par ce mécanisme
+et ne sont pas couvertes.
+
+Toute mutation Convex appelée depuis `app/` ou `components/` passe par le hook
+`useMutationWithFeedback` (`hooks/use-mutation-with-feedback.ts`) : il exécute
+la mutation, ne lève jamais d'exception et rend `{ ok: true, value }` ou
+`{ ok: false, message, code, requestId }`. Le message s'affiche en bas à droite
+de l'écran (`components/FeedbackToaster.tsx`, monté dans
+`app/[locale]/layout.tsx`), au-dessus des fenêtres ; il part seul (5 s pour un
+succès, 12 s pour un échec) ou par sa croix.
+
+| Cas | Ce qui s'affiche |
+|---|---|
+| Succès | Le texte fourni par l'appelant, en français ou en anglais (`feedback.*`, `machines.*Success` et `gestionnaires.machinesSaved` dans `messages/*.json`). L'appelant donne un texte, ou une fonction qui le compose à partir de la réponse de la mutation (le décompte de « Machines enregistrées : … »). Une mutation de fond (création de la ligne du compte à l'arrivée sur la page d'accueil) n'en fournit pas, pas plus que la liste des gestionnaires envoyée après une modification de machine : leur succès reste muet, leur échec non. |
+| Échec avec un code stable | La traduction du code si `messages/*.json` contient la clé `errors.<code>`. Le code est lu dans la `ConvexError` du serveur : la chaîne elle-même, ou le champ `code` (à défaut `error`) d'un objet. |
+| Échec avec un texte | Sans traduction du code, le texte du serveur : la chaîne de la `ConvexError`, le champ `message` de l'objet, ou sur un déploiement de développement la ligne « Uncaught Error: … ». Ces textes sont encore en anglais. |
+| Échec masqué | En production, Convex masque le texte d'une erreur qui n'est pas une `ConvexError` (comportement documenté par Convex, pas encore observé sur ce projet). Le site affiche alors « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : {identifiant}. » |
+
+Chaque échec est aussi écrit dans la console du navigateur avec le nom de la
+mutation, son code et l'identifiant de requête Convex, celui qui permet de
+retrouver l'erreur dans les journaux du déploiement.
+
+Les fenêtres et les cartes qui affichaient déjà l'erreur dans un encadré rouge
+(lancement, arrêt, droits de lancement, physiologie, formulaires machine et
+patient, fenêtre « Assigner des machines ») le gardent : il reçoit le même
+message que la notification. De même, trois écrans gardent leur propre
+confirmation durable en plus de la notification : « Machines enregistrées : … »
+sur la fiche d'un gestionnaire, « Machine mise à jour avec succès » sur la fiche
+d'une machine, et le bouton « Enregistré » de la carte Physiologie.
+
+**Arrêter ou annuler une séance** donne un seul message, quel que soit l'état
+que la page affichait : « Demande envoyée. L'état de la séance s'affiche sur
+cette page. » `training.requestStop` répond de la même façon qu'il ait annulé
+une séance en attente, demandé l'arrêt d'une séance active ou trouvé la séance
+déjà finie, et la machine peut avoir armé la séance pendant l'envoi : la page ne
+peut donc pas affirmer « annulée » ou « arrêt demandé ». Ce sont les bandeaux du
+panneau qui disent ce qui s'est passé.
+
+Limites :
+
+- aucune clé `errors.<code>` n'existe encore : les codes stables arrivent côté
+  serveur avec ANH-133 et leurs traductions avec ANH-90 ;
+- `convex/machines.ts` et `convex/users.ts` lèvent des `Error` simples : en
+  production, leurs refus (suppression d'une machine en séance, par exemple)
+  donnent le message masqué ci-dessus, pas leur motif ;
+- le test de bout en bout dans un navigateur (suppression refusée d'une machine
+  en séance) attend l'infrastructure d'ANH-83.
+
+Tests, dans `npm run test:site` : `hooks/use-mutation-with-feedback.test.tsx`
+(succès, erreur codée, erreur brute, erreur masquée, journal),
+`components/training/stop-feedback.test.tsx` (le message d'arrêt est le même
+que la page ait cru la séance en attente, active ou finie) et
+`hooks/no-silent-mutation.test.ts`, qui refuse dans `app/` et `components/` un
+appel direct à `useMutation` ainsi qu'un `catch` vide ou réduit à un
+`console.error` dans un fichier qui appelle une mutation.
+
 ---
 
 ## 7. Lancer le site en local
@@ -519,7 +581,7 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants). **Aucun test dans un navigateur** : la coupure d'une console simulée suivie de 90 s d'attente n'est pas rejouée de bout en bout (ANH-83). |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
 | Fraîcheur et horloge du poste | La fraîcheur est jugée sur l'horloge du navigateur (§6) ; l'écart avec l'heure du serveur n'est ni mesuré ni corrigé. |
 | Statut « En ligne » et « Dernier signal » | Non recalculés à l'horloge (§6) : le statut suit le serveur (jusqu'à 2,5 min), « Dernier signal » ne bouge qu'au prochain changement de donnée. |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |

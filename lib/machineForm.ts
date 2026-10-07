@@ -58,15 +58,18 @@ export function gestionnaireIdsToSubmit<T extends string>(edit: {
  * `assign` is the admin-only `machines.assignMachineToGestionnaires` call. It
  * is made only when the rule above yields a list, so a gestionnaire saving the
  * name or the place never makes it. A refusal of `assign` is not caught here:
- * it reaches the form, which shows it.
+ * it reaches the form, which shows it. The form calls the mutation through
+ * `useMutationWithFeedback`, which reports a refusal in what it returns
+ * rather than by throwing, so the answer of `assign` is handed back: `null`
+ * when the call was not made.
  */
-export async function submitGestionnaireList<T extends string>(edit: {
+export async function submitGestionnaireList<T extends string, Answer>(edit: {
   role: string | undefined;
   current: readonly T[];
   selected: readonly T[] | undefined;
-  assign: (gestionnaireIds: T[]) => Promise<unknown>;
-}): Promise<void> {
+  assign: (gestionnaireIds: T[]) => Promise<Answer>;
+}): Promise<Answer | null> {
   const gestionnaireIds = gestionnaireIdsToSubmit(edit);
-  if (gestionnaireIds === null) return;
-  await edit.assign(gestionnaireIds);
+  if (gestionnaireIds === null) return null;
+  return edit.assign(gestionnaireIds);
 }

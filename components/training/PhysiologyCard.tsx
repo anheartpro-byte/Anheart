@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import {
@@ -16,11 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Check, HeartPulse, Loader2 } from "lucide-react";
-import {
-  convexErrorMessage,
-  effectiveHrMax,
-  readOptionalNumber,
-} from "@/lib/training";
+import { effectiveHrMax, readOptionalNumber } from "@/lib/training";
 
 /**
  * Max heart rate / birth year of a rider, used to vet a programme's zone
@@ -38,7 +34,7 @@ export function PhysiologyCard({
   user: object;
 }) {
   const t = useTranslations();
-  const setPhysiology = useMutation(api.training.setUserPhysiology);
+  const setPhysiology = useMutationWithFeedback(api.training.setUserPhysiology);
 
   const currentHrMax = readOptionalNumber(user, "hrMax");
   const currentBirthYear = readOptionalNumber(user, "birthYear");
@@ -91,19 +87,21 @@ export function PhysiologyCard({
     setSaving(true);
     setError(null);
     setSaved(false);
-    try {
-      await setPhysiology({
+    const result = await setPhysiology(
+      {
         userId,
         ...(dirty.hrMax ? { hrMax: hrMaxValue } : {}),
         ...(dirty.birthYear ? { birthYear: birthYearValue } : {}),
-      });
+      },
+      { success: t("feedback.physiologySaved") },
+    );
+    if (result.ok) {
       setDirty({ hrMax: false, birthYear: false });
       setSaved(true);
-    } catch (err) {
-      setError(convexErrorMessage(err, t("common.error")));
-    } finally {
-      setSaving(false);
+    } else {
+      setError(result.message);
     }
+    setSaving(false);
   };
 
   return (

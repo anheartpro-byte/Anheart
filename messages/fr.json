@@ -24,6 +24,22 @@
     "signOut": "Se déconnecter",
     "signUp": "S'inscrire"
   },
+  "feedback": {
+    "failed": "L'action a échoué. Réessayez.",
+    "failedWithReference": "L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : {requestId}.",
+    "machineRestored": "Machine restaurée.",
+    "apiKeyRegenerated": "Nouvelle clé API générée.",
+    "userDeleted": "Compte supprimé.",
+    "roleUpdated": "Rôle mis à jour.",
+    "patientCreated": "Patient créé.",
+    "patientUpdated": "Patient mis à jour.",
+    "patientsAssigned": "Patients assignés.",
+    "launchRightGranted": "Droit de lancement accordé.",
+    "launchRightRevoked": "Droit de lancement retiré.",
+    "physiologySaved": "Physiologie enregistrée.",
+    "sessionLaunched": "Séance créée. Elle attend que la machine l'arme.",
+    "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page."
+  },
   "nav": {
     "dashboard": "Tableau de bord",
     "machines": "Machines",

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
@@ -70,7 +71,7 @@ export default function PatientDetailPage({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const deleteUser = useMutation(api.users.deleteUser);
+  const deleteUser = useMutationWithFeedback(api.users.deleteUser);
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -78,12 +79,11 @@ export default function PatientDetailPage({
     currentUser?.role === "admin" || currentUser?.role === "gestionnaire";
 
   const handleDelete = async () => {
-    try {
-      await deleteUser({ userId: patientId });
-      router.push("/dashboard/patients");
-    } catch (err) {
-      console.error(err);
-    }
+    const result = await deleteUser(
+      { userId: patientId },
+      { success: t("feedback.userDeleted") },
+    );
+    if (result.ok) router.push("/dashboard/patients");
   };
 
   if (patient === undefined || currentUser === undefined) {

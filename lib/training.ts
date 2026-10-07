@@ -1,4 +1,3 @@
-import { ConvexError } from "convex/values";
 /**
  * Frontend helpers for centrifuge training sessions.
  *
@@ -152,16 +151,4 @@ export function readOptionalString(
   if (!(key in obj)) return undefined;
   const value = (obj as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
-}
-
-/** Convex errors arrive as "[CONVEX M(...)] ... Uncaught Error: <msg>\n at ...". */
-export function convexErrorMessage(error: unknown, fallback: string): string {
-  // Training mutations throw ConvexError(message): its data survives production.
-  if (error instanceof ConvexError && typeof error.data === "string") {
-    return error.data;
-  }
-  if (!(error instanceof Error)) return fallback;
-  const match = error.message.match(/Uncaught Error: ([^\n]+)/);
-  if (match) return match[1].trim();
-  return error.message || fallback;
 }

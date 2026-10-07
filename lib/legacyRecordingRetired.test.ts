@@ -78,7 +78,10 @@ describe("the site offers one way to create a session", () => {
   it("calls no mutation of the sessions module", () => {
     // launchAutoSession is the only creation path; a session ends at the
     // machine, or through training.requestStop.
-    expect(matches(/useMutation\(\s*api\.sessions\./)).toEqual([]);
+    // The site calls its mutations through useMutationWithFeedback (ANH-156).
+    expect(matches(/useMutation(?:WithFeedback)?\(\s*api\.sessions\./)).toEqual(
+      [],
+    );
     expect(matches(/\b(createSession|endSession|cancelSession)\b/)).toEqual([]);
   });
 

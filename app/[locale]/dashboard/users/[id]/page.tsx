@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
@@ -69,7 +70,7 @@ export default function UserDetailPage({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const deleteUser = useMutation(api.users.deleteUser);
+  const deleteUser = useMutationWithFeedback(api.users.deleteUser);
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -80,12 +81,11 @@ export default function UserDetailPage({
     (currentUser?.role === "gestionnaire" && user?.role === "user");
 
   const handleDelete = async () => {
-    try {
-      await deleteUser({ userId });
-      router.push("/dashboard/users");
-    } catch (err) {
-      console.error(err);
-    }
+    const result = await deleteUser(
+      { userId },
+      { success: t("feedback.userDeleted") },
+    );
+    if (result.ok) router.push("/dashboard/users");
   };
 
   if (user === undefined || currentUser === undefined) {
