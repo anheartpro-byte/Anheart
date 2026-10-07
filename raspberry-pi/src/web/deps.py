@@ -29,6 +29,7 @@ import asyncio
 import hmac
 import ipaddress
 import logging
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,9 +246,9 @@ class PortLister(Protocol):
     subsystem, and nothing in this process may block the event loop.
     """
 
+    @abstractmethod
     async def list_ports(self) -> tuple[SerialPortInfo, ...]:
         """Candidate ports, best-effort. Must not raise and must not block."""
-        ...
 
 
 #: Where Linux exposes serial devices by a stable name. Preferred over the
@@ -402,19 +403,27 @@ class PresenceView(Protocol):
     """What ``/api/presence`` reads from the camera fail-safe."""
 
     @property
-    def last_decision(self) -> PresenceDecision | None: ...
+    @abstractmethod
+    def last_decision(self) -> PresenceDecision | None:
+        """What the last step decided; ``None`` before the first step."""
 
     @property
-    def monitor(self) -> PresenceMonitor: ...
+    @abstractmethod
+    def monitor(self) -> PresenceMonitor:
+        """The monitor behind the fail-safe."""
 
 
 class SensorSource(Protocol):
     """What ``/api/sensors`` reads: the configured channels and their latest readings."""
 
     @property
-    def kinds(self) -> tuple[SensorKind, ...]: ...
+    @abstractmethod
+    def kinds(self) -> tuple[SensorKind, ...]:
+        """The channels processed, in configuration order."""
 
-    def latest(self) -> Mapping[SensorKind, SensorReading]: ...
+    @abstractmethod
+    def latest(self) -> Mapping[SensorKind, SensorReading]:
+        """The most recent reading of every channel processed so far."""
 
 
 type TokenGuard = Callable[[str | None], Awaitable[None]]

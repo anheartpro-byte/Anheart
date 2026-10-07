@@ -83,6 +83,7 @@ import contextlib
 import logging
 import os
 import signal
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -271,13 +272,21 @@ class EcgClient(Protocol):
     is_connected: bool
     is_acquiring: bool
 
-    async def connect(self, timeout: float = ...) -> bool: ...  # noqa: ASYNC109  # the clients' own signature
+    @abstractmethod
+    async def connect(self, timeout: float = ...) -> bool:  # noqa: ASYNC109  # the clients' own signature
+        """Open the device. Returns whether it opened."""
 
-    async def start_acquisition(self) -> bool: ...
+    @abstractmethod
+    async def start_acquisition(self) -> bool:
+        """Start streaming. Returns whether it started."""
 
-    async def read_samples(self, count: int = ...) -> SampleBatch | None: ...
+    @abstractmethod
+    async def read_samples(self, count: int = ...) -> SampleBatch | None:
+        """The queued samples once at least ``count`` per channel are, else ``None``."""
 
-    async def disconnect(self) -> None: ...
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Stop acquiring if needed and close the device."""
 
 
 @final
@@ -450,9 +459,13 @@ class PanelReporter:
 class WebRunner(Protocol):
     """Serves the page until told to exit."""
 
-    async def serve(self) -> None: ...
+    @abstractmethod
+    async def serve(self) -> None:
+        """Run the server on this loop until it is asked to exit."""
 
-    def request_exit(self) -> None: ...
+    @abstractmethod
+    def request_exit(self) -> None:
+        """Ask the server to finish; :meth:`serve` returns shortly after."""
 
 
 @final

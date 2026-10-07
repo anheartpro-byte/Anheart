@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -98,4 +99,6 @@ class ExchangeLog:
 
 @runtime_checkable
 class ObservableDrive(Protocol):
-    def observe_exchanges(self, log: ExchangeLog) -> None: ...
+    @abstractmethod
+    def observe_exchanges(self, log: ExchangeLog) -> None:
+        """Record every exchange with the drive into ``log`` from now on."""

@@ -27,6 +27,7 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 from __future__ import annotations
 
 import math
+from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Final, NewType, Protocol
@@ -181,6 +182,7 @@ class PresenceSource(Protocol):
     detector process fills; see ``src/presence/README.md``.
     """
 
+    @abstractmethod
     def latest(self) -> PresenceObservation | None:
         """The most recent observation, or ``None`` if there has never been one.
 
@@ -188,7 +190,6 @@ class PresenceSource(Protocol):
         how a frozen camera looks - and the monitor recognises it by its
         unchanged :attr:`PresenceObservation.frame_seq`.
         """
-        ...
 
 
 @unique

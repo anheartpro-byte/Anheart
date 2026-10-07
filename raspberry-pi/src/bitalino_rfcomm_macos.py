@@ -43,6 +43,7 @@ import itertools
 import logging
 import re
 import threading
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -145,23 +146,33 @@ def parse_version(reply: bytes) -> str:
 class ChannelEvents(Protocol):
     """What the native channel reports, on the run-loop thread."""
 
-    def on_open(self, status: int, /) -> None: ...
-    def on_data(self, data: bytes, /) -> None: ...
-    def on_closed(self) -> None: ...
+    @abstractmethod
+    def on_open(self, status: int, /) -> None:
+        """The channel finished opening, with the IOReturn ``status`` of the attempt."""
+
+    @abstractmethod
+    def on_data(self, data: bytes, /) -> None:
+        """``data`` arrived from the device."""
+
+    @abstractmethod
+    def on_closed(self) -> None:
+        """The device closed the channel."""
 
 
 class NativeLink(Protocol):
     """An opened RFCOMM channel. Every call is made on the run-loop thread."""
 
+    @abstractmethod
     def pump(self, seconds: float, /) -> None:
         """Run the thread's run loop for ``seconds``; callbacks fire in here."""
-        ...
 
+    @abstractmethod
     def write(self, data: bytes, /) -> None:
         """Send ``data``. Raises ``OSError`` on failure."""
-        ...
 
-    def close(self) -> None: ...
+    @abstractmethod
+    def close(self) -> None:
+        """Close the channel and the connection to the device."""
 
 
 type NativeOpener = Callable[[str, ChannelEvents], NativeLink]
@@ -454,7 +465,9 @@ def _load_bindings() -> _Bindings:
 class _VarList(Protocol):
     """pyobjc's ``objc.varlist``: a C array of unknown length."""
 
-    def as_buffer(self, count: int, /) -> memoryview: ...
+    @abstractmethod
+    def as_buffer(self, count: int, /) -> memoryview:
+        """The first ``count`` bytes of the array, as a buffer."""
 
 
 def _payload(data: object, length: int) -> bytes | None:

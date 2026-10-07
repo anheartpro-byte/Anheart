@@ -19,6 +19,7 @@ the web layer only renders it. Kept out of both so neither imports the other.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -89,4 +90,6 @@ class PanelStatus:
 class PanelSource(Protocol):
     """Anything that can report a :class:`PanelStatus` now. Synchronous, no I/O."""
 
-    def panel_status(self) -> PanelStatus: ...
+    @abstractmethod
+    def panel_status(self) -> PanelStatus:
+        """The link panel, now."""

@@ -28,6 +28,7 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import Final, Protocol, assert_never, final
 
 from src.presence.monitor import (
@@ -79,23 +80,37 @@ class RuntimePort(Protocol):
     """
 
     @property
-    def state(self) -> RuntimeState: ...
+    @abstractmethod
+    def state(self) -> RuntimeState:
+        """Where the runtime is in a session's life."""
 
     @property
-    def output_enabled(self) -> bool: ...
+    @abstractmethod
+    def output_enabled(self) -> bool:
+        """The runtime's belief about the output stage."""
 
     @property
-    def manual(self) -> ManualSession | None: ...
+    @abstractmethod
+    def manual(self) -> ManualSession | None:
+        """The manual session as armed, or ``None``."""
 
-    def snapshot(self) -> TelemetrySnapshot: ...
+    @abstractmethod
+    def snapshot(self) -> TelemetrySnapshot:
+        """The last published picture of the session."""
 
-    def request_estop(self, source: str) -> SafetyVerdict: ...
+    @abstractmethod
+    def request_estop(self, source: str) -> SafetyVerdict:
+        """Latch the emergency stop and zero the reference, synchronously."""
 
-    def trip_from_thread(self, rule: str, action: SafetyAction, detail: str = "") -> None: ...
+    @abstractmethod
+    def trip_from_thread(self, rule: str, action: SafetyAction, detail: str = "") -> None:
+        """Raise a safety demand from a thread that is not the control loop."""
 
+    @abstractmethod
     def acknowledge(
         self, operator: str, *, estop_released: bool = False
-    ) -> Result[SafetyAcknowledgement, AcknowledgeRefusal]: ...
+    ) -> Result[SafetyAcknowledgement, AcknowledgeRefusal]:
+        """Clear the latched verdicts, or refuse and say why."""
 
 
 def motion_state(runtime: RuntimePort, standstill: MotorRpm = STANDSTILL_RPM) -> MotionState:

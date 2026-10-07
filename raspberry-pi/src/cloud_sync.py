@@ -66,6 +66,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -171,13 +172,15 @@ type Document = Mapping[str, object]
 class CloudTransport(Protocol):
     """GET and POST against the dashboard's machine API. Never raises."""
 
+    @abstractmethod
     async def get(
         self, path: str, params: Mapping[str, str] | None = None
-    ) -> Result[Document, CloudError]: ...
+    ) -> Result[Document, CloudError]:
+        """GET ``path`` with ``params``. The answered document, or why there is none."""
 
-    async def post(
-        self, path: str, body: Mapping[str, JsonValue]
-    ) -> Result[Document, CloudError]: ...
+    @abstractmethod
+    async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        """POST ``body`` to ``path``. The answered document, or why there is none."""
 
 
 def _parse_document(text: str) -> Document | None:
@@ -294,24 +297,36 @@ class StartedSession:
 class SessionListener(Protocol):
     """What the panel calls after it has acted on a start. Never blocks, never raises."""
 
-    def session_started(self, started: StartedSession) -> None: ...
+    @abstractmethod
+    def session_started(self, started: StartedSession) -> None:
+        """A session has just been armed."""
 
-    def start_refused(self, cloud_session_id: str, detail: str) -> None: ...
+    @abstractmethod
+    def start_refused(self, cloud_session_id: str, detail: str) -> None:
+        """The launch ``cloud_session_id`` was refused; ``detail`` says why."""
 
 
 class RuntimeView(Protocol):
     """The four things the link reads from the runtime."""
 
     @property
-    def state(self) -> RuntimeState: ...
+    @abstractmethod
+    def state(self) -> RuntimeState:
+        """Where the runtime is in a session's life."""
 
     @property
-    def end_reason(self) -> EndReason | None: ...
+    @abstractmethod
+    def end_reason(self) -> EndReason | None:
+        """Why the session ended, or ``None`` while it has not."""
 
     @property
-    def stop_reason(self) -> str | None: ...
+    @abstractmethod
+    def stop_reason(self) -> str | None:
+        """The reason given by the first operator stop request, or ``None``."""
 
-    def snapshot(self) -> TelemetrySnapshot: ...
+    @abstractmethod
+    def snapshot(self) -> TelemetrySnapshot:
+        """The last published picture of the session."""
 
 
 # =========================================================================

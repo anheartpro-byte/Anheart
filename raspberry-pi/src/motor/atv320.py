@@ -112,6 +112,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from abc import abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -206,21 +207,21 @@ class ModbusMaster(Protocol):
     PDU; typing it as ``object`` forces the narrowing reality requires.
     """
 
+    @abstractmethod
     def connect(self) -> bool:
         """Open the serial port. ``False`` means it did not open."""
-        ...
 
+    @abstractmethod
     def close(self) -> None:
         """Release the serial port."""
-        ...
 
+    @abstractmethod
     def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:
         """Modbus function 3."""
-        ...
 
+    @abstractmethod
     def write_register(self, address: int, value: int, slave: int = 1) -> object:
         """Modbus function 6."""
-        ...
 
 
 WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
