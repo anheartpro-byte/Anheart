@@ -483,7 +483,10 @@ données, lui, est calculé par le site (« Fraîcheur » plus haut). Voir le
 
 ### Messages de succès et d'échec
 
-Aucune action du site n'échoue en silence.
+Aucune **mutation** du site n'échoue en silence. Cela vaut pour les mutations
+seulement : une lecture Convex qui échoue, la copie d'une clé dans le
+presse-papiers ou toute action qui n'écrit rien ne passent pas par ce mécanisme
+et ne sont pas couvertes.
 
 Toute mutation Convex appelée depuis `app/` ou `components/` passe par le hook
 `useMutationWithFeedback` (`hooks/use-mutation-with-feedback.ts`) : il exécute
@@ -512,6 +515,14 @@ confirmation durable en plus de la notification : « Machines enregistrées : �
 sur la fiche d'un gestionnaire, « Machine mise à jour avec succès » sur la fiche
 d'une machine, et le bouton « Enregistré » de la carte Physiologie.
 
+**Arrêter ou annuler une séance** donne un seul message, quel que soit l'état
+que la page affichait : « Demande envoyée. L'état de la séance s'affiche sur
+cette page. » `training.requestStop` répond de la même façon qu'il ait annulé
+une séance en attente, demandé l'arrêt d'une séance active ou trouvé la séance
+déjà finie, et la machine peut avoir armé la séance pendant l'envoi : la page ne
+peut donc pas affirmer « annulée » ou « arrêt demandé ». Ce sont les bandeaux du
+panneau qui disent ce qui s'est passé.
+
 Limites :
 
 - aucune clé `errors.<code>` n'existe encore : les codes stables arrivent côté
@@ -523,7 +534,9 @@ Limites :
   en séance) attend l'infrastructure d'ANH-83.
 
 Tests, dans `npm run test:site` : `hooks/use-mutation-with-feedback.test.tsx`
-(succès, erreur codée, erreur brute, erreur masquée, journal) et
+(succès, erreur codée, erreur brute, erreur masquée, journal),
+`components/training/stop-feedback.test.tsx` (le message d'arrêt est le même
+que la page ait cru la séance en attente, active ou finie) et
 `hooks/no-silent-mutation.test.ts`, qui refuse dans `app/` et `components/` un
 appel direct à `useMutation` ainsi qu'un `catch` vide ou réduit à un
 `console.error` dans un fichier qui appelle une mutation.
@@ -568,7 +581,7 @@ Pièges :
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
-| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants ; retour des mutations : hook et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
+| Tests du site | Unitaires seulement, sans navigateur : `npm run test:ecg` (règles de `lib/` extraites des fenêtres, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur de l'état en direct : hook et composants ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses). **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni l'affichage d'un message après une suppression refusée ne sont rejoués de bout en bout (ANH-83). |
 | Fraîcheur et horloge du poste | La fraîcheur est jugée sur l'horloge du navigateur (§6) ; l'écart avec l'heure du serveur n'est ni mesuré ni corrigé. |
 | Statut « En ligne » et « Dernier signal » | Non recalculés à l'horloge (§6) : le statut suit le serveur (jusqu'à 2,5 min), « Dernier signal » ne bouge qu'au prochain changement de donnée. |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |

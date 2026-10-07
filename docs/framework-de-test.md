@@ -1749,6 +1749,11 @@ retour des mutations, chacun une seule fois :
   l'erreur codée (traduite, ou texte du serveur sans traduction), l'erreur
   brute, l'erreur masquée par le serveur et le journal avec l'identifiant de
   requête ;
+- `components/training/stop-feedback.test.tsx` rend le panneau d'entraînement,
+  récupère le bouton de confirmation avec son gestionnaire (le bouton et la
+  fenêtre sont remplacés, faute de DOM) et l'appelle : le message est le même
+  que la page ait cru la séance en attente, active ou finie, y compris quand la
+  machine arme la séance pendant l'envoi, et il n'affirme aucune issue ;
 - `hooks/no-silent-mutation.test.ts` lit les sources de `app/` et
   `components/`, hors tests : il refuse un appel direct à `useMutation`, et
   dans un fichier qui appelle une mutation un `catch` vide ou réduit à des

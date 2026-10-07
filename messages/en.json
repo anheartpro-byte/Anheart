@@ -38,8 +38,7 @@
     "launchRightRevoked": "Launch right revoked.",
     "physiologySaved": "Physiology saved.",
     "sessionLaunched": "Session created. It is waiting for the machine to arm it.",
-    "stopRequested": "Stop request recorded. The session will end when the machine confirms the stop.",
-    "sessionCancelled": "Session cancelled."
+    "stopRequestSent": "Request sent. This page shows the state of the session."
   },
   "nav": {
     "dashboard": "Dashboard",

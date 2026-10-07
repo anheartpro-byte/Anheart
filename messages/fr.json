@@ -38,8 +38,7 @@
     "launchRightRevoked": "Droit de lancement retiré.",
     "physiologySaved": "Physiologie enregistrée.",
     "sessionLaunched": "Séance créée. Elle attend que la machine l'arme.",
-    "stopRequested": "Demande d'arrêt enregistrée. La séance se terminera quand la machine confirmera l'arrêt.",
-    "sessionCancelled": "Séance annulée."
+    "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page."
   },
   "nav": {
     "dashboard": "Tableau de bord",

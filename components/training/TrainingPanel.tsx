@@ -128,13 +128,12 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   const handleStop = async () => {
     setStopping(true);
     setError(null);
+    // One wording for every case: the session may have been armed, or have
+    // ended, since this page last heard of it, and the server does not say
+    // which it found. The panel then shows what really happened.
     const result = await requestStop(
       { sessionId },
-      {
-        success: isPending
-          ? t("feedback.sessionCancelled")
-          : t("feedback.stopRequested"),
-      },
+      { success: t("feedback.stopRequestSent") },
     );
     if (!result.ok) setError(result.message);
     setConfirmOpen(false);
