@@ -1547,26 +1547,23 @@ def check_limits(limits: DriveLimits, ceiling: Hertz) -> Result[DriveLimits, Lim
 
 def describe_violation(violation: LimitViolation) -> str:
     """One operator-facing sentence per refusal, naming the keypad parameter."""
-    detail: str
     match violation:
         case LowSpeedNotZero(low_speed):
-            detail = (
+            return (
                 f"LSP is {low_speed:.1f} Hz, not 0: a zero speed reference would hold the "
                 "motor at LSP instead of stopping it. Set LSP = 0 on the keypad."
             )
         case HighSpeedAboveMaxFrequency(high_speed, max_frequency):
-            detail = (
+            return (
                 f"HSP ({high_speed:.1f} Hz) is above tFr ({max_frequency:.1f} Hz), so HSP is "
                 "not the drive's real speed ceiling. Fix the commissioning on the keypad."
             )
         case HighSpeedAboveCeiling(high_speed, ceiling):
-            detail = (
+            return (
                 f"HSP is {high_speed:.1f} Hz, above the {ceiling:.1f} Hz this installation "
                 "accepts. Lower HSP on the keypad; do not raise the ceiling to match."
             )
-        case _ as unreachable:
-            assert_never(unreachable)
-    return detail
+    raise assert_never(violation)
 
 
 @dataclass(frozen=True, slots=True)

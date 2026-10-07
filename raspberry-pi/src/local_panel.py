@@ -1310,31 +1310,33 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
     sentence is about a session that is running, and next to "start refused"
     it only blurs why.
     """
-    reason: str
+    return f"demarrage refuse : {_start_refusal_reason(refusal)}"
+
+
+def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
+    """Why the start was refused, without the words that say it was."""
     match refusal:
         case AlreadyStarted(state=state):
-            reason = f"la machine est deja {state.value}"
+            return f"la machine est deja {state.value}"
         case NotAttested():
-            reason = "cablage de l'arret d'urgence non atteste"
+            return "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
             said = verdict.detail.removesuffix(SELF_CLEARING)
-            reason = f"verdict {verdict.rule} a acquitter ({said})"
+            return f"verdict {verdict.rule} a acquitter ({said})"
         case LimitsMismatch(threshold=threshold):
-            reason = f"seuil {threshold} different de celui du superviseur"
+            return f"seuil {threshold} different de celui du superviseur"
         case PlanUnusable(detail=detail) | DriveUnavailable(detail=detail):
-            reason = detail
+            return detail
         case DriveParameterRefused():
-            reason = refusal.detail
+            return refusal.detail
         case DrivePrecommanded(output_rpm=rpm):
-            reason = f"variateur deja en marche ({rpm} tr/min), arret demande"
+            return f"variateur deja en marche ({rpm} tr/min), arret demande"
         case DriveInFault(report=report):
             code = "?" if report is None else f"{report.fault.mnemonic}, LFT {report.raw_code}"
-            reason = f"variateur en defaut ({code})"
+            return f"variateur en defaut ({code})"
         case RecordStorageLow():
-            reason = describe_record_storage(refusal)
-        case _ as unreachable:
-            assert_never(unreachable)
-    return f"demarrage refuse : {reason}"
+            return describe_record_storage(refusal)
+    raise assert_never(refusal)
 
 
 def describe_record_storage(refusal: RecordStorageLow) -> str:

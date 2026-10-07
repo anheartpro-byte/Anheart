@@ -50,7 +50,13 @@ from src.control_surface import (
 )
 from src.motor.drive import FaultReport
 from src.panel_status import EcgLinkStatus, PanelStatus
-from src.presence.monitor import Clear, EmergencyStop, RampDown, StartBlocked
+from src.presence.monitor import (
+    Clear,
+    EmergencyStop,
+    PresenceDecision,
+    RampDown,
+    StartBlocked,
+)
 from src.sensors.base import Metric, SensorReading, SensorSpec
 from src.telemetry import EcgWindow, Payload, PayloadKind
 from src.training.plan import PhaseSpan, Program, TrainingProfile
@@ -713,6 +719,22 @@ class RecordsRow:
     records: tuple[RecordRow, ...]
 
 
+def _camera_state(decision: PresenceDecision | None) -> tuple[str, str]:
+    """The camera row's state and its sentence, from the fail-safe's last decision."""
+    match decision:
+        case None:
+            return "waiting", "aucune image encore jugee"
+        case Clear():
+            return "clear", ""
+        case StartBlocked():
+            return "start_blocked", decision.detail
+        case RampDown(verdict=verdict):
+            return "ramp_down", verdict.detail
+        case EmergencyStop(verdict=verdict):
+            return "emergency_stop", verdict.detail
+    raise assert_never(decision)
+
+
 @dataclass(frozen=True, slots=True)
 class CameraRow:
     """``GET /api/camera``: the camera fail-safe, as the Securite page shows it."""
@@ -738,22 +760,7 @@ class CameraRow:
             )
         latched = view.monitor.latched
         rule = None if latched is None else latched.rule
-        decision = view.last_decision
-        state: str
-        detail: str
-        match decision:
-            case None:
-                state, detail = "waiting", "aucune image encore jugee"
-            case Clear():
-                state, detail = "clear", ""
-            case StartBlocked():
-                state, detail = "start_blocked", decision.detail
-            case RampDown(verdict=verdict):
-                state, detail = "ramp_down", verdict.detail
-            case EmergencyStop(verdict=verdict):
-                state, detail = "emergency_stop", verdict.detail
-            case _ as unreachable:
-                assert_never(unreachable)
+        state, detail = _camera_state(view.last_decision)
         return cls(configured=True, camera=camera, state=state, detail=detail, latched_rule=rule)
 
 
