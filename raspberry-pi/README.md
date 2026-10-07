@@ -349,7 +349,7 @@ node.
    ```bash
    curl -X POST "https://your-project.convex.site/api/machine/heartbeat" \
      -H "Authorization: Bearer YOUR_API_KEY" \
-     -H "X-Anheart-Contract: 1.0"
+     -H "X-Anheart-Contract: 1.1"
    ```
 
 ### Data not appearing in dashboard

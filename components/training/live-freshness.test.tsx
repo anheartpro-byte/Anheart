@@ -617,6 +617,32 @@ describe("live view: training panel", () => {
     });
   });
 
+  describe("a session the machine reads back from its local record", () => {
+    it("never shows as current the minutes a console sends again after a restart", () => {
+      // A session at the machine: link lost at 3 min, console killed at 5 min,
+      // link back at 8 min. The server receives now what was measured between
+      // 3 and 5 min, and serves both dates.
+      const interrupted = { origin: "local", startedAgoMs: 8 * 60_000 };
+      session(
+        "active",
+        { receivedAgoMs: 0, measuredAgoMs: 3 * 60_000 + 1000 },
+        interrupted,
+      );
+      expectNotOfNow(paint(panel));
+      // Nothing follows: a console that was killed measures no more.
+      expectNotOfNow(paintAfter(TELEMETRY_FRESH_MS - 1000, panel));
+      elapse(1000);
+      expectSilent(paint(panel));
+    });
+
+    it("does not show a session as heard again when its last batch is sent twice", () => {
+      // The second sending stores nothing: the server still serves the dates
+      // of the first, 40 s ago.
+      session("active", { receivedAgoMs: 40_000, measuredAgoMs: 40_000 });
+      expectSilent(paint(panel));
+    });
+  });
+
   describe("when the machine's clock is right", () => {
     it("shows the values of a session that sends, measured a second before they arrive", () => {
       session("active", { receivedAgoMs: 4000, measuredAgoMs: 5000 });

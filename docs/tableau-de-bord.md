@@ -461,8 +461,9 @@ Une machine qui se tait n'envoie plus rien : aucune donnée ne change, donc
 aucune query Convex ne se relance. Le site ne peut pas attendre un changement de
 donnée pour dire qu'un état est périmé. Il le recalcule lui-même **chaque
 seconde**, sur l'**horloge du serveur**. L'heure du poste ne date rien. Celle
-du Pi ne sert qu'à une chose, sur le panneau d'entraînement : dire quand un
-point a été mesuré, en plus de sa réception datée par le serveur.
+du Pi non plus : le serveur place lui-même sur son horloge le début d'une
+séance et la mesure de chaque point, à partir du temps écoulé que la machine
+compte ([convex.md, Deux horloges](convex.md#deux-horloges)).
 
 - **Le serveur date ce qu'il reçoit.** L'état d'une machine
   (`live.updatedAt`) et son dernier signal (`lastHeartbeat`) sont datés par
@@ -472,8 +473,10 @@ point a été mesuré, en plus de sa réception datée par le serveur.
   écrit) ; tant qu'aucun point n'est arrivé, c'est le début de la séance daté
   par le serveur (pour une séance démarrée à la console : son enregistrement
   par le serveur, pas le `startedAt` envoyé par le Pi). Avec lui vient
-  `lastMeasuredAt` : le `t` de ce même point, la date de mesure selon le Pi
-  (voir « Panneau d'entraînement » plus bas).
+  `lastMeasuredAt` : la date de mesure de ce même point, c'est-à-dire son `t`
+  placé par le serveur sur son horloge (voir « Panneau d'entraînement » plus
+  bas). Pour une séance dont la machine n'a donné aucune date de début
+  (console antérieure au contrat 1.1), c'est le `t` tel que le Pi l'a écrit.
 - **Chaque réponse porte l'horloge du serveur.** `getMachineLive`,
   `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`
   et `getMachinesForGestionnaire` renvoient `serverNow` : l'heure du serveur au
@@ -600,7 +603,8 @@ serveur, au seuil de la télémétrie : 20 s (`TELEMETRY_FRESH_MS`,
 1. **sa réception** (`lastSignalAt`, que `getTrainingSession` renvoie avec la
    séance) : la date à laquelle le serveur l'a reçu, ou le début de la séance
    daté par le serveur tant qu'aucun point n'est arrivé ;
-2. **sa mesure** (`lastMeasuredAt`, le `t` que le Pi a écrit dans le point) :
+2. **sa mesure** (`lastMeasuredAt`, le `t` du point placé sur l'horloge du
+   serveur) :
    moins de 20 s avant l'heure du serveur, et pas plus de 5 s **après** sa
    propre réception (`FUTURE_TOLERANCE_MS`, `datedAfterReception` : un point
    n'est pas mesuré après avoir été reçu ; une telle date vient d'une horloge

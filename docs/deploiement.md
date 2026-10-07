@@ -317,6 +317,48 @@ valeur absente se lit `undefined`), sans nom ni adresse.
 Cette requête n'a été exécutée sur aucun déploiement. Sa logique a été
 exercée en mémoire, sur des données de test.
 
+### 3.6 Ce que demande la synchronisation par relecture du journal
+
+Le contrat machine passe de `1.0` à `1.1`
+([convex.md](convex.md#ce-que-chaque-mineure-ajoute)). Rien de ce qui suit n'a
+été poussé sur un déploiement : tout a été vérifié en mémoire, avec
+`convex-test`.
+
+**Ce que le schéma gagne, et rien d'autre.**
+
+| Ajout | Effet sur les données déjà là |
+|---|---|
+| Table `training_events`, index `by_session_and_seq` et `by_organization` | Aucun : la table est neuve. |
+| Champ facultatif `sessions.machineStartedAt` | Aucun : les séances existantes ne l'ont pas, et le schéma l'accepte. Une séance enregistrée par une machine avant ce champ est lue avec la date qu'elle porte déjà dans `startedAt`. |
+
+Aucun champ existant ne change de type, aucun index n'est ajouté à une table
+existante (`training_telemetry.by_session_and_t` existait déjà), aucune
+migration n'est à lancer pour ce changement. `convex deploy` valide le schéma
+contre les données présentes et refuse le tout sans rien modifier s'il trouve
+un document non conforme.
+
+**Ce qui change pour ce qui est déjà stocké.**
+
+- `storeTelemetry` n'écrit plus deux fois le même point. Les doublons déjà
+  présents (un lot renvoyé sous l'ancien code) **restent** : rien ne les
+  retire, et un point présent deux fois est simplement compté déjà reçu s'il
+  est envoyé de nouveau.
+- Les dates des séances existantes ne bougent pas. Les séances créées après
+  le déploiement sont datées par le serveur
+  ([convex.md, Deux horloges](convex.md#deux-horloges)).
+- La table `training_events` est dans la liste de la migration
+  multi-organisation (`MACHINE_TABLES`) : des événements reçus avant cette
+  migration suivent l'organisation de leur machine quand elle tourne.
+
+**Ordre.** Ce changement est une mineure : il ne demande pas l'ordre de la
+[section 3.4](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite),
+qui vaut pour un changement de majeure. Une console restée en `1.0` fonctionne
+sans changement avec ce Convex : même corps, mêmes statuts, des champs de plus
+dans des réponses qu'elle ne lit pas.
+
+**Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
+arguments et la forme de leurs réponses : le site n'a rien à changer.
+
 ---
 
 ## 4. Essai de bout en bout du 1er octobre 2026

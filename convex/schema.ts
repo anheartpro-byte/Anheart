@@ -292,6 +292,12 @@ export default defineSchema({
     subjectLabel: v.optional(v.string()),
     operatorName: v.optional(v.string()),
     localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
+    // The start as the machine dated it, on its own clock (unix ms). The
+    // telemetry and the events of the session are dated on that same clock:
+    // with `startedAt`, which the server dates, it is what places them on the
+    // server's clock (`convex/training.ts`, `machineAxis`). Absent on a
+    // session whose machine never said it.
+    machineStartedAt: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),
     endReason: v.optional(v.string()),
   })
@@ -356,12 +362,14 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_session", ["sessionId"]),
 
-  // Training telemetry, ~1 Hz, from the Pi's TelemetrySnapshot.
+  // Training telemetry, ~1 Hz, as the Pi reads it back from the session's
+  // local record. One row per (sessionId, t): a point sent twice is stored
+  // once (`storeTelemetry`).
   training_telemetry: defineTable({
     organizationId, // Always the session's organisation
     sessionId: v.id("sessions"),
     machineId: v.id("machines"),
-    t: v.number(), // unix ms, Pi clock
+    t: v.number(), // unix ms on the machine's clock: the session's start as it dated it, plus the time elapsed
     elapsedS: v.number(),
     phase: v.string(),
     bpm: v.optional(v.number()), // absent = no fresh trustworthy HR
@@ -372,6 +380,24 @@ export default defineSchema({
     safetyAction: v.string(),
   })
     .index("by_session_and_t", ["sessionId", "t"])
+    .index("by_organization", ["organizationId"]),
+
+  // Events of a training session (verdicts, refusals, phases, drive faults,
+  // remote commands, preflight, warnings, the end), as the Pi reads them back
+  // from the session's local record. `seq` is the rank of the event in that
+  // record: one row per (sessionId, seq), however many times the machine
+  // sends it (`storeEvents`).
+  training_events: defineTable({
+    organizationId, // Always the session's organisation
+    sessionId: v.id("sessions"),
+    machineId: v.id("machines"),
+    seq: v.number(),
+    t: v.number(), // unix ms on the machine's clock, like `training_telemetry.t`
+    kind: v.string(),
+    detail: v.string(),
+    actor: v.string(), // "system", "remote" or an opaque operator identifier
+  })
+    .index("by_session_and_seq", ["sessionId", "seq"])
     .index("by_organization", ["organizationId"]),
 
   // Machine Heartbeats - For monitoring (can be cleaned up periodically)

@@ -250,7 +250,8 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. |
-| `startedAt`, `endedAt` | ms Unix. |
+| `startedAt`, `endedAt` | ms Unix, **sur l'horloge du serveur** : le site les lit comme des dates du serveur. La façon dont le serveur les obtient d'une machine dont l'horloge peut être fausse est décrite dans [Deux horloges](#deux-horloges). |
+| `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix). Les points et les événements de la séance sont datés sur cette même horloge. Absent quand la machine n'a donné aucune date (lancement du site confirmé par une console antérieure au contrat 1.1) ; une séance enregistrée par une machine avant ce champ porte cette date dans `startedAt`. |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
 | `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
 | `origin` | `remote` (site) \| `local` (machine). |
@@ -266,15 +267,73 @@ Index : `by_user`, `by_machine`, `by_machine_and_status`,
 
 ### `training_telemetry` : télémétrie à 1 Hz
 
-`sessionId`, `machineId`, `t` (ms Unix, horloge du Pi), `elapsedS`, `phase`,
-`bpm` (absent = pas de FC fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`,
-`gLoad`, `safetyAction`. Index `by_session_and_t`.
+`sessionId`, `machineId`, `t`, `elapsedS`, `phase`, `bpm` (absent = pas de FC
+fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`, `gLoad`, `safetyAction`.
+Index `by_session_and_t`.
 
-`t` sert à l'axe des courbes, à l'ordre des points et à dire quand un point a
-été **mesuré** (`lastMeasuredAt`). Il ne dit pas qu'une séance envoie encore :
-la date de **réception** d'un point est le `_creationTime` que Convex donne à
-sa ligne (`lastSignalAt`). Le site exige les deux pour afficher une valeur
-comme actuelle (voir `getTrainingSession`).
+**Une ligne par `(sessionId, t)`.** Un point envoyé une seconde fois (réponse
+perdue, console redémarrée) n'est pas inséré de nouveau : la ligne déjà là
+reste telle qu'elle est, avec la date à laquelle le serveur l'a reçue la
+première fois (`storeTelemetry`).
+
+`t` est une date en ms Unix **sur l'horloge de la machine** : le début de la
+séance tel qu'elle l'a daté, plus le temps écoulé. C'est l'identité du point
+et son rang dans la séance. Les lectures ne le servent pas tel quel :
+`getSessionTelemetry` et `lastMeasuredAt` le placent sur l'horloge du serveur
+(voir [Deux horloges](#deux-horloges)). Il ne dit pas qu'une séance envoie
+encore : la date de **réception** d'un point est le `_creationTime` que Convex
+donne à sa ligne (`lastSignalAt`). Le site exige les deux, mesure et
+réception, pour afficher une valeur comme actuelle (voir `getTrainingSession`).
+
+### `training_events` : événements d'une séance
+
+Les événements de l'enregistrement local d'une séance, tels que la machine les
+relit dans son journal : verdicts, refus, phases, défauts du variateur,
+commandes distantes, pré-vol, avertissements, fin.
+
+`sessionId`, `machineId`, `seq`, `t` (ms Unix sur l'horloge de la machine,
+comme `training_telemetry.t`), `kind`, `detail`, `actor` (`system`, `remote`
+ou un identifiant opaque d'opérateur, jamais un nom). Index
+`by_session_and_seq` et `by_organization`.
+
+`seq` est le rang de l'événement dans l'enregistrement. **Une ligne par
+`(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
+de nouveau (`storeEvents`). Aucune fonction publique ne lit encore cette
+table : la machine l'écrit, les tests la lisent.
+
+### Deux horloges
+
+Un Raspberry Pi n'a pas d'horloge sauvegardée. Démarré sans réseau, il date ce
+qu'il mesure d'une heure fausse, et son horloge est corrigée d'un coup quand
+le réseau revient. C'est un cas ordinaire. Convex ne compare donc jamais
+l'heure d'une machine à la sienne, ni pour accepter un point, ni pour dire
+qu'une mesure est actuelle.
+
+- **La machine date ses mesures sur son propre axe.** Le `t` d'un point ou
+  d'un événement est le début de la séance tel que la machine l'a daté, plus
+  le temps écoulé depuis. Ce début est gardé dans `sessions.machineStartedAt`.
+- **Le serveur date la séance.** `sessions.startedAt` et `endedAt` sont sur
+  l'horloge du serveur. La machine dit depuis combien de temps la séance a
+  commencé, compté sur son horloge monotone (`sessionAgeMs`) : le début est
+  cette durée avant la réception, et l'heure murale de la machine n'est pas
+  lue. Sans `sessionAgeMs` (console antérieure au contrat 1.1, ou qui ne peut
+  plus le dire), le serveur garde la date écrite par la machine ; si cette
+  date est antérieure au 1er janvier 2024 (`EARLIEST_MACHINE_DATE_MS` : une
+  horloge jamais réglée), il date la séance à sa déclaration.
+- **Le décalage entre les deux** (`startedAt - machineStartedAt`) place toute
+  date de la machine sur l'horloge du serveur : le `t` servi par
+  `getSessionTelemetry` (et son `sinceT`), `lastMeasuredAt`, et `endedAt`.
+  Une séance d'une machine datée de 1970 s'affiche à la date du serveur, et
+  ses mesures en direct se lisent comme mesurées maintenant.
+- **Une séance sans axe machine** (lancement du site confirmé par une console
+  qui n'envoie aucune date) : rien n'est décalé, ses dates sont servies comme
+  la machine les a écrites.
+
+Ce que cela ne fait pas : après un redémarrage **du système** de la machine
+(et non du seul logiciel), la console ne sait plus dire depuis combien de
+temps une séance d'avant le redémarrage a commencé. La date écrite par la
+machine est alors gardée telle quelle si elle est postérieure au 1er janvier
+2024, même fausse de quelques heures ou de quelques jours.
 
 ### Historique de l'ancien mode d'enregistrement ECG (lecture seule)
 
@@ -513,8 +572,8 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` → pose `stopRequestedAt` (une seule fois). Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
-| `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
+| `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Le `t` servi et `sinceT` sont sur l'horloge du serveur ([Deux horloges](#deux-horloges)). |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure : son `t`, placé sur l'horloge du serveur ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (envoi après une coupure ou un redémarrage). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
 
@@ -550,14 +609,15 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
 | `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax}`. |
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine, au format attendu par le Pi. |
-| `markTrainingStarted` | `pending` → `active`, `startedAt` = maintenant, machine `in_session`. Refuse une séance d'une autre machine ou non `pending`. |
-| `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
+| `markTrainingStarted` | `pending` → `active`, machine `in_session`. `startedAt` = la réception, ou `sessionAgeMs` plus tôt quand la machine le dit (jamais avant le lancement) ; `machineStartedAt` = la date écrite par la machine, si elle en envoie une. Refuse une séance d'une autre machine ou non `pending`. |
+| `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. La date envoyée par la machine devient `machineStartedAt` ; `startedAt` est daté par le serveur ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. `endedAt` = la date de fin écrite par la machine, placée sur l'horloge du serveur et jamais avant `startedAt` ; la réception si la machine n'en envoie pas ; la date de la machine telle quelle pour une séance sans axe machine. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
 | `getTrainingStatus` | `{status, active, stopRequested}`. |
-| `storeTelemetry` | Insère des points pour la séance (qui doit appartenir à la machine), dans l'organisation de la séance. |
+| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
+| `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. |
 
 Les refus de `markTrainingStarted`, `registerLocalSession`,
-`endTrainingSession` et `storeTelemetry` sont levés par
+`endTrainingSession`, `storeTelemetry` et `storeEvents` sont levés par
 `machineError(code, message)` (`convex/lib/contract.ts`) : la route les
 renvoie avec leur code stable (voir [section 6](#6-routes-http-machine-convexhttpts)).
 
@@ -662,7 +722,7 @@ HTTP n'y existent pas).
 Clé inconnue : **401**
 `{"error": "unauthorized", "message": "Invalid API key"}`.
 
-**Contrat** : chaque route (8 des 9, l'exception suit) exige ensuite l'en-tête
+**Contrat** : chaque route (9 des 10, l'exception suit) exige ensuite l'en-tête
 `X-Anheart-Contract: <majeure.mineure>`, vérifié **après** la clé et avant
 tout traitement, par le même point de passage que l'authentification
 (`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
@@ -685,7 +745,7 @@ listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
 passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
 La suppression (`isDeleted`) ou la désactivation explicite
-(`authenticationEnabled: false`) produit aussi **401**, sur les 9 routes et
+(`authenticationEnabled: false`) produit aussi **401**, sur les 10 routes et
 les deux queries internes d'authentification. Une machine simplement `offline`
 peut envoyer son heartbeat avec une clé valide.
 
@@ -712,7 +772,7 @@ applicatif n'enregistre la clé. Une régénération remplace atomiquement séle
 sel et digest : l'ancienne clé cesse de fonctionner immédiatement. Les champs
 de suppression/désactivation restent inchangés.
 
-**Erreurs** : tout refus des 9 routes machine (les 401 et les 426 compris)
+**Erreurs** : tout refus des 10 routes machine (les 401 et les 426 compris)
 a la forme
 `{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
 d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
@@ -739,10 +799,10 @@ requête) et son code est journalisé ; une absence de réponse devient
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
-| `POST /api/machine/training/start` | `{sessionId}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant |
-| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | une fois par séance démarrée à la machine ; idempotent par `localRef` |
+| `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant (la console n'envoie pas encore les deux champs facultatifs) |
+| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | une fois par séance démarrée à la machine ; idempotent par `localRef` |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
-| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored}` | lots de 300 points max, toutes les 5 s |
+| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored, duplicates, rejected}` | lots de 300 points max, toutes les 5 s |
 | `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | à la fin, après la télémétrie restante |
 
 Détails du contrat :
@@ -777,6 +837,32 @@ Détails du contrat :
   site entre le poll et l'armement), le Pi arrête la séance qu'il vient d'armer.
 - **Fin** : `failed` vaut `false` pour `programme_complete` et `operator_stop`,
   `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`.
+- **Un lot peut être envoyé deux fois.** `training/telemetry` et
+  `training/events` n'écrivent un point (`(sessionId, t)`) ou un événement
+  (`(sessionId, seq)`) qu'une fois. La réponse compte chaque élément du lot
+  dans exactement une case : `stored` (écrit par cet appel), `duplicates`
+  (déjà là, laissé tel quel, avec la date de sa première réception) ou
+  `rejected` (daté hors de la séance, non écrit). Un 200 acquitte donc tout
+  le lot : la machine n'a rien à renvoyer, et renvoyer ne coûte rien.
+- **Pas de limite « données trop anciennes ».** Aucune route d'entraînement
+  ne refuse un point parce qu'il est vieux : une séance d'il y a une semaine
+  s'envoie entière. La seule borne est de cohérence, et elle se lit sur
+  l'horloge **de la machine** : un point ou un événement est écrit si son `t`
+  est entre une minute avant le début que la machine a daté et une minute
+  après la fin (`SESSION_WINDOW_MARGIN_MS`). Pas de borne basse tant que la
+  machine n'a daté aucun début, pas de borne haute tant que la séance n'est
+  pas finie. Hors de ces bornes il est compté `rejected`, sans refuser le
+  lot. L'horloge du serveur n'entre pas dans ce calcul : une machine à
+  l'heure fausse, ou remise à l'heure en cours de séance, ne perd aucun point.
+- **Dates** : `startedAt` (dans `training/local` et `training/start`) est le
+  début tel que la machine l'a daté ; `sessionAgeMs`, facultatif, le temps
+  écoulé depuis, compté sur son horloge monotone. Une valeur qui n'est pas un
+  nombre n'est pas lue. Ce que le serveur en fait : [Deux horloges](#deux-horloges).
+- **Événements** : `seq` entier positif ou nul, `t` nombre, `kind` de 64
+  caractères au plus (minuscules, chiffres, `_`, une lettre d'abord), `detail`
+  de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
+  chiffres, `_` et `-`. Un événement mal formé refuse tout le lot (400
+  `invalid_request`, « Malformed event »), comme un point mal formé.
 - **Réseau perdu** : la séance continue sous le seul superviseur local. La
   télémétrie en attente est bornée à 3600 points (1 h), les plus anciens
   sont jetés d'abord ; 20 séances terminées au plus restent dues.
@@ -786,6 +872,7 @@ Détails du contrat :
 | Méthode et chemin | Rôle |
 |---|---|
 | `GET /api/machine/roster` | `{riders: [{userId, name, hrMax}]}` : patients ayant le droit sur la machine. **Aucun code du Pi ne l'appelle.** |
+| `POST /api/machine/training/events` | Corps `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements max, 2000 caractères de texte par événement), réponse `{stored, duplicates, rejected}`. La séance doit appartenir à la machine. **La console ne l'appelle pas encore** : elle le fera en relisant son enregistrement local. |
 
 ### Routes retirées
 
@@ -847,6 +934,15 @@ celles d'un projet **neuf**.
 
 `npm run dev` lance ensemble Next.js et `convex dev` ; son `predev` exécute
 `convex dev --until-success && convex dashboard` (réseau et compte requis).
+
+### Synchronisation par relecture du journal (contrat 1.1)
+
+Ce code ajoute au schéma la table `training_events` (index
+`by_session_and_seq` et `by_organization`) et le champ facultatif
+`sessions.machineStartedAt`. Rien d'existant ne change de type : un
+déploiement qui contient déjà des données l'accepte sans migration. Ce que le
+redéploiement doit savoir est dans
+[deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal).
 
 ### Migration du retrait de l'ancien mode ECG
 
@@ -1060,7 +1156,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/organizations.test.ts` | D'où viennent l'organisation et le rôle d'un appel : revendications acceptées et refusées, admin Anheart, premier passage d'un compte, et la transition avant et après `ANHEART_ORG_ID`. |
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
-| `convex/httpRoutes.test.ts` | Les 9 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/journalSync.test.ts` | Ce que Convex fait d'une séance que la machine relit dans son enregistrement et envoie, tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles, la borne de cohérence sur l'horloge de la machine, les dates du serveur pour une machine à l'heure fausse (1970, 10 min d'avance), et les deux dates d'un envoi tardif (reçu maintenant, mesuré avant). |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
@@ -1144,7 +1241,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 8 des 9 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre. |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 9 des 10 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre. |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 
@@ -1154,11 +1251,22 @@ un, ou rend obligatoire ce qui ne l'était pas, monte la **majeure** : les deux
 côtés doivent alors être livrés ensemble, et une machine restée sur l'ancienne
 majeure est refusée au lieu d'être comprise de travers.
 
+### Ce que chaque mineure ajoute
+
+| Mineure | Ajouts, tous compatibles |
+|---|---|
+| `1.0` | Le contrat de départ. |
+| `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local`. |
+
+Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
+elle n'envoie aucun des champs ajoutés, ne lit pas ceux de la réponse, et
+n'appelle pas la route des événements.
+
 ### Matrice de compatibilité
 
 | Version du Pi (`raspberry-pi/VERSION`) | Majeure de contrat | Version Convex minimale |
 |---|---|---|
-| `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.0`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
+| `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.1`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
 
 Cette matrice est tenue à jour à chaque release (check-list de
 [release.md](release.md)) : une ligne par version publiée du Pi. Aucune
