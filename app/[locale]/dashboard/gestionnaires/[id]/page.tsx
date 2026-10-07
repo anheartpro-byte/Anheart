@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
@@ -28,7 +29,6 @@ import {
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
 import { useMachineStatusLabel } from "@/components/dashboard/statusLabels";
 import { machineIdsToSave } from "@/lib/gestionnaireMachines";
-import { convexErrorMessage } from "@/lib/training";
 
 export default function GestionnaireDetailPage({
   params,
@@ -54,10 +54,12 @@ export default function GestionnaireDetailPage({
     { gestionnaireId },
   );
 
-  const setGestionnaireMachines = useMutation(
+  const setGestionnaireMachines = useMutationWithFeedback(
     api.machines.setGestionnaireMachines,
   );
-  const assignPatients = useMutation(api.users.assignPatientsToGestionnaire);
+  const assignPatients = useMutationWithFeedback(
+    api.users.assignPatientsToGestionnaire,
+  );
 
   const [showMachineDialog, setShowMachineDialog] = useState(false);
   const [showPatientDialog, setShowPatientDialog] = useState(false);
@@ -136,18 +138,23 @@ export default function GestionnaireDetailPage({
     try {
       // The server sets this gestionnaire's list exactly and touches no other
       // gestionnaire's link.
-      const result = await setGestionnaireMachines({
-        gestionnaireId,
-        machineIds: machineIdsToSave({
-          checked: selectedMachines,
-          listed: listedMachines.map((m) => m._id),
-          linked: gestionnaireMachines.map((m) => m._id),
-        }),
-      });
+      const result = await setGestionnaireMachines(
+        {
+          gestionnaireId,
+          machineIds: machineIdsToSave({
+            checked: selectedMachines,
+            listed: listedMachines.map((m) => m._id),
+            linked: gestionnaireMachines.map((m) => m._id),
+          }),
+        },
+        { success: (saved) => t("gestionnaires.machinesSaved", saved) },
+      );
+      if (!result.ok) {
+        setMachinesError(result.message);
+        return;
+      }
       setShowMachineDialog(false);
-      setMachinesSaved(t("gestionnaires.machinesSaved", result));
-    } catch (error) {
-      setMachinesError(convexErrorMessage(error, t("common.error")));
+      setMachinesSaved(t("gestionnaires.machinesSaved", result.value));
     } finally {
       setSaving(false);
     }
@@ -155,17 +162,15 @@ export default function GestionnaireDetailPage({
 
   const handleSavePatients = async () => {
     setSaving(true);
-    try {
-      await assignPatients({
+    const result = await assignPatients(
+      {
         gestionnaireId,
         patientIds: selectedPatients as Id<"users">[],
-      });
-      setShowPatientDialog(false);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setSaving(false);
-    }
+      },
+      { success: t("feedback.patientsAssigned") },
+    );
+    if (result.ok) setShowPatientDialog(false);
+    setSaving(false);
   };
 
   return (

@@ -238,6 +238,36 @@ describe("ANH-155 submitGestionnaireList", () => {
     ).rejects.toBe(refusal);
   });
 
+  it("ANH-156 hands back a refusal the admin mutation reports without throwing", async () => {
+    // The form's mutations go through useMutationWithFeedback: a refusal is
+    // an answer, not an exception.
+    const refused = { ok: false as const, message: "Unauthorized" };
+    const assign = vi.fn(async () => refused);
+
+    const answer = await submitGestionnaireList({
+      role: "admin",
+      current: ["G1"],
+      selected: ["G2"],
+      assign,
+    });
+
+    expect(answer).toBe(refused);
+  });
+
+  it("ANH-156 hands back null when the admin mutation is not called", async () => {
+    const assign = assignStandIn();
+
+    const answer = await submitGestionnaireList({
+      role: "gestionnaire",
+      current: ["G1"],
+      selected: ["G1"],
+      assign,
+    });
+
+    expect(answer).toBeNull();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("waits for the admin mutation before the form reports success", async () => {
     // Given a mutation that settles only when released.
     let release: () => void = () => undefined;

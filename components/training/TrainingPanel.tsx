@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import {
@@ -37,11 +38,7 @@ import {
   Timer,
 } from "lucide-react";
 import { useFreshness } from "@/hooks/use-freshness";
-import {
-  convexErrorMessage,
-  formatClock,
-  type TelemetryPoint,
-} from "@/lib/training";
+import { formatClock, type TelemetryPoint } from "@/lib/training";
 import {
   SessionKindBadge,
   SessionOriginBadge,
@@ -68,7 +65,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
     sessionId,
     limit: 3600,
   });
-  const requestStop = useMutation(api.training.requestStop);
+  const requestStop = useMutationWithFeedback(api.training.requestStop);
 
   const points: TelemetryPoint[] = telemetry ?? [];
   const last = points.length > 0 ? points[points.length - 1] : null;
@@ -131,15 +128,16 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   const handleStop = async () => {
     setStopping(true);
     setError(null);
-    try {
-      await requestStop({ sessionId });
-      setConfirmOpen(false);
-    } catch (err) {
-      setError(convexErrorMessage(err, t("common.error")));
-      setConfirmOpen(false);
-    } finally {
-      setStopping(false);
-    }
+    // One wording for every case: the session may have been armed, or have
+    // ended, since this page last heard of it, and the server does not say
+    // which it found. The panel then shows what really happened.
+    const result = await requestStop(
+      { sessionId },
+      { success: t("feedback.stopRequestSent") },
+    );
+    if (!result.ok) setError(result.message);
+    setConfirmOpen(false);
+    setStopping(false);
   };
 
   return (

@@ -4,12 +4,12 @@ import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { submitGestionnaireList } from "@/lib/machineForm";
-import { convexErrorMessage } from "@/lib/training";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -72,9 +72,9 @@ export function MachineFormModal({
 
   const gestionnaires = useQuery(api.users.listGestionnaires);
   const currentUser = useQuery(api.users.getCurrentUser);
-  const createMachine = useMutation(api.machines.createMachine);
-  const updateMachine = useMutation(api.machines.updateMachine);
-  const assignMachineToGestionnaires = useMutation(
+  const createMachine = useMutationWithFeedback(api.machines.createMachine);
+  const updateMachine = useMutationWithFeedback(api.machines.updateMachine);
+  const assignMachineToGestionnaires = useMutationWithFeedback(
     api.machines.assignMachineToGestionnaires,
   );
 
@@ -107,42 +107,46 @@ export function MachineFormModal({
   }, [open, machine, form]);
 
   const onSubmit = async (values: MachineFormValues) => {
-    try {
-      if (isEditing) {
-        await updateMachine({
+    const showFailure = (message: string) => form.setError("root", { message });
+    if (isEditing) {
+      const updated = await updateMachine(
+        {
           machineId: machine._id,
           name: values.name,
           location: values.location || undefined,
-        });
-        // The gestionnaire list is an admin-only call. Whether it is made is
-        // decided in lib/machineForm.ts, never here: only for a caller
-        // allowed to choose the gestionnaires, and only when the list
-        // changed. A gestionnaire saving the name or the place never makes it.
-        await submitGestionnaireList({
-          role: currentUser?.role,
-          current: machine.gestionnaires?.map((g) => g._id) ?? [],
-          selected: values.gestionnaireIds as Id<"users">[] | undefined,
-          assign: (gestionnaireIds) =>
-            assignMachineToGestionnaires({
-              machineId: machine._id,
-              gestionnaireIds,
-            }),
-        });
-        onOpenChange(false);
-        onSuccess?.();
-      } else {
-        const result = await createMachine({
+        },
+        { success: t("machines.updateSuccess") },
+      );
+      if (!updated.ok) return showFailure(updated.message);
+      // The gestionnaire list is an admin-only call. Whether it is made is
+      // decided in lib/machineForm.ts, never here: only for a caller
+      // allowed to choose the gestionnaires, and only when the list
+      // changed. A gestionnaire saving the name or the place never makes it.
+      const assigned = await submitGestionnaireList({
+        role: currentUser?.role,
+        current: machine.gestionnaires?.map((g) => g._id) ?? [],
+        selected: values.gestionnaireIds as Id<"users">[] | undefined,
+        assign: (gestionnaireIds) =>
+          assignMachineToGestionnaires({
+            machineId: machine._id,
+            gestionnaireIds,
+          }),
+      });
+      // `assigned` is null when the call was not made: nothing was refused.
+      if (assigned && !assigned.ok) return showFailure(assigned.message);
+      onOpenChange(false);
+      onSuccess?.();
+    } else {
+      const created = await createMachine(
+        {
           name: values.name,
           location: values.location || undefined,
           gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
-        });
-        setApiKey(result.apiKey);
-      }
-    } catch (error) {
-      // The server's own sentence, not the transport wrapping around it.
-      form.setError("root", {
-        message: convexErrorMessage(error, t("common.error")),
-      });
+        },
+        { success: t("machines.createSuccess") },
+      );
+      if (!created.ok) return showFailure(created.message);
+      setApiKey(created.value.apiKey);
     }
   };
 

@@ -1737,6 +1737,37 @@ simulée, attendre 90 s simulées, lire le badge dans un navigateur) attend
 l'infrastructure d'ANH-83. L'écart entre l'horloge du poste et celle du serveur
 n'est pas testé.
 
+### Retour des mutations du site (ANH-156)
+
+`npm run test:site` (voir la section précédente) exécute aussi les tests du
+retour des mutations, chacun une seule fois :
+
+- `hooks/use-mutation-with-feedback.test.tsx` monte le hook sous le vrai
+  fournisseur `next-intl` avec les vrais `messages/fr.json` et
+  `messages/en.json` ; seul `useMutation` de Convex est remplacé. Il couvre le
+  succès (texte fixe, ou composé à partir de la réponse de la mutation),
+  l'erreur codée (traduite, ou texte du serveur sans traduction), l'erreur
+  brute, l'erreur masquée par le serveur et le journal avec l'identifiant de
+  requête ;
+- `components/training/stop-feedback.test.tsx` rend le panneau d'entraînement,
+  récupère le bouton de confirmation avec son gestionnaire (le bouton et la
+  fenêtre sont remplacés, faute de DOM) et l'appelle : le message est le même
+  que la page ait cru la séance en attente, active ou finie, y compris quand la
+  machine arme la séance pendant l'envoi, et il n'affirme aucune issue ;
+- `hooks/no-silent-mutation.test.ts` lit les sources de `app/` et
+  `components/`, hors tests : il refuse un appel direct à `useMutation`, et
+  dans un fichier qui appelle une mutation un `catch` vide ou réduit à des
+  appels `console`. C'est une lecture de texte, pas une analyse du programme :
+  elle ne suit pas une erreur avalée dans un autre fichier ;
+- `lib/machineForm.test.ts` (`npm run test:ecg`, comme tous les tests de
+  `lib/`) vérifie que l'étape « liste des gestionnaires » de la fenêtre machine
+  rend la réponse de la mutation, donc un refus que le hook rapporte sans lever
+  d'exception.
+
+Ces tests ne montent aucune page : l'affichage réel du message et le scénario
+de bout en bout (suppression refusée d'une machine en séance) restent à faire
+dans le job navigateur d'ANH-83.
+
 ### Infrastructure encore dépendante d'autres tickets
 
 Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau

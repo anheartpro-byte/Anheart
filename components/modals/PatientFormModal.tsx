@@ -4,8 +4,8 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
@@ -65,8 +65,8 @@ export function PatientFormModal({
   const t = useTranslations();
   const isEditing = !!patient;
 
-  const createPatient = useMutation(api.users.createPatient);
-  const updatePatient = useMutation(api.users.updatePatient);
+  const createPatient = useMutationWithFeedback(api.users.createPatient);
+  const updatePatient = useMutationWithFeedback(api.users.updatePatient);
 
   const form = useForm<PatientFormValues>({
     resolver: zodResolver(patientSchema),
@@ -91,31 +91,32 @@ export function PatientFormModal({
   }, [open, patient, form]);
 
   const onSubmit = async (values: PatientFormValues) => {
-    try {
-      if (isEditing && patient) {
-        await updatePatient({
-          userId: patient._id,
-          firstName: values.firstName,
-          lastName: values.lastName,
-          language: values.language,
-        });
-        onOpenChange(false);
-        onSuccess?.();
-      } else {
-        await createPatient({
-          firstName: values.firstName,
-          lastName: values.lastName,
-          email: values.email,
-          language: values.language,
-        });
-        onOpenChange(false);
-        onSuccess?.();
-      }
-    } catch (error) {
-      form.setError("root", {
-        message: error instanceof Error ? error.message : "An error occurred",
-      });
+    const result =
+      isEditing && patient
+        ? await updatePatient(
+            {
+              userId: patient._id,
+              firstName: values.firstName,
+              lastName: values.lastName,
+              language: values.language,
+            },
+            { success: t("feedback.patientUpdated") },
+          )
+        : await createPatient(
+            {
+              firstName: values.firstName,
+              lastName: values.lastName,
+              email: values.email,
+              language: values.language,
+            },
+            { success: t("feedback.patientCreated") },
+          );
+    if (!result.ok) {
+      form.setError("root", { message: result.message });
+      return;
     }
+    onOpenChange(false);
+    onSuccess?.();
   };
 
   const handleClose = () => {
