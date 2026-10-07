@@ -231,6 +231,8 @@ class ChannelProcessor:
                 if vh > 0 and 1 - float(np.var(notched)) / vh > 0.6:
                     return "mains_dominated"
         except Exception:
+            # The notch could not be computed: the mains check is skipped, and the
+            # grade rests on the flat-lead and clipping checks above.
             pass
         return "good"
 
