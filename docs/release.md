@@ -15,6 +15,15 @@ machine a le droit de recevoir.
 > déployé nulle part. La règle « une machine ne reçoit qu'une version validée
 > pour son état » est écrite et testée, mais rien ne l'applique encore : voir
 > la [section 2](#2-le-niveau-de-validation-dune-version-du-pi).
+>
+> **Règles de `main` (7 octobre 2026).** Une release, c'est fusionner `develop`
+> dans `main` par un commit de fusion, puis poser les tags. Depuis ce jour, plus
+> rien dans la protection de `main` ne s'y oppose : ni historique linéaire, ni
+> branche à jour, ni vérification Vercel n'y sont exigés. Le relevé des deux
+> branches est dans
+> [deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
+> La fusion elle-même n'a encore été faite que dans les tests du script et en
+> simulation.
 
 Sommaire :
 
@@ -136,18 +145,27 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```
    Le script ouvre la PR `develop` vers `main` avec le modèle
    [`.github/PULL_REQUEST_TEMPLATE/release.md`](../.github/PULL_REQUEST_TEMPLATE/release.md),
-   où il a rempli les versions, le candidat et le changelog. `main` exige une
-   branche à jour : si `main` a reçu un commit que `develop` n'a pas (la PR
-   dédiée des boutons de déploiement, par exemple), GitHub refuse la fusion
-   tant que `develop` ne l'a pas repris. La marche est dans
-   [deploiement.md, section 5.5, étape 5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
-   `main` exigeait aussi deux vérifications Vercel, qui ne répondent plus : les
-   retirer d'abord (même section, étape 4).
+   où il a rempli les versions, le candidat et le changelog. Ce que `main`
+   exige de cette PR, d'après sa protection lue le 7 octobre 2026
+   ([deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main)) :
+   les six gates et `agent-review/R1` réussis sur son commit de tête, qui est
+   la tête de `develop`, et les conversations résolues. `main` n'exige plus ni
+   vérification Vercel, ni historique linéaire, ni branche à jour. Si `main` a
+   reçu un commit que `develop` n'a pas (la PR dédiée des boutons de
+   déploiement, par exemple), `develop` n'a pas à le reprendre : la PR se
+   fusionne tant qu'aucun fichier n'est en conflit (même section, étape 5,
+   voie B).
 5. **Remplir la check-list** de la PR ([section 5](#5-la-check-list-de-release)),
    preuve après preuve. Deux approbations.
-6. **Fusionner par commit de fusion**, jamais en squash ni en rebase : un
-   squash couperait `main` de l'historique de `develop`, et le changelog suivant
-   reprendrait tout depuis le début.
+6. **Fusionner par commit de fusion** (« Create a merge commit » dans GitHub),
+   jamais en squash ni en rebase : un squash couperait `main` de l'historique
+   de `develop`, et le changelog suivant reprendrait tout depuis le début.
+   `main` le permet depuis le 7 octobre 2026 : elle n'exige plus d'historique
+   linéaire. **`develop` n'a pas à reprendre ce commit de fusion**, ni après
+   cette release ni avant la suivante : `main` n'exige pas une branche à jour,
+   et le script calcule le changelog suivant sans que `develop` contienne ce
+   commit ([section 4](#comment-le-changelog-est-construit)). `develop` garde
+   son historique linéaire et ne reçoit aucun commit de fusion.
 7. **Poser les tags** dès que la CI de `main` est verte :
    ```bash
    scripts/release.sh tag
@@ -255,7 +273,7 @@ n'en lance plus pour un commit qui contient `vercel.json`
 ([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
 
 La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Ce sont
-les six noms que la protection de branche exige et que
+les six noms que la protection de `main` et celle de `develop` exigent et que
 `scripts/ci/ci-workflow.test.mjs` tient ; `npm run test:release` échoue si la
 liste du script s'en écarte. Si un job de `.github/workflows/ci.yml` est
 renommé, cette liste doit suivre dans la même PR : sinon le script refuse toute
@@ -311,6 +329,14 @@ première version. Il ne garde que les titres de la forme `ANH-123 : …`, donc
 les fusions squash des PR de ticket. `prepare`, `pr` et `tag` font ce même
 calcul : c'est ce qui permet aux deux derniers de voir qu'une section est en
 retard.
+
+Le tag précédent est posé sur un commit de fusion de `main`, que `develop` ne
+contient pas. Cela suffit : ce commit a pour second parent le commit de
+`develop` qui a été publié, et git écarte du calcul tout ce que le tag
+contient, donc tout ce qui précède ce commit sur `develop`. `develop` n'a pas
+à reprendre le commit de fusion : dans les tests du script elle ne le reprend
+jamais, et la version suivante n'y liste que ce qui a été fusionné depuis le
+tag.
 
 Une PR est rangée sous chaque composant dont elle modifie un fichier :
 

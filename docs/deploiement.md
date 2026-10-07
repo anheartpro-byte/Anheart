@@ -510,11 +510,12 @@ ligne de commande, au nom des comptes de démonstration.
 ### 5.5 Réglages à faire une fois, à la main
 
 Rien de ce qui suit n'est fait par le dépôt, et rien n'en a été fait par
-ANH-198. C'est au chef de projet, dans cet ordre. Les suites de commandes de
-cette section sont déduites des réglages relevés le 7 octobre 2026 ; aucune n'a
-été exécutée sur le dépôt. Seule la fusion du point 5 de la voie B a été
-simulée, sans toucher à aucune branche : elle se fait sans conflit et ne change
-aucun fichier.
+ANH-198. C'est au chef de projet, dans cet ordre. L'étape 4 est faite depuis le
+7 octobre 2026 ; elle reste écrite à sa place, pour que les numéros cités
+ailleurs restent valables. Les suites de commandes de cette section sont
+déduites des réglages relevés le 7 octobre 2026 ; aucune n'a été exécutée sur
+le dépôt. Seules des fusions ont été simulées ce jour-là, sans toucher à aucune
+branche : celle de la release (voie A) et celles de la voie B (son point 5).
 
 **1. Créer les deux environnements GitHub.** Dans le dépôt : **Settings**,
 **Environments**, **New environment**.
@@ -579,19 +580,44 @@ les déploiements suivants, pas celui qui est en ligne. Laisser
 « Config » : le site les fige à la construction, et elles sont publiques par
 nature.
 
-**4. Retirer de la protection de `main` les deux vérifications Vercel.**
-Relevé le 7 octobre 2026 : `main` exige neuf vérifications, administrateurs
-compris, dont les deux que Vercel posait sur chaque commit. Un commit qui
-contient `vercel.json` ne les reçoit plus : elles resteraient en attente pour
-toujours, et **aucune PR vers `main` ne pourrait être fusionnée**, ni la
-première release ni une PR dédiée. Dans le dépôt : **Settings**, **Branches**,
-la règle de `main`, **Edit**, « Require status checks to pass before merging » :
-retirer les deux vérifications dont le nom commence par « Vercel », puis **Save
-changes**. C'est ce qui a été fait sur `develop` le 7 octobre 2026. Garder les
-sept autres : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit`,
-`docs` et `agent-review/R1`. Pour relire la liste :
+**4. Retirer de la protection de `main` les deux vérifications Vercel. Fait le
+7 octobre 2026 : il n'y a plus rien à faire ici.** L'étape garde son numéro,
+que d'autres pages citent.
+
+Ce qui a été fait, et pourquoi. `main` exigeait neuf vérifications, dont les
+deux que Vercel posait sur chaque commit. Un commit qui contient `vercel.json`
+ne les reçoit plus : elles seraient restées en attente pour toujours, et aucune
+PR vers `main` n'aurait pu être fusionnée, ni la première release ni une PR
+dédiée. Elles ont été retirées, comme sur `develop` le même jour. Deux autres
+règles de `main` ont été levées ce jour-là, sur décision du chef de projet
+(une release, c'est fusionner `develop` dans `main`, puis poser les tags ;
+ANH-206) : l'historique linéaire, qui interdisait le commit de fusion de la
+release, et l'obligation d'une branche à jour avec `main`.
+
+Protection des deux branches, lue par l'API de GitHub le 7 octobre 2026, après
+ces changements :
+
+| Règle | `main` | `develop` |
+|---|---|---|
+| PR obligatoire, aucun push direct | oui | oui |
+| Vérifications obligatoires | `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit`, `docs` et `agent-review/R1` | les sept mêmes |
+| Branche à jour avec la branche visée avant la fusion | **non** | oui |
+| Historique linéaire (aucun commit de fusion) | **non** | oui |
+| Approbations exigées par GitHub | 0 | 0 |
+| Conversations résolues | oui | oui |
+| Push forcé, suppression de la branche | interdits | interdits |
+| Règles appliquées aux administrateurs | oui | oui |
+
+Plus aucune vérification Vercel n'est exigée, sur aucune des deux branches. Le
+dépôt permet les trois méthodes de fusion (commit de fusion, squash, rebase) ;
+sur `develop`, l'historique linéaire écarte le commit de fusion. Aucun jeu de
+règles (« ruleset ») ne s'ajoute à ces deux protections. Pour relire, les deux
+protections entières puis la seule liste des vérifications obligatoires de
+`main` :
 
 ```sh
+gh api repos/anheartpro-byte/Anheart/branches/main/protection
+gh api repos/anheartpro-byte/Anheart/branches/develop/protection
 gh api repos/anheartpro-byte/Anheart/branches/main/protection/required_status_checks --jq '.contexts'
 ```
 
@@ -603,16 +629,16 @@ voies.
 
 *Voie A, la plus simple : la première release* (`develop` vers `main`,
 [release.md](release.md#3-le-déroulé)). Elle apporte tout, et les boutons
-n'existent qu'après elle. Pour les boutons, elle ne demande aucun autre réglage
-que l'étape 4.
+n'existent qu'après elle. Elle ne demande aucun réglage de protection de plus :
+l'étape 4 est faite.
 
-**Une réserve, à trancher par le chef de projet avant la première release.**
-[release.md, étape 6](release.md#3-le-déroulé) demande de fusionner la PR de
-release par un commit de fusion. Or `main` exige un historique linéaire (relevé
-le 7 octobre 2026), ce qui interdit un commit de fusion : en l'état, la PR de
-release ne peut pas être fusionnée comme le processus le demande. ANH-198 ne
-règle pas ce point ; il est consigné dans le ticket de suite du processus de
-release. La même réserve vaut pour la release qui suit la voie B.
+La PR de release se fusionne par un commit de fusion, comme le demande
+[release.md, étape 6](release.md#3-le-déroulé) : `main` n'exige plus
+d'historique linéaire, et plus rien dans ses règles ne s'y oppose (étape 4). La
+fusion a été simulée le 7 octobre 2026, sans toucher à aucune branche : elle se
+fait sans conflit et donne exactement les fichiers de `develop`. Aucune PR de
+release n'a encore été ouverte : le geste lui-même, dans GitHub, n'est pas
+essayé.
 
 Une précaution pour cette première fusion : qu'un push sur `main` ne déploie plus
 n'a été constaté que sur des branches de travail. La release apporte le nouveau
@@ -624,14 +650,19 @@ commandes du point 4 de la voie B).
 
 *Voie B : une PR dédiée vers `main`, pour avoir les boutons avant la première
 release.* Elle fait aussi constater sur `main`, avec un commit qui ne change
-pas le site, qu'un push n'y déploie plus. Elle coûte deux changements
-temporaires de protection, chacun fait puis défait : sur `main`, les six gates
-retirées des vérifications obligatoires le temps de fusionner la PR dédiée
-(points 2 et 3) ; sur `develop`, « Require linear history » décoché le temps de
-la fusion qui reprend `main` (point 5). Relevé le 7 octobre 2026 : `main` et
-`develop` exigent toutes deux un historique linéaire et une branche à jour ;
-`main` exige les six gates, qu'aucune branche partie de `main` ne peut faire
-tourner, puisque `main` ne contient pas encore la CI.
+pas le site, qu'un push n'y déploie plus. Elle coûte un changement temporaire
+de protection, fait puis défait : sur `main`, les six gates retirées des
+vérifications obligatoires le temps de fusionner la PR dédiée (points 2 et 3).
+`main` les exige toujours (étape 4), et aucune branche partie de `main` ne peut
+les faire tourner : `main` ne contient pas encore la CI
+(`.github/workflows/ci.yml` n'y est pas, relevé le 7 octobre 2026), si bien
+que rien ne les lance sur une telle branche.
+
+Elle ne coûte plus rien sur `develop`. Tant que `main` exigeait une branche à
+jour, `develop` devait reprendre le commit de la PR dédiée par un commit de
+fusion, ce qui demandait de lever un moment son historique linéaire. `main`
+n'exige plus une branche à jour (étape 4) : `develop` reste telle quelle
+(point 5).
 
 1. Créer la branche à partir de `main`, avec les trois fichiers tels qu'ils
    sont sur `develop`, et ouvrir la PR :
@@ -645,13 +676,16 @@ tourner, puisque `main` ne contient pas encore la CI.
    gh pr create --base main --title "ANH-198 : apporter sur main les boutons de déploiement Vercel" --body "Trois fichiers repris de develop, sans autre changement."
    ```
 
-2. Dans la règle de `main`, retirer **le temps de cette fusion** les six gates
-   des vérifications obligatoires (`pi-gate`, `simulation-gate`,
-   `convex-tests`, `web`, `audit`, `docs`) : elles ne peuvent pas répondre sur
-   cette PR. Garder `agent-review/R1` : l'avis indépendant sur le commit reste
-   exigé.
+2. Dans la règle de `main` (dans le dépôt : **Settings**, **Branches**, la
+   règle de `main`, **Edit**, « Require status checks to pass before
+   merging »), retirer **le temps de cette fusion** les six gates des
+   vérifications obligatoires (`pi-gate`, `simulation-gate`, `convex-tests`,
+   `web`, `audit`, `docs`), puis **Save changes** : elles ne peuvent pas
+   répondre sur cette PR. Garder `agent-review/R1` : l'avis indépendant sur le
+   commit reste exigé.
 3. Fusionner la PR en **squash**, puis **remettre aussitôt les six gates** dans
-   la règle de `main`, et relire la liste avec la commande de l'étape 4.
+   la règle de `main`, et relire la liste avec la dernière commande de
+   l'étape 4.
 4. Deux minutes après la fusion, constater sur le commit obtenu sur `main` que
    Vercel n'a rien lancé. Les deux commandes doivent répondre `0` :
 
@@ -663,44 +697,27 @@ tourner, puisque `main` ne contient pas encore la CI.
 
    Si Vercel a déployé quand même, il a redéployé le site tel qu'il était déjà
    sur `main` : ne pas aller plus loin et le signaler.
-5. Faire reprendre `main` par `develop`. Sans cela `develop` n'est plus à jour
-   avec `main`, et `main` refusera la PR de release. Il y faut un **commit de
-   fusion** : un squash ne relie pas les deux historiques.
+5. Ne rien reprendre dans `develop`, et ne rien changer à sa protection. `main`
+   porte maintenant un commit que `develop` n'a pas ; cela ne gêne plus la
+   release, puisque `main` n'exige pas une branche à jour. À la fusion de la
+   release, les trois fichiers arrivent des deux côtés avec le même contenu.
+   Simulé le 7 octobre 2026, sans toucher à aucune branche : `develop`
+   fusionnée dans un `main` qui porte ce commit, sans conflit, et le résultat a
+   exactement les fichiers de `develop`.
 
-   - Dans la règle de `develop`, décocher **le temps de cette fusion** « Require
-     linear history ».
-   - Préparer la branche. La fusion ne change aucun fichier, puisque les trois
-     fichiers sont les mêmes des deux côtés ; la seconde commande ne doit rien
-     afficher :
-
-     ```sh
-     git fetch origin
-     git switch -c feature/anh-198-reprendre-main-dans-develop origin/develop
-     git merge --no-ff origin/main -m "ANH-198: reprendre dans develop le commit des boutons de déploiement posé sur main"
-     git diff --stat origin/develop HEAD
-     git push -u origin feature/anh-198-reprendre-main-dans-develop
-     gh pr create --base develop --title "ANH-198 : reprendre main dans develop" --body "Commit de fusion sans changement de fichier : develop reprend le commit des boutons posé sur main."
-     ```
-
-   - Une fois la CI verte et l'avis indépendant posé, fusionner cette PR par
-     **« Create a merge commit »**, ni squash ni rebase.
-   - Recocher « Require linear history » sur `develop`.
-   - Vérifier que `develop` contient maintenant `main` :
-
-     ```sh
-     git fetch origin
-     git merge-base --is-ancestor origin/main origin/develop && echo "develop contient main"
-     ```
-
-   À faire juste après l'étape 3 : si les trois fichiers changent sur `develop`
-   avant cette reprise, la fusion donne un conflit, à résoudre en gardant la
-   version de `develop`.
+   Une limite : si l'un des trois fichiers change sur `develop` avant la
+   release, la PR de release est en conflit sur ce fichier (simulé de même :
+   `CONFLICT (add/add)`) et ne peut pas être fusionnée telle quelle. Refaire
+   alors les points 1 à 3, sous un autre nom de branche, pour apporter sur
+   `main` la version du moment : les trois fichiers redeviennent identiques des
+   deux côtés et le conflit disparaît (simulé de même). Le plus simple est de
+   ne pas toucher à ces trois fichiers sur `develop` entre la PR dédiée et la
+   release.
 
 Avec la voie B, `main` ne contient pas encore la simulation hébergée : le
 bouton de production refuse de la déployer (« Simulation absente ») et ne peut
 déployer que le site, tel qu'il est sur `main`. La release qui suit la voie B
-reste soumise à la réserve de la voie A : commit de fusion demandé, historique
-linéaire exigé par `main`.
+se fusionne comme celle de la voie A, par un commit de fusion.
 
 **6. Séparer les variables de l'environnement « Preview » de Vercel**, pour
 qu'une préversion du site ne lise plus les données de production
@@ -1050,7 +1067,7 @@ est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
 | Soumettre les formulaires depuis le navigateur, dans les trois rôles ; en faire des tests automatiques (ANH-83) | Rien. |
 | Comprendre pourquoi l'ECG simulé de la console perd la confirmation quand le bras tourne (section 4) | Rien. |
 | Déployer Convex en production, puis le site par son bouton | Une décision (section 3.3). |
-| Rendre les deux boutons de déploiement utilisables : environnements GitHub, secrets, variables de serveur en type « Secret », protection de `main`, fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 5). |
+| Rendre les deux boutons de déploiement utilisables : environnements GitHub, secrets, variables de serveur en type « Secret », fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 3 et 5 ; l'étape 4, la protection de `main`, est faite depuis le 7 octobre 2026). |
 | Donner aux préversions Vercel les valeurs de développement, puis retirer du bouton de préversion le champ d'accord | Un réglage dans Vercel, puis une PR (section 5.5, étape 6). |
 | Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |
