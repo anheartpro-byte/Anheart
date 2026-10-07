@@ -646,6 +646,10 @@ def _process_cases() -> list[FailureCase]:
         action = {"at_s": at, "do": "loop_stall", "duration_s": stall}
         name = f"process_loop_stall_{kind}"
         over = stall > 3.0  # noqa: PLR2004  # the simulator's ttO
+        # Under ttO the FREEZE latches and the session still ends as it would
+        # have without the stall: a manual one by its own STOP, a programme by
+        # its own end, since its cooldown is followed under the FREEZE.
+        ends_itself = "programme_complete" if kind.startswith("auto") else "operator_stop"
         cases.append(
             FailureCase(
                 name=name,
@@ -655,9 +659,7 @@ def _process_cases() -> list[FailureCase]:
                 document=_auto(name, [action], at=at, duration_s=AUTO_DURATION_S)
                 if kind.startswith("auto")
                 else _manual(name, [action]),
-                end_reasons=VERDICT
-                if over
-                else frozenset({"operator_stop", "programme_complete", "shutdown"}),
+                end_reasons=VERDICT if over else frozenset({ends_itself}),
                 rules=("loop_stall",),
                 messages=(("SLF", "loop_stall") if over else ("loop_stall",)),
                 silent=silent,

@@ -1,0 +1,36 @@
+{
+  "name": "auto_cooldown_under_latched_freeze",
+  "description": "ANH-189, the programme's own descent under a LATCHED FREEZE: the shipped 30-min programme, the control loop stalls 1.4 s in the middle of HOLD (loop_stall, which latches), and nobody asks for a stop. The setpoint is held to the end of HOLD. From the entry into COOLDOWN at 1260 s it must walk down on the ordinary ramp, still under the FREEZE, and the session must be over at its planned 1800 s as a programme run to its end. The verdict is acknowledged at 1840 s, past the 1830 s at which session_overrun judges a session still in progress: that rule must stay silent, and nothing may move.",
+  "tags": [
+    "auto",
+    "fault",
+    "freeze"
+  ],
+  "kind": "auto",
+  "duration_s": 1860,
+  "profile": "standard_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "loop_stall",
+      "duration_s": 1.4
+    },
+    {
+      "at_s": 1840,
+      "do": "acknowledge",
+      "estop_released": false
+    }
+  ],
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "max_output_rpm": 5.55,
+    "rules": [
+      "loop_stall"
+    ],
+    "forbid_rules": [
+      "session_overrun",
+      "session_standstill"
+    ]
+  }
+}

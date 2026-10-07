@@ -88,7 +88,8 @@ est gardé pour cet onglet seulement.
    même alors, le bras tourne encore pendant la décélération. **STOP** demande
    un arrêt progressif. Il agit aussi quand la pastille **Securite** affiche
    « freeze » : la console garde alors la vitesse tant que personne ne demande
-   l'arrêt, mais STOP la fait baisser.
+   l'arrêt et qu'un programme n'est pas arrivé à sa fin prévue (phase
+   « cooldown »), mais STOP la fait baisser.
    Après un clic, regardez le bras et la vitesse mesurée. Si la vitesse ne
    baisse pas après un STOP, l'arrêt logiciel qui reste est **E-STOP**. Si
    elle ne baisse pas après un E-STOP, il ne reste que l'arrêt d'urgence câblé
@@ -769,7 +770,7 @@ la pastille **Securite** change.
 
 | **Securite** affiche | Ce que fait la console | Ce que vous faites |
 |---|---|---|
-| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas, et ne la baisse pas non plus tant que personne ne demande l'arrêt, pas même pour la fin prévue d'un programme (phase « cooldown »). Un **STOP**, ou en séance manuelle une cible de 0, la fait baisser quand même. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. Avant d'acquitter un « freeze » verrouillé, lisez l'avertissement sous ce tableau. |
+| « freeze » | Elle garde la vitesse commandée telle qu'elle est : elle ne la monte pas, et ne la baisse pas non plus tant que personne ne demande l'arrêt et qu'un programme n'est pas arrivé à sa fin prévue. Un **STOP**, ou en séance manuelle une cible de 0, la fait baisser quand même. En séance programmée, à partir de la phase « cooldown », elle la ramène à zéro comme le programme le prévoit, même si « freeze » reste affiché. À elle seule, cette action ne termine pas la séance. | Cherchez la cause (page **Securite**, ligne « regle »). Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. Avant d'acquitter un « freeze » verrouillé, lisez l'avertissement sous ce tableau. |
 | « reduce » | Elle baisse la vitesse commandée. Si elle la ramène à zéro, elle termine la séance, même si le bras tourne encore à cet instant : **Securite** passe à « ramp_down », avec la règle « session_standstill ». | Cherchez la cause. Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. |
 | « ramp_down » | Elle termine la séance : elle ramène progressivement la vitesse commandée à zéro. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | « quick_stop » | Arrêt d'urgence logiciel : elle met tout de suite la vitesse commandée à zéro, et la machine décélère. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
@@ -870,9 +871,6 @@ cas suivants :
   **Mode** affiche « ARRET ». Avec les deux programmes fournis par défaut à
   la date de ce brouillon, c'est le cas d'un arrêt enregistré dans les quatre
   dernières minutes et demie environ ;
-- quand un « freeze » verrouillé garde la vitesse au-delà de la durée
-  prévue, sans qu'un arrêt ait été demandé : la console ramène alors la
-  vitesse commandée à zéro, malgré ce « freeze » ;
 - en séance manuelle, si **Mode** affiche encore « ARRET » 30 secondes après
   l'arrêt automatique des 60 minutes, parce que le bras ralentit depuis une
   vitesse élevée.

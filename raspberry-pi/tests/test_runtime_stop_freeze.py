@@ -23,7 +23,9 @@ Four groups of tests, and the split matters when reading a failure:
   the verdict ran on the tick before it. There is no such walk on
   ``develop``, so these fail there as well;
 * **unchanged on purpose**: with no stop asked for a FREEZE holds exactly as
-  before, and every stronger verdict still decides first. These pass on both;
+  before, and every stronger verdict still decides first. These pass on both.
+  (One more thing brings the setpoint down under a FREEZE since: a programme
+  reaching its own cooldown, ``tests/test_runtime_cooldown_freeze.py``);
 * **what the screen is told**: no ramp and no arrival time over a setpoint
   that is held.
 
@@ -746,26 +748,6 @@ async def test_a_lower_manual_target_that_is_not_zero_is_still_held_by_a_freeze(
     assert _applied(rig) == 100, "the target was not followed once the FREEZE was gone"
 
 
-async def test_a_programme_s_own_cooldown_under_a_freeze_is_still_held() -> None:
-    """Left as it was, and reported with ANH-175: nobody asked for this stop.
-
-    The timeline reaches COOLDOWN under a latched FREEZE. No ending has begun,
-    so the setpoint is still held, as on ``develop``, until ``session_overrun``
-    ends the session. Pinned so that changing it is a decision.
-    """
-    rig = await _running_rig()
-    standing = await _frozen(rig, "thread")
-    before = _applied(rig)
-    for _ in range(round(60.0 / TICK)):
-        if rig.phase() is Phase.COOLDOWN:
-            break
-        await rig.step()
-    assert rig.phase() is Phase.COOLDOWN
-    held = await rig.run(8.0, feed=standing.feed, ping=standing.ping)
-    assert set(_setpoints(held)) == {before}
-    assert _end(rig) is None
-
-
 @pytest.mark.parametrize("mode", ["programme", "bench", "occupied"])
 @pytest.mark.parametrize(
     "action",
@@ -879,9 +861,9 @@ async def test_a_descent_under_a_freeze_announces_its_ramp_and_a_true_arrival_ti
 # ``session_overrun`` judges a session only until the runtime states it over:
 # its phase machine has reached DONE and the setpoint in force is zero
 # (``tests/test_runtime_session_overrun.py``). A stop under a FREEZE now walks
-# the setpoint to zero, so it must lead there like any other stop; and where
-# that rule still fires, over a session frozen past its programme's end, a
-# stop no longer has to wait for it.
+# the setpoint to zero, so it must lead there like any other stop. (A FREEZE
+# no longer holds an arm past the end of its programme for a stop to find
+# there: ``tests/test_runtime_cooldown_freeze.py``.)
 
 
 @pytest.mark.parametrize("source", ["thread", "hr_stale"])
@@ -967,46 +949,3 @@ async def test_a_session_ended_by_a_zero_target_under_a_freeze_gains_no_overrun_
     await rig.run(5.0)
     assert _verdict(rig) is None, "the acknowledgement did not hold"
     assert is_ok(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(300)))
-
-
-async def test_a_stop_under_a_freeze_held_past_the_programme_s_end_does_not_wait_for_the_rule() -> (
-    None
-):
-    """A latched FREEZE holds the arm past the end of its programme; then the operator stops.
-
-    With nobody asking, ``session_overrun`` is what ends this session, thirty
-    seconds past its planned length, and that is unchanged
-    (``test_a_session_frozen_past_its_end_is_still_ended_by_the_rule...``). A
-    STOP asked for before then used to wait for the rule too. Now the arm
-    comes down at once, under the FREEZE, and is at zero before the deadline.
-
-    What follows is any late STOP's ending: its monitored recovery outlives
-    the deadline, the rule latches over an arm that has already stopped, and
-    once the session is over one acknowledgement clears it for good.
-    """
-    rig = await _programme()
-    await rig.run(40.0)
-    rig.runtime.trip_from_thread(THREAD_RULE, SafetyAction.FREEZE, "under test")
-    await rig.run(TOTAL + 10.0 - 40.0)
-    before = _applied(rig)
-    assert before > 0, "the hold did not hold"
-    assert rig.phase() is Phase.RECOVERY, "a turning arm was called DONE"
-    assert _overrun(rig) is None
-
-    rig.runtime.request_stop("operator: stop button")
-    standing = Standing(THREAD_RULE, latched=True, feed=True, ping=True)
-    down = await _walk_down(rig, standing)
-    assert _since_start(rig) < DEADLINE, "the arm came down with the rule, not with the stop"
-    assert {snapshot.safety_action for snapshot in down} == {SafetyAction.FREEZE}
-    _assert_an_ordinary_walk(before, down, _walk_of("programme"))
-    assert _end(rig) is EndReason.OPERATOR_STOP
-
-    await rig.run(DEADLINE - _since_start(rig) + 2 * TICK)
-    late = _overrun(rig)
-    assert late is not None, "the rule no longer judges a recovery pushed past the deadline"
-    assert _applied(rig) == 0
-    await rig.run(float(rig.program.profile.recovery_s) + 5.0)
-    assert rig.state() is RuntimeState.FINISHED
-    assert isinstance(rig.runtime.acknowledge(OPERATOR), Ok)
-    await _at_rest(rig, 3 * TOTAL)
-    await _a_new_programme_is_accepted(rig)
