@@ -26,9 +26,12 @@ import {
   GATES,
   istanbulCoverage,
   jobStates,
+  literal,
   main,
   notice,
   parseJunit,
+  pendingList,
+  pendingOf,
   percent,
   PROJECTS,
   pythonCoverage,
@@ -58,12 +61,16 @@ function write(directory, name, content) {
   return path;
 }
 
+/** A text with its character references read, as a browser reads them. @param {string} written */
+const decoded = (written) => written.replaceAll(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
+
 /**
  * A summary as it reads: thousands are set apart by a space that does not
- * break, written here as a plain space.
+ * break, written here as a plain space, and a name from outside is written
+ * with character references, read here as the characters they stand for.
  * @param {string} markdown
  */
-const read = (markdown) => markdown.replaceAll(" ", " ");
+const read = (markdown) => decoded(markdown.replaceAll("\u202f", " "));
 
 // --- The files the tools write ----------------------------------------------------
 
@@ -298,12 +305,37 @@ test("a percentage is never rounded up, and a duration reads in minutes", () => 
   assert.equal(duration(3725), "1 h 02 min");
 });
 
-test("a name cannot break a table nor bring markup into the summary", () => {
+/** Names a test, a file or a scenario could carry, each of which Markdown or HTML would act on if written as it is. */
+const HOSTILE = [
+  "[lien](https://exemple.invalid/a)",
+  "![image](https://exemple.invalid/a.png)",
+  "<img src=x onerror=alert(1)>",
+  "a | b | c",
+  "https://exemple.invalid/chemin?x=1",
+  "www.exemple.invalid",
+  "@quelquun et #12",
+  ":rocket: **gras** _italique_ ~~barré~~ `code`",
+  "fin de cellule \\| suite",
+  "$x^2$ &amp; &#60;",
+  "ligne\nsuivante\tet tabulation",
+  "</code></details><h1>titre</h1>",
+];
+
+test("a name is written as text: it cannot end a cell nor make a link, an image, a mention or a tag", () => {
+  for (const name of HOSTILE) {
+    const written = literal(name);
+    // Only letters, digits, spaces, a few plain signs and character references are left.
+    assert.match(written, /^(?:[\p{L}\p{N} ,;=%'"/+-]|&#\d+;)*$/u, name);
+    // And a reader sees the name itself, its line breaks as spaces.
+    assert.equal(decoded(written), name.replaceAll(/\s+/g, " "), name);
+    assert.equal(cell(name), `<code>${written}</code>`);
+  }
   assert.equal(
-    cell('test[a|b] <img src=x onerror="alert(1)">\n&amp;'),
-    '<code>test[a&#124;b] &lt;img src=x onerror="alert(1)"&gt; &amp;amp;</code>',
+    literal("tests.test_units :: test_slow[a>b|c]"),
+    "tests&#46;test&#95;units &#58;&#58; test&#95;slow&#91;a&#62;b&#124;c&#93;",
   );
-  assert.ok(cell("x".repeat(500)).length < 200);
+  assert.equal(literal("src/web/ws.py"), "src/web/ws&#46;py");
+  assert.ok(decoded(cell("x".repeat(500))).length < 200, "a long name is cut");
 });
 
 // --- The gate scripts ----------------------------------------------------------------
@@ -395,8 +427,42 @@ test("every lint and type stage of the gate scripts is one the report recognises
 
 // --- The numbers of one job ------------------------------------------------------------
 
-/** What the Pi gate leaves in its report directory. @param {string} directory */
+/**
+ * The configuration of a Pi as the report reads it: the threshold judges
+ * `include`, and the safety chain declares more, kept out of it for now.
+ */
+const PI_PYPROJECT = `[tool.coverage.report]
+include = [
+    "src/training/*",
+]
+fail_under = 100
+
+[tool.anheart]
+# Declared in the safety chain, not yet under the threshold. A bracket ] or a "quote"
+# in a comment changes nothing.
+coverage_pending = [
+    "src/web/*",  # read from here: the report knows no name of its own ]
+    'src/absent.py',
+]
+
+safety_chain = ["src/training/*", "src/web/*", "src/absent.py"]
+
+[tool.other]
+coverage_pending = ["src/not/this/table.py"]
+`;
+
+/**
+ * What the Pi gate leaves in its report directory, in a checkout of its own.
+ * @param {string} directory @returns {string} the root of that checkout
+ */
 function piGateLeft(directory) {
+  write(directory, "repo/raspberry-pi/pyproject.toml", PI_PYPROJECT);
+  piGateFiles(directory);
+  return join(directory, "repo");
+}
+
+/** @param {string} directory */
+function piGateFiles(directory) {
   write(directory, "junit-0.xml", PYTEST);
   write(directory, "junit-1.xml", PYTEST_OTHER);
   write(directory, "junit-gate-runner.xml", PYTEST_OTHER);
@@ -426,17 +492,23 @@ function piGateLeft(directory) {
   );
 }
 
-test("the Pi gate reports its tests, its whole coverage, its safety chain apart, and its checks", (context) => {
+test("the Pi gate reports its tests, its whole coverage, the files under its threshold, and its checks", (context) => {
   const directory = scratch(context);
-  piGateLeft(directory);
-  const part = buildPart("pi", { dir: directory, shares: 2, root: ROOT, env: {} });
+  const root = piGateLeft(directory);
+  const part = buildPart("pi", { dir: directory, shares: 2, root, env: {} });
   assert.equal(part.schema, SCHEMA_VERSION);
   assert.equal(part.suites["pi-pytest"]?.tests, 7);
   assert.equal(part.suites["scripts-gate-runner"]?.tests, 2);
   assert.deepEqual(part.coverage.pi?.lines, { covered: 325, total: 400 });
   assert.deepEqual(part.coverage.pi?.branches, { covered: 124, total: 140 });
-  assert.deepEqual(part.coverage["pi-safety-chain"]?.lines, { covered: 300, total: 300 });
-  assert.deepEqual(part.coverage["pi-safety-chain"]?.branches, { covered: 120, total: 120 });
+  assert.deepEqual(part.coverage["pi-threshold"]?.lines, { covered: 300, total: 300 });
+  assert.deepEqual(part.coverage["pi-threshold"]?.branches, { covered: 120, total: 120 });
+  // What the configuration declares in the chain and keeps out of the threshold, read from it.
+  assert.deepEqual(part.pending, {
+    listed: ["src/web/*", "src/absent.py"],
+    files: [{ file: "src/web/ws.py", lines: { covered: 25, total: 100 }, branches: { covered: 4, total: 20 } }],
+    not_measured: ["src/absent.py"],
+  });
   assert.deepEqual(
     part.checks.map(({ kind, project, job, state }) => `${kind} ${project} ${job} ${state}`),
     [
@@ -449,23 +521,96 @@ test("the Pi gate reports its tests, its whole coverage, its safety chain apart,
     ],
   );
 
-  const summary = renderPart(part);
+  const summary = read(renderPart(part));
   assert.match(summary, /^<details><summary><b>Détail de la qualité : console du Pi<\/b><\/summary>$/m);
   assert.match(summary, /^\| tests Python de la console \| pytest \| 7 \| 4 \| 1 \| 2 \(dont 1 xfail\) \| 14,3 s \|$/m);
   assert.match(
     summary,
     /^\| tout `raspberry-pi\/src\/` \| 2 \| 81,2 % \(325 sur 400\) \| 88,5 % \(124 sur 140\) \| aucun \|$/m,
   );
+  // The 100 % is that of the files the threshold judges, and is named so: the chain holds more.
   assert.match(
     summary,
-    /^\| chaîne de sécurité du Pi \| 1 \| 100 % \(300 sur 300\) \| 100 % \(120 sur 120\) \| 100 % \|$/m,
+    /^\| chaîne de sécurité du Pi, fichiers sous le seuil \| 1 \| 100 % \(300 sur 300\) \| 100 % \(120 sur 120\) \| 100 % \|$/m,
   );
+  assert.match(
+    summary,
+    /^Fichiers déclarés dans la chaîne de sécurité et pas encore sous le seuil \(`coverage_pending`\) :$/m,
+  );
+  assert.match(
+    summary,
+    /^- <code>src\/web\/ws\.py<\/code> : lignes 25,0 % \(25 sur 100\), branches 20,0 % \(4 sur 20\)$/m,
+  );
+  assert.match(summary, /^- <code>src\/absent\.py<\/code> : non mesuré$/m);
   // The least covered files and the slowest tests, EX-2.
   assert.match(summary, /^Fichiers les moins couverts \(tout `raspberry-pi\/src\/`\) :$/m);
   assert.match(summary, /^\| <code>src\/web\/ws\.py<\/code> \| 25,0 % \(25 sur 100\) \| 20,0 % \(4 sur 20\) \|$/m);
   assert.match(summary, /^Tests les plus lents \(tests Python de la console\) :$/m);
-  assert.match(summary, /^\| <code>tests\.test_units :: test_slow\[a&gt;b&#124;c\]<\/code> \| 9,5 s \|$/m);
+  assert.match(summary, /^\| <code>tests\.test_units :: test_slow\[a>b\|c\]<\/code> \| 9,5 s \|$/m);
   assert.match(summary, /^- <code>tests\.test_drive :: test_fault<\/code>$/m, "a failed test is named");
+
+  // A configuration that cannot be read, or that lists nothing: said as such, never shown as "nothing more".
+  const unread = buildPart("pi", { dir: directory, shares: 2, root: join(directory, "no checkout"), env: {} });
+  assert.deepEqual(unread.pending, { listed: null, files: [], not_measured: [] });
+  assert.match(renderPart(unread), /^- liste indisponible : elle n'a pas pu être lue dans la configuration$/m);
+  write(root, "raspberry-pi/pyproject.toml", "[tool.anheart]\ncoverage_pending = []\n");
+  const none = buildPart("pi", { dir: directory, shares: 2, root, env: {} });
+  assert.deepEqual(none.pending, { listed: [], files: [], not_measured: [] });
+  assert.match(renderPart(none), /pas encore sous le seuil \(`coverage_pending`\) :\n\n- aucun\n/);
+});
+
+test("the files of the safety chain outside the threshold are read from the configuration, never named here", () => {
+  assert.deepEqual(pendingList(PI_PYPROJECT), ["src/web/*", "src/absent.py"]);
+  assert.deepEqual(pendingList('[tool.anheart]\ncoverage_pending = ["a.py", "b#c.py"] # two\n'), ["a.py", "b#c.py"]);
+  assert.deepEqual(pendingList("[tool.anheart] # bookkeeping\ncoverage_pending = [\n]\n"), []);
+  // Not there, in another table only, or written in a way this reader does not know: unknown, not empty.
+  for (const unknown of [
+    undefined,
+    "",
+    "[tool.anheart]\nsafety_chain = []\n",
+    '[tool.other]\ncoverage_pending = ["a.py"]\n',
+    '[tool.anheart]\nsafety_chain = []\n[tool.other]\ncoverage_pending = ["a.py"]\n',
+    '[tool.anheart]\ncoverage_pending = ["a.py"\n',
+    '[tool.anheart]\ncoverage_pending = ["a\\\\b.py"]\n',
+    '[tool.anheart]\ncoverage_pending = [["a.py"]]\n',
+    "[tool.anheart]\ncoverage_pending = [a.py]\n",
+  ]) {
+    assert.equal(pendingList(unknown), undefined, String(unknown));
+  }
+
+  // An entry names files as coverage.py reads it: `*` within a directory, `**` at any depth.
+  const file = (/** @type {string} */ name) => ({
+    file: name,
+    lines: { covered: 1, total: 2 },
+    branches: { covered: 0, total: 0 },
+  });
+  const measured = ["src/dsp.py", "src/dsp_py", "src/sensors/lux.py", "src/sensors/deep/raw.py", "src/web/app.py"].map(
+    file,
+  );
+  const kept = (/** @type {string[]} */ listed) => pendingOf(listed, measured).files.map(({ file: name }) => name);
+  assert.deepEqual(kept(["src/dsp.py"]), ["src/dsp.py"]);
+  assert.deepEqual(kept(["src/sensors/*"]), ["src/sensors/lux.py"]);
+  assert.deepEqual(kept(["src/sensors/**"]), ["src/sensors/lux.py", "src/sensors/deep/raw.py"]);
+  assert.deepEqual(pendingOf(["src/sensors/*", "src/gone.py", "tests/*"], measured).not_measured, [
+    "src/gone.py",
+    "tests/*",
+  ]);
+  assert.deepEqual(pendingOf(["src/dsp.py"], undefined), {
+    listed: ["src/dsp.py"],
+    files: [],
+    not_measured: ["src/dsp.py"],
+  });
+  assert.deepEqual(pendingOf(undefined, measured), { listed: null, files: [], not_measured: [] });
+
+  // The real configuration is one this reader reads, and each of its entries names a file that exists.
+  const real = pendingList(readFileSync(join(ROOT, "raspberry-pi/pyproject.toml"), "utf8"));
+  assert.ok(Array.isArray(real), "raspberry-pi/pyproject.toml: coverage_pending is not read");
+  for (const entry of real) {
+    assert.ok(entry.includes("*") || existsSync(join(ROOT, "raspberry-pi", entry)), `${entry} names no file`);
+  }
+  // No name of a pending file is written in the report: it only knows where the list is.
+  const source = readFileSync(join(ROOT, "scripts/ci/quality-report.mjs"), "utf8");
+  for (const entry of real) assert.ok(!source.includes(entry), `${entry} is named in quality-report.mjs`);
 });
 
 test("a job summary holds names, counts and durations, and nothing a test printed or said when failing", (context) => {
@@ -609,13 +754,19 @@ const everyPart = () => ({
     schema: SCHEMA_VERSION,
     part: "pi",
     suites: { "pi-pytest": numbers(3208, 0, 8, 3130), "scripts-gate-runner": numbers(102, 0, 0, 33) },
-    coverage: { pi: covered(9120, 10000, 2640, 3000), "pi-safety-chain": covered(7000, 7000, 2000, 2000) },
+    coverage: { pi: covered(9120, 10000, 2640, 3000), "pi-threshold": covered(7000, 7000, 2000, 2000) },
     checks: [
       check("lint", "pi", "pi-gate"),
       check("types", "pi", "pi-gate"),
       check("lint", "scripts", "pi-gate"),
       check("types", "scripts", "pi-gate"),
     ],
+    // One file is declared in the safety chain and kept out of the threshold for now.
+    pending: /** @type {import("./quality-report.mjs").Pending} */ ({
+      listed: ["src/signal.py"],
+      files: [{ file: "src/signal.py", lines: { covered: 132, total: 160 }, branches: { covered: 32, total: 50 } }],
+      not_measured: [],
+    }),
   },
   simulation: {
     schema: SCHEMA_VERSION,
@@ -667,6 +818,9 @@ const needs = (results = {}, rule = { python: "true", node: "true" }) =>
     ]),
   );
 
+/** The fields of `quality-report.json`, in the order they are written. */
+const REPORT_FIELDS = ["schema", "run", "jobs", "projects", "suites", "coverage", "safety_chain", "scenarios"];
+
 const RUN = {
   id: "37614000000",
   attempt: 1,
@@ -713,7 +867,7 @@ test("the table of the run has one line per project and the columns of the ticke
   assert.deepEqual(
     lines.slice(6, 6 + PROJECTS.length).map((text) => text.split(" | ")[0]),
     [
-      "| Console du Pi",
+      "| Console du Pi (tout `src/`)",
       "| Simulation",
       "| Convex",
       "| Site (`lib/`, `hooks/`, `components/`)",
@@ -721,7 +875,7 @@ test("the table of the run has one line per project and the columns of the ticke
     ],
   );
   assert.deepEqual(line(markdown, "Console du Pi"), [
-    "Console du Pi",
+    "Console du Pi (tout `src/`)",
     "3 248",
     "3 240",
     "0",
@@ -769,15 +923,23 @@ test("the table of the run has one line per project and the columns of the ticke
     "✅ réussie : `changes`, `audit`, `docs`",
   ]);
   assert.doesNotMatch(markdown, /¹/);
-  // EX-4: the safety chain apart from the whole, each threshold with whether it holds, the scenarios, the battery.
-  assert.match(
-    markdown,
-    /^\| Couverture, chaîne de sécurité du Pi \| lignes 100 % \(7 000 sur 7 000\), branches 100 % \(2 000 sur 2 000\) \| 100 % exigé par `pi-gate` : ✅ tenu \|$/m,
+  // The total above is the sum of the lines.
+  assert.equal(
+    PROJECTS.reduce((sum, { label }) => sum + Number(line(markdown, label)[1]?.replaceAll(" ", "")), 0),
+    5583,
   );
-  assert.match(
-    markdown,
-    /^\| Couverture, code de la simulation \| .* \| 100 % exigé par `simulation-gate` : ✅ tenu \|$/m,
-  );
+  // EX-4: each threshold with what it judges and whether it holds, the scenarios, the battery.
+  const safety = markdown.slice(markdown.indexOf("### Chaîne de sécurité"), markdown.indexOf("### Détail par suite"));
+  assert.deepEqual(safety.split("\n").slice(4, 8), [
+    "| Couverture, chaîne de sécurité du Pi, fichiers sous le seuil | 3 fichiers : lignes 100 % (7 000 sur 7 000), branches 100 % (2 000 sur 2 000) | 100 % exigé par `pi-gate` : ✅ tenu |",
+    // The 100 % is not left to stand for the whole chain: what is declared in it and outside the
+    // threshold is named, with its own figures, and the chain is given as a whole.
+    "| Chaîne de sécurité du Pi, hors du seuil : <code>src/signal.py</code> | lignes 82,5 % (132 sur 160), branches 64,0 % (32 sur 50) | déclaré dans la chaîne, pas encore sous le seuil |",
+    "| Chaîne de sécurité du Pi, en entier | lignes 99,6 % (7 132 sur 7 160), branches 99,1 % (2 032 sur 2 050) | aucun seuil sur l'ensemble : fichiers sous le seuil et hors du seuil réunis |",
+    "| Couverture, code de la simulation | 3 fichiers : lignes 100 % (4 000 sur 4 000), branches 100 % (1 500 sur 1 500) | 100 % exigé par `simulation-gate` : ✅ tenu |",
+  ]);
+  assert.doesNotMatch(safety, /chaîne de sécurité du Pi \| lignes 100 %/, "100 % is never said of the chain itself");
+  assert.match(markdown, /^- Ce rapport ne lit que les jobs de `ci\.yml`\. Les autres workflows du dépôt /m);
   assert.match(
     markdown,
     /^\| Batterie de simulation \| 1 024 tests : 1 023 réussis, 0 en échec, 1 ignoré \(dont 1 xfail\) \| /m,
@@ -806,36 +968,140 @@ test("a gate the path rule skipped reads « sautée », never zero", () => {
     run: RUN,
   });
   const markdown = read(renderReport(report));
-  for (const label of ["Console du Pi", "Simulation"]) {
-    const cells = line(markdown, label);
-    assert.deepEqual(
-      cells.slice(1, 10),
-      Array.from({ length: 9 }, () => "sautée"),
-      label,
-    );
-    assert.match(cells[10] ?? "", /^⏭️ sautée : `(pi|simulation)-gate`$/, label);
-  }
+  assert.deepEqual(line(markdown, "Simulation").slice(1), [
+    ...Array.from({ length: 9 }, () => "sautée"),
+    "⏭️ sautée : `simulation-gate`",
+  ]);
+  // The local panel of the console is tested by `web`, which ran: those tests are shown and counted,
+  // marked as part of the project only. Everything `pi-gate` measures reads « sautée ».
+  assert.deepEqual(line(markdown, "Console du Pi").slice(1), [
+    "40 ¹",
+    "40",
+    "0",
+    "0",
+    "4,0 s",
+    "sautée",
+    "sautée",
+    "sautée",
+    "sautée",
+    "⏭️ sautée : `pi-gate`",
+  ]);
   assert.match(
     markdown,
-    /4 gates réussies sur 6, 2 sautées par la règle de chemins \(`pi-gate`, `simulation-gate`\)\.$/m,
+    /^\*\*1 249 tests lancés, 0 en échec\.\*\* 4 gates réussies sur 6, 2 sautées par la règle de chemins \(`pi-gate`, `simulation-gate`\)\.$/m,
   );
-  assert.match(markdown, /^\| Couverture, chaîne de sécurité du Pi \| sautée \| 100 % exigé par `pi-gate` \|$/m);
+  // The total is the sum of the lines: no test is counted that no line shows.
+  const shown = PROJECTS.map(({ label }) => line(markdown, label)[1] ?? "").filter((text) => text !== "sautée");
+  assert.equal(
+    shown.reduce((sum, text) => sum + Number(text.replaceAll(/[ ¹]/g, "")), 0),
+    1249,
+  );
+  assert.match(
+    markdown,
+    /^\| Couverture, chaîne de sécurité du Pi, fichiers sous le seuil \| sautée \| 100 % exigé par `pi-gate` \|$/m,
+  );
+  assert.doesNotMatch(markdown, /hors du seuil|en entier/, "nothing is said of a chain that was not measured");
   assert.match(markdown, /^\| Batterie de simulation \| sautée \| /m);
   assert.match(markdown, /^\| Scénarios de simulation \| sautée \| /m);
   assert.match(
     markdown,
     /^\| Console du Pi \| tests Python de la console \| pytest \| `pi-gate` \| sautée \| sautée \| sautée \| sautée \| sautée \|$/m,
   );
-  // What did run is counted: the scripts lack the tests and the checks the Pi gate runs for them, and say so.
+  // The scripts lack the tests and the checks the Pi gate runs for them, and say so.
   const scripts = line(markdown, "Scripts");
   assert.deepEqual([scripts[1], scripts[8], scripts[9]], ["148 ¹", "✅ réussi (partiel)", "sautée"]);
-  assert.match(markdown, /^¹ Une suite de ce projet n'a pas de chiffres dans cette exécution/m);
+  assert.match(
+    markdown,
+    /^¹ Ce nombre ne compte qu'une partie des suites du projet : les autres n'ont pas de chiffres /m,
+  );
   assert.deepEqual(line(markdown, "Convex").slice(8), ["✅ réussi", "✅ réussi", "✅ réussie : `convex-tests`"]);
   const json = report.projects.find(({ id }) => id === "pi");
   assert.deepEqual(
-    [json?.gate.state, json?.coverage, json?.coverage_state, json?.lint.state],
-    ["skipped", null, "skipped", "skipped"],
+    [
+      json?.gate.state,
+      json?.tests?.total,
+      json?.tests?.complete,
+      json?.coverage,
+      json?.coverage_state,
+      json?.lint.state,
+    ],
+    ["skipped", 40, false, null, "skipped", "skipped"],
   );
+  assert.equal(report.safety_chain, null);
+
+  // A pull request that only changes Python: every gate of the site is skipped, and nothing of it ran elsewhere.
+  const { pi, simulation } = everyPart();
+  const python = read(
+    renderReport(
+      buildReport({
+        parts: { pi, simulation },
+        junit: everyScript(),
+        needs: needs({ "convex-tests": "skipped", web: "skipped" }, { python: "true", node: "false" }),
+        event: "pull_request",
+        run: RUN,
+      }),
+    ),
+  );
+  for (const label of ["Convex", "Site"]) {
+    assert.deepEqual(
+      line(python, label).slice(1, 10),
+      Array.from({ length: 9 }, () => "sautée"),
+      label,
+    );
+  }
+  assert.equal(line(python, "Console du Pi")[1], "3 208 ¹");
+});
+
+test("a count keeps its grammar, whatever it counts", () => {
+  const one = needs({
+    "pi-gate": "failure",
+    "simulation-gate": "skipped",
+    "convex-tests": "cancelled",
+    web: "skipped",
+    audit: "",
+    docs: "skipped",
+  });
+  const report = buildReport({
+    parts: {},
+    junit: { "scripts-ci": numbers(1) },
+    needs: one,
+    event: "pull_request",
+    run: RUN,
+  });
+  assert.match(
+    read(renderReport(report)),
+    /^\*\*1 test lancé, 0 en échec\.\*\* 0 gate réussie sur 6, 1 en échec \(`pi-gate`\), 1 annulée \(`convex-tests`\), 3 non lancées \(`simulation-gate`, `web`, `docs`\), 1 dans un état inconnu \(`audit`\)\.$/m,
+  );
+  assert.match(read(renderNotice(report)), /^1 test lancé, 0 en échec\. 0 gate réussie sur 6 \(/);
+  assert.match(
+    read(renderNotice(report)),
+    /^Scripts \(CI et release\) : 1 test \(une partie des suites\), 0 en échec ; /m,
+  );
+  const single = needs({ "pi-gate": "skipped" }, { python: "false", node: "true" });
+  const skipped = buildReport({ parts: {}, junit: {}, needs: single, event: "pull_request", run: RUN });
+  assert.match(
+    read(renderReport(skipped)),
+    /5 gates réussies sur 6, 1 sautée par la règle de chemins \(`pi-gate`\)\.$/m,
+  );
+  const alone = buildReport({
+    parts: {},
+    junit: {},
+    needs: needs({ ...one, docs: "success" }),
+    event: "push",
+    run: RUN,
+  });
+  assert.match(read(renderReport(alone)), /\*\* 1 gate réussie sur 6, /);
+  // One scenario, one file under a threshold, one test ignored.
+  const { simulation } = everyPart();
+  simulation.scenarios = { runs: 1, by_status: { PASS: 1 }, by_group: {} };
+  simulation.coverage.simulation = { ...covered(10, 10, 2, 2), files: 1 };
+  simulation.suites["simulation-battery"] = { ...numbers(1, 0, 0, 1), expected_failures: 0 };
+  const small = read(
+    renderReport(buildReport({ parts: { simulation }, junit: {}, needs: needs(), event: "push", run: RUN })),
+  );
+  assert.match(small, /^\| Scénarios de simulation \| 1 scénario joué par `simulation\.quick --all` : 1 PASS \| /m);
+  assert.match(small, /^\| Couverture, code de la simulation \| 1 fichier : lignes 100 % \(10 sur 10\), /m);
+  assert.match(small, /^\| Batterie de simulation \| 1 test : 1 réussi, 0 en échec, 0 ignoré \(dont 0 xfail\) \| /m);
 });
 
 test("a skipped job is « sautée » only when the path rule ran on a pull request and said so", () => {
@@ -871,7 +1137,7 @@ test("a skipped job is « sautée » only when the path rule ran on a pull reque
 test("a gate that failed keeps its numbers and reads « échec »", () => {
   const parts = everyPart();
   parts.pi.suites["pi-pytest"] = numbers(3208, 3, 8, 3130);
-  parts.pi.coverage["pi-safety-chain"] = covered(6990, 7000, 1990, 2000);
+  parts.pi.coverage["pi-threshold"] = covered(6990, 7000, 1990, 2000);
   parts.pi.checks[1] = check("types", "pi", "pi-gate", "failed");
   const report = buildReport({
     parts,
@@ -882,7 +1148,7 @@ test("a gate that failed keeps its numbers and reads « échec »", () => {
   });
   const markdown = read(renderReport(report));
   assert.deepEqual(line(markdown, "Console du Pi"), [
-    "Console du Pi",
+    "Console du Pi (tout `src/`)",
     "3 248",
     "3 237",
     "**3**",
@@ -900,8 +1166,44 @@ test("a gate that failed keeps its numbers and reads « échec »", () => {
   );
   assert.match(
     markdown,
-    /\| lignes 99,8 % \(6 990 sur 7 000\), branches 99,5 % \(1 990 sur 2 000\) \| 100 % exigé par `pi-gate` : ❌ non tenu \|$/m,
+    /^\| Couverture, chaîne de sécurité du Pi, fichiers sous le seuil \| 3 fichiers : lignes 99,8 % \(6 990 sur 7 000\), branches 99,5 % \(1 990 sur 2 000\) \| 100 % exigé par `pi-gate` : ❌ non tenu \|$/m,
   );
+  assert.match(
+    read(renderNotice(report)),
+    /^Chaîne de sécurité du Pi : seuil de 100 % non tenu \(3 fichiers sous le seuil : lignes 99,8 %, branches 99,5 %\) ; /m,
+  );
+
+  // The list of what the chain holds outside the threshold could not be read, or names a file nothing measured:
+  // neither is taken for "nothing outside", and no figure is given for the chain as a whole.
+  for (const [pending, said] of /** @type {const} */ ([
+    [
+      { listed: null, files: [], not_measured: [] },
+      "indisponible : la liste n'a pas pu être lue dans la configuration",
+    ],
+    [{ listed: ["src/gone.py"], files: [], not_measured: ["src/gone.py"] }, "non mesuré"],
+  ])) {
+    const unknown = everyPart();
+    unknown.pi.pending = {
+      listed: pending.listed === null ? null : [...pending.listed],
+      files: [],
+      not_measured: [...pending.not_measured],
+    };
+    const built = buildReport({ parts: unknown, junit: everyScript(), needs: needs(), event: "push", run: RUN });
+    const table = read(renderReport(built));
+    assert.ok(table.includes(`| ${said} | déclaré dans la chaîne, pas encore sous le seuil |`), said);
+    assert.equal(built.safety_chain?.whole ?? null, null);
+    assert.doesNotMatch(table, /en entier \| lignes/);
+    assert.match(read(renderNotice(built)), /hors du seuil : (liste indisponible|src\/gone\.py \(non mesuré\))$/m);
+  }
+  // Every file of the chain under the threshold: said in so many words.
+  const all = everyPart();
+  all.pi.pending = { listed: [], files: [], not_measured: [] };
+  const whole = buildReport({ parts: all, junit: everyScript(), needs: needs(), event: "push", run: RUN });
+  assert.match(
+    read(renderReport(whole)),
+    /^\| Chaîne de sécurité du Pi, hors du seuil \| aucun fichier \| toute la chaîne est sous le seuil \|$/m,
+  );
+  assert.match(read(renderNotice(whole)), / ; aucun fichier de la chaîne hors du seuil$/m);
 });
 
 test("a job that left no artifact reads « indisponible », and one that did not run « non lancé »", () => {
@@ -933,7 +1235,7 @@ test("a job that left no artifact reads « indisponible », and one that did not
 
   // Nothing at all, not even how the jobs ended: every line says so, and no number is made up.
   const empty = read(renderReport(buildReport({ parts: {}, junit: {}, needs: undefined, event: "", run: {} })));
-  assert.match(empty, /^\*\*0 tests lancés, 0 en échec\.\*\* 0 gates réussies sur 6, 6 dans un état inconnu /m);
+  assert.match(empty, /^\*\*0 test lancé, 0 en échec\.\*\* 0 gate réussie sur 6, 6 dans un état inconnu /m);
   assert.deepEqual(line(empty, "Console du Pi").slice(1), [
     ...Array.from({ length: 9 }, () => "non lancé"),
     "❔ état inconnu : `pi-gate`",
@@ -991,13 +1293,25 @@ test("the essentials of the run are also said in plain text, one line per projec
   const all = buildReport({ parts: everyPart(), junit: everyScript(), needs: needs(), event: "push", run: RUN });
   assert.deepEqual(read(renderNotice(all)).split("\n"), [
     "5 583 tests lancés, 0 en échec. 6 gates réussies sur 6.",
-    "Console du Pi : 3 248 tests, 0 en échec ; lignes 91,2 %, branches 88,0 % ; lint réussi ; types réussis ; gate réussie",
+    // What the coverage of the Pi is that of, then the threshold on what it judges and, by name, what it does not.
+    "Console du Pi (tout src/) : 3 248 tests, 0 en échec ; lignes 91,2 %, branches 88,0 % ; lint réussi ; types réussis ; gate réussie",
+    "Chaîne de sécurité du Pi : seuil de 100 % tenu (3 fichiers sous le seuil : lignes 100 %, branches 100 %) ; dans la chaîne mais hors du seuil : src/signal.py (lignes 82,5 %, branches 64,0 %)",
     "Simulation : 1 024 tests, 0 en échec ; lignes 100 %, branches 100 % ; lint réussi ; types réussis ; gate réussie",
     "Convex : 925 tests, 0 en échec ; lignes 96,6 %, branches 87,3 % ; lint réussi ; types réussis ; gate réussie",
-    "Site : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint réussi ; types réussis ; gate réussie",
-    "Scripts : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
+    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint réussi ; types réussis ; gate réussie",
+    "Scripts (CI et release) : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
     "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
   ]);
+  // When the job knows the address of its own summary, the notice ends on it: the table is one click away.
+  const address = "https://github.com/anheartpro-byte/Anheart/actions/runs/37614000000#summary-112800000001";
+  const linked = buildReport({
+    parts: everyPart(),
+    junit: everyScript(),
+    needs: needs(),
+    event: "push",
+    run: { ...RUN, summary_url: address },
+  });
+  assert.equal(renderNotice(linked).split("\n").at(-1), `Le tableau complet : ${address}`);
   // A site-only pull request whose `web` gate failed on a lint error, with no artifact from `convex-tests`.
   const { site } = everyPart();
   site.checks[1] = check("lint", "site", "web", "failed");
@@ -1008,17 +1322,59 @@ test("the essentials of the run are also said in plain text, one line per projec
   const partly = buildReport({ parts: { site }, junit: everyScript(), needs: states, event: "pull_request", run: RUN });
   assert.deepEqual(read(renderNotice(partly)).split("\n").slice(0, 6), [
     "324 tests lancés, 0 en échec. 3 gates réussies sur 6 (pi-gate sautée, simulation-gate sautée, web en échec).",
-    "Console du Pi : sautée par la règle de chemins",
+    // The panel of the console, tested by `web`: counted, and said to be part of the project only.
+    "Console du Pi (tout src/) : 40 tests (une partie des suites), 0 en échec ; couverture sautée ; lint sauté ; types sautés ; gate sautée",
     "Simulation : sautée par la règle de chemins",
     "Convex : tests indisponibles ; couverture indisponible ; lint réussi ; types indisponibles ; gate réussie",
-    "Site : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint en échec ; types réussis ; gate en échec",
-    "Scripts : 148 tests, 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
+    "Site (lib/, hooks/, components/) : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint en échec ; types réussis ; gate en échec",
+    "Scripts (CI et release) : 148 tests (une partie des suites), 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
   ]);
+  assert.doesNotMatch(renderNotice(partly), /Chaîne de sécurité/, "nothing is said of a chain that was not measured");
   // What the runner reads: one line, the line breaks and the characters of its own syntax escaped.
   assert.equal(
     notice("Rapport, 100 % : fait", "a 50 %\nb\r\n::error::c"),
     "::notice title=Rapport%2C 100 %25 %3A fait::a 50 %25%0Ab%0D%0A::error::c",
   );
+});
+
+test("every name that reaches a summary from a test, a file, a stage or a scenario is written as text", () => {
+  const [link = "", image = "", tag = "", pipes = "", address = "", bare = "", mention = "", marks = "", escape = ""] =
+    HOSTILE;
+  const ratio = { lines: { covered: 1, total: 2 }, branches: { covered: 0, total: 0 } };
+  const battery = { ...numbers(3, 1), slowest: [{ name: link, seconds: 2 }], failed_tests: [image] };
+  const detail = renderPart({
+    schema: SCHEMA_VERSION,
+    part: "simulation",
+    suites: { "simulation-battery": battery },
+    coverage: { simulation: { ...ratio, files: 1, least_covered: [{ file: tag, ...ratio }] } },
+    checks: [{ kind: "lint", project: "simulation", job: "simulation-gate", name: pipes, state: "passed" }],
+    scenarios: { runs: 2, by_status: { [address]: 1, [marks]: 1 }, by_group: {} },
+  });
+  const pi = renderPart({
+    schema: SCHEMA_VERSION,
+    part: "pi",
+    suites: {},
+    coverage: {},
+    checks: [],
+    pending: { listed: [bare, mention], files: [{ file: bare, ...ratio }], not_measured: [mention] },
+  });
+  const parts = everyPart();
+  parts.pi.pending = { listed: [link, escape], files: [{ file: link, ...ratio }], not_measured: [escape] };
+  parts.simulation.scenarios = { runs: 1, by_status: { [image]: 1 }, by_group: {} };
+  const table = renderReport(buildReport({ parts, junit: everyScript(), needs: needs(), event: "push", run: RUN }));
+  for (const [summary, held] of /** @type {const} */ ([
+    [detail, [link, image, tag, pipes, address, marks]],
+    [pi, [bare, mention]],
+    [table, [link, image, escape]],
+  ])) {
+    for (const name of held) {
+      assert.ok(summary.includes(literal(name)), `"${name}" is not in the summary as text`);
+      assert.ok(!summary.includes(name), `"${name}" is in the summary as it was given`);
+    }
+    assert.doesNotMatch(summary, /exemple\.invalid|<img|\]\(|!\[|@quelquun|:rocket:|\*\*gras|\\\|/);
+    // Read as a browser reads it, each name is there whole.
+    for (const name of held) assert.ok(decoded(summary).includes(name.replaceAll(/\s+/g, " ")), name);
+  }
 });
 
 // --- The commands ---------------------------------------------------------------------------
@@ -1027,9 +1383,10 @@ test("the two commands write the summaries and quality-report.json from what the
   const directory = scratch(context);
   const artifacts = join(directory, "artifacts");
   const summary = join(directory, "summary.md");
+  // In `pi-gate`: the report directory of the gate becomes the artifact `quality-pi`.
   const env = {
     GITHUB_STEP_SUMMARY: summary,
-    GITHUB_WORKSPACE: ROOT,
+    GITHUB_WORKSPACE: piGateLeft(join(artifacts, "quality-pi")),
     GITHUB_RUN_ID: "37614000000",
     GITHUB_RUN_ATTEMPT: "2",
     GITHUB_EVENT_NAME: "pull_request",
@@ -1038,9 +1395,8 @@ test("the two commands write the summaries and quality-report.json from what the
     GITHUB_SHA: "ffffffffffffffff",
     HEAD_SHA: "0123456789abcdef",
     PR_NUMBER: "40",
+    CHECK_RUN_ID: "112800000001",
   };
-  // In `pi-gate`: the report directory of the gate becomes the artifact `quality-pi`.
-  piGateLeft(join(artifacts, "quality-pi"));
   assert.equal(main(["job", "pi", "--dir", join(artifacts, "quality-pi"), "--shares", "2"], env), 0);
   assert.equal(JSON.parse(readFileSync(join(artifacts, "quality-pi", "part.json"), "utf8")).part, "pi");
   assert.match(readFileSync(summary, "utf8"), /Détail de la qualité : console du Pi/);
@@ -1070,9 +1426,17 @@ test("the two commands write the summaries and quality-report.json from what the
     sha: "0123456789abcdef",
     pull_request: 40,
     url: "https://github.com/anheartpro-byte/Anheart/actions/runs/37614000000",
+    summary_url: "https://github.com/anheartpro-byte/Anheart/actions/runs/37614000000#summary-112800000001",
   });
-  assert.deepEqual(Object.keys(report), ["schema", "run", "jobs", "projects", "suites", "coverage", "scenarios"]);
+  assert.deepEqual(Object.keys(report), REPORT_FIELDS);
   assert.deepEqual(report.jobs["pi-gate"], "failed");
+  // The safety chain as the configuration of that checkout declares it: one file measured, one not.
+  assert.deepEqual(report.safety_chain, {
+    listed: ["src/web/*", "src/absent.py"],
+    pending: [{ file: "src/web/ws.py", lines: { covered: 25, total: 100 }, branches: { covered: 4, total: 20 } }],
+    not_measured: ["src/absent.py"],
+    whole: null,
+  });
   assert.deepEqual(
     report.projects.map((/** @type {{id: string}} */ project) => project.id),
     PROJECTS.map(({ id }) => id),
@@ -1108,12 +1472,27 @@ test("the two commands write the summaries and quality-report.json from what the
   );
   assert.match(
     line ?? "",
-    /%0AConsole du Pi : 7 tests, 1 en échec ; lignes 81,2 %25, branches 88,5 %25 ; lint réussi ; types en échec ; gate en échec%0A/,
+    /%0AConsole du Pi \(tout src\/\) : 7 tests \(une partie des suites\), 1 en échec ; lignes 81,2 %25, branches 88,5 %25 ; lint réussi ; types en échec ; gate en échec%0A/,
+  );
+  assert.match(
+    line ?? "",
+    /%0AChaîne de sécurité du Pi : seuil de 100 %25 tenu \(1 fichier sous le seuil : lignes 100 %25, branches 100 %25\) ; dans la chaîne mais hors du seuil : src\/web\/ws\.py \(lignes 25,0 %25, branches 20,0 %25\), src\/absent\.py \(non mesuré\)%0A/,
+  );
+  // It ends on the address of the table: the summary of this very job.
+  assert.ok(
+    (line ?? "").endsWith(
+      "%0ALe tableau complet : https://github.com/anheartpro-byte/Anheart/actions/runs/37614000000#summary-112800000001\n",
+    ),
   );
   assert.equal((line ?? "").trimEnd().split("\n").length, 1, "a notice is one line of output");
+  // Without the number of its check run, or with something that is not one, no address is made up.
+  for (const CHECK_RUN_ID of [undefined, "", "12 34", "x"]) {
+    assert.equal(main(["report", "--artifacts", artifacts, "--out", out], { ...env, NEEDS, CHECK_RUN_ID }), 0);
+    assert.equal(JSON.parse(readFileSync(join(out, "quality-report.json"), "utf8")).run.summary_url, null);
+  }
   assert.match(
     markdown,
-    /^\| Console du Pi \| 7 ¹ \| 4 \| \*\*1\*\* \| 2 \| 14,3 s \| 81,2 % \| 88,5 % \| ✅ réussi \| ❌ échec \| ❌ échec : `pi-gate` \|$/m,
+    /^\| Console du Pi \(tout `src\/`\) \| 7 ¹ \| 4 \| \*\*1\*\* \| 2 \| 14,3 s \| 81,2 % \| 88,5 % \| ✅ réussi \| ❌ échec \| ❌ échec : `pi-gate` \|$/m,
   );
   assert.doesNotMatch(readFileSync(summary, "utf8") + JSON.stringify(report), /SECRET|ERR_TEST_FAILURE/);
 });
@@ -1159,7 +1538,7 @@ test("the report never fails the job that calls it: it exits 0 and says « rappo
   );
   assert.match(
     said(),
-    /^## Rapport de qualité\n\n\*\*0 tests lancés, 0 en échec\.\*\* 0 gates réussies sur 6, 6 dans un état inconnu/,
+    /^## Rapport de qualité\n\n\*\*0 test lancé, 0 en échec\.\*\* 0 gate réussie sur 6, 6 dans un état inconnu/,
   );
   // Started as a program, it ends the same way.
   const started = spawnSync(process.execPath, [join(ROOT, "scripts/ci/quality-report.mjs"), "nothing"], {
@@ -1186,7 +1565,10 @@ test("the documentation describes every column of the table and the format of qu
     section.includes(`\`schema\` | \`${SCHEMA_VERSION}\``),
     "the documented version of the format is not this one",
   );
-  for (const key of ["run", "jobs", "projects", "suites", "coverage", "scenarios"]) {
-    assert.ok(section.includes(`\`${key}\``), `the field "${key}" of quality-report.json is not described`);
+  for (const key of REPORT_FIELDS) {
+    assert.ok(section.includes(`| \`${key}\` |`), `the field "${key}" of quality-report.json is not described`);
   }
+  // The 100 % of the Pi is that of the files under the threshold: the documentation says what that leaves out.
+  assert.match(section, /`coverage_pending`/);
+  assert.match(section, /fichiers sous le seuil/);
 });

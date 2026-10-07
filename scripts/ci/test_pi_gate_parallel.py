@@ -52,6 +52,7 @@ from pi_gate_parallel import (
     parse_arguments,
     parse_shares,
     read_lines,
+    report_coverage,
 )
 from pi_gate_shard import (
     ALONE_IN_PROCESS_ZERO,
@@ -1134,6 +1135,67 @@ def test_a_report_that_cannot_be_written_changes_no_verdict(project: Path) -> No
     assert f"[gate] quality report: nothing is left in {nowhere}" in result.stdout
     assert "[gate] partition proven" in result.stdout
     assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+
+
+def test_a_report_directory_that_cannot_be_written_to_changes_no_verdict(
+    project: Path, kept: Path
+) -> None:
+    """The directory is there and closed: a pytest told to write there would end in error."""
+    if os.geteuid() == 0:
+        pytest.skip("no directory is closed to root")
+    kept.mkdir(parents=True)
+    kept.chmod(0o555)
+    try:
+        result = run_runner(project, *WHOLE, "--report", str(kept))
+    finally:
+        kept.chmod(0o755)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"[gate] quality report: nothing is left in {kept}" in result.stdout
+    assert "[gate] process 0 ended: exit code 0" in result.stdout
+    assert "[gate] process 1 ended: exit code 0" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert list(kept.iterdir()) == []
+
+
+def test_a_coverage_report_that_cannot_be_written_is_said_and_stops_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``coverage json`` fails on both reports: there is no data where it is told to read."""
+    report_coverage(tmp_path / "no data here" / ".coverage", tmp_path)
+
+    said = capsys.readouterr().out
+    assert "[gate] quality report: coverage-gate.json could not be written" in said
+    assert "[gate] quality report: coverage-all.json could not be written" in said
+    assert not (tmp_path / "coverage-gate.json").exists()
+    assert not (tmp_path / "coverage-all.json").exists()
+
+
+def test_a_report_file_that_cannot_be_replaced_changes_no_verdict(
+    project: Path, kept: Path
+) -> None:
+    """A directory stands where a file of the report goes: it is neither removed nor written.
+
+    One of the two coverage reports and the JUnit file of process 1. The
+    verdict is that of a run with no report, and what can be written is.
+    """
+    (kept / "coverage-gate.json" / "in the way").mkdir(parents=True)
+    (kept / "junit-1.xml" / "in the way").mkdir(parents=True)
+
+    result = run_runner(project, *WHOLE, "--report", str(kept))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[gate] quality report: junit-1.xml cannot be replaced" in result.stdout
+    assert "[gate] quality report: coverage-gate.json cannot be replaced" in result.stdout
+    assert "[gate] quality report: coverage-gate.json could not be written" in result.stdout
+    assert "[gate] process 1 ended: exit code 0" in result.stdout
+    assert "[gate] partition proven" in result.stdout
+    assert "[gate] required coverage of 100% reached on the combined data" in result.stdout
+    assert junit_counts(kept / "junit-0.xml") == (4, 0)
+    assert coverage_report(kept / "coverage-all.json")[0] == {"src/__init__.py", "src/lib.py"}
+    assert (kept / "coverage-gate.json" / "in the way").is_dir()
+    assert (kept / "junit-1.xml" / "in the way").is_dir()
 
 
 def test_shares_report_their_tests_and_the_combining_call_the_coverage(

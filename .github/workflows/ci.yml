@@ -57,16 +57,21 @@ env:
 # scripts say how each stage ended, and the steps named "Quality report" and
 # "Keep the numbers for the quality report" read and publish that. Each of
 # those steps carries `continue-on-error: true`: none can turn a gate red.
-# `quality-report`, the last job, is not a required check and cannot fail.
+# `quality-report`, the last job, is not a required check, and no step of it
+# can fail it.
 
 jobs:
   # The table of the run, one line per project, written on the page of the
   # run. It waits for every gate and runs whatever happened to them
   # (`always()`): a gate that failed, was skipped by the path rule or was
   # cancelled is a line of the table, not a reason to have no table. Every
-  # step continues on error: the worst this job can do is say "rapport
-  # indisponible". It reads how each job ended from `needs`, the answer of
-  # the path rule included, so that the rule is still read in one place only.
+  # step continues on error: the worst a step can do is leave the summary
+  # saying "rapport indisponible". What is left that can end this job other
+  # than green is not a step: its time limit, a runner that fails, a run that
+  # is cancelled. No required check depends on it; scripts/release.sh, which
+  # reads every check of a commit, would then ask for a rerun. It reads how
+  # each job ended from `needs`, the answer of the path rule included, so that
+  # the rule is still read in one place only.
   quality-report:
     needs: [changes, pi-gate, simulation-gate, convex-tests, web, audit, docs]
     if: ${{ always() }}
@@ -89,6 +94,9 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # GitHub anchors the summary of a job at this number: the notice the
+          # report emits ends on the address of the table.
+          CHECK_RUN_ID: ${{ job.check_run_id }}
         run: node scripts/ci/quality-report.mjs report --artifacts "$RUNNER_TEMP/quality" --out "$RUNNER_TEMP/quality-report"
       # Should the script itself be missing or unable to start.
       - name: Say so when no report was written
@@ -120,13 +128,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
+      # Where `node --test` is told, below, to keep its JUnit file.
+      - name: Make room for the numbers of the quality report
+        run: mkdir -p "$RUNNER_TEMP/quality"
       - name: Test the path rule, the workflows and the quality report
-        run: |
-          mkdir -p "$RUNNER_TEMP/quality"
-          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" \
-            scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs \
-            scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs \
-            scripts/ci/quality-report.test.mjs
+        run: node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs
       - name: Decide which gates this run needs
         id: rule
         env:
@@ -584,12 +590,17 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      # `jobSummary: false`: the report of the link checker is printed in the log
+      # of this step, whole, whatever this setting. Written to the summary of
+      # the run as well, it stood as one more block above the quality report,
+      # with a notice pointing at it.
       - name: Check local Markdown links and anchors
         uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
         with:
           lycheeVersion: v0.23.0
           args: --offline --include-fragments --no-progress 'README.md' 'docs/**/*.md'
           token: ''
+          jobSummary: false
       - name: Resolve threat identifiers
         if: ${{ !cancelled() }}
         run: |

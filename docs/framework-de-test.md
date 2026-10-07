@@ -1040,7 +1040,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
-| `quality-report` | n'est pas une gate et ne peut pas échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
+| `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
 une gate : voir
@@ -1804,11 +1804,16 @@ apparaît une fois qu'elles sont terminées.
 
 GitHub range les résumés des jobs dans l'ordre où les jobs finissent. Ce
 tableau est donc le dernier bloc de résumé de la page : au-dessus de lui
-viennent le détail replié de chaque gate, et les résumés que vitest et le
-contrôle des liens écrivent d'eux-mêmes. Pour lire l'essentiel sans faire
-défiler, le même job émet une annotation « Rapport de qualité » : le verdict de
-l'exécution et une ligne par projet, que la page liste avec les annotations de
-l'exécution.
+viennent le détail replié de chaque gate et les résumés que vitest écrit de
+lui-même. Pour y arriver sans faire défiler, le même job émet une annotation
+« Rapport de qualité », que la page liste avec les annotations de l'exécution :
+le verdict, une ligne par projet, le seuil de la chaîne de sécurité du Pi avec
+ce qu'il juge et ce qu'il ne juge pas encore, et pour finir l'adresse directe
+du tableau (`…/actions/runs/<exécution>#summary-<job>`).
+
+Le contrôle des liens du job `docs` n'écrit plus de résumé (`jobSummary:
+false`) : c'était un bloc de plus au-dessus du tableau. Son rapport reste
+entier dans le journal de son étape, où il était déjà imprimé.
 
 Les mêmes chiffres sont dans l'artefact `quality-report` de l'exécution, gardé
 90 jours : `quality-report.json`, pour une machine, et `quality-report.md`, le
@@ -1818,7 +1823,7 @@ tableau tel qu'il est affiché.
 
 | Ligne | Ce qui y est compté | Gate affichée |
 |---|---|---|
-| Console du Pi | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`) | `pi-gate` |
+| Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
 | Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
 | Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
 | Site | les tests de `lib/`, puis ceux de `hooks/` et `components/` (vitest, deux suites) | `web` |
@@ -1853,7 +1858,11 @@ Un pourcentage n'est jamais arrondi vers le haut : 99,96 % s'affiche 99,9 %, et
   ne concerne cette gate
   ([Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)).
   Elle n'a pas tourné : la ligne le dit dans chaque colonne, au lieu d'afficher
-  zéro.
+  zéro. Un cas particulier : les tests du panneau local de la console sont
+  lancés par `web`. Sur une PR qui ne touche que le site, `pi-gate` est sautée
+  et ces tests tournent quand même : la ligne de la console les affiche, avec
+  « ¹ », et dit « sautée » pour tout ce que `pi-gate` mesure. Le total de
+  l'en-tête est toujours la somme des lignes.
 - « indisponible » : le job a tourné, mais n'a pas laissé ce chiffre (artefact
   absent, fichier illisible, processus arrêté avant d'écrire son rapport). Le
   rapport ne devine pas : il n'affiche pas de total partiel pour une suite
@@ -1862,28 +1871,48 @@ Un pourcentage n'est jamais arrondi vers le haut : 99,96 % s'affiche 99,9 %, et
   décidé (exécution annulée, étape précédente en échec).
 - « non mesurée » : aucun outil ne mesure cette valeur aujourd'hui (la
   couverture des scripts).
-- « ¹ » après un nombre de tests, « (partiel) » après un état : une des suites
-  ou un des contrôles du projet n'a pas tourné dans cette exécution. Exemple :
+- « ¹ » après un nombre de tests, « (partiel) » après un état : le nombre ne
+  compte qu'une partie des suites du projet, ou l'état qu'une partie de ses
+  contrôles ; les autres n'ont pas de chiffres dans cette exécution. Exemple :
   sur une PR qui ne touche que le site, les scripts n'ont ni les tests ni les
   contrôles Python que `pi-gate` lance pour eux.
 - « rapport indisponible » : l'outil du rapport lui-même a échoué. Aucune gate
   ne dépend de lui ; son journal dit pourquoi.
 
 **Chaîne de sécurité et simulation.** La colonne de couverture du Pi porte sur
-tout `raspberry-pi/src/`. La chaîne de sécurité, elle, est donnée à part, avec
-son exigence : c'est la liste `include` de `raspberry-pi/pyproject.toml`, dont
-`pi-gate` exige 100 % de lignes et de branches. Ce seuil n'a pas changé : le
-rapport lit la mesure sur laquelle la gate vient de l'appliquer. La simulation
-exige 100 % sur tout son code. La même partie donne la batterie de simulation
-(tests réussis, en échec, ignorés, dont les `xfail`) et le nombre de scénarios
-joués par `simulation.quick --all`, par verdict (`PASS`, `XFAIL`, `SKIPPED`,
-`FAIL`), lus dans son `report.json`.
+tout `raspberry-pi/src/`. La chaîne de sécurité est donnée à part, en trois
+temps, parce que le seuil de 100 % ne la juge pas encore en entier :
+
+- « fichiers sous le seuil » : la liste `include` de
+  `raspberry-pi/pyproject.toml`, dont `pi-gate` exige 100 % de lignes et de
+  branches. C'est le seul chiffre accompagné de « seuil tenu » ou « non
+  tenu ». Ce seuil n'a pas changé : le rapport lit la mesure sur laquelle la
+  gate vient de l'appliquer ;
+- « hors du seuil » : chaque fichier que la même configuration déclare dans la
+  chaîne de sécurité sans l'avoir encore mis sous le seuil (la liste
+  `coverage_pending` de `[tool.anheart]`), par son nom, avec sa propre
+  couverture. Le rapport lit cette liste dans la configuration à chaque
+  exécution ; il ne connaît aucun nom de fichier. Si elle ne peut pas être lue,
+  il écrit « indisponible », jamais « aucun » ;
+- « en entier » : les deux réunis, sans seuil.
+
+« 100 % » se lit donc « les fichiers sous le seuil sont à 100 % », pas « la
+chaîne de sécurité est à 100 % ». Sur l'exécution 37623954237, les 76 fichiers
+sous le seuil étaient à 100 %, et `src/signal_processing.py`, seul fichier hors
+du seuil, à 82,5 % de lignes (132 sur 160) et 64,0 % de branches (32 sur 50) :
+la chaîne entière à 99,7 % de lignes et 99,3 % de branches.
+
+La simulation exige 100 % sur tout son code. La même partie donne la batterie
+de simulation (tests réussis, en échec, ignorés, dont les `xfail`) et le nombre
+de scénarios joués par `simulation.quick --all`, par verdict (`PASS`, `XFAIL`,
+`SKIPPED`, `FAIL`), lus dans son `report.json`.
 
 **Détail par gate.** Chaque job `pi-gate`, `simulation-gate`, `convex-tests` et
 `web` écrit aussi son propre résumé, replié sous le titre « Détail de la
 qualité » : ses suites, les dix fichiers les moins couverts, les dix tests les
 plus lents (à partir d'un dixième de seconde), les noms des tests en échec et
-l'état de chaque contrôle de lint et de types. La couverture complète, fichier
+l'état de chaque contrôle de lint et de types. Celui de `pi-gate` nomme aussi
+les fichiers de la chaîne de sécurité hors du seuil. La couverture complète, fichier
 par fichier, est dans l'artefact `quality-<projet>` du job : `coverage-all.json`
 et `coverage-gate.json` pour le Pi et la simulation, le rapport HTML de vitest
 pour Convex (`coverage-convex/index.html`) et pour le site.
@@ -1903,26 +1932,42 @@ npm run coverage:ecg      # les tests de lib/, rapport dans coverage/site-lib/
 npm run coverage:site     # ceux de hooks/ et components/, dans coverage/site-components/
 ```
 
-**Temps ajouté aux jobs**, mesuré sur l'exécution 37617756948 (PR #41) :
+**Temps ajouté aux jobs.** Mesuré le 7 octobre 2026 sur les trois exécutions
+de la PR #41 (37617756948, 37621116038 et 37623954237), comparées aux deux
+push sur `develop` de la même heure (37620748521 et 37622721443), qui n'ont pas
+le rapport.
 
-| Job | Durée du job | Dont, pour le rapport |
-|---|---|---|
-| `convex-tests` | 49 s | 7 s de mesure de couverture, 1 s de publication |
-| `web` | 1 min 13 s | 9 s de mesure de couverture, 1 s de publication |
-| `pi-gate` | 24 min 13 s | 2,8 s pour écrire la couverture en JSON, 2 s de publication |
-| `simulation-gate` (le verdict seul) | 1 min 28 s | 1 s pour écrire la couverture en JSON, 3 s de résumé et de publication |
-| `changes`, `audit`, `docs` | 10 s, 1 min 03 s, 15 s | 1 à 2 s de publication chacun |
-| `quality-report` | 13 s | tout le job, après les gates |
+| Job | Durée sur la PR | Sur `develop`, sans le rapport | Étapes ajoutées |
+|---|---|---|---|
+| `convex-tests` | 49 s, 44 s, 56 s | 36 s, 33 s | 6 à 8 s : mesure de couverture 5 à 7 s, résumé et publication 1 s |
+| `web` | 73 s, 87 s, 109 s | 88 s, 92 s | 10 à 17 s : mesure de couverture 9 à 14 s, résumé et publication 1 à 3 s |
+| `pi-gate` | 24 min 13 s, 19 min 32 s, 25 min 20 s | 23 min 39 s (37617560989), 25 min 54 s | environ 15 s : 8,5 s pour cinq tests ajoutés au lanceur (102 tests en 59,3 s contre 97 en 50,9 s, sur le même processeur), 2,8 s pour écrire la couverture en JSON, 2 à 4 s de résumé et de publication |
+| `simulation-gate` (le verdict seul) | 88 s, 62 s, 83 s | 48 s, 64 s | environ 13 s : les mêmes tests du lanceur, que ce job relance, 1 s de JSON, 1 à 3 s de résumé et de publication |
+| `changes`, `audit`, `docs` | 10 s et 7 s, 63 s, 15 s et 9 s | 8 s et 6 s, 61 s et 62 s, 15 s et 6 s | 1 à 2 s de publication chacun |
+| `quality-report` | 13 s, 9 s, 14 s | n'existait pas | tout le job, après les gates : il ne retarde aucune vérification obligatoire |
 
-Écrire un fichier JUnit ne se mesure pas à la seconde près. L'étape « Pi gate »
-a duré 23 min 50 s sur cette exécution ; le même jour, sur d'autres branches,
-elle a duré de 15 min 06 s à 25 min 19 s selon le processeur du runner
-(exécutions 37618180391 et 37614363760) : le rapport ne s'y distingue pas.
+À lire avec leur bruit : sur les autres branches du même jour, `convex-tests`
+a duré de 25 à 61 s et `web` de 52 à 92 s, selon le runner (l'installation de
+Node de 1 à 15 s, `npm ci` de 14 à 24 s). La somme des étapes ajoutées, elle,
+se lit dans chaque exécution : 17 s au plus dans `web`, 8 s au plus dans
+`convex-tests`. Les tests qui décident ces deux gates durent autant avec ou
+sans leur fichier JUnit (4 à 6 s pour Convex, 5 à 8 s pour `hooks/` et
+`components/`). Dans `simulation-gate`, l'écart avec `develop` vient surtout du
+processeur du runner : les 97 tests du lanceur y ont pris 32 s sur un runner
+et 51 s sur un autre. L'étape « Pi gate » a duré de 15 min 06 s à 25 min 19 s
+sur les autres branches du jour (37618180391 et 37614363760) : ce que le
+rapport y ajoute ne s'y distingue pas. Trois autres tests ont été ajoutés au
+lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
 
 **Ce qui n'est pas mesuré.**
 
 - La couverture des scripts (`scripts/`), et celle du JavaScript du panneau
   local (`raspberry-pi/src/web/static/`).
+- Le Python hors des deux paquets mesurés. Pour le Pi, seul
+  `raspberry-pi/src/` l'est : pas `raspberry-pi/scripts/`. Pour la simulation,
+  `simulation/cad/`, `simulation/scripts/` et les tests sont écartés de la
+  mesure par sa configuration, et `simulation_app.py`, à la racine du dépôt,
+  est hors du paquet. Le « 100 % » de la simulation ne dit rien d'eux.
 - Les pages du site (`app/`), `i18n/` et `proxy.ts` : aucun test unitaire ne
   les charge, ils ne sont donc pas dans la couverture du site. Ils attendent la
   suite navigateur (ANH-83).
@@ -1941,8 +1986,9 @@ elle a duré de 15 min 06 s à 25 min 19 s selon le processeur du runner
   exécution d'un dépôt public est public. Le rapport ne porte que des noms de
   tests et de fichiers, des comptes et des durées ; ni message d'échec, ni
   sortie de test.
-- Ce que vérifient les deux autres workflows, `codeql.yml` et
-  `pi-install.yml` : le rapport ne lit que les jobs de `ci.yml`.
+- Ce que font les autres workflows du dépôt (`codeql.yml`, `pi-install.yml`,
+  les workflows de déploiement) : le rapport ne lit que les jobs de `ci.yml`,
+  et le dit dans son résumé.
 - L'évolution dans le temps : chaque exécution a son `quality-report.json`,
   rien ne les compare encore.
 
@@ -1951,11 +1997,12 @@ elle a duré de 15 min 06 s à 25 min 19 s selon le processeur du runner
 | Champ | Contenu |
 |---|---|
 | `schema` | `1`. La version du format : elle augmente quand un champ change de sens ou disparaît, pas quand un champ s'ajoute |
-| `run` | l'exécution : `id`, `attempt`, `event`, `repository`, `ref`, `sha` (le commit de tête de la PR sur une PR), `pull_request`, `url` |
+| `run` | l'exécution : `id`, `attempt`, `event`, `repository`, `ref`, `sha` (le commit de tête de la PR sur une PR), `pull_request`, `url`, `summary_url` (l'adresse du tableau dans la page de l'exécution, ou `null`) |
 | `jobs` | l'état de `changes` et de chaque gate : `passed`, `failed`, `cancelled`, `skipped` (par la règle de chemins), `not_run`, `unknown` |
 | `projects` | une entrée par ligne du tableau : `id`, `label`, `gate` (`state`, et `jobs` avec l'état de chacun), `tests` (`total`, `passed`, `failed`, `skipped`, `duration_s`, et `complete`, faux si une suite du projet manque) ou `null`, `tests_state`, `coverage` (`lines` et `branches`, chacun `covered` et `total`) ou `null`, `coverage_state`, `lint` et `types` (`state`, `complete`, `checks`) |
 | `suites` | une entrée par suite de tests : `id`, `project`, `job`, `label`, `runner`, `state` (`measured`, `skipped`, `not_run`, `unavailable`) et, si elle est mesurée, `numbers` : `tests`, `passed`, `failed`, `skipped`, `expected_failures`, `duration_s`, `files` (le nombre de fichiers JUnit lus), `slowest`, `failed_tests` |
-| `coverage` | une entrée par mesure : `id`, `project`, `job`, `label`, `main` (vrai pour celle du tableau), `threshold` s'il y en a un, `state` et, si elle est mesurée, `numbers` : `lines`, `branches`, `files`, `least_covered` |
+| `coverage` | une entrée par mesure (`pi` : tout `raspberry-pi/src/` ; `pi-threshold` : les fichiers sous le seuil ; `simulation` ; `convex` ; `site`) : `id`, `project`, `job`, `label`, `main` (vrai pour celle du tableau), `threshold` s'il y en a un, `state` et, si elle est mesurée, `numbers` : `lines`, `branches`, `files`, `least_covered` |
+| `safety_chain` | ce que la chaîne de sécurité du Pi contient hors du seuil : `listed` (la liste `coverage_pending` telle que lue, `null` si elle n'a pas pu l'être), `pending` (chaque fichier mesuré qu'elle nomme, avec `lines` et `branches`), `not_measured` (ses entrées sans fichier mesuré), `whole` (les fichiers sous le seuil et ceux-là réunis, `null` s'il manque une partie) ; `null` si `pi-gate` n'a rien laissé |
 | `scenarios` | le rapport synthétique de la simulation : `runs`, `by_status`, `by_group` ; `null` s'il n'a pas été lu |
 
 Les durées sont en secondes. Les comptes de couverture sont des entiers : le
@@ -1977,19 +2024,36 @@ pourcentage se calcule, il n'est pas stocké.
   gate. Sans la variable, les deux scripts se comportent comme avant.
 - `scripts/ci/quality-report.mjs job <projet>` lit ces fichiers dans le job,
   écrit le détail du job et `part.json` ; l'artefact `quality-<projet>` les
-  porte jusqu'au dernier job. `changes`, `audit` et `docs` publient
-  seulement le fichier JUnit de leurs tests de scripts.
+  porte jusqu'au dernier job. Pour le Pi, il lit aussi la liste
+  `coverage_pending` de `raspberry-pi/pyproject.toml`, comme du texte (rien
+  n'est installé pour lire du TOML) : une liste de chaînes simples, sur une ou
+  plusieurs lignes, commentaires admis. Écrite autrement, elle est dite
+  « indisponible ». `changes`, `audit` et `docs` publient seulement le fichier
+  JUnit de leurs tests de scripts.
 - `scripts/ci/quality-report.mjs report`, dans `quality-report`, réunit le tout
   avec l'état de chaque job.
 
 **Ce que le rapport ne peut pas faire.** Il ne décide aucune gate. Les étapes
 qu'il ajoute aux gates (« Quality report, the numbers of this job », « Keep the
 numbers for the quality report », « Measure the coverage ») portent toutes
-`continue-on-error: true` ; le job `quality-report` n'est pas une vérification
-obligatoire, chacune de ses étapes continue sur erreur, et son outil rend
-toujours le code 0. Le workflow ne reçoit aucune permission de plus : lecture
-seule, pas de commentaire posté dans la PR. Un dossier de rapport impossible à
-écrire est signalé dans le journal de la gate, qui juge ensuite comme sans lui.
+`continue-on-error: true`. Le workflow ne reçoit aucune permission de plus :
+lecture seule, pas de commentaire posté dans la PR. Un dossier de rapport
+impossible à créer ou à écrire, ou un fichier de rapport impossible à
+remplacer, est signalé dans le journal de la gate, qui juge ensuite comme sans
+lui.
+
+Le job `quality-report` n'est pas une vérification obligatoire. Chacune de ses
+étapes continue sur erreur et son outil rend toujours le code 0 : aucune étape
+ne peut le faire échouer. Il peut encore finir autrement que vert pour une
+raison qui n'est pas une étape : sa limite de 5 minutes, une panne du runner,
+une exécution annulée. Aucune fusion n'en dépend ; seul `scripts/release.sh` le
+verrait (voir les limites plus bas).
+
+Un nom de test, de fichier, d'étape ou de verdict de scénario n'est jamais
+écrit tel quel dans un résumé : tout caractère autre qu'une lettre, un chiffre,
+une espace ou quelques signes sans effet est écrit comme une référence de
+caractère. Un nom ne peut donc ni fermer une cellule, ni produire un lien, une
+image, une mention ou une balise.
 
 **Tests.** `scripts/ci/quality-report.test.mjs` (job `changes`, sans
 installation) nourrit l'outil avec des fichiers écrits comme les outils les
@@ -2000,7 +2064,10 @@ section décrit chaque colonne. `scripts/ci/ci-workflow.test.mjs` vérifie que
 chaque étape ajoutée continue sur erreur, que chaque suite est écrite par le
 job dont le rapport l'attend, et que le job `audit` ne transmet que les
 fichiers JUnit de ses deux fichiers de test. `scripts/ci/test_pi_gate_parallel.py`
-vérifie que `--report` ne change aucun verdict.
+vérifie que `--report` ne change aucun verdict : dossier impossible à créer ou
+fermé en écriture, fichier impossible à remplacer, `coverage json` en échec.
+`quality-report.test.mjs` vérifie aussi que la liste des fichiers hors du seuil
+vient de la configuration, et qu'un nom hostile ressort en texte.
 
 **Limites.**
 
@@ -2008,16 +2075,18 @@ vérifie que `--report` ne change aucun verdict.
   l'exécution, seuls les détails des jobs déjà finis sont visibles.
 - Le tableau est le dernier bloc de résumé de la page, pas le premier : l'ordre
   des résumés est celui de la fin des jobs, et il ne se règle pas. L'annotation
-  « Rapport de qualité » en reprend l'essentiel, en texte.
+  « Rapport de qualité » en reprend l'essentiel, en texte, et se termine par
+  l'adresse du tableau. Les résumés « Vitest Test Report », que vitest écrit
+  dans `convex-tests` et `web`, restent au-dessus de lui.
 - Après « Re-run failed jobs », le rapport est réécrit avec les chiffres de la
   dernière exécution de chaque job.
 - `quality-report` démarre aussi sur une exécution annulée (`always()`) : il
   demande un runner quelques secondes, comme `simulation-gate`, et son tableau
   dit alors « annulée » ou « non lancé ».
 - `scripts/release.sh` lit toutes les vérifications du commit, obligatoires ou
-  non : `quality-report` ne peut pas y échouer, mais annulé avec son exécution
-  il fait refuser `prepare`, `pr` ou `tag`, comme n'importe quel job annulé.
-  Relancer l'exécution.
+  non. Un `quality-report` annulé avec son exécution, arrêté par sa limite de
+  temps ou victime d'une panne de runner lui fait refuser `prepare`, `pr` ou
+  `tag`, comme n'importe quel job dans cet état. Relancer l'exécution.
 - Un test `test.fails` de vitest (échec attendu) est écrit comme réussi dans
   son fichier JUnit : il compte dans « Réussis ».
 - Python et TypeScript ne comptent pas les lignes de la même façon

@@ -41,7 +41,7 @@ const SLOW_SECONDS = 0.1;
  * @type {readonly {id: string, label: string, gates: readonly string[]}[]}
  */
 export const PROJECTS = [
-  { id: "pi", label: "Console du Pi", gates: ["pi-gate"] },
+  { id: "pi", label: "Console du Pi (tout `src/`)", gates: ["pi-gate"] },
   { id: "simulation", label: "Simulation", gates: ["simulation-gate"] },
   { id: "convex", label: "Convex", gates: ["convex-tests"] },
   { id: "site", label: "Site (`lib/`, `hooks/`, `components/`)", gates: ["web"] },
@@ -135,17 +135,22 @@ export const SUITES = [
 /**
  * Every coverage measure of the CI. `main` is the one the table shows for its
  * project; `threshold` is the percentage its gate requires, when it requires one.
+ *
+ * `pi-threshold` is what the threshold of the Pi gate judges: the files of the
+ * `include` list of raspberry-pi/pyproject.toml. It is not the whole safety
+ * chain: the files that list keeps out for now (`coverage_pending`) are
+ * declared part of the chain too, and are shown apart, by name (`Pending`).
  * @type {readonly {id: string, project: string, job: string, part: string, label: string, main: boolean,
  *   threshold?: number}[]}
  */
 export const COVERAGES = [
   { id: "pi", project: "pi", job: "pi-gate", part: "pi", label: "tout `raspberry-pi/src/`", main: true },
   {
-    id: "pi-safety-chain",
+    id: "pi-threshold",
     project: "pi",
     job: "pi-gate",
     part: "pi",
-    label: "chaîne de sécurité du Pi",
+    label: "chaîne de sécurité du Pi, fichiers sous le seuil",
     main: false,
     threshold: 100,
   },
@@ -364,10 +369,10 @@ function coverageNumbers(files) {
 }
 
 /**
- * The coverage of a Python project from `coverage json` (coverage.py).
- * @param {string} path @returns {CoverageNumbers | undefined}
+ * Each file of a `coverage json` report (coverage.py), with its lines and its branches.
+ * @param {string} path @returns {FileCoverage[] | undefined} `undefined` if the report is not there to read
  */
-export function pythonCoverage(path) {
+function pythonFiles(path) {
   const report = object(readJson(path));
   const entries = Object.entries(object(report.files));
   if (report.totals === undefined || entries.length === 0) return undefined;
@@ -383,7 +388,86 @@ export function pythonCoverage(path) {
       branches: { covered: count(summary.covered_branches) ?? 0, total: count(summary.num_branches) ?? 0 },
     });
   }
-  return coverageNumbers(files);
+  return files;
+}
+
+/**
+ * The coverage of a Python project from `coverage json` (coverage.py).
+ * @param {string} path @returns {CoverageNumbers | undefined}
+ */
+export function pythonCoverage(path) {
+  const files = pythonFiles(path);
+  return files === undefined ? undefined : coverageNumbers(files);
+}
+
+/**
+ * What a project declares part of its safety chain but keeps out of its
+ * coverage threshold for now: the list itself (`null` if it could not be
+ * read), the measured files it names, and the entries no measured file answers to.
+ * @typedef {{listed: string[] | null, files: FileCoverage[], not_measured: string[]}} Pending
+ */
+
+/**
+ * The `coverage_pending` list of the `[tool.anheart]` table of a
+ * pyproject.toml: the files of the safety chain the threshold does not judge
+ * yet. Read as text, since nothing is installed here to read TOML: an array of
+ * plain strings, on one line or several, comments allowed.
+ * @param {string | undefined} toml the content of the file
+ * @returns {string[] | undefined} `undefined` if the list is not there to read: it is then unknown, not empty
+ */
+export function pendingList(toml) {
+  const text = toml ?? "";
+  // The table runs from its header to the next header, or to the end of the file.
+  const header = /^\[tool\.anheart\][ \t]*(?:#.*)?$/m.exec(text);
+  if (header === null) return undefined;
+  const after = text.slice(header.index + header[0].length);
+  const table = after.slice(0, /^\[{1,2}[^\]\n]+\]{1,2}[ \t]*(?:#.*)?$/m.exec(after)?.index ?? after.length);
+  const opening = /^coverage_pending[ \t]*=[ \t]*\[/m.exec(table);
+  if (opening === null) return undefined;
+  /** @type {string[]} */
+  const entries = [];
+  // One piece at a time, up to the bracket that closes the list: space, a comma, a comment to the
+  // end of its line, a plain string. A bracket or a quote inside a comment or a string is part of it.
+  const piece = /\s+|,|#[^\n]*|"([^"\\\n]*)"|'([^'\n]*)'|(\])/y;
+  piece.lastIndex = opening.index + opening[0].length;
+  for (;;) {
+    const [, double, single, closing] = piece.exec(table) ?? [undefined, undefined, undefined, "unknown"];
+    if (closing === "]") return entries;
+    // Anything else (an escape, a string on several lines, a list in the list) is not read as if it were understood.
+    if (closing !== undefined) return undefined;
+    const entry = double ?? single;
+    if (entry !== undefined) entries.push(entry);
+  }
+}
+
+/**
+ * Whether a file is one an entry of a coverage list names: `*` stands for
+ * anything within a directory, `**` for anything at all, as in coverage.py.
+ * @param {string} entry @param {string} file
+ */
+const names = (entry, file) =>
+  new RegExp(
+    `^${entry
+      .split("**")
+      .map((part) =>
+        part
+          .split("*")
+          .map((text) => text.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&"))
+          .join("[^/]*"),
+      )
+      .join(".*")}$`,
+  ).test(file);
+
+/**
+ * @param {readonly string[] | undefined} listed the pending list, as read
+ * @param {readonly FileCoverage[] | undefined} measured every measured file of the project
+ * @returns {Pending}
+ */
+export function pendingOf(listed, measured) {
+  if (listed === undefined) return { listed: null, files: [], not_measured: [] };
+  const files = (measured ?? []).filter(({ file }) => listed.some((entry) => names(entry, file)));
+  const silent = listed.filter((entry) => !files.some(({ file }) => names(entry, file)));
+  return { listed: [...listed], files, not_measured: silent };
 }
 
 /**
@@ -510,7 +594,7 @@ function once(checks) {
 /** @typedef {{runs: number, by_status: Record<string, number>, by_group: Record<string, number>}} Scenarios */
 /**
  * @typedef {{schema: number, part: string, suites: Record<string, SuiteNumbers>,
- *   coverage: Record<string, CoverageNumbers>, checks: Check[], scenarios?: Scenarios}} Part
+ *   coverage: Record<string, CoverageNumbers>, checks: Check[], scenarios?: Scenarios, pending?: Pending}} Part
  */
 
 /**
@@ -548,6 +632,8 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
   let coverage = {};
   /** @type {Check[]} */
   let checks = [];
+  /** @type {Pending | undefined} */
+  let pending;
   const junit = (/** @type {string} */ name) => suiteNumbers(existsSync(join(dir, name)) ? [join(dir, name)] : []);
   const shares = (/** @type {string} */ directory) =>
     namesIn(directory)
@@ -560,9 +646,14 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
     };
     coverage = {
       pi: pythonCoverage(join(dir, "coverage-all.json")),
-      "pi-safety-chain": pythonCoverage(join(dir, "coverage-gate.json")),
+      "pi-threshold": pythonCoverage(join(dir, "coverage-gate.json")),
     };
     checks = stageChecks(readText(join(dir, "stages.tsv")), "pi", "pi-gate");
+    // What the configuration declares in the safety chain and out of the threshold, read from it each time.
+    pending = pendingOf(
+      pendingList(readText(join(root, "raspberry-pi", "pyproject.toml"))),
+      pythonFiles(join(dir, "coverage-all.json")),
+    );
   } else if (part === "simulation") {
     // The jobs of the battery each left a directory: their stages and one JUnit file per share.
     const jobs = namesIn(parts ?? "")
@@ -599,26 +690,39 @@ export function buildPart(part, { dir, parts, scenarios: scenariosFile, shares: 
   const result = { schema: SCHEMA_VERSION, part, suites: measured(suites), coverage: measured(coverage), checks };
   const runs = part === "simulation" ? scenarios(scenariosFile) : undefined;
   if (runs !== undefined) result.scenarios = runs;
+  if (pending !== undefined) result.pending = pending;
   return result;
 }
 
 // --- Writing Markdown ------------------------------------------------------------
 
-/** @param {string} text any text @returns {string} the same text, safe in a cell of a Markdown table */
-export const cell = (text) =>
-  `<code>${text
+/**
+ * A text that comes from outside this file (the name of a test, of a file, of
+ * a scenario status) as it can be written in the summary: it reads the same
+ * and can be nothing else. Letters, digits, spaces and a few signs that mean
+ * nothing to Markdown or to HTML are kept; every other character is written as
+ * a character reference, which is never syntax. So a name cannot end a cell,
+ * open a tag, or make a link, an image, a mention or an emphasis.
+ * @param {string} text @returns {string}
+ */
+export const literal = (text) =>
+  text
     .slice(0, 160)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("|", "&#124;")
-    .replaceAll(/\s+/g, " ")}</code>`;
+    .replaceAll(/\s+/g, " ")
+    .replaceAll(/[^\p{L}\p{N} ,;=%'"/+-]/gu, (character) => `&#${character.codePointAt(0)};`);
+
+/** @param {string} text any text @returns {string} the same text, as code, safe in a cell of a Markdown table */
+export const cell = (text) => `<code>${literal(text)}</code>`;
 
 /** @param {number} value @returns {string} a whole number, its thousands set apart by a space that does not break */
-const whole = (value) => String(value).replace(/\B(?=(\d{3})+$)/g, " ");
+const whole = (value) => String(value).replace(/\B(?=(\d{3})+$)/g, "\u202f");
 
-/** @param {number} value @param {string} noun in the singular @returns {string} a count with its noun, in French */
-const counted = (value, noun) => `${whole(value)} ${noun}${value > 1 ? "s" : ""}`;
+/**
+ * A count with what it counts, in French: every word given takes an "s" from two on.
+ * @param {number} value @param {string} words in the singular: "test lancé", "gate réussie"
+ * @returns {string}
+ */
+const counted = (value, words) => `${whole(value)} ${value > 1 ? words.replaceAll(/(?<=\p{L})(?= |$)/gu, "s") : words}`;
 
 /**
  * A share as a percentage, never rounded up: 99,9 % stays below 100 %.
@@ -661,11 +765,15 @@ const PART_TITLE = { pi: "console du Pi", simulation: "simulation", convex: "Con
 
 /** @param {Scenarios} runs @returns {string} */
 function scenariosText(runs) {
+  // A status is a word the simulation wrote in its report: it is written as text, never as syntax.
   const statuses = Object.entries(runs.by_status)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([status, times]) => `${whole(times)} ${status}`);
-  return `${whole(runs.runs)} scénarios joués par \`simulation.quick --all\` : ${statuses.join(", ")}`;
+    .map(([status, times]) => `${whole(times)} ${literal(status)}`);
+  return `${counted(runs.runs, "scénario joué")} par \`simulation.quick --all\` : ${statuses.join(", ")}`;
 }
+
+/** @param {FileCoverage} file @returns {string} */
+const fileText = (file) => `lignes ${ratioText(file.lines)}, branches ${ratioText(file.branches)}`;
 
 /**
  * The summary a gate job shows for itself: its suites, its coverage with the
@@ -717,6 +825,20 @@ export function renderPart(part) {
     ),
     "",
   );
+  if (part.pending !== undefined) {
+    // The threshold above judges some of the safety chain: what the chain holds besides is named here.
+    const { listed, files, not_measured: silent } = part.pending;
+    lines.push("Fichiers déclarés dans la chaîne de sécurité et pas encore sous le seuil (`coverage_pending`) :", "");
+    if (listed === null) lines.push("- liste indisponible : elle n'a pas pu être lue dans la configuration", "");
+    else if (listed.length === 0) lines.push("- aucun", "");
+    else {
+      lines.push(
+        ...files.map((file) => `- ${cell(file.file)} : ${fileText(file)}`),
+        ...silent.map((entry) => `- ${cell(entry)} : non mesuré`),
+        "",
+      );
+    }
+  }
   for (const measure of measures) {
     const least = part.coverage[measure.id]?.least_covered ?? [];
     if (least.length === 0) continue;
@@ -903,7 +1025,35 @@ export function buildReport({ parts, junit, needs, event, run }) {
     projects,
     suites,
     coverage,
+    safety_chain: safetyChain(parts.pi?.pending, parts.pi?.coverage["pi-threshold"]),
     scenarios: parts.simulation?.scenarios ?? null,
+  };
+}
+
+/**
+ * The safety chain of the Pi as its configuration declares it: the files
+ * under the threshold and, named apart, the files declared in the chain that
+ * the threshold does not judge yet. `whole` adds the two up; it is `null`
+ * unless every part of the sum was measured.
+ * @param {Pending | undefined} pending @param {CoverageNumbers | undefined} threshold
+ */
+function safetyChain(pending, threshold) {
+  if (pending === undefined) return null;
+  const known = threshold !== undefined && pending.listed !== null && pending.not_measured.length === 0;
+  const add = (/** @type {(file: FileCoverage) => Ratio} */ of, /** @type {Ratio} */ under) => ({
+    covered: pending.files.reduce((sum, file) => sum + of(file).covered, under.covered),
+    total: pending.files.reduce((sum, file) => sum + of(file).total, under.total),
+  });
+  return {
+    listed: pending.listed,
+    pending: pending.files,
+    not_measured: pending.not_measured,
+    whole: known
+      ? {
+          lines: add((file) => file.lines, threshold.lines),
+          branches: add((file) => file.branches, threshold.branches),
+        }
+      : null,
   };
 }
 
@@ -934,6 +1084,35 @@ function checkText(check) {
   return MISSING[check.state] ?? check.state;
 }
 
+/** @param {CoverageNumbers} numbers @returns {boolean} whether nothing is missing, which is what a threshold of 100 % asks */
+const complete = ({ lines, branches }) => lines.covered >= lines.total && branches.covered >= branches.total;
+
+/**
+ * What the safety chain of the Pi holds besides the files under the
+ * threshold: each file by name with its own figures, then the chain as a
+ * whole. The 100 % of the threshold is never left to stand for the chain.
+ * @param {Report["safety_chain"]} chain @returns {string[][]}
+ */
+function pendingRows(chain) {
+  const declared = "déclaré dans la chaîne, pas encore sous le seuil";
+  const outside = "Chaîne de sécurité du Pi, hors du seuil";
+  if (chain === null || chain.listed === null) {
+    return [[outside, "indisponible : la liste n'a pas pu être lue dans la configuration", declared]];
+  }
+  if (chain.listed.length === 0) return [[outside, "aucun fichier", "toute la chaîne est sous le seuil"]];
+  return [
+    ...chain.pending.map((file) => [`${outside} : ${cell(file.file)}`, fileText(file), declared]),
+    ...chain.not_measured.map((entry) => [`${outside} : ${cell(entry)}`, "non mesuré", declared]),
+    [
+      "Chaîne de sécurité du Pi, en entier",
+      chain.whole === null
+        ? "indisponible"
+        : `lignes ${ratioText(chain.whole.lines)}, branches ${ratioText(chain.whole.branches)}`,
+      "aucun seuil sur l'ensemble : fichiers sous le seuil et hors du seuil réunis",
+    ],
+  ];
+}
+
 /** @param {Report} report @returns {string[][]} the safety chain and the simulation, one measure per line */
 function safetyRows(report) {
   /** @type {string[][]} */
@@ -944,13 +1123,13 @@ function safetyRows(report) {
       rows.push([`Couverture, ${measure.label}`, MISSING[measure.state] ?? measure.state, required]);
       continue;
     }
-    const { lines, branches } = measure.numbers;
-    const held = lines.covered >= lines.total && branches.covered >= branches.total;
+    const { lines, branches, files } = measure.numbers;
     rows.push([
       `Couverture, ${measure.label}`,
-      `lignes ${ratioText(lines)}, branches ${ratioText(branches)}`,
-      `${required} : ${held ? "✅ tenu" : "❌ non tenu"}`,
+      `${counted(files, "fichier")} : lignes ${ratioText(lines)}, branches ${ratioText(branches)}`,
+      `${required} : ${complete(measure.numbers) ? "✅ tenu" : "❌ non tenu"}`,
     ]);
+    if (measure.id === "pi-threshold") rows.push(...pendingRows(report.safety_chain));
   }
   const battery = report.suites.find((suite) => suite.id === "simulation-battery");
   /** What to say of the simulation where it left nothing. */
@@ -989,22 +1168,22 @@ export function renderReport(report) {
   const measured = suites.flatMap((suite) => (suite.numbers === undefined ? [] : [suite.numbers]));
   const tests = measured.reduce((sum, numbers) => sum + numbers.tests, 0);
   const failed = measured.reduce((sum, numbers) => sum + numbers.failed, 0);
-  const told = (/** @type {JobState} */ state, /** @type {string} */ words) => {
+  const told = (/** @type {JobState} */ state, /** @type {string} */ one, /** @type {string} */ several) => {
     const named = GATES.filter((job) => jobs[job] === state).map((job) => `\`${job}\``);
-    return named.length === 0 ? [] : [`${named.length} ${words} (${named.join(", ")})`];
+    return named.length === 0 ? [] : [`${named.length} ${named.length > 1 ? several : one} (${named.join(", ")})`];
   };
   const verdict = [
-    `${GATES.filter((job) => jobs[job] === "passed").length} gates réussies sur ${GATES.length}`,
-    ...told("failed", "en échec"),
-    ...told("skipped", "sautées par la règle de chemins"),
-    ...told("cancelled", "annulées"),
-    ...told("not_run", "non lancées"),
-    ...told("unknown", "dans un état inconnu"),
+    `${counted(GATES.filter((job) => jobs[job] === "passed").length, "gate réussie")} sur ${GATES.length}`,
+    ...told("failed", "en échec", "en échec"),
+    ...told("skipped", "sautée par la règle de chemins", "sautées par la règle de chemins"),
+    ...told("cancelled", "annulée", "annulées"),
+    ...told("not_run", "non lancée", "non lancées"),
+    ...told("unknown", "dans un état inconnu", "dans un état inconnu"),
   ];
   const lines = [
     "## Rapport de qualité",
     "",
-    `**${whole(tests)} tests lancés, ${whole(failed)} en échec.** ${verdict.join(", ")}.`,
+    `**${counted(tests, "test lancé")}, ${whole(failed)} en échec.** ${verdict.join(", ")}.`,
     "",
     table(
       [
@@ -1022,9 +1201,13 @@ export function renderReport(report) {
       ],
       projects.map((project) => {
         const gate = gateText(project.gate);
-        if (project.gate.state === "skipped") return [project.label, ...cells(9, MISSING.skipped ?? ""), gate];
         const numbers = project.tests;
-        const counted =
+        // A suite of a skipped gate may still have run in another job: its tests are then shown, and
+        // counted in the total above. Without any, the whole line says the gate was skipped.
+        if (project.gate.state === "skipped" && numbers === null) {
+          return [project.label, ...cells(9, MISSING.skipped ?? ""), gate];
+        }
+        const tested =
           numbers === null
             ? cells(5, MISSING[project.tests_state] ?? project.tests_state)
             : [
@@ -1038,14 +1221,18 @@ export function renderReport(report) {
           project.coverage === null
             ? cells(2, MISSING[project.coverage_state] ?? project.coverage_state)
             : [percent(project.coverage.lines), percent(project.coverage.branches)];
-        return [project.label, ...counted, ...covered, checkText(project.lint), checkText(project.types), gate];
+        return [project.label, ...tested, ...covered, checkText(project.lint), checkText(project.types), gate];
       }),
       "lrrrrrrrlll",
     ),
     "",
   ];
-  if (projects.some((project) => project.gate.state !== "skipped" && project.tests?.complete === false)) {
-    lines.push("¹ Une suite de ce projet n'a pas de chiffres dans cette exécution : voir le détail par suite.", "");
+  if (projects.some((project) => project.tests?.complete === false)) {
+    lines.push(
+      "¹ Ce nombre ne compte qu'une partie des suites du projet : les autres n'ont pas de chiffres dans cette " +
+        "exécution (voir le détail par suite).",
+      "",
+    );
   }
   const others = ["audit", "docs"].map((job) => `\`${job}\` ${GATE_WORD[jobs[job] ?? "unknown"] ?? ""}`);
   lines.push(
@@ -1077,6 +1264,8 @@ export function renderReport(report) {
     "- Couverture de Convex et du site : mesurée, sans seuil. Elle ne fait échouer aucune gate.",
     "- Non mesuré : la couverture des scripts ; les pages du site (`app/`), qu'aucun test unitaire ne charge ; " +
       "les tests de release (`npm run test:release`), que la CI ne lance pas.",
+    "- Ce rapport ne lit que les jobs de `ci.yml`. Les autres workflows du dépôt (analyse statique, installation " +
+      "du Pi, déploiements) n'y figurent pas.",
     "- Chaque colonne est décrite dans `docs/framework-de-test.md`, section CI. Les mêmes chiffres sont dans " +
       "l'artefact `quality-report` (`quality-report.json`).",
     "",
@@ -1113,15 +1302,38 @@ const SAID = {
 };
 
 /**
+ * The safety chain of the Pi in one sentence: the threshold, on the files it
+ * judges, then by name what the chain holds besides.
+ * @param {Report} report @returns {string | undefined} `undefined` when the Pi gate left no such measure
+ */
+function chainSentence(report) {
+  const threshold = report.coverage.find(({ id }) => id === "pi-threshold");
+  if (threshold?.numbers === undefined) return undefined;
+  const { lines, branches, files } = threshold.numbers;
+  const under =
+    `seuil de ${threshold.threshold} % ${complete(threshold.numbers) ? "tenu" : "non tenu"} ` +
+    `(${counted(files, "fichier")} sous le seuil : lignes ${percent(lines)}, branches ${percent(branches)})`;
+  const chain = report.safety_chain;
+  if (chain === null || chain.listed === null) return `${under} ; fichiers hors du seuil : liste indisponible`;
+  if (chain.listed.length === 0) return `${under} ; aucun fichier de la chaîne hors du seuil`;
+  const outside = [
+    ...chain.pending.map((file) => `${file.file} (lignes ${percent(file.lines)}, branches ${percent(file.branches)})`),
+    ...chain.not_measured.map((entry) => `${entry} (non mesuré)`),
+  ];
+  return `${under} ; dans la chaîne mais hors du seuil : ${outside.join(", ")}`;
+}
+
+/**
  * The verdict of the run and one line per project, as plain text: what the
  * report job also says as a notice. GitHub shows the summaries of the jobs in
  * the order the jobs ended, so the table of the run, written by the last job,
  * is the last block of the page; a notice is listed with the annotations of
- * the run. Counts and states only, like the table.
+ * the run, and ends on the address of the table. Counts and states only, like
+ * the table.
  * @param {Report} report @returns {string}
  */
 export function renderNotice(report) {
-  const { jobs, projects, suites } = report;
+  const { run, jobs, projects, suites } = report;
   const measured = suites.flatMap((suite) => (suite.numbers === undefined ? [] : [suite.numbers]));
   const sum = (/** @type {(numbers: SuiteNumbers) => number} */ of) =>
     measured.reduce((total, numbers) => total + of(numbers), 0);
@@ -1130,12 +1342,16 @@ export function renderNotice(report) {
     (job) => `${job} ${GATE_SAID[jobs[job] ?? "unknown"]}`,
   );
   const lines = [
-    `${whole(sum((numbers) => numbers.tests))} tests lancés, ${whole(sum((numbers) => numbers.failed))} en échec. ` +
-      `${passed} gates réussies sur ${GATES.length}${others.length === 0 ? "" : ` (${others.join(", ")})`}.`,
+    `${counted(
+      sum((numbers) => numbers.tests),
+      "test lancé",
+    )}, ${whole(sum((numbers) => numbers.failed))} en échec. ` +
+      `${counted(passed, "gate réussie")} sur ${GATES.length}${others.length === 0 ? "" : ` (${others.join(", ")})`}.`,
   ];
   for (const project of projects) {
-    const label = project.label.replace(/ \(.*$/, "");
-    if (project.gate.state === "skipped") {
+    // As in the table, with the signs of Markdown left out: "Console du Pi (tout src/)".
+    const label = project.label.replaceAll("`", "");
+    if (project.gate.state === "skipped" && project.tests === null) {
       lines.push(`${label} : sautée par la règle de chemins`);
       continue;
     }
@@ -1146,7 +1362,8 @@ export function renderNotice(report) {
         [
           project.tests === null
             ? `tests ${SAID[project.tests_state]?.[1] ?? project.tests_state}`
-            : `${whole(project.tests.total)} tests, ${whole(project.tests.failed)} en échec`,
+            : `${counted(project.tests.total, "test")}${project.tests.complete ? "" : " (une partie des suites)"}, ` +
+              `${whole(project.tests.failed)} en échec`,
           project.coverage === null
             ? `couverture ${COVERAGE_SAID[project.coverage_state] ?? project.coverage_state}`
             : `lignes ${percent(project.coverage.lines)}, branches ${percent(project.coverage.branches)}`,
@@ -1155,8 +1372,14 @@ export function renderNotice(report) {
           `gate ${GATE_SAID[project.gate.state] ?? project.gate.state}`,
         ].join(" ; "),
     );
+    const chain = project.id === "pi" ? chainSentence(report) : undefined;
+    if (chain !== undefined) lines.push(`Chaîne de sécurité du Pi : ${chain}`);
   }
-  lines.push("Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.");
+  lines.push(
+    typeof run.summary_url === "string"
+      ? `Le tableau complet : ${run.summary_url}`
+      : "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
+  );
   return lines.join("\n");
 }
 
@@ -1194,6 +1417,9 @@ function summarize(env, markdown) {
 function runOf(env) {
   const pull = Number(env.PR_NUMBER);
   const known = env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID;
+  const url = known ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null;
+  // GitHub anchors the summary of a job at the number of its check run.
+  const anchored = url !== null && /^\d+$/.test(env.CHECK_RUN_ID ?? "");
   return {
     id: env.GITHUB_RUN_ID ?? null,
     attempt: Number(env.GITHUB_RUN_ATTEMPT) || 1,
@@ -1202,7 +1428,8 @@ function runOf(env) {
     ref: env.GITHUB_REF_NAME ?? null,
     sha: env.HEAD_SHA || env.GITHUB_SHA || null,
     pull_request: Number.isInteger(pull) && pull > 0 ? pull : null,
-    url: known ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null,
+    url,
+    summary_url: anchored ? `${url}#summary-${env.CHECK_RUN_ID}` : null,
   };
 }
 

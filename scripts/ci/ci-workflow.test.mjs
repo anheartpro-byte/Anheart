@@ -189,6 +189,17 @@ test("the report job waits for every gate, runs whatever happened to them, and n
   // How each gate ended, the answer of the path rule included, comes from `needs` as one value.
   assert.match(jobs.get(REPORT) ?? "", /^ {10}NEEDS: \$\{\{ toJSON\(needs\) \}\}$/m);
   assert.match(jobs.get(REPORT) ?? "", /^ {10}pattern: quality-\*$/m);
+  // The table is the last block of the page of the run: the job hands the report what GitHub
+  // anchors its own summary at, so that the notice can end on the address of the table.
+  assert.match(jobs.get(REPORT) ?? "", /^ {10}CHECK_RUN_ID: \$\{\{ job\.check_run_id \}\}$/m);
+});
+
+test("the link checker keeps its report in its log, and writes no block above the table of the run", () => {
+  const checker = stepsOf("docs").find((step) => step.includes("lycheeverse/lychee-action@")) ?? "";
+  assert.match(checker, /^ {10}jobSummary: false$/m);
+  // What it checks, and what makes the gate fail, are as they were.
+  assert.match(checker, /^ {10}args: --offline --include-fragments --no-progress 'README\.md' 'docs\/\*\*\/\*\.md'$/m);
+  assert.doesNotMatch(checker, /^ {10}fail(IfEmpty)?: false$|continue-on-error/m);
 });
 
 test("no step of the report job can fail it, and it says so when it wrote no report", (context) => {

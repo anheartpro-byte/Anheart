@@ -241,17 +241,37 @@ def report_directory(settings: Settings) -> Path | None:
     """The directory given with ``--report``, created; ``None`` when nothing is to be left.
 
     What goes there feeds the quality report of the run and nothing else: no
-    verdict of this runner reads it back. So a directory that cannot be created
-    is said and then done without, never counted as a problem.
+    verdict of this runner reads it back. So a directory that cannot be created,
+    or that cannot be written to, is said and then done without, never counted
+    as a problem. Being there is not enough: a pytest told to write its JUnit
+    file where it cannot ends with an error, which would fail the gate.
     """
     if settings.report is None:
         return None
     try:
         settings.report.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=settings.report):
+            pass
     except OSError as error:
         say(f"[gate] quality report: nothing is left in {settings.report} ({error})")
         return None
     return settings.report
+
+
+def cleared(target: Path) -> bool:
+    """Remove what an earlier call left at ``target``; say whether the place is free.
+
+    Each call writes the files of the quality report afresh, so that a file
+    that is there is one this call wrote. What cannot be removed (a directory
+    standing in its place) is left alone and said: nothing of the report may
+    stop the gate.
+    """
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as error:
+        say(f"[gate] quality report: {target.name} cannot be replaced ({error})")
+        return False
+    return True
 
 
 def pump(index: int, stream: TextIO) -> None:
@@ -307,9 +327,10 @@ def start(
     if report is not None:
         junit = report / f"junit-{index}.xml"
         # Like forget() above: a process that dies before writing its file
-        # must leave none, not the one of an earlier call.
-        junit.unlink(missing_ok=True)
-        command += [f"--junitxml={junit}"]
+        # must leave none, not the one of an earlier call. Where that file
+        # cannot be removed, this process is not asked for one.
+        if cleared(junit):
+            command += [f"--junitxml={junit}"]
     environment = {**os.environ, **needed_to_start}
     process = subprocess.Popen(  # noqa: S603  # fixed argv, no shell
         command,
@@ -565,8 +586,10 @@ def report_coverage(merged_file: Path, report: Path) -> None:
     """
     for name, scope in (("coverage-gate.json", ()), ("coverage-all.json", ("--include=*",))):
         target = report / name
-        target.unlink(missing_ok=True)
-        if run_coverage(merged_file, "json", "--fail-under=0", *scope, "-o", str(target)) != 0:
+        written = cleared(target) and (
+            run_coverage(merged_file, "json", "--fail-under=0", *scope, "-o", str(target)) == 0
+        )
+        if not written:
             say(f"[gate] quality report: {name} could not be written")
 
 
