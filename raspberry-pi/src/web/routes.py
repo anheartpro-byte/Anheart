@@ -489,17 +489,17 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
                 ),
             )
         parsed = parse_profile(document, where=f"profile {profile_id!r}")
-        if isinstance(parsed, Err):
-            raise _parse_failure(parsed.error)
-        return await _commit_profile(writer, parsed.value, rev)
+        if isinstance(parsed, Ok):
+            return await _commit_profile(writer, parsed.value, rev)
+        raise _parse_failure(parsed.error)
 
     @app.delete("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
     async def delete_profile(profile_id: str, rev: int) -> ProfileListRow:
         """Delete one profile. Deleting the last one leaves an empty store."""
         removed = await writer.delete(profile_id, StoreRev(rev))
-        if isinstance(removed, Err):
-            raise _delete_failure(removed.error)
-        return _profile_list(store)
+        if isinstance(removed, Ok):
+            return _profile_list(store)
+        raise _delete_failure(removed.error)
 
     @app.post("/api/plan/preview", dependencies=auth, tags=["profiles"])
     async def preview_plan(body: PreviewBody) -> PlanPreviewRow:
@@ -516,9 +516,9 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
             at=services.clock.unix_millis(),
             total_duration_s=_optional_seconds(body.total_duration_s),
         )
-        if isinstance(resolved, Err):
-            raise _resolve_failure(resolved.error)
-        return _preview(resolved.value, geometry)
+        if isinstance(resolved, Ok):
+            return _preview(resolved.value, geometry)
+        raise _resolve_failure(resolved.error)
 
 
 def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -548,9 +548,9 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
             total_duration_s=_optional_seconds(body.total_duration_s),
             subject_age=body.subject_age,
         )
-        if isinstance(submitted, Err):
-            raise _start_failure(submitted.error)
-        return CommandRow.of(submitted.value)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _start_failure(submitted.error)
 
     @app.post(
         "/api/session/stop",
@@ -568,9 +568,9 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         """
         operator = _require_operator(body.operator)
         submitted = surface.submit_end(operator=operator, reason=body.reason)
-        if isinstance(submitted, Err):
-            raise _end_failure(submitted.error)
-        return CommandRow.of(submitted.value)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _end_failure(submitted.error)
 
     @app.post("/api/session/estop", dependencies=auth, tags=["session"])
     async def emergency_stop(body: EstopBody) -> EstopRow:
@@ -622,9 +622,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
         submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
-        if isinstance(submitted, Err):
-            raise _start_failure(submitted.error)
-        return CommandRow.of(submitted.value)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _start_failure(submitted.error)
 
     @app.post(
         "/api/manual/target",
@@ -649,9 +649,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         submitted = surface.submit_manual_target(
             output_rpm=OutputRpm(body.output_rpm), operator=operator
         )
-        if isinstance(submitted, Err):
-            raise _command_failure(submitted.error)
-        return CommandRow.of(submitted.value)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _command_failure(submitted.error)
 
     @app.post(
         "/api/drive/fault-reset",
@@ -668,9 +668,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         _require_motion_enabled(services)
         operator = _require_operator(body.operator)
         submitted = surface.submit_fault_reset(operator=operator)
-        if isinstance(submitted, Err):
-            raise _command_failure(submitted.error)
-        return CommandRow.of(submitted.value)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _command_failure(submitted.error)
 
 
 def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -701,9 +701,9 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
                 ),
             )
         recorded = surface.attest_estop_wiring(body.operator)
-        if isinstance(recorded, Err):
-            raise _attestation_failure(recorded.error)
-        return AttestationRow.of(recorded.value)
+        if isinstance(recorded, Ok):
+            return AttestationRow.of(recorded.value)
+        raise _attestation_failure(recorded.error)
 
     @app.post("/api/safety/acknowledge", dependencies=auth, tags=["safety"])
     async def acknowledge(body: AckBody) -> AckRow:
@@ -715,9 +715,9 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
         to ask fails closed.
         """
         cleared = surface.acknowledge(body.operator, estop_released=body.estop_released)
-        if isinstance(cleared, Err):
-            raise _acknowledge_failure(cleared.error)
-        return AckRow.of(cleared.value)
+        if isinstance(cleared, Ok):
+            return AckRow.of(cleared.value)
+        raise _acknowledge_failure(cleared.error)
 
     @app.post("/api/presence", dependencies=auth, tags=["safety"])
     async def presence(body: PresenceBody) -> PresenceRow:
@@ -1022,9 +1022,9 @@ def _profile_list(store: ProfileStore) -> ProfileListRow:
 async def _commit_profile(writer: ProfileWriter, profile: TrainingProfile, rev: int) -> ProfileRow:
     """Write one validated profile, or raise the mapped failure."""
     written = await writer.upsert(profile, StoreRev(rev))
-    if isinstance(written, Err):
-        raise _upsert_failure(written.error)
-    return ProfileRow.of(profile)
+    if isinstance(written, Ok):
+        return ProfileRow.of(profile)
+    raise _upsert_failure(written.error)
 
 
 def _preview(program: Program, geometry: MachineGeometry) -> PlanPreviewRow:
