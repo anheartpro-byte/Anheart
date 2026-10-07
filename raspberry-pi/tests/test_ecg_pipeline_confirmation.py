@@ -378,7 +378,7 @@ def test_the_window_is_the_one_the_legacy_dsp_keeps() -> None:
     class _Module(Protocol):
         ChannelProcessor: _Factory
 
-    module = cast("_Module", importlib.import_module("src.signal_processing"))
+    module = cast(_Module, importlib.import_module("src.signal_processing"))
     for fs in (100, 500, 1000):
         processor = module.ChannelProcessor("ECG", fs, 50)
         window = processor._window  # pyright: ignore[reportPrivateUsage] - no public route

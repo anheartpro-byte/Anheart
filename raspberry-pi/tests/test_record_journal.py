@@ -460,7 +460,7 @@ def test_a_value_outside_the_closed_union_costs_itself_and_is_said(
     """The ``assert_never`` guard of the writing thread: refused loudly, the thread goes on."""
     clock = clock_at_start()
     journal = opened(tmp_path, clock)
-    journal.submit(cast("Entry", "not a value of any stream"))
+    journal.submit(cast(Entry, "not a value of any stream"))
     journal.submit(row())
     journal.drain()
     status = journal.status(clock.monotonic())

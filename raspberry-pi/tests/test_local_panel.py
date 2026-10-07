@@ -870,7 +870,7 @@ def test_a_refusal_that_is_not_one_fails_loudly(describe: Callable[[object], str
 
 async def test_a_command_that_is_not_one_fails_loudly(tmp_path: Path) -> None:
     panel, clock = sim_panel(tmp_path)
-    object.__setattr__(panel.surface, "_pending", cast("StartSession", "not-a-command"))
+    object.__setattr__(panel.surface, "_pending", cast(StartSession, "not-a-command"))
     clock.advance(TICK)
     with pytest.raises(AssertionError):
         await panel.control_step()

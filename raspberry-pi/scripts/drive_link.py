@@ -115,7 +115,7 @@ def arg_text(args: argparse.Namespace, name: str) -> str:
     (a widening, not a lie) and narrowing with ``isinstance`` keeps the scripts
     free of it.
     """
-    flags = cast("Mapping[str, object]", vars(args))
+    flags = cast(Mapping[str, object], vars(args))
     value = flags[name]
     if not isinstance(value, str):
         raise TypeError(f"--{name}: expected text, got {type(value).__name__}")
