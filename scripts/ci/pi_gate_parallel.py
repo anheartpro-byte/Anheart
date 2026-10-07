@@ -688,8 +688,7 @@ def judge(settings: Settings, private: Path) -> tuple[Sequence[str], str]:
             return judge_part(settings, private)
         case Mode.COMBINE:
             return judge_combined(settings, private)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(settings.mode)
 
 
 def main(arguments: Sequence[str]) -> int:
