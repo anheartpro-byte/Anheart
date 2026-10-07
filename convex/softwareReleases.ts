@@ -6,13 +6,24 @@
  * holds the rule the machine registry and the remote update will apply with it.
  * Only an admin reads or writes this table.
  *
+ * ANH-195: the row says which validation level is in force, and
+ * `software_release_levels` keeps every level the version has held, with who
+ * decided it, when and why. Raising or lowering a level adds a row there; it
+ * never erases the decision before it.
+ *
  * The register is Anheart-wide, not per organisation (ANH-114): a version is
- * the same for every client, so the table carries no `organizationId`, and
+ * the same for every client, so the tables carry no `organizationId`, and
  * "admin" here is the admin of the Anheart organisation. The admin of a client
  * organisation (`org_admin`) neither reads nor writes it.
  */
 import { ConvexError, v } from "convex/values";
-import { internalQuery, mutation, query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import {
+  internalQuery,
+  mutation,
+  query,
+  type QueryCtx,
+} from "./_generated/server";
 import { requireRole } from "./lib/auth";
 import { isReleaseVersion } from "./lib/releaseValidation";
 import { softwareComponentValidator, validationLevelValidator } from "./schema";
@@ -20,10 +31,43 @@ import { CLOUD_VERSION } from "./cloudVersion";
 
 const MAX_NOTES_LENGTH = 2000;
 
+/** One validation level a version has held: who decided it, when and why. */
+const levelDecisionValidator = v.object({
+  validationLevel: validationLevelValidator,
+  reason: v.optional(v.string()),
+  decidedBy: v.id("users"),
+  decidedAt: v.number(),
+});
+
+/** The decisions stored for a version, oldest first. */
+async function storedLevels(ctx: QueryCtx, release: Doc<"software_releases">) {
+  return await ctx.db
+    .query("software_release_levels")
+    .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+    .collect();
+}
+
+/**
+ * What a row recorded before the history existed says of its own level: the
+ * first decision of its history, in the words of the row.
+ */
+function firstLevelOf(release: Doc<"software_releases">) {
+  if (release.validationLevel === undefined) return [];
+  return [
+    {
+      validationLevel: release.validationLevel,
+      reason: release.notes,
+      decidedBy: release.recordedBy,
+      decidedAt: release.updatedAt,
+    },
+  ];
+}
+
 /**
  * Record a released version, or correct the record of one already known
  * (same component and version). Raising or lowering the validation level of a
- * known version must say why in `notes` (the review that decided it).
+ * known version must say why in `notes` (the review that decided it), and
+ * adds that decision to the history of the version.
  */
 export const recordRelease = mutation({
   args: {
@@ -58,15 +102,18 @@ export const recordRelease = mutation({
       );
     }
 
+    const now = Date.now();
+    const level = args.validationLevel;
     const fields = {
       component: args.component,
       version: args.version,
-      validationLevel: args.validationLevel,
+      validationLevel: level,
       releasedAt: args.releasedAt,
       notes,
       recordedBy: admin._id,
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
+    const decision = { reason: notes, decidedBy: admin._id, decidedAt: now };
 
     const existing = await ctx.db
       .query("software_releases")
@@ -75,22 +122,53 @@ export const recordRelease = mutation({
       )
       .unique();
     if (existing === null) {
-      return await ctx.db.insert("software_releases", fields);
+      const releaseId = await ctx.db.insert("software_releases", fields);
+      if (level !== undefined) {
+        await ctx.db.insert("software_release_levels", {
+          releaseId,
+          validationLevel: level,
+          ...decision,
+        });
+      }
+      return releaseId;
     }
-    if (
-      existing.validationLevel !== args.validationLevel &&
-      notes === undefined
-    ) {
-      throw new ConvexError(
-        "Changing the validation level of a recorded version needs notes",
-      );
+
+    if (existing.validationLevel !== level) {
+      if (notes === undefined) {
+        throw new ConvexError(
+          "Changing the validation level of a recorded version needs notes",
+        );
+      }
+      if (level !== undefined) {
+        // A row recorded before the history existed first gets its own level
+        // written down, so that the level it leaves is not lost.
+        if ((await storedLevels(ctx, existing)).length === 0) {
+          for (const first of firstLevelOf(existing)) {
+            await ctx.db.insert("software_release_levels", {
+              releaseId: existing._id,
+              ...first,
+            });
+          }
+        }
+        await ctx.db.insert("software_release_levels", {
+          releaseId: existing._id,
+          validationLevel: level,
+          ...decision,
+        });
+      }
     }
+    // The row is the record in force: the last write wins there. What a level
+    // change replaces stays in `software_release_levels`.
     await ctx.db.replace(existing._id, fields);
     return existing._id;
   },
 });
 
-/** Recorded versions, most recent first, optionally for one component. */
+/**
+ * Recorded versions, most recent first, optionally for one component. Each
+ * carries `levelHistory`: every validation level it has held, oldest first
+ * (empty for a version that carries no level).
+ */
 export const listReleases = query({
   args: { component: v.optional(softwareComponentValidator) },
   returns: v.array(
@@ -104,6 +182,7 @@ export const listReleases = query({
       notes: v.optional(v.string()),
       recordedBy: v.id("users"),
       updatedAt: v.number(),
+      levelHistory: v.array(levelDecisionValidator),
     }),
   ),
   handler: async (ctx, args) => {
@@ -118,7 +197,21 @@ export const listReleases = query({
               q.eq("component", component),
             )
             .collect();
-    return rows.sort((a, b) => b.releasedAt - a.releasedAt);
+    const listed = [];
+    for (const row of rows.sort((a, b) => b.releasedAt - a.releasedAt)) {
+      const stored = await storedLevels(ctx, row);
+      const levelHistory =
+        stored.length === 0
+          ? firstLevelOf(row)
+          : stored.map(({ validationLevel, reason, decidedBy, decidedAt }) => ({
+              validationLevel,
+              reason,
+              decidedBy,
+              decidedAt,
+            }));
+      listed.push({ ...row, levelHistory });
+    }
+    return listed;
   },
 });
 

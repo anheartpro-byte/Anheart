@@ -52,21 +52,32 @@ export function requiredReleaseLevel(
   return REQUIRED_RELEASE_LEVEL[machine];
 }
 
+/** True for one of the four machine states this rule knows. */
+function isMachineValidationLevel(
+  machine: unknown,
+): machine is MachineValidationLevel {
+  return MACHINE_VALIDATION_LEVELS.some((known) => known === machine);
+}
+
 /**
  * True when a Pi version validated up to `release` may run on a machine
  * validated up to `machine`. A version with no recorded level (`undefined`) is
  * accepted only by a machine that has no validation to lose.
+ *
+ * The rule fails closed. The types name the values it knows, but the values
+ * come from stored data: a machine state that is none of the four accepts no
+ * version at all, and a version level that is none of the three counts as no
+ * level.
  */
 export function releaseAllowedOnMachine(
   release: ValidationLevel | undefined,
   machine: MachineValidationLevel,
 ): boolean {
+  if (!isMachineValidationLevel(machine)) return false;
   const required = requiredReleaseLevel(machine);
   if (required === null) return true;
-  if (release === undefined) return false;
-  return (
-    VALIDATION_LEVELS.indexOf(release) >= VALIDATION_LEVELS.indexOf(required)
-  );
+  const granted = VALIDATION_LEVELS.findIndex((known) => known === release);
+  return granted !== -1 && granted >= VALIDATION_LEVELS.indexOf(required);
 }
 
 const CORE = "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)";
