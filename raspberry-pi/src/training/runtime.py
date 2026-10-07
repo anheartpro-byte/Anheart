@@ -27,7 +27,7 @@ THE ORDER INSIDE THE TICK IS THE DESIGN
 
 3. **Only if there is no verdict, apply the controller's demand.** Step 3 is
    subordinate to step 2 and there is no path that reverses them: the
-   controller is reached from exactly two of the seven arms of one ``match``
+   controller is reached from exactly two of the eight arms of one ``match``
    over :class:`~src.training.types.SafetyAction`, and both of those arms cap
    its output at what the verdict permits.
 
@@ -136,6 +136,14 @@ one whose first step the drive did not acknowledge. The operator asks again
 once nothing holds, so neither a warning that lifts, nor an acknowledgement,
 nor a heart rate that settles ever starts the arm. A rise held the same way
 over an arm that is TURNING waits and resumes, as it always has.
+
+And a FREEZE holds a speed, never a stop (ANH-175). Once somebody has asked
+for the arm to come down - an operator's STOP at the console or from the site,
+any ending already begun, a manual target of zero - the setpoint walks to zero
+at the motion limits from the next tick, under a FREEZE exactly as with no
+verdict (:meth:`TrainingRuntime._stop_under_freeze`), and a FREEZE that appears
+during that walk does not pause it. With no such request the FREEZE arm is
+what it was, and every stronger verdict still decides first.
 
 The idle console is read-only until it finds the drive enabled or turning with
 no session running; then it stops it exactly as a start would
@@ -1171,6 +1179,7 @@ class TrainingRuntime:
         "_manual",
         "_manual_target",
         "_motion",
+        "_motion_at",
         "_motion_from",
         "_motion_geometry",
         "_phase",
@@ -1287,8 +1296,7 @@ class TrainingRuntime:
         # is read on such a tick only, after _follow_manual has rewritten it,
         # so nothing ever resets it.
         self._rise_held: RiseHold | None = None
-        # Since when the motion profiler's allowance accrues (see motion.py).
-        self._motion_from: Monotonic | None = None
+        self._forget_motion_base()
         # An operator's fault reset between its two words, or None.
         self._fault_reset_at: Monotonic | None = None
 
@@ -1346,6 +1354,15 @@ class TrainingRuntime:
         # Whether THIS session's phase machine has reached DONE: stated once by
         # _advance_phase, read (with the setpoint in force) by session_overrun.
         self._session_over: bool = False
+
+    def _forget_motion_base(self) -> None:
+        """The motion profiler's time base, as a new session finds it: none."""
+        # Since when the motion profiler's allowance accrues (see motion.py).
+        self._motion_from: Monotonic | None = None
+        # The tick the motion profiler last ran on (_motion_step), or None. A
+        # stop that begins under a FREEZE trusts _motion_from only when that is
+        # the previous tick (_stop_under_freeze).
+        self._motion_at: Monotonic | None = None
 
     def _initialise_idle_observation(self) -> None:
         self._idle_link: IdleLink = IdleLink()
@@ -1917,7 +1934,7 @@ class TrainingRuntime:
         self._manual = None
         self._manual_target = MotorRpm(0)
         self._withdrawn = None
-        self._motion_from = None
+        self._forget_motion_base()
         self._fault_reset_at = None
         self._started_at = None
         self._phase = Phase.DONE
@@ -2242,6 +2259,7 @@ class TrainingRuntime:
 
     async def _tick(self, now: Monotonic) -> None:
         """The tick proper. Read the module docstring before reordering anything."""
+        previous = self._previous_tick_at
         interval = self._interval(now)
         # 0. Idle only: read the drive, write nothing. A no-op once a session
         #    has been started, because from then on step 1 owns the link.
@@ -2255,7 +2273,7 @@ class TrainingRuntime:
         standing = self._worst(self._latched, verdict)
         # 3. The command. The verdict decides; it reaches the controller only
         #    through the two arms that cap it.
-        await self._command(now, standing)
+        await self._command(now, standing, previous)
         await self._settle(now)
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
@@ -2761,12 +2779,18 @@ class TrainingRuntime:
     # Commanding
     # =====================================================================
 
-    async def _command(self, now: Monotonic, standing: SafetyVerdict | None) -> None:
+    async def _command(
+        self, now: Monotonic, standing: SafetyVerdict | None, previous: Monotonic | None
+    ) -> None:
         """Apply the standing verdict, which is the only thing that sets a setpoint.
 
         Exhaustive over :class:`~src.training.types.SafetyAction`, so a new
         action fails the type check here rather than falling into whichever
         branch happened to be last.
+
+        ``previous`` is the instant of the tick before this one (``None`` on
+        the first): the time base of a stop that begins under a FREEZE
+        (:meth:`_stop_under_freeze`).
 
         The last lines are the ONE place that sees a setpoint come back to
         zero, whichever arm wrote it: see :meth:`_note_standstill`.
@@ -2777,6 +2801,10 @@ class TrainingRuntime:
             case SafetyAction.NONE:
                 self._descent_from = None
                 await self._follow_controller(now, allow_increase=True, cap=None)
+            case SafetyAction.FREEZE if self._stop_asked():
+                # A FREEZE holds a speed somebody still wants. It never holds
+                # one the operator has asked to bring down (ANH-175).
+                await self._stop_under_freeze(now, previous)
             case SafetyAction.FREEZE:
                 # Hold the last commanded speed and do not consult the controller
                 # at all. That is what makes the resume bumpless in the sense
@@ -2832,6 +2860,79 @@ class TrainingRuntime:
         if before != 0 and self._applied_rpm == 0:
             self._note_standstill(standing)
         self._withdraw_waiting_target(standing)
+
+    def _stop_asked(self) -> bool:
+        """Whether an arm that is turning has been asked to come down to zero.
+
+        Asked by an ending, whoever began it: the operator's STOP at the
+        console, a stop sent from the site (both are :meth:`request_stop`,
+        turned into the ending by :meth:`_advance_phase` earlier in this very
+        tick), the manual session reaching its own limit, or a verdict that
+        ended the session and has been acknowledged since. Or asked by a
+        manual target of zero, which only the operator sets while the arm
+        turns: :meth:`_withdraw_waiting_target` zeroes a target over a
+        setpoint that is already zero, and nothing else touches one outside
+        an ending.
+
+        Not asked: a programme's own cooldown on its timeline, with no ending.
+        Under a FREEZE that one is still held, as before (ANH-175 is about a
+        stop somebody requested, and leaves the rest of a FREEZE alone).
+
+        With the setpoint already at zero there is nothing to bring down, and
+        the hold arm keeps it there exactly as it always has.
+        """
+        if self._applied_rpm == 0:
+            return False
+        if self._ending is not None:
+            return True
+        return self._manual is not None and self._manual_target == 0
+
+    async def _stop_under_freeze(self, now: Monotonic, previous: Monotonic | None) -> None:
+        """A stop asked for while a FREEZE stands: walk the setpoint to zero all the same.
+
+        The defect (ANH-175): the FREEZE arm re-applied the setpoint and looked
+        at nothing else, so a STOP was recorded, the screen said ARRET, and the
+        arm went on turning at session speed: twenty seconds under ``hr_stale``
+        until its REDUCE, without limit under a latched ``loop_stall``. Only
+        the emergency stop acted. A FREEZE is there to keep the speed from
+        being raised or regulated on evidence nobody trusts. Coming down is
+        not that, and it needs no evidence at all: the destination is zero.
+
+        So the setpoint takes the ordinary stop's own walk, at the motion
+        limits (:meth:`_motion_step`, as :meth:`_follow_manual` and a
+        programme's cooldown do), and a programme's last step across
+        ``(0, min_run)`` waits as it does there (:meth:`_passage_too_soon`).
+        The destination is zero and nothing else, so nothing here can raise
+        the setpoint, and neither the controller nor the heart rate is
+        consulted. A manual descent is step for step the one
+        :meth:`_follow_manual` walks with no verdict. A programme's ordinary
+        cooldown walks towards the controller's demand, which itself goes to
+        zero at ``RuntimeLimits.slew``; with the shipped limits that demand
+        runs ahead and the motion limits are what binds, so the two descents
+        are the same, and this one is never faster than the motion limits.
+
+        The time base. The hold arm leaves the profiler none, and a REDUCE on
+        a programme walks its own ramp and leaves a stale one. Followed
+        blindly, the first gives a stop that begins one tick late and the
+        second a first step as long as the REDUCE lasted. So unless the
+        profiler ran on the previous tick, its allowance starts at that tick:
+        one tick's worth, which is what a setpoint parked at its target gets
+        when it is given a new one with no verdict standing. A FREEZE that
+        appears during a descent already begun finds the profiler running and
+        changes nothing: the descent does not even pause.
+
+        Every stronger verdict still decides first, in its own arm: this one
+        is reached under FREEZE only. What the zero means once it is reached
+        is :meth:`_note_standstill`'s to say.
+        """
+        self._descent_from = None
+        self._decision = None
+        if self._motion_at != previous:
+            self._motion_from = previous
+        moved = self._motion_step(now, MotorRpm(0))
+        if self._manual is None and self._passage_too_soon(now, moved):
+            moved = self._applied_rpm
+        await self._apply_setpoint(now, moved)
 
     def _withdraw_waiting_target(self, standing: SafetyVerdict | None) -> None:
         """Something holds the arm at standstill: take back the manual target that waits.
@@ -2941,10 +3042,23 @@ class TrainingRuntime:
         not told apart from the warning's own descent: the cautious reading,
         the session ends. And nobody on board (a BENCH manual session) changes
         nothing here: the decision of 2026-10-06 covers the empty capsule too.
+
+        The same reading holds for a manual target of zero followed WHILE a
+        warning only holds the speed (a FREEZE, :meth:`_stop_under_freeze`): the
+        exemption above is for a zero typed with NO warning standing, so this
+        session ends too, for one acknowledgement. There the cause can be told
+        apart, and it is: a FREEZE lowers nothing, so that zero is the
+        operator's own, and the verdict says so instead of blaming the
+        warning. An operator's STOP under the same FREEZE never comes this
+        far: its session is already ending.
         """
         if motion_is_over(self._phase):
             return
-        if standing is not None:
+        if standing is not None and standing.action is SafetyAction.FREEZE:
+            self._stopped_by = (
+                f"the operator's manual target of zero, followed under the warning {standing.rule},"
+            )
+        elif standing is not None:
             self._stopped_by = f"the warning {standing.rule}"
         elif self._manual is None:
             self._stopped_by = "the heart-rate regulation"
@@ -3097,6 +3211,7 @@ class TrainingRuntime:
         the carry), and restarts whenever the setpoint is where it is asked to
         be, so a setpoint parked for a minute does not bank a minute of motion.
         """
+        self._motion_at = now
         applied = self._applied_rpm
         started = self._motion_from
         if started is None or applied == target:
@@ -3781,17 +3896,31 @@ class TrainingRuntime:
         )
 
     def _manual_view(self) -> ManualView | None:
-        """The manual session for the screen: target, ceiling, and the ramp still to come."""
+        """The manual session for the screen: target, ceiling, and the ramp still to come.
+
+        No ramp and no arrival time are announced for a target a FREEZE is
+        holding the setpoint away from: nothing is walking towards it, and the
+        banner that says "ramp in progress, arrival in 0:20" over a speed that
+        does not move was the screen's half of ANH-175. A FREEZE holds every
+        target but zero (:meth:`_stop_asked`), so a descent to zero keeps its
+        ramp and its arrival time under one, because it is really under way.
+        """
         manual = self._manual
         if manual is None:
             return None
         applied = self._applied_rpm
         target = MotorRpm(0) if self._ending is not None else self._manual_target
+        frozen = self.standing_action is SafetyAction.FREEZE
+        held = frozen and target not in (0, applied)
         return ManualView(
             occupancy=manual.occupancy,
             target=self._speed_view(target),
             ceiling=self._speed_view(manual.ceiling),
             min_run=self._speed_view(self._motion.min_run),
-            ramping=applied != target,
-            ramp_eta=ramp_duration(applied, target, self._motion, self._motion_geometry),
+            ramping=applied != target and not held,
+            ramp_eta=(
+                None
+                if held
+                else ramp_duration(applied, target, self._motion, self._motion_geometry)
+            ),
         )
