@@ -589,7 +589,7 @@ deux que Vercel posait sur chaque commit. Un commit qui contient `vercel.json`
 ne les reçoit plus : elles seraient restées en attente pour toujours, et aucune
 PR vers `main` n'aurait pu être fusionnée, ni la première release ni une PR
 dédiée. Elles ont été retirées, comme sur `develop` le même jour. Deux autres
-règles de `main` ont été levées en même temps, sur décision du chef de projet
+règles de `main` ont été levées ce jour-là, sur décision du chef de projet
 (une release, c'est fusionner `develop` dans `main`, puis poser les tags ;
 ANH-206) : l'historique linéaire, qui interdisait le commit de fusion de la
 release, et l'obligation d'une branche à jour avec `main`.
@@ -676,11 +676,13 @@ n'exige plus une branche à jour (étape 4) : `develop` reste telle quelle
    gh pr create --base main --title "ANH-198 : apporter sur main les boutons de déploiement Vercel" --body "Trois fichiers repris de develop, sans autre changement."
    ```
 
-2. Dans la règle de `main`, retirer **le temps de cette fusion** les six gates
-   des vérifications obligatoires (`pi-gate`, `simulation-gate`,
-   `convex-tests`, `web`, `audit`, `docs`) : elles ne peuvent pas répondre sur
-   cette PR. Garder `agent-review/R1` : l'avis indépendant sur le commit reste
-   exigé.
+2. Dans la règle de `main` (dans le dépôt : **Settings**, **Branches**, la
+   règle de `main`, **Edit**, « Require status checks to pass before
+   merging »), retirer **le temps de cette fusion** les six gates des
+   vérifications obligatoires (`pi-gate`, `simulation-gate`, `convex-tests`,
+   `web`, `audit`, `docs`), puis **Save changes** : elles ne peuvent pas
+   répondre sur cette PR. Garder `agent-review/R1` : l'avis indépendant sur le
+   commit reste exigé.
 3. Fusionner la PR en **squash**, puis **remettre aussitôt les six gates** dans
    la règle de `main`, et relire la liste avec la dernière commande de
    l'étape 4.
