@@ -27,10 +27,12 @@ import {
   istanbulCoverage,
   jobStates,
   main,
+  notice,
   parseJunit,
   percent,
   PROJECTS,
   pythonCoverage,
+  renderNotice,
   renderPart,
   renderReport,
   SCHEMA_VERSION,
@@ -778,7 +780,7 @@ test("the table of the run has one line per project and the columns of the ticke
   );
   assert.match(
     markdown,
-    /^\| Batterie de simulation \| 1 024 tests : 1 023 réussis, 0 en échec, 1 ignorés \(dont 1 xfail\) \| /m,
+    /^\| Batterie de simulation \| 1 024 tests : 1 023 réussis, 0 en échec, 1 ignoré \(dont 1 xfail\) \| /m,
   );
   assert.match(
     markdown,
@@ -985,6 +987,40 @@ test("the catalogue of the report names each suite and each measure once, under 
   );
 });
 
+test("the essentials of the run are also said in plain text, one line per project, for a notice", () => {
+  const all = buildReport({ parts: everyPart(), junit: everyScript(), needs: needs(), event: "push", run: RUN });
+  assert.deepEqual(read(renderNotice(all)).split("\n"), [
+    "5 583 tests lancés, 0 en échec. 6 gates réussies sur 6.",
+    "Console du Pi : 3 248 tests, 0 en échec ; lignes 91,2 %, branches 88,0 % ; lint réussi ; types réussis ; gate réussie",
+    "Simulation : 1 024 tests, 0 en échec ; lignes 100 %, branches 100 % ; lint réussi ; types réussis ; gate réussie",
+    "Convex : 925 tests, 0 en échec ; lignes 96,6 %, branches 87,3 % ; lint réussi ; types réussis ; gate réussie",
+    "Site : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint réussi ; types réussis ; gate réussie",
+    "Scripts : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
+    "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
+  ]);
+  // A site-only pull request whose `web` gate failed on a lint error, with no artifact from `convex-tests`.
+  const { site } = everyPart();
+  site.checks[1] = check("lint", "site", "web", "failed");
+  const states = needs(
+    { "pi-gate": "skipped", "simulation-gate": "skipped", web: "failure" },
+    { python: "false", node: "true" },
+  );
+  const partly = buildReport({ parts: { site }, junit: everyScript(), needs: states, event: "pull_request", run: RUN });
+  assert.deepEqual(read(renderNotice(partly)).split("\n").slice(0, 6), [
+    "324 tests lancés, 0 en échec. 3 gates réussies sur 6 (pi-gate sautée, simulation-gate sautée, web en échec).",
+    "Console du Pi : sautée par la règle de chemins",
+    "Simulation : sautée par la règle de chemins",
+    "Convex : tests indisponibles ; couverture indisponible ; lint réussi ; types indisponibles ; gate réussie",
+    "Site : 136 tests, 0 en échec ; lignes 15,9 %, branches 20,4 % ; lint en échec ; types réussis ; gate en échec",
+    "Scripts : 148 tests, 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
+  ]);
+  // What the runner reads: one line, the line breaks and the characters of its own syntax escaped.
+  assert.equal(
+    notice("Rapport, 100 % : fait", "a 50 %\nb\r\n::error::c"),
+    "::notice title=Rapport%2C 100 %25 %3A fait::a 50 %25%0Ab%0D%0A::error::c",
+  );
+});
+
 // --- The commands ---------------------------------------------------------------------------
 
 test("the two commands write the summaries and quality-report.json from what the jobs left", (context) => {
@@ -1058,6 +1094,23 @@ test("the two commands write the summaries and quality-report.json from what the
   // The same table in the summary of the run and next to the JSON.
   const markdown = readFileSync(join(out, "quality-report.md"), "utf8");
   assert.ok(readFileSync(summary, "utf8").endsWith(markdown));
+  // On GitHub the essentials are also printed as one notice, on one line; elsewhere nothing is printed.
+  const printed = context.mock.method(process.stdout, "write", () => true);
+  assert.equal(main(["report", "--artifacts", artifacts, "--out", out], { ...env, NEEDS }), 0);
+  assert.equal(printed.mock.callCount(), 0);
+  assert.equal(main(["report", "--artifacts", artifacts, "--out", out], { ...env, NEEDS, GITHUB_ACTIONS: "true" }), 0);
+  const [line, ...more] = printed.mock.calls.map((call) => String(call.arguments[0]));
+  printed.mock.restore();
+  assert.deepEqual(more, []);
+  assert.match(
+    line ?? "",
+    /^::notice title=Rapport de qualité::15 tests lancés, 2 en échec\. 4 gates réussies sur 6 \(/,
+  );
+  assert.match(
+    line ?? "",
+    /%0AConsole du Pi : 7 tests, 1 en échec ; lignes 81,2 %25, branches 88,5 %25 ; lint réussi ; types en échec ; gate en échec%0A/,
+  );
+  assert.equal((line ?? "").trimEnd().split("\n").length, 1, "a notice is one line of output");
   assert.match(
     markdown,
     /^\| Console du Pi \| 7 ¹ \| 4 \| \*\*1\*\* \| 2 \| 14,3 s \| 81,2 % \| 88,5 % \| ✅ réussi \| ❌ échec \| ❌ échec : `pi-gate` \|$/m,

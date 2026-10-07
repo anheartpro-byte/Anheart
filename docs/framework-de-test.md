@@ -1796,13 +1796,23 @@ projet du dépôt, combien de tests ont tourné, combien ont réussi, la
 couverture, l'état du lint et des types, et l'état de la gate. Aucun journal à
 ouvrir, aucun service externe.
 
-**Où le lire.** Dans une PR, onglet **Checks**, puis **CI** dans la colonne de
-gauche : la page qui s'ouvre est le résumé de l'exécution. Hors d'une PR :
-**Actions → CI**, puis l'exécution voulue. Le tableau « Rapport de qualité » est
-écrit par le job `quality-report`, le dernier de l'exécution : il apparaît une
-fois les six gates terminées. Les mêmes chiffres sont dans l'artefact
-`quality-report` de l'exécution, gardé 90 jours : `quality-report.json`, pour
-une machine, et `quality-report.md`, le tableau tel qu'il est affiché.
+**Où le lire.** Sur la page de résumé de l'exécution : **Actions → CI**, puis
+l'exécution voulue ; depuis une PR, « Details » à côté d'une vérification de la
+CI, puis « Summary » en haut de la colonne de gauche. Le tableau « Rapport de
+qualité » est écrit par le job `quality-report`, qui attend les six gates : il
+apparaît une fois qu'elles sont terminées.
+
+GitHub range les résumés des jobs dans l'ordre où les jobs finissent. Ce
+tableau est donc le dernier bloc de résumé de la page : au-dessus de lui
+viennent le détail replié de chaque gate, et les résumés que vitest et le
+contrôle des liens écrivent d'eux-mêmes. Pour lire l'essentiel sans faire
+défiler, le même job émet une annotation « Rapport de qualité » : le verdict de
+l'exécution et une ligne par projet, que la page liste avec les annotations de
+l'exécution.
+
+Les mêmes chiffres sont dans l'artefact `quality-report` de l'exécution, gardé
+90 jours : `quality-report.json`, pour une machine, et `quality-report.md`, le
+tableau tel qu'il est affiché.
 
 **Une ligne par projet.**
 
@@ -1893,6 +1903,22 @@ npm run coverage:ecg      # les tests de lib/, rapport dans coverage/site-lib/
 npm run coverage:site     # ceux de hooks/ et components/, dans coverage/site-components/
 ```
 
+**Temps ajouté aux jobs**, mesuré sur l'exécution 37617756948 (PR #41) :
+
+| Job | Durée du job | Dont, pour le rapport |
+|---|---|---|
+| `convex-tests` | 49 s | 7 s de mesure de couverture, 1 s de publication |
+| `web` | 1 min 13 s | 9 s de mesure de couverture, 1 s de publication |
+| `pi-gate` | 24 min 13 s | 2,8 s pour écrire la couverture en JSON, 2 s de publication |
+| `simulation-gate` (le verdict seul) | 1 min 28 s | 1 s pour écrire la couverture en JSON, 3 s de résumé et de publication |
+| `changes`, `audit`, `docs` | 10 s, 1 min 03 s, 15 s | 1 à 2 s de publication chacun |
+| `quality-report` | 13 s | tout le job, après les gates |
+
+Écrire un fichier JUnit ne se mesure pas à la seconde près. L'étape « Pi gate »
+a duré 23 min 50 s sur cette exécution ; le même jour, sur d'autres branches,
+elle a duré de 15 min 06 s à 25 min 19 s selon le processeur du runner
+(exécutions 37618180391 et 37614363760) : le rapport ne s'y distingue pas.
+
 **Ce qui n'est pas mesuré.**
 
 - La couverture des scripts (`scripts/`), et celle du JavaScript du panneau
@@ -1915,6 +1941,8 @@ npm run coverage:site     # ceux de hooks/ et components/, dans coverage/site-co
   exécution d'un dépôt public est public. Le rapport ne porte que des noms de
   tests et de fichiers, des comptes et des durées ; ni message d'échec, ni
   sortie de test.
+- Ce que vérifient les deux autres workflows, `codeql.yml` et
+  `pi-install.yml` : le rapport ne lit que les jobs de `ci.yml`.
 - L'évolution dans le temps : chaque exécution a son `quality-report.json`,
   rien ne les compare encore.
 
@@ -1978,6 +2006,9 @@ vérifie que `--report` ne change aucun verdict.
 
 - Le tableau n'existe qu'une fois toutes les gates terminées : pendant
   l'exécution, seuls les détails des jobs déjà finis sont visibles.
+- Le tableau est le dernier bloc de résumé de la page, pas le premier : l'ordre
+  des résumés est celui de la fin des jobs, et il ne se règle pas. L'annotation
+  « Rapport de qualité » en reprend l'essentiel, en texte.
 - Après « Re-run failed jobs », le rapport est réécrit avec les chiffres de la
   dernière exécution de chaque job.
 - `quality-report` démarre aussi sur une exécution annulée (`always()`) : il

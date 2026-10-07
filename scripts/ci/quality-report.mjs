@@ -10,7 +10,8 @@
 //       numbers of the job, <dir>/part.json.
 //   report --artifacts <dir> --out <dir>   in the last job of the run. Reads
 //       the numbers of every job and how each job ended, writes the table of
-//       the run and <out>/quality-report.json.
+//       the run and <out>/quality-report.json, and says the essentials again
+//       as a notice (an annotation of the run).
 //
 // What this file holds to:
 // - a number comes from a file a tool wrote for machines, never from a log;
@@ -616,6 +617,9 @@ export const cell = (text) =>
 /** @param {number} value @returns {string} a whole number, its thousands set apart by a space that does not break */
 const whole = (value) => String(value).replace(/\B(?=(\d{3})+$)/g, " ");
 
+/** @param {number} value @param {string} noun in the singular @returns {string} a count with its noun, in French */
+const counted = (value, noun) => `${whole(value)} ${noun}${value > 1 ? "s" : ""}`;
+
 /**
  * A share as a percentage, never rounded up: 99,9 % stays below 100 %.
  * @param {Ratio | undefined} ratio @returns {string}
@@ -956,8 +960,8 @@ function safetyRows(report) {
     "Batterie de simulation",
     numbers === undefined
       ? without
-      : `${whole(numbers.tests)} tests : ${whole(numbers.passed)} réussis, ${whole(numbers.failed)} en échec, ` +
-        `${whole(numbers.skipped)} ignorés (dont ${whole(numbers.expected_failures)} xfail)`,
+      : `${counted(numbers.tests, "test")} : ${counted(numbers.passed, "réussi")}, ${whole(numbers.failed)} en échec, ` +
+        `${counted(numbers.skipped, "ignoré")} (dont ${whole(numbers.expected_failures)} xfail)`,
     "aucun échec, chaque test une seule fois (`simulation-gate`)",
   ]);
   rows.push([
@@ -1082,6 +1086,90 @@ export function renderReport(report) {
   return lines.join("\n");
 }
 
+/** @type {Readonly<Record<string, string>>} */
+const GATE_SAID = {
+  passed: "réussie",
+  failed: "en échec",
+  cancelled: "annulée",
+  skipped: "sautée",
+  not_run: "non lancée",
+  unknown: "dans un état inconnu",
+};
+/** @type {Readonly<Record<string, string>>} */
+const COVERAGE_SAID = {
+  skipped: "sautée",
+  not_run: "non lancée",
+  unavailable: "indisponible",
+  not_measured: "non mesurée",
+};
+/** A state in a sentence, after "lint" (the first word) and after "tests" or "types" (the second). */
+/** @type {Readonly<Record<string, readonly [string, string]>>} */
+const SAID = {
+  passed: ["réussi", "réussis"],
+  failed: ["en échec", "en échec"],
+  skipped: ["sauté", "sautés"],
+  not_run: ["non lancé", "non lancés"],
+  unavailable: ["indisponible", "indisponibles"],
+};
+
+/**
+ * The verdict of the run and one line per project, as plain text: what the
+ * report job also says as a notice. GitHub shows the summaries of the jobs in
+ * the order the jobs ended, so the table of the run, written by the last job,
+ * is the last block of the page; a notice is listed with the annotations of
+ * the run. Counts and states only, like the table.
+ * @param {Report} report @returns {string}
+ */
+export function renderNotice(report) {
+  const { jobs, projects, suites } = report;
+  const measured = suites.flatMap((suite) => (suite.numbers === undefined ? [] : [suite.numbers]));
+  const sum = (/** @type {(numbers: SuiteNumbers) => number} */ of) =>
+    measured.reduce((total, numbers) => total + of(numbers), 0);
+  const passed = GATES.filter((job) => jobs[job] === "passed").length;
+  const others = GATES.filter((job) => jobs[job] !== "passed").map(
+    (job) => `${job} ${GATE_SAID[jobs[job] ?? "unknown"]}`,
+  );
+  const lines = [
+    `${whole(sum((numbers) => numbers.tests))} tests lancés, ${whole(sum((numbers) => numbers.failed))} en échec. ` +
+      `${passed} gates réussies sur ${GATES.length}${others.length === 0 ? "" : ` (${others.join(", ")})`}.`,
+  ];
+  for (const project of projects) {
+    const label = project.label.replace(/ \(.*$/, "");
+    if (project.gate.state === "skipped") {
+      lines.push(`${label} : sautée par la règle de chemins`);
+      continue;
+    }
+    const partly = (/** @type {{state: string, complete: boolean}} */ { state, complete }) =>
+      state === "passed" && !complete ? " (partiel)" : "";
+    lines.push(
+      `${label} : ` +
+        [
+          project.tests === null
+            ? `tests ${SAID[project.tests_state]?.[1] ?? project.tests_state}`
+            : `${whole(project.tests.total)} tests, ${whole(project.tests.failed)} en échec`,
+          project.coverage === null
+            ? `couverture ${COVERAGE_SAID[project.coverage_state] ?? project.coverage_state}`
+            : `lignes ${percent(project.coverage.lines)}, branches ${percent(project.coverage.branches)}`,
+          `lint ${SAID[project.lint.state]?.[0] ?? project.lint.state}${partly(project.lint)}`,
+          `types ${SAID[project.types.state]?.[1] ?? project.types.state}${partly(project.types)}`,
+          `gate ${GATE_SAID[project.gate.state] ?? project.gate.state}`,
+        ].join(" ; "),
+    );
+  }
+  lines.push("Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.");
+  return lines.join("\n");
+}
+
+/**
+ * A notice, as the runner reads it from the output of a step.
+ * @param {string} title @param {string} message @returns {string}
+ */
+export function notice(title, message) {
+  const data = (/** @type {string} */ text) =>
+    text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  return `::notice title=${data(title).replaceAll(":", "%3A").replaceAll(",", "%2C")}::${data(message)}`;
+}
+
 // --- Commands --------------------------------------------------------------------
 
 /** @param {readonly string[]} argv @returns {Record<string, string | undefined>} `--name value` pairs */
@@ -1164,6 +1252,8 @@ function report(given, env) {
   writeFileSync(join(out, "quality-report.json"), `${JSON.stringify(built, null, 2)}\n`);
   writeFileSync(join(out, "quality-report.md"), `${markdown}\n`);
   summarize(env, markdown);
+  // On GitHub only: the essentials again, where the page of the run lists its annotations.
+  if (env.GITHUB_ACTIONS === "true") process.stdout.write(`${notice("Rapport de qualité", renderNotice(built))}\n`);
 }
 
 /**
