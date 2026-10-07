@@ -46,7 +46,7 @@ from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_HR_STALE, RULE_SESSION_STANDSTILL, SELF_CLEARING
 from src.training.types import RunMode, SafetyAction, SignalQuality, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm
-from tests.test_cloud_sync import LAUNCH, Dashboard, Reply, ok
+from tests.test_cloud_sync import LAUNCH, Dashboard, Reply, launch_answer
 from tests.test_failure_rig import (
     OPERATOR,
     PROGRAMME_ENV,
@@ -136,7 +136,7 @@ class Console:
         pending = [launch]
 
         def poll(_body: Mapping[str, object]) -> Reply:
-            return ok({"session": pending.pop()} if pending else {})
+            return launch_answer(pending.pop() if pending else None)
 
         self.dashboard.handlers[POLL] = poll
 

@@ -1,16 +1,28 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { validateMachineAuth } from "./lib/machineHttpAuth";
+import {
+  authenticateMachineRequest,
+  validateMachineAuth,
+} from "./lib/machineHttpAuth";
 import type { Id } from "./_generated/dataModel";
 import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
+import {
+  CONTRACT_VERSION,
+  machineErrorResponse,
+  refusalOf,
+  softwareVersionOf,
+  type MachineErrorCode,
+} from "./lib/contract";
 
 const http = httpRouter();
 
 /**
  * POST /api/machine/heartbeat
- * The local panel sends this with what the machine is doing.
+ * The local panel sends this with what the machine is doing, every 10 seconds,
+ * with its software version and the contract it speaks (stored on the machine
+ * for the dashboard to show).
  */
 http.route({
   path: "/api/machine/heartbeat",
@@ -30,6 +42,7 @@ http.route({
       activeSessionId?: string;
       live?: Infer<typeof liveStateValidator>;
       programsEnabled?: boolean;
+      software_version?: unknown;
     } = {};
 
     try {
@@ -49,6 +62,9 @@ http.route({
       batteryLevel: body.batteryLevel,
       wifiStrength: body.wifiStrength,
       activeSessionId: body.activeSessionId,
+      softwareVersion: softwareVersionOf(body.software_version),
+      // The header's value, which the gate just checked, not the body's copy.
+      contractVersion: authResult.contract,
     });
 
     // The local panel reports what the machine is doing with each heartbeat.
@@ -93,6 +109,15 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+/** A refusal: `{error: <stable code>, message: <words>}` (contracts/machine-api.json). */
+function refuse(
+  status: number,
+  code: MachineErrorCode,
+  message: string,
+): Response {
+  return machineErrorResponse(status, code, message);
+}
+
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = await req.json();
@@ -132,24 +157,28 @@ function validLive(live: unknown): live is Infer<typeof liveStateValidator> {
 
 type Machine = { _id: string };
 
-/** Authenticate, then run `handle`; any thrown error becomes a 400 with its message. */
+/**
+ * Pass the gate (by default the key, then the contract), then run `handle`;
+ * any thrown error becomes a 400 carrying its stable code (`request_failed`
+ * when it has none). Only the stop request's route passes another gate.
+ */
 function machineRoute(
   handle: (
     ctx: Parameters<Parameters<typeof httpAction>[0]>[0],
     req: Request,
     machineId: Id<"machines">,
   ) => Promise<Response>,
+  gate: typeof authenticateMachineRequest = validateMachineAuth,
 ) {
   return httpAction(async (ctx, req) => {
-    const auth = await validateMachineAuth(ctx, req);
+    const auth = await gate(ctx, req);
     if ("error" in auth) return auth.error;
     const machine: Machine = auth.machine;
     try {
       return await handle(ctx, req, machine._id as Id<"machines">);
     } catch (error: unknown) {
-      return json(400, {
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
+      const { code, message } = refusalOf(error);
+      return refuse(400, code, message);
     }
   });
 }
@@ -161,7 +190,11 @@ function sessionIdOf(
   return isStr(raw) && raw.length > 0 ? (raw as Id<"sessions">) : null;
 }
 
-/** GET /api/machine/training/poll -> {session: PendingTraining | null} */
+/**
+ * GET /api/machine/training/poll
+ * -> {session: PendingTraining | null, server_contract_version}
+ * The console arms nothing from an answer whose major is not its own.
+ */
 http.route({
   path: "/api/machine/training/poll",
   method: "GET",
@@ -170,7 +203,7 @@ http.route({
       internal.training.getPendingTrainingSession,
       { machineId },
     );
-    return json(200, { session });
+    return json(200, { session, server_contract_version: CONTRACT_VERSION });
   }),
 });
 
@@ -193,9 +226,11 @@ http.route({
   handler: machineRoute(async (ctx, req, machineId) => {
     const body = await readJson(req);
     if (!body || !isNum(body.storeRev) || !Array.isArray(body.profiles)) {
-      return json(400, {
-        error: "Expected {storeRev, programsEnabled, profiles}",
-      });
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected {storeRev, programsEnabled, profiles}",
+      );
     }
     const keys = [
       "totalDurationS",
@@ -210,7 +245,7 @@ http.route({
     const profiles = [];
     for (const raw of body.profiles as unknown[]) {
       if (typeof raw !== "object" || raw === null) {
-        return json(400, { error: "Profile must be an object" });
+        return refuse(400, "invalid_request", "Profile must be an object");
       }
       const p = raw as Record<string, unknown>;
       if (
@@ -218,7 +253,11 @@ http.route({
         !isStr(p.name) ||
         !keys.every((k) => isNum(p[k]))
       ) {
-        return json(400, { error: `Malformed profile ${String(p.profileId)}` });
+        return refuse(
+          400,
+          "invalid_request",
+          `Malformed profile ${String(p.profileId)}`,
+        );
       }
       profiles.push({
         profileId: p.profileId,
@@ -250,7 +289,7 @@ http.route({
   handler: machineRoute(async (ctx, req, machineId) => {
     const body = await readJson(req);
     const sessionId = sessionIdOf(ctx, body?.sessionId);
-    if (!sessionId) return json(400, { error: "Missing sessionId" });
+    if (!sessionId) return refuse(400, "invalid_request", "Missing sessionId");
     await ctx.runMutation(internal.training.markTrainingStarted, {
       machineId,
       sessionId,
@@ -272,9 +311,11 @@ http.route({
       !isNum(b.startedAt) ||
       !isStr(b.operatorName)
     ) {
-      return json(400, {
-        error: "Expected {localRef, kind, startedAt, operatorName}",
-      });
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected {localRef, kind, startedAt, operatorName}",
+      );
     }
     const optStr = (x: unknown) => (isStr(x) ? x : undefined);
     const optNum = (x: unknown) => (isNum(x) ? x : undefined);
@@ -309,7 +350,11 @@ http.route({
     const b = await readJson(req);
     const sessionId = sessionIdOf(ctx, b?.sessionId);
     if (!b || !sessionId || !isStr(b.reason)) {
-      return json(400, { error: "Expected {sessionId, failed, reason}" });
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected {sessionId, failed, reason}",
+      );
     }
     await ctx.runMutation(internal.training.endTrainingSession, {
       machineId,
@@ -322,7 +367,17 @@ http.route({
   }),
 });
 
-/** GET /api/machine/training/status?sessionId= -> {status, active, stopRequested} */
+/**
+ * GET /api/machine/training/status?sessionId=
+ * -> {status, active, stopRequested, server_contract_version}
+ *
+ * The one machine route that answers whatever contract the machine announces
+ * (the key is still required): it carries the stop request, and "stop" means
+ * the same thing under every contract. A console of another major ends its
+ * session on `stopRequested: true` or `active: false` (either can only cause
+ * an ordinary stop) and trusts nothing else in this answer. The route only
+ * reads.
+ */
 http.route({
   path: "/api/machine/training/status",
   method: "GET",
@@ -331,15 +386,15 @@ http.route({
       ctx,
       new URL(req.url).searchParams.get("sessionId"),
     );
-    if (!sessionId) return json(400, { error: "Missing sessionId" });
+    if (!sessionId) return refuse(400, "invalid_request", "Missing sessionId");
     const status = await ctx.runQuery(internal.training.getTrainingStatus, {
       machineId,
       sessionId,
     });
     return status
-      ? json(200, status)
-      : json(404, { error: "Session not found" });
-  }),
+      ? json(200, { ...status, server_contract_version: CONTRACT_VERSION })
+      : refuse(404, "session_not_found", "Session not found");
+  }, authenticateMachineRequest),
 });
 
 /** POST /api/machine/training/telemetry {sessionId, points[]} */
@@ -350,7 +405,7 @@ http.route({
     const b = await readJson(req);
     const sessionId = sessionIdOf(ctx, b?.sessionId);
     if (!b || !sessionId || !Array.isArray(b.points)) {
-      return json(400, { error: "Expected {sessionId, points}" });
+      return refuse(400, "invalid_request", "Expected {sessionId, points}");
     }
     const points = [];
     for (const raw of b.points as unknown[]) {
@@ -369,7 +424,7 @@ http.route({
         !isNum(p.gLoad) ||
         !isStr(p.safetyAction)
       ) {
-        return json(400, { error: "Malformed telemetry point" });
+        return refuse(400, "invalid_request", "Malformed telemetry point");
       }
       points.push({
         t: p.t,
@@ -384,7 +439,7 @@ http.route({
       });
     }
     if (points.length > 600)
-      return json(400, { error: "At most 600 points per batch" });
+      return refuse(400, "invalid_request", "At most 600 points per batch");
     const result = await ctx.runMutation(internal.training.storeTelemetry, {
       machineId,
       sessionId,

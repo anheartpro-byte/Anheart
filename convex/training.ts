@@ -40,6 +40,7 @@ import {
 } from "./lib/auth";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
+import { machineError } from "./lib/contract";
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS } from "../lib/training";
@@ -800,9 +801,12 @@ export const markTrainingStarted = internalMutation({
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
     if (!s || s.machineId !== args.machineId)
-      throw new ConvexError("Session not found");
+      throw machineError("session_not_found", "Session not found");
     if (s.status !== "pending")
-      throw new ConvexError(`Session is not pending (status: ${s.status})`);
+      throw machineError(
+        "session_not_pending",
+        `Session is not pending (status: ${s.status})`,
+      );
     await ctx.db.patch(args.sessionId, {
       status: "active",
       startedAt: Date.now(),
@@ -840,7 +844,7 @@ export const registerLocalSession = internalMutation({
       .unique();
     if (existing) return existing._id;
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) throw new ConvexError("Machine not found");
+    if (!machine) throw machineError("machine_not_found", "Machine not found");
     const userId = args.userId
       ? ctx.db.normalizeId("users", args.userId)
       : null;
@@ -880,7 +884,7 @@ export const endTrainingSession = internalMutation({
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
     if (!s || s.machineId !== args.machineId)
-      throw new ConvexError("Session not found");
+      throw machineError("session_not_found", "Session not found");
     if (s.status === "completed" || s.status === "failed") return null; // idempotent
     await ctx.db.patch(args.sessionId, {
       status: args.failed ? "failed" : "completed",
@@ -925,7 +929,7 @@ export const storeTelemetry = internalMutation({
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
     if (!s || s.machineId !== args.machineId)
-      throw new ConvexError("Session not found");
+      throw machineError("session_not_found", "Session not found");
     for (const p of args.points) {
       await ctx.db.insert("training_telemetry", {
         sessionId: args.sessionId,

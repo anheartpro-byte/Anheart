@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import http from "./http";
+import { machineHeaders } from "./machineAuth.fixtures";
 import { LEGACY_END_REASON } from "./migrations/retireLegacyRecording";
 import {
   addSession,
@@ -227,7 +228,7 @@ describe("ANH-135 the schema follows", () => {
     );
     const response = await w.t.fetch("/api/machine/heartbeat", {
       method: "POST",
-      headers: { Authorization: `Bearer ${w.machineKey}` },
+      headers: machineHeaders(w.machineKey),
     });
     expect(response.status).toBe(200);
   });
@@ -545,7 +546,7 @@ describe("ANH-135 migration: the recorder settings leave the machines", () => {
     );
     const response = await w.t.fetch("/api/machine/heartbeat", {
       method: "POST",
-      headers: { Authorization: `Bearer ${w.machineKey}` },
+      headers: machineHeaders(w.machineKey),
     });
     expect(response.status).toBe(200);
   });

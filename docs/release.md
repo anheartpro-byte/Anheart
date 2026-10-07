@@ -36,7 +36,7 @@ Les trois avancent séparément : une release peut ne publier qu'un composant.
 
 | Composant | Tag | Écrit par le script dans | Lu par |
 |---|---|---|---|
-| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | **rien encore.** Le heartbeat l'enverra (`software_version`, ANH-133) ; l'affichage sur la console locale n'a pas encore de ticket ([section 8](#8-limites-et-reste-à-faire)). |
+| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | la console, qui le lit une fois au démarrage (`src/contract.py`) et l'envoie dans chaque heartbeat (`software_version`) ; la fiche machine du site l'affiche. L'affichage sur la console locale n'a pas encore de ticket ([section 8](#8-limites-et-reste-à-faire)). |
 | Convex | `cloud-X.Y.Z` | `convex/VERSION` et la constante `CLOUD_VERSION` de `convex/cloudVersion.ts` | le code déployé : `npx convex run softwareReleases:deployedCloudVersion` répond la version du déploiement visé. |
 | Site | `web-X.Y.Z` | `package.json` et `package-lock.json` (champ `version`) | `next.config.ts`, qui la fige à la construction ; le pied de page de l'accueil et de la FAQ l'affiche. |
 
@@ -379,8 +379,7 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Quoi | Qui ou quel ticket |
 |---|---|
 | Faire la première release réelle (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) | le responsable du produit, [section 3](#3-le-déroulé) |
-| Afficher la version sur la console locale | ticket à créer ; après ANH-133, qui lit `raspberry-pi/VERSION` côté Pi |
-| Envoyer la version dans le heartbeat | ANH-133 |
+| Afficher la version sur la console locale | ticket à créer ; `read_software_version` (`src/contract.py`) lit déjà `raspberry-pi/VERSION` côté Pi |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
 | Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |

@@ -245,6 +245,9 @@ export const getMachine = query({
       createdAt: v.number(),
       isDeleted: v.optional(v.boolean()),
       deletedAt: v.optional(v.number()),
+      softwareVersion: v.optional(v.string()),
+      contractVersion: v.optional(v.string()),
+      lastVersionSeenAt: v.optional(v.number()),
       gestionnaires: v.array(
         v.object({
           _id: v.id("users"),
@@ -305,6 +308,9 @@ export const getMachine = query({
       createdAt: machine.createdAt,
       isDeleted: machine.isDeleted,
       deletedAt: machine.deletedAt,
+      softwareVersion: machine.softwareVersion,
+      contractVersion: machine.contractVersion,
+      lastVersionSeenAt: machine.lastVersionSeenAt,
       gestionnaires: validGestionnaires,
     };
   },
@@ -527,6 +533,8 @@ export const recordHeartbeat = internalMutation({
     batteryLevel: v.optional(v.number()),
     wifiStrength: v.optional(v.number()),
     activeSessionId: v.optional(v.string()),
+    softwareVersion: v.optional(v.string()),
+    contractVersion: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -543,10 +551,19 @@ export const recordHeartbeat = internalMutation({
       newStatus = "in_session";
     }
 
-    // Update machine
+    // Update machine. A heartbeat that went through the contract gate states
+    // the versions as they are now: a software version it did not send is
+    // cleared rather than left to look current.
     await ctx.db.patch(args.machineId, {
       lastHeartbeat: now,
       status: newStatus,
+      ...(args.contractVersion === undefined
+        ? {}
+        : {
+            softwareVersion: args.softwareVersion,
+            contractVersion: args.contractVersion,
+            lastVersionSeenAt: now,
+          }),
     });
 
     // Record heartbeat history

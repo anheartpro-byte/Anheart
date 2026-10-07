@@ -183,6 +183,12 @@ export default defineSchema({
     // Reported by the Pi: whether this build accepts programmed (auto) sessions.
     programsEnabled: v.optional(v.boolean()),
     live: v.optional(liveStateValidator),
+    // Announced by the Pi with each heartbeat (contracts/machine-api.json):
+    // its software version (a git tag, e.g. "pi-0.4.2"; absent when it sent
+    // none), the contract it speaks, and when both were last seen.
+    softwareVersion: v.optional(v.string()),
+    contractVersion: v.optional(v.string()),
+    lastVersionSeenAt: v.optional(v.number()),
   })
     .index("by_api_key", ["apiKey"])
     .index("by_apiKeySelector", ["apiKeySelector"])

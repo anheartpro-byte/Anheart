@@ -1,7 +1,11 @@
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
-import { machineFixture, machineRoutes } from "./machineAuth.fixtures";
+import {
+  machineFixture,
+  machineHeaders,
+  machineRoutes,
+} from "./machineAuth.fixtures";
 
 const modules = import.meta.glob([
   "./**/*.ts",
@@ -104,7 +108,7 @@ describe("ANH-121 machine authentication", () => {
     });
     const response = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
-      headers: { Authorization: `Bearer ${f.apiKey}` },
+      headers: machineHeaders(f.apiKey),
     });
     // Then authentication succeeds and the actual heartbeat is persisted.
     expect(first?._id).toBe(f.machineId);
@@ -140,7 +144,7 @@ describe("ANH-121 machine authentication", () => {
     expect(Object.keys(replacement)).toEqual(["apiKey"]);
     const response = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
-      headers: { Authorization: `Bearer ${replacement.apiKey}` },
+      headers: machineHeaders(replacement.apiKey),
     });
     expect(response.status).toBe(200);
   });

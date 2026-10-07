@@ -662,7 +662,10 @@ programmes, ni droits, ni zone de danger.
 
 Statut (« En ligne », « Hors ligne » ou « En session » ; une valeur que le
 site ne connaît pas s'afficherait telle quelle), Dernier signal, « Créée le »
-(date de création). Bouton **Modifier** : fenêtre du
+(date de création), puis « Version logicielle » et « Contrat machine » : ce
+que la machine a annoncé à son dernier signal (« - » tant qu'elle n'a rien
+annoncé), avec la ligne « Versions annoncées il y a ... ». Le site affiche ces
+versions sans les comparer à une version attendue. Bouton **Modifier** : fenêtre du
 [§4.5](#45-fenêtre-nouvelle-machine--modifier).
 
 #### Carte « Gestionnaires »
