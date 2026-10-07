@@ -803,7 +803,8 @@ async def test_reads_feed_the_watchdog_only_when_configured_like_the_hardware() 
     """
     clock = ManualClock()
     sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
-    assert isinstance(await sim.open(), Ok)
+    opened = await sim.open()
+    assert isinstance(opened, Ok)
     for _ in range(40):
         sim.advance(clock.advance(TICK))
         await sim.read_status()
@@ -821,7 +822,8 @@ async def test_a_failed_open_still_leaves_the_watchdog_armable() -> None:
     clock = ManualClock()
     sim = SimulatedDrive(clock)
     sim.inject_comms_loss(Seconds(1.0))
-    assert isinstance(_err(await sim.open()), CommTimeout)
+    opened = await sim.open()
+    assert isinstance(_err(opened), CommTimeout)
 
     _run_silent(sim, clock, Seconds(1.0))
     await _status(sim)  # a read, not a write: establishes comms, feeds nothing

@@ -15,6 +15,7 @@ bench time. This turns the question into evidence:
 
 import os
 import sys
+from abc import abstractmethod
 from typing import Protocol, runtime_checkable
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +31,9 @@ from src.units import Seconds
 class RegisterReply(Protocol):
     registers: list[int]
 
-    def isError(self) -> bool: ...  # noqa: N802 - vendor response protocol
+    @abstractmethod
+    def isError(self) -> bool:  # noqa: N802 - vendor response protocol
+        """Whether the reply is a Modbus exception rather than register values."""
 
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "COM3"

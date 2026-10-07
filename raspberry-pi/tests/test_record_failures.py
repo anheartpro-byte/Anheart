@@ -69,10 +69,12 @@ def test_ex8_existing_record_is_never_overwritten_and_closed_writer_refuses_appe
 ) -> None:
     recording = writer(tmp_path)
     assert isinstance(Writer.create(tmp_path, manifest()), Err)
-    assert isinstance(recording.close(ManualClock(), "done"), Ok)
+    closed = recording.close(ManualClock(), "done")
+    assert isinstance(closed, Ok)
     before = (recording.path / "ticks.csv").read_bytes()
     assert isinstance(recording.tick(row()), Err)
-    assert isinstance(recording.close(ManualClock(), "second"), Err)
+    closed = recording.close(ManualClock(), "second")
+    assert isinstance(closed, Err)
     assert (recording.path / "ticks.csv").read_bytes() == before
 
 
@@ -85,7 +87,8 @@ def test_ex12_io_failures_return_errors_without_claiming_close(tmp_path: Path) -
     manifest_path = recording.path / "manifest.json"
     manifest_path.unlink()
     manifest_path.mkdir()
-    assert isinstance(recording.close(ManualClock(), "done"), Err)
+    closed = recording.close(ManualClock(), "done")
+    assert isinstance(closed, Err)
     assert not recording.closed
     assert not (recording.path / "checksums.sha256").exists()
 
@@ -134,7 +137,8 @@ def test_ex7_blank_missing_and_invalid_sensor_values_keep_their_meaning(tmp_path
         ("ECG", "rate", None),
     ]
     assert isinstance(recording.sensors(float("nan"), ()), Err)
-    assert isinstance(recording.close(ManualClock(), "done"), Ok)
+    closed = recording.close(ManualClock(), "done")
+    assert isinstance(closed, Ok)
     assert isinstance(recording.sensors(2, (blank,)), Err)
 
 

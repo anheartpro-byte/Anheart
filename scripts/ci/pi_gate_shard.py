@@ -210,8 +210,7 @@ class Share:
             case Suite.SIMULATION:
                 owners = simulation_owners(nodeids, self.count)
                 return [owner == self.index for owner in owners]
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(self.suite)
 
     def absent(self, nodeids: Sequence[str]) -> Sequence[str]:
         """What the dealing rule names that is no longer collected, sorted."""
@@ -221,8 +220,7 @@ class Share:
             case Suite.SIMULATION:
                 files = {file_of(nodeid) for nodeid in nodeids}
                 return sorted(ALONE_IN_PROCESS_ZERO.difference(files))
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(self.suite)
 
     def collected_file(self) -> Path:
         return self.evidence / f"collected-{self.index}.txt"

@@ -20,8 +20,8 @@ from typing import Final
 
 import pytest
 
-import src.record.export as export_module
 from src.clock import ManualClock
+from src.record import export as export_module
 from src.record.export import (
     BUSY,
     EXPORT_PREFIX,

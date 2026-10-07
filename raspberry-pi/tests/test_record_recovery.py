@@ -54,7 +54,8 @@ def test_ex8_failed_manifest_publish_preserves_the_open_record(
         raise OSError("synthetic publish failure")
 
     monkeypatch.setattr(Path, "replace", failed_replace)
-    assert isinstance(recording.close(ManualClock(), "done"), Err)
+    closed = recording.close(ManualClock(), "done")
+    assert isinstance(closed, Err)
     assert (recording.path / "manifest.json").read_bytes() == original
     assert not (recording.path / "checksums.sha256").exists()
 

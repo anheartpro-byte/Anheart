@@ -1,9 +1,16 @@
-"""Hardware-free adapter lifecycle regressions for drive ownership."""
+"""Hardware-free adapter lifecycle regressions for drive ownership.
+
+Also the synthetic serial handle and the helpers that the other drive
+ownership tests and the subprocess worker share: this module imports none of
+them back.
+"""
 
 from __future__ import annotations
 
 import gc
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import Literal, assert_never
 
@@ -15,9 +22,35 @@ from src.motor.drive_process_lock import DriveLease, DriveOwnershipError, retry_
 from src.motor.ftdi_link import ConfigurableFtdi, open_ftdi_port, open_schneider_device
 from src.result import Err
 from src.units import Seconds
-from tests.drive_lock_worker import SyntheticSerial
-from tests.test_drive_process_lock import run_contender
 from tests.test_ftdi_link import FRAME, ConfigurableChip, FakeChip, Sleeps
+
+
+class SyntheticSerial:
+    def __init__(self, *, fail_setup: bool = False, fail_close: bool = False) -> None:
+        self.fail_setup: bool = fail_setup
+        self.fail_close: bool = fail_close
+        self.closed: bool = False
+        self.successful_closes: int = 0
+
+    @property
+    def inter_byte_timeout(self) -> float | None:
+        return None
+
+    @inter_byte_timeout.setter
+    def inter_byte_timeout(self, value: float | None) -> None:
+        del value
+        if self.fail_setup:
+            raise OSError("synthetic configuration failed with a live handle")
+
+    def close(self) -> None:
+        if self.fail_close:
+            raise OSError("synthetic close failed; handle remains live")
+        if not self.closed:
+            self.successful_closes += 1
+        self.closed = True
+
+    def is_closed(self) -> bool:
+        return self.closed
 
 
 def broken_open_master(
@@ -52,8 +85,7 @@ def broken_open_master(
                 open_device=open_ftdi,
             )
             return master, handle, opens
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(backend)
 
 
 def refused_open(master: ModbusMaster) -> None:
@@ -62,6 +94,45 @@ def refused_open(master: ModbusMaster) -> None:
     except OSError:
         opened = False
     assert not opened
+
+
+def hold_failed_master(
+    backend: Literal["serial", "ftdi"], patch: pytest.MonkeyPatch, after_open: bool
+) -> int:
+    master, handle, opens = broken_open_master(backend, patch)
+    try:
+        if after_open:
+            handle.fail_setup = False
+            handle.fail_close = False
+            assert master.connect()
+            handle.fail_close = True
+            with pytest.raises(OSError, match="synthetic close failed"):
+                master.close()
+        else:
+            refused_open(master)
+        assert not handle.is_closed()
+        assert len(opens) == 1
+        print("OPEN", flush=True)  # noqa: T201 - live-handle readiness handshake
+        sys.stdin.read(1)
+    finally:
+        handle.fail_close = False
+        master.close()
+    return 0
+
+
+def run_contender(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - fixed synthetic fixture
+        [
+            sys.executable,
+            str(Path(__file__).with_name("drive_lock_worker.py")),
+            str(root),
+            "attempt",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
 
 
 @pytest.mark.parametrize("backend", ["serial", "ftdi"])

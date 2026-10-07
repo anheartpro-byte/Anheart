@@ -208,20 +208,24 @@ def _out(rpm: int) -> OutputRpm:
 
 async def _turning(mode: Mode) -> Rig:
     """A session of ``mode`` with the arm turning and no verdict standing."""
-    rig: Rig
+    rig = await _started(mode)
+    assert _applied(rig) > 0, "the arm is not turning"
+    assert _verdict(rig) is None
+    return rig
+
+
+async def _started(mode: Mode) -> Rig:
+    """A session of ``mode``, as it stands once it has been started."""
     match mode:
         case "programme":
             rig = await _running_rig(profile=LONG_HOLD)
             await rig.run(4.0)
+            return rig
         case "bench":
-            rig = await _manual(Occupancy.BENCH, MANUAL_SPEED)
+            return await _manual(Occupancy.BENCH, MANUAL_SPEED)
         case "occupied":
-            rig = await _manual(Occupancy.OCCUPIED, MANUAL_SPEED)
-        case _ as unreachable:
-            assert_never(unreachable)
-    assert _applied(rig) > 0, "the arm is not turning"
-    assert _verdict(rig) is None
-    return rig
+            return await _manual(Occupancy.OCCUPIED, MANUAL_SPEED)
+    raise assert_never(mode)
 
 
 async def _frozen(rig: Rig, source: Source) -> Standing:

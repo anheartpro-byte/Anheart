@@ -16,7 +16,7 @@ import src.motor.ftdi_link as link
 from src.clock import ManualClock
 from src.motor.drive_process_lock import retry_failed_drive_closes
 from src.units import Seconds
-from tests.test_drive_process_lock import run_contender
+from tests.test_drive_lock_transports import run_contender
 from tests.test_ftdi_link import FRAME, Sleeps
 
 

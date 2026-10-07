@@ -580,6 +580,7 @@ def _handle(result: Result[MotorRpm, DriveError]) -> str:
             return f"ok:{rpm}"
         case Err(error):
             return _describe(error)
+    raise assert_never(result)
 
 
 def _describe(error: DriveError) -> str:
@@ -602,8 +603,7 @@ def _describe(error: DriveError) -> str:
             return f"range:{quantity}"
         case EnableUnconfirmed() | StopUnconfirmed() as unknown:
             return _describe_unknown_output_state(unknown)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _describe_unknown_output_state(error: EnableUnconfirmed | StopUnconfirmed) -> str:
@@ -618,8 +618,7 @@ def _describe_unknown_output_state(error: EnableUnconfirmed | StopUnconfirmed) -
             return f"enable?:{zeroed}:{removed}"
         case StopUnconfirmed(waited=waited, last_output_rpm=rpm):
             return f"stop?:{waited}:{rpm}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def test_every_error_variant_is_handled_and_carries_its_context() -> None:
@@ -756,7 +755,8 @@ def test_a_class_missing_a_method_is_not_a_backend() -> None:
 async def test_a_backend_reports_results_rather_than_raising() -> None:
     """Every fallible operation hands back a value the caller has to look at."""
     backend = _RecordingBackend()
-    assert isinstance(await backend.open(), Ok)
+    opened = await backend.open()
+    assert isinstance(opened, Ok)
     assert isinstance(await backend.write_command(ControlWord.ENABLE_OPERATION), Ok)
     assert isinstance(await backend.write_speed(MotorRpm(600)), Ok)
 
@@ -764,7 +764,8 @@ async def test_a_backend_reports_results_rather_than_raising() -> None:
     assert isinstance(status, Ok)
     assert status.value.state == DriveState.OPERATION_ENABLED
     assert await backend.read_limits() == Ok(BENCH_LIMITS)
-    assert isinstance(await backend.close(), Ok)
+    closed = await backend.close()
+    assert isinstance(closed, Ok)
 
     assert backend.commands == [ControlWord.ENABLE_OPERATION]
     assert backend.speeds == [MotorRpm(600)]

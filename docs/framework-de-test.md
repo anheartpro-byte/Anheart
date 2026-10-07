@@ -1660,7 +1660,8 @@ de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
 pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
 complet (celle de checkout sur le même commit que `ci.yml`), une seule
 permission d'écriture dans tous les workflows du dépôt, déclencheurs, langages,
-noms des jobs, et le périmètre confronté aux fichiers suivis par Git (seuls le
+noms des jobs, la suite de requêtes (`security-and-quality`, sans filtre de
+règle), et le périmètre confronté aux fichiers suivis par Git (seuls le
 code Convex généré et le fichier de CAO sont laissés de côté).
 
 **Réglage du dépôt à ne pas toucher.** Ne pas activer le « Default setup » de

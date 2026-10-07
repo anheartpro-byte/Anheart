@@ -30,6 +30,7 @@ import ast
 import asyncio
 import threading
 import time
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -467,7 +468,9 @@ class BusFactory(Protocol):
     even in a fixture type.
     """
 
-    def __call__(self, *, offset: int = 0, eta: int = ETA_SWITCH_ON_DISABLED) -> FakeBus: ...
+    @abstractmethod
+    def __call__(self, *, offset: int = 0, eta: int = ETA_SWITCH_ON_DISABLED) -> FakeBus:
+        """A new fake drive at ``offset`` whose status word reads ``eta``."""
 
 
 SETTINGS: Final[SerialSettings] = SerialSettings(port="COM-NONE")
@@ -670,7 +673,8 @@ def test_the_driver_refuses_tuning_that_would_verify_nothing(
 async def test_the_slave_address_is_on_every_transaction(clock: ManualClock, bus: FakeBus) -> None:
     """A wrong unit address talks confidently to a different drive on the bus."""
     drive = build_drive(clock, bus, settings=SerialSettings(port="p", slave_address=7))
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert [t.slave for t in bus.log] == [7]
 
 
@@ -683,7 +687,8 @@ async def test_open_proves_the_addressing_with_a_read_and_commands_nothing(
     drive: ATV320Drive, bus: FakeBus
 ) -> None:
     """A wrong offset found by writing has already written a speed somewhere."""
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert bus.connect_calls == 1
     assert bus.writes() == []
     assert bus.reads() == [RegisterMap().eta]
@@ -702,27 +707,31 @@ async def test_open_reports_a_port_that_will_not_open(drive: ATV320Drive, bus: F
 
 async def test_open_reports_a_raising_connect(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.raise_on_connect = connection_exception()
-    assert isinstance(await drive.open(), Err)
+    opened = await drive.open()
+    assert isinstance(opened, Err)
 
 
 async def test_open_reports_a_wrong_register_offset(clock: ManualClock, bus: FakeBus) -> None:
     """The drive is at offset 0; the driver is told -1, so ETA does not exist."""
     drive = build_drive(clock, bus, offset=-1)
     match await drive.open():
-        case Err(BadResponse(detail=detail)):
-            assert "exception code 2" in detail
-            assert "offset" in detail
+        case Err(BadResponse() as error):
+            assert "exception code 2" in error.detail
+            assert "offset" in error.detail
         case other:
             pytest.fail(f"expected BadResponse naming the offset, got {other!r}")
 
 
 async def test_open_after_close_works(drive: ATV320Drive, bus: FakeBus) -> None:
     """close() shuts the executor down; open() must leave the object usable."""
-    assert isinstance(await drive.open(), Ok)
-    assert isinstance(await drive.close(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     latched_by_close = drive.link_lost
     assert latched_by_close
-    assert isinstance(await drive.open(), Ok)
+    reopened = await drive.open()
+    assert isinstance(reopened, Ok)
     latched_after_reopen = drive.link_lost
     assert not latched_after_reopen
     assert bus.connect_calls == 2
@@ -797,8 +806,8 @@ async def test_write_speed_rejects_values_outside_signed_16_bit(
 ) -> None:
     """Rejected at the boundary, and nothing reaches the wire."""
     match await drive.write_speed(MotorRpm(rpm)):
-        case Err(OutOfRange(quantity=quantity)):
-            assert quantity == "signed16"
+        case Err(OutOfRange() as error):
+            assert error.quantity == "signed16"
         case other:
             pytest.fail(f"expected OutOfRange, got {other!r}")
     assert bus.log == []
@@ -809,10 +818,10 @@ async def test_write_speed_catches_a_disagreeing_echo(drive: ATV320Drive, bus: F
     bus.script_writes.append(write_echo(RegisterMap().lfrd, 500))
     bus.script_reads.append(read_reply([123]))
     match await drive.write_speed(MotorRpm(500)):
-        case Err(BadResponse(detail=detail)):
-            assert "write-verify failed" in detail
-            assert "500 rpm" in detail
-            assert "123 rpm" in detail
+        case Err(BadResponse() as error):
+            assert "write-verify failed" in error.detail
+            assert "500 rpm" in error.detail
+            assert "123 rpm" in error.detail
         case other:
             pytest.fail(f"expected a write-verify BadResponse, got {other!r}")
 
@@ -842,9 +851,9 @@ async def test_write_speed_reports_a_value_the_drive_rejects(
 ) -> None:
     bus.script_writes.append(exception_response(WRITE_SINGLE_REGISTER, ILLEGAL_DATA_VALUE))
     match await drive.write_speed(MotorRpm(900)):
-        case Err(BadResponse(detail=detail)):
-            assert "rejected a write" in detail
-            assert "exception code 3" in detail
+        case Err(BadResponse() as error):
+            assert "rejected a write" in error.detail
+            assert "exception code 3" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1017,8 +1026,8 @@ async def test_read_limits_reports_a_parameter_the_drive_does_not_have(
     """Unseeded addresses answer exception code 2, as a wrong offset would."""
     assert bus.regs.tfr not in bus.registers
     match await drive.read_limits():
-        case Err(BadResponse(detail=detail)):
-            assert "3103" in detail
+        case Err(BadResponse() as error):
+            assert "3103" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1072,8 +1081,8 @@ async def test_read_register_refuses_once_the_link_is_latched(
 async def test_a_short_read_is_a_bad_response(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.script_reads.append(read_reply([]))
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "expected exactly 1 register" in detail
+        case Err(BadResponse() as error):
+            assert "expected exactly 1 register" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1085,8 +1094,8 @@ async def test_a_reply_with_no_register_block_is_a_bad_response(
     ``registers: list[int]`` and never assigns it, so this raises."""
     bus.script_reads.append(write_echo(8602, 0))
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "carries no register data" in detail
+        case Err(BadResponse() as error):
+            assert "carries no register data" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1098,8 +1107,8 @@ async def test_a_reply_that_is_not_a_pdu_is_a_bad_response(
     """pymodbus returns None when a caller sets no_response_expected."""
     bus.script_reads.append(reply)
     match await drive.read_status():
-        case Err(BadResponse(detail=detail)):
-            assert "neither a Modbus PDU" in detail
+        case Err(BadResponse() as error):
+            assert "neither a Modbus PDU" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1107,8 +1116,8 @@ async def test_a_reply_that_is_not_a_pdu_is_a_bad_response(
 async def test_a_non_pdu_write_reply_is_a_bad_response(drive: ATV320Drive, bus: FakeBus) -> None:
     bus.script_writes.append(None)
     match await drive.write_command(ControlWord.SHUTDOWN):
-        case Err(BadResponse(detail=detail)):
-            assert "neither a Modbus PDU" in detail
+        case Err(BadResponse() as error):
+            assert "neither a Modbus PDU" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1126,9 +1135,9 @@ async def test_a_write_is_not_acked_by_somebody_elses_reply(
     """
     bus.script_writes.append(read_reply([0]))
     match await drive.write_command(ControlWord.SHUTDOWN):
-        case Err(BadResponse(detail=detail)):
-            assert "function code 3" in detail
-            assert "NOT acknowledged" in detail
+        case Err(BadResponse() as error):
+            assert "function code 3" in error.detail
+            assert "NOT acknowledged" in error.detail
         case other:
             pytest.fail(f"expected BadResponse, got {other!r}")
 
@@ -1149,8 +1158,8 @@ async def test_a_register_outside_the_16_bit_domain_is_out_of_range(
     """Parsed at the boundary, so nothing downstream has to check again."""
     bus.script_reads.append(read_reply([0x1FFFF]))
     match await drive.read_status():
-        case Err(OutOfRange(quantity=quantity)):
-            assert quantity == "register"
+        case Err(OutOfRange() as error):
+            assert error.quantity == "register"
         case other:
             pytest.fail(f"expected OutOfRange, got {other!r}")
 
@@ -1359,7 +1368,8 @@ async def test_a_link_that_heals_itself_is_not_permission_to_resume(
     assert isinstance(await drive.read_status(), Err)
     still_latched = drive.link_lost
     assert still_latched, "a healthy bus is not permission to resume"
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     latched_after_reopen = drive.link_lost
     assert not latched_after_reopen
     assert isinstance(await drive.read_status(), Ok)
@@ -1454,17 +1464,11 @@ async def test_enable_that_fails_at_the_energising_word_says_the_motor_may_be_ru
     bus.script_reads.extend([Behave.NORMALLY, Behave.NORMALLY, Behave.NORMALLY, io_exception()])
 
     match await drive.enable():
-        case Err(
-            EnableUnconfirmed(
-                detail=detail,
-                reference_zeroed=zeroed,
-                run_command_removed=removed,
-            )
-        ):
-            assert zeroed, "the rollback zeroed LFRD"
-            assert removed, "and removed the run command"
-            assert "may be live" in detail
-            assert "CommTimeout" in detail, "the underlying failure is still named"
+        case Err(EnableUnconfirmed() as error):
+            assert error.reference_zeroed, "the rollback zeroed LFRD"
+            assert error.run_command_removed, "and removed the run command"
+            assert "may be live" in error.detail
+            assert "CommTimeout" in error.detail, "the underlying failure is still named"
         case other:
             pytest.fail(f"expected EnableUnconfirmed, got {other!r}")
 
@@ -1540,9 +1544,9 @@ async def test_enable_refuses_a_faulted_drive_and_names_the_fault(
     drive = build_drive(clock, bus)
 
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault, raw_code=code)):
-            assert fault is DriveFault.OVERCURRENT
-            assert code == LFT_OVERCURRENT
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.OVERCURRENT
+            assert error.raw_code == LFT_OVERCURRENT
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     assert bus.command_words() == [], "not one command word to a faulted drive"
@@ -1554,8 +1558,8 @@ async def test_enable_reports_a_fault_that_appears_mid_sequence(
     bus.on_command[ControlWord.SWITCH_ON] = ETA_FAULT
     bus.registers[RegisterMap().lft] = LFT_OVERCURRENT
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault)):
-            assert fault is DriveFault.OVERCURRENT
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.OVERCURRENT
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     assert bus.command_words() == [6, 7], "ENABLE_OPERATION must not follow a fault"
@@ -1657,8 +1661,8 @@ async def test_enable_does_not_wait_out_a_fault_that_appears_while_settling(
     bus.on_command[ControlWord.SHUTDOWN] = ETA_FAULT
     bus.registers[RegisterMap().lft] = LFT_UNDERVOLTAGE
     match await drive.enable():
-        case Err(DriveFaulted(fault=fault)):
-            assert fault is DriveFault.UNDERVOLTAGE
+        case Err(DriveFaulted() as error):
+            assert error.fault is DriveFault.UNDERVOLTAGE
         case other:
             pytest.fail(f"expected DriveFaulted, got {other!r}")
     # Pre-check, one read that saw the fault, one LFT read. No settling.
@@ -1687,7 +1691,8 @@ async def test_close_ramps_to_a_stop_before_it_drops_the_output_stage(
     regs = RegisterMap()
     assert isinstance(await drive.enable(), Ok)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
 
     assert [(t.access, t.address, t.value) for t in bus.log] == [
         (Access.WRITE, regs.lfrd, 0),
@@ -1746,7 +1751,8 @@ async def test_close_stops_as_soon_as_the_shaft_has_stopped(
     # reads the fake's RFRD register of 0.
     bus.script_reads.extend([read_reply([600]), read_reply([600])])
 
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert len(bus.reads()) == 3, "it stopped polling the moment RFRD read zero"
     assert bus.command_words() == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
 
@@ -1761,7 +1767,8 @@ async def test_close_treats_one_rpm_as_stopped(clock: ManualClock, bus: FakeBus)
     drive = build_drive(clock, bus)
     assert isinstance(await drive.enable(), Ok)
     bus.registers[regs.rfrd] = 0xFFFF  # -1 rpm, signed
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.command_words()[-2:] == [ControlWord.SWITCH_ON.value, ControlWord.SHUTDOWN.value]
 
 
@@ -1804,7 +1811,8 @@ async def test_close_reports_a_failure_to_remove_the_run_command(
     """Both words are attempted: the shaft is already stopped, so 6 is safe."""
     regs = RegisterMap()
     bus.script_writes.extend([Behave.NORMALLY, io_exception()])
-    assert isinstance(await drive.close(), Err)
+    closed = await drive.close()
+    assert isinstance(closed, Err)
     assert bus.writes() == [
         (regs.lfrd, 0),
         (regs.cmd, ControlWord.SWITCH_ON.value),
@@ -1830,7 +1838,8 @@ async def test_close_releases_the_port_even_if_releasing_it_raises(
     """A driver that will not let go of a port because close() threw is a
     driver nobody can restart."""
     bus.raise_on_close = OSError("handle already gone")
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.close_calls == 1
     assert drive.link_lost
 
@@ -1848,7 +1857,8 @@ async def test_close_on_a_latched_link_still_attempts_the_stop(
     regs = RegisterMap()
     await latch_the_link(drive, bus)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.writes() == [
         (regs.lfrd, 0),
         (regs.cmd, ControlWord.SWITCH_ON.value),
@@ -1866,11 +1876,14 @@ async def test_close_is_idempotent_and_does_not_raise_the_second_time(
     ``RuntimeError: cannot schedule new futures after shutdown`` - out of a
     shutdown handler, which is where an exception has nobody left to catch it.
     """
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     transactions = len(bus.log)
 
-    assert isinstance(await drive.close(), Ok)
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert len(bus.log) == transactions, "a second close must not touch the wire"
     assert bus.close_calls == 1
 
@@ -1892,10 +1905,13 @@ async def test_a_second_close_repeats_the_first_verdict(drive: ATV320Drive, bus:
 
 async def test_reopening_after_a_close_clears_the_close(drive: ATV320Drive, bus: FakeBus) -> None:
     """open() is the one place any latch is cleared, this one included."""
-    assert isinstance(await drive.close(), Ok)
-    assert isinstance(await drive.open(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     bus.log.clear()
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert bus.writes()[0] == (RegisterMap().lfrd, 0), "the stop was attempted again"
 
 
@@ -2177,7 +2193,7 @@ async def _race_the_executor(
     started = time.perf_counter()
     outcome = drive.emergency_disable_blocking(budget)
     taken = time.perf_counter() - started
-    await opening
+    _ = await opening
     return outcome, taken
 
 

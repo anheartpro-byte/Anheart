@@ -38,7 +38,8 @@ async def test_cancel_startup_recovery_owns_the_stop(
     rig, held = make_rig(tmp_path, wrap=HeldRecovery)
     assert isinstance(held, HeldRecovery)
     held.after_transmission = after_transmission
-    assert isinstance(await rig.simulator.open(), Ok)
+    opened = await rig.simulator.open()
+    assert isinstance(opened, Ok)
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         assert isinstance(await rig.simulator.write_command(word), Ok)
     assert isinstance(await rig.simulator.write_speed(MotorRpm(240)), Ok)

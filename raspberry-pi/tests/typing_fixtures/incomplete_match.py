@@ -39,5 +39,5 @@ def handle_incomplete(result: Result[int, FakeDriveError]) -> str:
             match error:
                 case CommTimeout():
                     return "timeout"
-                case _ as unreachable:
-                    assert_never(unreachable)
+            raise assert_never(error)
+    raise assert_never(result)

@@ -301,11 +301,8 @@ def test_detect_events_ignores_a_shallow_flicker() -> None:
 
 
 def _err(result: Ok[OutputRpm] | Err[NoFlicker]) -> str:
-    match result:
-        case Ok(value=value):
-            pytest.fail(f"expected no flicker, got {value}")
-        case Err(error=error):
-            return error.detail
+    assert isinstance(result, Err), f"expected no flicker, got {result!r}"
+    return result.error.detail
 
 
 def test_estimate_flicker_refusals() -> None:

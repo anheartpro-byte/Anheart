@@ -166,6 +166,6 @@ class Meteor:
 def test_an_unknown_scripted_event_fails_loudly() -> None:
     clock = ManualClock()
     camera = SimulatedCamera(clock)
-    camera.schedule(cast("CameraEvent", Meteor(start=Monotonic(0.0))))
+    camera.schedule(cast(CameraEvent, Meteor(start=Monotonic(0.0))))
     with pytest.raises(AssertionError):
         camera.latest()

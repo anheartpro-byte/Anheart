@@ -115,7 +115,7 @@ def arg_text(args: argparse.Namespace, name: str) -> str:
     (a widening, not a lie) and narrowing with ``isinstance`` keeps the scripts
     free of it.
     """
-    flags = cast("Mapping[str, object]", vars(args))
+    flags = cast(Mapping[str, object], vars(args))
     value = flags[name]
     if not isinstance(value, str):
         raise TypeError(f"--{name}: expected text, got {type(value).__name__}")
@@ -144,20 +144,20 @@ def link_from_args(args: argparse.Namespace) -> DriveLink:
     The validation itself lives in :func:`src.local_config.build_drive_link`, so
     the local console and these scripts parse the link identically.
     """
-    match build_drive_link(
+    built = build_drive_link(
         port=arg_text(args, "port"),
         slave=arg_text(args, "slave"),
         baud=arg_text(args, "baud"),
         parity=arg_text(args, "parity"),
         timeout=arg_text(args, "timeout"),
         offset=arg_text(args, "offset"),
-    ):
+    )
+    match built:
         case Ok(link):
             return link
         case Err(problem):
             raise ValueError(f"{problem.key}: {problem.detail}")
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(built)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +190,8 @@ def build_drive(link: DriveLink, clock: Clock) -> BuiltDrive:
 def describe_error(error: DriveError) -> str:  # noqa: PLR0911 - one return per variant
     """One line for the operator, per variant of the closed union."""
     match error:
-        case CommTimeout(after=after):
-            return f"pas de reponse du variateur (apres {after:.3f} s)"
+        case CommTimeout():
+            return f"pas de reponse du variateur (apres {error.after:.3f} s)"
         case BadResponse(detail=detail):
             return f"reponse invalide: {detail}"
         case UnexpectedState(expected=expected, actual=actual):
@@ -204,5 +204,4 @@ def describe_error(error: DriveError) -> str:  # noqa: PLR0911 - one return per 
             return f"activation non confirmee: {detail}"
         case StopUnconfirmed(detail=detail):
             return f"arret non confirme: {detail}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)

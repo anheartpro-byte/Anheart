@@ -484,7 +484,8 @@ def test_bytes_that_arrive_after_a_short_read_go_to_the_next_read(clock: ManualC
 def test_write_hands_the_frame_to_the_chip(clock: ManualClock) -> None:
     chip = FakeChip()
     port, _ = make_port(chip, clock)
-    assert port.write(b"\xf8\x03\x0c\x81\x00\x01") == 6
+    written = port.write(b"\xf8\x03\x0c\x81\x00\x01")
+    assert written == 6
     assert chip.written == [b"\xf8\x03\x0c\x81\x00\x01"]
 
 
@@ -492,7 +493,8 @@ def test_write_reports_what_the_chip_accepted(clock: ManualClock) -> None:
     chip = FakeChip()
     chip.accept = 3
     port, _ = make_port(chip, clock)
-    assert port.write(b"\x01\x02\x03\x04") == 3
+    written = port.write(b"\x01\x02\x03\x04")
+    assert written == 3
 
 
 def test_close_releases_the_chip_once_and_is_idempotent(clock: ManualClock) -> None:

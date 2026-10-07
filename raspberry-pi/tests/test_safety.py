@@ -2464,8 +2464,7 @@ def _refusal_kind(refusal: AcknowledgeRefusal) -> str:
             return "estop-latched"
         case NothingLatched():
             return "nothing-latched"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def test_acknowledging_clears_the_floor_and_the_estop_together() -> None:

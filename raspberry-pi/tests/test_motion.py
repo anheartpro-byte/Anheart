@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from abc import abstractmethod
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -72,18 +73,18 @@ def test_the_defaults_are_the_plans_numbers() -> None:
 
 
 class _Positional(Protocol):
-    def __call__(self, output_accel: float, g_rate: float, min_run: int, /) -> MotionLimits: ...
+    @abstractmethod
+    def __call__(self, output_accel: float, g_rate: float, min_run: int, /) -> MotionLimits:
+        """The limits built from their fields given by position."""
 
 
 def _with(field: str, bad: float) -> MotionLimits:
     """``LIMITS`` with one field replaced, each through its own typed keyword."""
-    match field:
-        case "output_accel":
-            return replace(LIMITS, output_accel=OutputRpmPerSecond(bad))
-        case "g_rate":
-            return replace(LIMITS, g_rate=GLoadPerSecond(bad))
-        case _:
-            return replace(LIMITS, max_interval=Seconds(bad))
+    if field == "output_accel":
+        return replace(LIMITS, output_accel=OutputRpmPerSecond(bad))
+    if field == "g_rate":
+        return replace(LIMITS, g_rate=GLoadPerSecond(bad))
+    return replace(LIMITS, max_interval=Seconds(bad))
 
 
 def test_the_limits_are_frozen_and_keyword_only() -> None:

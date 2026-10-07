@@ -63,7 +63,8 @@ def closed_record(root: Path, index: int = 1) -> Path:
     assert isinstance(created, Ok)
     recording = created.value
     assert isinstance(recording.tick(row()), Ok)
-    assert isinstance(recording.close(ManualClock(), "operator_stop"), Ok)
+    closed = recording.close(ManualClock(), "operator_stop")
+    assert isinstance(closed, Ok)
     return recording.path
 
 

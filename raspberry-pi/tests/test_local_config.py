@@ -55,19 +55,15 @@ SIM_ENV: Final[Mapping[str, str]] = {
 
 
 def _load(env: Mapping[str, str]) -> LocalConfig:
-    match load_local_config(env):
-        case Ok(config):
-            return config
-        case Err(problems):
-            pytest.fail(f"unexpected problems: {problems}")
+    loaded = load_local_config(env)
+    assert isinstance(loaded, Ok), f"unexpected problems: {loaded!r}"
+    return loaded.value
 
 
 def _problems(env: Mapping[str, str]) -> tuple[ConfigProblem, ...]:
-    match load_local_config(env):
-        case Ok(config):
-            pytest.fail(f"accepted a bad configuration: {config}")
-        case Err(problems):
-            return problems
+    loaded = load_local_config(env)
+    assert isinstance(loaded, Err), f"accepted a bad configuration: {loaded!r}"
+    return loaded.error
 
 
 def _keys(env: Mapping[str, str]) -> set[str]:
