@@ -118,6 +118,8 @@ class Trace:
 
     meta: Mapping[str, JsonValue]
     rows: tuple[Row, ...]
+    """The session's ticks, from the start command on (``t`` > 0)."""
+
     frames: tuple[Mapping[str, JsonValue], ...]
     events: tuple[Event, ...]
     final: FinalState
@@ -126,10 +128,13 @@ class Trace:
     final_observed_t: float
     raw: tuple[bytes, ...] = ()
     sensors: tuple[tuple[float, tuple[SensorReading, ...]], ...] = ()
+    preamble: tuple[Row, ...] = ()
+    """The idle ticks before the start command (``t`` <= 0), in the v2 record only:
+    a replay needs them, the checks and the schema-1 exports never did."""
 
     def write_record(self, root: Path, privacy: Privacy) -> Path:
         writer = _required(Writer.create(root, self.manifest, privacy))
-        for row in self.rows:
+        for row in (*self.preamble, *self.rows):
             _required(writer.tick(row))
         for event in self.events:
             _required(writer.event(event))
