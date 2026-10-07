@@ -2494,7 +2494,7 @@ de maintenant, et aucune valeur :
   partagé par une autre valeur : la tâche `checkOfflineMachines` doit la
   suivre.
 
-Limites. Le dépôt n'a pas de bibliothèque de test avec DOM : dans ces tests, le
+Limites. Ces tests n'utilisent pas de bibliothèque de test avec DOM : le
 hook tourne sur un hôte minimal (un composant qui ne rend rien), et les
 composants sont rendus en HTML statique, une fois à la réception d'une réponse
 et une fois plus tard. Les tests écrits depuis montent les composants sur le
@@ -2545,9 +2545,19 @@ dans le job navigateur d'ANH-83.
 
 Pour tenir le seuil de 80 %, chaque composant de `components/`, chaque hook et
 chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
-(`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), toujours sans
-navigateur et sans bibliothèque de DOM : le dépôt n'en a pas, et aucune
-dépendance n'a été ajoutée.
+(`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
+n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
+
+**Deux sortes de tests, deux documents.** Les composants, les hooks et les
+règles de `lib/` sont testés sur le document minimal de `test-support/`,
+décrit ci-dessous. Les pages (`app/`) le sont avec la bibliothèque standard,
+jsdom et testing-library, activée fichier par fichier : elle arrive avec
+ANH-204 (`test-support/pages.tsx`), dont la PR est fusionnée après celle-ci.
+Les deux coexistent dans `npm run test:site`. Pour un nouveau test : un
+composant va sur le document minimal tant qu'il n'a besoin de rien de ce que
+ce document n'implémente pas (la liste est sous « Limites ») ; sinon il va sur
+la bibliothèque standard. On n'étend pas le document minimal pour imiter un
+navigateur.
 
 **Le document des tests : `test-support/`.** Le rendu en HTML statique des
 sections précédentes ne suffit pas à un formulaire : il ne garde pas d'état
@@ -2625,9 +2635,37 @@ restaurée).
 - Un remplaçant ne vaut que par sa fidélité à ce qu'il remplace : un
   comportement attribué à une primitive Radix dans un test l'est d'après sa
   documentation, pas d'après une exécution.
-- `test-support/dom.ts` n'implémente que ce que les composants actuels
-  demandent : un composant qui appelle une autre fonction du navigateur la
-  reçoit du test qui le monte, ou d'un ajout à `test-support/browser.ts`.
+- Le document minimal a été écrit d'après ce que React lui demande. Aucun test
+  ne le compare à un vrai DOM.
+
+**Ce que le document minimal n'implémente pas.** Un test écrit dessus ne
+prouve donc rien de ce qui suit, quel que soit son résultat :
+
+- **Aucune action par défaut du navigateur.** Un clic sur un bouton d'envoi
+  n'envoie pas le formulaire, la touche Entrée non plus : les tests appellent
+  `submit(formulaire)`. Un bouton du mauvais `type`, ou un formulaire sans
+  bouton d'envoi, n'est donc pas vu. Un clic sur un libellé ne donne pas le
+  focus à son champ, un lien ne navigue pas, une case native ne se coche pas.
+- **Aucune mise en page ni CSS.** Chaque élément est un point à l'origine, de
+  taille nulle ; une classe est un texte. `screen.text()` lit tout ce qui est
+  dans l'arbre, y compris ce qu'une classe cacherait à l'écran : un test
+  prouve qu'un élément est présent ou absent, pas qu'il est visible.
+- **Aucune règle de focus ni de clavier.** `focus()` note l'élément, rien de
+  plus : pas d'ordre de tabulation, pas de focus retenu dans une fenêtre.
+- **Un seul événement à la fois.** `click` envoie `click`, sans les événements
+  de pointeur qui le précèdent dans un navigateur ; `type` envoie `input` et
+  `change`, sans les touches. Un élément `disabled` n'est respecté que par
+  l'outil `click`.
+- **Aucune validation native** (`required`, `min`, `max`, `type="email"`),
+  aucune liste `<select>` native, aucun sélecteur (`querySelector`), aucune
+  lecture de HTML (`innerHTML`).
+- **Aucun arbre d'accessibilité.** Un rôle ou un nom accessible est un
+  attribut lu tel qu'il est écrit : rien ne calcule ce qu'un lecteur d'écran
+  annoncerait.
+- **Rien de ce que le test n'installe pas** : primitives Radix, portails,
+  canevas, images d'animation, observateurs, presse-papiers, largeur de
+  fenêtre. Ils viennent de remplaçants nommés (`test-support/ui.tsx`,
+  `radix.tsx`, `browser.ts`), installés par le test qui en a besoin.
 
 ### Infrastructure encore dépendante d'autres tickets
 

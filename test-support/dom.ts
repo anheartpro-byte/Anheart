@@ -1,13 +1,16 @@
 /**
- * A document for the tests of the site, without a browser and without a DOM
- * library: the repository has neither. React runs for real on it (state,
- * effects, renders after an event), so a test can open a form, type in it,
- * submit it, and read what the screen then shows.
+ * A document for the tests of the site's components, without a browser and
+ * without a DOM library. React runs for real on it (state, effects, renders
+ * after an event), so a test can open a form, type in it, submit it, and read
+ * what the screen then shows.
  *
  * It holds what React itself asks of a document, and nothing of what a
- * browser adds: no layout, no focus rules, no CSS, no parsing of HTML. A
- * component that needs more (a Radix popover, a canvas, a media query) gets it
- * from the test that mounts it, as a stand-in the test names.
+ * browser adds: no layout, no focus rules, no CSS, no parsing of HTML, no
+ * default action (a click on a submit button submits nothing: a test submits
+ * the form itself). A component that needs more (a Radix popover, a canvas, a
+ * media query) gets it from the test that mounts it, as a stand-in the test
+ * names. What it does not implement, and so cannot prove, is listed in
+ * docs/framework-de-test.md, "Tests des composants du site, sans navigateur".
  *
  * Importing this file installs the document as `document` and `window`, for
  * the test file that imports it and for no other: Vitest gives each test file
