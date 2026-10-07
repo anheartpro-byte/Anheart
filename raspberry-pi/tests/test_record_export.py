@@ -252,6 +252,8 @@ async def test_ex3_past_its_few_threads_a_record_read_is_refused_at_once_never_q
     assert io.active == 2
     for _ in range(50):
         assert await io.run(disk.read, Seconds(30.0)) == Err(RecordError("read", BUSY))
+    # Both threads are on the disk, however late a loaded machine starts them.
+    wait_for(lambda: len(disk.threads) >= 2)
     await asyncio.sleep(0.05)
     assert disk.threads == ["record-io", "record-io"], "a refused read never reached a thread"
     assert not first.done()
