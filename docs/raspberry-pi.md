@@ -126,7 +126,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `record/journal.py` | La file bornée et le fil d'écriture `record-journal` de la console. | Remettre une valeur ne prend ni verrou ni fichier et n'attend jamais ; `fsync` toutes les 2 s ; une erreur d'écriture coûte l'enregistrement, jamais la séance ([section 14](#14-lenregistrement-de-séance-boîte-noire-locale)). Porte 100 %. |
 | `record/session.py` | L'enregistreur côté boucle : ce que la console voit, mis au format. | Ses points d'entrée ne lèvent jamais ; aucun nom d'opérateur n'est écrit. Porte 100 %. |
 | `record/retention.py` | La rétention locale. | Un enregistrement sans dépôt confirmé n'est jamais purgé. Porte 100 %. |
-| `record/export.py` | L'archive `.tar.gz` d'un enregistrement, pour la route d'export. | Construite hors de la boucle ; seul un dossier d'enregistrement peut être nommé. Porte 100 %. |
+| `record/export.py` | La liste des enregistrements et l'archive `.tar.gz` de l'un d'eux, pour les routes d'export, et les fils qui les lisent (`RecordIo`). | Lues sur deux fils réservés (`record-io`), jamais sur la boucle ni sur les fils du traitement ECG ; une lecture de plus est refusée, jamais mise en attente ; seul un dossier d'enregistrement peut être nommé ([14.6](#146-export)). Porte 100 %. |
 
 ---
 
