@@ -1774,9 +1774,10 @@ l'audit des dépendances.
 analyse par SonarQube Cloud. Le chef de projet a décidé le 7 octobre 2026 de
 ne garder que CodeQL : avec l'offre gratuite pour dépôt public, le tableau de
 bord de SonarQube Cloud est public, constats de sécurité compris, alors que les
-résultats de CodeQL ne sont lisibles que par les personnes qui ont accès au
-dépôt. Le dépôt ne contient donc ni workflow, ni configuration, ni secret pour
-SonarQube Cloud.
+résultats de CodeQL ne sont lisibles que par les personnes qui ont un droit
+d'écriture sur le dépôt : le dépôt est public, y avoir accès ne suffit pas. Le
+dépôt ne contient donc ni workflow, ni configuration, ni secret pour SonarQube
+Cloud.
 
 **Périmètre.** CodeQL laisse de côté ce qui est généré, installé, ou n'est pas
 du code : `convex/_generated`, `node_modules`, les environnements virtuels
