@@ -275,6 +275,9 @@
     "assignGestionnairesDesc": "Sélectionner les gestionnaires qui peuvent utiliser cette machine",
     "notFound": "Machine introuvable",
     "createdAt": "Créée le",
+    "softwareVersion": "Version logicielle",
+    "contractVersion": "Contrat machine",
+    "versionSeen": "Versions annoncées {when}",
     "dangerZone": "Zone de danger",
     "regenerateKeyConfirmDesc": "La clé API actuelle sera invalidée immédiatement. La machine devra être reconfigurée avec la nouvelle clé.",
     "form": {

@@ -275,6 +275,9 @@
     "assignGestionnairesDesc": "Select which gestionnaires can use this machine",
     "notFound": "Machine not found",
     "createdAt": "Created",
+    "softwareVersion": "Software version",
+    "contractVersion": "Machine contract",
+    "versionSeen": "Versions announced {when}",
     "dangerZone": "Danger Zone",
     "regenerateKeyConfirmDesc": "This will invalidate the current API key immediately. The machine will need to be reconfigured with the new key.",
     "form": {

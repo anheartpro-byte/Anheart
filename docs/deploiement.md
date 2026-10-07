@@ -157,6 +157,31 @@ Avant de le lancer :
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
 
+### 3.4 Ordre de mise à jour : les consoles d'abord, Convex ensuite
+
+Le contrat entre une console et Convex est versionné
+([convex.md](convex.md#11-versions-et-compatibilité)) : deux côtés qui ne sont
+pas au même niveau se refusent. Les deux sens échouent du bon côté (aucun
+lancement distant n'est armé), mais pas au même prix.
+
+| Situation | Effet |
+|---|---|
+| Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et fins de séance fonctionnent. Un arrêt venu du tableau de bord aussi : demande d'arrêt, ou séance que le serveur ne tient plus pour active. Le **lancement distant** est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. La fiche machine n'affiche pas les versions, que cet ancien Convex ne stocke pas. |
+| Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, ses programmes ne sont plus synchronisés, sa télémétrie et ses fins de séance sont **refusées**, et aucun lancement distant ne lui parvient. Un arrêt venu du tableau de bord lui parvient encore. |
+
+D'où l'ordre :
+
+1. **Les consoles d'abord.** Une console à jour fonctionne avec l'ancien Convex,
+   au lancement distant près.
+2. **Convex ensuite**, quand toutes les consoles sont à jour.
+3. **Jamais pendant une séance.** Une séance en cours au moment où Convex cesse
+   de servir la majeure de la console continue sous le seul superviseur local
+   et s'arrête normalement à la console ; sa télémétrie et sa fin, refusées,
+   sont abandonnées, et elle reste `active` dans Convex.
+
+`scripts/pi/preflight.sh` dit dans quelle situation se trouve une console avant
+de la démarrer ([section 7.5](#75-vérifier-puis-démarrer)).
+
 ---
 
 ## 4. Essai de bout en bout du 1er octobre 2026
@@ -468,8 +493,25 @@ docker compose logs -f
 ```
 
 `preflight.sh` contrôle Docker, le `.env`, la présence du câble du variateur,
-l'appairage du BITalino et la clé de la machine. Il ne parle jamais au
-variateur. Il sort avec le code 1 s'il trouve un point bloquant.
+l'appairage du BITalino, la clé de la machine et le contrat du tableau de
+bord. Il ne parle jamais au variateur. Il sort avec le code 1 s'il trouve un
+point bloquant.
+
+Pour le tableau de bord, il envoie une seule requête de lecture, celle que la
+console envoie elle-même au repos (`GET /api/machine/training/poll`), et n'en
+affiche jamais la réponse. Ce qu'il en dit :
+
+| Réponse | Verdict |
+|---|---|
+| 200 avec une `server_contract_version` de la même majeure | `ok` : clé acceptée, contrat **servi**. C'est le seul cas où il le dit. |
+| 200 sans version annoncée (un Convex antérieur au contrat répond ainsi) | `ok` pour la clé, puis `WARN` : le tableau de bord n'annonce pas de contrat, la console refusera tout lancement distant tant qu'il n'est pas mis à jour. Non bloquant : le reste fonctionne. |
+| 200 avec une version d'une autre majeure | `ok` pour la clé, puis `WARN` : même conséquence. |
+| 426 | `FAIL` : clé acceptée, mais le tableau de bord ne sert pas la majeure de cette console. |
+| 401 | `FAIL` : clé refusée. |
+| pas de réponse | `FAIL` : tableau de bord injoignable. |
+
+Voir [l'ordre de mise à jour](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite)
+et [Versions et compatibilité](convex.md#11-versions-et-compatibilité).
 
 La première ligne des journaux résume ce que la console a compris de sa
 configuration, par exemple :

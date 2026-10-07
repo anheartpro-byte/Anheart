@@ -35,6 +35,7 @@ Sommaire :
 8. [Déployer](#8-déployer)
 9. [Défauts connus et reste à faire](#9-défauts-connus-et-reste-à-faire)
 10. [Tests automatisés](#10-tests-automatisés)
+11. [Versions et compatibilité](#11-versions-et-compatibilité)
 
 ---
 
@@ -162,6 +163,9 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | `isDeleted`, `deletedAt`, `deletedBy` | Suppression douce. |
 | `programsEnabled` | Rapporté par le Pi : accepte-t-il les séances auto ? |
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
+| `softwareVersion` | Version logicielle annoncée par le Pi dans son heartbeat (tag git, par exemple `pi-0.4.2`). Absente tant qu'aucun heartbeat ne l'a donnée, et effacée si le dernier heartbeat n'en portait pas de bien formée. |
+| `contractVersion` | Version du contrat machine annoncée par le Pi : l'en-tête `X-Anheart-Contract` du dernier heartbeat accepté. |
+| `lastVersionSeenAt` | ms Unix du heartbeat qui a porté ces deux valeurs. |
 
 Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelector`, `by_status`, `by_is_deleted`.
 
@@ -368,6 +372,11 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `getTrainingStatus` | `{status, active, stopRequested}`. |
 | `storeTelemetry` | Insère des points pour la séance (qui doit appartenir à la machine). |
 
+Les refus de `markTrainingStarted`, `registerLocalSession`,
+`endTrainingSession` et `storeTelemetry` sont levés par
+`machineError(code, message)` (`convex/lib/contract.ts`) : la route les
+renvoie avec leur code stable (voir [section 6](#6-routes-http-machine-convexhttpts)).
+
 ---
 
 ## 5. Autres fonctions publiques
@@ -398,7 +407,7 @@ Résumé des fonctions les plus utilisées par le site.
 |---|---|---|
 | `createMachine` | admin | Crée la machine, statut `offline`. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
-| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. |
+| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin | Annule la suppression. |
@@ -457,8 +466,31 @@ HTTP n'y existent pas).
 
 **Authentification** : chaque route exige
 `Authorization: Bearer <clé API de la machine>`. Sans en-tête : **401**
-`{"error": "Missing Authorization header"}`. Clé inconnue : **401**
-`{"error": "Invalid API key"}`.
+`{"error": "unauthorized", "message": "Missing Authorization header"}`.
+Clé inconnue : **401**
+`{"error": "unauthorized", "message": "Invalid API key"}`.
+
+**Contrat** : chaque route (8 des 9, l'exception suit) exige ensuite l'en-tête
+`X-Anheart-Contract: <majeure.mineure>`, vérifié **après** la clé et avant
+tout traitement, par le même point de passage que l'authentification
+(`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
+illisible, ou d'une majeure non servie : **426**
+`{"error": "contract_unsupported", "message": "…", "supported": ["1"]}`,
+et rien n'est lu ni écrit. Une mineure plus récente que celle du serveur
+est acceptée. Voir [Versions et compatibilité](#11-versions-et-compatibilité).
+
+**Une seule exception : la demande d'arrêt.**
+`GET /api/machine/training/status` répond quelle que soit la version
+annoncée, en-tête absent compris ; la clé de la machine reste exigée. C'est
+la route qui porte `stopRequested`, et un arrêt a le même sens dans toutes
+les versions : le refuser ne serait jamais le côté sûr. Sans cette exception,
+une demande d'arrêt du tableau de bord n'atteindrait plus une séance en cours
+dès que le serveur ne sert pas la majeure de la console. La route ne fait que
+lire, et sa réponse annonce `server_contract_version` : une console d'une
+autre majeure n'en retient que ce qui arrête, `stopRequested: true` ou
+`active: false`. Les routes exemptées sont
+listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
+passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
 La suppression (`isDeleted`) ou la désactivation explicite
 (`authenticationEnabled: false`) produit aussi **401**, sur les 9 routes et
@@ -488,22 +520,36 @@ applicatif n'enregistre la clé. Une régénération remplace atomiquement séle
 sel et digest : l'ancienne clé cesse de fonctionner immédiatement. Les champs
 de suppression/désactivation restent inchangés.
 
-**Erreurs** : les routes d'entraînement renvoient **400** `{"error": "<message>"}`
-pour un corps mal formé **et** pour toute exception interne (par exemple
-« Session not found »). Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne
-réessaie pas la même requête), une absence de réponse devient `Unreachable`
-(on réessaie plus tard).
+**Erreurs** : tout refus des 9 routes machine (les 401 et les 426 compris)
+a la forme
+`{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
+d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
+changer. La liste des codes est dans `contracts/machine-api.json` :
+
+| Code | Statut | Sens |
+|---|---|---|
+| `contract_unsupported` | 426 | Majeure de contrat absente ou non servie ; la réponse porte `supported`. |
+| `unauthorized` | 401 | En-tête `Authorization` absent, clé inconnue, machine supprimée ou désactivée. |
+| `invalid_request` | 400 | Corps ou paramètres mal formés. |
+| `session_not_found` | 400, ou 404 sur `training/status` | Séance inconnue, ou qui n'appartient pas à la machine authentifiée (même réponse dans les deux cas). |
+| `session_not_pending` | 400 | `training/start` sur une séance qui n'attend plus son départ. |
+| `machine_not_found` | 400 | La machine a disparu entre l'authentification et l'écriture. |
+| `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
+
+Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la même
+requête) et son code est journalisé ; une absence de réponse devient
+`Unreachable` (on réessaie plus tard).
 
 ### Routes utilisées par la console locale (`raspberry-pi/src/cloud_sync.py`)
 
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
-| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
+| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
-| `GET /api/machine/training/poll` | - | `{session: null}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
+| `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | une fois par séance démarrée à la machine ; idempotent par `localRef` |
-| `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested}` ; 404 si inconnue | toutes les 3 s pendant une séance |
+| `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored}` | lots de 300 points max, toutes les 5 s |
 | `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | à la fin, après la télémétrie restante |
 
@@ -514,9 +560,23 @@ Détails du contrat :
   Sinon seul le heartbeat est enregistré.
 - **Statut de la machine** : chaque heartbeat met `online`, ou `in_session` si
   `activeSessionId` est présent.
+- **Versions** : chaque heartbeat écrit `machines.softwareVersion` (le champ
+  `software_version` s'il est bien formé : 64 caractères au plus, lettres,
+  chiffres, `.`, `_`, `+`, `-` ; sinon le champ est effacé),
+  `machines.contractVersion` (l'en-tête `X-Anheart-Contract`, qui vient d'être
+  vérifié, et non la copie `contract_version` du corps) et
+  `machines.lastVersionSeenAt`.
+- **Serveur d'un autre contrat** : `server_contract_version` vaut la version
+  servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
+  pas la sienne ; il termine le lancement par `/training/end` avec la raison
+  `refusee par la machine : serveur incompatible (contrat X vs Y)`.
 - **Arrêt demandé** : si `status` répond `stopRequested: true` ou
-  `active: false`, le Pi fait un arrêt ordinaire sur la rampe réglée, attribué à
-  l'opérateur « tableau de bord ».
+  `active: false`, le Pi fait un arrêt ordinaire sur la rampe réglée, attribué
+  à l'opérateur « tableau de bord », **quelle que soit la version** annoncée
+  par la réponse (même majeure, autre majeure, absente ou illisible). Ces deux
+  champs ne peuvent provoquer qu'un arrêt ordinaire : les croire est le côté
+  sûr. Rien d'autre n'est retenu d'une réponse d'une autre majeure : rien n'y
+  peut lancer, reprendre ou réarmer quoi que ce soit.
 - **Lancement refusé par le Pi** : le Pi termine la séance `pending` par
   `/training/end` avec `failed: true` et une raison qui commence par
   `refusee par la machine : `. Un lancement ni démarré ni refusé en 60 s est
@@ -706,6 +766,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
 | `convex/httpRoutes.test.ts` | Les 9 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
+| `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice. |
@@ -724,7 +785,8 @@ les arguments, et une liste de `cases`. Une cellule est un acteur nommé
 `anonymous`) avec une portée (`own` / `other` / `self`) et un résultat attendu :
 
 - `refuse` : l'appel lève une erreur (avec, si utile, un extrait du message ;
-  il n'existe **aucun code d'erreur stable**, seulement des messages anglais) ;
+  les fonctions publiques n'ont **aucun code d'erreur stable**, seulement des
+  messages anglais ; seules les routes machine en ont, section 6) ;
 - `success` : l'effet ou la donnée renvoyée est vérifié ;
 - `empty` : la requête renvoie `null` ou `[]` (pas d'accès, rien n'est exposé) ;
 - `filtered` : la liste renvoyée contient la donnée du demandeur et exclut
@@ -755,3 +817,51 @@ s'ajoutera plus tard comme nouveaux acteurs sans réécrire les tests.
   `completeness.test.ts` échoue.
 - Nouvelle route de `http.ts` : l'ajouter à `ROUTE_COVERAGE` et lui écrire un
   test dans `httpRoutes.test.ts`, sinon la gate de complétude échoue.
+
+---
+
+## 11. Versions et compatibilité
+
+Le contrat entre une machine et Convex porte un numéro `majeure.mineure`. Sa
+définition unique est le fichier [`contracts/machine-api.json`](../contracts/machine-api.json)
+à la racine du dépôt : `convex/lib/contract.ts` le lit directement (version,
+nom de l'en-tête, liste des codes d'erreur), et les constantes de
+`raspberry-pi/src/contract.py` y sont épinglées par les tests du Pi.
+
+| Règle | Effet |
+|---|---|
+| Même **majeure** des deux côtés | Les deux se parlent. |
+| **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 8 des 9 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre. |
+| Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
+| Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
+
+Une évolution compatible (un champ optionnel de plus, un code d'erreur de plus)
+monte la **mineure**. Tout ce qui change le sens d'un champ existant, en retire
+un, ou rend obligatoire ce qui ne l'était pas, monte la **majeure** : les deux
+côtés doivent alors être livrés ensemble, et une machine restée sur l'ancienne
+majeure est refusée au lieu d'être comprise de travers.
+
+### Matrice de compatibilité
+
+| Version du Pi (`raspberry-pi/VERSION`) | Majeure de contrat | Version Convex minimale |
+|---|---|---|
+| `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.0`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
+
+Cette matrice est tenue à jour à chaque release (check-list de
+[release.md](release.md)) : une ligne par version publiée du Pi. Aucune
+version n'a encore été publiée : elle ne contient que la ligne de
+développement.
+
+Limites à connaître :
+
+- Un Convex antérieur à ce contrat n'annonce pas sa version : un Pi de cette
+  branche qui l'interroge n'arme donc **aucun lancement distant** (réponse sans
+  version). C'est le cas tant que le nouveau code n'est pas déployé ; mettre
+  les deux côtés à niveau relève du redéploiement (ticket ANH-82).
+- La « version attendue » d'une machine n'est définie nulle part aujourd'hui :
+  la fiche machine du site **affiche** la version annoncée, sans la comparer.
+  La comparaison et son badge viendront avec le registre machine (ticket
+  ANH-147).
+- `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat
+  et **ne sont pas stockés** : le Pi n'en a pas encore (il envoie `null`).

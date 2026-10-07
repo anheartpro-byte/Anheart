@@ -89,6 +89,7 @@ from src.cloud_sync import (
     SessionListener,
     StartedSession,
 )
+from src.contract import read_software_version
 from src.control_surface import (
     LOCAL_SUBJECT,
     ControlSurface,
@@ -1052,6 +1053,7 @@ def build_panel(
             store=store,
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
+            software_version=read_software_version(),
         )
     return LocalPanel(
         clock=clock,

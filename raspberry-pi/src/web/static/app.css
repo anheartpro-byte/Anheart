@@ -382,6 +382,7 @@ input[type="text"], input[type="password"], input[type="number"], select {
 .ports li, .events li { padding: 0.2rem 0; border-bottom: 1px solid var(--line); color: var(--ink-dim); }
 .events li.event-emergency_stop { color: #ff9ea1; }
 .events li.event-refused { color: #f7c778; }
+.events li.event-dashboard { color: #f7c778; }
 
 .fault {
   margin-top: 0.8rem;

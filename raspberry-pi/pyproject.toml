@@ -241,6 +241,9 @@ include = [
     # The dashboard link: it can submit a start and forward a stop, so every
     # branch that decides either is tested, like the rest of the console.
     "src/cloud_sync.py",
+    # The versioned contract of that link: it decides whether a launch that
+    # came down from the dashboard may be armed at all.
+    "src/contract.py",
     # Every BITalino channel's typed processor, the one scipy boundary they
     # share, and the camera/presence fail-safe: all under the same gate.
     "src/dsp.py",
@@ -293,6 +296,7 @@ safety_chain = [
     "src/web/profile_writer.py",
     "src/panel_status.py",
     "src/cloud_sync.py",
+    "src/contract.py",
     "src/dsp.py",
     "src/sensors/*",
     "src/presence/*",

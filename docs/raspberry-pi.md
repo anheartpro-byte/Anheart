@@ -35,6 +35,7 @@ des garanties dans [securite.md](securite.md), le côté Convex dans
 11. [L'âge minimum du passager](#11-lâge-minimum-du-passager)
 12. [La configuration (`.env`)](#12-la-configuration-env)
 13. [Le contrat de code strict et la gate](#13-le-contrat-de-code-strict-et-la-gate)
+14. [Versions et compatibilité](#14-versions-et-compatibilité)
 
 ---
 
@@ -107,7 +108,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
-| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle. Porte 100 %. |
+| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat. Porte 100 %. |
+| `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
 | `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
@@ -777,13 +779,13 @@ tableau de bord.
 
 | Sens | Quoi | Route Convex | Cadence |
 |---|---|---|---|
-| Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
+| Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle et la version du contrat | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous une référence locale (pas de doublon après une coupure) | `POST /api/machine/training/local` | au départ |
 | Pi → Convex | confirmation du départ d'une séance lancée à distance | `POST /api/machine/training/start` | au départ |
 | Pi → Convex | télémétrie échantillonnée à 1 Hz, envoyée par lots | `POST /api/machine/training/telemetry` | toutes les 5 s (lots de 300 points max) |
 | Pi → Convex | fin de séance avec la raison du runtime | `POST /api/machine/training/end` | à la fin |
-| Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance) | `GET /api/machine/training/poll` | toutes les 3 s au repos |
+| Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s en séance |
 
 Règles :
@@ -799,7 +801,11 @@ Règles :
   du tableau de bord périmée. Nouvel essai après 15 s. Jusqu'à 3600 points de
   télémétrie (une heure) sont gardés, les plus vieux sont jetés d'abord ; 20
   fins de séance au plus restent en attente.
-* Un arrêt venu du tableau de bord est attribué à « tableau de bord ».
+* Un arrêt venu du tableau de bord est attribué à « tableau de bord ». Il est
+  honoré **quelle que soit la version de contrat** du serveur (section 14).
+* Un lancement venu d'un serveur d'une autre majeure de contrat, ou qui
+  n'annonce pas sa version, n'est **jamais armé** : voir
+  [Versions et compatibilité](#14-versions-et-compatibilité).
 
 Non vérifié : aucun déploiement Convex réel n'a été contacté ; les tests
 utilisent un transport factice (voir [convex.md](convex.md)).
@@ -1015,3 +1021,88 @@ mypy « Success: no issues found in 129 source files », **3187 tests passés**,
 couverture de branches **100,00 %** sur le périmètre de la gate, `GATE PASSED`,
 en 21 min 26 s pour les tests (machine chargée par d'autres processus ce
 jour-là ; la durée varie).
+
+---
+
+## 14. Versions et compatibilité
+
+`src/contract.py`. Le contrat entre la console et Convex porte un numéro
+`majeure.mineure` (aujourd'hui `1.0`). Sa définition unique est
+[`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
+dépôt ; la description complète des règles est dans
+[convex.md](convex.md#11-versions-et-compatibilité).
+
+Ce que fait la console :
+
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.0`. Il est posé sur
+  le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
+* **Chaque heartbeat** porte `software_version`, `contract_version`,
+  `medical_parameters_version` et `config_hash`. Les deux derniers valent `null` :
+  la console n'a encore ni fichier de paramètres médicaux signé ni empreinte de
+  configuration.
+* **La version logicielle** est lue une fois, au démarrage, dans le fichier
+  `raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker). Le dépôt y porte
+  `pi-0.0.0-dev` ; le script de release (`scripts/release.sh`, voir
+  [release.md](release.md)) y écrit le tag de chaque version. Fichier absent, illisible ou mal formé : la console démarre
+  quand même et annonce `pi-unknown`, jamais une version devinée.
+* **Un serveur qui refuse le contrat** (réponse 426, code
+  `contract_unsupported`) : la console l'écrit dans son journal et affiche
+  `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les
+  majeures que le serveur dit servir. Elle continue de fonctionner comme sans
+  tableau de bord.
+* **Un serveur d'une autre majeure** : chaque réponse de
+  `/api/machine/training/poll` annonce `server_contract_version`. Si sa majeure
+  n'est pas celle de la console, ou si la réponse n'annonce aucune version
+  lisible, **rien n'est armé** : le lancement n'atteint jamais la boîte aux
+  lettres. La console affiche `serveur incompatible (contrat X vs Y)` (Y vaut
+  `inconnu` sans version lisible) et renvoie le lancement comme séance échouée,
+  raison `refusee par la machine : serveur incompatible (contrat X vs Y)`.
+* **Un arrêt traverse toutes les versions.** La route
+  `/api/machine/training/status` répond quel que soit le contrat annoncé, et
+  une réponse qui porte `stopRequested: true` ou `active: false` arrête la
+  séance en cours quelle que soit la majeure qu'elle annonce, version absente
+  ou illisible comprise : un arrêt a le même sens partout, ces deux champs ne
+  peuvent provoquer qu'un arrêt ordinaire, et le refuser ne serait jamais le
+  côté sûr. C'est **tout** ce qui est retenu d'une réponse d'une autre
+  majeure : aucun autre champ n'est lu, et rien n'y peut lancer, reprendre ou
+  réarmer quoi que ce soit.
+* **Les refus du serveur** arrivent sous la forme
+  `{error: <code stable>, message: <texte>}`. Le code est ce que le journal de
+  la console porte (`session_not_found (HTTP 400): Session not found`) ; un
+  refus identique au précédent n'est pas réécrit.
+
+L'affichage sur la console est un événement de type `dashboard`, sans nom
+d'opérateur, dans la liste **Evenements** (voir
+[console-locale.md](console-locale.md)). Ce n'est pas un événement `refused` :
+la page lit un `refused` comme la réponse de la machine à propos de la cible
+manuelle à l'écran et l'écrit dans la carte Mode MANUEL, ce que cette nouvelle
+du lien n'est jamais. Il est
+émis pour chaque lancement refusé, quand la phrase change, et sinon rappelé
+toutes les 60 s tant que l'incompatibilité dure (`INCOMPATIBLE_REPEAT`) : la
+liste n'est envoyée qu'aux écrans connectés à ce moment-là, et une page ouverte
+plus tard doit l'apprendre aussi. Le journal, lui, ne l'écrit qu'au changement.
+
+Pourquoi la version du contrat est une constante du code, et non lue dans le
+fichier partagé à l'exécution : la console est déployée avec le seul dossier
+`raspberry-pi/` (`scripts/pi/deploy.sh`, contexte de construction Docker), donc
+`contracts/machine-api.json` n'est pas sur la machine. Les constantes de
+`src/contract.py` sont épinglées à ce fichier par `tests/test_contract.py` : un
+changement fait d'un seul côté échoue à la gate.
+
+### Matrice de compatibilité
+
+La matrice (version du Pi, majeure de contrat, version Convex minimale) est
+tenue dans [convex.md](convex.md#matrice-de-compatibilité), une seule fois pour
+les deux côtés.
+
+Non fait par ce logiciel :
+
+* L'écriture dans `events.jsonl` : la console n'écrit pas encore
+  l'enregistrement de séance (ticket ANH-128). L'incompatibilité passe par le
+  flux d'événements de la console, celui que cet enregistrement consignera.
+* Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
+  utilisent un transport factice des deux côtés.
+* Sous un 426, les lots de télémétrie et la fin de séance sont abandonnés
+  comme tout refus : une séance en cours pendant un changement de majeure du
+  serveur resterait `active` côté Convex. D'où l'ordre de mise à jour de
+  [deploiement.md](deploiement.md#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite).
