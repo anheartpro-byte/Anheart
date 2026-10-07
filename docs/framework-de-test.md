@@ -1031,7 +1031,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL et ceux des deux workflows de déploiement |
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL, ceux des deux workflows de déploiement et ceux du rapport de qualité |
 | `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
@@ -1040,6 +1040,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel et des fonctions ECG du site, build Next.js avec configuration publique de test |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
+| `quality-report` | n'est pas une gate et ne peut pas échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
 une gate : voir
@@ -1057,6 +1058,11 @@ implique pour `scripts/release.sh` sont dans
 Deux autres, `deploy-production.yml` et `deploy-preview.yml`, déploient sur
 Vercel quand une personne le demande, et jamais autrement : voir
 [Déploiement Vercel par bouton](#déploiement-vercel-par-bouton-anh-198).
+
+Chaque gate garde aussi, pour le rapport de qualité, ce que ses outils ont
+mesuré (artefacts `quality-*`), et `convex-tests` et `web` mesurent en plus la
+couverture de leurs tests, sans seuil. Rien de cela ne change le verdict d'une
+gate : voir [Rapport de qualité](#rapport-de-qualité-anh-199).
 
 `npx tsc --noEmit`, dans `web`, lit les fichiers de `convex/` avec les
 réglages du site. `convex/tsconfig.json` est un projet TypeScript à part, avec
@@ -1782,6 +1788,211 @@ ceux de CodeQL : une exécution en échec, annulée, en cours ou en attente
 d'approbation fait refuser `prepare` et `pr` (tête de `develop`) ou `tag` (tête
 de `main`). Voir
 [release.md](release.md#les-boutons-de-déploiement-et-le-script).
+
+### Rapport de qualité (ANH-199)
+
+Chaque exécution de `ci.yml` écrit sur sa propre page un tableau : pour chaque
+projet du dépôt, combien de tests ont tourné, combien ont réussi, la
+couverture, l'état du lint et des types, et l'état de la gate. Aucun journal à
+ouvrir, aucun service externe.
+
+**Où le lire.** Dans une PR, onglet **Checks**, puis **CI** dans la colonne de
+gauche : la page qui s'ouvre est le résumé de l'exécution. Hors d'une PR :
+**Actions → CI**, puis l'exécution voulue. Le tableau « Rapport de qualité » est
+écrit par le job `quality-report`, le dernier de l'exécution : il apparaît une
+fois les six gates terminées. Les mêmes chiffres sont dans l'artefact
+`quality-report` de l'exécution, gardé 90 jours : `quality-report.json`, pour
+une machine, et `quality-report.md`, le tableau tel qu'il est affiché.
+
+**Une ligne par projet.**
+
+| Ligne | Ce qui y est compté | Gate affichée |
+|---|---|---|
+| Console du Pi | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`) | `pi-gate` |
+| Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
+| Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
+| Site | les tests de `lib/`, puis ceux de `hooks/` et `components/` (vitest, deux suites) | `web` |
+| Scripts | les tests de `scripts/ci` lancés par `changes`, `audit` et `docs` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
+
+Sous le tableau, une ligne donne l'état d'`audit` et de `docs`, sans rien de ce
+qu'ils ont trouvé, puis trois parties : « Chaîne de sécurité et simulation »,
+« Détail par suite de tests » (une ligne par suite, avec le job qui la lance)
+et « Lire ce rapport ».
+
+**Ce que dit chaque colonne.**
+
+| Colonne | Ce qu'elle dit | D'où vient le chiffre |
+|---|---|---|
+| Tests lancés | le nombre de tests que les suites du projet ont exécutés ou ignorés dans cette exécution | les fichiers JUnit écrits par pytest, vitest et `node --test` eux-mêmes |
+| Réussis | ceux qui ont réussi | idem |
+| Échoués | ceux qui ont échoué, en gras dès qu'il y en a un ; leurs noms sont dans le détail du job | idem |
+| Ignorés | les tests sautés par un marqueur (`skip`) et les défauts connus déclarés (`xfail`), qui ne sont ni des réussites ni des échecs | idem |
+| Durée cumulée | la somme des durées de chaque test, tous processus confondus. Ce n'est pas le temps d'attente : `pi-gate` répartit ses tests sur quatre processus, la simulation sur quatre jobs | idem |
+| Lignes couvertes | la part des lignes exécutées par les tests, sur tous les fichiers source du projet, y compris ceux qu'aucun test ne charge | `coverage json` de coverage.py pour le Pi et la simulation, `coverage-final.json` de vitest pour Convex et le site |
+| Branches couvertes | la part des branches prises (chaque issue d'un `if`, d'un `match`, d'un opérateur ternaire) | idem |
+| Lint | l'état des contrôles de style : ruff (`check` et `format`) pour le Pi, la simulation et les fichiers Python des scripts, ESLint pour Convex, le site et les scripts | les étapes enregistrées par `check.sh`, et le résultat de l'étape `npm run lint` du job `web` |
+| Types | l'état des contrôles de types : basedpyright et mypy pour le Python, `tsc -p convex/tsconfig.json` pour Convex, `tsc --noEmit` pour le site | les étapes enregistrées par `check.sh`, et le résultat de l'étape `tsc` de chaque job |
+| Gate | l'état de la vérification obligatoire du projet, tel que GitHub le donne | le contexte `needs` du job `quality-report` |
+
+Un pourcentage n'est jamais arrondi vers le haut : 99,96 % s'affiche 99,9 %, et
+« 100 % » veut dire que rien ne manque.
+
+**Les mots du tableau.**
+
+- « sautée » : sur une PR, la règle de chemins a jugé qu'aucun fichier changé
+  ne concerne cette gate
+  ([Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)).
+  Elle n'a pas tourné : la ligne le dit dans chaque colonne, au lieu d'afficher
+  zéro.
+- « indisponible » : le job a tourné, mais n'a pas laissé ce chiffre (artefact
+  absent, fichier illisible, processus arrêté avant d'écrire son rapport). Le
+  rapport ne devine pas : il n'affiche pas de total partiel pour une suite
+  dont un processus manque.
+- « non lancé » : le job n'a pas tourné, sans que la règle de chemins l'ait
+  décidé (exécution annulée, étape précédente en échec).
+- « non mesurée » : aucun outil ne mesure cette valeur aujourd'hui (la
+  couverture des scripts).
+- « ¹ » après un nombre de tests, « (partiel) » après un état : une des suites
+  ou un des contrôles du projet n'a pas tourné dans cette exécution. Exemple :
+  sur une PR qui ne touche que le site, les scripts n'ont ni les tests ni les
+  contrôles Python que `pi-gate` lance pour eux.
+- « rapport indisponible » : l'outil du rapport lui-même a échoué. Aucune gate
+  ne dépend de lui ; son journal dit pourquoi.
+
+**Chaîne de sécurité et simulation.** La colonne de couverture du Pi porte sur
+tout `raspberry-pi/src/`. La chaîne de sécurité, elle, est donnée à part, avec
+son exigence : c'est la liste `include` de `raspberry-pi/pyproject.toml`, dont
+`pi-gate` exige 100 % de lignes et de branches. Ce seuil n'a pas changé : le
+rapport lit la mesure sur laquelle la gate vient de l'appliquer. La simulation
+exige 100 % sur tout son code. La même partie donne la batterie de simulation
+(tests réussis, en échec, ignorés, dont les `xfail`) et le nombre de scénarios
+joués par `simulation.quick --all`, par verdict (`PASS`, `XFAIL`, `SKIPPED`,
+`FAIL`), lus dans son `report.json`.
+
+**Détail par gate.** Chaque job `pi-gate`, `simulation-gate`, `convex-tests` et
+`web` écrit aussi son propre résumé, replié sous le titre « Détail de la
+qualité » : ses suites, les dix fichiers les moins couverts, les dix tests les
+plus lents (à partir d'un dixième de seconde), les noms des tests en échec et
+l'état de chaque contrôle de lint et de types. La couverture complète, fichier
+par fichier, est dans l'artefact `quality-<projet>` du job : `coverage-all.json`
+et `coverage-gate.json` pour le Pi et la simulation, le rapport HTML de vitest
+pour Convex (`coverage-convex/index.html`) et pour le site.
+
+**Couverture de Convex et du site : lue, pas exigée.** Aucun seuil ne
+s'applique à ces deux mesures, et elles ne peuvent faire échouer aucune gate :
+les seuils se décideront après les premiers chiffres. Dans `convex-tests` et
+`web`, les tests qui décident la gate tournent comme avant, sans mesure ; une
+étape séparée les relance ensuite avec la mesure, et continue même si elle
+échoue. Pour le site, la mesure porte sur `lib/`, `hooks/` et `components/` :
+les deux suites sont additionnées, une ligne couverte par l'une ou par l'autre
+compte une fois. En local :
+
+```bash
+npm run coverage:convex   # rapport dans coverage/convex/index.html
+npm run coverage:ecg      # les tests de lib/, rapport dans coverage/site-lib/
+npm run coverage:site     # ceux de hooks/ et components/, dans coverage/site-components/
+```
+
+**Ce qui n'est pas mesuré.**
+
+- La couverture des scripts (`scripts/`), et celle du JavaScript du panneau
+  local (`raspberry-pi/src/web/static/`).
+- Les pages du site (`app/`), `i18n/` et `proxy.ts` : aucun test unitaire ne
+  les charge, ils ne sont donc pas dans la couverture du site. Ils attendent la
+  suite navigateur (ANH-83).
+- Les tests de release (`npm run test:release`) : la CI ne les lance pas
+  ([release.md](release.md#8-limites-et-reste-à-faire)), ils ne sont donc pas
+  dans la ligne des scripts.
+- Les types des scripts `.mjs` : `tsc` ne lit que les fichiers `.ts` et `.tsx`.
+  La colonne « Types » des scripts ne porte que sur leurs fichiers Python.
+- Les tests écartés par configuration (marqueur `hardware`, tests `slow` de
+  l'endurance nocturne) : ils ne sont pas lancés, donc pas comptés.
+- La qualité du code au sens d'un outil d'analyse (complexité, duplication,
+  code mort) : aucun outil du dépôt ne la mesure. CodeQL cherche des failles de
+  sécurité, et ses résultats se lisent dans **Security → Code scanning**
+  ([Analyse statique externe](#analyse-statique-externe--codeql-anh-196)).
+- Ce que trouvent `npm audit`, `pip-audit`, gitleaks et CodeQL : le résumé d'une
+  exécution d'un dépôt public est public. Le rapport ne porte que des noms de
+  tests et de fichiers, des comptes et des durées ; ni message d'échec, ni
+  sortie de test.
+- L'évolution dans le temps : chaque exécution a son `quality-report.json`,
+  rien ne les compare encore.
+
+**Format de `quality-report.json`.**
+
+| Champ | Contenu |
+|---|---|
+| `schema` | `1`. La version du format : elle augmente quand un champ change de sens ou disparaît, pas quand un champ s'ajoute |
+| `run` | l'exécution : `id`, `attempt`, `event`, `repository`, `ref`, `sha` (le commit de tête de la PR sur une PR), `pull_request`, `url` |
+| `jobs` | l'état de `changes` et de chaque gate : `passed`, `failed`, `cancelled`, `skipped` (par la règle de chemins), `not_run`, `unknown` |
+| `projects` | une entrée par ligne du tableau : `id`, `label`, `gate` (`state`, et `jobs` avec l'état de chacun), `tests` (`total`, `passed`, `failed`, `skipped`, `duration_s`, et `complete`, faux si une suite du projet manque) ou `null`, `tests_state`, `coverage` (`lines` et `branches`, chacun `covered` et `total`) ou `null`, `coverage_state`, `lint` et `types` (`state`, `complete`, `checks`) |
+| `suites` | une entrée par suite de tests : `id`, `project`, `job`, `label`, `runner`, `state` (`measured`, `skipped`, `not_run`, `unavailable`) et, si elle est mesurée, `numbers` : `tests`, `passed`, `failed`, `skipped`, `expected_failures`, `duration_s`, `files` (le nombre de fichiers JUnit lus), `slowest`, `failed_tests` |
+| `coverage` | une entrée par mesure : `id`, `project`, `job`, `label`, `main` (vrai pour celle du tableau), `threshold` s'il y en a un, `state` et, si elle est mesurée, `numbers` : `lines`, `branches`, `files`, `least_covered` |
+| `scenarios` | le rapport synthétique de la simulation : `runs`, `by_status`, `by_group` ; `null` s'il n'a pas été lu |
+
+Les durées sont en secondes. Les comptes de couverture sont des entiers : le
+pourcentage se calcule, il n'est pas stocké.
+
+**Comment il est produit.**
+
+- Les lanceurs de tests écrivent eux-mêmes un fichier JUnit : `--junitxml`
+  pour chaque processus pytest, `--reporter=junit` pour vitest,
+  `--test-reporter=junit` pour `node --test`. Aucun chiffre n'est lu dans un
+  journal.
+- `raspberry-pi/scripts/check.sh` et `simulation/scripts/check.sh` acceptent
+  `QUALITY_REPORT_DIR=<dossier>` : ils y notent comment chaque étape s'est
+  terminée (`stages.tsv`) et passent `--report <dossier>` à
+  `scripts/ci/pi_gate_parallel.py`, qui y laisse le fichier JUnit de chaque
+  processus et la couverture réunie en JSON, une fois pour ce que le seuil juge
+  (`coverage-gate.json`), une fois pour tout ce qui a été mesuré
+  (`coverage-all.json`). Aucun test n'est relancé : ce sont les mesures de la
+  gate. Sans la variable, les deux scripts se comportent comme avant.
+- `scripts/ci/quality-report.mjs job <projet>` lit ces fichiers dans le job,
+  écrit le détail du job et `part.json` ; l'artefact `quality-<projet>` les
+  porte jusqu'au dernier job. `changes`, `audit` et `docs` publient
+  seulement le fichier JUnit de leurs tests de scripts.
+- `scripts/ci/quality-report.mjs report`, dans `quality-report`, réunit le tout
+  avec l'état de chaque job.
+
+**Ce que le rapport ne peut pas faire.** Il ne décide aucune gate. Les étapes
+qu'il ajoute aux gates (« Quality report, the numbers of this job », « Keep the
+numbers for the quality report », « Measure the coverage ») portent toutes
+`continue-on-error: true` ; le job `quality-report` n'est pas une vérification
+obligatoire, chacune de ses étapes continue sur erreur, et son outil rend
+toujours le code 0. Le workflow ne reçoit aucune permission de plus : lecture
+seule, pas de commentaire posté dans la PR. Un dossier de rapport impossible à
+écrire est signalé dans le journal de la gate, qui juge ensuite comme sans lui.
+
+**Tests.** `scripts/ci/quality-report.test.mjs` (job `changes`, sans
+installation) nourrit l'outil avec des fichiers écrits comme les outils les
+écrivent : toutes les gates vertes, une gate sautée par la règle de chemins,
+une gate en échec, un artefact absent, une exécution dont on ne sait rien. Il
+exécute aussi la fonction `stage` des deux `check.sh`, et vérifie que cette
+section décrit chaque colonne. `scripts/ci/ci-workflow.test.mjs` vérifie que
+chaque étape ajoutée continue sur erreur, que chaque suite est écrite par le
+job dont le rapport l'attend, et que le job `audit` ne transmet que les
+fichiers JUnit de ses deux fichiers de test. `scripts/ci/test_pi_gate_parallel.py`
+vérifie que `--report` ne change aucun verdict.
+
+**Limites.**
+
+- Le tableau n'existe qu'une fois toutes les gates terminées : pendant
+  l'exécution, seuls les détails des jobs déjà finis sont visibles.
+- Après « Re-run failed jobs », le rapport est réécrit avec les chiffres de la
+  dernière exécution de chaque job.
+- `quality-report` démarre aussi sur une exécution annulée (`always()`) : il
+  demande un runner quelques secondes, comme `simulation-gate`, et son tableau
+  dit alors « annulée » ou « non lancé ».
+- `scripts/release.sh` lit toutes les vérifications du commit, obligatoires ou
+  non : `quality-report` ne peut pas y échouer, mais annulé avec son exécution
+  il fait refuser `prepare`, `pr` ou `tag`, comme n'importe quel job annulé.
+  Relancer l'exécution.
+- Un test `test.fails` de vitest (échec attendu) est écrit comme réussi dans
+  son fichier JUnit : il compte dans « Réussis ».
+- Python et TypeScript ne comptent pas les lignes de la même façon
+  (coverage.py compte les instructions, vitest les lignes où commence une
+  instruction) : deux pourcentages de projets différents ne se comparent pas au
+  dixième près.
 
 ### Lire un échec et relancer
 

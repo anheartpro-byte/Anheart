@@ -25,6 +25,11 @@ env:
   # `simulation-battery` must name each of them once (0 to this number minus
   # one): `simulation-gate` fails if a share is missing or if a test ran twice.
   SIMULATION_SHARES: '13'
+  # For the quality report (see `quality-report` below): what makes
+  # `node --test` and vitest keep a JUnit file next to their usual output.
+  # Where the file goes follows on each line that uses them.
+  NODE_TEST_REPORT: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit
+  VITEST_REPORT: --reporter=default --reporter=github-actions --reporter=junit
 
 # Which gates run (docs/framework-de-test.md, section CI).
 #
@@ -46,8 +51,64 @@ env:
 # The names `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` and
 # `docs` are required by branch protection: each must stay the name of one
 # job, never of a matrix (a skipped matrix job reports under another name).
+#
+# The quality report (docs/framework-de-test.md, "Rapport de qualité") adds to
+# the gates without deciding any: the test runners keep a JUnit file, the gate
+# scripts say how each stage ended, and the steps named "Quality report" and
+# "Keep the numbers for the quality report" read and publish that. Each of
+# those steps carries `continue-on-error: true`: none can turn a gate red.
+# `quality-report`, the last job, is not a required check and cannot fail.
 
 jobs:
+  # The table of the run, one line per project, written on the page of the
+  # run. It waits for every gate and runs whatever happened to them
+  # (`always()`): a gate that failed, was skipped by the path rule or was
+  # cancelled is a line of the table, not a reason to have no table. Every
+  # step continues on error: the worst this job can do is say "rapport
+  # indisponible". It reads how each job ended from `needs`, the answer of
+  # the path rule included, so that the rule is still read in one place only.
+  quality-report:
+    needs: [changes, pi-gate, simulation-gate, convex-tests, web, audit, docs]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        continue-on-error: true
+        with:
+          persist-credentials: false
+      - name: Gather the numbers every job left
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: quality-*
+          path: ${{ runner.temp }}/quality
+      - name: Quality report of the run
+        continue-on-error: true
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci/quality-report.mjs report --artifacts "$RUNNER_TEMP/quality" --out "$RUNNER_TEMP/quality-report"
+      # Should the script itself be missing or unable to start.
+      - name: Say so when no report was written
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          if [[ ! -s "$RUNNER_TEMP/quality-report/quality-report.json" ]]; then
+            echo '**Rapport de qualité : rapport indisponible.** Aucune gate ne dépend de lui.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Publish quality-report.json
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-report
+          retention-days: 90
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality-report
+
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -59,8 +120,13 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
-      - name: Test the path rule and the workflow that applies it
-        run: node --test scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs
+      - name: Test the path rule, the workflows and the quality report
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" \
+            scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs \
+            scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs \
+            scripts/ci/quality-report.test.mjs
       - name: Decide which gates this run needs
         id: rule
         env:
@@ -76,6 +142,16 @@ jobs:
             git diff --name-only --no-renames -z 'HEAD^1' HEAD > "$changed"
           fi
           node scripts/ci/gates-for-changes.mjs --event "$EVENT_NAME" < "$changed" | tee -a "$GITHUB_OUTPUT"
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-scripts-changes
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   pi-gate:
     needs: changes
@@ -103,6 +179,7 @@ jobs:
       - name: Pi gate
         env:
           PYTEST_ADDOPTS: --durations=25
+          QUALITY_REPORT_DIR: ${{ runner.temp }}/quality
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           PI_GATE_PROCESSES="$(nproc)" bash raspberry-pi/scripts/check.sh
@@ -132,6 +209,20 @@ jobs:
             simulation/coverage.xml
             simulation/out/ci/report.json
             simulation/out/ci/report.html
+      - name: Quality report, the numbers of this job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node scripts/ci/quality-report.mjs job pi --dir "$RUNNER_TEMP/quality" --shares "$(nproc)"
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-pi
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   # The scenario battery of the simulation gate, cut into SIMULATION_SHARES
   # shares, one pytest process each. Share 0 is the cohort, which uses every
@@ -184,6 +275,8 @@ jobs:
           PYTEST_ADDOPTS: --durations=15
           SIMULATION_GATE_SHARES: ${{ matrix.shares }}/${{ env.SIMULATION_SHARES }}
           SIMULATION_GATE_EVIDENCE: ${{ runner.temp }}/simulation-evidence
+          # Inside the evidence, so that it reaches `simulation-gate` with it.
+          QUALITY_REPORT_DIR: ${{ runner.temp }}/simulation-evidence/quality-${{ matrix.shares }}
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           bash simulation/scripts/check.sh
@@ -305,6 +398,7 @@ jobs:
         env:
           SIMULATION_GATE_COMBINE: ${{ env.SIMULATION_SHARES }}
           SIMULATION_GATE_EVIDENCE: ${{ runner.temp }}/simulation-evidence
+          QUALITY_REPORT_DIR: ${{ runner.temp }}/quality
         run: bash simulation/scripts/check.sh
       - name: Publish coverage and synthetic reports
         if: ${{ !cancelled() }}
@@ -318,6 +412,20 @@ jobs:
             simulation/coverage.xml
             simulation/out/ci/report.json
             simulation/out/ci/report.html
+      - name: Quality report, the numbers of this job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node scripts/ci/quality-report.mjs job simulation --dir "$RUNNER_TEMP/quality" --parts "$RUNNER_TEMP/simulation-evidence" --scenarios simulation/out/ci/report.json --shares "$SIMULATION_SHARES"
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-simulation
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   convex-tests:
     needs: changes
@@ -334,8 +442,31 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Type-check the Convex functions
+        id: types
         run: npx tsc -p convex/tsconfig.json --noEmit
-      - run: npm run test:convex
+      - run: npm run test:convex -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/convex.xml"
+      # Read, not enforced: a second run of the same tests, apart from the one
+      # above that decides the gate. No threshold, and it continues on error.
+      - name: Measure the coverage of the Convex functions
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: npm run coverage:convex -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-convex"
+      - name: Quality report, the numbers of this job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          TYPES_OUTCOME: ${{ steps.types.outcome }}
+        run: node scripts/ci/quality-report.mjs job convex --dir "$RUNNER_TEMP/quality"
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-convex
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   web:
     needs: changes
@@ -355,12 +486,42 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npm run lint
-      - run: node --test raspberry-pi/tests/web/*.test.mjs
-      - run: npm run test:ecg
-      - run: npm run test:site
+      - id: types
+        run: npx tsc --noEmit
+      - id: lint
+        run: npm run lint
+      - name: Test the local panel of the console
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/pi-panel.xml" raspberry-pi/tests/web/*.test.mjs
+      - run: npm run test:ecg -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-lib.xml"
+      - run: npm run test:site -- $VITEST_REPORT --outputFile.junit="$RUNNER_TEMP/quality/site-components.xml"
       - run: npm run build
+      # Read, not enforced: a second run of the same tests, apart from the two
+      # above that decide the gate. No threshold, and it continues on error.
+      - name: Measure the coverage of the site
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          npm run coverage:ecg -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-site-lib"
+          npm run coverage:site -- --reporter=default --coverage.reportsDirectory="$RUNNER_TEMP/quality/coverage-site-components"
+      - name: Quality report, the numbers of this job
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          TYPES_OUTCOME: ${{ steps.types.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+        run: node scripts/ci/quality-report.mjs job site --dir "$RUNNER_TEMP/quality"
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-site
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   audit:
     runs-on: ubuntu-24.04
@@ -382,9 +543,13 @@ jobs:
       - run: npm ci
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
+      # The test file of `npm run test:dependency-security`, run directly so
+      # that it can be told where to keep its JUnit file.
       - name: Verify dependency stack-depth guards
         if: ${{ !cancelled() }}
-        run: npm run test:dependency-security
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-dependency-guard.xml" scripts/ci/braces-depth-guard.test.mjs
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |
@@ -395,8 +560,22 @@ jobs:
         run: |
           go install github.com/zricethezav/gitleaks/v8@v8.24.3
           anheart_gitleaks_bin="$(go env GOPATH)/bin/gitleaks"
-          ANHEART_GITLEAKS_BIN="$anheart_gitleaks_bin" node --test scripts/ci/gitleaks-fixture.test.mjs
+          mkdir -p "$RUNNER_TEMP/quality"
+          ANHEART_GITLEAKS_BIN="$anheart_gitleaks_bin" node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-gitleaks-fixture.xml" scripts/ci/gitleaks-fixture.test.mjs
           "$anheart_gitleaks_bin" git --redact --log-opts='--all'
+      # Only the JUnit files of the two test files above: how many tests they
+      # hold and whether they pass. Nothing of what the audits or the scan
+      # found leaves this job.
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-scripts-audit
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality
 
   docs:
     runs-on: ubuntu-24.04
@@ -414,5 +593,16 @@ jobs:
       - name: Resolve threat identifiers
         if: ${{ !cancelled() }}
         run: |
-          node --test scripts/ci/check-men.test.mjs
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-men.xml" scripts/ci/check-men.test.mjs
           bash scripts/ci/check-men.sh
+      - name: Keep the numbers for the quality report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: quality-scripts-docs
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/quality

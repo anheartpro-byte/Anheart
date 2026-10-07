@@ -13,6 +13,9 @@
     "test:convex": "vitest run --config vitest.convex.config.mts",
     "test:ecg": "vitest run --config vitest.ecg.config.mts",
     "test:site": "vitest run --config vitest.site.config.mts",
+    "coverage:convex": "vitest run --config vitest.convex.config.mts --coverage",
+    "coverage:ecg": "vitest run --config vitest.ecg.config.mts --coverage",
+    "coverage:site": "vitest run --config vitest.site.config.mts --coverage",
     "test:dependency-security": "node --test scripts/ci/braces-depth-guard.test.mjs",
     "test:release": "node --test scripts/release.test.mjs"
   },
@@ -62,6 +65,7 @@
     "@types/node": "^24.10.4",
     "@types/react": "^19.2.6",
     "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "^5.0.3",
     "convex-test": "^0.0.60",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.8",
