@@ -37,6 +37,13 @@ Three keys gate what the machine may do, and all three default to "no":
 * ``MACHINE_API_KEY`` + ``CONVEX_URL``: the dashboard link. Blank key, no link,
   and the console runs exactly as it does offline.
 
+The session record (the local black box) has its own keys, all optional:
+``RECORD_ROOT`` (default ``data/records``, relative to ``raspberry-pi/``),
+``RECORD_LOCAL_RETENTION_DAYS`` (default 30: how long a record already
+deposited AND confirmed is kept; one that was not is never purged),
+``RECORD_MACHINE_ID`` / ``RECORD_ORGANIZATION_ID`` (opaque identifiers written
+in the manifest, ``unassigned`` when unset) and ``ANHEART_SOFTWARE_VERSION``.
+
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
 module is testable with a dict.
 """
@@ -100,6 +107,11 @@ KEY_SENSORS: Final[str] = "SENSORS"
 KEY_PRESENCE_SOURCE: Final[str] = "PRESENCE_SOURCE"
 KEY_MIN_RIDER_AGE: Final[str] = "MIN_RIDER_AGE"
 KEY_LEG_TIP_RADIUS_M: Final[str] = "LEG_TIP_RADIUS_M"
+KEY_RECORD_ROOT: Final[str] = "RECORD_ROOT"
+KEY_RECORD_RETENTION_DAYS: Final[str] = "RECORD_LOCAL_RETENTION_DAYS"
+KEY_RECORD_MACHINE_ID: Final[str] = "RECORD_MACHINE_ID"
+KEY_RECORD_ORGANIZATION_ID: Final[str] = "RECORD_ORGANIZATION_ID"
+KEY_SOFTWARE_VERSION: Final[str] = "ANHEART_SOFTWARE_VERSION"
 
 # --- Defaults and bounds -------------------------------------------------
 DEFAULT_MOTOR_MAX_RPM: Final[MotorRpm] = MotorRpm(300)
@@ -112,6 +124,24 @@ BENCH_CONSOLE_PORT: Final[int] = 8123
 """``scripts/bench_console.py`` listens here; the console must not collide with it."""
 
 DEFAULT_MOTION_LIMITS_PATH: Final[Path] = Path("config/motion_limits.json")
+
+DEFAULT_RECORD_ROOT: Final[Path] = Path("data/records")
+"""One directory per session, under ``raspberry-pi/`` (``data/`` is git-ignored)."""
+
+DEFAULT_RECORD_RETENTION_DAYS: Final[int] = 30
+MAX_RECORD_RETENTION_DAYS: Final[int] = 3650
+"""Typo guard: ten years is not a retention anybody chose on a Pi's disk."""
+
+UNASSIGNED: Final[str] = "unassigned"
+"""The manifest's machine and organisation until somebody names them."""
+
+UNVERSIONED: Final[str] = "unversioned"
+"""The manifest's software version when the deployment did not state one."""
+
+RECORD_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,128}")
+"""An opaque, path-safe identifier: the record format refuses anything else."""
+
+RECORD_VERSION: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.+-]{1,128}")
 
 OCCUPIED_INITIAL_RESULTANT_G: Final[ResultantG] = ResultantG(1.2)
 """First-trial ceiling with a person on board, about 990 motor rpm at 1.5 m.
@@ -231,6 +261,25 @@ class CloudConfig:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RecordConfig:
+    """Where the session records go and what their manifests are stamped with."""
+
+    root: Path = DEFAULT_RECORD_ROOT
+    """Relative to ``raspberry-pi/`` unless absolute."""
+
+    retention_days: int = DEFAULT_RECORD_RETENTION_DAYS
+    """How long a record deposited AND confirmed is kept locally. One that was
+    not deposited is never purged, whatever this says."""
+
+    machine_id: str = UNASSIGNED
+    organization_id: str = UNASSIGNED
+    software_version: str = UNVERSIONED
+
+
+DEFAULT_RECORD_CONFIG: Final[RecordConfig] = RecordConfig()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LocalConfig:
     """Everything the local console needs, validated. Build with :func:`load_local_config`."""
 
@@ -265,6 +314,9 @@ class LocalConfig:
     """The rider's farthest point from the axis (``LEG_TIP_RADIUS_M``); the anti-nausea
     g-rate limit is judged there. ``None``: judged at ``ARM_RADIUS_M``, which
     understates the load at the feet (the CAD bounds the leg tip at 2.43 m)."""
+
+    record: RecordConfig = DEFAULT_RECORD_CONFIG
+    """The local black box: where it writes and what it stamps."""
 
     def ceiling_for(self, occupancy: Occupancy) -> Result[MotorRpm, OccupancyRefused]:
         """The motor-rpm ceiling for ``occupancy``, or why motion is refused.
@@ -596,6 +648,70 @@ def _presence(env: Mapping[str, str]) -> Result[CameraSource, ConfigProblem]:
     return Err(ConfigProblem(KEY_PRESENCE_SOURCE, f"{text!r} inconnu (connus : {known})"))
 
 
+def _record_identifier(
+    env: Mapping[str, str], key: str, pattern: re.Pattern[str], default: str
+) -> Result[str, ConfigProblem]:
+    text = _text(env, key, default)
+    if pattern.fullmatch(text) is None:
+        return Err(
+            ConfigProblem(
+                key,
+                f"{text!r} : identifiant opaque attendu (lettres ASCII, chiffres, _ et -, "
+                "jamais un nom)",
+            )
+        )
+    return Ok(text)
+
+
+def _record_retention(env: Mapping[str, str]) -> Result[int, ConfigProblem]:
+    days = _int(
+        _text(env, KEY_RECORD_RETENTION_DAYS, str(DEFAULT_RECORD_RETENTION_DAYS)),
+        KEY_RECORD_RETENTION_DAYS,
+    )
+    if isinstance(days, Err):
+        return days
+    if not 0 <= days.value <= MAX_RECORD_RETENTION_DAYS:
+        return Err(
+            ConfigProblem(
+                KEY_RECORD_RETENTION_DAYS,
+                f"{days.value} jours hors de 0..{MAX_RECORD_RETENTION_DAYS}",
+            )
+        )
+    return days
+
+
+def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem, ...]]:
+    """The black box's keys. Every problem, not only the first."""
+    retention = _record_retention(env)
+    machine = _record_identifier(env, KEY_RECORD_MACHINE_ID, RECORD_IDENTIFIER, UNASSIGNED)
+    organization = _record_identifier(
+        env, KEY_RECORD_ORGANIZATION_ID, RECORD_IDENTIFIER, UNASSIGNED
+    )
+    version = _record_identifier(env, KEY_SOFTWARE_VERSION, RECORD_VERSION, UNVERSIONED)
+    if (
+        isinstance(retention, Err)
+        or isinstance(machine, Err)
+        or isinstance(organization, Err)
+        or isinstance(version, Err)
+    ):
+        return Err(
+            tuple(
+                result.error
+                for result in (retention, machine, organization, version)
+                if isinstance(result, Err)
+            )
+        )
+    return Ok(
+        RecordConfig(
+            root=Path(_text(env, KEY_RECORD_ROOT, str(DEFAULT_RECORD_ROOT))),
+            retention_days=retention.value,
+            machine_id=machine.value,
+            organization_id=organization.value,
+            software_version=version.value,
+        )
+    )
+
+
 def _web(env: Mapping[str, str]) -> Result[WebConfig, ConfigProblem]:
     port = _int(_text(env, KEY_UI_PORT, str(DEFAULT_PORT)), KEY_UI_PORT)
     if isinstance(port, Err):
@@ -637,6 +753,7 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
     presence = _presence(env)
     min_age = _min_rider_age(env)
     leg_tip = _leg_tip(env, radius.value if isinstance(radius, Ok) else None)
+    record = _record(env)
 
     problems = tuple(
         result.error
@@ -659,9 +776,10 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
             leg_tip,
         )
         if isinstance(result, Err)
-    )
+    ) + (record.error if isinstance(record, Err) else ())
     if (
         problems
+        or isinstance(record, Err)
         or isinstance(backend, Err)
         or isinstance(link, Err)
         or isinstance(source, Err)
@@ -700,5 +818,6 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
             camera=presence.value,
             min_rider_age=min_age.value,
             leg_tip_radius=leg_tip.value,
+            record=record.value,
         )
     )

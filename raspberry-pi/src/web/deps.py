@@ -39,6 +39,7 @@ from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
 from src.panel_status import PanelSource
 from src.presence.monitor import PresenceDecision, PresenceMonitor
+from src.record.export import RecordExporter
 from src.result import Result
 from src.sensors.base import SensorKind, SensorReading
 from src.telemetry import TelemetryHub
@@ -392,6 +393,9 @@ class Services:
 
     camera: str = "none"
     """Which camera feeds it (``PRESENCE_SOURCE``), for the page."""
+
+    records: RecordExporter | None = None
+    """The session records on disk (``GET /api/records``); ``None`` = nothing is recorded."""
 
 
 class PresenceView(Protocol):

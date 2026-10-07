@@ -27,6 +27,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > 6 octobre 2026 avec ANH-181) viennent du code, des tests automatiques sur la console
 > en simulation et de mesures sur le banc d'essai logiciel ; ils n'ont pas été rejoués
 > dans un navigateur.
+> L'enregistrement de séance (section 16, la carte de la section 10, les messages et
+> les routes qui s'y rapportent, ajoutés le 7 octobre 2026) vient du code et des tests
+> automatiques sur la console en simulation ; rien n'a été rejoué dans un navigateur ni
+> mesuré sur un vrai Pi.
 > Ce que la page affiche de plus depuis le 7 octobre 2026 (la note de la carte MANUEL
 > pour une cible prise, refusée ou remise à 0, l'encadré de la fréquence cardiaque, les
 > bandeaux `ARRET D'URGENCE NON CONFIRME` et `REPRISE AUTOMATIQUE POSSIBLE`, les
@@ -53,6 +57,7 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 13. [Messages d'erreur typiques](#13-messages-derreur-typiques)
 14. [Référence des routes HTTP et WebSocket](#14-référence-des-routes-http-et-websocket)
 15. [Écarts connus entre le code, la page et les README](#15-écarts-connus-entre-le-code-la-page-et-les-readme)
+16. [L'enregistrement de séance (boîte noire locale)](#16-lenregistrement-de-séance-boîte-noire-locale)
 
 ---
 
@@ -707,6 +712,17 @@ pour retard), `ecg` (fréquence et seq), `profils`, `revision` du stock de profi
 
 **Ports serie** : les ports série trouvés par le Pi (`aucun port serie trouve` sinon).
 
+### Carte « Enregistrements de seance »
+
+Une note (`Le dernier enregistrement de cette machine, en archive .tar.gz. Machine au
+repos uniquement.`) et le bouton `Exporter l'enregistrement`. Le bouton demande la liste
+des enregistrements, télécharge l'archive du plus récent et écrit dans la note
+`exporte : <nom>.tar.gz`. Sinon la note passe en rouge avec la raison :
+`aucun enregistrement sur cette machine`, `cette console n'enregistre pas`,
+`liste des enregistrements refusee pendant une seance : attendre le retour au repos`,
+ou une autre erreur de l'API (section 13).
+Voir la [section 16](#16-lenregistrement-de-séance-boîte-noire-locale).
+
 ---
 
 ## 11. Page « Securite »
@@ -952,6 +968,13 @@ Mode MANUEL, précédés de `refus de la machine (<heure>) :` (section 6).
 | `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` | 409 | acquittement sans la case « coup de poing » |
 | `nothing is latched to acknowledge` | 409 | rien à acquitter |
 | `a valid x-anheart-token header is required` | 401 | jeton absent ou faux |
+| `liste des enregistrements refusee pendant une seance : attendre le retour au repos` | 409 | liste des enregistrements demandée pendant une séance (c'est ce que voit le bouton d'export) |
+| `export refuse pendant une seance : attendre le retour au repos` | 409 | archive d'un enregistrement demandée pendant une séance |
+| `enregistrement inconnu sur cette machine` | 404 | le nom demandé n'est pas celui d'un dossier d'enregistrement |
+| `cette console n'enregistre pas` | 404 | export demandé à une console construite sans enregistrement (tests) |
+| `lecture des enregistrements deja en cours : reessayer dans un instant` | 503 | deux lectures du disque des enregistrements sont déjà en cours ; la requête est refusée tout de suite, jamais mise en attente |
+| `le disque des enregistrements ne repond pas` | 504 | le disque n'a pas répondu en 5 s (liste) ou 120 s (archive) |
+| `lecture des enregistrements impossible (<erreur>)` | 500 | le disque a refusé la lecture ou la construction de l'archive |
 
 ### Refus de la boucle (événement `refused`)
 
@@ -965,6 +988,8 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent |
+| `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
+| `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
 | `demarrage refuse : age du passager requis pour une seance programmee` | âge vide |
 | `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
@@ -1055,11 +1080,13 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | 400 | requête mal formée : nom vide, attestation incomplète, profil incohérent |
 | 401 | jeton absent ou faux |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
-| 404 | profil inconnu, fichier statique absent |
-| 409 | la machine n'est pas dans un état pour ça |
+| 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
+| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance) |
 | 412 | arrêt d'urgence non attesté depuis ce démarrage |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
-| 500 | stock de profils non inscriptible |
+| 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
+| 503 | lecture des enregistrements déjà en cours (deux au plus à la fois) |
+| 504 | le disque des enregistrements ne répond pas |
 
 ### Public
 
@@ -1116,6 +1143,19 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
 
+### Enregistrements
+
+| Méthode | Chemin | Rôle | Retour |
+|---|---|---|---|
+| GET | `/api/records` | les enregistrements de séance du disque, le plus récent d'abord : `recording` (cette console enregistre-t-elle), `records` (`name`, `closed` : `false` pour un enregistrement interrompu) | 200 ; 409 (séance en cours) ; 503 ; 504 ; 500 |
+| GET | `/api/records/{name}/archive` | le dossier `name` en `.tar.gz` (`Content-Disposition: attachment`) | 200 ; 404 (nom inconnu, console sans enregistrement) ; 409 (séance en cours) ; 503 ; 504 ; 500 |
+
+Ces deux routes lisent le disque sur deux fils qui leur sont réservés, jamais
+sur la boucle de contrôle ni sur les fils du traitement ECG. 503 : les deux
+sont pris, la requête est refusée tout de suite. 504 : le disque n'a pas
+répondu à temps. Détail dans
+[raspberry-pi.md](raspberry-pi.md#156-export).
+
 ### WebSocket `/ws/telemetry`
 
 - Paramètre `?token=<jeton>` si `UI_TOKEN` est défini.
@@ -1124,7 +1164,8 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
   boucle locale, en `http` et `https`), ou si le jeton est faux. Un client sans `Origin`
   (outil, test) est admis, mais reste soumis au jeton.
 - Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés), `{"kind": "event"}`
-  (chaque événement), `{"kind": "ecg"}` (tranche de l'anneau ECG après chaque instantané,
+  (chaque événement ; depuis le 7 octobre 2026, un événement de type `recording` porte
+  les messages de l'enregistrement de séance), `{"kind": "ecg"}` (tranche de l'anneau ECG après chaque instantané,
   jusqu'à 1500 échantillons à la connexion), `{"kind": "resync"}` quand l'écran a pris du
   retard ; le serveur ferme alors avec le code 1013
   (`this screen fell behind and was disconnected; reload to resync`).
@@ -1168,3 +1209,67 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
   tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).
 - L'estimation de rotation du capteur LUX ne suit pas le variateur simulé en simulation.
+
+---
+
+## 16. L'enregistrement de séance (boîte noire locale)
+
+La console écrit chaque séance sur le disque du Pi pendant qu'elle se déroule :
+ce que la machine a fait à chaque tic, les verdicts, les défauts du variateur,
+les gestes de l'opérateur, les échantillons bruts du BITalino. C'est la boîte
+noire de la machine. Le détail technique (file d'écriture, cadence, format) est
+dans [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale)
+et [enregistrement.md](enregistrement.md).
+
+> Vérifié par les tests automatiques sur la console en simulation, y compris
+> les routes et le bouton d'export. **Pas** vérifié dans un navigateur, ni sur
+> un vrai Pi avec sa carte SD.
+
+**Où.** Un dossier par séance sous `raspberry-pi/data/records/` (clé
+`RECORD_ROOT`), nommé par l'heure UTC du début. Le dossier est créé quand la
+séance est armée et fermé quand elle est finie (ou à la sortie de la console).
+Il n'y a rien à faire pour que l'enregistrement ait lieu, et rien à l'écran
+tant qu'il se passe bien.
+
+**Ce que l'opérateur peut voir.**
+
+| Quand | Où | Texte |
+|---|---|---|
+| le disque est trop plein pour démarrer | liste **Evenements**, événement `refused` | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` |
+| le dossier d'enregistrement est inutilisable | événement `refused` au départ, et événement `recording` dès le lancement de la console | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` |
+| le disque ne répond plus depuis plus de 15 s | événement `refused` au départ | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` |
+| l'enregistrement se dégrade pendant une séance | événement `recording` | `enregistrement de seance degrade : …` (disque plein, droits, erreur d'écriture, file pleine, disque qui ne répond plus), toujours suivi de `La seance et la securite continuent.` |
+| l'enregistrement redevient normal | événement `recording` | `enregistrement de seance retabli` |
+
+**Un enregistrement dégradé n'arrête rien.** La séance continue, STOP et E-STOP
+fonctionnent, toutes les règles de sécurité restent actives. Ce qui est perdu,
+c'est une partie de la trace : le noter, finir ou arrêter la séance selon le
+protocole du site, et s'occuper du disque avant la suivante. Le tableau de bord
+reçoit le même signal (`recordDegraded` dans le battement de cœur), mais ne
+l'affiche pas encore.
+
+**Le disque se remplit.** Aucun enregistrement n'est supprimé automatiquement
+tant qu'il n'a pas été déposé hors de la machine et que ce dépôt n'a pas été
+confirmé, et ce dépôt n'existe pas encore. Compter environ 40 Mo par séance de
+30 minutes. Sous 500 Mo libres, la console refuse de démarrer une séance : il
+faut alors exporter les enregistrements utiles, puis supprimer leurs dossiers à
+la main sur le Pi. Quand le dépôt existera, un enregistrement déposé et confirmé
+sera gardé `RECORD_LOCAL_RETENTION_DAYS` jours (30 par défaut) puis supprimé.
+
+**Exporter.** Page Configuration, carte « Enregistrements de seance », bouton
+`Exporter l'enregistrement` : la console prépare l'archive `.tar.gz` du
+**dernier** enregistrement et le navigateur la télécharge sous le nom du
+dossier. Seulement machine au repos : pendant une séance, la note dit
+`liste des enregistrements refusee pendant une seance : attendre le retour au repos`.
+Si le disque ne répond pas, elle dit `le disque des enregistrements ne repond pas`
+ou `lecture des enregistrements deja en cours : reessayer dans un instant` :
+attendre, ne pas multiplier les clics (deux lectures au plus sont en cours à la
+fois, les autres sont refusées tout de suite, et la machine n'en est pas
+ralentie). Les autres enregistrements s'exportent par l'API
+(`GET /api/records`, puis `GET /api/records/{nom}/archive`).
+
+**Qui peut lire.** Le dossier est réservé au compte qui lance la console
+(mode 700). Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
+elle contient l'ECG brut de la séance et doit être traitée comme une donnée de
+santé. Le nom de l'opérateur n'y figure pas (un alias le remplace), mais un
+motif tapé à la main y est recopié : ne pas y écrire le nom d'un passager.

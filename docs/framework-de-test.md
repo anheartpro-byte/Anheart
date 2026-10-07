@@ -110,7 +110,12 @@ Autres éléments :
 * **hypothesis** (tests par propriétés) est utilisé dans 24 fichiers de tests du Pi.
 * Marqueurs pytest : `hardware` (exclu par défaut via `-m 'not hardware'` dans
   `pyproject.toml`) et `slow`. À ce jour **aucun test n'est marqué
-  `hardware`** : aucun test automatique ne parle à du matériel réel.
+  `hardware`** : aucun test automatique ne parle à du matériel réel. Un seul
+  est marqué `slow` : l'endurance de l'enregistrement de séance
+  (`tests/test_record_endurance.py`, ANH-128), sautée tant que
+  `ANHEART_ENDURANCE_HOURS` n'est pas définie. La même boucle tourne quelques
+  minutes simulées dans la gate, à chaque run ; la journée simulée entière est
+  l'étape nocturne de la CI ([section 15](#15-ci)).
 * `tests/typing_fixtures/` contient des modules volontairement faux, sur
   lesquels `test_typing_contract.py` lance les vérificateurs de types pour
   prouver qu'ils détectent bien l'erreur.
@@ -1004,7 +1009,7 @@ de `develop` : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit` et
 | Job | Contrôles et artefacts |
 |---|---|
 | `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow et ceux du workflow CodeQL |
-| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml` |
+| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all`, rejeu nocturne des scénarios réels ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
@@ -1080,7 +1085,8 @@ rapport synthétique. Le rejeu nocturne des scénarios réels s'activera lorsque
 ANH-131 aura fourni les fichiers autorisés ; leur absence est signalée dans le
 journal, jamais présentée comme un rejeu réussi.
 
-Budgets d'exécution : 60 minutes pour `pi-gate`, 45 minutes pour chaque job de
+Budgets d'exécution : 60 minutes pour `pi-gate` (dont, la nuit, 35 minutes au
+plus pour l'étape d'endurance de l'enregistrement), 45 minutes pour chaque job de
 la batterie de simulation, 90 minutes pour `simulation (report)` (le budget de
 l'ancien job unique, gardé pour le rapport nocturne avec `--dsp`) et 15 minutes
 pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
@@ -1772,7 +1778,10 @@ dans le job navigateur d'ANH-83.
 
 Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
 local ne le remplacent pas. La matrice Convex complète par organisation et le
-contrat machine restent ANH-132. L'endurance 24 h reste ANH-164 : aucun job vide
-ne la simule. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
+contrat machine restent ANH-132. L'endurance 24 h de la console entière,
+acquisition comprise, reste ANH-164 : aucun job vide ne la simule. L'étape
+nocturne de `pi-gate` ne juge que l'enregistrement de séance (ANH-128) : une
+journée simulée de séances avec l'écrivain actif, sans le calcul de
+l'acquisition. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
 Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni
 ces tickets dépendants.

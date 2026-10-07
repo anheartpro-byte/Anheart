@@ -98,6 +98,7 @@ from src.training.runtime import (
     LimitsMismatch,
     NotAttested,
     PlanUnusable,
+    RecordStorageLow,
     RuntimeLimits,
     RuntimeState,
     SafetyStanding,
@@ -1377,6 +1378,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         DriveParameterRefused(violation=LowSpeedNotZero(low_speed=Hertz(1.0)), limits=BENCH_LIMITS),
         DrivePrecommanded(state=DriveState.OPERATION_ENABLED, output_rpm=MotorRpm(1)),
         DriveInFault(report=None, state=DriveState.FAULT),
+        RecordStorageLow(free_bytes=None, required_bytes=1, where="data/records"),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
@@ -1403,6 +1405,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:
             label = "drive_precommanded"
         case DriveInFault():
             label = "drive_in_fault"
+        case RecordStorageLow():
+            label = "record_storage_low"
         case _ as unreachable:
             assert_never(unreachable)
     return label

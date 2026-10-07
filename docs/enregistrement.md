@@ -2,9 +2,13 @@
 
 Le format d'ANH-127 est commun au Pi et à la simulation. La bibliothèque
 `raspberry-pi/src/record/` définit les valeurs typées, le writer, le reader et
-la validation. La simulation appelle cette bibliothèque. Le branchement du
-writer dans la console réelle, sa file d'attente et son isolation de la boucle
-de contrôle sont le travail d'ANH-128, pas une propriété acquise ici.
+la validation. La simulation appelle cette bibliothèque, et la console du Pi
+aussi depuis ANH-128 : elle écrit un dossier par séance sous `data/records/`,
+par une file bornée et un fil d'écriture à part, sans jamais écrire dans la
+boucle de contrôle. Ce branchement (file, cadence de `fsync`, comportement en
+cas d'erreur, refus de départ, rétention, export) est décrit dans
+[raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
+Ce document-ci ne décrit que le format.
 
 ## Arborescence
 
@@ -35,6 +39,11 @@ cycle de vie : ouvert avec `ended_at` et `end_reason` à `null`, puis finalisé
 `checksums.sha256` n'est créé qu'après cette finalisation.
 Une séance interrompue peut donc n'avoir que six entrées, sans checksums.
 
+Rien d'autre n'entre dans le dossier. Sur le Pi, la confirmation d'un dépôt
+hors de la machine est un fichier **à côté** du dossier
+(`<nom du dossier>.deposit.json`), pas dedans : le dossier reste exactement
+ces sept entrées et se relit sans avertissement, déposé ou non.
+
 ## Manifeste
 
 Tous les champs suivants sont présents, y compris ceux dont la valeur est
@@ -60,7 +69,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `clocks` | objet décrit ci-dessous |
 | `started_at` | horodatage ISO 8601 UTC terminé par `Z` |
 | `ended_at` | horodatage UTC `Z`, ou `null` avant fermeture |
-| `end_reason` | motif de fin, ou `null` avant fermeture |
+| `end_reason` | motif de fin, ou `null` avant fermeture ; les valeurs écrites par la console du Pi, dont `interrupted` et `superseded`, sont dans [raspberry-pi.md](raspberry-pi.md#151-où-et-quand) |
 | `preflight` | liste de `{check, passed}` pour les contrôles réellement faits, ou `null` |
 | `geometry` | copie typée de la géométrie appliquée décrite ci-dessous, ou `null` si non observée |
 | `end_observation` | observation finale typée décrite ci-dessous, ou `null` si absente |
@@ -124,9 +133,18 @@ Le producteur appelle `Writer.close(clock, end_reason, observation)` avec
 cette valeur typée. Sans observation, la fermeture ne déduit rien du dernier
 tic. La simulation copie son bilan réel après la fenêtre de teardown : état
 du modèle, consigne tenue, lecture de vitesse par la sonde et état du runtime.
-Un échec de cette sonde reste `shaft_motor_rpm: null`. Un producteur Pi peut
-fournir les mêmes champs depuis ses observations, en laissant les autres à
-`null`. Le branchement réel de ces observations appartient à ANH-128.
+Un échec de cette sonde reste `shaft_motor_rpm: null`. La console du Pi
+fournit les mêmes champs depuis ses propres observations : l'état du runtime,
+l'état du variateur de son dernier instantané, la consigne appliquée, LFRD et
+la vitesse de l'arbre du dernier statut lu **s'il est encore frais** (`null`
+sinon), le motif d'arrêt. `energised` y reste `null` : la console n'observe
+pas la présence de couple.
+
+Sur la console, `geometry` vaut `null` : elle connaît son rayon de référence
+et la pointe des pieds, pas les rayons de capsule et de contrepoids que
+`GeometrySnapshot` exige, et elle n'en invente pas. Sa géométrie appliquée
+entre dans `config_hash`. `operator` y est un alias opaque et stable dérivé du
+nom saisi (`op-` suivi de 16 chiffres hexadécimaux), jamais ce nom.
 
 Le viewer lit la même géométrie et le même état final neutre pour les deux
 producteurs. Il avertit `missing_viewer_geometry` en l'absence de géométrie,
@@ -228,9 +246,11 @@ des échanges SDK n'est activée. Les clients système et FTDI activent aussi ce
 point d'observation quand le pilote reçoit le journal. Le journal peut être
 fourni directement au pilote par `observe_exchanges(log)` : aucune importation de simulation
 n'est nécessaire. Le consommateur remet les champs des `Exchange` au writer
-partagé ; le branchement console, la file bornée et l'écriture disque restent
-ANH-128. Ce journal en mémoire n'est pas une garantie de capture physique ni
-une preuve du comportement d'un câble réel.
+partagé. **La console du Pi ne le fait pas encore** : son `drive_frames.jsonl`
+existe et reste vide. Le journal des échanges n'a ni borne ni vidage, et le
+brancher tel quel ferait grossir la mémoire de la console pendant toute une
+séance (ticket de suite proposé avec ANH-128). Ce journal en mémoire n'est pas
+une garantie de capture physique ni une preuve du comportement d'un câble réel.
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel
@@ -276,6 +296,14 @@ convertisseur réel. Un bloc 1 absent entre 0 et 2 reste absent. Le reader ne
 comble ni ne rééchantillonne les trous. Un dernier gzip interrompu est ignoré
 avec un avertissement. Une corruption complète est une erreur.
 
+Sur la console du Pi, un bloc est un lot d'acquisition tel que reçu (200
+échantillons par voie à la cadence normale, davantage après un retard) et
+`seq` est un compteur de lots par séance, pris à la réception : un trou dans
+la numérotation est un lot que l'enregistreur a dû refuser (file pleine). Ce
+que le BITalino lui-même a perdu est dit par un événement `warning`
+(`bitalino_loss:`, avec les compteurs de la liaison), et se voit dans les
+`t_first`. Le premier bloc d'une séance peut commencer un peu avant `t = 0`.
+
 Dans les scénarios DSP, le tap placé avant le traitement capture tous les
 canaux acquis. La perturbation secteur synthétique est quantifiée au point
 de production des comptes ADC ; le DSP et le fichier reçoivent donc les
@@ -310,10 +338,17 @@ Une ligne complète invalide, un schéma inconnu ou un nombre non fini est
 refusé. Il n'y a ni récupération silencieuse de données corrompues ni NaN,
 Infinity ou -Infinity numérique dans les exports.
 
-Le writer retourne les erreurs d'E/S par `Result`. Il ne promet ni queue,
-ni fsync périodique, ni absence de blocage de la boucle moteur. Il doit être
-appelé par un propriétaire unique et, sur la console, par l'adaptateur hors
-boucle de contrôle prévu dans ANH-128.
+Le writer retourne les erreurs d'E/S par `Result`, nommées par leur classe et
+leur code (`OSError:ENOSPC`), jamais par un chemin. Il n'a ni file ni fil : il
+doit être appelé par un propriétaire unique, hors de toute boucle de contrôle.
+Rien n'est poussé vers le disque tant que `Writer.sync()` n'est pas appelé
+(`fsync` de chaque fichier écrit depuis le dernier appel, et de leurs
+dossiers). Un ajout que le disque refuse en cours de ligne est retiré (retour
+à la dernière ligne complète), pour qu'une demi-ligne ne se retrouve jamais au
+milieu d'un fichier ; si même ce retrait est refusé, le flux est abandonné et
+sa fin tronquée se lit comme une troncature ordinaire. Sur la console, le
+propriétaire unique est le fil du journal de séance
+([raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale)).
 
 ## Frontière de confidentialité
 
@@ -356,8 +391,10 @@ d'image de présence, de clé machine, de jeton ou de mot de passe. Pas de
 consigne interpolée, de battement synthétisé pour masquer une perte, ni de
 vérité physiologique réelle inventée. Pas de preuve de chiffrement au repos,
 de consentement ou de conformité réglementaire. Pas de dépôt Storage,
-synchronisation, rétention, purge, rejeu, capture RTU native ni branchement
-de la console réelle : ces fonctionnalités relèvent des tickets suivants.
+synchronisation, rejeu ni capture RTU native : ces fonctionnalités relèvent
+des tickets suivants. Le branchement de la console réelle et la rétention
+locale existent (ANH-128) et sont décrits dans
+[raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
 
 La relecture indépendante de ce document et du SHA final reste une étape
 d'acceptation du ticket ; ce document ne vaut pas signature de reviewer.

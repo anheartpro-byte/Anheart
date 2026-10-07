@@ -150,7 +150,7 @@ class DriveFrame:
 @dataclass(frozen=True, slots=True)
 class RecordError:
     operation: Literal[
-        "create", "append", "tick", "event", "raw", "sensors", "close", "read", "view"
+        "create", "append", "tick", "event", "raw", "sensors", "sync", "close", "read", "view"
     ]
     detail: str
 

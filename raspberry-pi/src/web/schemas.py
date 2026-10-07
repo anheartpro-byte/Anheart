@@ -693,6 +693,27 @@ class SensorsRow:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordRow:
+    """One session record on the machine's disk."""
+
+    name: str
+    """Its directory: the UTC start, then the session's identifier."""
+
+    closed: bool
+    """Whether it was finalised; ``False`` for a record an abrupt stop interrupted."""
+
+
+@dataclass(frozen=True, slots=True)
+class RecordsRow:
+    """``GET /api/records``: the session records, newest first."""
+
+    recording: bool
+    """Whether this console records its sessions at all."""
+
+    records: tuple[RecordRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CameraRow:
     """``GET /api/camera``: the camera fail-safe, as the Securite page shows it."""
 
