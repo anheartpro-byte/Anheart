@@ -25,6 +25,14 @@ réellement vérifié**. Il complète [convex.md](convex.md),
 >   script et un service systemd lance l'image à l'allumage ; la CI exécute
 >   cette installation en simulation ([pi-image.md](pi-image.md)).
 
+> **Déploiements Vercel, 7 octobre 2026 (ANH-198).** Le dépôt contient
+> maintenant de quoi ne plus rien déployer à chaque push, et deux boutons qui
+> déploient à la demande ([section 5.1](#51-comment-il-se-déploie)). **Aucun
+> des deux boutons n'a encore été lancé** : ils n'apparaissent dans GitHub
+> qu'une fois leurs fichiers arrivés sur `main`, et ils échouent tant que les
+> réglages de la [section 5.5](#55-réglages-à-faire-une-fois-à-la-main) ne
+> sont pas faits.
+
 ## Sommaire
 
 1. [Les environnements](#1-les-environnements)
@@ -79,6 +87,12 @@ Les variables du projet Vercel `anheart` (`NEXT_PUBLIC_CONVEX_URL`,
 `CLERK_JWT_ISSUER_DOMAIN`) ont **la même valeur** pour la production, les
 préversions et le développement : ce sont les valeurs de production. Conséquence
 en section 5.2.
+
+Les deux boutons de déploiement lisent quatre secrets rangés dans les deux
+environnements GitHub `production` et `preview` du dépôt, jamais dans un
+fichier ni parmi les secrets du dépôt : `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
+`VERCEL_PROJECT_ID_SITE` et `VERCEL_PROJECT_ID_SIMULATION`
+([section 5.5](#55-réglages-à-faire-une-fois-à-la-main)).
 
 Une clé de déploiement Convex se génère dans le tableau de bord Convex : choisir
 le déploiement (Development ou Production) dans le sélecteur du haut, puis
@@ -180,14 +194,19 @@ Avant de le lancer :
    modification d'une machine échouent. Les autres fonctions gardent leur nom
    et leurs arguments ; `sessions.listSessions` renvoie deux champs de plus
    (`kind`, `origin`).
-3. Fusionner la branche dans `main` déploie le site de production (Vercel est
-   relié au dépôt GitHub). Ordre : Convex d'abord, le site **aussitôt après**,
-   dans la même fenêtre, à cause du point 2. Dans l'autre ordre, le nouveau
-   site ne trouve pas l'heure du serveur (`serverNow`) dans les réponses de
-   l'ancien Convex : il affiche toutes les machines « Hors ligne » et toutes
-   les données périmées jusqu'au déploiement de Convex
+3. Fusionner dans `main` ne déploie plus le site : il se déploie par le bouton
+   « Déployer en production (main) » ([§5.1](#51-comment-il-se-déploie)).
+   Ordre : fusionner dans `main` ; puis, dans une même fenêtre et quand aucune
+   séance n'est en cours, Convex d'abord et le site **aussitôt après** par le
+   bouton, à cause du point 2. Dans l'autre ordre, le nouveau site ne trouve
+   pas l'heure du serveur (`serverNow`) dans les réponses de l'ancien Convex :
+   il affiche toutes les machines « Hors ligne » et toutes les données périmées
+   jusqu'au déploiement de Convex
    ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)).
-   Ce changement n'ajoute ni table, ni champ, ni index, ni migration.
+   Ce changement n'ajoute ni table, ni champ, ni index, ni migration. Une
+   exception tant que `main` n'a pas reçu `vercel.json` : un push sur `main`
+   qui n'apporte pas ce fichier déploie encore le site de production tout seul
+   ([§5.1](#avant-et-après-larrivée-sur-main)).
 4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
@@ -282,21 +301,171 @@ ajouté trois comptes de démonstration et quatre séances.
 
 ### 5.1 Comment il se déploie
 
-Le projet Vercel `anheart` est relié au dépôt GitHub `anheartpro-byte/Anheart`.
-Un envoi sur `main` déploie la production ; un envoi sur une autre branche crée
-une préversion. Il n'y a rien à lancer à la main.
+**Un push ne déploie plus rien dès que son commit contient le `vercel.json` de
+la racine du dépôt.** Le projet Vercel `anheart` reste relié au dépôt GitHub
+`anheartpro-byte/Anheart`, mais ce fichier coupe les déploiements déclenchés
+par Git, pour toutes les branches
+(`git.deploymentEnabled: false`,
+[documentation Vercel](https://vercel.com/docs/project-configuration/git-configuration#turning-off-all-automatic-deployments)).
+Les deux projets Vercel reliés au dépôt, `anheart` (le site) et
+`anheart-simulation` ([section 6](#6-le-moteur-de-simulation-hébergé)),
+construisent depuis la racine du dépôt : ils lisent ce même fichier.
+
+La règle suit le commit poussé, pas la branche. Constat du 7 octobre 2026 sur
+la PR #40, qui apporte ce fichier : son premier commit, poussé sur une branche
+de travail, n'a reçu de Vercel ni déploiement ni statut, pour aucun des deux
+projets ; un commit d'une autre branche, sans le fichier, poussé quelques
+minutes plus tôt, avait reçu les deux statuts. Ce constat vaut pour une branche de
+travail : aucun push n'a été fait sur `main` (voir
+[plus bas](#avant-et-après-larrivée-sur-main)).
+
+Le site et la simulation se déploient par deux boutons de GitHub, dans l'onglet
+**Actions** du dépôt :
+
+| Workflow (colonne de gauche d'Actions) | Branche déployée | Vers | Ce qu'il exige |
+|---|---|---|---|
+| « Déployer en production (main) » | `main` | la production ([section 1](#1-les-environnements)) | le mot `production` saisi dans le champ de confirmation ; l'environnement GitHub `production` et son approbation |
+| « Déployer la préversion (develop) » | `develop` | une préversion Vercel, à une adresse nouvelle à chaque déploiement | l'environnement GitHub `preview` ; si le site est choisi, les mots `données de production` saisis dans le champ prévu ([section 5.2](#52-les-préversions-pointent-sur-la-production)) |
+
+**Avant de lancer : ce que les boutons ne vérifient pas.** C'est à la personne
+qui clique de s'en assurer, et pour la production à celle qui approuve. Le
+formulaire, le nom de l'exécution et le haut de sa page le rappellent.
+
+- **Le site de production ne se déploie que dans la fenêtre du déploiement de
+  Convex, jamais pendant une séance** ([§3.3](#33-vers-la-production)). Le
+  bouton ne sait ni si Convex vient d'être déployé, ni si une séance est en
+  cours.
+- **Les gates ne sont pas vérifiées.** Le bouton déploie la tête de la branche
+  telle qu'elle est, que sa CI soit verte, rouge ou encore en cours : regarder
+  les vérifications du commit avant de cliquer.
+- **Une préversion du site lit et écrit les données de production**, tant que
+  les variables Preview de Vercel ne sont pas séparées
+  ([section 5.2](#52-les-préversions-pointent-sur-la-production)).
+
+Pour lancer un déploiement :
+
+1. **Actions**, cliquer sur le nom du workflow, puis **Run workflow**.
+2. « Use workflow from » : laisser `main` pour la production ; **choisir
+   `develop`** pour la préversion (GitHub propose `main` par défaut). Sur toute
+   autre branche, le bouton refuse avec le message « Mauvaise branche » et rien
+   n'est déployé.
+3. « Quoi déployer » : `site`, `simulation` ou `site et simulation`.
+4. Pour la production, écrire `production` dans le champ de confirmation. Pour
+   une préversion qui comprend le site, écrire `données de production` dans le
+   champ prévu (`donnees de production`, sans accent, est accepté aussi) ; la
+   simulation seule ne demande rien. Tout autre texte est refusé
+   (« Confirmation refusée », « Accord manquant ») et rien n'est déployé.
+5. **Run workflow**. Pour la production, approuver l'exécution quand GitHub le
+   demande (« Review deployments »).
+6. La page de l'exécution donne, dans son résumé, le commit déployé et
+   l'adresse obtenue.
+
+Le commit déployé est la tête de la branche au moment du clic, et seulement
+tant qu'elle l'est encore. Si la branche a avancé entre le clic et le début du
+déploiement (une approbation tardive), ou si une ancienne exécution est relancée
+(« Re-run »), le job refuse avec le message « Exécution périmée » et ne déploie
+pas son projet : lancer une nouvelle exécution par **Run workflow**. Relancer
+une exécution dont le commit est encore la tête de la branche redéploie ce
+commit ; c'est un vrai déploiement, soumis aux mêmes règles.
+
+Avec `site et simulation`, les deux projets sont déployés par deux jobs qui
+tournent côte à côte, et chacun ne parle que du sien : si l'un échoue, l'autre a
+pu déployer. Lire le résultat de chacun.
+
+Deux déploiements de la même cible ne se chevauchent pas : le second attend la
+fin du premier. Chaque déploiement compte dans la limite du compte (offre
+Hobby : 100 déploiements par jour).
+
+Ce que fait le bouton pour le site, sur un runner GitHub
+(`.github/workflows/deploy-production.yml` et `deploy-preview.yml`). C'est la
+procédure que Vercel documente pour GitHub Actions
+([guide Vercel](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel)) :
+
+1. `vercel pull` lit les réglages du projet `anheart` et les variables de
+   l'environnement visé (Production ou Preview) ;
+2. `vercel build` construit le site : `npm install`, puis `npm run build`, sur
+   Node 24, comme le faisait Vercel à chaque push ;
+3. `vercel deploy --prebuilt` envoie ce qui a été construit et rend l'adresse.
+
+La CLI Vercel est installée à une version figée (`VERCEL_CLI_VERSION`, en tête
+des deux workflows : 62.1.0, celle que l'image de construction de Vercel
+utilisait pour le site le 7 octobre 2026). Le jeton n'est remis qu'aux étapes
+qui appellent Vercel, jamais à l'installation ni à la construction. Pour la
+simulation, le bouton suit une autre procédure, celle de `deploy.sh`
+([section 6.4](#64-redéployer)).
+
+Conséquence de la construction hors de Vercel : `vercel pull` écrit sur le
+disque du runner GitHub, le temps du job, les variables de l'environnement visé
+dont Vercel rend encore la valeur (type « Config »), et elles seules arrivent à
+la construction. `NEXT_PUBLIC_CONVEX_URL` et
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, que le site fige à la construction,
+doivent être de ce type. Vercel ne rend plus la valeur d'une variable de type
+« Secret » (ancien nom : « Sensitive ») une fois enregistrée
+([documentation Vercel](https://vercel.com/docs/environment-variables/sensitive-environment-variables)) :
+elle n'arrive pas sur le runner, la construction n'en a pas besoin, et Vercel
+la donne au site à l'exécution. C'est pourquoi `CLERK_SECRET_KEY` doit être de
+ce type avant le premier clic sur `site`
+([section 5.5, étape 3](#55-réglages-à-faire-une-fois-à-la-main)). Aucune étape
+des workflows n'affiche ni n'envoie ce que `vercel pull` a écrit, et un test le
+tient. Le type de ces variables dans le projet n'a pas été relevé.
+
+#### Avant et après l'arrivée sur `main`
+
+Ce qui précède dépend de la présence de trois fichiers sur `main` :
+`vercel.json` et les deux workflows. Au 7 octobre 2026 ils n'y sont pas.
+
+- **Les boutons.** GitHub n'affiche « Run workflow » que pour un workflow
+  présent sur la branche par défaut du dépôt, `main`. Tant que les deux
+  fichiers de workflow n'y sont pas, aucun bouton n'apparaît et rien ne peut
+  être déployé depuis GitHub.
+- **Les pushs sur `main`.** `main` ne contient pas encore `vercel.json` : un
+  push sur `main` qui ne l'apporte pas (une correction faite directement sur
+  `main`, par exemple) **déploie encore le site de production tout seul**. Le
+  commit qui apporte le fichier sur `main` (la fusion de la première release,
+  ou une PR dédiée) ne devrait pas être déployé, puisque la règle suit le
+  commit. **Ce n'est pas constaté** : `main` est la branche de production des
+  deux projets, et aucun push n'y a été fait. Le vérifier au premier push sur
+  `main`, dans Vercel ou sur le commit dans GitHub (aucun statut « Vercel »).
+- **Les autres branches.** Une branche partie de `develop` après ANH-198
+  contient `vercel.json` : ses pushs ne déploient rien. Une branche plus
+  ancienne crée encore deux préversions à chaque push, jusqu'à ce qu'elle
+  reprenne `develop`.
+
+Une fois les trois fichiers sur `main` et ce constat fait, plus aucun push ne
+déploie : restent les deux boutons, et `deploy.sh` en secours pour la simulation
+([section 6.4](#64-redéployer)).
 
 ### 5.2 Les préversions pointent sur la production
 
 Comme les variables Vercel sont les mêmes partout (section 2), **une préversion
-de la branche parle au Convex de production et au Clerk de production**. Une
-préversion de `feat/pi-training-session` appelle donc des fonctions qui
-n'existent pas encore en production : ses nouvelles pages ne peuvent pas marcher.
+du site parle au Convex de production et au Clerk de production**. Tant que
+c'est le cas, la préversion déployée par le bouton :
 
-Pour qu'une préversion serve à tester, donner aux préversions leurs propres
-valeurs dans les réglages du projet Vercel (environnement « Preview ») :
-`NEXT_PUBLIC_CONVEX_URL` du développement, et les deux clés Clerk de
-développement. Ne pas toucher aux valeurs « Production ».
+- demande un compte de production pour se connecter ;
+- **lit et écrit les données de production** (comptes, machines, séances) : ce
+  qu'on y fait est fait en production ;
+- appelle le Convex de production avec le code de `develop` : toute page qui
+  utilise une fonction absente de la production échoue.
+
+Ce n'est donc pas un bac à sable. Le bouton de préversion l'écrit dans son
+formulaire et, dès que le site est choisi, exige que la personne écrive
+`données de production` pour l'accepter. La simulation seule ne demande rien.
+
+Pour qu'une préversion serve à tester, l'environnement « Preview » du projet
+Vercel `anheart` doit recevoir ses propres valeurs : `NEXT_PUBLIC_CONVEX_URL` du
+développement, et les deux clés Clerk de développement, **sans toucher aux
+valeurs de la production**. La marche exacte est la dernière étape de la
+[section 5.5](#55-réglages-à-faire-une-fois-à-la-main). Les deux variables
+`NEXT_PUBLIC_...` sont figées à la construction : après le réglage, relancer le
+bouton de préversion pour qu'il prenne effet. Une fois les variables séparées,
+le champ d'accord du bouton est à retirer (même étape).
+
+L'adresse d'une préversion est protégée par la connexion Vercel (réglage
+« Vercel Authentication » du projet `anheart`, relevé le 7 octobre 2026) : il
+faut être connecté au compte Vercel du client pour l'ouvrir.
+
+La simulation hébergée n'est pas concernée : elle ne lit aucune donnée
+([section 6.1](#61-ce-que-cest)).
 
 ### 5.3 Lancer le site en local sur le Convex de développement
 
@@ -337,6 +506,232 @@ Ce que les écrans ont montré, y compris les défauts, est consigné dans le gu
 Limites : les formulaires n'ont pas été soumis depuis le navigateur ; les
 écritures (rôles, droits, physiologie, lancement, arrêt) ont été faites par la
 ligne de commande, au nom des comptes de démonstration.
+
+### 5.5 Réglages à faire une fois, à la main
+
+Rien de ce qui suit n'est fait par le dépôt, et rien n'en a été fait par
+ANH-198. C'est au chef de projet, dans cet ordre. Les suites de commandes de
+cette section sont déduites des réglages relevés le 7 octobre 2026 ; aucune n'a
+été exécutée sur le dépôt. Seule la fusion du point 5 de la voie B a été
+simulée, sans toucher à aucune branche : elle se fait sans conflit et ne change
+aucun fichier.
+
+**1. Créer les deux environnements GitHub.** Dans le dépôt : **Settings**,
+**Environments**, **New environment**.
+
+| Environnement | Réglages |
+|---|---|
+| `production` | « Required reviewers » : la ou les personnes qui approuvent un déploiement en production (ne pas cocher « Prevent self-review » si la même personne lance et approuve). « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `main`. |
+| `preview` | « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `develop`. Sans approbation par défaut : lire ce que cela veut dire à l'étape 2. |
+
+Le faire **avant** le premier lancement : GitHub crée tout seul, sans aucune
+règle, un environnement qui n'existe pas encore.
+
+**2. Créer le jeton Vercel et enregistrer les quatre secrets, dans les deux
+environnements et nulle part ailleurs.**
+
+| Secret | Valeur | Où la trouver |
+|---|---|---|
+| `VERCEL_TOKEN` | un jeton d'accès du compte Vercel du client | Vercel, **Account Settings**, **Tokens**, créer un jeton : portée « Anheart's projects », avec une date d'expiration. La valeur n'est affichée qu'une fois. |
+| `VERCEL_ORG_ID` | l'identifiant de l'équipe (il commence par `team_`) | Vercel, équipe « Anheart's projects », **Settings**, **General**, « Team ID » |
+| `VERCEL_PROJECT_ID_SITE` | l'identifiant du projet `anheart` (il commence par `prj_`) | Vercel, projet `anheart`, **Settings**, **General**, « Project ID » |
+| `VERCEL_PROJECT_ID_SIMULATION` | l'identifiant du projet `anheart-simulation` | Vercel, projet `anheart-simulation`, **Settings**, **General**, « Project ID » |
+
+Les enregistrer comme **secrets d'environnement** : **Settings**,
+**Environments**, l'environnement, « Environment secrets ». Les quatre noms dans
+`production`, les quatre mêmes dans `preview`.
+
+**Ne pas les enregistrer comme secrets du dépôt** (**Settings**, **Secrets and
+variables**, **Actions**, « Repository secrets »). Un secret du dépôt est remis
+à tout workflow du dépôt, y compris à un workflow modifié sur une autre branche.
+Un secret d'environnement n'est remis qu'à un job qui passe par cet
+environnement : c'est la restriction de branche de l'étape 1 qui empêche une
+autre branche de s'en servir, et l'approbation qui garde la production.
+
+**Le même jeton se trouve dans `preview`, sans approbation.** Un jeton Vercel
+n'est pas limité à un environnement de Vercel : celui de `preview` a les mêmes
+droits que celui de `production`, sur les deux projets. La seule barrière de
+`preview` est sa restriction à la branche `develop`. Ce qui garde ce jeton est
+donc la protection de `develop` (PR obligatoire, vérifications obligatoires,
+avis indépendant), pas une personne qui approuve. Pour la même garantie qu'en
+production, exiger aussi une approbation sur `preview` (« Required
+reviewers ») : chaque préversion demande alors un clic de plus.
+
+S'il manque un secret, le job échoue aussitôt avec le message « Secret
+manquant » et le nom du secret ; aucune valeur n'est jamais affichée. À
+l'expiration du jeton, les boutons échouent à la première étape qui appelle
+Vercel : créer un nouveau jeton et remplacer la valeur de `VERCEL_TOKEN` dans
+les deux environnements.
+
+**3. Dans Vercel, avant le premier clic sur `site` : rendre secrètes les
+variables de serveur.** Pour construire le site, le bouton lit les variables du
+projet `anheart`, et `vercel pull` écrit sur le disque du runner GitHub celles
+dont Vercel rend encore la valeur
+([section 5.1](#51-comment-il-se-déploie)). Projet `anheart`, **Settings**,
+**Environment Variables** : `CLERK_SECRET_KEY`, et toute autre variable de
+serveur qui est un secret, doit être de type « Secret » (ancien nom :
+« Sensitive »). Elle n'est alors plus remise au runner, et le site la reçoit
+toujours à l'exécution. Si l'écran ne propose pas de changer le type d'une
+variable existante, la supprimer puis la recréer avec la même valeur, les mêmes
+environnements et le type « Secret » : un changement de variable ne touche que
+les déploiements suivants, pas celui qui est en ligne. Laisser
+`NEXT_PUBLIC_CONVEX_URL` et `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` en type
+« Config » : le site les fige à la construction, et elles sont publiques par
+nature.
+
+**4. Retirer de la protection de `main` les deux vérifications Vercel.**
+Relevé le 7 octobre 2026 : `main` exige neuf vérifications, administrateurs
+compris, dont les deux que Vercel posait sur chaque commit. Un commit qui
+contient `vercel.json` ne les reçoit plus : elles resteraient en attente pour
+toujours, et **aucune PR vers `main` ne pourrait être fusionnée**, ni la
+première release ni une PR dédiée. Dans le dépôt : **Settings**, **Branches**,
+la règle de `main`, **Edit**, « Require status checks to pass before merging » :
+retirer les deux vérifications dont le nom commence par « Vercel », puis **Save
+changes**. C'est ce qui a été fait sur `develop` le 7 octobre 2026. Garder les
+sept autres : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit`,
+`docs` et `agent-review/R1`. Pour relire la liste :
+
+```sh
+gh api repos/anheartpro-byte/Anheart/branches/main/protection/required_status_checks --jq '.contexts'
+```
+
+**5. Faire arriver trois fichiers sur `main`** : `vercel.json`,
+`.github/workflows/deploy-production.yml` et
+`.github/workflows/deploy-preview.yml`. Ce qui reste vrai d'ici là est dit dans
+[Avant et après l'arrivée sur `main`](#avant-et-après-larrivée-sur-main). Deux
+voies.
+
+*Voie A, la plus simple : la première release* (`develop` vers `main`,
+[release.md](release.md#3-le-déroulé)). Elle apporte tout, et les boutons
+n'existent qu'après elle. Pour les boutons, elle ne demande aucun autre réglage
+que l'étape 4.
+
+**Une réserve, à trancher par le chef de projet avant la première release.**
+[release.md, étape 6](release.md#3-le-déroulé) demande de fusionner la PR de
+release par un commit de fusion. Or `main` exige un historique linéaire (relevé
+le 7 octobre 2026), ce qui interdit un commit de fusion : en l'état, la PR de
+release ne peut pas être fusionnée comme le processus le demande. ANH-198 ne
+règle pas ce point ; il est consigné dans le ticket de suite du processus de
+release. La même réserve vaut pour la release qui suit la voie B.
+
+Une précaution pour cette première fusion : qu'un push sur `main` ne déploie plus
+n'a été constaté que sur des branches de travail. La release apporte le nouveau
+site ; s'il partait quand même en production à la fusion, il tournerait contre
+l'ancien Convex ([§3.3](#33-vers-la-production)). Fusionner donc cette première
+release dans la fenêtre du déploiement de Convex, puis regarder le commit
+obtenu sur `main` : aucun statut « Vercel », aucun déploiement (les deux
+commandes du point 4 de la voie B).
+
+*Voie B : une PR dédiée vers `main`, pour avoir les boutons avant la première
+release.* Elle fait aussi constater sur `main`, avec un commit qui ne change
+pas le site, qu'un push n'y déploie plus. Elle coûte deux changements
+temporaires de protection, chacun fait puis défait : sur `main`, les six gates
+retirées des vérifications obligatoires le temps de fusionner la PR dédiée
+(points 2 et 3) ; sur `develop`, « Require linear history » décoché le temps de
+la fusion qui reprend `main` (point 5). Relevé le 7 octobre 2026 : `main` et
+`develop` exigent toutes deux un historique linéaire et une branche à jour ;
+`main` exige les six gates, qu'aucune branche partie de `main` ne peut faire
+tourner, puisque `main` ne contient pas encore la CI.
+
+1. Créer la branche à partir de `main`, avec les trois fichiers tels qu'ils
+   sont sur `develop`, et ouvrir la PR :
+
+   ```sh
+   git fetch origin
+   git switch -c feature/anh-198-boutons-de-deploiement-sur-main origin/main
+   git checkout origin/develop -- vercel.json .github/workflows/deploy-production.yml .github/workflows/deploy-preview.yml
+   git commit -m "ANH-198: apporter sur main les boutons de déploiement Vercel"
+   git push -u origin feature/anh-198-boutons-de-deploiement-sur-main
+   gh pr create --base main --title "ANH-198 : apporter sur main les boutons de déploiement Vercel" --body "Trois fichiers repris de develop, sans autre changement."
+   ```
+
+2. Dans la règle de `main`, retirer **le temps de cette fusion** les six gates
+   des vérifications obligatoires (`pi-gate`, `simulation-gate`,
+   `convex-tests`, `web`, `audit`, `docs`) : elles ne peuvent pas répondre sur
+   cette PR. Garder `agent-review/R1` : l'avis indépendant sur le commit reste
+   exigé.
+3. Fusionner la PR en **squash**, puis **remettre aussitôt les six gates** dans
+   la règle de `main`, et relire la liste avec la commande de l'étape 4.
+4. Deux minutes après la fusion, constater sur le commit obtenu sur `main` que
+   Vercel n'a rien lancé. Les deux commandes doivent répondre `0` :
+
+   ```sh
+   git fetch origin
+   gh api "repos/anheartpro-byte/Anheart/commits/$(git rev-parse origin/main)/status" --jq '.total_count'
+   gh api "repos/anheartpro-byte/Anheart/deployments?sha=$(git rev-parse origin/main)" --jq 'length'
+   ```
+
+   Si Vercel a déployé quand même, il a redéployé le site tel qu'il était déjà
+   sur `main` : ne pas aller plus loin et le signaler.
+5. Faire reprendre `main` par `develop`. Sans cela `develop` n'est plus à jour
+   avec `main`, et `main` refusera la PR de release. Il y faut un **commit de
+   fusion** : un squash ne relie pas les deux historiques.
+
+   - Dans la règle de `develop`, décocher **le temps de cette fusion** « Require
+     linear history ».
+   - Préparer la branche. La fusion ne change aucun fichier, puisque les trois
+     fichiers sont les mêmes des deux côtés ; la seconde commande ne doit rien
+     afficher :
+
+     ```sh
+     git fetch origin
+     git switch -c feature/anh-198-reprendre-main-dans-develop origin/develop
+     git merge --no-ff origin/main -m "ANH-198: reprendre dans develop le commit des boutons de déploiement posé sur main"
+     git diff --stat origin/develop HEAD
+     git push -u origin feature/anh-198-reprendre-main-dans-develop
+     gh pr create --base develop --title "ANH-198 : reprendre main dans develop" --body "Commit de fusion sans changement de fichier : develop reprend le commit des boutons posé sur main."
+     ```
+
+   - Une fois la CI verte et l'avis indépendant posé, fusionner cette PR par
+     **« Create a merge commit »**, ni squash ni rebase.
+   - Recocher « Require linear history » sur `develop`.
+   - Vérifier que `develop` contient maintenant `main` :
+
+     ```sh
+     git fetch origin
+     git merge-base --is-ancestor origin/main origin/develop && echo "develop contient main"
+     ```
+
+   À faire juste après l'étape 3 : si les trois fichiers changent sur `develop`
+   avant cette reprise, la fusion donne un conflit, à résoudre en gardant la
+   version de `develop`.
+
+Avec la voie B, `main` ne contient pas encore la simulation hébergée : le
+bouton de production refuse de la déployer (« Simulation absente ») et ne peut
+déployer que le site, tel qu'il est sur `main`. La release qui suit la voie B
+reste soumise à la réserve de la voie A : commit de fusion demandé, historique
+linéaire exigé par `main`.
+
+**6. Séparer les variables de l'environnement « Preview » de Vercel**, pour
+qu'une préversion du site ne lise plus les données de production
+([section 5.2](#52-les-préversions-pointent-sur-la-production)). Projet
+`anheart`, **Settings**, **Environment Variables**. Les variables ont
+aujourd'hui la même valeur partout, celle de la production (section 2) ; une
+même entrée y est donc cochée pour plusieurs environnements (les entrées
+elles-mêmes n'ont pas été relevées). Pour `NEXT_PUBLIC_CONVEX_URL`,
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` et `CLERK_SECRET_KEY`, dans cet ordre pour
+chacune :
+
+1. ouvrir l'entrée partagée, **décocher « Preview » sans toucher à sa valeur**,
+   enregistrer. Ne pas modifier la valeur de cette entrée : c'est celle de la
+   production, et la prochaine construction de production la prendrait ;
+2. créer une **nouvelle** entrée du même nom, cochée pour « Preview » seulement,
+   avec la valeur de développement : `https://standing-jay-887.convex.cloud`
+   pour Convex, les deux clés de l'instance Clerk de développement pour Clerk
+   (la clé secrète en type « Secret »).
+
+`CLERK_JWT_ISSUER_DOMAIN` peut rester telle quelle : le site ne la lit pas.
+Relancer ensuite le bouton de préversion avec `site`, et vérifier sur la
+préversion qu'elle demande un compte de l'instance Clerk de développement.
+
+Ce constat fait, retirer du workflow de préversion ce qui n'a plus lieu d'être,
+par une PR ordinaire : le champ `production_data`, l'étape « Exiger l'accord sur
+les données de production », la phrase du nom de l'exécution et celle du
+résumé, avec leurs tests. D'ici là le bouton continue de demander l'accord, à
+tort mais sans danger.
+
+Premier essai conseillé, une fois les étapes 1 à 5 faites : le bouton de
+préversion avec `simulation`, qui ne touche à aucune donnée.
 
 ---
 
@@ -392,16 +787,29 @@ L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 | `build.sh` | Assemble `dist/` : ce dossier, `simulation/` (modules, scénarios, cohorte, géométrie CAO), `raspberry-pi/src` et `raspberry-pi/config`. |
 | `deploy.sh` | `build.sh`, puis `vercel deploy`. |
 
-Le projet Vercel relié à Git construit depuis la racine du dépôt, avec le
-preset **FastAPI**. Vercel installe avec `uv` les dépendances de la table
-`[project]` du `pyproject.toml` racine. Elles correspondent au sous-ensemble
-hébergé ci-dessus ; garder les deux listes alignées lors d'une mise à jour.
-Ce manifeste déclare `simulation_app:app` comme point d'entrée ; `simulation_app.py`
-charge cette même application, les sources Pi et le substitut BITalino.
-Le `requirements.txt` racine renvoie au fichier ci-dessus pour les installations
-pip manuelles ; `.python-version` et le manifeste fixent Python 3.12. Le site
-garde son preset **Next.js** et ses commandes npm.
-Un push sur la branche de la PR crée une préversion ; il ne fusionne pas `main`.
+Le projet Vercel `anheart-simulation` est relié au dépôt et construit depuis sa
+racine, avec le preset **FastAPI**. Il lit donc le `vercel.json` de la racine,
+qui coupe ses déploiements Git comme ceux du site
+([section 5.1](#51-comment-il-se-déploie)) : **un push dont le commit contient
+ce fichier ne crée plus de préversion de la simulation.**
+
+Le dépôt garde deux dispositions de la même application :
+
+- **l'assemblage autonome `dist/`**, fait par `build.sh`. C'est ce que
+  déploient les deux boutons et `deploy.sh` ;
+- **la racine du dépôt**, que Vercel construisait à chaque push. Le
+  `pyproject.toml` racine déclare `simulation_app:app` comme point d'entrée, et
+  sa table `[project]` porte les dépendances que Vercel installait avec `uv`.
+  Elles correspondent au sous-ensemble hébergé ci-dessus ; garder les deux
+  listes alignées lors d'une mise à jour (un test les compare).
+  `simulation_app.py` charge la même application, les sources Pi et le
+  substitut BITalino. Le `requirements.txt` racine renvoie au fichier ci-dessus
+  pour les installations pip manuelles ; `.python-version` et le manifeste
+  fixent Python 3.12. Plus aucun déploiement ne construit cette disposition :
+  elle reste lançable en local ([section 6.4](#64-redéployer)) et couverte par
+  les tests de l'adaptateur.
+
+Le site garde son preset **Next.js** et ses commandes npm.
 
 Le visualiseur est monté depuis `simulation/viewer/`. Vercel peut le promouvoir
 sur son CDN, et le même fichier reste accessible en HTTP local. `build.sh`
@@ -410,17 +818,34 @@ Voir la [documentation FastAPI de Vercel](https://vercel.com/docs/frameworks/bac
 
 ### 6.4 Redéployer
 
+La voie normale est celle des deux boutons de la
+[section 5.1](#51-comment-il-se-déploie), en choisissant `simulation` : une
+préversion depuis `develop`, la production (`anheart-simulation.vercel.app`)
+depuis `main`. Le bouton reprend la procédure de `deploy.sh` : il lance
+`build.sh` sur le commit de la branche, la CLI Vercel envoie `dist/`, et Vercel
+construit la fonction. Rien de Python n'est installé sur le runner, et le
+moteur hébergé ne lit aucune variable de son projet Vercel. Une préversion est
+protégée par la connexion Vercel.
+
+Un déploiement par bouton part d'un checkout propre : il ne publie pas
+`/report.html`, que `build.sh` n'embarque que si le rapport a été produit sur
+le poste (`python -m simulation.quick --all`).
+
+`deploy.sh` reste la procédure de secours, depuis un poste :
+
 ```sh
-deploy/simulation-vercel/deploy.sh           # une préversion (protégée par la connexion Vercel)
-deploy/simulation-vercel/deploy.sh --prod    # la production : anheart-simulation.vercel.app
+deploy/simulation-vercel/deploy.sh           # une préversion
+deploy/simulation-vercel/deploy.sh --prod    # la production
 ```
 
 Il faut une connexion de la CLI Vercel dans `.vercel-cli/` :
-`npx vercel login --global-config .vercel-cli`.
+`npx vercel login --global-config .vercel-cli`. À la différence du bouton,
+`deploy.sh` embarque le code **du disque** au moment de `build.sh`, pas un
+commit ; il ne passe par aucune approbation ; et il prend la dernière version
+de la CLI, pas une version figée.
 
-Le déploiement manuel ci-dessus embarque le code **du disque** au moment de
-`build.sh`. Le déploiement Git embarque le commit poussé. Une modification
-locale de `raspberry-pi/src` ne change donc pas une version déjà hébergée.
+Dans les deux cas, une modification de `raspberry-pi/src` ou de `simulation/`
+ne change pas une version déjà hébergée : il faut redéployer.
 
 > Le **tout premier** déploiement d'un projet Vercel est toujours affecté à la
 > production, même sans `--prod`. C'est ce qui s'est passé le 1er octobre 2026.
@@ -624,8 +1049,9 @@ est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
 | Relire [guides/guide-tableau-de-bord.md](guides/guide-tableau-de-bord.md) ligne à ligne contre les vrais écrans, et corriger les défauts du §9.4 (textes en anglais…) | Rien. |
 | Soumettre les formulaires depuis le navigateur, dans les trois rôles ; en faire des tests automatiques (ANH-83) | Rien. |
 | Comprendre pourquoi l'ECG simulé de la console perd la confirmation quand le bras tourne (section 4) | Rien. |
-| Déployer Convex en production, puis fusionner la branche | Une décision (section 3.3). |
-| Donner aux préversions Vercel les valeurs de développement | Un réglage dans Vercel (section 5.2). |
+| Déployer Convex en production, puis le site par son bouton | Une décision (section 3.3). |
+| Rendre les deux boutons de déploiement utilisables : environnements GitHub, secrets, variables de serveur en type « Secret », protection de `main`, fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 5). |
+| Donner aux préversions Vercel les valeurs de développement, puis retirer du bouton de préversion le champ d'accord | Un réglage dans Vercel, puis une PR (section 5.5, étape 6). |
 | Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |
-| Vérifier chaque préversion Git de la simulation avant fusion | `simulation/` et `deploy/` sont versionnés ; le projet Git construit depuis la racine avec `simulation_app:app`. |
+| Lancer une première fois chaque bouton, la préversion de la simulation d'abord | Les réglages de la section 5.5 : aucun des deux workflows n'a encore tourné. |
