@@ -136,7 +136,13 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```
    Le script ouvre la PR `develop` vers `main` avec le modèle
    [`.github/PULL_REQUEST_TEMPLATE/release.md`](../.github/PULL_REQUEST_TEMPLATE/release.md),
-   où il a rempli les versions, le candidat et le changelog.
+   où il a rempli les versions, le candidat et le changelog. `main` exige une
+   branche à jour : si `main` a reçu un commit que `develop` n'a pas (la PR
+   dédiée des boutons de déploiement, par exemple), GitHub refuse la fusion
+   tant que `develop` ne l'a pas repris. La marche est dans
+   [deploiement.md, section 5.5, étape 5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
+   `main` exigeait aussi deux vérifications Vercel, qui ne répondent plus : les
+   retirer d'abord (même section, étape 4).
 5. **Remplir la check-list** de la PR ([section 5](#5-la-check-list-de-release)),
    preuve après preuve. Deux approbations.
 6. **Fusionner par commit de fusion**, jamais en squash ni en rebase : un
@@ -276,16 +282,20 @@ commit que le script s'apprête à lire :
 | en échec, refusée à l'approbation ou annulée | refus, tant que cette exécution reste attachée au commit |
 
 Un bouton en échec ne dit rien du code : un secret manquant, une confirmation
-mal saisie ou un quota Vercel épuisé suffisent. Pour lever le refus :
+mal saisie ou un quota Vercel épuisé suffisent. Pour lever le refus,
+**supprimer l'exécution en échec** (« Delete workflow run ») : ses
+vérifications quittent le commit, et rien n'est déployé. Ce geste n'a pas été
+essayé sur ce dépôt.
 
-- relancer les jobs en échec de **cette même** exécution (« Re-run failed
-  jobs ») jusqu'au succès : seule la dernière tentative compte alors ;
-- ou, si l'échec tient à ce qui a été saisi (la confirmation), supprimer
-  l'exécution (« Delete workflow run »), ce qui retire ses vérifications du
-  commit.
-
-Lancer une **nouvelle** exécution, même réussie, ne suffit pas : celle qui a
-échoué reste sur le commit. Ces deux gestes n'ont pas été essayés sur ce dépôt.
+**Ne pas relancer l'exécution (« Re-run ») dans le seul but de faire passer le
+script : la relancer, c'est déployer.** Une exécution relancée garde ses
+saisies et son commit ; elle est soumise aux mêmes règles qu'un clic (fenêtre
+du déploiement de Convex, aucune séance en cours, approbation), et le job la
+refuse (« Exécution périmée ») dès que son commit n'est plus la tête de la
+branche. Si le déploiement doit bien avoir lieu, lancer une nouvelle exécution
+par « Run workflow », puis supprimer celle qui a échoué : une nouvelle
+exécution, même réussie, ne retire pas de ce commit les vérifications de
+l'ancienne.
 
 D'où l'ordre du [déroulé](#3-le-déroulé) : le bouton de production vient
 **après** `scripts/release.sh tag`. Lancé avant, sur la tête de `main`, il fait
