@@ -1045,9 +1045,10 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    signatures, `str` porteur de sens (utiliser une `Enum`), `# type: ignore` sans
    code, `assert` comme contrôle de flux, lecture directe de l'horloge.
 3. **Erreurs** : `Result[T, E]` avec unions fermées dans les chemins moteur et
-   sécurité ; chaque `match` se termine par `assert_never`, si bien qu'une
-   nouvelle variante d'erreur casse la vérification de types partout où elle
-   n'est pas traitée.
+   sécurité ; chaque `match` se termine par `assert_never` (dans un dernier
+   cas générique, ou après le `match` par `raise assert_never(sujet)` quand
+   chaque cas rend une valeur), si bien qu'une nouvelle variante d'erreur casse
+   la vérification de types partout où elle n'est pas traitée.
 4. **Horloge injectée** partout (`src/clock.py`).
 5. **Une bibliothèque non typée = un seul module** qui l'importe, avec un stub
    écrit à la main dans `stubs/` (`bitalino`, `biosppy`, `scipy`, `pymodbus`,
