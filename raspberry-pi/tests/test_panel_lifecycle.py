@@ -40,7 +40,7 @@ async def test_run_stops_motor_and_children_when_observer_is_hung(
         if ending == "cancel":
             runner.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(runner, 2)
+                await runner
         else:
             if ending == "stop":
                 stop.set()

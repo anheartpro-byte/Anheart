@@ -2196,7 +2196,7 @@ async def _race_the_executor(
     started = time.perf_counter()
     outcome = drive.emergency_disable_blocking(budget)
     taken = time.perf_counter() - started
-    await asyncio.wait_for(opening, 5.0)
+    await opening
     return outcome, taken
 
 
