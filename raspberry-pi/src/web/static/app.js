@@ -79,7 +79,8 @@ var state = {
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
   manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
-  manualTaken: null,     // the target the note says the machine took, and that note: {rpm, text}
+  manualTaken: null,     // the target the note says the machine took, and that note: {rpm, detail, text}
+  riseHeld: false,       // whether the console says the heart rate holds a manual rise (the box of the manual card)
   manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
   dirty: {},             // canvas id -> true when it needs a redraw
 };
@@ -967,6 +968,7 @@ function renderManualHold() {
   var known = Boolean(state.panel) && performance.now() - state.panelAt < PANEL_STALE_MS;
   var hold = known ? state.panel.manual_rise_hold : null;
   var unknown = Boolean(manual) && manual.occupancy !== "bench" && !known;
+  state.riseHeld = Boolean(manual) && Boolean(hold);
   show(el("manual-hold"), Boolean(manual) && (Boolean(hold) || unknown));
   if (unknown) {
     text(el("manual-hold-title"), "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
@@ -1094,6 +1096,12 @@ function doManualStart() {
   the applied target is another one (a STOP, a verdict, another screen), the
   note is wiped rather than left to say that the machine follows a target it
   has dropped.
+
+  Taken is not followed. The note adds "(suivie aux limites de mouvement)"
+  only while the machine is walking the setpoint to the target, and takes the
+  words off, frame by frame, for as long as something holds the setpoint
+  (followsTarget): the note must not say of a speed that is held that it is
+  on its way.
 */
 function manualOnScreen() {
   var snapshot = state.snapshot;
@@ -1129,16 +1137,47 @@ function noteLoopRefusal(event) {
   );
 }
 
+/*
+  Whether the machine is walking the setpoint to the target it holds, as of
+  this frame. A target taken is not always a target followed:
+
+  - a verdict that has the setpoint keeps it from the target. A reduce walks
+    it down whatever the target is. A freeze holds it away from every target
+    but one: zero is a stop asked for, and a stop is followed under a freeze;
+  - with no verdict, the heart rate of a person on board can hold a rise: the
+    box above the target says so, and a target above the setpoint waits.
+*/
+function followsTarget(snapshot, manual) {
+  var safety = snapshot.safety;
+  if (safety) {
+    return safety.action === "freeze" && manual.target.motor_rpm === 0;
+  }
+  return !(state.riseHeld && manual.target.motor_rpm > snapshot.setpoint.motor_rpm);
+}
+
+function takenNote(detail, followed) {
+  return "cible prise par la machine : " + detail + (followed ? " (suivie aux limites de mouvement)" : "");
+}
+
 function settleManualTarget(snapshot) {
   var manual = snapshot.mode === "repos" ? null : snapshot.manual;
+  var note = el("manual-note");
   var taken = state.manualTaken;
+  if (taken && note.textContent !== taken.text) {
+    // Something else has been written there since: the note is no longer this one's to keep.
+    state.manualTaken = taken = null;
+  }
   if (taken && !(manual && holdsTarget(manual, taken.rpm))) {
     // The machine no longer holds the target the note says it took (a STOP, a
-    // verdict, another screen): the note would go on saying "taken, followed".
-    // It is wiped, unless something else has been written there since.
+    // verdict, another screen): the note would go on saying "taken". Wiped.
     state.manualTaken = null;
-    if (el("manual-note").textContent === taken.text) {
-      ok(el("manual-note"), "");
+    ok(note, "");
+  } else if (taken) {
+    // Still held. "Followed" is said for as long as it is true, frame after frame.
+    var current = takenNote(taken.detail, followsTarget(snapshot, manual));
+    if (current !== taken.text) {
+      ok(note, current);
+      taken.text = current;
     }
   }
   var sent = state.manualSent;
@@ -1146,9 +1185,9 @@ function settleManualTarget(snapshot) {
     return;
   }
   if (manual && holdsTarget(manual, sent.rpm)) {
-    var said = "cible prise par la machine : " + sent.detail + " (suivie aux limites de mouvement)";
-    ok(el("manual-note"), said);
-    state.manualTaken = { rpm: sent.rpm, text: said };
+    var said = takenNote(sent.detail, followsTarget(snapshot, manual));
+    ok(note, said);
+    state.manualTaken = { rpm: sent.rpm, detail: sent.detail, text: said };
   } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
     return;
   } else if (manual) {

@@ -927,6 +927,41 @@ test("the note stops saying the machine follows a target once the machine has dr
   assert.equal(node("manual-note").textContent, "");
 });
 
+test("a target taken while a verdict holds the setpoint is not said to be followed", async () => {
+  // Given an arm turning at 120 tr/min moteur under a warning that holds its speed.
+  const { context, frame, node } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  const at120 = { setpoint: turning(120), measured: turning(120) };
+  frame(manualFrame(59.8, 120, { ...at120, ...held }));
+  await apply(context, 5, 60);
+  // When the machine takes the higher target and the freeze keeps the setpoint where it is.
+  frame(manualFrame(60.2, 249, { ...at120, ...held }));
+  // Then the note says taken, and does not say followed.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  // A reduce walks the setpoint down whatever the target is: not followed either.
+  frame(manualFrame(60.4, 249, { setpoint: turning(110), measured: turning(112), ...verdict("reduce", "hr_stale", false) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  // When the warning lifts, the setpoint walks to the target again, and the note says so.
+  frame(manualFrame(60.6, 249, { setpoint: turning(112), measured: turning(112) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+  // And the words come off again the moment a verdict holds the setpoint, latched or not.
+  frame(manualFrame(60.8, 249, { setpoint: turning(118), measured: turning(116), ...verdict("freeze", "loop_stall", true) }));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+});
+
+test("under a freeze a target of 0 is a stop asked for, and the note says it is followed", async () => {
+  // Given an arm at 249 tr/min moteur under a freeze, and the operator's own zero.
+  const { context, frame, node } = panel();
+  const held = verdict("freeze", "attendant_absent", false);
+  frame(manualFrame(59.8, 249, { setpoint: turning(249), measured: turning(249), ...held }));
+  await apply(context, 0, 60);
+  // When the machine takes it: under a freeze a stop asked for is walked down all the same.
+  frame(manualFrame(60.2, 0, { setpoint: turning(240), measured: turning(246), ...held }));
+  // Then, of all targets under a freeze, this one is said followed.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 0.00 output rpm (suivie aux limites de mouvement)");
+});
+
 test("wiping a taken note leaves alone what was written there since", async () => {
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
@@ -1106,6 +1141,29 @@ test("with a person on board, a console that stops answering is shown as an unkn
   // And the next answer puts the indicator back to what the console says.
   context.renderPanel(panelRow());
   assert.equal(shown("manual-hold"), false);
+});
+
+test("while the heart rate holds a rise, a higher target taken is not said to be followed", async () => {
+  // Given a person on board, an arm turning at 120 tr/min moteur, and the console saying the rise is held.
+  const { context, frame, node } = panel();
+  const at120 = { setpoint: turning(120), measured: turning(120) };
+  frame(riderFrame(59.6, 120, at120));
+  context.renderPanel(panelRow({ manual_rise_hold: "heart_rate_falling" }));
+  // When a higher target is taken: no verdict stands, and yet the speed does not climb.
+  await apply(context, 5, 60);
+  frame(riderFrame(60.2, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  // A lower target is a descent, and the heart rate holds no descent: followed.
+  await apply(context, 2, 61);
+  frame(riderFrame(61.2, 100, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 2.00 output rpm (suivie aux limites de mouvement)");
+  // Once the console says nothing holds any more, the rise is followed, and the note says so.
+  await apply(context, 5, 62);
+  frame(riderFrame(62.2, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  context.renderPanel(panelRow());
+  frame(riderFrame(62.4, 249, at120));
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
 });
 
 test("with nobody on board the heart rate holds nothing, answered or not", () => {

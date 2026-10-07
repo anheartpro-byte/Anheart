@@ -478,6 +478,14 @@ Règles de la cible :
   `cible appliquee` reste la référence : si elle est restée ou revenue à `0.00`, la
   machine n'y va pas. Quand la machine ne tient plus la cible (après un STOP, par
   exemple), la note `cible prise ...` s'efface.
+* **« Prise » ne veut pas dire « suivie ».** Les mots
+  `(suivie aux limites de mouvement)` ne sont écrits que si la vitesse va vers la
+  cible à cet instant. Ils sont retirés, et la note dit seulement
+  `cible prise par la machine : ...`, tant qu'une alerte tient ou baisse la vitesse
+  (`freeze` avec une cible autre que 0, `reduce`), ou tant que l'encadré orange de la
+  fréquence cardiaque retient une montée vers une cible plus haute. Ils reviennent
+  quand plus rien ne retient la vitesse. Pendant un gel, une cible de 0 est suivie :
+  la note le dit.
 * **Avec une personne à bord, un encadré orange prévient avant l'envoi.**
   **MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE** s'affiche au-dessus de la cible quand
   la fréquence cardiaque empêche la vitesse de monter (fréquence absente, lue depuis
@@ -1665,7 +1673,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ bandeau `ARRET D'URGENCE NON CONFIRME`, `aucune reponse de la console depuis N s - UTILISEZ L'ARRET CABLE` | la demande E-STOP de cet écran est partie et rien n'est revenu depuis 2 s ou plus | **coup de poing** ; la demande reste en attente et peut encore passer |
 | bandeau `ARRET D'URGENCE NON CONFIRME`, `la demande a echoue : ... - UTILISEZ L'ARRET CABLE` | la demande E-STOP a échoué ; le bandeau reste après la fenêtre d'alerte | **coup de poing** |
 | ✔ `cible envoyee : ... - pas encore prise par la machine` | la console a reçu la cible ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
-| ✔ `cible prise par la machine : ... (suivie aux limites de mouvement)` | la machine tient cette cible et la suit | surveiller **Vitesse mesuree** |
+| ✔ `cible prise par la machine : ... (suivie aux limites de mouvement)` | la machine tient cette cible, et la vitesse va vers elle à cet instant | surveiller **Vitesse mesuree** |
+| `cible prise par la machine : ...` (sans `(suivie aux limites de mouvement)`) | la machine tient cette cible mais la vitesse n'y va pas à cet instant : une alerte la tient ou la baisse (`freeze` avec une cible autre que 0, `reduce`), ou la fréquence cardiaque retient une montée | lire **Securite** et l'encadré orange ; la ligne `rampe` dit `consigne maintenue, cible non atteinte` sous un gel. La vitesse ira vers la cible sans nouveau clic quand plus rien ne la retiendra (§11) |
 | ✔ `refus de la machine (<heure>) : ...` (rouge, carte Mode MANUEL) | la machine a refusé la cible, ou l'a remise à 0 ; la suite du message est celle de la liste Evenements | §13.11 |
 | `cible NON prise par la machine : la cible appliquee est ... La raison n'est pas arrivee a cet ecran.` | une seconde après l'envoi, la machine ne tient pas la cible et cet écran n'a pas reçu la raison | lire Securite, l'encadré orange et la carte Variateur ; renvoyer la cible (§13.11) |
 | `cible NON prise par la machine : la seance manuelle est terminee.` | la séance s'est terminée avant que la cible soit prise | redémarrer une séance |
