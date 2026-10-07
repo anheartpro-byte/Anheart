@@ -9,6 +9,7 @@
  * the pending-session filtering the Pi depends on.
  */
 import { describe, expect, it } from "vitest";
+import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
@@ -151,6 +152,88 @@ describe("ANH-132 malformed bodies return 400 {error}", () => {
     expect(response.status).toBe(400);
     const payload = (await response.json()) as { error?: string };
     expect(typeof payload.error).toBe("string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ANH-195 EX-3: a body that is JSON but not an object is refused.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every route of the router that takes a body, read from the router itself: a
+ * route added later is held to the same answer without being listed here.
+ */
+const bodyRoutes = http
+  .getRoutes()
+  .filter(([, method]) => method === "POST")
+  .map(([path]) => path)
+  .sort();
+
+/** What JSON can hold at its top level besides an object. */
+const notAnObject = [
+  { kind: "null", raw: "null" },
+  { kind: "a number", raw: "42" },
+  { kind: "a string", raw: '"heartbeat"' },
+  { kind: "a boolean", raw: "true" },
+  { kind: "an empty array", raw: "[]" },
+  { kind: "an array of objects", raw: '[{"sessionId":"x","points":[]}]' },
+];
+
+/** Everything a machine route can write for the first machine. */
+async function written(w: MachineWorld) {
+  return await w.t.run(async (ctx) => ({
+    machine: await ctx.db.get(w.machine),
+    heartbeats: await ctx.db.query("machine_heartbeats").collect(),
+    profiles: await ctx.db.query("machine_profiles").collect(),
+    sessions: await ctx.db.query("sessions").collect(),
+    telemetry: await ctx.db.query("training_telemetry").collect(),
+  }));
+}
+
+describe("ANH-195 EX-3 a JSON body that is not an object is refused with 400", () => {
+  it("covers the six routes that take a body", () => {
+    expect(bodyRoutes).toEqual([
+      "/api/machine/heartbeat",
+      "/api/machine/profiles",
+      "/api/machine/training/end",
+      "/api/machine/training/local",
+      "/api/machine/training/start",
+      "/api/machine/training/telemetry",
+    ]);
+  });
+
+  const cases = bodyRoutes.flatMap((path) =>
+    notAnObject.map((body) => ({ path, ...body })),
+  );
+
+  it.each(cases)("$path refuses $kind", async ({ path, raw }) => {
+    const w = await world();
+    const before = await written(w);
+
+    const response = await sendRaw(w, w.machineKey, "POST", path, raw);
+    const payload: unknown = await response.json();
+    const after = await written(w);
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({
+      error: "invalid_request",
+      message: expect.any(String),
+    });
+    expect(after).toEqual(before);
+  });
+
+  it("still takes a heartbeat without a body, and one whose body is an object", async () => {
+    const w = await world();
+
+    const empty = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "");
+    const object = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "{}");
+    const beats = await w.t.run((ctx) =>
+      ctx.db.query("machine_heartbeats").collect(),
+    );
+
+    expect(empty.status).toBe(200);
+    expect(object.status).toBe(200);
+    expect(beats).toHaveLength(2);
   });
 });
 

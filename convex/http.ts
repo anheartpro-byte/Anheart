@@ -48,7 +48,13 @@ http.route({
     try {
       const text = await req.text();
       if (text) {
-        body = JSON.parse(text);
+        const parsed: unknown = JSON.parse(text);
+        // JSON that is not an object (null, a number, a string, an array) is
+        // refused before anything is recorded.
+        if (!isJsonObject(parsed)) {
+          return refuse(400, "invalid_request", "Expected a JSON object");
+        }
+        body = parsed as typeof body;
       }
     } catch {
       // Empty or invalid body is OK - use defaults
@@ -118,14 +124,17 @@ function refuse(
   return machineErrorResponse(status, code, message);
 }
 
+/** True for what JSON calls an object: not null, not an array, not a scalar. */
+function isJsonObject(parsed: unknown): parsed is Record<string, unknown> {
+  return (
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+  );
+}
+
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = await req.json();
-    return typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
