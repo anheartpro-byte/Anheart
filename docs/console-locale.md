@@ -22,6 +22,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > 11 et 13, ajoutés le 6 octobre 2026) viennent du code, des tests automatiques et de
 > rejeux par l'API sur la console en simulation ; ils n'ont pas été rejoués dans un
 > navigateur.
+> Les passages sur la règle `session_overrun` (sections 4, 5 et 11, ajoutés le
+> 6 octobre 2026 avec ANH-181) viennent du code, des tests automatiques sur la console
+> en simulation et de mesures sur le banc d'essai logiciel ; ils n'ont pas été rejoués
+> dans un navigateur.
 
 ---
 
@@ -180,7 +184,7 @@ Les modes :
 
 | Mode | Signification |
 |---|---|
-| `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. |
+| `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. Une séance finie n'y déclenche aucun verdict, aussi longtemps que la console y reste : le départ suivant ne demande pas de redémarrer la console (section 11, `session_overrun`). |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
 | `SEANCE` | une séance programmée (AUTO) déroule son programme |
 | `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro ; sous un `freeze`, elle ne descend même pas tant que le gel tient (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
@@ -235,6 +239,18 @@ s'arrête au mode : `liaison ouverte · repos`.
   l'étage de sortie coupé à l'arrêt mesuré, le mode revient à `REPOS` ; pour un
   programme, `REPOS` ne revient qu'après la phase `recovery`. Repartir demande un
   nouveau démarrage.
+- **Un STOP donné tard dans un programme se termine par un verdict à acquitter.** Un
+  STOP rouvre une récupération complète (5 minutes avec le profil standard), même si le
+  programme était déjà dans sa propre phase `recovery`, bras arrêté. Si elle dépasse la
+  durée prévue de plus de 30 s, la règle `session_overrun` se verrouille pendant cette
+  récupération : avec le profil standard de 30 minutes, c'est le cas de tout STOP donné
+  dans les quatre dernières minutes et demie, et le verdict apparaît à 1830 s. Rien ne
+  bouge. Acquitter une fois `REPOS` affiché (section 11). Mesuré sur le banc d'essai
+  logiciel avec le profil standard, et vérifié par l'API sur la console en simulation
+  avec un programme court (`raspberry-pi/tests/test_session_overrun_console.py`) ; pas
+  rejoué dans un navigateur. Un arrêt demandé depuis le site passe par ce même STOP. Un
+  E-STOP ou un verdict d'arrêt donnés aussi tard rouvrent la même récupération et mènent
+  au même verdict (section 11).
 - Refus : une boîte d'alerte `STOP refuse : …` (par exemple
   `the machine is already stopping` si un arrêt est déjà en cours, ou
   `there is no session to end (the machine is idle)`).
@@ -642,6 +658,37 @@ lui-même à 0 alors qu'aucun avertissement ne tient, le retour au calme d'un pr
 En séance manuelle, capsule vide comprise, la règle vaut aussi. Décisions et mesures :
 [securite.md](securite.md#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques).
 
+**Une séance qui dépasse sa durée est arrêtée, une séance finie n'est plus jugée :
+`session_overrun`.** La règle termine, sur un `ramp_down` verrouillé, une séance encore
+en cours plus de 30 s après sa durée prévue (celle du programme ; 3600 s en séance
+manuelle). Le détail donne les durées :
+`the session has run 1830 s against a programme of 1800 s plus 30 s of grace: the phase machine has lost track`.
+Elle ne juge qu'une séance **en cours**. Une fois la séance finie (phase `done`,
+consigne à 0), elle se tait : la console peut rester au mode `REPOS` aussi longtemps
+qu'il le faut sans qu'aucun verdict apparaisse, et le départ suivant est accepté sans
+redémarrer la console. Avant le correctif du 6 octobre 2026 (ANH-181), ce verdict
+apparaissait seul au repos (30 s après la fin d'un programme allé à son terme, 1830,2 s
+après le départ du profil standard même arrêté tôt, 3630,2 s après le départ d'une
+séance manuelle), l'acquittement ne tenait pas et il fallait redémarrer la console.
+Le verdict peut encore apparaître **pendant** une séance : quand un `freeze`
+verrouillé que personne n'acquitte (par exemple `loop_stall`) tient le bras en vitesse
+au-delà de la fin du programme, et la règle fait alors descendre la consigne ; quand
+une fin de séance est ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt),
+parce que toute fin de séance rouvre une récupération complète, qui dépasse alors
+l'échéance, bras déjà arrêté (section 5) ; quand une séance manuelle atteint ses 3600 s
+à grande vitesse et descend encore 30 s plus tard. Dans tous ces cas : attendre que
+**Mode** affiche `REPOS`, acquitter par son nom, puis demander un nouveau départ.
+L'acquittement tient alors. Avant `REPOS`, il répond 200 et le verdict est de nouveau
+là au cycle suivant. Après un E-STOP donné tard, `session_overrun` se verrouille
+derrière l'arrêt d'urgence : un seul acquittement à `REPOS` lève les deux ; si l'E-STOP
+est acquitté avant `REPOS`, `session_overrun` reste ou apparaît ensuite comme verdict
+retenu (pastille **Securite** `ramp_down`), à acquitter de nouveau à `REPOS`. Après un
+verdict d'arrêt donné tard (par exemple `hr_stale` à son niveau `ramp_down`), le
+plancher verrouillé garde ce premier verdict : `session_overrun` n'apparaît que dans
+la liste des règles actives pendant `ARRET`, et un seul acquittement à `REPOS` suffit.
+Mesures et limites :
+[securite.md](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
+
 ### Acquittement
 
 | Élément | Rôle |
@@ -952,8 +999,9 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 - La phrase ajoutée aux avertissements non verrouillés (section 11) est en anglais et
   n'apparaît que sur les pages Seance et Securite. Aucun bandeau ne dit en permanence, en
   français, qu'une vitesse maintenue ou baissée peut remonter seule.
-- Un acquittement de `session_standstill` donné avant le retour du mode à `REPOS`
-  répond 200 puis est repris, sans que la page dise quand il tiendra (section 11).
+- Un acquittement de `session_standstill` (ou de `session_overrun`) donné avant le
+  retour du mode à `REPOS` répond 200 puis est repris, sans que la page dise quand il
+  tiendra (section 11).
 - Ces quatre points relèvent de la page et sont l'objet du ticket
   [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178).
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
