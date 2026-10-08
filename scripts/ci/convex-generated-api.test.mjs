@@ -105,9 +105,11 @@ test("EX-11 a module is imported under a name that is a legal identifier", () =>
 });
 
 test("EX-11 the text names each module twice, quoted only where its path needs it", () => {
-  const text = render(["crons.ts", "lib/auth.ts", "my-module.ts"]);
+  const text = render(["crons.ts", "lib/auth.ts", "my-module.ts", "séance.ts", "x1.ts", "1x.ts", "𝒜.ts"]);
 
-  assert.deepEqual(importedBy(text), ["crons", "lib/auth", "my-module"]);
+  assert.deepEqual(importedBy(text), ["crons", "lib/auth", "my-module", "séance", "x1", "1x", "𝒜"]);
+  // As Prettier leaves each: a letter of any script needs no quotes, a path, a
+  // hyphen, a leading digit or a letter outside the basic plane does.
   assert.ok(
     text.includes(
       [
@@ -115,6 +117,10 @@ test("EX-11 the text names each module twice, quoted only where its path needs i
         "  crons: typeof crons;",
         '  "lib/auth": typeof lib_auth;',
         '  "my-module": typeof my_module;',
+        "  séance: typeof séance;",
+        "  x1: typeof x1;",
+        '  "1x": typeof 1x;',
+        '  "𝒜": typeof 𝒜;',
         "}>;",
       ].join("\n"),
     ),

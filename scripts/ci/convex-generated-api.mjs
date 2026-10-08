@@ -109,8 +109,16 @@ export function identifierOf(module) {
   return DECLARED.includes(identifier) || RESERVED.includes(identifier) ? `${identifier}_` : identifier;
 }
 
+/**
+ * What Prettier takes for a name it may leave unquoted: a letter of any script
+ * (not one outside the basic plane), `$` or `_`, then letters, marks, digits
+ * and connectors. `séance` is one, `lib/auth` and `my-module` are not.
+ */
+const UNQUOTED =
+  /^(?![^]*[\u{10000}-\u{10FFFF}])[$_\p{L}\p{Nl}][$_\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}‌‍]*$/u;
+
 /** A property name as Prettier leaves it: quoted only when it has to be. @param {string} path */
-const keyOf = (path) => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(path) ? path : `"${path}"`);
+const keyOf = (path) => (UNQUOTED.test(path) ? path : `"${path}"`);
 
 /**
  * The text of api.d.ts for these modules.
