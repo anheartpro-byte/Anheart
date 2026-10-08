@@ -219,7 +219,7 @@ class EMGGenerator:
                 self._burst_left = max(1, round(duration * fs))
                 self._burst_amp = cfg.burst_mv * self._rng.uniform(0.6, 1.0)
             burst = self._burst_amp if self._burst_left > 0 else 0.0
-            amplitude = math.sqrt(tonic * tonic + burst * burst)
+            amplitude = math.hypot(tonic, burst)
             mv = amplitude * norm * y + cfg.baseline_mv * self._rng.gauss(0.0, 1.0)
             if cfg.mains_mv != 0.0:
                 t = context.start + i * dt

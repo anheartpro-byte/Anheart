@@ -15,6 +15,7 @@ reads a clock: the block's start time arrives in the context.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -40,11 +41,13 @@ class SignalGenerator(Protocol):
     """One channel's synthetic signal."""
 
     @property
-    def kind(self) -> SensorKind: ...
+    @abstractmethod
+    def kind(self) -> SensorKind:
+        """The channel this generator synthesises."""
 
+    @abstractmethod
     def render(self, context: SignalContext) -> tuple[AdcCount, ...]:
         """``context.count`` samples, each within ``0..kind.adc_max``."""
-        ...
 
 
 def flat(kind: SensorKind, count: int) -> tuple[AdcCount, ...]:

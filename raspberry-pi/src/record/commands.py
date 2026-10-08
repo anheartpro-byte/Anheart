@@ -137,8 +137,7 @@ def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
             return "shutdown"
         case Attendant(present):
             return f"attendant present={str(present).lower()}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(command)
 
 
 def kind_of(command: Command, *, remote: bool = False) -> EventKind:
@@ -243,4 +242,5 @@ def parse(detail: str) -> Result[Command, str]:  # noqa: PLR0911  # one return p
         case "attendant":
             return _attendant(arguments)
         case _:
-            return Err("not a command of the replay vocabulary")
+            pass
+    return Err("not a command of the replay vocabulary")

@@ -59,7 +59,7 @@ def test_the_drive_seam_imports_only_the_standard_library_and_src(source_path: P
     somebody importing pymodbus here, it is a helpful refactor pulling in
     something that makes this module un-simulatable.
     """
-    allowed = {"__future__", "collections", "dataclasses", "enum", "types", "typing", "src"}
+    allowed = {"__future__", "abc", "collections", "dataclasses", "enum", "types", "typing", "src"}
     assert _imported_roots(source_path) <= allowed
 
 

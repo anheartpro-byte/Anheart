@@ -946,8 +946,7 @@ def is_regulating(phase: Phase) -> bool:
             return True
         case Phase.BASELINE | Phase.COOLDOWN | Phase.RECOVERY | Phase.DONE:
             return False
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(phase)
 
 
 def stop_reason(phase: Phase) -> str:
@@ -968,8 +967,7 @@ def stop_reason(phase: Phase) -> str:
             return "demanding zero: the programme is over"
         case Phase.WARMUP | Phase.HOLD:
             return f"demanding zero: no speed is asked for in {phase.value}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(phase)
 
 
 @final
@@ -1262,8 +1260,7 @@ class HeartRateController:
                     increments=False,
                     reason=stop_reason(observed.phase),
                 )
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(observed.phase)
 
     def _warmup(
         self, now: Monotonic, observed: ControlInput, step_dt: Seconds, ceiling: MotorRpm

@@ -120,13 +120,13 @@ class DriveLease:
 
     @classmethod
     def claim(cls) -> DriveLease:
-        match cls.acquire():
+        acquired = cls.acquire()
+        match acquired:
             case Ok(lease):
                 return lease
             case Err(error):
                 raise DriveOwnershipError(error)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(acquired)
 
 
 class DriveConnection:

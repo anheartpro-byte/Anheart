@@ -24,6 +24,7 @@ See .claude/skills/anheart-strict-python/SKILL.md rule 4.
 from __future__ import annotations
 
 import time
+from abc import abstractmethod
 from typing import Protocol, final, runtime_checkable
 
 from src.units import Monotonic, Seconds, UnixMillis
@@ -42,13 +43,13 @@ class Clock(Protocol):
     a perfectly good monotonic one, and elapsed-time logic must not care.
     """
 
+    @abstractmethod
     def monotonic(self) -> Monotonic:
         """Seconds from an arbitrary origin, monotonically non-decreasing."""
-        ...
 
+    @abstractmethod
     def unix_millis(self) -> UnixMillis:
         """Wall-clock milliseconds since the Unix epoch."""
-        ...
 
 
 @final

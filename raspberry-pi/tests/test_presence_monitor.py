@@ -16,8 +16,8 @@ import pytest
 
 from src.clock import ManualClock
 from src.presence.monitor import (
-    ALL_PRESENCE_RULES,
     DEFAULT_PRESENCE_LIMITS,
+    MOTION_RULES,
     RULE_PRESENCE_BENCH_OCCUPIED,
     RULE_PRESENCE_CAMERA_LOST,
     RULE_PRESENCE_CAPSULE_UNKNOWN,
@@ -28,6 +28,7 @@ from src.presence.monitor import (
     RULE_PRESENCE_RIDER_UNBUCKLED,
     RULE_PRESENCE_ZONE_NOT_CLEAR,
     RULE_PRESENCE_ZONE_UNCERTAIN,
+    START_RULES,
     Clear,
     EmergencyStop,
     PresenceDecision,
@@ -138,6 +139,9 @@ def _ready(stream: Stream, context: MachineContext = AT_REST, **frame: object) -
 # =========================================================================
 # Vocabulary and limits
 # =========================================================================
+
+ALL_PRESENCE_RULES: Final[tuple[str, ...]] = tuple(dict.fromkeys((*MOTION_RULES, *START_RULES)))
+"""Every rule id of the package: the motion rules, then the start rules not already among them."""
 
 
 def test_every_rule_id_is_well_formed_and_distinct() -> None:
