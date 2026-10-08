@@ -198,6 +198,18 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_component_and_version", ["component", "version"]),
 
+  // Every validation level a Pi version has held, one row per decision,
+  // oldest first, never rewritten: who decided it, when and why (ANH-195).
+  // `software_releases` says which level is in force; this table says how the
+  // version got there. Anheart-wide like the register: no `organizationId`.
+  software_release_levels: defineTable({
+    releaseId: v.id("software_releases"),
+    validationLevel: validationLevelValidator,
+    reason: v.optional(v.string()), // the notes given with the decision
+    decidedBy: v.id("users"),
+    decidedAt: v.number(), // unix ms
+  }).index("by_release", ["releaseId"]),
+
   // Training presets, mirrored from each Pi. The Pi is the authority; this
   // table is replaced wholesale on every sync.
   machine_profiles: defineTable({

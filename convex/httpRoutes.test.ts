@@ -9,6 +9,7 @@
  * the pending-session filtering the Pi depends on.
  */
 import { describe, expect, it } from "vitest";
+import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
@@ -151,6 +152,208 @@ describe("ANH-132 malformed bodies return 400 {error}", () => {
     expect(response.status).toBe(400);
     const payload = (await response.json()) as { error?: string };
     expect(typeof payload.error).toBe("string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ANH-195 EX-3: a body a machine route cannot read is refused with 400, and
+// nothing is written.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every route of the router that takes a body, read from the router itself: a
+ * route added later is held to the same answer without being listed here.
+ */
+const bodyRoutes = http
+  .getRoutes()
+  .filter(([, method]) => method === "POST")
+  .map(([path]) => path)
+  .sort();
+
+/** Bodies no route takes: JSON that is not an object, and text that is not JSON. */
+const unreadable = [
+  { kind: "null", raw: "null" },
+  { kind: "a number", raw: "42" },
+  { kind: "a string", raw: '"heartbeat"' },
+  { kind: "a boolean", raw: "true" },
+  { kind: "an empty array", raw: "[]" },
+  { kind: "an array of objects", raw: '[{"sessionId":"x","points":[]}]' },
+  { kind: "text that is not JSON", raw: "not json at all" },
+  { kind: "an object cut short", raw: '{"live":{"runMode":"seance"' },
+  { kind: "white space alone", raw: " \n" },
+];
+
+/** A state a heartbeat may carry, well formed. */
+const LIVE = {
+  runMode: "seance",
+  phase: "hold",
+  bpm: 140,
+  motorRpm: 1000,
+  outputRpm: 20,
+  setpointMotorRpm: 1000,
+  gLoad: 1.1,
+  safetyAction: "none",
+};
+
+/**
+ * Object bodies the heartbeat refuses: one of the three fields it stores as
+ * sent is not of its type. The well-formed state beside it is not taken.
+ */
+const wrongTyped = [
+  { kind: "a battery level that is text", sent: { batteryLevel: "high" } },
+  { kind: "a battery level that is null", sent: { batteryLevel: null } },
+  { kind: "a battery level that is an object", sent: { batteryLevel: {} } },
+  { kind: "a wifi strength that is null", sent: { wifiStrength: null } },
+  { kind: "a wifi strength that is text", sent: { wifiStrength: "-60" } },
+  { kind: "a session that is a number", sent: { activeSessionId: 42 } },
+  { kind: "a session that is null", sent: { activeSessionId: null } },
+].map(({ kind, sent }) => ({
+  kind,
+  raw: JSON.stringify({ ...sent, live: LIVE, programsEnabled: false }),
+}));
+
+/** Everything a machine route can write for the first machine. */
+async function written(w: MachineWorld) {
+  return await w.t.run(async (ctx) => ({
+    machine: await ctx.db.get(w.machine),
+    heartbeats: await ctx.db.query("machine_heartbeats").collect(),
+    profiles: await ctx.db.query("machine_profiles").collect(),
+    sessions: await ctx.db.query("sessions").collect(),
+    telemetry: await ctx.db.query("training_telemetry").collect(),
+    events: await ctx.db.query("training_events").collect(),
+  }));
+}
+
+/** The request is refused as malformed, in the shape of every refusal, and nothing is written. */
+async function expectRefusedUnwritten(w: MachineWorld, path: string, raw: string) {
+  const before = await written(w);
+
+  const response = await sendRaw(w, w.machineKey, "POST", path, raw);
+  const payload: unknown = await response.json();
+  const after = await written(w);
+
+  expect(response.status).toBe(400);
+  expect(payload).toEqual({
+    error: "invalid_request",
+    message: expect.any(String),
+  });
+  expect(after).toEqual(before);
+}
+
+describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", () => {
+  // Not an exact list: a route added to the router joins the tables below by
+  // itself. This only holds that the router was read, and is not empty.
+  it("covers at least the seven routes that took a body when this was written", () => {
+    expect(bodyRoutes).toEqual(
+      expect.arrayContaining([
+        "/api/machine/heartbeat",
+        "/api/machine/profiles",
+        "/api/machine/training/end",
+        "/api/machine/training/events",
+        "/api/machine/training/local",
+        "/api/machine/training/start",
+        "/api/machine/training/telemetry",
+      ]),
+    );
+  });
+
+  const cases = bodyRoutes.flatMap((path) =>
+    unreadable.map((body) => ({ path, ...body })),
+  );
+
+  it.each(cases)("$path refuses $kind", async ({ path, raw }) => {
+    const w = await world();
+    await expectRefusedUnwritten(w, path, raw);
+  });
+
+  it.each(wrongTyped)("the heartbeat refuses $kind", async ({ raw }) => {
+    const w = await world();
+    await expectRefusedUnwritten(w, "/api/machine/heartbeat", raw);
+  });
+
+  it("refuses a number JSON cannot hold as a battery level", async () => {
+    const w = await world();
+    // 1e999 is valid JSON text and reads as Infinity.
+    await expectRefusedUnwritten(w, "/api/machine/heartbeat", '{"batteryLevel":1e999}');
+  });
+
+  it.each(bodyRoutes)(
+    "%s judges the key, then the contract, then the body",
+    async (path) => {
+      const w = await world();
+      const post = (headers: Record<string, string>) =>
+        w.t.fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          body: "null",
+        });
+      const key = { Authorization: `Bearer ${w.machineKey}` };
+      const contract = { [CONTRACT_HEADER]: CONTRACT_VERSION };
+      const before = await written(w);
+
+      const noKey = await post(contract);
+      const unknownKey = await post({
+        Authorization: `Bearer ${unknownButWellFormedKey}`,
+      });
+      const noContract = await post(key);
+      const otherMajor = await post({ ...key, [CONTRACT_HEADER]: "99.0" });
+      const readable = await post({ ...key, ...contract });
+      const after = await written(w);
+
+      // The same unreadable body each time: what is wrong first is what is said.
+      expect([
+        noKey.status,
+        unknownKey.status,
+        noContract.status,
+        otherMajor.status,
+        readable.status,
+      ]).toEqual([401, 401, 426, 426, 400]);
+      expect(after).toEqual(before);
+    },
+  );
+
+  it("still takes a heartbeat without a body, and one whose body is an empty object", async () => {
+    const w = await world();
+
+    const empty = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "");
+    const object = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "{}");
+    const beats = await w.t.run((ctx) =>
+      ctx.db.query("machine_heartbeats").collect(),
+    );
+
+    expect(empty.status).toBe(200);
+    expect(object.status).toBe(200);
+    expect(beats).toHaveLength(2);
+  });
+
+  it("records the three stored fields of a heartbeat as before when each has its type", async () => {
+    const w = await world();
+    const sessionId = await seedSession(w, w.machine, "active", "auto");
+    const before = await written(w);
+
+    const response = await send(w, w.machineKey, "POST", "/api/machine/heartbeat", {
+      batteryLevel: 87,
+      wifiStrength: -55,
+      activeSessionId: sessionId,
+      live: LIVE,
+      // Fields the server does not store are no reason to refuse.
+      medical_parameters_version: null,
+      config_hash: null,
+    });
+    const after = await written(w);
+
+    expect(response.status).toBe(200);
+    expect(after.heartbeats).toHaveLength(before.heartbeats.length + 1);
+    expect(after.heartbeats[after.heartbeats.length - 1]).toMatchObject({
+      machineId: w.machine,
+      batteryLevel: 87,
+      wifiStrength: -55,
+      activeSessionId: sessionId,
+    });
+    expect(after.machine).toMatchObject({
+      status: "in_session",
+      live: { phase: "hold", bpm: 140 },
+    });
   });
 });
 

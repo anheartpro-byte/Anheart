@@ -171,21 +171,41 @@ l'admin d'une organisation cliente ne la lit ni ne l'écrit.
 | `validationLevel` | pour une version du Pi seulement : `bench`, `auto_validated` (M5) ou `occupied_validated` (M6) |
 | `releasedAt` | date de la release, ms Unix |
 | `notes` | texte libre ; obligatoire quand le niveau d'une version déjà enregistrée change |
-| `recordedBy`, `updatedAt` | l'admin qui a écrit la ligne, et quand |
+| `recordedBy`, `updatedAt` | l'admin qui a écrit la ligne en dernier, et quand |
 
 Index `by_component_and_version`.
+
+La ligne dit le niveau **en vigueur**. Ce qu'un changement de niveau remplace
+n'est pas perdu : la table `software_release_levels` garde chaque niveau qu'une
+version du Pi a porté, une ligne par décision, du plus ancien au plus récent.
+Elle ne fait que s'allonger, et n'a pas d'`organizationId` non plus.
+
+| Champ | Sens |
+|---|---|
+| `releaseId` | la ligne de `software_releases` |
+| `validationLevel` | le niveau décidé |
+| `reason` | les `notes` données avec la décision (le motif ; facultatif pour le premier niveau) |
+| `decidedBy`, `decidedAt` | l'admin qui l'a décidé, et quand |
+
+Index `by_release`. Une ligne de `software_releases` écrite avant cette table
+n'y a aucune décision : elle est lue comme sa propre première décision (son
+niveau, ses `notes`, son `recordedBy`, son `updatedAt`), et cette première
+décision est écrite dans la table à la première écriture qui suit, changement
+de niveau ou simple correction, avant que la ligne soit réécrite. Les deux
+tables sont un ajout au schéma : aucune donnée existante n'est à migrer.
 
 **Règle portée par `validationLevel`.** Une machine validée pour les séances
 programmées (M5) ne reçoit qu'une version `auto_validated` ou
 `occupied_validated` ; une machine validée pour une personne à bord (M6) ne
-reçoit qu'une version `occupied_validated`. La règle est codée dans
+reçoit qu'une version `occupied_validated`. Un état de machine que la règle ne
+connaît pas ne reçoit aucune version. La règle est codée dans
 `convex/lib/releaseValidation.ts` (`releaseAllowedOnMachine`) et testée, mais
 **aucune fonction ne l'appelle encore** : l'état de validation d'une machine
 n'existe pas dans le schéma. Le registre machine (ANH-147) et la mise à jour à
 distance (ANH-116, ANH-168) l'appliqueront. Détail dans
 [release.md](release.md#2-le-niveau-de-validation-dune-version-du-pi).
 
-Cette table n'est déployée sur aucun déploiement.
+Ces deux tables ne sont déployées sur aucun déploiement.
 
 ### `machine_profiles` : programmes synchronisés depuis le Pi
 
@@ -760,8 +780,8 @@ organisation cliente est refusé, en lecture comme en écriture.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `recordRelease` (mutation) | admin Anheart | Enregistre une version publiée dans `software_releases`, ou corrige la ligne d'une version déjà connue (une seule ligne par composant et version). Refuse une version qui n'est pas `<composant>-X.Y.Z`, une version du Pi sans niveau de validation, un niveau sur une version `cloud` ou `web`, une date invalide, des notes de plus de 2000 caractères, et un changement de niveau sans `notes`. Erreurs en `ConvexError(message)`. |
-| `listReleases` (query) | admin Anheart | Les versions enregistrées, la plus récente d'abord ; filtre `component` optionnel. |
+| `recordRelease` (mutation) | admin Anheart | Enregistre une version publiée dans `software_releases`, ou corrige la ligne d'une version déjà connue (une seule ligne par composant et version). Le niveau d'une version du Pi est écrit aussi dans `software_release_levels` : à l'enregistrement, puis à chaque changement de niveau, avec son motif, son auteur et sa date ; une correction qui laisse le niveau en place n'y ajoute rien. Refuse une version qui n'est pas `<composant>-X.Y.Z`, une version du Pi sans niveau de validation, un niveau sur une version `cloud` ou `web`, une date invalide, des notes de plus de 2000 caractères, et un changement de niveau sans `notes`. Erreurs en `ConvexError(message)`. |
+| `listReleases` (query) | admin Anheart | Les versions enregistrées, la plus récente d'abord ; filtre `component` optionnel. Chaque version porte `levelHistory` : ses niveaux successifs, du plus ancien au plus récent (`validationLevel`, `reason`, `decidedBy`, `decidedAt`) ; vide pour une version `cloud` ou `web`. |
 
 `deployedCloudVersion` est une query **interne** : elle répond la constante
 `CLOUD_VERSION` de `convex/cloudVersion.ts`, donc la version du code déployé
@@ -852,6 +872,25 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la même
 requête) et son code est journalisé ; une absence de réponse devient
 `Unreachable` (on réessaie plus tard).
+
+**Corps** : les sept routes `POST` attendent un objet JSON. Un corps qui n'en
+est pas un est refusé par **400** `invalid_request`, et rien n'est écrit :
+du texte qui n'est pas du JSON (un objet tronqué compris), ou du JSON valide
+qui n'est pas un objet (`null`, un nombre, une chaîne, un booléen, un
+tableau). La clé est jugée d'abord, puis le contrat, puis le corps : 401, 426,
+400, dans cet ordre. Un test tient la règle pour chaque route `POST` du
+routeur, celles qui s'y ajouteront comprises (`convex/httpRoutes.test.ts`).
+
+Le heartbeat a une seule tolérance que les autres n'ont pas : un corps
+**vide** y vaut un heartbeat sans champ (200). C'est ce qu'envoie le test de
+connectivité de `raspberry-pi/README.md` (un `curl` sans corps), et ce
+qu'envoyait au repos la console de l'ancien mode d'enregistrement. Il refuse
+aussi, par le même 400 et avant d'enregistrer quoi que ce soit, un objet dont
+l'un des trois champs stockés tels quels n'a pas son type : `batteryLevel` et
+`wifiStrength` sont des nombres, `activeSessionId` une chaîne. Les autres
+champs gardent leur règle, dite plus bas : un `live` mal formé est ignoré, un
+`software_version` mal formé est effacé, un champ inconnu à la racine du corps
+n'est pas lu.
 
 ### Routes utilisées par la console locale (`raspberry-pi/src/cloud_sync.py`)
 
@@ -1005,6 +1044,37 @@ déploiement qui contient déjà des données l'accepte sans migration. Ce que l
 redéploiement doit savoir est dans
 [deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal).
 
+### `convex/_generated/api.d.ts` : tenu par un script
+
+Ce fichier est versionné : sans lui, ni les fonctions ni le site ne passent le
+contrôle des types. Il liste les modules de `convex/`, un `import` chacun.
+`npx convex dev` le réécrit, mais cette commande a besoin d'un déploiement
+(depuis la version 1.28 du paquet, écrire `convex/_generated/` passe par le
+déploiement) : un fichier ajouté sans elle n'y entrait pas, et le fichier
+s'écartait de l'arbre sans que rien le dise.
+
+`scripts/ci/convex-generated-api.mjs` le déduit des fichiers de `convex/`,
+sans déploiement et sans réseau, avec la règle du paquet (est un module tout
+fichier `.ts` ou `.js` hors de `_generated/`, sauf `schema.ts`, les fichiers
+dont le nom a plus d'un point comme `auth.config.ts` ou `*.test.ts`, et les
+fichiers sans `import` ni `export`) et dans la forme que le paquet écrit :
+
+```bash
+node scripts/ci/convex-generated-api.mjs            # compare, et nomme les modules manquants ou en trop
+node scripts/ci/convex-generated-api.mjs --write    # réécrit le fichier
+```
+
+Le job `convex-tests` lance la première forme avant le contrôle des types :
+une PR qui ajoute, retire ou renomme un module sans réécrire le fichier est
+refusée. Après avoir ajouté un fichier à `convex/`, lancer la seconde.
+
+Limites : le script refuse un backend qui monte un composant Convex (un
+`convex.config.ts` sous `convex/`), dont les liaisons viennent du déploiement
+et non de l'arbre ; il ne juge que `api.d.ts`, pas les quatre autres fichiers
+de `convex/_generated/`, qui ne dépendent pas de la liste des modules. Si une
+version ultérieure du paquet écrit ce fichier autrement, le script doit suivre
+dans la même PR.
+
 ### Migration du retrait de l'ancien mode ECG
 
 **Pas encore exécutée, sur aucun déploiement.** Deux mutations internes de
@@ -1016,6 +1086,56 @@ npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
 npx convex run migrations/retireLegacyRecording:removeMachineConfig
 ```
 
+**Telles qu'écrites, ces deux lignes visent le déploiement de développement.**
+Ce qui le décide est la clé `CONVEX_DEPLOY_KEY` de `.env.local`, celle du
+développement
+([deploiement.md, section 2](deploiement.md#2-les-clés-et-où-elles-sont-rangées)) :
+la CLI charge ce fichier, et une clé de déploiement présente dans
+l'environnement désigne à elle seule le déploiement visé. Deux conséquences,
+lues dans le paquet installé (convex 1.46.0,
+`src/cli/lib/deploymentSelection.ts`) :
+
+- `CONVEX_DEPLOYMENT` n'est pas consulté tant qu'une clé est là ;
+- **l'option `--prod` est ignorée.** Dans ce dépôt,
+  `npx convex run --prod …` agit sur le développement, sans le dire. Ne pas
+  s'en servir pour viser la production.
+
+Pour la production, c'est sa clé qu'il faut passer, **après** le
+`convex deploy` de la production
+([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), en
+deux temps.
+
+1. **Lire quel déploiement la clé désigne, avant de lancer quoi que ce
+   soit.** Une clé de déploiement commence par le type et le nom de son
+   déploiement, jusqu'au `|` qui précède sa partie secrète :
+
+   ```bash
+   sed -n 's/^CONVEX_DEPLOY_KEY_PROD=\([a-z]*:[a-z0-9-]*\)|.*/\1/p' .env.local
+   ```
+
+   La ligne affichée doit être `prod:clean-giraffe-153`, le déploiement de
+   production ([deploiement.md, section 1](deploiement.md#1-les-environnements)).
+   Si elle commence par `dev:`, porte un autre nom, ou si rien ne s'affiche,
+   ne pas continuer. Cette lecture ne passe pas par la CLI et ne contacte
+   aucun déploiement : elle ne dépend donc pas de ce que la CLI choisirait,
+   et elle n'affiche pas la partie secrète de la clé.
+2. **Lancer les deux mutations avec cette clé** :
+
+   ```bash
+   CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
+     npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
+   CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
+     npx convex run migrations/retireLegacyRecording:removeMachineConfig
+   ```
+
+   Une variable déjà présente dans l'environnement l'emporte sur celle de
+   `.env.local`, que la CLI ne charge que pour les variables absentes : la
+   clé passée sur la ligne remplace donc celle du développement, pour cette
+   commande seulement.
+
+Cette forme n'a été essayée sur aucun déploiement : la migration n'a tourné
+nulle part.
+
 | Mutation | Effet | Résultat renvoyé |
 |---|---|---|
 | `failOpenRecordingSessions` | Passe `failed` toute séance de l'ancien mode (sans `kind`) encore `pending` ou `active`, avec `endReason = "legacy mode retired"` et `endedAt`. Les séances d'enregistrement finies et toutes les séances d'entraînement ne sont pas touchées ; les lignes gardent leur forme (pas de `kind` ajouté). Le statut de la machine n'est pas écrit : le prochain heartbeat le recalcule. | `{machinesChecked, sessionsFailed}` |
@@ -1025,6 +1145,28 @@ Les deux sont idempotentes : une seconde exécution renvoie zéro. Pourquoi la
 première compte : une séance d'enregistrement restée `pending` refuse tout
 lancement auto sur sa machine (« A session is already waiting for this
 machine ») et empêche de supprimer cette machine.
+
+**Les compteurs à vérifier**, sur chaque déploiement, en gardant la sortie des
+quatre exécutions :
+
+| Compteur | Ce qu'il doit valoir |
+|---|---|
+| `machinesChecked`, dans les deux résultats | le nombre de documents de la table `machines` du déploiement visé, machines supprimées comprises : la migration a lu toutes ses machines. Le compter à part, avec la commande donnée sous ce tableau. |
+| `sessionsFailed`, première exécution | le nombre de séances de l'ancien mode restées `pending` ou `active`. À noter : rien ne permet de le retrouver ensuite. |
+| `machinesCleared`, première exécution | le nombre de machines qui portaient `config`. En production, où le schéma en service (branche `main`) exige ce champ sur chaque machine, il doit être égal à `machinesChecked`. |
+| `sessionsFailed` et `machinesCleared`, **seconde exécution** | `0`. Relancer chaque mutation une fois : ce zéro est la preuve que la première a tout traité. |
+
+Pour compter les machines d'un déploiement, précéder la commande de la même
+variable `CONVEX_DEPLOY_KEY` qu'à l'étape 2 pour la production :
+
+```bash
+npx convex data machines --format jsonLines --limit 10000 | wc -l
+```
+
+`npx convex data machines` seul n'affiche que les 100 documents les plus
+récents : il ne compte pas au-delà. Avec `--format jsonLines` chaque document
+tient sur une ligne, et `--limit` repousse la borne. Si le nombre obtenu est
+égal à la limite donnée, la relever et recommencer.
 
 Le champ `machines.config` reste déclaré, facultatif, dans le schéma : le
 retirer tant que des documents le portent ferait échouer `convex deploy`. Une

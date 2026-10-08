@@ -2196,6 +2196,17 @@ export const MATRIX: Entry[] = [
         throw new Error("Release not recorded");
       if (row.recordedBy !== w.admin)
         throw new Error("Release not attributed to the admin");
+      // ANH-195: the level it was recorded with is the first of its history.
+      const decisions = await w.t.run((ctx) =>
+        ctx.db.query("software_release_levels").collect(),
+      );
+      if (
+        decisions.length !== 1 ||
+        decisions[0].releaseId !== row._id ||
+        decisions[0].validationLevel !== "bench" ||
+        decisions[0].decidedBy !== w.admin
+      )
+        throw new Error("Level decision not recorded for the admin");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
@@ -2224,11 +2235,16 @@ export const MATRIX: Entry[] = [
       return {};
     },
     onSuccess: (res) => {
-      const versions = asArray(res).map(
-        (row) => (row as { version: string }).version,
-      );
-      if (versions.join() !== "pi-0.1.0")
+      const rows = asArray(res) as Array<{
+        version: string;
+        levelHistory: Array<{ validationLevel: string }>;
+      }>;
+      if (rows.map((row) => row.version).join() !== "pi-0.1.0")
         throw new Error("Expected the recorded version");
+      // ANH-195: the levels the version has held are read with it.
+      const held = rows[0].levelHistory.map((entry) => entry.validationLevel);
+      if (held.join() !== "bench")
+        throw new Error("Expected the level history of the version");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
