@@ -1172,8 +1172,9 @@ cas, à confirmer sur la première PR de chaque sorte fusionnée après celle-ci
 Une PR qui touche le Pi ou la simulation attend `pi-gate` et
 `simulation-gate`.
 
-Depuis ANH-183, les tests de `pi-gate` sont répartis sur deux jobs. Les durées
-mesurées avant sont dans
+Depuis ANH-183, les tests de `pi-gate` sont répartis sur deux jobs : sur un
+runner lent, le verdict tombe en 14 min 23 s au lieu de 25 min 31 s. Les
+durées avant et après, par job, sont dans
 [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183).
 
 Les actions de checkout, d'installation de Node, de publication et de
@@ -1252,6 +1253,9 @@ Chaque processus collecte toute la suite, comme en série, puis ne garde que
 les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
 avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 67 cas lourds, qui
 se suivent, sont ainsi distribués à tour de rôle entre tous les processus.
+Depuis ANH-183, les tests d'au moins dix secondes font exception : ils sont
+distribués selon leur durée mesurée (voir « La règle de partage du Pi », dans
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)).
 Chaque processus mesure sa propre couverture.
 
 La gate ne passe que si ces trois vérifications réussissent :
@@ -1319,8 +1323,11 @@ démarre, et peut en changer le comportement. La première version exportait
 `print("OPEN", flush=True)` écrit `OPEN` puis le saut de ligne en deux appels
 système au lieu d'un : les tests de verrou du variateur (ANH-74), qui lisent
 la ligne `OPEN` de leur processus auxiliaire en une seule lecture, ont échoué
-6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis,
-le lanceur transmet ses réglages au greffon par des options de ligne de
+6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis
+ANH-183, ces tests lisent la ligne jusqu'à sa fin, en autant de lectures qu'il
+faut, et l'un d'eux fixe lui-même la variable dans un sens puis dans l'autre :
+la gate est verte avec ou sans elle (run 37711318184, avec). Depuis ce premier
+échec, le lanceur transmet ses réglages au greffon par des options de ligne de
 commande (`--pi-gate-share`, `--pi-gate-evidence`). Il ne peut pas démarrer
 pytest sans deux variables : `PYTHONPATH`, pour que le greffon soit trouvé, et
 `COVERAGE_FILE`, lu une fois par pytest-cov au démarrage de la mesure. Le
@@ -1406,8 +1413,9 @@ cumulés.
 
 Les tests sont maintenant coupés en huit parts, exécutées par deux jobs. Le
 mécanisme est celui de la gate de simulation (section suivante) : le même
-lanceur, le même greffon, la même preuve. La règle de partage reste celle du
-Pi : le rang du test dans l'ordre de collecte, modulo le nombre de parts.
+lanceur, le même greffon, la même preuve. La règle de partage est celle du
+Pi, décrite plus bas : par durée mesurée pour les tests lents, par rang dans
+l'ordre de collecte pour tous les autres.
 
 | Job | Parts | Ce qu'il exécute |
 |---|---|---|
@@ -1455,9 +1463,10 @@ d'environnement choisissent l'étape, comme pour la simulation :
   [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)).
 * Le seuil est le même et s'applique au même total : 100 % des branches des
   fichiers de la liste `include` de `raspberry-pi/pyproject.toml`, une fois, sur
-  les mesures réunies des huit parts. Sur un seul job, le run 37696963792
-  jugeait 13 069 lignes et 2 934 branches, pour 4258 tests ; la même base de
-  code répartie en deux jobs donne les mêmes totaux.
+  les mesures réunies des huit parts. Sur un seul job, le run 37710526918
+  jugeait 13 184 lignes et 2 934 branches ; le même code réparti en deux jobs
+  donne les mêmes totaux (run 37711318184), et le journal de `pi-gate` les
+  affiche à chaque exécution.
 * Les contrôles statiques sont ceux d'avant, lancés par chacun des deux jobs
   de tests ; le rapport de qualité les compte une fois.
 
@@ -1474,6 +1483,78 @@ d'environnement choisissent l'étape, comme pour la simulation :
   après l'expiration des artefacts (14 jours) échoue : il faut alors tout
   relancer.
 
+**La règle de partage du Pi** (`pi_owners`, dans `pi_gate_shard.py`) ne sert
+qu'à gagner du temps : la preuve de partition ne la connaît pas et vaut quelle
+que soit la règle.
+
+* les deux tests de `SAME_PROCESS` vont à la part 0 ;
+* les tests d'au moins dix secondes sont nommés dans `PI_SLOW_SECONDS`, avec
+  leur durée mesurée en CI : 52 lignes, qui désignent 119 des 4267 tests et
+  les deux tiers de leur temps. Ils sont distribués du plus lent au moins
+  lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
+  paramètre vaut pour chaque cas du test : les 67 cas de
+  `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
+  secondes chacun. Une ligne avec paramètre ne désigne que ce cas, pour les
+  tests dont les cas diffèrent : un programme interrompu dans sa dernière
+  phase tourne six fois plus longtemps qu'interrompu dans la première ;
+* tous les autres tests sont distribués par leur rang dans l'ordre de
+  collecte, à tour de rôle, comme tous l'étaient avant.
+
+Sans cette table, la première exécution en deux jobs (run 37706142121) n'avait
+rien fait gagner : 6 min 18 s pour `pi (tests 1)` et 16 min 33 s pour
+`pi (tests 2)`, soit 1262 s et 3424 s de pytest cumulés. Deux causes. Le
+runner du second job était 2,07 fois plus lent (mesuré sur les 67 cas de la
+famille ci-dessus, que les deux jobs se partageaient). Et, ramenées au même
+runner, ses quatre parts portaient encore un tiers de travail de plus (1568 s
+contre 1166 s) : distribués par leur seul rang, les cas longs de plusieurs
+tests paramétrés (phases `hold`, `cooldown`, `recovery`) tombaient dans les
+mêmes parts. Rejouée sur les durées de ce run, la règle donne 1384 s et 1349 s
+aux deux jobs, et la part la plus lourde passe de 433 s à 359 s, pour 342 s en
+moyenne.
+
+**Durées mesurées avec cette règle** (run 37711318184 du 8 octobre 2026, lancé
+à la main sur une branche jetable qui portait ce code ; toutes les gates y ont
+tourné et réussi) :
+
+| Job | Durée | Processeur du runner | pytest cumulé de ses quatre parts |
+|---|---|---|---|
+| `pi (tests 1)` | 12 min 51 s | AMD EPYC 7763 | 2849 s (706 à 718 s par part) |
+| `pi (tests 2)` | 7 min 11 s | AMD EPYC 9V45 | 1518 s (370 à 393 s par part) |
+| `pi-gate` (le verdict seul) | 1 min 29 s | non affiché par ce job | sans objet |
+| du début du premier job de tests au verdict | 14 min 23 s | | |
+
+Les deux jobs portent maintenant le même travail. Dans chacun, les quatre
+parts finissent à moins de 25 s les unes des autres, et le rapport des deux
+cumuls (1,88) est celui des deux processeurs : la même famille de tests y
+prend 17,9 s par cas sur l'un et 9,9 s sur l'autre (1,80). L'écart qui reste
+entre les deux jobs est donc celui des runners, pas celui de la règle.
+
+À comparer, sur le même modèle de processeur lent (EPYC 7763) et le même
+jour : en un seul job, `pi-gate` a pris 25 min 31 s sur `develop` (run
+37710526918 : 4294 tests, 13 184 lignes et 2 934 branches jugées). Réparti,
+le verdict tombe 14 min 23 s après le début des tests, pour 4304 tests (les
+dix qu'ANH-183 ajoute), chacun exécuté une fois et une seule, et les mêmes
+13 184 lignes et 2 934 branches. Quand les deux runners sont rapides, l'ordre
+de grandeur est celui du job le plus court de ce run : 7 min 11 s, plus le
+verdict.
+
+Ce run exportait aussi `PYTHONUNBUFFERED=1` dans les trois jobs du Pi : la gate
+y est verte avec la variable, comme elle l'est sans (voir « Le lanceur ne
+laisse rien dans l'environnement des tests », plus haut).
+
+Limites, les mêmes que pour la table de la simulation :
+
+* `PI_SLOW_SECONDS` ne sert qu'à équilibrer. Un nom qui n'est plus collecté
+  est ignoré ; un nouveau test lent qui n'y figure pas est distribué par son
+  rang. Dans les deux cas la gate reste juste et devient moins équilibrée. Le
+  signe se lit dans le journal de chaque job : chaque processus affiche sa
+  durée et ses 25 tests les plus lents (`--durations=25`). Pour rafraîchir la
+  table, lire les durées de chaque test dans les fichiers
+  `quality-<parts>/junit-<part>.xml` des artefacts `pi-evidence-*` d'un run ;
+* la règle ne peut rien au processeur attribué à chaque runner, qui change
+  d'un job à l'autre : un job tombé sur un runner deux fois plus lent prend
+  deux fois plus de temps, et c'est lui que `pi-gate` attend.
+
 Pour reproduire la CI sur une seule machine, avec le même découpage :
 
 ```sh
@@ -1488,7 +1569,10 @@ chaque part nommée une fois et une seule, la condition et la première étape d
 `pi-gate`, ce que les jobs de tests publient et ce que `pi-gate` récupère, le
 refus par `check.sh` de deux modes à la fois. Les tests du lanceur
 (`scripts/ci/test_pi_gate_parallel.py`) couvrent les parts exécutées par des
-appels séparés (voir la section suivante).
+appels séparés (voir la section suivante) et la règle de partage du Pi : un
+test lent reconnu par son nom ou par un de ses cas, les tests lents distribués
+selon leur durée et tous les autres par leur rang, chaque test choisi par une
+part et une seule.
 
 ### Gate de simulation répartie (ANH-184)
 
