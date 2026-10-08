@@ -833,9 +833,10 @@ verdict d'arrêt), parce que toute fin de séance rouvre une récupération comp
 dépassait alors l'échéance, bras déjà arrêté (section 5) ; et une séance manuelle qui
 atteignait ses 3600 s à grande vitesse et descendait encore 30 s plus tard. La règle
 juge maintenant une fin de séance déjà ouverte sur sa propre échéance : l'instant où
-elle a été ouverte, plus le temps laissé à la descente (240 s avec le profil
-standard ; en séance manuelle, la descente depuis le plafond de la séance et 4 s de
-rampe du variateur, soit 108 s depuis 1344 tr/min moteur), plus la récupération une
+elle a été ouverte, plus la descente attendue depuis la vitesse commandée à cet
+instant (4 s bras à l'arrêt ; 30 s depuis 193 tr/min moteur dans un programme ; en
+séance manuelle la descente aux limites de mouvement et 4 s de rampe du variateur,
+soit 24 s depuis 300 tr/min moteur et 108 s depuis 1344), plus la récupération une
 fois la consigne à 0 (300 s avec le profil standard ; 60 s en séance manuelle avec
 une personne à bord, aucune capsule vide), plus 30 s. Jamais plus tôt que l'échéance
 du programme. Ces fins de séance se terminent donc sans `session_overrun` : après un
@@ -843,11 +844,15 @@ STOP il n'y a rien à acquitter, et après un E-STOP ou un verdict d'arrêt il r
 celui-là seul.
 
 Le verdict apparaît encore quand une fin de séance ne se déroule pas comme prévu :
-une descente qui n'a pas ramené la consigne à 0 dans le temps qui lui est laissé, ou
-une récupération qui ne finit pas. Le détail nomme alors la fin de séance :
-`the session has run 1870 s against an ending opened at 1600 s with 240 s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track`
-(ou `… with 540 s to finish its descent and its monitored recovery plus 30 s of grace …`
-pour une récupération). Un `freeze` verrouillé que personne n'acquitte n'est pas un de
+une descente qui n'a pas ramené la consigne à 0 dans le temps qu'une descente prend
+depuis cette vitesse, ou une récupération qui ne finit pas. Le détail nomme alors la
+fin de séance :
+`the session has run 1859 s against an ending opened at 1799 s with 30 s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track`
+(ou `… with 304 s to finish its descent and its monitored recovery plus 30 s of grace …`
+pour une récupération). Demander STOP sur un bras qui ne descend pas ne retarde ce
+verdict que du temps de cette descente : mesuré sur le banc d'essai logiciel, bras
+tenu à 193 tr/min moteur, STOP à 1799 s, verdict à 1859 s au lieu de 1830 s sans
+STOP. Un `freeze` verrouillé que personne n'acquitte n'est pas un de
 ces cas : il ne tient plus le bras en vitesse au-delà de la fin du programme (alinéa
 suivant). Quand le verdict apparaît : attendre que **Mode** affiche `REPOS`,
 acquitter par son nom, puis demander un nouveau départ. L'acquittement tient alors.

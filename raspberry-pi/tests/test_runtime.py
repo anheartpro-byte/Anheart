@@ -952,6 +952,7 @@ def _assign(target: object, name: str, value: object) -> None:
                 action=SafetyAction.NONE,
                 detail="",
                 at=Monotonic(0.0),
+                setpoint=MotorRpm(0),
             ),
         ),
     ],

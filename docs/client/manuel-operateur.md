@@ -862,10 +862,15 @@ manuelle), elle verrouille l'alerte « session_overrun » : **Securite** affiche
 « ramp_down ». Une fois la séance finie, la console ne déclenche plus cette
 alerte, quel que soit le temps passé à « REPOS ».
 
-Une fin de séance déjà enregistrée n'est pas jugée sur la durée prévue. La
-console lui laisse le temps de ramener la vitesse commandée à zéro, puis celui
-de sa phase « recovery », et 30 secondes de plus. Les deux situations
-suivantes ne déclenchent donc pas cette alerte :
+Pour une fin de séance déjà enregistrée, la console retient la plus tardive
+de deux échéances. La première est celle de toute séance : la durée prévue
+plus 30 secondes. La seconde est le temps que cette fin de séance met
+normalement à se terminer, compté depuis l'arrêt : le temps de ramener à zéro
+la vitesse commandée à ce moment-là, puis celui de sa phase « recovery », et
+30 secondes de plus. Le temps de la phase « recovery » n'est compté qu'une
+fois la vitesse commandée revenue à zéro : tant qu'elle ne l'est pas, la
+seconde échéance s'arrête au temps de la descente et aux 30 secondes. Les
+deux situations suivantes ne déclenchent donc pas cette alerte :
 
 - un arrêt enregistré tard dans une séance programmée : un **STOP**, à la
   console ou demandé depuis le site, un **E-STOP**, ou un arrêt décidé par la
@@ -884,9 +889,9 @@ par la console. Un seul acquittement à « REPOS » suffit.
 
 Si l'alerte « session_overrun » s'affiche, la séance ou sa fin ne s'est pas
 déroulée comme prévu : par exemple, la vitesse commandée n'est pas revenue à
-zéro dans le temps laissé. La console ramène alors elle-même la vitesse
-commandée à zéro. Cette alerte se lève comme les autres, une fois la séance
-finie : attendez **Mode** « REPOS », puis acquittez
+zéro dans le temps qu'il faut pour cela. La console ramène alors elle-même la
+vitesse commandée à zéro. Cette alerte se lève comme les autres, une fois la
+séance finie : attendez **Mode** « REPOS », puis acquittez
 ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Un acquittement
 donné plus tôt ne tient pas : l'alerte est de nouveau là aussitôt. Notez
 l'heure et la ligne « detail », et appelez le support.

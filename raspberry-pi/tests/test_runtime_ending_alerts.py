@@ -17,34 +17,35 @@ latches that matter get ignored.
   in a session, up to a latched ``hr_stale`` once the electrodes were off.
 
 What changed. The runtime states the ending it has opened and the rule gives
-it its own descent and recovery before judging (the first two); and no ending
-is opened over a session that is over (the third).
+it the descent expected from the speed it opened at, and its recovery, before
+judging (the first two); and no ending is opened over a session that is over
+(the third).
 ``tests/test_safety_ending_overrun.py`` proves what the rule does with the
 statement, instant by instant. This file proves what happens on the real tick:
 
 * **the three sequences**: these fail on ``develop`` and pass here;
 * **what the runtime states**, and that it cannot move once stated;
 * **the rule stays armed**: a descent that does not finish is still brought to
-  zero by it. The runtime follows a stop under a FREEZE (ANH-175, ANH-189), so
-  nothing holds a descent any more; as in
+  zero by it, and an ending buys an arm that is not coming down the time of
+  its own descent and no more. The runtime follows a stop under a FREEZE
+  (ANH-175, ANH-189), so nothing holds a descent any more; as in
   ``tests/test_runtime_session_overrun.py`` that guard is forced off to show
   that the rule behind it still works;
+* **every descent fits the time it is given**, on the shipped settings and
+  with a slew slower than the motion limits;
 * **what stays latched**: an emergency stop and a drive fault at rest are
   still latched, shown, refused against and acknowledged by name.
 
 The fake drive and the manual clock of ``tests/test_runtime.py``.
 
 **What these cost, and why they are built the way they are.** Under coverage
-one run of the shipped 30-minute programme costs about half a minute of CI,
-and an hour of manual session as much. So the shipped programme is run ONCE,
-to 1600 s, and the three endings of the acceptance criterion each start from
-a copy of that same instant; the manual sessions reach a shortened limit (the
-limit is one constant, read alike by the phase machine and by what the rule
-is measured against); and everything else runs the rig's 130 s programme,
-which has the same phases and the same late endings. The instants of the
-shipped numbers that are not run here (a STOP at 1531 s or at 1799 s, the
-hour of a manual session) are judged at the rule, in
-``tests/test_safety_ending_overrun.py``.
+one run of the shipped 30-minute programme costs about half a minute of CI.
+So the shipped programme is run ONCE for the acceptance criterion, and each
+of its late endings starts from a copy of the instant it is opened at; the
+manual session with a person on board reaches a shortened limit (the limit is
+one constant, read alike by the phase machine and by what the rule is
+measured against); and everything else runs the rig's 130 s programme, which
+has the same phases and the same late endings.
 """
 
 from __future__ import annotations
@@ -59,12 +60,15 @@ from src.local_panel import RUNTIME_LIMITS
 from src.motor.drive import DriveFault
 from src.result import Err, Ok, is_ok
 from src.training import runtime as runtime_module
-from src.training.motion import DEFAULT_MOTION_LIMITS
-from src.training.plan import COMMISSIONED_DECEL_S, MIN_RECOVERY_S
+from src.training.hr_control import Gains
+from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, ramp_duration
+from src.training.plan import COMMISSIONED_DECEL_S, MIN_RECOVERY_S, TrainingProfile
 from src.training.runtime import (
     BENCH_RECOVERY,
+    MANUAL_SESSION_LIMIT,
     EndReason,
     ResetWhileCommanded,
+    RuntimeLimits,
     RuntimeState,
     SafetyStanding,
     TrainingRuntime,
@@ -79,14 +83,18 @@ from src.training.safety import (
     GoSilentIsTerminal,
 )
 from src.training.types import Occupancy, Phase, RunMode, SafetyAction
-from src.units import MotorRpm, Seconds
+from src.units import Bpm, MotorRpm, RpmPerSecond, Seconds
 from tests.test_runtime import (
+    GEOMETRY,
+    LIMITS,
     OPERATOR,
     REAL_PROFILE,
+    RIG_MOTION,
     TICK,
     Occupant,
     Rig,
-    _rig,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _profile,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _rig,  # pyright: ignore[reportPrivateUsage]
 )
 from tests.test_runtime_manual import (
     _manual as _manual_session,  # pyright: ignore[reportPrivateUsage]
@@ -126,14 +134,33 @@ COOLDOWN: Final[float] = 10.0
 RECOVERY: Final[float] = 60.0
 """The rig programme's monitored recovery, in seconds."""
 
-LATE: Final[float] = 1600.0
-"""The instant of the acceptance criterion: 200 s before the shipped programme ends."""
-
 SHORT_LIMIT: Final[Seconds] = Seconds(180.0)
-"""The manual session limit these tests run under (3600 s on the machine).
+"""A shortened manual session limit (3600 s on the machine), where the hour proves nothing."""
 
-Long enough to be at the nameplate speed when it comes: the climb takes 107 s.
+MIN_RUN: Final[int] = 55
+"""The slowest running speed of every profile here, motor rpm: the last step of a stop."""
+
+SLOW_SLEW: Final[RuntimeLimits] = RuntimeLimits(
+    slew=RpmPerSecond(7.0),
+    start_hysteresis_rpm=MotorRpm(10),
+    gains=Gains(period=Seconds(10.0), step_cap=Seconds(20.0)),
+)
+"""A control law slower than the shipped motion limits (12.4 motor rpm/s): not a shipped setting.
+
+Seven rpm/s in whole rpm per 0.2 s tick is one rpm a tick, five rpm/s: the
+descent the control law paces is then two and a half times longer than the
+motion-limited walk.
 """
+
+SLOW_PROFILE: Final[TrainingProfile] = _profile(
+    total_duration_s=Seconds(600.0),
+    baseline_s=Seconds(10.0),
+    warmup_max_s=Seconds(200.0),
+    hold_min_s=Seconds(60.0),
+    cooldown_s=Seconds(60.0),
+    recovery_s=Seconds(60.0),
+)
+"""Long enough for that slow law to reach the profile's ceiling: 276 motor rpm by 300 s."""
 
 
 def _applied(rig: Rig) -> MotorRpm:
@@ -145,9 +172,26 @@ def _floor_rule(rig: Rig) -> str | None:
     return None if floor is None else floor.rule
 
 
-def _believe(runtime: TrainingRuntime, name: str, value: object) -> None:
-    """Write one field of the runtime through a parameter: a state no path of it produces."""
-    setattr(runtime, name, value)
+def _believe(target: object, name: str, value: object) -> None:
+    """Write one field through a parameter: a state the test sets by hand."""
+    setattr(target, name, value)
+
+
+def _expected(speed: int, motion: MotionLimits, slew: float | None) -> float:
+    """The descent an ending is expected to make from ``speed``, worked out apart from the runtime.
+
+    The specification its own figure is checked against. The motion-limited
+    walk to zero; in a programme (``slew`` given, the arm turning) the longer
+    of that walk with the wait before its last step, and of twice the setpoint
+    over the slew, which bounds the control law's whole-rpm ramp; and the
+    drive's 4 s ramp in every case.
+    """
+    walk = ramp_duration(MotorRpm(speed), MotorRpm(0), motion, GEOMETRY)
+    assert walk is not None
+    drive = float(COMMISSIONED_DECEL_S)
+    if slew is None or speed == 0:
+        return float(walk) + drive
+    return max(float(walk) + MIN_RUN / slew, 2.0 * speed / slew) + drive
 
 
 async def _shipped() -> Rig:
@@ -176,7 +220,10 @@ async def _a_new_programme_starts(rig: Rig) -> None:
 
 @dataclass(frozen=True, slots=True)
 class _Late:
-    """One ending opened 200 s before the end of the shipped programme."""
+    """One ending opened in the last minutes of the shipped programme."""
+
+    at: float
+    """Seconds after the start at which it happens."""
 
     what: str
 
@@ -188,10 +235,13 @@ class _Late:
 
 
 _LATE: Final[tuple[_Late, ...]] = (
-    _Late("a STOP", None, 1901.0),
-    _Late("an e-stop", RULE_OPERATOR_ESTOP, 1901.0),
-    _Late("the electrodes taken off", RULE_HR_STALE, 1961.0),
+    _Late(1531.0, "a STOP", None, 1832.0),
+    _Late(1600.0, "a STOP", None, 1901.0),
+    _Late(1600.0, "an e-stop", RULE_OPERATOR_ESTOP, 1901.0),
+    _Late(1600.0, "the electrodes taken off", RULE_HR_STALE, 1961.0),
+    _Late(1799.0, "a STOP", None, 2100.0),
 )
+"""In the order of the clock: one programme is run through all of them."""
 
 
 def _fork(rig: Rig) -> Rig:
@@ -208,25 +258,27 @@ def _fork(rig: Rig) -> Rig:
 async def test_an_ending_opened_late_in_the_shipped_programme_latches_no_overrun() -> None:
     """The first measured case, and the acceptance criterion. On ``develop``: 1830.2 s.
 
-    The shipped programme, 1600 s in: it is in its own recovery, the arm at
-    rest. From that same instant, three endings: a STOP is typed; the
-    emergency stop is pressed; the electrodes come off and ``hr_stale`` ends
-    the session 60 s later. Each opens a whole 300 s recovery, which ends
+    The shipped programme is in its own recovery, the arm at rest. At 1531 s,
+    the first second at which ``develop`` latched, a STOP is typed. At 1600 s,
+    from that same instant: a STOP; the emergency stop; the electrodes come
+    off and ``hr_stale`` ends the session 60 s later. At 1799 s, one second
+    before the end, a STOP. Each opens a whole 300 s recovery, which ends
     after 1830 s. On every tick until the console is back at REPOS the rule
     does not fire and is not on the latched floor; what stands at the end is
     only what ended the session; one named acknowledgement clears it, and the
     next start is taken.
     """
     programme = await _shipped()
-    await programme.run(LATE)
-    assert _applied(programme) == 0, "the programme is not in its own recovery: not this case"
-    assert programme.state() is RuntimeState.RUNNING
+    await programme.run(_LATE[0].at)
     first, second = _fork(programme), _fork(programme)
     assert first.runtime is not second.runtime
     one, other = await first.step(), await second.step()
     assert one == other, "two copies of one rig did not answer the same tick alike"
 
     for late in _LATE:
+        await programme.run(late.at - _since_start(programme))
+        assert _applied(programme) == 0, "the programme is not in its own recovery: not this case"
+        assert programme.state() is RuntimeState.RUNNING
         rig = _fork(programme)
         feed = late.what != "the electrodes taken off"
         if late.what == "a STOP":
@@ -236,7 +288,7 @@ async def test_an_ending_opened_late_in_the_shipped_programme_latches_no_overrun
 
         while rig.state() is not RuntimeState.FINISHED:
             await rig.step(feed=feed)
-            at = f"{late.what}, {_since_start(rig):.1f} s"
+            at = f"{late.what} at {late.at:.0f} s, {_since_start(rig):.1f} s"
             assert _overrun(rig) is None, f"session_overrun fired over a normal ending: {at}"
             assert _floor_rule(rig) != RULE_SESSION_OVERRUN, at
             assert _since_start(rig) < late.over_by, f"the ending did not finish: {at}"
@@ -268,13 +320,22 @@ class _AtTheLimit:
     speed: int
     """The ceiling and the target, motor rpm."""
 
+    limit: Seconds
+    """The limit it runs to: the machine's hour, or a shortened one."""
+
     descent: tuple[float, float]
     """The walk to zero from that speed takes between these many seconds."""
 
 
 _AT_THE_LIMIT: Final[tuple[_AtTheLimit, ...]] = (
-    _AtTheLimit("the capsule empty, the nameplate speed", Occupancy.BENCH, 1380, (106.0, 108.0)),
-    _AtTheLimit("a person on board", Occupancy.OCCUPIED, 200, (11.0, 13.0)),
+    _AtTheLimit(
+        "the capsule empty, the nameplate speed, the real hour",
+        Occupancy.BENCH,
+        1380,
+        MANUAL_SESSION_LIMIT,
+        (106.0, 108.0),
+    ),
+    _AtTheLimit("a person on board", Occupancy.OCCUPIED, 200, SHORT_LIMIT, (11.0, 13.0)),
 )
 
 
@@ -284,17 +345,18 @@ async def test_a_manual_session_that_reaches_its_limit_at_speed_latches_no_overr
 ) -> None:
     """The second measured case, and the acceptance criterion. On ``develop``: 30.2 s past it.
 
-    A shortened limit, an hour on the machine. The console brings the arm down
-    at the motion limits: 107 s from the 1380 rpm nameplate, the highest
-    ceiling a console can be given (104 s from the 1344 motor rpm of the
-    measured case, which is the same walk started three seconds lower). With a
+    The console brings the arm down at the motion limits: 107 s from the
+    1380 rpm nameplate, the highest ceiling a console can be given (104 s from
+    the 1344 motor rpm of the measured case, which is the same walk started
+    three seconds lower), at the machine's real limit of an hour. With a
     person on board a 60 s recovery follows, so that session latched on
-    ``develop`` whatever its speed. Nothing fires and nothing stands, from the
-    limit to REPOS; the session ends as a completed one, and a new manual start
-    is taken.
+    ``develop`` whatever its speed; its limit is shortened here, where the
+    hour proves nothing. Nothing fires and nothing stands, from the limit to
+    REPOS; the session ends as a completed one, and a new manual start is
+    taken.
     """
-    monkeypatch.setattr(runtime_module, "MANUAL_SESSION_LIMIT", SHORT_LIMIT)
-    limit = float(SHORT_LIMIT)
+    monkeypatch.setattr(runtime_module, "MANUAL_SESSION_LIMIT", case.limit)
+    limit = float(case.limit)
     if case.occupancy is Occupancy.OCCUPIED:
         rig = await _occupied_manual(case.speed)
     else:
@@ -475,6 +537,59 @@ async def test_a_session_ended_by_a_stop_still_opens_nothing_for_a_verdict_at_re
     assert _standing_rule(rig) == RULE_OPERATOR_ESTOP
 
 
+@pytest.mark.parametrize("arrives", ["an e-stop", "a drive fault"])
+async def test_a_verdict_over_a_setpoint_of_zero_and_a_shaft_still_turning_opens_no_ending(
+    arrives: str,
+) -> None:
+    """A session is over by its setpoint, not by its shaft: what happens when the two disagree.
+
+    The programme has run to its end: the setpoint is zero and the output
+    stage is off. The shaft is then set turning by hand at 120 motor rpm, as
+    an arm that somebody pushes, or that coasts. The verdict arrives over it.
+
+    No ending is opened: there is no setpoint to bring down, and no torque to
+    remove. The verdict is latched and is the only thing standing, every start
+    is refused in its name, the reference stays at zero and the output stage
+    stays off. The console shows REPOS, which says that nothing is commanded,
+    and the measured speed goes on saying that the arm turns: it is the
+    measured speed, never the mode, that says whether an arm is stopped.
+    """
+    rig = await _programme()
+    await _run_to_its_end(rig)
+    _believe(rig.drive, "_rpm", 120.0)
+    still = await rig.step()
+    assert still.measured.motor_rpm > 100, "the shaft is not turning: not this case"
+    assert still.setpoint.motor_rpm == 0
+    assert rig.state() is RuntimeState.FINISHED
+    frames = len(rig.drive.writes)
+
+    if arrives == "an e-stop":
+        rig.runtime.request_estop("console web: e-stop")
+        expected = RULE_OPERATOR_ESTOP
+    else:
+        rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
+        expected = RULE_DRIVE_FAULT
+    first = await rig.step()
+    assert first.measured.motor_rpm > 0, "the screen no longer shows the shaft turning"
+    for snapshot in [first, *await rig.run(30.0)]:
+        at = f"{_since_start(rig):.1f} s after the start"
+        assert snapshot.mode is RunMode.REPOS, f"the console left REPOS, {at}"
+        assert snapshot.phase is Phase.DONE
+        assert snapshot.setpoint.motor_rpm == 0
+        assert snapshot.safety is not None
+        assert snapshot.safety.rule == expected, f"{snapshot.safety.rule} stands, {at}"
+    assert rig.runtime.ending is None, "an ending was opened with nothing to bring down"
+    assert rig.runtime.end_reason is EndReason.PROGRAMME_COMPLETE
+    assert _live_rules(rig) <= {expected}
+    assert set(rig.drive.writes[frames:]) <= {MotorRpm(0)}
+    assert not rig.drive.is_enabled()
+
+    refused = await rig.start()
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, SafetyStanding)
+    assert refused.error.verdict.rule == expected
+
+
 # =========================================================================
 # WHAT THE RUNTIME STATES
 # =========================================================================
@@ -484,24 +599,33 @@ async def test_the_runtime_states_its_ending_from_the_tick_it_opens_until_the_ne
     """What reaches the rule, asserted on the recorded observations.
 
     None while the session runs. From the tick the STOP is honoured: when the
-    ending opened, counted from the start, and the programme's own cooldown
-    and recovery. The same three numbers on every tick from there, through the
-    descent, the recovery and the rest that follows, whatever arrives
-    meanwhile (an emergency stop here): an ending cannot move its own
-    deadline. None again from the first tick of the next session.
+    ending opened, counted from the start; the descent expected from the
+    setpoint that was in force at that instant; and the programme's recovery.
+    The same three numbers on every tick from there, through the descent, the
+    recovery and the rest that follows, whatever arrives meanwhile (an
+    emergency stop here): an ending cannot move its own deadline. None again
+    from the first tick of the next session.
     """
     rig = await _programme()
     with _observations() as seen:
         await rig.run(40.0)
         assert all(o.ending is None for o in seen), "an ending was stated before any opened"
 
+        speed = int(_applied(rig))
+        assert speed > 0, "the arm is not turning: not this case"
         rig.runtime.request_stop("operator pressed STOP")
         await rig.step()
         opened = _since_start(rig)
         stated = seen[-1].ending
-        assert stated == EndingInProgress(
-            opened=Seconds(opened), descent=Seconds(COOLDOWN), recovery=Seconds(RECOVERY)
+        assert stated is not None
+        assert stated.opened == Seconds(opened)
+        assert float(stated.descent) == pytest.approx(
+            _expected(speed, RIG_MOTION, float(LIMITS.slew))
         )
+        assert stated.recovery == Seconds(RECOVERY)
+        ending = rig.runtime.ending
+        assert ending is not None
+        assert ending.setpoint == speed
 
         await rig.run(5.0)
         rig.runtime.request_estop("console web: e-stop")
@@ -518,19 +642,45 @@ async def test_the_runtime_states_its_ending_from_the_tick_it_opens_until_the_ne
         assert len(seen) > again
         assert all(o.ending is None for o in seen[again:]), "the new session began as ending"
 
+        rig.runtime.request_stop("operator pressed STOP")
+        await rig.step()
+        second = seen[-1].ending
+        assert second is not None
+        assert second.descent == COMMISSIONED_DECEL_S, "the descent of the first session was kept"
+
+
+async def test_an_ending_opened_at_rest_is_given_the_drive_ramp_and_nothing_else() -> None:
+    """The late endings of the ticket: nothing to bring down, so nothing to wait for.
+
+    A STOP in a programme's BASELINE, the setpoint at zero. The ending states
+    a descent of 4 s, the drive's own ramp, whatever the profile's cooldown
+    and whatever speed the session could have reached.
+    """
+    rig = await _programme()
+    await rig.run(5.0)
+    assert rig.phase() is Phase.BASELINE
+    with _observations() as seen:
+        rig.runtime.request_stop("operator pressed STOP")
+        await rig.step()
+    stated = seen[-1].ending
+    assert stated is not None
+    assert stated.descent == COMMISSIONED_DECEL_S
+    assert stated.recovery == Seconds(RECOVERY)
+
 
 @pytest.mark.parametrize(
     ("occupancy", "recovery"),
     [(Occupancy.BENCH, BENCH_RECOVERY), (Occupancy.OCCUPIED, MIN_RECOVERY_S)],
 )
-async def test_a_manual_ending_is_stated_with_the_descent_from_its_ceiling(
+async def test_a_manual_ending_is_stated_with_the_descent_from_the_speed_it_opened_at(
     occupancy: Occupancy, recovery: Seconds
 ) -> None:
-    """The budget a manual ending is given: the walk from the ceiling, plus the drive's ramp.
+    """What a manual ending is given: the walk from its speed, plus the drive's ramp.
 
-    From a ceiling of 300 motor rpm the motion-limited walk to zero takes
-    20 s, and the drive's commissioned ramp 4 s. No recovery with the capsule
-    empty, the shortest a profile may declare with a person on board.
+    At 200 motor rpm under a ceiling of 300: the motion-limited walk to zero
+    takes 12 s from there, and the drive's commissioned ramp 4 s. Not the 24 s
+    of a walk from the ceiling. No recovery with the capsule empty, the
+    shortest a profile may declare with a person on board.
     """
     if occupancy is Occupancy.OCCUPIED:
         rig = await _occupied_manual(200)
@@ -544,7 +694,8 @@ async def test_a_manual_ending_is_stated_with_the_descent_from_its_ceiling(
     stated = seen[-1].ending
     assert stated is not None
     assert stated.opened == Seconds(_since_start(rig))
-    assert float(stated.descent) == pytest.approx(20.0 + float(COMMISSIONED_DECEL_S))
+    assert float(stated.descent) == pytest.approx(_expected(200, DEFAULT_MOTION_LIMITS, None))
+    assert float(stated.descent) == pytest.approx(12.0 + float(COMMISSIONED_DECEL_S))
     assert stated.recovery == recovery
 
 
@@ -579,22 +730,21 @@ async def test_a_descent_blocked_by_a_latched_freeze_is_still_stopped_by_the_rul
     The guard that follows a stop under a FREEZE is forced off, so a FREEZE
     holds the setpoint whatever was asked, as it did before ANH-175. A FREEZE
     latched at 40 s holds the arm at speed through the programme's cooldown
-    and recovery. STOP is typed at 125 s, five seconds before the end: an
-    ending opens, in time, and its descent is blocked too.
+    and recovery. STOP is typed two seconds before the end: an ending opens,
+    in time, and its descent is blocked too.
 
-    That ending had its 10 s of cooldown to bring the setpoint to zero: due at
-    135 s, judged past 165 s. Not at 160 s, the programme's own deadline,
-    which the ending has moved back by those five seconds; and not at 225 s
-    either: none of its 60 s of recovery is lent to an arm that is still
-    turning. Past 165 s the rule fires, RAMP_DOWN and latched; RAMP_DOWN
-    outranks the FREEZE, the setpoint comes down to zero and the shaft
-    follows.
+    That ending has the descent expected from the speed it found, a few
+    seconds on this rig, and the grace. Not the programme's own deadline,
+    which it has moved back by those few seconds; and none of its 60 s of
+    recovery, which is not lent to an arm that is still turning. Past it the
+    rule fires, RAMP_DOWN and latched; RAMP_DOWN outranks the FREEZE, the
+    setpoint comes down to zero and the shaft follows.
     """
     monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
     rig = await _programme()
     await rig.run(40.0)
     rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
-    await rig.run(TOTAL - 5.0 - 40.0)
+    await rig.run(TOTAL - 2.0 - 40.0)
     held = _applied(rig)
     assert held > 0, "with the guard off the FREEZE did not hold the arm"
     rig.runtime.request_stop("operator pressed STOP")
@@ -602,7 +752,8 @@ async def test_a_descent_blocked_by_a_latched_freeze_is_still_stopped_by_the_rul
     opened = _since_start(rig)
     assert rig.runtime.end_reason is EndReason.OPERATOR_STOP
 
-    due = opened + COOLDOWN + 30.0
+    expected = _expected(int(held), RIG_MOTION, float(LIMITS.slew))
+    due = opened + expected + 30.0
     assert due > DEADLINE + 1.0, "the ending's own deadline is not the later one: not this case"
     while _since_start(rig) < due - 1.0:
         await rig.step()
@@ -613,9 +764,9 @@ async def test_a_descent_blocked_by_a_latched_freeze_is_still_stopped_by_the_rul
     await rig.run(2.0)
     verdict = _overrun(rig)
     assert verdict is not None, f"nothing ended a blocked descent {_since_start(rig):.1f} s in"
-    assert _since_start(rig) < opened + COOLDOWN + RECOVERY, "the recovery was lent to the descent"
+    assert _since_start(rig) < opened + RECOVERY, "the recovery was lent to the descent"
     assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
-    assert "with 10 s to bring the setpoint back to zero plus 30 s of grace" in verdict.detail
+    assert f"with {expected:.0f} s to bring the setpoint back to zero" in verdict.detail
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN
 
     await rig.run(10.0)
@@ -623,38 +774,93 @@ async def test_a_descent_blocked_by_a_latched_freeze_is_still_stopped_by_the_rul
     assert abs(rig.drive.shaft_rpm) < 1.0
 
 
-async def test_a_manual_descent_blocked_at_the_limit_is_still_stopped_by_the_rule(
+async def test_a_stop_on_an_arm_that_is_not_coming_down_buys_its_own_descent_and_no_more(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """EX-1, at the manual limit: the same barrier behind the ending the limit opens.
+    """The shipped programme, a blocked descent, STOP at 1799 s: 1859 s, not 2069 s.
 
-    A short limit, the guard forced off, a FREEZE latched while the arm turns
-    at 200 motor rpm. At the limit the session ends itself and its descent is
-    blocked. The ending is given the walk from the ceiling plus the drive's
-    ramp, 24 s, and the grace: the rule fires 54 s after the limit and the
-    setpoint comes down at the motion limits.
+    The guard forced off, a FREEZE latched at 900 s holds the arm at its HOLD
+    speed through the cooldown and the recovery. With nobody touching
+    anything the rule ends that at 1830.2 s. STOP is typed one second before
+    the end and its descent does not happen either.
+
+    The ending is given the descent expected from the 193 motor rpm it found,
+    29.7 s, and the grace: the rule fires no later than that, at 1859 s. A
+    budget taken from the profile's 240 s cooldown gave the same arm until
+    2069.4 s, four minutes for having pressed STOP. What the ending still
+    costs against doing nothing is the time its own descent would have taken.
+    """
+    monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
+    rig = await _shipped()
+    await rig.run(900.0)
+    rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
+    await rig.run(PLANNED - 1.0 - 900.0)
+    held = int(_applied(rig))
+    assert held > MIN_RUN, "with the guard off the FREEZE did not hold the arm at speed"
+    rig.runtime.request_stop("operator pressed STOP")
+    await rig.step()
+    opened = _since_start(rig)
+
+    expected = _expected(held, DEFAULT_MOTION_LIMITS, float(RUNTIME_LIMITS.slew))
+    assert expected < 45.0, "the descent expected from a HOLD speed is not a matter of minutes"
+    latest = opened + expected + 30.0
+    while _overrun(rig) is None:
+        await rig.step()
+        assert _since_start(rig) <= latest + 2 * TICK, (
+            f"an arm held at {held} motor rpm was left turning past its expected descent"
+        )
+        assert _applied(rig) == held or _overrun(rig) is not None
+    verdict = _overrun(rig)
+    assert verdict is not None
+    assert _since_start(rig) > latest - 2 * TICK, "fired before the ending's own time had run out"
+    assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
+    assert f"an ending opened at {opened:.0f} s with {expected:.0f} s to bring" in verdict.detail
+
+    await rig.run(30.0)
+    assert _applied(rig) == 0, "RAMP_DOWN did not bring the held arm down"
+    assert abs(rig.drive.shaft_rpm) < 1.0
+
+
+async def test_a_manual_descent_blocked_below_the_ceiling_is_judged_on_the_speed_it_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EX-1, at the manual limit: the walk from the speed in force, not from the ceiling.
+
+    A short limit, the guard forced off, a ceiling of 1380 motor rpm and a
+    FREEZE latched while the arm turns at 300. At the limit the session ends
+    itself and its descent is blocked. The walk from 300 takes 20 s, the
+    drive's ramp 4 s: the rule fires 54 s after the limit and the setpoint
+    comes down at the motion limits. A budget taken from the ceiling, whose
+    walk takes 107 s, left that arm at 300 for 141 s.
     """
     limit = Seconds(100.0)
     monkeypatch.setattr(runtime_module, "MANUAL_SESSION_LIMIT", limit)
     monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
-    rig = await _manual_session()
-    _target(rig, 200)
+    rig = await _manual_session(_manual_rig(), ceiling=MotorRpm(1380))
+    _target(rig, 300)
     await rig.run(40.0)
     rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
     await rig.run(float(limit) - 40.0 + 1.0)
     assert rig.runtime.end_reason is EndReason.PROGRAMME_COMPLETE
-    assert _applied(rig) == 200, "with the guard off the FREEZE did not hold the arm"
+    assert _applied(rig) == 300, "with the guard off the FREEZE did not hold the arm"
+    manual = rig.runtime.manual
+    assert manual is not None
+    assert float(manual.cooldown) > 100.0, (
+        "the ceiling's own walk is not the long one: not this case"
+    )
 
-    budget = 20.0 + float(COMMISSIONED_DECEL_S) + 30.0
-    await rig.run(budget - 2.0)
+    expected = _expected(300, DEFAULT_MOTION_LIMITS, None)
+    assert expected == pytest.approx(24.0)
+    await rig.run(expected + 30.0 - 2.0)
     assert _overrun(rig) is None, f"fired early, {_since_start(rig):.1f} s in"
-    assert _applied(rig) == 200
+    assert _applied(rig) == 300
     await rig.run(2.0)
     verdict = _overrun(rig)
-    assert verdict is not None, "nothing ended a manual descent blocked at the limit"
+    assert verdict is not None, "an arm held below the ceiling was left to the ceiling's budget"
     assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
+    assert "with 24 s to bring the setpoint back to zero" in verdict.detail
 
-    await rig.run(30.0)
+    await rig.run(40.0)
     assert _applied(rig) == 0, "RAMP_DOWN did not bring the blocked descent down"
     assert abs(rig.drive.shaft_rpm) < 1.0
 
@@ -695,6 +901,99 @@ async def test_an_overrun_that_opens_its_own_ending_keeps_firing_until_the_sessi
     assert _applied(rig) == 0
     assert _overrun(rig) is None
     assert _floor_rule(rig) is None, "the last acknowledgement did not hold once over"
+
+
+# =========================================================================
+# EVERY DESCENT FITS THE TIME ITS ENDING IS GIVEN
+# =========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class _Pace:
+    """One configuration under which a programme is brought to speed, then ended."""
+
+    who: str
+    limits: RuntimeLimits
+    profile: TrainingProfile
+    at_speed: float
+    """Seconds after the start at which the arm turns at the profile's ceiling, in HOLD."""
+
+
+_PACES: Final[tuple[_Pace, ...]] = (
+    _Pace("the shipped settings", RUNTIME_LIMITS, REAL_PROFILE, 560.0),
+    _Pace("a slew slower than the motion limits", SLOW_SLEW, SLOW_PROFILE, 300.0),
+    _Pace("a slew far quicker than the motion limits", LIMITS, SLOW_PROFILE, 300.0),
+)
+
+_DESCENTS: Final[tuple[str, ...]] = (
+    "a STOP",
+    "a STOP under a latched FREEZE",
+    "a verdict that ramps down",
+)
+
+
+@pytest.mark.parametrize("pace", _PACES, ids=[pace.who for pace in _PACES])
+async def test_every_descent_of_a_programme_fits_the_time_its_ending_is_given(pace: _Pace) -> None:
+    """The three descents a programme has, each from the profile's ceiling of 276 motor rpm.
+
+    * an ordinary STOP: the setpoint walks at the motion limits towards the
+      controller's demand, which comes down on the control law's ramp;
+    * a STOP under a FREEZE: the motion-limited walk alone, and the wait
+      before its last step;
+    * a verdict's own descent (RAMP_DOWN): the control law's ramp.
+
+    Each brings the setpoint to zero within the descent its ending states, so
+    the 30 s of grace are not what a normal ending relies on. That holds on
+    the shipped settings (15 rpm/s, 26 s at the longest against 40.8 s
+    stated), and with a control law slower than the motion limits, which is
+    not a shipped setting: at 7 rpm/s the ordinary descent takes 51.8 s and a
+    verdict's 52.2 s where the walk alone takes 18 s. A time worked out from
+    the walk, the drive's ramp and the grace together would be 52.0 s, which
+    the second overruns; the ending is given 82.9 s. With a
+    control law far quicker than the motion limits (70 rpm/s) it is the walk
+    that paces every descent, and the walk that is stated.
+    """
+    programme = _rig(profile=pace.profile, limits=pace.limits, motion=DEFAULT_MOTION_LIMITS)
+    programme.fed_bpm = Bpm(82)
+    started = await programme.start()
+    assert is_ok(started), started
+    await programme.run(float(pace.profile.baseline_s) + 1.0)
+    programme.fed_bpm = Bpm(65)
+    await programme.run(pace.at_speed - _since_start(programme))
+    speed = int(_applied(programme))
+    assert speed == pace.profile.max_rpm, "the arm is not at the profile's ceiling: not this case"
+    assert _standing_rule(programme) is None
+    slew = float(pace.limits.slew)
+
+    took: dict[str, float] = {}
+    for what in _DESCENTS:
+        rig = _fork(programme)
+        with _observations() as seen:
+            if what == "a STOP under a latched FREEZE":
+                rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
+            if what == "a verdict that ramps down":
+                rig.runtime.trip_from_thread("rig_ramp_down", SafetyAction.RAMP_DOWN, "under test")
+            else:
+                rig.runtime.request_stop("operator pressed STOP")
+            await rig.step()
+            opened = _since_start(rig)
+            while _applied(rig) != 0:
+                await rig.step()
+                assert _since_start(rig) < opened + 300.0, f"{what}: the setpoint never came down"
+            stated = seen[-1].ending
+        assert stated is not None, what
+        assert float(stated.descent) == pytest.approx(_expected(speed, DEFAULT_MOTION_LIMITS, slew))
+        took[what] = _since_start(rig) - opened
+        assert took[what] <= float(stated.descent) - float(COMMISSIONED_DECEL_S) + TICK, (
+            f"{what}: {took[what]:.1f} s to come down from {speed} motor rpm, "
+            f"{float(stated.descent):.1f} s expected"
+        )
+    walk_alone = _expected(speed, DEFAULT_MOTION_LIMITS, None)
+    assert took["a STOP under a latched FREEZE"] < took["a STOP"] + 2 * TICK
+    if slew < 12.0:
+        assert took["a STOP"] > walk_alone + 25.0, "the slow law is not what paced this descent"
+    if slew > 30.0:
+        assert took["a STOP"] > 2.0 * speed / slew + 5.0, "the walk is not what paced this descent"
 
 
 # =========================================================================

@@ -741,10 +741,10 @@ class EndingInProgress:
     """An ending the session has opened: when, and how long it is allowed to take.
 
     The runtime's statement, in :attr:`SafetyObservation.ending`, of three
-    facts that are fixed on the tick the ending opens and do not move after
-    it: the ending is recorded once and a second cause never replaces it, and
-    the two durations belong to the session (its profile, or its manual
-    ceiling). So an ending cannot push its own deadline back.
+    facts that are fixed when the ending opens and do not move after it: the
+    ending is recorded once and a second cause never replaces it, its descent
+    is the one expected from the setpoint it opened at, and its recovery
+    belongs to the session. So an ending cannot push its own deadline back.
 
     ``session_overrun`` is the only rule that reads it. See
     :meth:`SafetySupervisor._rule_session_overrun` for what it does with it,
@@ -755,11 +755,14 @@ class EndingInProgress:
     """Time since the session started at which the ending opened."""
 
     descent: Seconds
-    """How long the setpoint may take, from there, to be back at zero.
+    """How long the setpoint is expected to take, from there, to be back at zero.
 
-    The budget the phase machine itself gives an ending's ``COOLDOWN``: the
-    profile's cooldown for a programme, and for a manual session the
-    motion-limited walk from its ceiling plus the drive's commissioned ramp.
+    From the setpoint IN FORCE WHEN THE ENDING OPENED, not from the highest
+    the session could reach: the motion-limited walk from that speed (in a
+    programme, the control law's ramp when that is the slower of the two),
+    plus the drive's commissioned ramp. An ending opened at rest has the
+    drive's ramp and nothing else. See
+    :meth:`~src.training.runtime.TrainingRuntime._expected_descent`.
     """
 
     recovery: Seconds
@@ -2729,25 +2732,26 @@ class SafetySupervisor:
         the ending opened (:class:`EndingInProgress`):
 
         * while the setpoint in force is not zero, ``opened + descent``: the
-          ending has its descent budget to bring the setpoint back to zero,
-          and not one second of its recovery;
+          ending has the descent expected from the setpoint it opened at to
+          bring it back to zero, and not one second of its recovery;
         * once the setpoint in force is zero, ``opened + descent + recovery``.
 
         ``grace`` (:attr:`SafetyLimits.overrun_grace`, 30 s) is added by the
         caller in every case.
 
-        On the shipped settings. A programme's descent budget is its
-        profile's cooldown, 240 s, and its recovery 300 s. The motion-limited
-        walk from the profile's ceiling (276 motor rpm) takes 18.0 s and the
-        longest descent measured from there on the software rig 26 s, so
-        240 s is nine times what a descent needs. A manual session's budget
-        is the motion-limited walk from its own ceiling plus the drive's 4 s
-        ramp: 107.8 s from 1344 motor rpm, 110.8 s from the 1380 rpm
-        nameplate; its recovery is 60 s with a person on board and none on
-        the bench. An ending that goes as it should is over at most two ticks
-        after ``opened + descent + recovery``, because that is how the
-        runtime's phase machine counts it, so 30 s of grace never fires on
-        one.
+        On the shipped settings. The descent is the one the ending has to
+        make from the speed it found
+        (:meth:`~src.training.runtime.TrainingRuntime._expected_descent`): in
+        a programme 29.7 s from 193 motor rpm and 40.8 s from the profile's
+        ceiling of 276, where the longest descents measured on the software
+        rig are 17.6 s and 26.0 s, and 4 s from a setpoint already at zero;
+        in a manual session the motion-limited walk plus the drive's 4 s
+        ramp, 24.0 s from 300 motor rpm, 107.8 s from 1344, 110.8 s from the
+        1380 rpm nameplate. The recovery is the profile's (300 s shipped),
+        60 s after a manual session with a person on board and none on the
+        bench. An ending that goes as it should has its setpoint at zero
+        within its descent and is over one recovery later, so 30 s of grace
+        never fires on one.
 
         What stays armed, and when.
 
@@ -2762,15 +2766,19 @@ class SafetySupervisor:
           session is over, as it always has, so an acknowledgement given
           before then is still taken back.
         * An arm still turning is judged at ``opened + descent`` plus the
-          grace. For a programme that is the unchanged 1830 s unless the
-          ending opened after 1560 s, which is 60 s after the arm should have
-          been at rest; at the very latest 2100 s, for an ending opened at
-          1830 s. For a manual session's own limit it is 3600 s plus its
-          descent budget plus the grace: 3737.8 s from 1344 motor rpm, where
-          the walk itself ends at about 3704 s.
+          grace. For the shipped programme that is the unchanged 1830 s
+          unless the ending opened in its last 41 s (30 s at 193 motor rpm),
+          on an arm that should have been at rest for five minutes; at the
+          very latest 1900.8 s, for an ending opened at 1830 s at the
+          profile's ceiling. For a manual session's own limit it is 3600 s
+          plus the walk from the speed in force, the drive's ramp and the
+          grace: 3654.2 s from 300 motor rpm, 3738 s from 1344, where the
+          walk itself ends at 3703.8 s. That is the whole of what an ending
+          can still cost against a descent that is not happening: the time
+          its own descent would take, and no more.
         * A session parked in its recovery is judged at
-          ``opened + descent + recovery`` plus the grace: 570 s after its
-          ending opened on the shipped programme.
+          ``opened + descent + recovery`` plus the grace: 334 s after an
+          ending opened at rest on the shipped programme.
 
         The rule's ``RAMP_DOWN`` outranks a ``FREEZE``, so a descent that a
         ``FREEZE`` held, or that anything else left unfinished, is walked to

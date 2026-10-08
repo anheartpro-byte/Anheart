@@ -122,10 +122,11 @@ MANUAL_LIMIT: Final[Seconds] = Seconds(30.0)
 """The manual session limit of the third sequence (3600 s on the machine)."""
 
 BENCH_CEILING: Final[int] = 300
-"""Its bench ceiling, motor rpm: the walk to zero from there takes 20 s."""
+"""Its bench ceiling, motor rpm."""
 
-DESCENT_BUDGET: Final[float] = 24.0
-"""What that session's ending is given to reach zero: the 20 s walk, the drive's 4 s ramp."""
+EXPECTED_DESCENT: Final[float] = 15.8
+"""What that session's ending is given to reach zero from the 199 motor rpm it is held at:
+the 11.8 s of the motion-limited walk from that speed, and the drive's 4 s ramp."""
 
 
 def _console(
@@ -360,10 +361,10 @@ async def test_an_overrun_raised_during_a_session_is_acknowledged_for_good_once_
     limit of 30 s. A FREEZE latches while the arm turns at 199 motor rpm, and
     the guard that follows a stop under a FREEZE is forced off: at its limit
     the session ends itself and its descent does not happen. The ending is
-    given the 24 s of a descent from its ceiling and the rule's 30 s of grace.
-    Until then nothing but the FREEZE stands; past it ``session_overrun``
-    latches, its RAMP_DOWN outranks the FREEZE, and the reference comes down
-    to zero on the simulated drive.
+    given the 15.8 s a descent from that speed is expected to take, and the
+    rule's 30 s of grace. Until then nothing but the FREEZE stands; past it
+    ``session_overrun`` latches, its RAMP_DOWN outranks the FREEZE, and the
+    reference comes down to zero on the simulated drive.
 
     An acknowledgement given while the arm is coming down is taken back on
     the next tick. Back at REPOS the verdict is latched and no longer firing:
@@ -389,7 +390,7 @@ async def test_an_overrun_raised_during_a_session_is_acknowledged_for_good_once_
         await _until(run, limit + 1.0)
         assert runtime.end_reason is EndReason.PROGRAMME_COMPLETE, "the limit ended nothing"
         assert _mode(run) is RunMode.ARRET
-        before = await _until(run, limit + DESCENT_BUDGET + GRACE - 1.0)
+        before = await _until(run, limit + EXPECTED_DESCENT + GRACE - 1.0)
         assert {s.safety.rule for s in before if s.safety is not None} == {"rig_freeze"}, (
             "the rule fired before the ending had run out of its budget"
         )

@@ -364,9 +364,9 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
   la consigne descend, même sous FREEZE ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)).
   Cette fin est jugée par `session_overrun` sur sa propre échéance, et non
   sur les 3600 s qu'elle vient d'atteindre : la limite, plus la descente
-  depuis le plafond de la séance et la rampe du variateur, plus la
-  récupération, plus 30 s. Une séance menée à sa limite se termine donc sans
-  alerte, à grande vitesse aussi : voir
+  attendue depuis la vitesse en vigueur à cet instant et la rampe du
+  variateur, plus la récupération, plus 30 s. Une séance menée à sa limite se
+  termine donc sans alerte, à grande vitesse aussi : voir
   [5.2](#52-les-18-règles-du-superviseur).
 * Après une fin de séance, la cible vaut 0 : une nouvelle séance exige un
   nouveau départ. Une consigne ramenée à 0 par un avertissement termine la
@@ -460,8 +460,8 @@ scénarios de simulation. La console copie les profils livrés dans
   consigne en vigueur est 0) et vaut « non » par défaut. `ending` ne peut que
   retarder cette même règle, d'une durée finie, jamais l'avancer ni la faire
   taire : il porte trois valeurs fixées à l'ouverture de la fin (l'instant,
-  le temps laissé à la descente, la durée de la récupération) et vaut
-  « aucune fin » par défaut. Raison de la
+  la descente attendue depuis la consigne en vigueur à cet instant, la durée
+  de la récupération) et vaut « aucune fin » par défaut. Raison de la
   première phrase : lors d'un malaise
   vasovagal la FC **baisse** ; la loi de commande y lit « sous la zone » et
   veut accélérer.
@@ -530,7 +530,7 @@ n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` 
 | `no_load` | consigne ≥ 100 tr/min, sortie active, courant < 0,2 A pendant 3 s (phase ouverte, pas de moteur, mauvais registre) | 0,2 A, 100 tr/min, 3 s | RAMP_DOWN | oui |
 | `tracking_error` | vitesse mesurée hors de l'enveloppe de plus de 60 tr/min moteur pendant 2 s, sortie active | 60 tr/min, 2 s | RAMP_DOWN ; **GO_SILENT** si l'écho LFRD est aussi faux depuis 1 s | oui |
 | `reverse_rotation` | vitesse mesurée de signe opposé à la consigne et > 10 tr/min | 10 tr/min, aucun délai | QUICK_STOP | oui |
-| `session_overrun` | séance en cours (le runtime ne l'a pas constatée finie : `session_over` faux) **et** durée écoulée depuis le départ > échéance + 30 s. L'échéance est la durée du programme (3600 s en séance manuelle) ; pour une séance qui a ouvert une fin de séance à temps, la plus tardive de cette durée et de l'échéance de la fin (ouverture + descente, plus la récupération une fois la consigne à 0) | 30 s | RAMP_DOWN | oui ; se redéclenche tant que la séance n'est pas finie |
+| `session_overrun` | séance en cours (le runtime ne l'a pas constatée finie : `session_over` faux) **et** durée écoulée depuis le départ > échéance + 30 s. L'échéance est la durée du programme (3600 s en séance manuelle) ; pour une séance qui a ouvert une fin de séance à temps, la plus tardive de cette durée et de l'échéance de la fin (ouverture + descente attendue depuis la consigne en vigueur à l'ouverture, plus la récupération une fois la consigne à 0) | 30 s | RAMP_DOWN | oui ; se redéclenche tant que la séance n'est pas finie |
 | `loop_stall` | écart entre deux tics > 3 périodes ; > 15 périodes | 0,6 s → FREEZE ; 3,0 s → GO_SILENT | FREEZE ou GO_SILENT | oui (les deux) |
 | `attendant_absent` | aucun signe de présence de la page depuis… (mesuré depuis le départ s'il n'y en a jamais eu) | > 60 s FREEZE ; > 120 s RAMP_DOWN | FREEZE → RAMP_DOWN | seulement RAMP_DOWN |
 | `setpoint_unconfirmed` | LFRD relu ≠ LFRD écrit pendant 1 s | 1 s | RAMP_DOWN | oui |
@@ -589,22 +589,36 @@ redémarrer la console.
   verrouillait alors sur une fin qui se déroulait comme prévu. Le runtime dit
   maintenant la fin qu'il a ouverte (champ `ending` de l'observation,
   `TrainingRuntime._ending_in_progress`) : l'instant d'ouverture compté depuis
-  le départ, le temps laissé à la descente (`cooldown_s` du profil ; en
-  séance manuelle, la marche aux limites de mouvement depuis le plafond plus
-  les 4 s de rampe du variateur) et la durée de la récupération. La règle
+  le départ, la descente attendue et la durée de la récupération. La règle
   retient la plus tardive de l'échéance du programme et de celle de la fin :
   ouverture + descente tant que la consigne n'est pas à 0, ouverture +
   descente + récupération ensuite, plus les 30 s dans les deux cas
-  (`SafetySupervisor._overrun_due`). Avec le profil standard : 240 s de
-  descente et 300 s de récupération.
+  (`SafetySupervisor._overrun_due`).
+* **La descente attendue** est celle que la fin a réellement à faire, depuis
+  la consigne en vigueur à son ouverture (enregistrée avec la fin,
+  `Ending.setpoint`), et non la plus longue que la séance pourrait demander
+  (`TrainingRuntime._expected_descent`, calculée une fois, au premier tic qui
+  suit l'ouverture). En séance manuelle : la marche aux limites de mouvement
+  depuis cette consigne (`ramp_duration`). Dans un programme : la plus longue
+  de cette marche, avec l'attente avant son dernier pas (`min_run / slew`),
+  et de la rampe de la loi de commande, bornée par `2 × consigne / slew`
+  parce qu'elle avance par tr/min entiers et ne perd jamais plus de la moitié
+  de son `slew`. Dans les deux cas plus les 4 s de la rampe du variateur.
+  Avec les réglages livrés : 4 s pour une fin ouverte bras à l'arrêt, 29,7 s
+  depuis 193 tr/min moteur et 40,8 s depuis le plafond du profil (276), où
+  les descentes mesurées prennent au plus 17,6 s et 26,0 s ; en séance
+  manuelle 24 s depuis 300 tr/min moteur, 107,8 s depuis 1344, 110,8 s depuis
+  1380.
 * **La règle reste armée.** L'échéance d'une fin ne peut que retarder la
-  règle. Une descente qui ne finit pas n'a droit qu'au temps de la descente :
-  pour un programme, l'échéance reste 1830 s sauf pour une fin ouverte après
-  1560 s sur un bras encore en rotation, et vaut au plus 2100 s ; à la limite
-  d'une séance manuelle, 3600 s plus la descente plus 30 s. Une fin ouverte
-  après le dépassement (plus de 30 s après la durée prévue) ne reporte rien :
-  c'est celle que le verdict de la règle ouvre lui-même. Une valeur qui n'est
-  pas un nombre fini laisse l'échéance du programme.
+  règle. Une descente qui ne finit pas n'a droit qu'à sa descente attendue :
+  pour le profil standard, l'échéance reste 1830 s sauf pour une fin ouverte
+  dans les 41 dernières secondes sur un bras encore en rotation, et vaut au
+  plus 1900,8 s (fin ouverte à 1830 s au plafond du profil) ; à la limite
+  d'une séance manuelle, 3600 s plus la descente depuis la vitesse en vigueur
+  plus 30 s (3654 s depuis 300 tr/min moteur, 3738 s depuis 1344). Une fin
+  ouverte après le dépassement (plus de 30 s après la durée prévue) ne
+  reporte rien : c'est celle que le verdict de la règle ouvre lui-même. Une
+  valeur qui n'est pas un nombre fini laisse l'échéance du programme.
 * **Un verdict qui arrive sur une séance finie n'ouvre plus de fin de
   séance** (`TrainingRuntime._begin_ending`). Après un programme allé à son
   terme, un E-STOP ou un défaut variateur au repos mettaient le mode à `ARRET`

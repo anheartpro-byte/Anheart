@@ -893,7 +893,7 @@ def motion_is_over(phase: Phase) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Ending:
-    """An ending in progress: why, how severe, and when it began.
+    """An ending in progress: why, how severe, when it began, and from what speed.
 
     Frozen and recorded once. A second cause arriving later - a comms loss
     during an operator stop, say - does not replace it: the thing that ended the
@@ -907,6 +907,15 @@ class Ending:
 
     detail: str
     at: Monotonic
+
+    setpoint: MotorRpm
+    """The setpoint in force when it began: what the ending has to bring back to zero.
+
+    A measurement (what was last written to the drive and acknowledged), taken
+    before the ending writes anything. How long that descent is expected to
+    take is what ``session_overrun`` gives the ending before judging it
+    (:meth:`TrainingRuntime._expected_descent`).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -960,7 +969,8 @@ MANUAL_SESSION_LIMIT: Final[Seconds] = Seconds(3600.0)
 A manual session has no timeline, so ``session_overrun`` would otherwise judge
 it against a programme of zero seconds. An hour is the ceiling the operator
 works under; past it the setpoint walks to zero exactly like a STOP, and that
-ending is judged like any other one: against its own descent and recovery
+ending is judged like any other one: against the descent expected from the
+speed it opened at, and its recovery
 (:meth:`TrainingRuntime._ending_in_progress`), not against the hour it has
 just reached.
 """
@@ -1198,6 +1208,7 @@ class TrainingRuntime:
         "_enabled",
         "_end_reason",
         "_ending",
+        "_ending_descent",
         "_failures",
         "_fault_reset_at",
         "_follower",
@@ -1390,6 +1401,10 @@ class TrainingRuntime:
         # Whether THIS session's phase machine has reached DONE: stated once by
         # _advance_phase, read (with the setpoint in force) by session_overrun.
         self._session_over: bool = False
+        # How long the ending's descent is expected to take, from the setpoint
+        # it opened at: worked out once, on the first tick that states the
+        # ending (_ending_in_progress), and kept. None until then.
+        self._ending_descent: Seconds | None = None
 
     def _forget_motion_base(self) -> None:
         """The motion profiler's time base, as a new session finds it: none."""
@@ -2020,6 +2035,7 @@ class TrainingRuntime:
         self._stop_requested = None
         self._stopped_by = None
         self._session_over = False
+        self._ending_descent = None
         self._warmup_satisfied = False
         self._resting_bpm = None
         self._decision = None
@@ -2602,8 +2618,9 @@ class TrainingRuntime:
         itself keep that rule quiet: from 1344 motor rpm the ramp alone takes
         104 s, and the rule's 30 s of grace ran out in the middle of it. What
         keeps it quiet is that the ending opened here is stated to the
-        supervisor (:meth:`_ending_in_progress`), which then gives it its own
-        descent and recovery before judging (ANH-185).
+        supervisor (:meth:`_ending_in_progress`), which then gives it the
+        descent expected from the speed it opened at, and its recovery, before
+        judging (ANH-185).
         """
         if self._session_elapsed(now) < MANUAL_SESSION_LIMIT:
             return Phase.HOLD
@@ -2768,15 +2785,19 @@ class TrainingRuntime:
     def _ending_in_progress(self) -> EndingInProgress | None:
         """The ending this session has opened, as the supervisor is told of it, or ``None``.
 
-        Three facts, all fixed on the tick the ending opens. WHEN, counted
-        like everything the supervisor measures a session by, from its start:
-        an :class:`Ending` is recorded once and a later cause never replaces
-        it (:meth:`_begin_ending`), so this instant cannot move. And the two
-        durations the phase machine itself counts an ending with
-        (:meth:`_ending_phase`): the descent it allows before it stops waiting
-        for a standstill (:meth:`_cooldown_s`), and the monitored recovery
-        that follows (:meth:`_recovery_s`). Both belong to the session, its
-        profile or its manual ceiling, and neither changes while it runs.
+        Three facts, all fixed when the ending opens. WHEN, counted like
+        everything the supervisor measures a session by, from its start: an
+        :class:`Ending` is recorded once and a later cause never replaces it
+        (:meth:`_begin_ending`), so this instant cannot move. How long its
+        DESCENT is expected to take, from the setpoint that was in force at
+        that instant (:meth:`_expected_descent`). And the monitored RECOVERY
+        that follows (:meth:`_recovery_s`), which belongs to the session.
+
+        The descent is worked out once, here, on the first tick that states
+        the ending, and kept: it walks the motion profile, which is too much
+        to do on every tick, and it must not sit between an emergency stop and
+        the zero it writes, which is why :meth:`_begin_ending` only records
+        the setpoint.
 
         Nothing here is a demand, and nothing here is computed from what the
         control law wants. ``session_overrun`` is the only rule that reads it:
@@ -2795,11 +2816,76 @@ class TrainingRuntime:
         ending = self._ending
         if ending is None:
             return None
+        descent = self._ending_descent
+        if descent is None:
+            descent = self._expected_descent(ending.setpoint)
+            self._ending_descent = descent
         return EndingInProgress(
             opened=self._session_elapsed(ending.at),
-            descent=self._cooldown_s(),
+            descent=descent,
             recovery=self._recovery_s(),
         )
+
+    def _expected_descent(self, setpoint: MotorRpm) -> Seconds:
+        """How long an ending is expected to take to bring ``setpoint`` back to zero.
+
+        What ``session_overrun`` gives an ending whose setpoint is not at zero
+        before it judges it (plus its grace). It is the descent the ending
+        actually has to make, from the speed it found, and not the longest one
+        the session could ever need: a budget taken from the profile's
+        cooldown (240 s shipped) or from a manual session's ceiling kept the
+        rule away from a descent that was not happening for minutes longer
+        than any descent lasts, and made pressing STOP on an arm that would
+        not come down later than doing nothing.
+
+        The descents that exist, and how long each takes from ``setpoint``:
+
+        * **the motion-limited walk** (:meth:`_motion_step`): the only descent
+          of a manual session, whatever stands over it; and in a programme,
+          the stop followed under a ``FREEZE`` (:meth:`_stop_under_freeze`).
+          It takes :func:`~src.training.motion.ramp_duration`, walked tick for
+          tick as the runtime walks it. In a programme its last step, from
+          ``min_run`` to zero, also waits for the control law's slew to have
+          paid for it (:meth:`_passage_too_soon`): ``min_run / slew`` more.
+        * **the control law's ramp**, in a programme only: an ordinary stop
+          walks towards the controller's demand, which comes down at ``slew``
+          (:meth:`_follow_controller`), and a verdict's own descent comes down
+          at ``slew`` too (:meth:`_descend`, under ``REDUCE`` and
+          ``RAMP_DOWN``). Both step in WHOLE rpm, for the time since their
+          last step, and a step that cannot pay for one rpm leaves its time
+          unspent. So a step always moves at least half of what its time is
+          worth, whatever the tick: the ramp never falls below half its slew,
+          and ``2 x setpoint / slew`` bounds it, its own wait at ``min_run``
+          included.
+        * **the emergency zero** (``QUICK_STOP``): one write. Nothing to wait
+          for.
+
+        A programme's setpoint follows whichever of the first two is the
+        slower at each instant, so the expected descent is the longer of the
+        two; a manual session's is the walk. To either,
+        :data:`~src.training.plan.COMMISSIONED_DECEL_S` is added: the drive's
+        own ramp, after which the shaft is where the setpoint is.
+
+        On the shipped settings (15 rpm/s, ``min_run`` 55, the shipped motion
+        limits): 29.7 s from 193 motor rpm and 40.8 s from the profile's
+        ceiling of 276, where the longest descents measured on the software
+        rig are 17.6 s and 26.0 s; 4 s from a setpoint already at zero; in a
+        manual session 24.0 s from 300 motor rpm, 107.8 s from 1344 and
+        110.8 s from the 1380 rpm nameplate.
+
+        A setpoint from which the motion limits would never reach zero (a
+        configuration no session starts on) counts as no walk at all, which
+        errs towards being judged sooner.
+        """
+        speed = abs(setpoint)
+        reached = ramp_duration(MotorRpm(speed), MotorRpm(0), self._motion, self._motion_geometry)
+        walk = 0.0 if reached is None else float(reached)
+        controller = self._controller
+        if controller is None or speed == 0:
+            return Seconds(walk + COMMISSIONED_DECEL_S)
+        slew = self._limits.slew
+        passage = controller.plan.speed.min_run_rpm / slew
+        return Seconds(max(walk + passage, 2.0 * speed / slew) + COMMISSIONED_DECEL_S)
 
     def _envelope(self, now: Monotonic) -> SpeedEnvelope | None:
         """Where the shaft may be this tick, or ``None`` while nothing talks to the drive.
@@ -3740,6 +3826,7 @@ class TrainingRuntime:
             action=SafetyAction.NONE if verdict is None else verdict.action,
             detail="operator stop" if verdict is None else f"{verdict.rule}: {verdict.detail}",
             at=now,
+            setpoint=self._applied_rpm,
         )
         if self._session_is_over():
             return ending

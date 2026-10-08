@@ -37,7 +37,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
 | **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend sur un bras à l'arrêt : tant que quelque chose y retient une montée (un verdict, verrouillé ou non ; avec une personne à bord, une fréquence cardiaque inutilisable, de tendance inconnue ou en baisse rapide ; un premier pas que le variateur n'a pas confirmé), une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève, ni un acquittement, ni une fréquence cardiaque qui revient ou se stabilise ne mettent le bras en mouvement. Reste possible sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 la liste exacte de ce que les règles ne couvrent pas et en 7.6 la règle des cibles manuelles). | `safety.py`, `runtime.py` |
-| **Une séance qui dépasse sa durée est arrêtée ; une séance finie n'est plus jugée.** `session_overrun` termine, sur un verrou, une séance encore en cours 30 s après sa durée prévue. Une fois la séance finie, la règle ne juge plus, aussi longtemps que la console reste au repos : rien ne se verrouille seul après une séance, et un nouveau départ ne demande pas de redémarrer la console ([section 8](#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)). Une fin de séance déjà ouverte (STOP, E-STOP, verdict d'arrêt, limite d'une séance manuelle) est jugée sur sa propre échéance, jamais plus tôt que celle du programme : son ouverture, plus le temps laissé à la descente, plus la récupération une fois la consigne à 0, plus 30 s. Un verdict qui arrive au repos après une séance finie reste verrouillé et à acquitter, sans rouvrir de fin de séance ([8.6](#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185)). | `safety.py`, `runtime.py` |
+| **Une séance qui dépasse sa durée est arrêtée ; une séance finie n'est plus jugée.** `session_overrun` termine, sur un verrou, une séance encore en cours 30 s après sa durée prévue. Une fois la séance finie, la règle ne juge plus, aussi longtemps que la console reste au repos : rien ne se verrouille seul après une séance, et un nouveau départ ne demande pas de redémarrer la console ([section 8](#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)). Une fin de séance déjà ouverte (STOP, E-STOP, verdict d'arrêt, limite d'une séance manuelle) est jugée sur sa propre échéance, jamais plus tôt que celle du programme : son ouverture, plus la descente attendue depuis la vitesse commandée à cet instant, plus la récupération une fois la consigne à 0, plus 30 s. Un verdict qui arrive au repos après une séance finie reste verrouillé et à acquitter, sans rouvrir de fin de séance ([8.6](#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185)). | `safety.py`, `runtime.py` |
 | **Un arrêt demandé descend toujours, et la descente prévue d'un programme aussi.** STOP à la console, arrêt demandé depuis le site, cible manuelle remise à 0 : la consigne descend aux limites de mouvement dès le cycle suivant, qu'un avertissement FREEZE tienne ou non, verrouillé ou non, et un FREEZE qui apparaît pendant la descente ne la fige pas ([7.7](#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)). De même, dès qu'un programme entre dans son retour au calme (`cooldown`), la consigne descend aux limites de mouvement sous FREEZE comme sans verdict, sans jamais remonter, et la séance se termine à la durée prévue, sauf si la cause d'un FREEZE non verrouillé dure jusqu'au niveau suivant de sa règle ([7.8](#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Hors de ces cas, FREEZE tient la consigne comme avant ; les verdicts plus sévères décident toujours en premier. | `runtime.py` |
 | **Attestation du câblage E-STOP** à chaque démarrage du processus, par un opérateur nommé, avant tout mouvement. | `confirm_estop_wiring` |
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
@@ -996,11 +996,12 @@ juge.
 **Ce qui change.**
 
 - Le runtime dit au superviseur la fin de séance qu'il a ouverte (champ
-  `ending` de l'observation). Trois valeurs, fixées au cycle où la fin
-  s'ouvre : l'instant d'ouverture, compté depuis le départ ; le temps laissé
-  à la descente ; la durée de la récupération. Une fin de séance n'est
-  enregistrée qu'une fois et une seconde cause ne la remplace pas : elle ne
-  peut donc pas repousser sa propre échéance.
+  `ending` de l'observation). Trois valeurs, fixées à l'ouverture de la
+  fin : l'instant d'ouverture, compté depuis le départ ; la descente
+  attendue depuis la consigne en vigueur à cet instant ; la durée de la
+  récupération. Une fin de séance n'est enregistrée qu'une fois, avec cette
+  consigne, et une seconde cause ne la remplace pas : elle ne peut donc pas
+  repousser sa propre échéance.
 - `session_overrun` juge une séance qui a ouvert une fin sur la plus tardive
   de deux échéances : celle du programme, inchangée, et celle de la fin.
 
@@ -1021,19 +1022,55 @@ juge.
 Sans fin ouverte, rien ne change : même seuil, même action, même verrou, même
 phrase.
 
-**Les nombres, avec les réglages livrés.**
+**La descente attendue.** C'est le temps que la fin de séance met
+normalement à ramener à 0 la consigne qu'elle a trouvée, et non le plus long
+temps dont la séance pourrait avoir besoin. Une première version prenait la
+durée `cooldown` du profil (240 s) ou la descente depuis le plafond d'une
+séance manuelle, quelle que soit la vitesse : elle tenait la règle éloignée
+d'une descente qui n'avait pas lieu pendant des minutes de plus qu'aucune
+descente ne dure (relevé par la revue indépendante). Les descentes qui
+existent, depuis une consigne S :
 
-| | Descente | Récupération | Marge |
-|---|---|---|---|
-| Programme livré | 240 s, la durée `cooldown` du profil. La marche aux limites de mouvement depuis le plafond du profil (276 tr/min moteur) prend 18,0 s ; la plus longue descente mesurée depuis ce plafond sur le banc d'essai logiciel, 26 s (7.8). | 300 s | 30 s |
-| Séance manuelle | La marche aux limites de mouvement depuis le plafond de la séance, plus les 4 s de la rampe du variateur : 107,8 s depuis 1344 tr/min moteur (27 tr/min au bras), 110,8 s depuis 1380 (la plaque), 24 s depuis 300 (le plafond par défaut). | 60 s avec une personne à bord, 0 capsule vide | 30 s |
+| Descente | Où | Durée depuis S |
+|---|---|---|
+| Marche aux limites de mouvement | toute séance manuelle, quel que soit le verdict ; dans un programme, l'arrêt suivi sous FREEZE (7.7, 7.8) | la marche calculée cycle par cycle (`ramp_duration`) ; dans un programme, plus l'attente avant le dernier pas, `min_run / slew` (3,7 s) |
+| Rampe de la loi de commande | programme seulement : arrêt ordinaire (la consigne suit la demande du régulateur, qui descend à `slew`) et descente d'un verdict (REDUCE, RAMP_DOWN) | elle avance par tr/min entiers et garde le temps qu'un pas n'a pas pu payer : jamais moins de la moitié de `slew`, donc au plus `2 × S / slew` |
+| Zéro d'urgence (QUICK_STOP) | toute séance | une écriture |
 
-Ce sont les deux durées que la machine à phases compte déjà pour une fin de
-séance : la phase `cooldown` d'une fin s'arrête à l'arrêt mesuré ou au bout de
-la descente, et la `recovery` dure ensuite la récupération. Une fin qui se
-déroule normalement est donc finie au plus deux cycles après
-« ouverture + descente + récupération », et la marge de 30 s ne se déclenche
-jamais sur elle.
+Dans un programme la consigne suit à chaque instant la plus lente des deux
+premières : la descente attendue est la plus longue des deux. En séance
+manuelle c'est la marche. On y ajoute les 4 s de la rampe du variateur
+(`COMMISSIONED_DECEL_S`). Le calcul est fait une fois, au premier cycle qui
+suit l'ouverture, à partir de la consigne enregistrée avec la fin
+(`TrainingRuntime._expected_descent`).
+
+| Consigne à l'ouverture | Descente attendue | Plus longue descente mesurée |
+|---|---|---|
+| Programme, bras à l'arrêt (toute fin ouverte pendant la `recovery`) | 4,0 s | sans objet |
+| Programme, 193 tr/min moteur (palier, personne simulée) | 29,7 s | 17,6 s (7.8) |
+| Programme, 276 tr/min moteur (plafond du profil) | 40,8 s | 26,0 s (7.8) |
+| Séance manuelle, 300 tr/min moteur | 24,0 s | 20,0 s |
+| Séance manuelle, 1344 tr/min moteur (27 tr/min au bras) | 107,8 s | 103,8 s |
+| Séance manuelle, 1380 tr/min moteur (la plaque) | 110,8 s | 106,8 s |
+
+La récupération est celle du profil (300 s livré), 60 s en séance manuelle
+avec une personne à bord, aucune capsule vide. La marge reste 30 s.
+
+La descente prévue d'un programme sur sa propre chronologie (7.8) n'est pas
+une fin de séance ouverte : elle reste jugée sur l'échéance du programme. Si
+un arrêt est demandé pendant qu'elle se déroule, la fin part de la consigne
+de cet instant.
+
+La marche seule, plus la rampe du variateur, ne suffit pas pour un programme.
+Avec les réglages livrés elle donne 15,4 s depuis 193 tr/min moteur et 22,0 s
+depuis 276, moins que les descentes normales mesurées (17,6 s et 26,0 s) :
+une fin normale ne tiendrait que grâce à la marge. Et un `slew` plus lent que
+les limites de mouvement (ce n'est pas le réglage livré) allonge la rampe de
+la loi sans allonger la marche : à 7 tr/min/s, depuis 276 tr/min moteur,
+l'arrêt ordinaire prend 51,8 s et la descente d'un RAMP_DOWN 52,2 s, l'arrêt
+sous FREEZE 25,6 s. La marche seule donnerait 22,0 s, soit 52,0 s marge
+comprise : la descente du RAMP_DOWN la dépasse, l'arrêt ordinaire y tient à
+0,2 s près. Avec la rampe de la loi la fin se voit donner 82,9 s.
 
 **Ce contre quoi la règle reste armée.**
 
@@ -1042,17 +1079,39 @@ jamais sur elle.
   verrouille, et tout verdict que la règle donnait sans fin tardive est donné
   au même instant.
 - **Une descente qui ne finit pas.** Tant que la consigne n'est pas à 0, la
-  fin n'a que sa descente : la récupération n'est pas prêtée à un bras qui
-  tourne. Pour un programme, l'échéance reste celle d'avant (1830 s) sauf si
-  la fin a été ouverte après 1560 s, soit 60 s après l'instant où le
-  programme veut le bras arrêté ; au plus tard 2100 s, pour une fin ouverte à
-  1830 s. Pour la limite d'une séance manuelle, c'est 3600 s plus sa descente
-  plus la marge : 3738 s depuis 1344 tr/min moteur, où la marche elle-même
-  finit à 3703,8 s. Le RAMP_DOWN de la règle l'emporte sur un FREEZE : une
-  descente qu'un FREEZE tiendrait, ou que quoi que ce soit laisserait
-  inachevée, est alors menée à 0.
-- **Une récupération qui ne finit pas** est jugée 570 s après l'ouverture de
-  la fin avec le profil livré (240 + 300 + 30).
+  fin n'a que sa descente attendue : la récupération n'est pas prêtée à un
+  bras qui tourne. Mesuré en bloquant la descente comme le font les tests
+  (garde de 7.7 et 7.8 retirée, FREEZE verrouillé, bras tenu à 193 tr/min
+  moteur), instant où la règle se déclenche :
+
+  | Cas | `develop` | Maintenant |
+  |---|---|---|
+  | Aucune fin ouverte, ou STOP à 1560 s ou avant | 1830,2 s | 1830,2 s |
+  | STOP à 1600 s | 1830,2 s | 1830,2 s |
+  | STOP à 1799 s | 1830,2 s | 1859,0 s |
+  | STOP pris à 1830,0 s, dernier instant qui compte | 1830,2 s | 1889,8 s |
+  | Limite d'une séance manuelle, bras tenu à 300 tr/min moteur sous un plafond de 1380 | 3630,2 s | 3654,4 s |
+  | Limite d'une séance manuelle, bras tenu à 1344 tr/min moteur | 3630,2 s | 3738,2 s |
+
+  Dans chaque cas le RAMP_DOWN de la règle l'emporte sur le FREEZE et la
+  consigne est menée à 0.
+- **Le retard qui reste par rapport à `develop`, et pourquoi.** Un arrêt
+  demandé sur un bras qui ne descend pas retarde encore la règle, du temps
+  que sa propre descente aurait pris, plus la marge : au pire 59,6 s à
+  193 tr/min moteur (mesuré) et 70,6 s au plafond du profil, 276 (par le
+  calcul : 40,8 + 30 - 0,2), pour une fin ouverte à 1830,0 s ; rien pour une
+  fin ouverte plus de 41 s avant la fin du programme. En séance manuelle :
+  24,2 s depuis 300 tr/min moteur et 108,0 s depuis 1344 (mesurés), 111,0 s
+  depuis 1380 (par le calcul). Ce temps est nécessaire : une fin de séance
+  ouverte sur un bras en vitesse doit avoir le temps de sa descente, sans
+  quoi la règle se verrouille sur une descente qui se déroule normalement.
+  C'est le cas mesuré de la séance manuelle menée à sa limite (103,8 s
+  depuis 1344 tr/min moteur, d'où les 3738,2 s), et il vaut de même pour un
+  programme. La première version donnait 240 s quelle que soit la vitesse :
+  2069,4 s et 2100,2 s dans les deux cas du programme ci-dessus, 3741,2 s
+  pour le bras tenu à 300 tr/min.
+- **Une récupération qui ne finit pas** est jugée 334 s après l'ouverture
+  d'une fin au repos avec le profil livré (4 + 300 + 30).
 - **Une consigne qui quitterait 0 pendant une fin** serait jugée aussitôt sur
   la descente seule : la règle lit la consigne en vigueur à chaque cycle, et
   c'est une mesure (ce qui a été écrit au variateur).
@@ -1090,6 +1149,13 @@ trouverait une vitesse commandée après la fin ouvre une vraie fin de séance,
 avec sa descente et son échéance (état écrit à la main dans un test : aucun
 chemin du runtime n'y mène).
 
+« Finie » se lit sur la consigne, pas sur l'arbre. Si l'arbre tourne encore
+quand le verdict arrive, consigne à 0 et étage de sortie retiré (bras poussé
+à la main, roue libre), rien n'est rouvert non plus : il n'y a ni consigne à
+ramener ni couple à retirer. **Mode** affiche `REPOS`, qui dit que rien n'est
+commandé ; c'est la vitesse mesurée, et la pastille **Rotation**, qui disent
+que le bras tourne.
+
 **Ce qui a été mesuré.** Sur le banc d'essai logiciel (variateur factice,
 horloge manuelle), profil livré, console et limites de mouvement de la
 machine ; jamais sur le matériel. « Avant » : les mesures de 8.5.
@@ -1111,14 +1177,33 @@ machine ; jamais sur le matériel. « Avant » : les mesures de 8.5.
 **Ce qui a été vérifié.**
 
 - Les trois cas, par des tests nommés qui échouent sur `develop` :
-  `tests/test_runtime_ending_alerts.py` (sur le runtime) et
+  `tests/test_runtime_ending_alerts.py` (sur le runtime : STOP à 1531 s,
+  1600 s et 1799 s, E-STOP et électrodes retirées à 1600 s du programme
+  livré ; séance manuelle menée à sa limite réelle d'une heure à 1380 tr/min
+  moteur, et avec une personne à bord ; verdict au repos) et
   `tests/test_safety_ending_overrun.py` (sur la règle, instant par instant,
   avec une propriété sur tout programme, toute fin et tout instant).
-- La règle armée : avec la garde de 7.7 et 7.8 retirée dans le test (rien ne
-  tient plus une descente sinon), une descente bloquée par un FREEZE
-  verrouillé est menée à 0 par la règle, dans un programme (STOP 5 s avant la
-  fin : verdict après ouverture + descente + 30 s, sans attendre la
-  récupération) et à la limite d'une séance manuelle.
+- La règle armée, garde de 7.7 et 7.8 retirée dans le test (rien ne tient
+  plus une descente sinon) : programme livré, bras tenu à 193 tr/min moteur,
+  STOP à 1799 s, la règle se déclenche au plus tard à l'ouverture plus la
+  descente attendue plus 30 s (1859,0 s) ; limite d'une séance manuelle, bras
+  tenu à 300 tr/min moteur sous un plafond de 1380, la règle se déclenche
+  54 s après la limite.
+- Chaque descente tient dans le temps donné à sa fin : arrêt ordinaire,
+  arrêt sous FREEZE verrouillé et RAMP_DOWN, depuis le plafond du profil,
+  avec les réglages livrés, avec un `slew` de 7 tr/min/s plus lent que les
+  limites de mouvement, et avec un `slew` de 70 tr/min/s où c'est la marche
+  qui décide.
+- 33 fins normales du programme livré mesurées (STOP, E-STOP et électrodes
+  retirées à onze instants de 1250 s à 1799 s) et cinq séances manuelles
+  menées à leur limite réelle (1344, 1380 et 300 tr/min moteur capsule vide,
+  300 sous un plafond de 1380, 200 avec une personne à bord) : aucun
+  `session_overrun`.
+- Une séance finie se lit sur la consigne, pas sur l'arbre : un test met
+  l'arbre en rotation à la main (120 tr/min moteur) consigne à 0 et étage de
+  sortie retiré, puis fait arriver un E-STOP ou un défaut variateur. Aucune
+  fin de séance n'est ouverte, le verdict est verrouillé, rien d'autre que 0
+  n'est écrit, et la vitesse mesurée continue de dire que le bras tourne.
 - Sur la console réelle en simulation, par son API
   (`tests/test_session_overrun_console.py`) : un STOP tardif sans verdict,
   l'E-STOP au repos après un programme, et un vrai dépassement (descente
@@ -1137,6 +1222,18 @@ machine ; jamais sur le matériel. « Avant » : les mesures de 8.5.
 - Une fin ouverte pendant la `recovery` d'un programme rouvre toujours une
   récupération complète : c'est sa durée qui n'est plus jugée, pas elle qui
   est raccourcie.
+- Une fin de séance tardive dont l'arbre met, consigne à 0, plus de 30 s de
+  plus que la descente attendue à s'arrêter (arbre en roue libre après un
+  défaut variateur, par exemple) se termine après son échéance : la machine
+  à phases attend l'arrêt mesuré, jusqu'à la durée `cooldown` du profil,
+  avant de compter la récupération. `session_overrun` se verrouille alors en
+  plus du verdict qui a arrêté la séance, comme sur `develop`, où il se
+  verrouillait à l'échéance du programme. Lu dans le code, pas mesuré : le
+  profil livré n'a pas de bras en rotation dans ses dernières minutes.
+- La borne `2 × S / slew` vaut pour la rampe telle qu'elle est écrite
+  aujourd'hui (pas de tr/min entiers, temps non dépensé gardé). Un
+  avertissement qui apparaîtrait et disparaîtrait à chaque cycle pendant une
+  descente peut la ralentir davantage : ce cas n'est pas mesuré.
 - Un runtime devenu silencieux qui ne peut plus reprendre sa consigne est
   jugé comme avant, à l'échéance du programme.
 - Un E-STOP sur une console qui n'a encore démarré aucune séance ouvre

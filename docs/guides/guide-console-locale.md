@@ -978,16 +978,18 @@ rien ne s'était mal passé :
 * une séance manuelle qui atteignait sa limite d'une heure à grande vitesse et
   descendait encore 30 s plus tard.
 
-La règle laisse maintenant à une fin de séance le temps de sa descente et de sa
-récupération avant de la juger. Après un STOP donné tard ou une séance manuelle menée
-à sa limite, il n'y a rien à acquitter. Après un E-STOP ou un arrêt décidé par une
-règle, il reste à acquitter celui-là, et lui seul.
+La règle laisse maintenant à une fin de séance le temps que prend sa descente depuis
+la vitesse du moment de l'arrêt, puis celui de sa récupération, avant de la juger.
+Après un STOP donné tard ou une séance manuelle menée à sa limite, il n'y a rien à
+acquitter. Après un E-STOP ou un arrêt décidé par une règle, il reste à acquitter
+celui-là, et lui seul.
 
 Vous ne devriez donc plus voir ce verdict (`ramp_down`, verrouillé) que si une fin de
 séance ne se déroule pas comme prévu : une vitesse commandée qui n'est pas revenue à 0
-dans le temps laissé à la descente, ou une récupération qui ne finit pas. Le détail le
-dit, par exemple
-`the session has run 1870 s against an ending opened at 1600 s with 240 s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track`.
+dans le temps qu'une descente prend depuis cette vitesse, ou une récupération qui ne
+finit pas. Demander STOP sur un bras qui ne ralentit pas ne repousse ce verdict que du
+temps de cette descente, jamais de plusieurs minutes. Le détail le dit, par exemple
+`the session has run 1859 s against an ending opened at 1799 s with 30 s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track`.
 La règle ramène alors elle-même la vitesse commandée à 0. Faites comme pour tout
 verdict verrouillé : attendez que **Mode** affiche `REPOS`, acquittez par votre nom
 (§13.6), puis redémarrez une séance. L'acquittement tient. Donné avant `REPOS`, il est
@@ -1797,7 +1799,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `attendant_absent` | onglet fermé ou injoignable | gel après 60 s (il se lève seul si un onglet redonne le signal), arrêt contrôlé verrouillé après 120 s |
 | `the arm came to a standstill inside the session (<cause> brought the setpoint to zero): the session has ended, and a stopped arm never restarts by itself. ...` | `session_standstill` | séance terminée, verrouillé ; la vitesse commandée est déjà à 0, lisez Rotation pour l'arrêt du bras ; rien ne repart ; acquitter une fois le mode à `REPOS` (§11) |
 | `the session has run <n> s against a programme of <m> s plus 30 s of grace: the phase machine has lost track` | `session_overrun` | la séance en cours a dépassé sa durée prévue de plus de 30 s : arrêt contrôlé, verrouillé. N'apparaît plus au repos après une séance finie, ni pendant une fin de séance qui se déroule normalement ; acquitter une fois le mode à `REPOS` (§11) |
-| `the session has run <n> s against an ending opened at <t> s with <d> s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track` (ou `… to finish its descent and its monitored recovery …`) | `session_overrun` | une fin de séance ouverte à `<t>` s n'a pas ramené la vitesse commandée à 0, ou n'a pas fini sa récupération, dans le temps `<d>` qui lui est laissé : arrêt contrôlé, verrouillé ; acquitter une fois le mode à `REPOS` et signaler (§11) |
+| `the session has run <n> s against an ending opened at <t> s with <d> s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track` (ou `… to finish its descent and its monitored recovery …`) | `session_overrun` | une fin de séance ouverte à `<t>` s n'a pas ramené la vitesse commandée à 0, ou n'a pas fini sa récupération, dans le temps `<d>` qu'une fin de séance normale prend depuis la vitesse du moment de l'arrêt : arrêt contrôlé, verrouillé ; acquitter une fois le mode à `REPOS` et signaler (§11) |
 | `...; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` | fin de phrase ajoutée à toute règle non verrouillée (`freeze`, `reduce`), tant que la séance peut encore prendre de la vitesse | la règle se lèvera seule ; tant que le bras tourne, la vitesse pourra remonter sans clic (§11). Le bandeau orange **REPRISE AUTOMATIQUE POSSIBLE** dit la même chose en français, et lui seul tient compte de la cible manuelle |
 
 ## 15. FAQ et pièges
@@ -1833,7 +1835,8 @@ que nécessaire : rien ne se verrouille seul, et la séance suivante démarre no
 
 **Un verdict `session_overrun` est affiché.**
 La séance en cours a dépassé sa durée prévue de plus de 30 s, ou une fin de séance n'a
-pas ramené la vitesse commandée à 0 dans le temps qui lui est laissé (§11). Depuis le
+pas ramené la vitesse commandée à 0 dans le temps qu'une descente prend depuis la
+vitesse du moment de l'arrêt (§11). Depuis le
 8 octobre 2026, une fin de séance ouverte dans les dernières minutes d'un programme
 (STOP, E-STOP ou arrêt décidé par une règle) ne le déclenche plus, pas plus qu'une
 séance manuelle menée à sa limite : ce verdict n'est donc plus attendu en usage
