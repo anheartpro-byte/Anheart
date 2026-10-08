@@ -1540,7 +1540,13 @@ verdict.
 
 Ce run exportait aussi `PYTHONUNBUFFERED=1` dans les trois jobs du Pi : la gate
 y est verte avec la variable, comme elle l'est sans (voir « Le lanceur ne
-laisse rien dans l'environnement des tests », plus haut).
+laisse rien dans l'environnement des tests », plus haut). Sans la variable,
+l'exécution suivante de la PR donne les mêmes ordres de grandeur (run
+37713577185) : 12 min 50 s pour `pi (tests 1)`, de nouveau sur un EPYC 7763
+(2882 s de pytest cumulés, 717 à 724 s par part), 7 min 59 s pour
+`pi (tests 2)` sur un Xeon 6973P-C (1699 s, 416 à 437 s par part), et le
+verdict 14 min 21 s après le début des tests, sur les mêmes 4304 tests,
+13 184 lignes et 2 934 branches.
 
 Limites, les mêmes que pour la table de la simulation :
 
