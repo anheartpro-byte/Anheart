@@ -11,7 +11,17 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -631,6 +641,41 @@ test("the simulation is assembled by its own build.sh and deployed from dist/, a
     assert.equal(deployed.output, `url=${ADDRESS}\n`, file);
     assert.ok(!deployed.said.includes(HELD.VERCEL_TOKEN), `${file}: the token was printed`);
   }
+});
+
+test("the viewer page build.sh puts in dist/ is the source file, byte for byte", (context) => {
+  // ANH-183 EX-18. The page names its own script and its own style by their hash in its content
+  // security policy: a copy that differs by one byte is a page whose script the browser refuses.
+  // The real build.sh is run as it is, in a throwaway tree: its own files copied, what it reads of
+  // the repository linked. It assembles there, never in the working tree; nothing is installed and
+  // nothing reaches Vercel (the assembly is plain copies).
+  const SOURCE = "simulation/viewer/index.html";
+  const HERE = "deploy/simulation-vercel";
+  const tree = mkdtempSync(join(tmpdir(), "anheart-build-"));
+  context.after(() => rmSync(tree, { recursive: true, force: true }));
+  mkdirSync(join(tree, HERE), { recursive: true });
+  for (const own of ["build.sh", "app.py", "bitalino.py", "requirements.txt", "vercel.json", ".python-version"]) {
+    copyFileSync(join(root, HERE, own), join(tree, HERE, own));
+  }
+  for (const read of ["simulation", "raspberry-pi"]) symlinkSync(join(root, read), join(tree, read), "dir");
+  const before = existsSync(join(root, HERE, "dist"));
+
+  const built = spawnSync("bash", ["--noprofile", "--norc", join(tree, HERE, "build.sh")], {
+    env: { PATH: process.env.PATH ?? "" },
+    encoding: "utf8",
+  });
+  assert.equal(built.status, 0, built.stderr);
+  assert.match(built.stdout, /^assembled: .*\/deploy\/simulation-vercel\/dist \(/m);
+
+  const source = readFileSync(join(root, SOURCE));
+  assert.ok(source.length > 10_000, "the source page was not read");
+  // Both copies: the one Vercel serves from its CDN, and the one the hosted application serves.
+  for (const copy of ["dist/public/viewer/index.html", "dist/simulation/viewer/index.html"]) {
+    const copied = readFileSync(join(tree, HERE, copy));
+    assert.ok(copied.equals(source), `${copy} is not ${SOURCE} byte for byte`);
+  }
+  // The working tree was left as it was: the assembly went to the throwaway tree only.
+  assert.equal(existsSync(join(root, HERE, "dist")), before);
 });
 
 test("a deployment that fails, or that gives no address, fails its job and announces nothing", () => {
