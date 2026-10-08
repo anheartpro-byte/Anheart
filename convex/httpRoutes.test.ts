@@ -220,6 +220,7 @@ async function written(w: MachineWorld) {
     profiles: await ctx.db.query("machine_profiles").collect(),
     sessions: await ctx.db.query("sessions").collect(),
     telemetry: await ctx.db.query("training_telemetry").collect(),
+    events: await ctx.db.query("training_events").collect(),
   }));
 }
 
@@ -242,12 +243,13 @@ async function expectRefusedUnwritten(w: MachineWorld, path: string, raw: string
 describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", () => {
   // Not an exact list: a route added to the router joins the tables below by
   // itself. This only holds that the router was read, and is not empty.
-  it("covers at least the six routes that took a body when this was written", () => {
+  it("covers at least the seven routes that took a body when this was written", () => {
     expect(bodyRoutes).toEqual(
       expect.arrayContaining([
         "/api/machine/heartbeat",
         "/api/machine/profiles",
         "/api/machine/training/end",
+        "/api/machine/training/events",
         "/api/machine/training/local",
         "/api/machine/training/start",
         "/api/machine/training/telemetry",

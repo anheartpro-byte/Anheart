@@ -873,7 +873,7 @@ Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la mêm
 requête) et son code est journalisé ; une absence de réponse devient
 `Unreachable` (on réessaie plus tard).
 
-**Corps** : les six routes `POST` attendent un objet JSON. Un corps qui n'en
+**Corps** : les sept routes `POST` attendent un objet JSON. Un corps qui n'en
 est pas un est refusé par **400** `invalid_request`, et rien n'est écrit :
 du texte qui n'est pas du JSON (un objet tronqué compris), ou du JSON valide
 qui n'est pas un objet (`null`, un nombre, une chaîne, un booléen, un
@@ -1110,7 +1110,7 @@ deux temps.
    déploiement, jusqu'au `|` qui précède sa partie secrète :
 
    ```bash
-   sed -n 's/^CONVEX_DEPLOY_KEY_PROD=\([a-z]*:[^|]*\)|.*/\1/p' .env.local
+   sed -n 's/^CONVEX_DEPLOY_KEY_PROD=\([a-z]*:[a-z0-9-]*\)|.*/\1/p' .env.local
    ```
 
    La ligne affichée doit être `prod:clean-giraffe-153`, le déploiement de
