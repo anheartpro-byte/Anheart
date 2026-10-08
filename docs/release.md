@@ -5,9 +5,10 @@ comment chaque composant est versionné, ce que fait `scripts/release.sh`, ce qu
 le responsable de release doit prouver avant la fusion, et quelle version une
 machine a le droit de recevoir.
 
-> **État réel (6 octobre 2026).** Le script, le modèle de PR, le changelog et le
+> **État réel (8 octobre 2026).** Le script, le modèle de PR, le changelog et le
 > registre Convex existent et sont testés (`npm run test:release`,
-> `npm run test:convex`). **Aucune release n'a encore été faite** : aucun tag
+> `npm run test:convex`), et la CI lance ces deux suites à chaque exécution
+> ([section 7](#7-tests)). **Aucune release n'a encore été faite** : aucun tag
 > n'existe, `CHANGELOG.md` n'a aucune section, et les trois composants portent
 > la valeur de développement `0.0.0-dev`. La première release réelle
 > (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) reste à faire par le responsable du
@@ -45,7 +46,7 @@ Les trois avancent séparément : une release peut ne publier qu'un composant.
 
 | Composant | Tag | Écrit par le script dans | Lu par |
 |---|---|---|---|
-| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | la console, qui le lit une fois au démarrage (`src/contract.py`) et l'envoie dans chaque heartbeat (`software_version`) ; la fiche machine du site l'affiche. L'affichage sur la console locale n'a pas encore de ticket ([section 8](#8-limites-et-reste-à-faire)). |
+| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | la console, qui le lit une fois au démarrage (`src/contract.py`) et l'envoie dans chaque heartbeat (`software_version`) ; la fiche machine du site l'affiche. La console locale ne l'affiche pas encore : c'est le sujet d'ANH-210 ([section 8](#8-limites-et-reste-à-faire)). |
 | Convex | `cloud-X.Y.Z` | `convex/VERSION` et la constante `CLOUD_VERSION` de `convex/cloudVersion.ts` | le code déployé : `npx convex run softwareReleases:deployedCloudVersion` répond la version du déploiement visé. |
 | Site | `web-X.Y.Z` | `package.json` et `package-lock.json` (champ `version`) | `next.config.ts`, qui la fige à la construction ; le pied de page de l'accueil et de la FAQ l'affiche. |
 
@@ -135,7 +136,8 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    Le script refuse si `develop` n'est pas vert. Il crée la branche
    `release/pi-0.1.0_cloud-0.1.0_web-0.1.0`, y écrit les fichiers de version et
    les sections de `CHANGELOG.md`, et ouvre une PR vers `develop` intitulée
-   `Release : pi-0.1.0, cloud-0.1.0, web-0.1.0`.
+   `Release : pi-0.1.0, cloud-0.1.0, web-0.1.0`. S'il échoue en route, voir
+   [Si `prepare` échoue](#si-prepare-échoue).
 3. **Faire relire et fusionner la PR de préparation** comme toute PR (CI verte,
    revue, squash). Garder le titre `Release : …` : c'est ce qui la tient hors
    du changelog suivant.
@@ -156,7 +158,10 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    fusionne tant qu'aucun fichier n'est en conflit (même section, étape 5,
    voie B).
 5. **Remplir la check-list** de la PR ([section 5](#5-la-check-list-de-release)),
-   preuve après preuve. Deux approbations.
+   preuve après preuve, puis **faire relire le candidat** : GitHub n'exige
+   aucune approbation sur `main`, la revue est l'avis d'un agent indépendant,
+   posé comme statut `agent-review/R1` sur le commit de tête de la PR
+   ([L'avis indépendant sur une release](#lavis-indépendant-sur-une-release)).
 6. **Fusionner par commit de fusion** (« Create a merge commit » dans GitHub),
    jamais en squash ni en rebase : un squash couperait `main` de l'historique
    de `develop`, et le changelog suivant reprendrait tout depuis le début.
@@ -170,9 +175,10 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    ```bash
    scripts/release.sh tag
    ```
-8. **Enregistrer les versions dans Convex** avec les lignes que le script vient
-   d'afficher ([section 6](#6-enregistrer-la-version-dans-convex)).
-9. **Déployer, dans la fenêtre fixée par la check-list.** Ni la fusion dans
+   Le script refuse si le commit de `develop` que `main` vient de recevoir ne
+   porte pas `agent-review/R1` réussi. Les tags sont poussés ensemble : `origin`
+   les prend tous, ou n'en prend aucun.
+8. **Déployer, dans la fenêtre fixée par la check-list.** Ni la fusion dans
    `main` ni ce script ne déploient (pour la toute première fusion dans `main`,
    voir la précaution de
    [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)). Dans une
@@ -186,10 +192,60 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    tags de l'étape 7 : lancé avant, il peut les faire refuser
    ([section 4](#les-boutons-de-déploiement-et-le-script)). Un bouton pour
    Convex reste prévu par ANH-126.
+9. **Enregistrer les versions dans Convex** avec les lignes que `tag` a
+   affichées à l'étape 7 ([section 6](#6-enregistrer-la-version-dans-convex)).
+   Après le déploiement de Convex, pas avant : le registre est une table et
+   une mutation de ce code, qui n'existent sur un déploiement qu'une fois ce
+   code déployé.
 
-Si une étape échoue, rien n'est à défaire à la main sauf à l'étape 2 : quand la
-branche `release/…` a été créée mais pas poussée, la supprimer avant de
-relancer.
+Si `pr` ou `tag` échoue, rien n'est à défaire : `pr` ne crée que la PR, et
+`tag` ne garde aucun tag, ni dans le clone ni sur `origin`, quand il ne peut pas
+tous les poser. Corriger la cause et relancer. Pour `prepare`, voir ci-dessous.
+
+### Si `prepare` échoue
+
+Tout ce que `prepare` va écrire est calculé avant qu'il touche au clone. Une
+fois la branche `release/…` créée, trois choses peuvent encore échouer, et
+aucune ne demande de ménage à la main :
+
+| Ce qui échoue | Ce que fait le script | Quoi faire |
+|---|---|---|
+| l'écriture d'un fichier, ou le commit (un fichier protégé, un hook qui refuse) | il rend le clone tel qu'il était : la branche d'origine, aucun fichier modifié, la branche `release/…` supprimée. Rien n'est sur `origin`. | corriger la cause, relancer la même commande |
+| le push | de même | relancer la même commande |
+| la création de la PR, la branche étant déjà poussée | il rend le clone tel qu'il était et le dit. La branche reste sur `origin`, sans PR. | relancer la même commande : elle voit que la branche de `origin` porte exactement ce qu'elle écrirait, n'écrit et ne pousse rien, et crée seulement la PR. `--dry-run` l'annonce (« Reprise »). |
+
+« Exactement ce qu'elle écrirait » veut dire : même commit de départ sur
+`develop`, même titre, mêmes fichiers, même contenu. La date d'une section
+fait partie du contenu : relancer **le même jour**, ou avec la même `--date`.
+Si `develop` a bougé entre-temps, ou si la date a changé, le script refuse et
+nomme la branche à supprimer sur `origin`
+(`git push origin --delete release/…`) avant de relancer.
+
+Relancé alors que sa PR est déjà ouverte, `prepare` donne son adresse et ne
+crée rien. Une branche `release/…` restée dans le clone sans être sur `origin`
+(créée à la main, ou laissée par une version antérieure du script) fait
+refuser : le script donne la commande qui la supprime.
+
+### L'avis indépendant sur une release
+
+`main` exige `agent-review/R1` réussi sur le commit de tête de la PR de
+release. Ce n'est pas un job de la CI : c'est un statut de commit, posé sur un
+SHA précis, qui dit qu'un agent indépendant a relu ce commit-là.
+
+- **Quoi relire.** Le candidat : le commit de tête de `develop` que la PR de
+  release montre (ligne « Candidat » de son corps), avec sa check-list
+  remplie. La PR de préparation a eu son propre avis, sur sa propre tête ; il
+  ne vaut pas pour le candidat, qui est un autre commit.
+- **Sur quel SHA.** Celui du candidat, exactement. Si `develop` avance, la PR
+  de release montre un nouveau commit, qui n'a pas de statut : la revue et la
+  check-list sont à refaire sur lui.
+- **Ce que fait le script.** `pr` n'exige pas l'avis, qui se rend sur ce que la
+  PR montre : il écrit dans la PR l'état du statut à l'ouverture. `tag`
+  l'exige, sur le commit de `develop` que `main` a reçu (le commit de fusion
+  de `main`, lui, est neuf et n'a été relu par personne). Le script ne pose
+  jamais ce statut.
+- **Qui le pose.** Aucun document ne le dit aujourd'hui pour une release : à
+  décider avant la première ([section 8](#8-limites-et-reste-à-faire)).
 
 ### Si `develop` a bougé pendant la release
 
@@ -223,7 +279,33 @@ titres manquants. Dans ce cas :
      que `main` n'a pas reçu le changelog complété, `tag` refuse.
 
 Avant la fusion de la PR de préparation, le cas est plus simple : fermer cette
-PR, supprimer sa branche `release/…` et relancer `prepare`.
+PR, supprimer sa branche `release/…` sur `origin` et relancer `prepare`.
+
+### Un revert porte un titre de ticket
+
+Annuler une PR de ticket se fait dans une PR intitulée comme les autres,
+`ANH-n : annuler …` : elle a alors sa ligne dans la section, à côté de celle du
+ticket qu'elle annule, et le changelog dit vrai. GitHub propose un autre titre,
+`Revert "ANH-10 : …"`. **Le remplacer avant de fusionner.** Sous ce titre, le
+revert n'aurait aucune ligne : le changement annulé partirait, et la section
+citerait toujours son ticket.
+
+Les trois étapes refusent donc de continuer tant que l'intervalle à publier
+pour un composant contient un revert au titre par défaut qui touche ce
+composant, et elles le nomment (son SHA court et son titre). Un commit fusionné
+ne change plus de titre ; pour sortir du refus :
+
+1. **Annuler ce revert** par le bouton « Revert » de sa PR, **en gardant le
+   titre que GitHub propose** (`Revert "Revert "ANH-10 : …""` ; `git revert`
+   écrit `Reapply "ANH-10 : …"`, que le script lit de même). Les deux commits
+   se neutralisent : le script ne refuse plus, et rien n'est parti sans ligne.
+2. **Refaire l'annulation** dans une PR intitulée `ANH-n : annuler …`.
+3. **Relancer `prepare` avec les mêmes versions** : il ajoute la ligne de cette
+   PR à la section, comme pour toute PR de ticket fusionnée pendant la release.
+
+Ce que le script ne voit pas : un revert fusionné sous un titre écrit à la
+main qui n'est ni celui d'un ticket ni celui que GitHub propose. Il est alors
+ignoré, comme tout commit sans titre de ticket.
 
 ---
 
@@ -231,10 +313,18 @@ PR, supprimer sa branche `release/…` et relancer `prepare`.
 
 | Étape | Lit | Écrit | Refuse si |
 |---|---|---|---|
-| `prepare` | `origin/develop` et sa CI | une branche `release/…` (fichiers de version, `CHANGELOG.md`), une PR vers `develop` | `develop` n'est pas vert ; une version n'est pas `X.Y.Z` ou n'est pas supérieure à la version courante ; son tag existe déjà ; la version courante n'a pas son tag ; `--pi` sans `--pi-validation` ; l'arbre de travail a des modifications |
-| `prepare`, relancé avec des versions déjà écrites dans `develop` et sans tag | `origin/develop` et sa CI | une branche `release/…-changelog-<sha>` (`CHANGELOG.md` seul), une PR vers `develop` | `develop` n'est pas vert ; les sections citent déjà chaque PR de ticket (rien à changer) |
-| `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; **`develop` contient une PR de ticket d'un composant que la section de sa version ne cite pas** |
-| `tag` | `origin/main` et sa CI | les tags annotés, poussés | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le dernier commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash, ou changelog complété pas encore dans `main`) ; **`main` contient une PR de ticket d'un composant que la section de sa version ne cite pas** |
+| `prepare` | `origin/develop` et sa CI | une branche `release/…` (fichiers de version, `CHANGELOG.md`), une PR vers `develop` | `develop` n'est pas vert ; une version n'est pas `X.Y.Z` ou n'est pas supérieure à la version courante ; son tag existe déjà ; la version courante n'a pas son tag ; `--pi` sans `--pi-validation` ; l'arbre de travail a des modifications ; la branche `release/…` existe déjà avec un autre contenu ; un revert sans titre de ticket |
+| `prepare`, relancé avec des versions déjà écrites dans `develop` et sans tag | `origin/develop` et sa CI | une branche `release/…-changelog-<sha>` (`CHANGELOG.md` seul), une PR vers `develop` | `develop` n'est pas vert ; les sections citent déjà chaque PR de ticket (rien à changer) ; un revert sans titre de ticket |
+| `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; **`develop` contient une PR de ticket d'un composant que la section de sa version ne cite pas** ; un revert sans titre de ticket |
+| `tag` | `origin/main` et sa CI, et les statuts du commit de `develop` que `main` contient | les tags annotés, poussés tous ensemble | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le dernier commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash, ou changelog complété pas encore dans `main`) ; **`main` contient une PR de ticket d'un composant que la section de sa version ne cite pas** ; un revert sans titre de ticket ; le commit de `develop` que `main` contient n'a pas `agent-review/R1` réussi |
+
+Quand la reprise de `prepare` reçoit un autre `--pi-validation` que celui de
+la section, elle l'accepte : c'est ainsi qu'un niveau se corrige avant le tag.
+Sa PR le dit alors dans son titre (`Release : … (niveau de validation du Pi
+modifié)`, ou `(changelog complété, niveau de validation du Pi modifié)` si des
+PR de ticket s'ajoutent aussi) et dans son texte (« Change le niveau de
+validation de `pi-0.1.0` : `bench` devient `auto_validated` »). Une PR
+intitulée `(changelog complété)` ne change donc jamais un niveau.
 
 Les deux refus en gras tiennent la règle suivante : **aucun tag n'est posé sur
 un commit qui contient une PR de ticket d'un composant absente de la section de
@@ -244,13 +334,14 @@ le commit de `develop` le plus récent que `main` contient), et les compare aux
 lignes de la section. Quoi faire quand il refuse est dit à la
 [section 3](#si-develop-a-bougé-pendant-la-release).
 
-« Vert » veut dire deux choses à la fois :
+« Vert » veut dire trois choses à la fois :
 
 - aucun *check run* du commit n'a échoué, n'a été annulé ou n'est encore en
   cours ;
 - chacune des six gates de la CI (`pi-gate`, `simulation-gate`, `convex-tests`,
   `web`, `audit`, `docs`) a, sur ce commit, au moins une exécution terminée et
-  réussie.
+  réussie ;
+- aucun *statut de commit* n'est en échec, en erreur ou en attente.
 
 Un commit sur lequel la CI n'a pas tourné n'est donc pas vert, même si un check
 run tiers y a réussi (les commentaires d'aperçu de Vercel, par exemple,
@@ -267,10 +358,25 @@ de ces deux branches, où le push a donc tout lancé. Deux cas en découlent :
 - une gate n'a sur le commit que des exécutions ignorées : le commit n'est pas
   vert, et le script la nomme parmi les gates absentes ou non réussies.
 
-Le script ne lit que les check runs. Il **ne lit pas les statuts de commit**.
-Les déploiements que Vercel lançait à chaque push étaient des statuts ; Vercel
-n'en lance plus pour un commit qui contient `vercel.json`
-([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
+Le script lit les check runs **et les statuts de commit**. Un statut n'est pas
+un job : c'est une marque qu'un service ou une personne pose sur un SHA.
+GitHub garde la dernière de chaque nom, et c'est elle que le script lit. Un
+commit qui ne porte aucun statut n'est pas refusé pour autant : c'est le cas
+ordinaire de la tête de `develop` et du commit de fusion de `main`. Deux
+sortes de statuts comptent ici :
+
+- `agent-review/R1`, l'avis indépendant
+  ([section 3](#lavis-indépendant-sur-une-release)). `tag` l'exige réussi sur
+  le commit de `develop` que `main` a reçu ; en échec ou en attente sur le
+  commit qu'une étape lit, il la fait refuser comme tout autre statut ;
+- ceux d'un service de déploiement. Vercel en posait à chaque push ; il n'en
+  pose plus pour un commit qui contient `vercel.json`
+  ([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
+
+Le nom du statut exigé est écrit en tête du script (`REQUIRED_STATUSES`), à
+côté de la liste des gates ; `npm run test:release` échoue s'il s'écarte de ce
+que le relevé des deux protections nomme
+([deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main)).
 
 La liste des gates est écrite en tête du script (`REQUIRED_CHECKS`). Ce sont
 les six noms que la protection de `main` et celle de `develop` exigent et que
@@ -403,7 +509,7 @@ pour une première release.
 | Valeurs `[MED]` | `git grep -l '\[MED\]' origin/develop -- raspberry-pi/src convex` liste les fichiers concernés ; `git diff <base>..origin/develop -- <ces fichiers>` montre ce qui a changé. |
 | Verrous | `git diff <base>..origin/develop -- raspberry-pi/src/local_config.py raspberry-pi/.env.example raspberry-pi/.env.pi.example` ne change aucun des deux défauts, et les deux fichiers d'exemple portent `=false`. |
 | Niveau de validation | `bench` : cette check-list. Au-dessus : le compte rendu de revue. |
-| Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance et de celle qui approuve. Qu'aucune séance ne soit en cours se vérifie au moment de déployer, pas ici ([étape 9 du déroulé](#3-le-déroulé)). |
+| Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance et de celle qui approuve. Qu'aucune séance ne soit en cours se vérifie au moment de déployer, pas ici ([étape 8 du déroulé](#3-le-déroulé)). |
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -436,8 +542,10 @@ exemple :
 ```
 
 Aucune page du site n'appelle encore cette mutation, et elle n'a été appelée sur
-aucun déploiement : elle n'est prouvée que par les tests en mémoire. À la
-première release, l'essayer d'abord sur le déploiement de développement. La
+aucun déploiement : elle n'est prouvée que par les tests en mémoire. Elle
+n'existe sur un déploiement qu'une fois ce code déployé : d'où sa place dans le
+[déroulé](#3-le-déroulé), après le déploiement de Convex. À la première
+release, l'essayer d'abord sur le déploiement de développement. La
 ligne de commande de Convex sait appeler une fonction au nom d'un compte ; cette
 forme n'a pas été essayée ici :
 
@@ -459,6 +567,16 @@ son `origin`, et remplace `gh` par un double : aucun test ne touche GitHub ni le
 dépôt réel. Il vérifie aussi les fichiers de version du dépôt, le pied de page
 du site, et que la check-list du modèle de PR est celle de ce document.
 
+La CI lance les deux. `npm run test:convex` est le job `convex-tests`. Le
+fichier de `npm run test:release` est une étape du job `docs`, choisi parce
+qu'il tourne à chaque exécution, quels que soient les fichiers changés : ces
+tests lisent le script, mais aussi ce document, `docs/roadmap.md` et le modèle
+de PR, qu'une PR de documentation peut changer seule. C'est là que le script
+tourne sous Linux (bash 5, l'`awk` du runner) ; en local il tourne aussi sous
+macOS (bash 3.2). Première exécution sous Linux le 7 octobre 2026 (exécution
+37703336157) : 86 tests réussis en 41 s, et le job `docs` entier en 48 s, contre
+une dizaine de secondes avant ces tests.
+
 ---
 
 ## 8. Limites et reste à faire
@@ -466,9 +584,11 @@ du site, et que la check-list du modèle de PR est celle de ce document.
 | Quoi | Qui ou quel ticket |
 |---|---|
 | Faire la première release réelle (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) | le responsable du produit, [section 3](#3-le-déroulé) |
-| Afficher la version sur la console locale | ticket à créer ; `read_software_version` (`src/contract.py`) lit déjà `raspberry-pi/VERSION` côté Pi |
+| Afficher la version sur la console locale | ANH-210 ; `read_software_version` (`src/contract.py`) lit déjà `raspberry-pi/VERSION` côté Pi |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
-| Lancer `npm run test:release` en CI | une ligne à ajouter au workflow |
+| Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant la première release |
+| Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant la première release partielle |
+| Refuser à la fusion, et non à la release, une PR de revert au titre par défaut | non outillé : le titre d'une PR peut changer après la CI ; le refus est fait par `scripts/release.sh` ([section 3](#un-revert-porte-un-titre-de-ticket)) |
 | Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
 | Déployer Convex par un bouton, comme le site et la simulation (ANH-198) | ANH-126 |

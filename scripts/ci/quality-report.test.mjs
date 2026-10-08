@@ -868,6 +868,7 @@ const everyScript = () => ({
   "scripts-dependency-guard": numbers(8),
   "scripts-gitleaks-fixture": numbers(6),
   "scripts-men": numbers(14),
+  "scripts-release": numbers(85),
 });
 
 /** The `needs` context of the report job. @param {Record<string, string>} [results] @param {Record<string, string>} [rule] */
@@ -923,7 +924,7 @@ test("the table of the run has one line per project and the columns of the ticke
   const markdown = read(renderReport(report));
   const lines = markdown.split("\n");
   assert.equal(lines[0], "## Rapport de qualité");
-  assert.equal(lines[2], "**5 583 tests lancés, 0 en échec.** 6 gates réussies sur 6.");
+  assert.equal(lines[2], "**5 668 tests lancés, 0 en échec.** 6 gates réussies sur 6.");
   assert.equal(lines[4], `| ${HEADER.join(" | ")} |`);
   assert.deepEqual(
     lines.slice(6, 6 + PROJECTS.length).map((text) => text.split(" | ")[0]),
@@ -972,11 +973,11 @@ test("the table of the run has one line per project and the columns of the ticke
   assert.deepEqual(line(markdown, "Site").slice(6, 8), ["84,9 %", "81,5 %"]);
   // No tool measures the coverage of the scripts: it is said, not shown as zero.
   assert.deepEqual(line(markdown, "Scripts").slice(1), [
-    "250",
-    "250",
+    "335",
+    "335",
     "0",
     "0",
-    "47,8 s",
+    "56,3 s",
     "non mesurée",
     "non mesurée",
     "✅ réussi",
@@ -987,7 +988,7 @@ test("the table of the run has one line per project and the columns of the ticke
   // The total above is the sum of the lines.
   assert.equal(
     PROJECTS.reduce((sum, { label }) => sum + Number(line(markdown, label)[1]?.replaceAll(" ", "")), 0),
-    5583,
+    5668,
   );
   // EX-4: each threshold with what it judges and whether it holds, the scenarios, the battery.
   const safety = markdown.slice(markdown.indexOf("### Seuils de couverture"), markdown.indexOf("### Détail par suite"));
@@ -1015,7 +1016,10 @@ test("the table of the run has one line per project and the columns of the ticke
     /^- Couverture de Convex et du site : 80 % de lignes et de branches exigés par `convex-tests` \(sur `convex\/` et sur chacun de ses 3 fichiers de la chaîne de sécurité pris seul\) et 80 % par `web` \(sur `lib\/`, `hooks\/`, `components\/`, `app\/`\)\. Sous le seuil, la gate échoue\.$/m,
   );
   // The pages are measured like any other folder of the site: the report no longer lists them as left out.
-  assert.match(markdown, /^- Non mesuré : la couverture des scripts ; les tests de release /m);
+  assert.match(
+    markdown,
+    /^- Non mesuré : la couverture des scripts \(leurs tests sont comptés, ceux de l'outillage de release compris\)\.$/m,
+  );
   assert.doesNotMatch(markdown, /pages du site/);
   assert.doesNotMatch(markdown, /sans seuil/, "the coverage of Convex and of the site is no longer only read");
   assert.match(markdown, /^- Ce rapport ne lit que les jobs de `ci\.yml`\. Les autres workflows du dépôt /m);
@@ -1067,13 +1071,13 @@ test("a gate the path rule skipped reads « sautée », never zero", () => {
   ]);
   assert.match(
     markdown,
-    /^\*\*1 249 tests lancés, 0 en échec\.\*\* 4 gates réussies sur 6, 2 sautées par la règle de chemins \(`pi-gate`, `simulation-gate`\)\.$/m,
+    /^\*\*1 334 tests lancés, 0 en échec\.\*\* 4 gates réussies sur 6, 2 sautées par la règle de chemins \(`pi-gate`, `simulation-gate`\)\.$/m,
   );
   // The total is the sum of the lines: no test is counted that no line shows.
   const shown = PROJECTS.map(({ label }) => line(markdown, label)[1] ?? "").filter((text) => text !== "sautée");
   assert.equal(
     shown.reduce((sum, text) => sum + Number(text.replaceAll(/[ ¹]/g, "")), 0),
-    1249,
+    1334,
   );
   assert.match(
     markdown,
@@ -1088,7 +1092,7 @@ test("a gate the path rule skipped reads « sautée », never zero", () => {
   );
   // The scripts lack the tests and the checks the Pi gate runs for them, and say so.
   const scripts = line(markdown, "Scripts");
-  assert.deepEqual([scripts[1], scripts[8], scripts[9]], ["148 ¹", "✅ réussi (partiel)", "sautée"]);
+  assert.deepEqual([scripts[1], scripts[8], scripts[9]], ["233 ¹", "✅ réussi (partiel)", "sautée"]);
   assert.match(
     markdown,
     /^¹ Ce nombre ne compte qu'une partie des suites du projet : les autres n'ont pas de chiffres /m,
@@ -1241,7 +1245,7 @@ test("a gate that failed keeps its numbers and reads « échec »", () => {
   ]);
   assert.match(
     markdown,
-    /^\*\*5 583 tests lancés, 3 en échec\.\*\* 5 gates réussies sur 6, 1 en échec \(`pi-gate`\)\.$/m,
+    /^\*\*5 668 tests lancés, 3 en échec\.\*\* 5 gates réussies sur 6, 1 en échec \(`pi-gate`\)\.$/m,
   );
   assert.match(
     markdown,
@@ -1588,7 +1592,7 @@ test("the catalogue of the report names each suite and each measure once, under 
 test("the essentials of the run are also said in plain text, one line per project, for a notice", () => {
   const all = buildReport({ parts: everyPart(), junit: everyScript(), needs: needs(), event: "push", run: RUN });
   assert.deepEqual(read(renderNotice(all)).split("\n"), [
-    "5 583 tests lancés, 0 en échec. 6 gates réussies sur 6.",
+    "5 668 tests lancés, 0 en échec. 6 gates réussies sur 6.",
     // What the coverage of the Pi is that of, then the threshold on what it judges and, by name, what it does not.
     "Console du Pi (tout src/) : 3 248 tests, 0 en échec ; lignes 91,2 %, branches 88,0 % ; lint réussi ; types réussis ; gate réussie",
     "Chaîne de sécurité du Pi : seuil de 100 % tenu (3 fichiers sous le seuil : lignes 100 %, branches 100 %) ; dans la chaîne mais hors du seuil : src/signal.py (lignes 82,5 %, branches 64,0 %)",
@@ -1598,7 +1602,7 @@ test("the essentials of the run are also said in plain text, one line per projec
     "Couverture, Convex : seuil de 80 % de lignes et de branches tenu ; fichiers jugés seuls : convex/training.ts tenu (lignes 95,4 %, branches 92,1 %), convex/http.ts tenu (lignes 100 %, branches 93,2 %), convex/lib/auth.ts tenu (lignes 100 %, branches 100 %)",
     "Site (lib/, hooks/, components/, app/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint réussi ; types réussis ; gate réussie",
     "Couverture, Site (lib/, hooks/, components/, app/) : seuil de 80 % de lignes et de branches tenu",
-    "Scripts (CI et release) : 250 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
+    "Scripts (CI et release) : 335 tests, 0 en échec ; couverture non mesurée ; lint réussi ; types réussis ; gate réussie",
     "Le tableau complet est le résumé du job quality-report, dernier bloc de cette page.",
   ]);
   // When the job knows the address of its own summary, the notice ends on it: the table is one click away.
@@ -1620,14 +1624,14 @@ test("the essentials of the run are also said in plain text, one line per projec
   );
   const partly = buildReport({ parts: { site }, junit: everyScript(), needs: states, event: "pull_request", run: RUN });
   assert.deepEqual(read(renderNotice(partly)).split("\n").slice(0, 7), [
-    "324 tests lancés, 0 en échec. 3 gates réussies sur 6 (pi-gate sautée, simulation-gate sautée, web en échec).",
+    "409 tests lancés, 0 en échec. 3 gates réussies sur 6 (pi-gate sautée, simulation-gate sautée, web en échec).",
     // The panel of the console, tested by `web`: counted, and said to be part of the project only.
     "Console du Pi (tout src/) : 40 tests (une partie des suites), 0 en échec ; couverture sautée ; lint sauté ; types sautés ; gate sautée",
     "Simulation : sautée par la règle de chemins",
     "Convex : tests indisponibles ; couverture indisponible ; lint réussi ; types indisponibles ; gate réussie",
     "Site (lib/, hooks/, components/, app/) : 136 tests, 0 en échec ; lignes 84,9 %, branches 81,5 % ; lint en échec ; types réussis ; gate en échec",
     "Couverture, Site (lib/, hooks/, components/, app/) : seuil de 80 % de lignes et de branches tenu",
-    "Scripts (CI et release) : 148 tests (une partie des suites), 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
+    "Scripts (CI et release) : 233 tests (une partie des suites), 0 en échec ; couverture non mesurée ; lint réussi (partiel) ; types sautés ; gate réussie",
   ]);
   assert.doesNotMatch(renderNotice(partly), /Chaîne de sécurité/, "nothing is said of a chain that was not measured");
   // What the runner reads: one line, the line breaks and the characters of its own syntax escaped.

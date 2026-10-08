@@ -25,7 +25,7 @@ Chaque case cochée porte sa preuve sur la même ligne (lien, SHA, sortie de com
 
 ## Fusion et suite
 
-- Fusion par **commit de fusion** (ni squash, ni rebase), après deux approbations, sans contournement administrateur.
-- Juste après la fusion et la CI de `main` : `scripts/release.sh tag`.
-- Puis enregistrer chaque version dans Convex (`softwareReleases.recordRelease`), comme l'indique la sortie du script.
-- Le site ne se déploie plus à la fusion. Dans la fenêtre fixée, hors de toute séance et après les tags : Convex d'abord, puis aussitôt le site par le bouton « Déployer en production (main) » (`docs/release.md`, étape 9).
+- Fusion par **commit de fusion** (ni squash, ni rebase), une fois l'avis indépendant `agent-review/R1` réussi sur le candidat ci-dessus, sans contournement administrateur. GitHub n'exige aucune approbation sur `main` : la revue est cet avis (`docs/release.md`, section 3).
+- Juste après la fusion et la CI de `main` : `scripts/release.sh tag`. Il refuse si le candidat ne porte pas `agent-review/R1` réussi.
+- Le site ne se déploie plus à la fusion. Dans la fenêtre fixée, hors de toute séance et après les tags : Convex d'abord, puis aussitôt le site par le bouton « Déployer en production (main) » (`docs/release.md`, étape 8).
+- Puis enregistrer chaque version dans Convex (`softwareReleases.recordRelease`), avec les lignes que `tag` a affichées : après le déploiement de Convex, pas avant (`docs/release.md`, étape 9).
