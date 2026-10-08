@@ -432,13 +432,14 @@ test("the audit hands the report the JUnit files of its two test files, and noth
   const kept = (/** @type {string} */ text) =>
     [...text.matchAll(/\$RUNNER_TEMP\/quality\/([\w.-]+)/g)].map(([, name]) => name).sort();
   assert.deepEqual(kept(jobs.get("audit") ?? ""), ["scripts-dependency-guard.xml", "scripts-gitleaks-fixture.xml"]);
-  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-men.xml"]);
+  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-men.xml", "scripts-release.xml"]);
   assert.deepEqual(kept(jobs.get("changes") ?? ""), ["scripts-ci.xml"]);
   // Each of those files is written by `node --test` itself, for the test file named on the same line.
   for (const [id, file] of [
     ["audit", "scripts/ci/braces-depth-guard.test.mjs"],
     ["audit", "scripts/ci/gitleaks-fixture.test.mjs"],
     ["docs", "scripts/ci/check-men.test.mjs"],
+    ["docs", "scripts/release.test.mjs"],
   ]) {
     const line = (jobs.get(id ?? "") ?? "").split("\n").find((text) => text.trimEnd().endsWith(` ${file}`)) ?? "";
     assert.match(
@@ -454,6 +455,29 @@ test("the audit hands the report the JUnit files of its two test files, and noth
   const codeql = readFileSync(new URL("../../.github/workflows/codeql.yml", import.meta.url), "utf8");
   assert.doesNotMatch(codeql, /quality|upload-artifact|GITHUB_STEP_SUMMARY/);
   assert.doesNotMatch(jobs.get(REPORT) ?? "", /security|code-scanning|audit\b.*\bjson/i);
+});
+
+// --- The release tooling, tested by a gate that existed (ANH-195) ---
+//
+// It has no job of its own: branch protection lists the required checks by
+// name, and a step of a required job fails that job. What follows holds that
+// the step is one nothing softens, in a job that runs whatever the files changed.
+
+test("the release tooling is tested by `docs`, the required job no path rule can skip", () => {
+  const name = "Test the release tooling";
+  const step = stepsOf("docs").find((text) => text.startsWith(`name: ${name}\n`)) ?? "";
+  assert.ok(step !== "", `docs: no step "${name}"`);
+  assert.doesNotMatch(step, /continue-on-error/);
+  // After the checks of the pages, whatever they found; never on a cancelled run.
+  assert.equal(stepCondition("docs", name), "${{ !cancelled() }}");
+  assert.match(script("docs", name), / scripts\/release\.test\.mjs$/m);
+  assert.ok(REQUIRED.includes("docs") && ALWAYS.includes("docs"));
+  // It is the test file `npm run test:release` names, and the report counts it for the job that runs it.
+  assert.equal(JSON.parse(atRoot("package.json")).scripts["test:release"], "node --test scripts/release.test.mjs");
+  assert.deepEqual(
+    SUITES.filter(({ job }) => job === "docs").map(({ id }) => id),
+    ["scripts-men", "scripts-release"],
+  );
 });
 
 test("the workflow gives no token more than read access, and each action is pinned to one full commit", () => {

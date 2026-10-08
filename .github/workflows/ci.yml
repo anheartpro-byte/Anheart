@@ -593,7 +593,7 @@ jobs:
 
   docs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -615,6 +615,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/quality"
           node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-men.xml" scripts/ci/check-men.test.mjs
           bash scripts/ci/check-men.sh
+      # Part of the gate: the release tooling (scripts/release.sh) and what
+      # docs/release.md and the release template say of it. It is the test
+      # file of `npm run test:release`, run directly so that it can be told
+      # where to keep its JUnit file. Every test works in throwaway
+      # repositories with a double of `gh`: nothing reaches GitHub, nothing is
+      # tagged, pushed or deployed. In this job because it runs on every
+      # event, whatever the files changed: these tests read pages of docs/,
+      # which the path rule lets the other gates skip.
+      - name: Test the release tooling
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/quality"
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-release.xml" scripts/release.test.mjs
       - name: Keep the numbers for the quality report
         if: ${{ !cancelled() }}
         continue-on-error: true

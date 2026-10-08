@@ -1090,7 +1090,7 @@ par un commit de fusion
 | `convex-tests` | types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
-| `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe |
+| `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; puis les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub. Ils sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés, et qu'ils lisent des pages de `docs/` ([release.md](release.md#7-tests)) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
@@ -2081,9 +2081,10 @@ lanceur après ces mesures (environ 3 s en local, deux fois par exécution).
   dépôt) : ils sont hors des dossiers mesurés, donc ni comptés ni jugés par le
   seuil du site. Les pages (`app/`) sont mesurées et jugées depuis ANH-204 ; le
   parcours dans un navigateur est le sujet d'ANH-83.
-- Les tests de release (`npm run test:release`) : la CI ne les lance pas
-  ([release.md](release.md#8-limites-et-reste-à-faire)), ils ne sont donc pas
-  dans la ligne des scripts.
+- La couverture des tests de release (`npm run test:release`) : depuis
+  ANH-195 le job `docs` les lance et le rapport les compte dans la ligne des
+  scripts, mais aucun outil ne mesure ce qu'ils couvrent de
+  `scripts/release.sh`, qui est du shell.
 - Les types des scripts `.mjs` : `tsc` ne lit que les fichiers `.ts` et `.tsx`.
   La colonne « Types » des scripts ne porte que sur leurs fichiers Python.
 - Les tests écartés par configuration (marqueur `hardware`, tests `slow` de

@@ -140,6 +140,14 @@ export const SUITES = [
     runner: "node --test",
   },
   {
+    id: "scripts-release",
+    project: "scripts",
+    job: "docs",
+    part: "scripts-docs",
+    label: "outillage de release",
+    runner: "node --test",
+  },
+  {
     id: "scripts-gate-runner",
     project: "scripts",
     job: "pi-gate",
@@ -1328,8 +1336,8 @@ export function renderReport(report) {
     `- Couverture de Convex et du site : ${CONVEX.threshold} % de lignes et de branches exigés par \`convex-tests\` ` +
       `(sur \`convex/\` et sur chacun de ses ${counted(CONVEX.alone.length, "fichier")} de la chaîne de sécurité pris seul) ` +
       `et ${SITE.threshold} % par \`web\` (sur ${SITE_FOLDERS}). Sous le seuil, la gate échoue.`,
-    `- Non mesuré : la couverture des scripts ; ${NOT_MEASURED_OF_THE_SITE}` +
-      "les tests de release (`npm run test:release`), que la CI ne lance pas.",
+    `- Non mesuré : ${NOT_MEASURED_OF_THE_SITE}la couverture des scripts ` +
+      "(leurs tests sont comptés, ceux de l'outillage de release compris).",
     "- Ce rapport ne lit que les jobs de `ci.yml`. Les autres workflows du dépôt (analyse statique, installation " +
       "du Pi, déploiements) n'y figurent pas.",
     "- Chaque colonne est décrite dans `docs/framework-de-test.md`, section CI. Les mêmes chiffres sont dans " +

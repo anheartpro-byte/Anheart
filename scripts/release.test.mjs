@@ -71,13 +71,37 @@ function commit(repo, subject, files) {
   git(repo, "commit", "--quiet", "-m", subject);
 }
 
+/**
+ * The double of `gh`. It answers the check runs of any commit with
+ * `FAKE_GH_CHECKS`, and the commit statuses of a commit with the file named
+ * after its SHA in `FAKE_GH_STATUSES` (no file: the commit carries no status).
+ * `gh pr list` answers the address of the open pull request, if any.
+ */
 const FAKE_GH = `#!/bin/sh
 printf '%s\\n' "$*" >>"$FAKE_GH_LOG"
 if [ "$1" = api ]; then
-  printf '%s' "$FAKE_GH_CHECKS"
-  exit "\${FAKE_GH_API_EXIT:-0}"
+  case "$2" in
+    */check-runs)
+      printf '%s' "$FAKE_GH_CHECKS"
+      exit "\${FAKE_GH_API_EXIT:-0}"
+      ;;
+    */status)
+      sha="\${2%/status}"
+      if [ -f "$FAKE_GH_STATUSES/\${sha##*/}" ]; then cat "$FAKE_GH_STATUSES/\${sha##*/}"; fi
+      exit "\${FAKE_GH_STATUS_EXIT:-0}"
+      ;;
+  esac
+  exit 64
+fi
+if [ "$1 $2" = "pr list" ]; then
+  printf '%s' "$FAKE_GH_OPEN_PR"
+  exit 0
 fi
 if [ "$1 $2" = "pr create" ]; then
+  if [ "\${FAKE_GH_CREATE_EXIT:-0}" != 0 ]; then
+    echo "gh: the pull request could not be created" >&2
+    exit "$FAKE_GH_CREATE_EXIT"
+  fi
   while [ $# -gt 0 ]; do
     if [ "$1" = --body-file ]; then cat "$2" >"$FAKE_GH_LOG.body"; fi
     shift
@@ -86,6 +110,9 @@ if [ "$1 $2" = "pr create" ]; then
 fi
 `;
 
+/** The commit status the independent review leaves on the commit it read. */
+const REVIEW = "agent-review/R1";
+
 /** History of `develop` before any release: titles as squash merges leave them. */
 const HISTORY = [
   ["ANH-10 : régler la rampe du bras (#1)", { "raspberry-pi/src/ramp.py": "ramp = 1\n" }],
@@ -93,7 +120,6 @@ const HISTORY = [
   ["ANH-12 : pied de page du site (#3)", { "components/Footer.tsx": "// footer\n", "convex/footer.ts": "export {};\n" }],
   ["ANH-13 : guide de démarrage (#4)", { "docs/guide.md": "# Guide\n" }],
   ["chore: bump a dependency", { "app/page.tsx": "// page\n" }],
-  ['Revert "ANH-10 : régler la rampe du bras (#1)"', { "raspberry-pi/src/revert.py": "x = 1\n" }],
 ];
 
 /**
@@ -107,7 +133,9 @@ function fixture(t, history = HISTORY) {
   const work = join(dir, "work");
   const bin = join(dir, "bin");
   const log = join(dir, "gh.log");
+  const statuses = join(dir, "statuses");
   mkdirSync(bin);
+  mkdirSync(statuses);
   writeFileSync(join(bin, "gh"), FAKE_GH);
   chmodSync(join(bin, "gh"), 0o755);
 
@@ -148,8 +176,12 @@ function fixture(t, history = HISTORY) {
     dir,
     origin,
     work,
-    /** Run release.sh in the work clone. `checks` is what the CI answers. */
-    run(args, { checks = GREEN, apiExit = "0", env = {} } = {}) {
+    /**
+     * Run release.sh in the work clone. `checks` is what the CI answers;
+     * `createExit` makes `gh pr create` fail; `openPr` is the address of a
+     * pull request already open for the branch.
+     */
+    run(args, { checks = GREEN, apiExit = "0", statusExit = "0", createExit = "0", openPr = "", env = {} } = {}) {
       rmSync(log, { force: true });
       rmSync(`${log}.body`, { force: true });
       const result = spawnSync("bash", [SCRIPT, ...args], {
@@ -161,6 +193,10 @@ function fixture(t, history = HISTORY) {
           FAKE_GH_LOG: log,
           FAKE_GH_CHECKS: checks,
           FAKE_GH_API_EXIT: apiExit,
+          FAKE_GH_STATUSES: statuses,
+          FAKE_GH_STATUS_EXIT: statusExit,
+          FAKE_GH_CREATE_EXIT: createExit,
+          FAKE_GH_OPEN_PR: openPr,
           ...env,
         },
       });
@@ -194,8 +230,21 @@ function fixture(t, history = HISTORY) {
       git(work, "commit", "--quiet", "-m", subject);
       git(work, "push", "--quiet", "origin", "develop");
     },
-    /** What merging the release PR with a merge commit leaves on `main`. */
-    mergeIntoMain() {
+    /**
+     * The commit statuses of a commit, as `name<TAB>state` lines (GitHub keeps
+     * the latest of each name). An empty text leaves the commit without any.
+     */
+    setStatuses(sha, lines) {
+      writeFileSync(join(statuses, sha), lines);
+    },
+    /**
+     * What merging the release PR with a merge commit leaves on `main`. The
+     * protection of `main` lets it through only when the head of `develop`
+     * carries the independent review: `reviewed: false` is a merge made with
+     * that rule lifted.
+     */
+    mergeIntoMain({ reviewed = true } = {}) {
+      if (reviewed) fx.setStatuses(git(work, "rev-parse", "develop"), `${REVIEW}\tsuccess\n`);
       git(work, "switch", "--quiet", "main");
       git(work, "merge", "--quiet", "--no-ff", "-m", "Merge pull request #9 from develop", "develop");
       git(work, "push", "--quiet", "origin", "main");
@@ -611,6 +660,20 @@ test("EX-2 the gates release.sh requires are the required checks of the CI workf
   }
 });
 
+test("ANH-195 EX-8 the commit status release.sh requires is the one the protection of main and of develop requires", () => {
+  const required = /^REQUIRED_STATUSES="([^"]+)"$/m.exec(real("scripts/release.sh"));
+  assert.ok(required, "REQUIRED_STATUSES not found in scripts/release.sh");
+  assert.deepEqual(required[1].split(" "), [REVIEW]);
+  // The record of the two protections, read from GitHub: the six gates and this status.
+  assert.match(
+    real("docs/deploiement.md"),
+    /^\| Vérifications obligatoires \| `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit`, `docs` et `agent-review\/R1` \| les sept mêmes \|$/m,
+  );
+  // And the release documents say that tag requires it, and that no approval stands in for it.
+  assert.match(real("docs/release.md"), /`tag`\s+l'exige, sur le commit de `develop` que `main` a reçu/);
+  assert.doesNotMatch(real("docs/release.md") + real(TEMPLATE), /deux approbations/i);
+});
+
 test("EX-2 prepare refuses when the CI state cannot be read", (t) => {
   const fx = fixture(t);
   refuses(fx.run(["prepare", ...ALL], { apiExit: "1" }), /lecture des vérifications CI impossible/);
@@ -701,7 +764,7 @@ test("EX-2 a dry run of each step writes nothing, pushes nothing, creates no PR 
     /gh pr create --base main --head develop --title "Release : pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0"/,
     /\*\*Gates vertes\.\*\*/,
     /git tag -a pi-0\.1\.0 <commit de main>/,
-    /git push origin pi-0\.1\.0 cloud-0\.1\.0 web-0\.1\.0/,
+    /git push --atomic origin pi-0\.1\.0 cloud-0\.1\.0 web-0\.1\.0/,
   ]) {
     assert.match(prepare.stdout, expected);
   }
@@ -815,6 +878,545 @@ test("EX-4 pr refuses a Pi section whose validation level was removed", (t) => {
   git(fx.work, "push", "--quiet", "origin", branch);
   fx.squashIntoDevelop(branch, "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
   refuses(fx.run(["pr"]), /section pi-0\.1\.0 sans niveau de validation reconnu/);
+});
+
+// ---------------------------------------------------------------------------
+// ANH-195 EX-5: a revert carries a ticket title
+// ---------------------------------------------------------------------------
+
+const BRANCH = "release/pi-0.1.0_cloud-0.1.0_web-0.1.0";
+const TITLE = "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0";
+/** The title GitHub proposes for the pull request that reverts the one of ANH-10. */
+const REVERT = 'Revert "ANH-10 : régler la rampe du bras"';
+const RAMP = "raspberry-pi/src/ramp.py";
+const creations = (result) => result.gh.filter((call) => call.startsWith("pr create"));
+
+/** A repository where the preparation of 0.1.0 is merged into `develop`. */
+function prepared(t, history = HISTORY) {
+  const fx = fixture(t, history);
+  const first = fx.run(["prepare", ...ALL]);
+  assert.equal(first.status, 0, first.stderr);
+  fx.squashIntoDevelop(BRANCH, `${TITLE} (#5)`);
+  return fx;
+}
+
+test("ANH-195 EX-5 prepare refuses a revert merged under the title GitHub proposes, and names it", (t) => {
+  const fx = fixture(t, [...HISTORY, [`${REVERT} (#6)`, { [RAMP]: "ramp = 0\n" }]]);
+  const short = git(fx.work, "rev-parse", "--short", "develop");
+  const before = fx.state();
+
+  for (const args of [
+    ["prepare", ...ALL],
+    ["prepare", ...ALL, "--dry-run"],
+  ]) {
+    const refused = fx.run(args);
+    refuses(
+      refused,
+      new RegExp(
+        `un revert sans titre de ticket touche pi \\(Raspberry Pi\\) dans origin/develop :\\n {2}${short} Revert "ANH-10 : régler la rampe du bras" \\(#6\\)\\n`,
+      ),
+    );
+    assert.match(refused.stderr, /Un revert porte un titre de ticket \(ANH-n : \.\.\.\)/);
+    assert.deepEqual(
+      refused.gh.filter((call) => call.startsWith("pr ")),
+      [],
+    );
+  }
+  assert.equal(fx.state(), before);
+});
+
+test("ANH-195 EX-5 a revert merged during a release under its default title stops pr, prepare and tag", (t) => {
+  const fx = prepared(t);
+  // The section of pi-0.1.0 cites ANH-10; this takes its change away.
+  fx.mergeTicket(`${REVERT} (#6)`, { [RAMP]: "ramp = 0\n" });
+
+  for (const args of [["pr"], ["pr", "--dry-run"], ["prepare", ...ALL.slice(0, -2)]]) {
+    const blocked = fx.run(args);
+    refuses(blocked, /un revert sans titre de ticket touche pi \(Raspberry Pi\) dans \S+ :\n {2}[0-9a-f]+ Revert "ANH-10 : régler la rampe du bras" \(#6\)\n/);
+    assert.deepEqual(
+      blocked.gh.filter((call) => call.startsWith("pr ")),
+      [],
+    );
+  }
+
+  // Merged into main all the same, the release PR being open already: no tag.
+  fx.mergeIntoMain();
+  for (const args of [["tag"], ["tag", "--dry-run"]]) {
+    refuses(fx.run(args), /un revert sans titre de ticket touche pi/);
+  }
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+});
+
+for (const [how, restore] of [
+  ["the Revert button of GitHub, which quotes the title of the pull request", `Revert "${REVERT}" (#7)`],
+  ["git revert, which quotes the title of the merged commit", `Revert "${REVERT} (#6)" (#7)`],
+  ["git revert of a revert, which writes Reapply", 'Reapply "ANH-10 : régler la rampe du bras" (#7)'],
+]) {
+  test(`ANH-195 EX-5 the way out: the revert undone by ${how}, then made again under a ticket title`, (t) => {
+    const fx = prepared(t);
+    fx.mergeTicket(`${REVERT} (#6)`, { [RAMP]: "ramp = 0\n" });
+    refuses(fx.run(["pr", "--dry-run"]), /un revert sans titre de ticket/);
+
+    // Undone under the proposed title: the two cancel out, nothing left untold.
+    fx.mergeTicket(restore, { [RAMP]: "ramp = 1\n" });
+    const cancelled = fx.run(["pr", "--dry-run"]);
+    assert.equal(cancelled.status, 0, cancelled.stderr);
+
+    // Made again as a ticket: a line the section must carry, like any other.
+    fx.mergeTicket("ANH-60 : annuler la rampe du bras (#8)", { [RAMP]: "ramp = 0\n" });
+    refuses(fx.run(["pr"]), /ne cite pas :\n {2}pi-0\.1\.0 : ANH-60 : annuler la rampe du bras \(#8\)\n/);
+    const completed = fx.run(["prepare", ...ALL.slice(0, -2)]);
+    assert.equal(completed.status, 0, completed.stderr);
+    const head = /--head (\S+) /.exec(creations(completed)[0] ?? "")?.[1] ?? "";
+    fx.squashIntoDevelop(head, `${TITLE} (changelog complété) (#9)`);
+    assert.equal(fx.run(["pr"]).status, 0);
+    fx.mergeIntoMain();
+    const tagged = fx.run(["tag"]);
+
+    assert.equal(tagged.status, 0, tagged.stderr);
+    assertTagsComplete(fx);
+    const message = git(fx.origin, "tag", "-l", "--format=%(contents)", "pi-0.1.0");
+    assert.match(message, /- ANH-10 : régler la rampe du bras \(#1\)\n- ANH-60 : annuler la rampe du bras \(#8\)/);
+    assert.doesNotMatch(message, /Revert|Reapply/);
+  });
+}
+
+test("ANH-195 EX-5 a third default revert, which undoes the one that cancelled the first, is refused in its turn", (t) => {
+  const fx = fixture(t, [
+    ...HISTORY,
+    [`${REVERT} (#6)`, { [RAMP]: "ramp = 0\n" }],
+    [`Revert "${REVERT}" (#7)`, { [RAMP]: "ramp = 1\n" }],
+    [`Revert "Revert "${REVERT}"" (#8)`, { [RAMP]: "ramp = 0\n" }],
+  ]);
+  const short = git(fx.work, "rev-parse", "--short", "develop");
+
+  const refused = fx.run(["prepare", ...ALL, "--dry-run"]);
+
+  refuses(refused, /un revert sans titre de ticket touche pi/);
+  // The third alone: the first two cancelled each other.
+  assert.deepEqual(refused.stderr.match(/^ {2}[0-9a-f]+ Re.*$/gm), [`  ${short} Revert "Revert "${REVERT}"" (#8)`]);
+});
+
+test("ANH-195 EX-5 a default revert does not hold back a component it does not touch", (t) => {
+  const fx = fixture(t, [
+    ...HISTORY,
+    [`${REVERT} (#6)`, { [RAMP]: "ramp = 0\n" }],
+    ['Revert "ANH-13 : guide de démarrage" (#7)', { "docs/guide.md": "# Guide, as before\n" }],
+  ]);
+
+  const others = fx.run(["prepare", "--cloud", "0.1.0", "--web", "0.1.0", "--date", DATE, "--dry-run"]);
+  const pi = fx.run(["prepare", "--pi", "0.1.0", "--pi-validation", "bench", "--date", DATE, "--dry-run"]);
+
+  assert.equal(others.status, 0, others.stderr);
+  refuses(pi, /un revert sans titre de ticket touche pi/);
+  // The revert of a page of docs/ touches no component: it is not named.
+  assert.doesNotMatch(pi.stderr, /guide de démarrage/);
+});
+
+test("ANH-195 EX-5 a revert under a ticket title is a line of the section, next to the ticket it undoes", (t) => {
+  const fx = fixture(t, [...HISTORY, ['ANH-60 : Revert "ANH-10 : régler la rampe du bras" (#6)', { [RAMP]: "ramp = 0\n" }]]);
+
+  const result = fx.run(["prepare", "--pi", "0.1.0", "--pi-validation", "bench", "--date", DATE]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const changelog = git(fx.work, "show", "origin/release/pi-0.1.0:CHANGELOG.md");
+  assert.deepEqual(sectionOf(changelog, "pi-0.1.0").split("\n").slice(-2), [
+    "- ANH-10 : régler la rampe du bras (#1)",
+    '- ANH-60 : Revert "ANH-10 : régler la rampe du bras" (#6)',
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// ANH-195 EX-6: a resumed prepare that changes the validation level says so
+// ---------------------------------------------------------------------------
+
+const SAME_VERSIONS = ["prepare", "--pi", "0.1.0", "--cloud", "0.1.0", "--web", "0.1.0", "--pi-validation"];
+
+test("ANH-195 EX-6 a resumed prepare that changes the Pi validation level says so in the title and the text of its PR", (t) => {
+  const fx = prepared(t);
+
+  // The same versions, another level, and nothing merged since the preparation.
+  const changed = fx.run([...SAME_VERSIONS, "auto_validated"]);
+
+  assert.equal(changed.status, 0, changed.stderr);
+  assert.equal(creations(changed).length, 1);
+  assert.match(
+    creations(changed)[0],
+    /^pr create --base develop --head release\/\S+-changelog-[0-9a-f]+ --title Release : pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0 \(niveau de validation du Pi modifié\) --body-file /,
+  );
+  assert.match(changed.body, /^\*\*Change le niveau de validation de `pi-0\.1\.0` : `bench` devient `auto_validated`\.\*\* /m);
+  assert.match(changed.body, /la ligne « Niveau de validation du Pi justifié » de la check-list de release est à prouver pour ce niveau/);
+  // The text no longer claims that ticket PRs were added.
+  assert.match(changed.body, /^Réécrit le changelog de la release pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0 sans y ajouter de PR de ticket\.$/m);
+  assert.doesNotMatch(changed.body, /a reçu des PR de ticket/);
+  assert.match(changed.body, /^Niveau de validation : `auto_validated`\.$/m);
+});
+
+test("ANH-195 EX-6 a resumed prepare that adds tickets and changes the level says both, and one that keeps the level says neither", (t) => {
+  const fx = prepared(t);
+  fx.mergeTicket("ANH-40 : nouvelle rampe d'arrêt (#40)", { "raspberry-pi/src/stop.py": "stop = 1\n" });
+
+  const both = fx.run([...SAME_VERSIONS, "occupied_validated", "--dry-run"]);
+  const same = fx.run([...SAME_VERSIONS, "bench", "--dry-run"]);
+
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout, /--title "Release : pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0 \(changelog complété, niveau de validation du Pi modifié\)"/);
+  assert.match(both.stdout, /Complète le changelog de la release .* : `develop` a reçu des PR de ticket depuis sa préparation\./);
+  assert.match(both.stdout, /\*\*Change le niveau de validation de `pi-0\.1\.0` : `bench` devient `occupied_validated`\.\*\*/);
+  assert.equal(same.status, 0, same.stderr);
+  assert.match(same.stdout, /--title "Release : pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0 \(changelog complété\)"/);
+  assert.doesNotMatch(same.stdout, /Change le niveau de validation|niveau de validation du Pi modifié/);
+});
+
+// ---------------------------------------------------------------------------
+// ANH-195 EX-8: recovery after a failed prepare, atomic tags, commit statuses
+// ---------------------------------------------------------------------------
+
+/** What a failed prepare must give back: the branch checked out, a clean tree, no release branch. */
+function assertCloneAsBefore(fx, before) {
+  assert.equal(fx.state(), before);
+  assert.equal(git(fx.work, "branch", "--list", "release/*"), "");
+}
+
+test(
+  "ANH-195 EX-8 a file that cannot be written after the branch switch leaves the clone as it was",
+  // The owner of a file is not stopped by its permissions when the owner is root.
+  { skip: process.getuid?.() === 0 ? "run as root: a read-only file can still be written" : false },
+  (t) => {
+    const fx = fixture(t);
+    chmodSync(join(fx.work, "package.json"), 0o444);
+    const before = fx.state();
+
+    const failed = fx.run(["prepare", ...ALL]);
+
+    refuses(failed, /écriture de package\.json impossible/);
+    assert.match(
+      failed.stderr,
+      /prepare a échoué après avoir créé la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0\. Rien n'a été créé sur GitHub, et le clone est rendu tel qu'il était/,
+    );
+    // The files written before the one that failed are gone with the branch.
+    assertCloneAsBefore(fx, before);
+    assert.equal(readFileSync(join(fx.work, "raspberry-pi/VERSION"), "utf8"), "pi-0.0.0-dev\n");
+    assert.deepEqual(
+      failed.gh.filter((call) => call.startsWith("pr ")),
+      [],
+    );
+
+    // The cause removed, the same command goes through.
+    chmodSync(join(fx.work, "package.json"), 0o644);
+    const again = fx.run(["prepare", ...ALL]);
+    assert.equal(again.status, 0, again.stderr);
+    assert.equal(creations(again).length, 1);
+  },
+);
+
+test("ANH-195 EX-8 a commit refused after the files were written leaves the clone as it was", (t) => {
+  const fx = fixture(t);
+  const hook = join(fx.work, ".git", "hooks", "pre-commit");
+  mkdirSync(dirname(hook), { recursive: true });
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+  chmodSync(hook, 0o755);
+  // From a commit that is not a branch: the clone must come back to it too.
+  git(fx.work, "switch", "--quiet", "--detach", "main");
+  const before = fx.state();
+
+  const failed = fx.run(["prepare", ...ALL]);
+
+  refuses(failed, /le commit de préparation a été refusé/);
+  assertCloneAsBefore(fx, before);
+  assert.equal(git(fx.origin, "for-each-ref", "refs/heads/release"), "");
+});
+
+test("ANH-195 EX-8 a push refused by origin leaves the clone as it was, and the same command then goes through", (t) => {
+  const fx = fixture(t);
+  const hook = join(fx.origin, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+  chmodSync(hook, 0o755);
+  const before = fx.state();
+
+  const failed = fx.run(["prepare", ...ALL]);
+
+  refuses(failed, /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 n'a pas pu être poussée sur origin/);
+  assert.match(failed.stderr, /Rien n'a été créé sur GitHub/);
+  assertCloneAsBefore(fx, before);
+
+  rmSync(hook);
+  const again = fx.run(["prepare", ...ALL]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(git(fx.work, "log", "-1", "--format=%s", `origin/${BRANCH}`), TITLE);
+});
+
+test("ANH-195 EX-8 a PR that could not be created after the push is created by the same command run again", (t) => {
+  const fx = fixture(t);
+  const before = fx.state();
+
+  const failed = fx.run(["prepare", ...ALL], { createExit: "1" });
+
+  refuses(failed, /la PR de préparation n'a pas pu être créée/);
+  assert.match(
+    failed.stderr,
+    /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 est sur origin, mais sa PR n'a pas été créée\. Le clone est rendu tel qu'il était\. Relancer la même commande/,
+  );
+  // The branch is on origin; the clone is back on develop, without the branch.
+  const pushed = git(fx.origin, "rev-parse", `refs/heads/${BRANCH}`);
+  assert.equal(git(fx.work, "rev-parse", "--abbrev-ref", "HEAD"), "develop");
+  assert.equal(git(fx.work, "status", "--porcelain"), "");
+  assert.equal(git(fx.work, "branch", "--list", "release/*"), "");
+  assert.notEqual(fx.state(), before);
+
+  // Run again while GitHub still refuses: nothing more is written, and it says what to do.
+  const stillFailing = fx.run(["prepare", ...ALL], { createExit: "1" });
+  refuses(stillFailing, /la PR de préparation n'a pas pu être créée : la branche release\/\S+ reste sur origin, relancer la même commande/);
+  assert.equal(git(fx.origin, "rev-parse", `refs/heads/${BRANCH}`), pushed);
+  assert.equal(git(fx.work, "rev-parse", "--abbrev-ref", "HEAD"), "develop");
+
+  // The dry run says what is left to do, and does not do it.
+  const dry = fx.run(["prepare", ...ALL, "--dry-run"]);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, new RegExp(`^Reprise : la branche ${BRANCH} est déjà sur origin avec ce contenu \\(${pushed}\\)\\. Seule sa PR reste à créer\\.$`, "m"));
+  assert.doesNotMatch(dry.stdout, /^git (switch|commit|push -u) /m);
+  assert.deepEqual(
+    dry.gh.filter((call) => call.startsWith("pr ")),
+    [],
+  );
+
+  const resumed = fx.state();
+  const again = fx.run(["prepare", ...ALL]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(creations(again).length, 1);
+  assert.match(creations(again)[0], new RegExp(`^pr create --base develop --head ${BRANCH} --title ${TITLE} --body-file `));
+  assert.match(again.body, /^Prépare la release pi-0\.1\.0, cloud-0\.1\.0, web-0\.1\.0\.$/m);
+  // Nothing was written, committed or pushed a second time.
+  assert.equal(fx.state(), resumed);
+  assert.equal(git(fx.origin, "rev-parse", `refs/heads/${BRANCH}`), pushed);
+
+  // And the release goes on from the branch that was pushed the first time.
+  fx.squashIntoDevelop(`origin/${BRANCH}`, `${TITLE} (#5)`);
+  assert.equal(fx.run(["pr"]).status, 0);
+});
+
+test("ANH-195 EX-8 prepare run again while its PR is open says so and creates nothing", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  const before = fx.state();
+
+  const again = fx.run(["prepare", ...ALL], { openPr: "https://github.invalid/anheart/pull/5" });
+
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /^La PR de préparation est déjà ouverte : https:\/\/github\.invalid\/anheart\/pull\/5$/m);
+  assert.deepEqual(creations(again), []);
+  assert.equal(fx.state(), before);
+});
+
+test("ANH-195 EX-8 prepare refuses a branch already on origin that holds another preparation", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  // develop moves: the branch pushed above was prepared from another commit.
+  fx.mergeTicket("ANH-40 : nouvelle rampe d'arrêt (#40)", { "raspberry-pi/src/stop.py": "stop = 1\n" });
+  const before = fx.state();
+
+  for (const args of [
+    ["prepare", ...ALL],
+    ["prepare", ...ALL, "--dry-run"],
+  ]) {
+    const refused = fx.run(args);
+    refuses(
+      refused,
+      /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 existe déjà sur origin avec un autre contenu que celui de cette préparation : fermer sa PR s'il y en a une, la supprimer \(git push origin --delete release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0\), puis relancer/,
+    );
+    assert.deepEqual(
+      refused.gh.filter((call) => call.startsWith("pr ")),
+      [],
+    );
+  }
+  assert.equal(fx.state(), before);
+});
+
+test("ANH-195 EX-8 a branch deleted on origin is not taken for a pushed one, and a branch left in the clone is named", (t) => {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  // The PR is closed and its branch deleted on GitHub; the clone still remembers it.
+  git(fx.origin, "update-ref", "-d", `refs/heads/${BRANCH}`);
+  git(fx.work, "switch", "--quiet", "develop");
+  assert.notEqual(git(fx.work, "for-each-ref", `refs/remotes/origin/${BRANCH}`), "");
+
+  refuses(
+    fx.run(["prepare", ...ALL]),
+    /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 existe déjà dans ce clone sans être sur origin : la supprimer \(git branch -D release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0\), puis relancer/,
+  );
+  git(fx.work, "branch", "--quiet", "-D", BRANCH);
+  const again = fx.run(["prepare", ...ALL]);
+
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /Reprise/);
+  assert.equal(git(fx.origin, "log", "-1", "--format=%s", `refs/heads/${BRANCH}`), TITLE);
+});
+
+test("ANH-195 EX-8 origin takes every tag or none", (t) => {
+  const fx = prepared(t);
+  fx.mergeIntoMain();
+  // origin refuses one tag of the three, and would take the two others.
+  const hook = join(fx.origin, "hooks", "update");
+  writeFileSync(hook, '#!/bin/sh\n[ "$1" != refs/tags/web-0.1.0 ]\n');
+  chmodSync(hook, 0o755);
+
+  const refused = fx.run(["tag"]);
+
+  refuses(refused, /les tags n'ont pas pu être poussés : origin n'en a reçu aucun, et aucun n'est conservé en local/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+
+  rmSync(hook);
+  const tagged = fx.run(["tag"]);
+  assert.equal(tagged.status, 0, tagged.stderr);
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+});
+
+for (const [name, lines, message] of [
+  ["a failed commit status", "deploy/site\tfailure\n", /statut deploy\/site : failure/],
+  ["a commit status in error", "deploy/site\terror\n", /statut deploy\/site : error/],
+  ["a pending commit status", "deploy/site\tpending\n", /statut deploy\/site : pending/],
+  ["a refused independent review", `${REVIEW}\tfailure\n`, /statut agent-review\/R1 : failure/],
+  ["one failed status beside a successful one", `${REVIEW}\tsuccess\ndeploy/site\tfailure\n`, /statut deploy\/site : failure/],
+]) {
+  test(`ANH-195 EX-8 prepare and pr refuse when the head of develop carries ${name}`, (t) => {
+    const fx = fixture(t);
+    fx.setStatuses(git(fx.work, "rev-parse", "develop"), lines);
+    const before = fx.state();
+    const early = fx.run(["prepare", ...ALL]);
+    refuses(early, /develop n'est pas vert/);
+    assert.match(early.stderr, message);
+    assert.equal(fx.state(), before);
+
+    // The same once the preparation is merged: pr reads the new head.
+    fx.setStatuses(git(fx.work, "rev-parse", "develop"), "");
+    assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+    fx.squashIntoDevelop(BRANCH, `${TITLE} (#5)`);
+    fx.setStatuses(git(fx.work, "rev-parse", "develop"), lines);
+    const late = fx.run(["pr"]);
+    refuses(late, /develop n'est pas vert/);
+    assert.match(late.stderr, message);
+    assert.deepEqual(
+      late.gh.filter((call) => call.startsWith("pr ")),
+      [],
+    );
+  });
+}
+
+test("ANH-195 EX-8 pr writes in the pull request where the independent review stands on its candidate", (t) => {
+  const fx = prepared(t);
+  const candidate = git(fx.work, "rev-parse", "develop");
+
+  const unread = fx.run(["pr", "--dry-run"]);
+  fx.setStatuses(candidate, `${REVIEW}\tsuccess\ndeploy/site\tsuccess\n`);
+  const read = fx.run(["pr"]);
+
+  // Not required to open the pull request: the review is made on what it shows.
+  assert.equal(unread.status, 0, unread.stderr);
+  assert.match(unread.stdout, /^Avis indépendant : agent-review\/R1 : absent$/m);
+  assert.equal(read.status, 0, read.stderr);
+  assert.match(
+    read.body,
+    /^Avis indépendant sur ce commit : à l'ouverture de cette PR, agent-review\/R1 : success\. `main` exige ce statut réussi pour fusionner, et `scripts\/release\.sh tag` le vérifie avant de poser un tag\.$/m,
+  );
+  assert.ok(read.gh.includes(`api repos/{owner}/{repo}/commits/${candidate}/status --paginate --jq .statuses[] | [.context, .state] | @tsv`));
+});
+
+test("ANH-195 EX-8 tag refuses a release whose candidate does not carry the independent review, whatever main carries", (t) => {
+  const fx = prepared(t);
+  const candidate = git(fx.work, "rev-parse", "develop");
+  // Merged with the rule of main lifted: nothing was posted on the candidate.
+  fx.mergeIntoMain({ reviewed: false });
+  const merge = git(fx.origin, "rev-parse", "refs/heads/main");
+  // A status on the merge commit is not a review of what it brought in.
+  fx.setStatuses(merge, `${REVIEW}\tsuccess\n`);
+
+  for (const [lines, state] of [
+    ["", "absent"],
+    ["deploy/site\tsuccess\n", "absent"],
+    [`${REVIEW}\tpending\n`, "pending"],
+    [`${REVIEW}\tfailure\n`, "failure"],
+    [`${REVIEW}\terror\n`, "error"],
+  ]) {
+    fx.setStatuses(candidate, lines);
+    for (const args of [["tag"], ["tag", "--dry-run"]]) {
+      const refused = fx.run(args);
+      refuses(refused, new RegExp(`le candidat publié \\(${candidate}\\) n'a pas l'avis indépendant requis :\\n {2}- agent-review/R1 : ${state}\\n`));
+      assert.match(refused.stderr, /La release ne part pas sans lui/);
+    }
+  }
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+
+  fx.setStatuses(candidate, `${REVIEW}\tsuccess\n`);
+  const tagged = fx.run(["tag"]);
+  assert.equal(tagged.status, 0, tagged.stderr);
+  assert.match(tagged.stdout, new RegExp(`^Avis indépendant : agent-review/R1 réussi sur le candidat ${candidate}$`, "m"));
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+});
+
+test("ANH-195 EX-8 tag refuses when the merge commit of main carries a status that is not successful", (t) => {
+  const fx = prepared(t);
+  fx.mergeIntoMain();
+  fx.setStatuses(git(fx.origin, "rev-parse", "refs/heads/main"), "deploy/site\tpending\n");
+
+  const refused = fx.run(["tag"]);
+
+  refuses(refused, /main n'est pas vert[\s\S]*statut deploy\/site : pending/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+});
+
+test("ANH-195 EX-8 the three steps refuse when the commit statuses cannot be read", (t) => {
+  const fx = fixture(t);
+  const unreadable = { statusExit: "1" };
+  const before = fx.state();
+  refuses(fx.run(["prepare", ...ALL], unreadable), /lecture des statuts de commit impossible pour develop/);
+  assert.equal(fx.state(), before);
+
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop(BRANCH, `${TITLE} (#5)`);
+  refuses(fx.run(["pr"], unreadable), /lecture des statuts de commit impossible pour develop/);
+  fx.mergeIntoMain();
+  refuses(fx.run(["tag"], unreadable), /lecture des statuts de commit impossible pour main/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+});
+
+test("ANH-195 two releases in a row go through though main carries a commit develop does not have", (t) => {
+  const fx = fixture(t);
+  // A pull request merged into main alone, which develop never takes back.
+  git(fx.work, "switch", "--quiet", "main");
+  commit(fx.work, "ANH-198 : apporter sur main les boutons de déploiement (#90)", { "vercel.json": "{}\n" });
+  git(fx.work, "push", "--quiet", "origin", "main");
+  git(fx.work, "switch", "--quiet", "develop");
+
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop(BRANCH, `${TITLE} (#5)`);
+  assert.equal(fx.run(["pr"]).status, 0);
+  fx.mergeIntoMain();
+  const first = fx.run(["tag"]);
+  assert.equal(first.status, 0, first.stderr);
+
+  fx.mergeTicket("ANH-30 : nouveau palier de vitesse (#30)", { "raspberry-pi/src/tiers.py": "t = 1\n" });
+  const next = fx.run(["prepare", "--pi", "0.2.0", "--pi-validation", "bench", "--date", "2026-11-02"]);
+  assert.equal(next.status, 0, next.stderr);
+  fx.squashIntoDevelop("release/pi-0.2.0", "Release : pi-0.2.0 (#31)");
+  const opened = fx.run(["pr"]);
+  assert.equal(opened.status, 0, opened.stderr);
+  fx.mergeIntoMain();
+  const second = fx.run(["tag"]);
+
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\npi-0.2.0\nweb-0.1.0");
+  assertTagsComplete(fx);
+  // develop never received the commit of main, nor any merge commit.
+  assert.equal(git(fx.origin, "log", "--format=%s", "refs/heads/develop", "--", "vercel.json"), "");
+  assert.equal(git(fx.origin, "rev-list", "--merges", "--count", "refs/heads/develop"), "0");
+  const message = git(fx.origin, "tag", "-l", "--format=%(contents)", "pi-0.2.0").split("\n");
+  assert.deepEqual(
+    message.filter((line) => line.startsWith("- ")),
+    ["- ANH-30 : nouveau palier de vitesse (#30)"],
+  );
 });
 
 // ---------------------------------------------------------------------------
