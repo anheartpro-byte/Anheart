@@ -133,6 +133,21 @@ export const recordRelease = mutation({
       return releaseId;
     }
 
+    // A Pi row recorded before the history existed first gets its own level
+    // written down. What the row says of it (notes, author, date) is about to
+    // be replaced, by a level change or by a plain correction. A refusal
+    // below undoes this write with the rest of the mutation.
+    if (
+      existing.component === "pi" &&
+      (await storedLevels(ctx, existing)).length === 0
+    ) {
+      for (const first of firstLevelOf(existing)) {
+        await ctx.db.insert("software_release_levels", {
+          releaseId: existing._id,
+          ...first,
+        });
+      }
+    }
     if (existing.validationLevel !== level) {
       if (notes === undefined) {
         throw new ConvexError(
@@ -140,16 +155,6 @@ export const recordRelease = mutation({
         );
       }
       if (level !== undefined) {
-        // A row recorded before the history existed first gets its own level
-        // written down, so that the level it leaves is not lost.
-        if ((await storedLevels(ctx, existing)).length === 0) {
-          for (const first of firstLevelOf(existing)) {
-            await ctx.db.insert("software_release_levels", {
-              releaseId: existing._id,
-              ...first,
-            });
-          }
-        }
         await ctx.db.insert("software_release_levels", {
           releaseId: existing._id,
           validationLevel: level,
@@ -157,8 +162,8 @@ export const recordRelease = mutation({
         });
       }
     }
-    // The row is the record in force: the last write wins there. What a level
-    // change replaces stays in `software_release_levels`.
+    // The row is the record in force: the last write wins there. What it
+    // said of an earlier level stays in `software_release_levels`.
     await ctx.db.replace(existing._id, fields);
     return existing._id;
   },

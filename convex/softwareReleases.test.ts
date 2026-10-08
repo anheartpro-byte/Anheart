@@ -353,6 +353,70 @@ describe("ANH-195 EX-7 the history of the validation levels of a Pi version", ()
     expect(stored.map((row) => row.releaseId)).toEqual([id, id]);
   });
 
+  it("keeps what a row recorded before the history existed said of its level when it is only corrected", async () => {
+    const { w, admin } = await world();
+    const reviewer = await secondAdmin(w);
+    const id = await w.t.run((ctx) =>
+      ctx.db.insert("software_releases", {
+        ...PI,
+        notes: "first bench release",
+        recordedBy: reviewer.id,
+        updatedAt: NOW - 86_400_000,
+      }),
+    );
+    const first = {
+      validationLevel: "bench",
+      reason: "first bench release",
+      decidedBy: reviewer.id,
+      decidedAt: NOW - 86_400_000,
+    };
+
+    // The same level, another date: the row is rewritten by another admin.
+    await admin.mutation(api.softwareReleases.recordRelease, {
+      ...PI,
+      releasedAt: NOW + 5,
+      notes: "release date corrected",
+    });
+    const corrected = await admin.query(api.softwareReleases.listReleases, {});
+    // A second correction finds the decision stored, and adds nothing.
+    await admin.mutation(api.softwareReleases.recordRelease, {
+      ...PI,
+      releasedAt: NOW + 6,
+    });
+    const again = await admin.query(api.softwareReleases.listReleases, {});
+    const stored = await levels(w);
+
+    expect(corrected[0]).toMatchObject({
+      _id: id,
+      notes: "release date corrected",
+      recordedBy: w.admin,
+      updatedAt: NOW,
+    });
+    // The first decision is still the one the row carried, not the correction.
+    expect(corrected[0].levelHistory).toEqual([first]);
+    expect(again[0].levelHistory).toEqual([first]);
+    expect(stored).toHaveLength(1);
+  });
+
+  it("writes down nothing of a row recorded before the history existed when its level change is refused", async () => {
+    const { w, admin } = await world();
+    await w.t.run((ctx) =>
+      ctx.db.insert("software_releases", {
+        ...PI,
+        recordedBy: w.admin,
+        updatedAt: NOW - 86_400_000,
+      }),
+    );
+
+    const refused = admin.mutation(api.softwareReleases.recordRelease, {
+      ...PI,
+      validationLevel: "occupied_validated",
+    });
+
+    await expect(refused).rejects.toThrow(/needs notes/);
+    expect(await levels(w)).toEqual([]);
+  });
+
   it("keeps no level history for a cloud or web version", async () => {
     const { w, admin } = await world();
     for (const component of ["cloud", "web"] as const) {
