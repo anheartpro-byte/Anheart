@@ -96,7 +96,9 @@ gros (nombre de tests collectés) :
 | `test_simulated_drive.py`, `test_sim.py` | 97 + 114 | les simulateurs (variateur, BITalino, physiologie) |
 | `test_drive_faults_complete.py` | 78 | **chacun** des 66 codes LFT injecté sur la vraie console |
 | `test_failure_drive.py`, `_ecg`, `_process`, `_operator`, `_rig` | 84 + 14 + 11 + 16 + 1 | pannes injectées sur la vraie racine de composition (`build_panel`) |
-| `test_cloud_sync.py` | 83 | le lien avec Convex (lancement, arrêt, réseau mort) |
+| `test_cloud_sync.py` | 103 | le lien avec Convex (lancement, arrêt, réseau mort, ce que chaque réponse du serveur veut dire) |
+| `test_record_cursor.py`, `test_record_upload.py`, `test_record_uplink.py` | 32 + 46 + 89 | l'envoi des séances relues sur le disque : curseur, relecture à 1 Hz, ordre, reprise, réponses ([détail](#synchronisation-par-relecture-du-journal-local-anh-129)) |
+| `test_cloud_journal_e2e.py`, `test_cloud_journal_wiring.py` | 2 + 6 | le test d'acceptation de la synchronisation (coupure, console tuée, reprise) et son câblage dans la vraie console |
 | `test_sensor_*.py` | 35 à 57 chacun | un fichier par capteur (ECG, EDA, SpO2, RESP, EMG, LUX) |
 | `test_presence_*.py`, `test_panel_presence.py` | 147 au total | la caméra / présence opérateur |
 | `test_local_panel.py`, `test_local_panel_e2e.py` | 60 + 6 | la console assemblée |
@@ -2920,8 +2922,8 @@ de maintenant, et aucune valeur :
 - `convex/journalSync.test.ts` (`npm run test:convex`) vérifie ce que le
   serveur garde d'une séance envoyée tard ou deux fois : un lot renvoyé ne
   change ni les lignes ni la date de leur première réception. Il rejoue deux
-  consoles. Celle d'aujourd'hui, qui ne dit pas l'âge de sa séance : ses dates
-  sont stockées et servies comme avant (horloge reculée de 10 min en cours de
+  consoles. Celle d'une version antérieure, qui ne dit pas l'âge de sa séance :
+  ses dates sont stockées et servies comme avant (horloge reculée de 10 min en cours de
   séance, machine datée de 1970 déclarée en retard : aucun point refusé,
   jamais lue comme en direct). Celle qui dit son âge : `lastMeasuredAt` et le
   `t` des courbes sont sur l'horloge du serveur quelle que soit l'heure de la
@@ -3275,6 +3277,67 @@ suite ne comptait que les tests d'origine et ceux des pages) :
 `npm run test:site` 41 s et la mesure de couverture 50 s, contre 9 s et 14 s
 sur `develop` ; le job entier 2 min 54 s, contre 1 min 25 s à 1 min 47 s sur
 les trois exécutions de `develop` qui précèdent.
+
+### Synchronisation par relecture du journal local (ANH-129)
+
+Ce que la console doit au tableau de bord est relu sur son disque
+([raspberry-pi.md §8](raspberry-pi.md#8-la-synchronisation-avec-le-tableau-de-bord)).
+Tous ces tests tournent en simulation et en **temps simulé** ; ils sont dans la
+gate du Pi, et `convex/journalTrace.test.ts` dans `npm run test:convex`.
+
+| Fichier | Ce qu'il vérifie |
+|---|---|
+| `raspberry-pi/tests/test_record_cursor.py` | Le curseur : à côté du dossier, écrit par renommage, en mode 600, relu à l'identique ; un curseur tronqué, vide, d'une autre version ou hors bornes est dit illisible et ne lève rien ; un curseur orphelin et un fichier temporaire abandonné sont retirés au balayage, un curseur dont le dossier existe ne l'est pas. |
+| `raspberry-pi/tests/test_record_upload.py` | La relecture : le premier tic de chaque seconde, les mêmes points aux mêmes dates qu'on relise du début ou d'un curseur, une ligne en cours d'écriture laissée, une ligne illisible passée et comptée, un lot borné en taille, les événements avec leur rang, un curseur qui ne correspond pas au fichier signalé. |
+| `raspberry-pi/tests/test_record_uplink.py` | L'envoi : déclaration avant toute mesure et sous la référence du manifeste (EX-8), points et événements de l'enregistrement, curseur écrit à chaque acquittement (EX-1, EX-2), reprise après redémarrage dans l'ordre (EX-4), séance en cours d'abord, puis celle qui vient de finir, puis les autres de la plus ancienne à la plus récente, à un lot par 2 s (EX-5), rien d'abandonné quand le lien retient (EX-7), les quatre suites d'une réponse, le décompte `rejected` et celui des lignes illisibles, écrits dans le journal de la console, l'âge de la séance selon que l'horloge monotone est encore la même. Et que rien d'un enregistrement n'est ouvert hors `manifest.json`, `ticks.csv` et `events.jsonl` : tout autre fichier du dossier (`drive_frames.jsonl`, `sensors.csv`, `ecg/`) est remplacé par un tube que personne n'alimente, et l'enregistrement est livré entier. |
+| `raspberry-pi/tests/test_cloud_journal_wiring.py` | Dans la vraie console : une séance qui tourne et finit sous un 426 est envoyée entière et close avec sa raison quand le contrat est de nouveau servi ; un disque qui ne répond pas retient l'envoi sans empiler de fil ni d'étape ; une étape en attente du disque rend la main dès son annulation ; le tic de contrôle garde sa cadence pendant ce temps ; une fois la fin d'une séance détenue par le tableau de bord, la console ne lui demande plus si un arrêt est voulu, même si la machine n'a pas fini ; le lien ne garde aucune file. |
+| `raspberry-pi/tests/test_cloud_journal_e2e.py` | **Le test d'acceptation du ticket**, ci-dessous. Et un second scénario sur la même console : l'horloge de la machine avancée d'une heure puis reculée de dix minutes **pendant** qu'une séance tourne et envoie ; aucun point ne change de date, aucun n'est refusé, et la fin est datée où la séance a fini. |
+| `convex/journalTrace.test.ts` | Le même, côté Convex : les requêtes de la console rejouées contre les vraies fonctions. |
+
+**Le test d'acceptation.** Sur la vraie console en simulation (variateur
+simulé, vrai runtime, vrai enregistrement sur disque, vrai lien) : une séance
+démarrée à la machine, le réseau coupé à 3 min (le dernier lot est reçu, sa
+réponse est perdue), la console tuée à 5 min au milieu d'une ligne, redémarrée
+sans réseau, le réseau de retour à 8 min avec la bonne heure, sur une machine
+qui datait tout de 1970. Le tableau de bord doit alors détenir chaque point
+1 Hz de l'enregistrement et chaque événement **une seule fois**, et la fin de
+la séance avec sa raison (`interrupted`) ; la séance est datée sur l'horloge
+du serveur, et la correction de l'horloge de la machine n'a fait refuser aucun
+point.
+
+Il est en deux moitiés, parce qu'aucun déploiement Convex n'est contacté :
+
+1. `test_cloud_journal_e2e.py` joue le scénario contre `tests/fake_dashboard.py`,
+   qui applique en mémoire les règles du serveur. **Dix minutes simulées
+   coûtent environ 6 s** sur un poste de développement et **environ 34 s dans
+   la CI** (mesuré sur un run de `pi-gate`, couverture activée) ; le test
+   échoue au-delà de 5 minutes, la moitié du temps réel. Chaque requête
+   reçue est notée, avec sa réponse. C'est **un seul test**, exprès : la gate
+   répartit les tests sur plusieurs processus, et un scénario partagé par
+   plusieurs tests serait rejoué dans chacun. Chaque chose établie y est une
+   fonction nommée pour ce qu'elle dit.
+2. `convex/journalTrace.test.ts` rejoue ces requêtes, dans l'ordre et aux
+   mêmes instants, contre les vraies fonctions Convex (`convex-test`) : Convex
+   doit répondre à chacune comme le faux tableau de bord l'a fait, et détenir
+   la même chose à la fin. Moins d'une seconde.
+
+Le lien entre les deux est `contracts/fixtures/journal-sync-trace.json`. Le
+test du Pi échoue si ce fichier n'est plus exactement ce que la console
+envoie. Après un changement voulu de ce que la console envoie :
+
+```sh
+cd raspberry-pi
+ANHEART_WRITE_SYNC_TRACE=1 .venv/bin/python -m pytest tests/test_cloud_journal_e2e.py -q
+cd .. && npm run test:convex
+```
+
+Limites. La console est « tuée » en étant abandonnée en mémoire, son fichier
+coupé au milieu d'une ligne : ce n'est pas un vrai SIGKILL du processus (celui
+de l'enregistrement est dans `test_record_abrupt_stop.py`). Le faux tableau de
+bord n'est tenu au vrai que par la trace rejouée : une règle du serveur que le
+scénario n'exerce pas n'est pas comparée. Le disque est celui du poste : la
+lenteur d'une carte SD est simulée par une lecture qui ne revient pas, pas
+mesurée. Aucun déploiement Convex réel et aucun Pi n'ont été utilisés.
 
 ### Infrastructure encore dépendante d'autres tickets
 

@@ -72,7 +72,7 @@ from tests.test_failure_rig import OPERATOR, attest, start_manual
 from tests.test_runtime_session_overrun import (
     _nothing_asks_for_the_descent,  # pyright: ignore[reportPrivateUsage]
 )
-from tests.test_standstill_console import END, LINKED_ENV, START, Console, console
+from tests.test_standstill_console import END, LINKED_ENV, Console, console
 
 QUICK_PROFILE: Final[str] = "ending_quick"
 """A whole programme in 80 s: its five phases, and the shortest recovery a profile may have."""
@@ -222,7 +222,7 @@ async def test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_
         run.offer("remote-1", QUICK_PROFILE)
         await run.run(5.0)
         assert run.state() is RuntimeState.RUNNING
-        assert run.dashboard.to(START) == [{"sessionId": "remote-1"}]
+        assert run.confirmed() == ["remote-1"]
 
         await _to_its_end(run)
         reported = run.ended("remote-1")
@@ -345,7 +345,7 @@ async def test_a_programme_stopped_late_at_the_console_latches_nothing_and_takes
         await run.run(5.0)
         assert run.state() is RuntimeState.RUNNING, rig.refusals()
         assert _mode(run) is RunMode.SEANCE
-        assert run.dashboard.to(START) == [{"sessionId": "remote-2"}]
+        assert run.confirmed() == ["remote-2"]
         assert run.ended("remote-2") == []
         assert rig.refusals() == []
     await rig.panel.close()

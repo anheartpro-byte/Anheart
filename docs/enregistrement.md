@@ -41,8 +41,11 @@ Une séance interrompue peut donc n'avoir que six entrées, sans checksums.
 
 Rien d'autre n'entre dans le dossier. Sur le Pi, la confirmation d'un dépôt
 hors de la machine est un fichier **à côté** du dossier
-(`<nom du dossier>.deposit.json`), pas dedans : le dossier reste exactement
-ces sept entrées et se relit sans avertissement, déposé ou non. Un fichier
+(`<nom du dossier>.deposit.json`), pas dedans, et le curseur de la
+synchronisation avec le tableau de bord aussi (`<nom du dossier>.sync.json`,
+[raspberry-pi.md](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) : le
+dossier reste exactement ces sept entrées et se relit sans avertissement,
+déposé ou non, synchronisé ou non. Un fichier
 ajouté dans un dossier fermé serait signalé à la lecture
 (`checksum_mismatch`) : ce qui arrive à la console après la fermeture va dans
 le journal hors séance, un dossier `logbook/` à côté des enregistrements

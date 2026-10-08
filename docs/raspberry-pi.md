@@ -111,7 +111,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
-| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat. Porte 100 %. |
+| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire. Porte 100 %. |
+| `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
 | `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
@@ -127,6 +128,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `record/journal.py` | La file bornée et le fil d'écriture `record-journal` de la console. | Remettre une valeur ne prend ni verrou ni fichier et n'attend jamais ; `fsync` toutes les 2 s ; une erreur d'écriture coûte l'enregistrement, jamais la séance ([section 15](#15-lenregistrement-de-séance-boîte-noire-locale)). Porte 100 %. |
 | `record/session.py` | L'enregistreur côté boucle : ce que la console voit, mis au format. | Ses points d'entrée ne lèvent jamais ; aucun nom d'opérateur n'est écrit. Porte 100 %. |
 | `record/retention.py` | La rétention locale. | Un enregistrement sans dépôt confirmé n'est jamais purgé. Porte 100 %. |
+| `record/cursor.py` | Le curseur de synchronisation d'un enregistrement : ce que le tableau de bord en a acquitté. | Un fichier à côté du dossier, jamais dedans ; écrit de façon atomique, en mode 600 ; un curseur illisible ne perd rien, il fait renvoyer l'enregistrement depuis son début ([8.1](#81-ce-qui-est-envoyé-vient-du-disque)). Porte 100 %. |
+| `record/upload.py` | La relecture d'un enregistrement pour le tableau de bord : télémétrie à 1 Hz tirée de `ticks.csv`, événements de `events.jsonl` avec leur rang. | Seules les lignes complètes sont lues, une quantité bornée par appel ; relire donne les mêmes points aux mêmes dates ; ne lit ni `drive_frames.jsonl`, ni les blocs ECG, ni `sensors.csv`. Porte 100 %. |
 | `record/export.py` | La liste des enregistrements et l'archive `.tar.gz` de l'un d'eux, pour les routes d'export, et les fils qui les lisent (`RecordIo`). | Lues sur deux fils réservés (`record-io`), jamais sur la boucle ni sur les fils du traitement ECG ; une lecture de plus est refusée, jamais mise en attente ; seul un dossier d'enregistrement peut être nommé ([15.6](#156-export)). Porte 100 %. |
 
 ---
@@ -143,7 +146,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `ecg_step` | 0,2 s (`ECG_PERIOD`) | garde le BITalino connecté (nouvel essai toutes les 5 s au plus, délai de connexion 30 s) et pompe les échantillons vers le traitement ECG (sur un fil de travail) |
 | `sensor_step` | 1 s | retraite la fenêtre de chaque capteur |
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
-| `cloud_step` | 1 s | une étape du lien Convex |
+| `cloud_step` | 1 s | une étape du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -969,21 +972,22 @@ d'accoupler le bras** (clavier d'abord, puis le code).
 
 ## 8. La synchronisation avec le tableau de bord
 
-`src/cloud_sync.py`. Actif seulement si `MACHINE_API_KEY` est renseignée (et
-`CONVEX_URL` en `https://…convex.site`, ou `http://localhost` /
-`http://127.0.0.1`). Sans clé, la console fonctionne exactement pareil, sans
-tableau de bord.
+`src/cloud_sync.py` et `src/record_uplink.py`. Actif seulement si
+`MACHINE_API_KEY` est renseignée (et `CONVEX_URL` en `https://…convex.site`,
+ou `http://localhost` / `http://127.0.0.1`). Sans clé, la console fonctionne
+exactement pareil, sans tableau de bord.
 
 | Sens | Quoi | Route Convex | Cadence |
 |---|---|---|---|
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
-| Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous une référence locale (pas de doublon après une coupure) | `POST /api/machine/training/local` | au départ |
-| Pi → Convex | confirmation du départ d'une séance lancée à distance | `POST /api/machine/training/start` | au départ |
-| Pi → Convex | télémétrie échantillonnée à 1 Hz, envoyée par lots | `POST /api/machine/training/telemetry` | toutes les 5 s (lots de 300 points max) |
-| Pi → Convex | fin de séance avec la raison du runtime | `POST /api/machine/training/end` | à la fin |
+| Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance | `POST /api/machine/training/local` | avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
+| Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | au départ |
+| Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 2 s quand elle a du retard |
+| Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
+| Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
-| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s en séance |
+| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s tant que le tableau de bord tient la séance pour démarrée et non finie, **avant** ce que l'étape envoie de la séance |
 
 Règles :
 
@@ -992,22 +996,228 @@ Règles :
 * Un lancement distant passe par la même boîte aux lettres qu'un départ tapé à
   la console, donc par les mêmes portes (attestation, pas de verdict, console
   au repos), puis par celles de la séance programmée (4.4). Tout refus revient
-  comme séance échouée avec la raison. Un lancement ni démarré ni refusé après
-  60 s est déclaré échoué.
+  comme séance échouée avec la raison, sans date : c'est le serveur qui la
+  date. Un lancement ni démarré ni refusé après 60 s est déclaré échoué. Un
+  seul refus attend à la fois, et aucun lancement n'est demandé tant qu'il
+  n'est pas parti : le serveur rendrait le même.
 * Chaque appel renvoie un `Result` ; un réseau mort ne fait que rendre l'image
-  du tableau de bord périmée. Nouvel essai après 15 s. Jusqu'à 3600 points de
-  télémétrie (une heure) sont gardés, les plus vieux sont jetés d'abord ; 20
-  fins de séance au plus restent en attente.
+  du tableau de bord périmée. **Rien de ce qui est dû au tableau de bord
+  n'attend en mémoire** : c'est sur le disque, dans les enregistrements de
+  séance (8.1).
 * Un arrêt venu du tableau de bord est attribué à « tableau de bord ». Il est
   honoré **quelle que soit la version de contrat** du serveur (section 14).
 * Un lancement venu d'un serveur d'une autre majeure de contrat, ou qui
   n'annonce pas sa version, n'est **jamais armé** : voir
   [Versions et compatibilité](#14-versions-et-compatibilité).
 
-Non vérifié : aucun déploiement Convex réel n'a été contacté ; les tests
-utilisent un transport factice (voir [convex.md](convex.md)). Le champ
-`recordDegraded` est envoyé au premier niveau du corps, hors de `live` ; le
-côté Convex ne le lit pas encore et ne l'affiche nulle part.
+### 8.1 Ce qui est envoyé vient du disque
+
+Ce que le tableau de bord reçoit d'une séance n'est plus ce que la console
+gardait en mémoire pendant qu'elle tournait : c'est ce que dit
+l'enregistrement sur le disque ([section 15](#15-lenregistrement-de-séance-boîte-noire-locale)),
+relu depuis l'endroit que le tableau de bord a acquitté en dernier. Une
+console tuée au milieu d'une séance doit donc au tableau de bord exactement ce
+que son disque contient, et le lui envoie après son redémarrage.
+
+**Le curseur.** Un petit fichier par enregistrement,
+`<racine>/<nom du dossier>.sync.json`, **à côté** du dossier et non dedans :
+le dossier d'un enregistrement ne contient que les fichiers du format
+([enregistrement.md](enregistrement.md#arborescence)), et sa relecture
+signalerait tout autre fichier. Il contient l'identifiant de la séance côté
+tableau de bord (et si son départ lui a été confirmé), l'identifiant du
+démarrage du système pendant lequel l'enregistrement a été fait
+([8.5](#85-les-dates)), l'endroit acquitté de `ticks.csv` et le `t` du dernier point
+acquitté, l'endroit acquitté de `events.jsonl` et le rang du dernier
+événement, l'état de la fin (`pending` ou `sent`), l'état de l'ensemble
+(`pending` ou `complete`), et trois compteurs (points et événements acquittés
+sans être stockés, requêtes refusées pour de bon). Il ne contient aucune
+mesure.
+
+| Propriété | Comment |
+|---|---|
+| Créé dès que la console relie la séance à son enregistrement, dans la seconde qui suit le départ, avant toute réponse du tableau de bord | un enregistrement qui a un curseur est un enregistrement que la console reprendra |
+| Écrit après chaque acquittement | fichier temporaire privé dans le même dossier, `fsync`, puis renommage : un lecteur voit l'ancien curseur ou le nouveau, jamais la moitié d'un |
+| Privé | mode 600, comme le dossier racine est en 700 |
+| Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
+| Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture |
+| Un enregistrement **sans aucun curseur** | n'est pas envoyé : la synchronisation ne l'a jamais ouvert. C'est le cas des enregistrements faits par une version antérieure de ce logiciel, ou faits sans tableau de bord configuré. Supprimer un curseur à la main retire donc l'enregistrement de la synchronisation |
+
+**La télémétrie à 1 Hz.** `ticks.csv` est écrit à 5 Hz. Le point d'une seconde
+de la séance est son **premier tic**. La règle ne dépend que du fichier :
+relire depuis le curseur, ou depuis le début, donne les mêmes points aux mêmes
+dates, ce qui permet au tableau de bord de reconnaître un point qu'il a déjà.
+Un trou dans les tics reste un trou dans les points : rien n'est inventé.
+
+**Seules les lignes complètes sont lues.** Une dernière ligne en cours
+d'écriture est laissée à la lecture suivante. Une ligne complète
+incompréhensible est passée et comptée dans le journal de la console : elle ne
+retient pas ce qui la suit. Un événement illisible garde son rang.
+
+**Ce qui n'est pas envoyé.** Les trames du variateur (`drive_frames.jsonl`),
+les blocs ECG bruts et `sensors.csv` ne sont ni lus ni envoyés : ils
+voyageront avec le dépôt des enregistrements complets (ANH-130). Les
+événements hors séance du journal de bord (`logbook/`) ne sont pas
+synchronisés non plus.
+
+### 8.2 Dans quel ordre
+
+1. **La séance en cours.** Tant qu'elle a quelque chose de prêt à envoyer,
+   rien d'autre n'est envoyé.
+2. **La séance qui vient de finir** : le tableau de bord la montre encore en
+   cours.
+3. **Toutes les autres, de la plus ancienne à la plus récente** (le nom d'un
+   dossier d'enregistrement commence par la date de son début) : celles qu'un
+   lancement précédent de la console a laissées inachevées, et celles qui ont
+   fini dans ce lancement pendant que le lien ne répondait pas.
+
+Pour une séance : la **déclaration** (ou la confirmation du départ) d'abord,
+puis la télémétrie, les événements, et la **fin** quand l'enregistrement est
+fermé et sa télémétrie acquittée.
+
+Débit : une séance à jour envoie toutes les 5 s ce qu'elle a mesuré depuis.
+Tout ce qui est en retard (une séance en cours après une coupure, ou une
+séance d'avant) va à **un lot de 300 points au plus toutes les 2 s**. Une fin
+sans enregistrement (un lancement refusé) n'attend pas ce rythme : c'est une
+petite requête.
+
+### 8.3 Ce que chaque réponse fait au curseur
+
+| Réponse | Cas | Effet |
+|---|---|---|
+| **Acquittée** | 200 | Le curseur avance après tout ce que la requête portait, stocké ou non. Le serveur compte ce qu'il n'a pas stocké parce que daté hors de la séance (`rejected`) : ce nombre est écrit dans le journal de la console (`N points of session ... acknowledged but not stored`) et cumulé dans le curseur (`rejected_points`, `rejected_events`). Ces points sont derrière le curseur : les renvoyer donnerait la même réponse. |
+| **Retenue** | pas de réponse (réseau, délai de 3 s), 401, 403, 408, 425, **426**, 429, 5xx | Rien n'a été reçu. **Le curseur ne bouge pas et rien n'est abandonné.** Plus aucun envoi pendant 15 s, puis la même requête est refaite. |
+| **Route inconnue** | 404 sans code stable | Pour les événements (un Convex antérieur au contrat 1.1) : ils restent dus, et la télémétrie et la fin continuent sans eux. La route est redemandée une fois par minute tant que la séance s'envoie ; une fois sa fin partie, l'enregistrement est mis de côté jusqu'au démarrage suivant de la console, qui redemande. Pour toute autre route : comme « retenue ». |
+| **Refusée** | tout autre refus | Avec un code qui dit que la même requête sera toujours refusée (`invalid_request`, `session_not_found`, `session_not_pending`, `machine_not_found`) : passée tout de suite. Sinon (`request_failed`, ou pas de code) : essayée **trois fois en tout**, à 15 s d'intervalle, puis passée. Une requête passée est comptée dans le curseur (`refused`) et écrite dans le journal ; ce qui la suit n'est pas retenu. |
+
+Une déclaration acquittée sans identifiant de séance ne sert à rien : elle est
+refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
+ni le refus d'un lancement ne l'attendent ; les séances plus anciennes rangées
+derrière elle, si.
+
+Deux refus ont un effet propre. Un **départ** que le tableau de bord refuse
+(séance annulée sur le site entre le poll et l'armement) fait arrêter la
+séance en cours, tout de suite, sans nouvel essai. Une **déclaration** refusée
+pour de bon clôt l'enregistrement sans rien en envoyer : sans séance côté
+tableau de bord, rien ne peut être reçu.
+
+### 8.4 Après un redémarrage de la console
+
+À sa première étape où la séance en cours ne lui prend pas la place, le lien
+liste une fois les enregistrements dont le curseur ne dit pas `complete`, du
+plus ancien au plus récent, et retire les curseurs orphelins. Chacun est
+repris où le tableau de bord s'était arrêté :
+
+- **déjà déclaré** : le curseur porte l'identifiant de la séance, rien n'est
+  redéclaré ;
+- **jamais déclaré** (le réseau manquait depuis le départ) : il est déclaré
+  avec ce que dit son manifeste. L'enregistrement ne contient aucun nom : la
+  séance apparaît avec l'alias de l'opérateur (`op-…`) et sans nom de
+  programme ;
+- **jamais fermé** (la console a été tuée pendant la séance) : il se termine
+  par `interrupted`, séance échouée, datée de son dernier tic ;
+- **fermé** : il se termine par la raison de son manifeste
+  (`operator_stop: <texte de l'arrêt>`, `shutdown`, …), comme si la console
+  n'avait pas redémarré.
+
+Une sortie ordinaire de la console (SIGTERM) en cours de séance ferme
+l'enregistrement avec `shutdown`, après l'arrêt du variateur ; la fin part au
+démarrage suivant.
+
+### 8.5 Les dates
+
+La console n'a pas d'horloge sauvegardée : démarrée sans réseau, elle date ce
+qu'elle écrit d'une heure fausse, corrigée d'un coup au retour du réseau.
+
+- **Dans l'enregistrement**, un tic et un événement sont datés en secondes
+  depuis le début de la séance, sur l'**horloge monotone**. Le manifeste porte
+  l'heure murale du début (`clocks.utc_start`) et la lecture monotone du même
+  instant.
+- **Dans une requête**, le `t` d'un point ou d'un événement est ce début plus
+  le temps écoulé : **une seule lecture de l'heure murale, au départ**, puis
+  des durées. La fin est datée de même. Une correction de l'heure murale en
+  cours de séance ne déplace donc aucun point, et aucun n'est refusé pour
+  elle.
+- **L'âge de la séance** (`sessionAgeMs`) accompagne la déclaration et la
+  confirmation du départ : le temps écoulé depuis le début, sur l'horloge
+  monotone. C'est lui qui fait dater la séance par le serveur, sur sa propre
+  horloge ([convex.md, Deux horloges](convex.md#deux-horloges)) : une console
+  datée de 1970 ne fait apparaître aucune séance en 1970, et ce qu'elle envoie
+  en retard est lu comme mesuré quand il l'a été.
+
+Après un redémarrage **de la console seule** (le système n'a pas redémarré),
+l'horloge monotone est la même : l'âge reste exact. Le curseur retient pour
+cela l'identifiant du démarrage du système (`boot_id`, lu dans
+`/proc/sys/kernel/random/boot_id`).
+
+Après un redémarrage **du système**, plus rien ne relie les deux horloges :
+
+| L'enregistrement est daté | Ce que la console dit | Ce que le tableau de bord affiche |
+|---|---|---|
+| après le 1er janvier 2024 | aucun âge | la date que la console avait écrite, comme avant. Elle peut être fausse de la durée pendant laquelle le Pi était éteint ; rien ne permet de le savoir (une heure fiable est le sujet d'ANH-163) |
+| avant (une horloge jamais réglée) | un âge **minimal** : le temps depuis lequel cette console tourne, plus la durée de l'enregistrement, plus une minute | la séance, datée au plus tard qu'elle puisse avoir commencé. Sa vraie date est perdue ; elle n'est ni en 1970, ni lue comme mesurée à l'instant |
+
+### 8.6 Ce que la synchronisation ne peut pas coûter
+
+- **Jamais dans le tic.** `RecordUplink.step` tourne dans la tâche du lien
+  (`cloud_step`), qui n'appelle aucune fonction du tic et que le tic n'appelle
+  pas.
+- **Aucune lecture sur la boucle.** Chaque lecture d'enregistrement et chaque
+  écriture de curseur se fait sur un fil `record-io` **réservé à la
+  synchronisation**, distinct des fils de l'export et de ceux du traitement
+  ECG : une à la fois, bornée en taille (512 kio de `ticks.csv`, 300 points,
+  200 événements) et en durée (2 s, 10 s pour la liste du démarrage). La
+  mémoire tenue est celle d'un lot.
+- **Un disque qui ne répond pas** retient l'envoi et rien d'autre : l'étape
+  suivante trouve le fil occupé et rend la main tout de suite, sans rien
+  empiler. Une séance démarrée à la machine dont l'enregistrement n'apparaît
+  pas en 10 s est déclarée quand même, sans enregistrement : le tableau de
+  bord apprend son départ et sa fin, pas ses mesures.
+- **La sortie n'attend pas.** À la sortie de la console, la tâche du lien est
+  annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
+  réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas
+  le processus. L'ordre de sortie reste : variateur arrêté d'abord.
+
+### 8.7 Limites
+
+- Une séance n'est **close** côté tableau de bord qu'une fois son
+  enregistrement fermé par le fil du journal. Si le disque ne le ferme jamais,
+  la fin part quand même, 10 s après que le runtime a fini la séance, avec la
+  raison du runtime.
+- Derrière un défaut variateur verrouillé, l'enregistrement est fermé quand la
+  phase atteint `DONE` ([15.1](#151-où-et-quand)) : la séance est close côté
+  tableau de bord à ce moment-là, alors que le runtime attend encore le
+  réarmement. Le battement de cœur continue de la nommer : la machine reste
+  « en séance » pour le site tant que le runtime n'a pas fini. La console ne
+  demande plus au tableau de bord si un arrêt est voulu : il tient la séance
+  pour finie, et sa réponse se lirait comme une demande d'arrêt.
+- Une étape du lien enchaîne quelques lectures et quelques requêtes, chacune
+  bornée (2 s par lecture, 10 s pour la liste du démarrage, 3 s par requête).
+  Sur un disque ou un réseau lents sans être morts, une étape peut donc durer
+  plusieurs secondes, et quelques dizaines dans le pire cas où chaque
+  opération approche de sa borne. La demande d'arrêt du tableau de bord est
+  lue une fois par étape, avant tout envoi : elle attend d'autant. Le tic,
+  l'arrêt à la console et le superviseur n'en dépendent pas.
+- Une console qui n'enregistre pas (construite sans journal, ce qui n'arrive
+  que dans les tests) déclare et termine ses séances, sans télémétrie.
+- Face à un Convex antérieur au contrat 1.1 : les événements restent dus, un
+  lot renvoyé peut être stocké deux fois, et la séance est datée par la
+  console ([deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)).
+- Une fin sans enregistrement (un lancement refusé, ou une séance sans
+  enregistrement) n'a qu'une place en mémoire : si une seconde arrive avant
+  que la première soit partie, la plus ancienne est abandonnée, et le journal
+  le dit.
+
+Vérifié par les tests automatiques, en simulation et en temps simulé
+(`tests/test_record_cursor.py`, `test_record_upload.py`,
+`test_record_uplink.py`, `test_cloud_journal_wiring.py`, et le test
+d'acceptation `test_cloud_journal_e2e.py`, dont les requêtes sont rejouées
+contre les vraies fonctions Convex par `convex/journalTrace.test.ts`). Non
+vérifié : aucun déploiement Convex réel n'a été contacté, aucune carte SD
+n'a été mesurée, et le test « tue » la console en l'abandonnant en mémoire,
+pas par un vrai SIGKILL (celui de l'enregistrement est dans
+`test_record_abrupt_stop.py`). Le champ `recordDegraded` est envoyé au premier
+niveau du corps du battement de cœur, hors de `live` ; le côté Convex ne le
+lit pas encore et ne l'affiche nulle part.
 
 ---
 
@@ -1318,10 +1528,18 @@ Non fait par ce logiciel :
   `dashboard:` ([15.1](#151-où-et-quand)).
 * Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
   utilisent un transport factice des deux côtés.
-* Sous un 426, les lots de télémétrie et la fin de séance sont abandonnés
-  comme tout refus : une séance en cours pendant un changement de majeure du
-  serveur resterait `active` côté Convex. D'où l'ordre de mise à jour de
-  [deploiement.md](deploiement.md#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite).
+* La console n'affiche de l'état du lien que la phrase
+  `serveur incompatible (...)` : ni la version du serveur, ni ce qui reste à
+  envoyer ne sont montrés sur la page (ticket ANH-210).
+
+Sous un 426, rien n'est acquitté et **rien n'est abandonné**
+([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)) : la séance en cours
+continue d'être enregistrée sur le disque, son curseur ne bouge pas, et la
+console redemande toutes les 15 s. Quand le serveur sert de nouveau la majeure
+de la console (ou que la console, mise à jour et redémarrée, parle celle du
+serveur), la séance est déclarée, envoyée entière et **close avec sa raison**.
+D'ici là elle reste `active` côté Convex pour une séance lancée du site, et
+inconnue de Convex pour une séance démarrée à la machine.
 
 ---
 
@@ -1617,6 +1835,12 @@ réunies (`src/record/retention.py`) :
 Tout doute garde l'enregistrement. La purge tourne sur le fil du journal, au
 démarrage puis toutes les six heures, seulement entre deux séances, et ne
 regarde que les dossiers d'enregistrement directement sous la racine.
+
+Le curseur de synchronisation d'un enregistrement
+(`<nom du dossier>.sync.json`, [8.1](#81-ce-qui-est-envoyé-vient-du-disque))
+est lui aussi à côté du dossier. La purge ne le retire pas : c'est la
+synchronisation qui retire, à chaque démarrage de la console, tout curseur
+dont le dossier n'existe plus.
 
 > **Aujourd'hui, rien n'écrit ce marqueur.** Le dépôt hors de la machine
 > (Convex Storage, ANH-130) n'existe pas encore et attend un avis juridique.

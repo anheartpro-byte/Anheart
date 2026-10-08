@@ -143,6 +143,14 @@ class Console:
     def ended(self, session_id: str) -> list[Mapping[str, object]]:
         return [body for body in self.dashboard.to(END) if body["sessionId"] == session_id]
 
+    def confirmed(self) -> list[object]:
+        """The launches whose start was confirmed to the dashboard, in order.
+
+        A confirmation also carries the start the console dated and the age of
+        the session: only which launch it confirms is of interest here.
+        """
+        return [body["sessionId"] for body in self.dashboard.to(START)]
+
 
 def console(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str] = LINKED_ENV
@@ -277,7 +285,10 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         run.offer("remote-2")
         await run.run(8.0)
         assert run.state() is RuntimeState.RUNNING
-        assert run.dashboard.to(START) == [{"sessionId": "remote-2"}]
+        # Confirmed once, with the start the console dated and the age of the session.
+        (confirmed,) = run.dashboard.to(START)
+        assert confirmed["sessionId"] == "remote-2"
+        assert set(confirmed) == {"sessionId", "startedAt", "sessionAgeMs"}
         assert run.ended("remote-2") == []
     await rig.panel.close()
     assert await rig.left_stopped() == ""

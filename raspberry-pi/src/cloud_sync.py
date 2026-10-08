@@ -11,10 +11,12 @@ Up, from this machine to the dashboard:
   preset the runtime would refuse must not be offered on a screen;
 * every session this console runs, whoever started it: an AUTO session
   launched from the dashboard, and any session started here at the machine
-  (MANUAL, or AUTO from the panel), registered under a local reference so a
-  retry after a network loss cannot create it twice;
-* telemetry at 1 Hz while a session runs, and the session's end with the
-  runtime's own reason.
+  (MANUAL, or AUTO from the panel), declared under the reference its record
+  carries, so that declaring it again, even after a restart, cannot create it
+  twice;
+* its telemetry at 1 Hz, its events and its end, read back from the session's
+  record on disk by :mod:`src.record_uplink`: what the dashboard has not
+  acknowledged is on disk, never in a queue here.
 
 Down, from the dashboard to this machine, exactly two things:
 
@@ -37,8 +39,10 @@ Every call returns a :class:`~src.result.Result`; a dead network is
 ``Err(Unreachable)``, logged and retried later, and the session carries on
 under the local supervisor exactly as it would with no dashboard at all. The
 worst a lost link does is leave the dashboard's picture stale, which the
-dashboard shows as stale. Telemetry waiting for the link is bounded
-(:data:`MAX_QUEUED_POINTS`), oldest dropped first.
+dashboard shows as stale. Nothing waits for the link in memory: what it owes
+the dashboard is in the session records, and is sent when the link answers
+again, after a restart of the console too (:func:`answer_of` says what each
+answer does to the sending).
 
 One contract, checked on both sides
 -----------------------------------
@@ -48,7 +52,9 @@ dashboard of another major refuses the console (426), and the console refuses
 the dashboard: a poll answer that does not name this console's major arms
 nothing, whatever launch it carries. Either way the operator reads
 ``serveur incompatible (contrat X vs Y)`` in the console's event list, and the
-machine goes on exactly as it would with no dashboard.
+machine goes on exactly as it would with no dashboard. A session that runs
+while the console is refused loses nothing: it is on disk, and is sent whole,
+with its end, once the two sides agree again.
 
 One thing crosses every contract: **a stop**. "Stop" means the same under any
 version, and refusing one is never the safe side. The status route answers
@@ -65,11 +71,9 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from abc import abstractmethod
-from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, cast
 
@@ -91,6 +95,18 @@ from src.contract import (
 )
 from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
 from src.local_config import CardiacTiers, CloudConfig
+from src.record_uplink import (
+    Acked,
+    Answer,
+    ArmedSession,
+    Declaration,
+    Held,
+    RecordSource,
+    RecordUplink,
+    Refusal,
+    RouteMissing,
+    RuntimeEnd,
+)
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState
@@ -111,11 +127,8 @@ POLL_PERIOD: Final[Seconds] = Seconds(3.0)
 STATUS_PERIOD: Final[Seconds] = Seconds(3.0)
 """How often a running session asks whether the dashboard wants it stopped."""
 
-TELEMETRY_PERIOD: Final[Seconds] = Seconds(5.0)
-"""Telemetry is sampled every step and sent in batches this far apart."""
-
 RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
-"""After a failure, how long before a registration, preset push or end is retried."""
+"""After a failure, how long before a preset push is retried."""
 
 LAUNCH_TIMEOUT: Final[Seconds] = Seconds(60.0)
 """A launch the loop has neither started nor refused by now is reported as failed."""
@@ -127,12 +140,18 @@ The event list is only sent to the screens connected at that moment, so a
 standing condition said once at startup would never reach a page opened later.
 """
 
-MAX_QUEUED_POINTS: Final[int] = 3600
-"""An hour of 1 Hz telemetry held for a lost link; the oldest go first."""
+HELD_STATUSES: Final[frozenset[int]] = frozenset({401, 403, 408, 425, 426, 429})
+"""Refusals that are about the link, not about what was sent: the key is not accepted,
+the contract is not served, the server asks to wait. A 5xx is one too."""
 
-MAX_BATCH: Final[int] = 300
-MAX_FINISHED: Final[int] = 20
-"""Ended sessions still owed to the dashboard. Past this the oldest is dropped."""
+SERVER_ERROR: Final[int] = 500
+
+FINAL_CODES: Final[frozenset[str]] = frozenset(
+    {"invalid_request", "session_not_found", "session_not_pending", "machine_not_found"}
+)
+"""Stable codes that say the same request will always be refused
+(``contracts/machine-api.json``). ``request_failed`` is not one: it also covers a
+failure of the moment."""
 
 DASHBOARD_OPERATOR: Final[str] = "tableau de bord"
 """Who a stop from the dashboard is attributed to in the console's event list."""
@@ -381,24 +400,6 @@ def live_row(snapshot: TelemetrySnapshot, session_id: str | None) -> Mapping[str
     return row
 
 
-def telemetry_point(snapshot: TelemetrySnapshot) -> Mapping[str, JsonValue]:
-    """One 1 Hz sample for ``/api/machine/training/telemetry``."""
-    point: dict[str, JsonValue] = {
-        "t": int(snapshot.wall_clock),
-        "elapsedS": round(float(snapshot.elapsed), 2),
-        "phase": snapshot.phase.value,
-        "motorRpm": int(snapshot.measured.motor_rpm),
-        "outputRpm": round(float(snapshot.measured.output_rpm), 3),
-        "setpointMotorRpm": int(snapshot.setpoint.motor_rpm),
-        "gLoad": round(float(snapshot.measured.g_load), 4),
-        "safetyAction": snapshot.safety_action.name.lower(),
-    }
-    bpm = snapshot.live_bpm
-    if bpm is not None:
-        point["bpm"] = int(bpm)
-    return point
-
-
 def describe_surface_refusal(refusal: StartRefusal) -> str:
     """One line for a launch the console's surface refused. Exhaustive."""
     match refusal:
@@ -432,27 +433,47 @@ def end_is_failure(reason: EndReason | None) -> bool:
 # =========================================================================
 
 
-@dataclass(slots=True)
-class _Tracked:
-    """One session the dashboard is owed news of.
-
-    Mutable on purpose, and owned by exactly one :class:`CloudSync`: it is the
-    delivery state of that session (registered yet? start confirmed? how much
-    telemetry is still queued?), which changes as the link comes and goes.
-    """
-
-    started: StartedSession
-    local_ref: str
-    cloud_id: str | None
-    start_confirmed: bool
-    points: deque[Mapping[str, JsonValue]] = field(
-        default_factory=lambda: deque[Mapping[str, JsonValue]](maxlen=MAX_QUEUED_POINTS)
+def declaration_of(started: StartedSession) -> Declaration:
+    """What the dashboard is told of a session this console has just armed."""
+    profile = started.profile
+    occupancy = started.occupancy
+    return Declaration(
+        kind=started.kind.value,
+        operator=started.operator,
+        profile_id=None if profile is None else profile.profile_id,
+        profile_name=None if profile is None else profile.name,
+        zone_low_bpm=None if profile is None else int(profile.zone_low_bpm),
+        zone_high_bpm=None if profile is None else int(profile.zone_high_bpm),
+        total_duration_s=None if profile is None else float(profile.total_duration_s),
+        subject_hr_max=None if profile is None else int(profile.subject_hr_max),
+        occupancy=None if occupancy is None else occupancy.value,
     )
-    ended: tuple[bool, str, UnixMillis] | None = None
-    """``(failed, reason, at)`` once the runtime has finished it."""
 
-    stop_forwarded: bool = False
-    next_try: Monotonic | None = None
+
+def answer_of(result: Result[Document, CloudError]) -> Answer:
+    """What an exchange with the dashboard means for what was sent.
+
+    * an answer: **acknowledged**;
+    * no answer, or a refusal that is about the link itself (the key, the
+      contract, a server error, a request to wait): **held**. Nothing was
+      received, nothing is dropped, and the same request is made again later;
+    * 404 with no stable code: the dashboard **does not know the route**;
+    * any other refusal: about the request. ``final`` when its stable code
+      says the same request will always be refused.
+    """
+    if isinstance(result, Ok):
+        return Acked(result.value)
+    error = result.error
+    match error:
+        case Unreachable():
+            return Held(error.detail)
+        case Refused():
+            if error.status in HELD_STATUSES or error.status >= SERVER_ERROR:
+                return Held(describe_refusal(error))
+            if error.status == httpx.codes.NOT_FOUND and error.code is None:
+                return RouteMissing()
+            return Refusal(describe_refusal(error), final=error.code in FINAL_CODES)
+    raise assert_never(error)
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,15 +488,11 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
-        "_current",
-        "_finished",
         "_incompatible",
         "_last_heartbeat",
         "_last_poll",
         "_last_refused",
-        "_last_sample",
         "_last_status",
-        "_last_telemetry",
         "_next_profiles",
         "_online",
         "_programs_enabled",
@@ -485,10 +502,12 @@ class CloudSync:
         "_runtime",
         "_said_at",
         "_software_version",
+        "_stop_forwarded",
         "_store",
         "_surface",
         "_tiers",
         "_transport",
+        "_uplink",
     )
 
     def __init__(
@@ -503,9 +522,13 @@ class CloudSync:
         programs_enabled: bool,
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
         record_degraded: Callable[[], bool] | None = None,
+        records: RecordSource | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
-        be written, read at every heartbeat; ``None`` when this console records nothing."""
+        be written, read at every heartbeat; ``None`` when this console records nothing.
+        ``records``: the session records the telemetry, the events and the end of every
+        session are read back from; ``None`` on a console that records nothing, which
+        then only declares and ends its sessions."""
         self._clock: Clock = clock
         self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
@@ -521,17 +544,18 @@ class CloudSync:
         self._said_at: Monotonic | None = None
         self._refused_launch: str | None = None
         self._last_refused: Refused | None = None
-        # Delivery state, mutated only by this object's own step and callbacks.
-        self._current: _Tracked | None = None
-        self._finished: deque[_Tracked] = deque(maxlen=MAX_FINISHED)
+        # What every session owes the dashboard is sent from its record. This
+        # object keeps the state of the session that is running, and no queue.
+        self._uplink: RecordUplink = RecordUplink(
+            clock=clock, sender=self, source=records, start_refused=self._start_cancelled
+        )
+        self._stop_forwarded: bool = False
         self._awaiting: _Awaiting | None = None
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
         self._last_poll: Monotonic | None = None
         self._last_status: Monotonic | None = None
-        self._last_telemetry: Monotonic | None = None
-        self._last_sample: Monotonic | None = None
         self._online: bool = False
 
     # --- read access -----------------------------------------------------
@@ -544,29 +568,25 @@ class CloudSync:
     @property
     def current_session_id(self) -> str | None:
         """The dashboard id of the session running now, once known."""
-        return None if self._current is None else self._current.cloud_id
+        return self._uplink.session_id
 
     @property
     def owed(self) -> int:
-        """Sessions whose end the dashboard has not yet acknowledged."""
-        return len(self._finished) + (0 if self._current is None else 1)
+        """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
+        return self._uplink.owed
 
     # --- what the panel calls --------------------------------------------
 
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
-        previous = self._current
-        if previous is not None:
-            # Its FINISHED fell between two link steps: the runtime has already
-            # been reset for this start, so its reason is gone. Say so.
-            previous.ended = (True, "fin non observee par le lien", self._clock.unix_millis())
-            self._retire(previous)
         remote = started.cloud_session_id
-        self._current = _Tracked(
-            started=started,
-            local_ref=uuid.uuid4().hex,
-            cloud_id=remote,
-            start_confirmed=remote is None,
+        self._stop_forwarded = False
+        self._uplink.begin(
+            ArmedSession(
+                declaration=declaration_of(started),
+                started_at=started.started_at,
+                cloud_session_id=remote,
+            )
         )
         if self._awaiting is not None and self._awaiting.cloud_session_id == remote:
             self._awaiting = None
@@ -580,60 +600,43 @@ class CloudSync:
     # --- the step ----------------------------------------------------------
 
     async def step(self) -> None:
-        """One pass: sample, detect an end, then whatever network work is due."""
+        """One pass: detect an end, then whatever network work is due."""
         now = self._clock.monotonic()
         snapshot = self._runtime.snapshot()
-        self._observe(now, snapshot)
+        self._observe()
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
-        if self._current is None and self._awaiting is None:
+        if not self._uplink.running and self._awaiting is None and not self._uplink.refusal_owed:
             await self._poll(now)
         self._check_launch_timeout(now)
-        # Delivery last, so a refusal found above goes out in this same step.
-        current = self._current
-        if current is not None:
-            await self._deliver(now, current)
-        for owed in tuple(self._finished):
-            await self._deliver(now, owed)
+        # A stop asked for is looked for BEFORE anything is sent: sending may
+        # take seconds on a poor link, and a stop must not wait behind it.
+        await self._follow_stop(now)
+        # The sending last, so a refusal found above goes out in this same step.
+        await self._uplink.step()
+        # And once more, for the step in which the sending has just had the
+        # start confirmed: the first question is asked at once. It asks
+        # nothing when the question above was asked (the period is not over).
+        await self._follow_stop(now)
 
-    def _observe(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
-        current = self._current
-        if current is None:
+    def _observe(self) -> None:
+        """Tell the sending that the runtime has finished the running session."""
+        if not self._uplink.running or self._runtime.state is not RuntimeState.FINISHED:
             return
-        if self._last_sample is None or elapsed(self._last_sample, now) >= 1.0:
-            self._last_sample = now
-            current.points.append(telemetry_point(snapshot))
-        if self._runtime.state is RuntimeState.FINISHED:
-            reason = self._runtime.end_reason
-            words = reason.value if reason is not None else "fin"
-            stop = self._runtime.stop_reason
-            detail = words if stop is None else f"{words}: {stop}"
-            current.ended = (end_is_failure(reason), detail, self._clock.unix_millis())
-            self._current = None
-            self._retire(current)
-
-    def _retire(self, tracked: _Tracked) -> None:
-        if len(self._finished) == MAX_FINISHED:
-            dropped = self._finished[0]
-            _logger.warning("dashboard: dropping undelivered session %s", dropped.local_ref)
-        self._finished.append(tracked)
+        reason = self._runtime.end_reason
+        words = reason.value if reason is not None else "fin"
+        stop = self._runtime.stop_reason
+        detail = words if stop is None else f"{words}: {stop}"
+        self._uplink.finished(RuntimeEnd(end_is_failure(reason), detail))
 
     def _owe_refusal(self, cloud_session_id: str, detail: str) -> None:
-        refused = StartedSession(
-            kind=SessionKind.AUTO,
-            operator=DASHBOARD_OPERATOR,
-            started_at=self._clock.unix_millis(),
-            subject_id="",
-            cloud_session_id=cloud_session_id,
-        )
-        tracked = _Tracked(
-            started=refused,
-            local_ref=uuid.uuid4().hex,
-            cloud_id=cloud_session_id,
-            start_confirmed=True,
-            ended=(True, f"refusee par la machine : {detail}", self._clock.unix_millis()),
-        )
-        self._retire(tracked)
+        self._uplink.owe_refusal(cloud_session_id, f"refusee par la machine : {detail}")
+
+    async def send(self, path: str, body: Mapping[str, JsonValue]) -> Answer:
+        """POST for the sending of the records, and say what the answer means for it."""
+        sent = await self._transport.post(path, body)
+        self._note(sent)
+        return answer_of(sent)
 
     # --- heartbeat and presets --------------------------------------------
 
@@ -749,87 +752,13 @@ class CloudSync:
         self._awaiting = None
         self._owe_refusal(awaiting.cloud_session_id, "la boucle n'a ni demarre ni refuse")
 
-    # --- one session's delivery -------------------------------------------
+    # --- a stop from the dashboard ------------------------------------------
 
-    async def _deliver(self, now: Monotonic, tracked: _Tracked) -> None:
-        if tracked.next_try is not None and now < tracked.next_try:
+    async def _follow_stop(self, now: Monotonic) -> None:
+        session_id = self._uplink.following
+        if session_id is None or self._stop_forwarded:
             return
-        delivered = await self._deliver_once(now, tracked)
-        tracked.next_try = None if delivered else Monotonic(now + RETRY_PERIOD)
-
-    async def _deliver_once(self, now: Monotonic, tracked: _Tracked) -> bool:
-        """Register, confirm, follow a stop, send telemetry, end: each needs the one before."""
-        session_id = await self._register(tracked)
-        if session_id is None or not await self._confirm_start(tracked, session_id):
-            return False
-        if tracked.ended is None:
-            await self._follow_stop(now, tracked, session_id)
-            if not _due(self._last_telemetry, now, TELEMETRY_PERIOD):
-                return True
-            self._last_telemetry = now
-            return await self._flush(tracked, session_id)
-        if not await self._flush(tracked, session_id):
-            return False
-        if tracked.points:
-            return True  # more than one batch owed: the rest next step
-        return await self._end(tracked, tracked.ended, session_id)
-
-    async def _register(self, tracked: _Tracked) -> str | None:
-        """The dashboard id, registering a local session first if need be; ``None`` if not yet."""
-        if tracked.cloud_id is not None:
-            return tracked.cloud_id
-        started = tracked.started
-        body: dict[str, JsonValue] = {
-            "localRef": tracked.local_ref,
-            "kind": started.kind.value,
-            "startedAt": int(started.started_at),
-            "operatorName": started.operator,
-        }
-        profile = started.profile
-        if profile is not None:
-            body.update(
-                profileId=profile.profile_id,
-                profileName=profile.name,
-                zoneLowBpm=int(profile.zone_low_bpm),
-                zoneHighBpm=int(profile.zone_high_bpm),
-                totalDurationS=float(profile.total_duration_s),
-                subjectHrMax=int(profile.subject_hr_max),
-            )
-        if started.occupancy is not None:
-            body["occupancy"] = started.occupancy.value
-        sent = await self._transport.post("/api/machine/training/local", body)
-        self._note(sent)
-        if isinstance(sent, Err):
-            return None
-        found = sent.value.get("sessionId")
-        if not isinstance(found, str):
-            _logger.warning("dashboard: registration answered without a session id")
-            return None
-        tracked.cloud_id = found
-        return found
-
-    async def _confirm_start(self, tracked: _Tracked, session_id: str) -> bool:
-        if tracked.start_confirmed:
-            return True
-        sent = await self._transport.post("/api/machine/training/start", {"sessionId": session_id})
-        self._note(sent)
-        if isinstance(sent, Ok):
-            tracked.start_confirmed = True
-            return True
-        # Exhaustiveness over CloudError is enforced once, in _note, which has
-        # already run: a new variant fails there before it can reach this line.
-        error = sent.error
-        if isinstance(error, Unreachable):
-            return False
-        # Refused: cancelled on the dashboard between the poll and the arm.
-        # The machine is armed for a session nobody wants: end it.
-        _logger.warning("dashboard refused the start (%s): stopping", describe_refusal(error))
-        tracked.start_confirmed = True
-        self._forward_stop(tracked, f"annulee au tableau de bord ({error.detail})")
-        return True
-
-    async def _follow_stop(self, now: Monotonic, tracked: _Tracked, session_id: str) -> None:
-        if tracked.stop_forwarded or not _due(self._last_status, now, STATUS_PERIOD):
+        if not _due(self._last_status, now, STATUS_PERIOD):
             return
         self._last_status = now
         sent = await self._transport.get("/api/machine/training/status", {"sessionId": session_id})
@@ -842,49 +771,18 @@ class CloudSync:
         # this session on the ordinary ramp, and that is the safe side under
         # any contract. These two fields are all that is read here.
         if document.get("stopRequested") is True or document.get("active") is False:
-            self._forward_stop(tracked, "arret demande depuis le tableau de bord")
+            self._forward_stop("arret demande depuis le tableau de bord")
 
-    def _forward_stop(self, tracked: _Tracked, reason: str) -> None:
-        tracked.stop_forwarded = True
+    def _start_cancelled(self, detail: str) -> None:
+        """The dashboard refused the start of the running session: nobody wants it. End it."""
+        _logger.warning("dashboard refused the start (%s): stopping", detail)
+        self._forward_stop(f"annulee au tableau de bord ({detail})")
+
+    def _forward_stop(self, reason: str) -> None:
+        self._stop_forwarded = True
         ended = self._surface.submit_end(operator=DASHBOARD_OPERATOR, reason=reason)
         if isinstance(ended, Err):
             _logger.warning("dashboard stop not accepted by the console: %s", ended.error)
-
-    async def _flush(self, tracked: _Tracked, session_id: str) -> bool:
-        """Send one batch. ``False`` only when the link is down; a refused batch is dropped."""
-        if not tracked.points:
-            return True
-        batch: list[JsonValue] = [
-            tracked.points[i] for i in range(min(MAX_BATCH, len(tracked.points)))
-        ]
-        sent = await self._transport.post(
-            "/api/machine/training/telemetry", {"sessionId": session_id, "points": batch}
-        )
-        self._note(sent)
-        if isinstance(sent, Err) and isinstance(sent.error, Unreachable):
-            return False
-        if isinstance(sent, Err):
-            _logger.warning("dashboard refused %d telemetry points: %s", len(batch), sent.error)
-        for _ in batch:
-            tracked.points.popleft()
-        return True
-
-    async def _end(
-        self, tracked: _Tracked, ended: tuple[bool, str, UnixMillis], session_id: str
-    ) -> bool:
-        failed, reason, at = ended
-        sent = await self._transport.post(
-            "/api/machine/training/end",
-            {"sessionId": session_id, "failed": failed, "reason": reason, "endedAt": at},
-        )
-        self._note(sent)
-        if isinstance(sent, Err) and isinstance(sent.error, Unreachable):
-            return False
-        if isinstance(sent, Err):
-            _logger.warning("dashboard refused the end of %s: %s", session_id, sent.error)
-        # Only an ended session reaches here, and every ended session is retired.
-        self._finished.remove(tracked)
-        return True
 
     def _note(self, result: Result[Document, CloudError]) -> None:
         was = self._online

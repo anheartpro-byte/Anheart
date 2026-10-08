@@ -78,6 +78,16 @@ that reports none (the simulator) is wrapped by a tap that notes each call
 (:mod:`src.record.drive_tap`). What is asked at the console while no session
 is recorded goes to the logbook (:mod:`src.record.logbook`).
 
+The dashboard is told from the record
+-------------------------------------
+
+What the dashboard receives of a session (telemetry, events, end) is read back
+from that session's record, from the place the dashboard last acknowledged
+(:mod:`src.record_uplink`): a lost link, or a console that restarts, loses
+nothing of a session that is on disk. Those reads have a thread of their own
+(:func:`record_source`), and the dashboard task that asks for them is cancelled
+first at exit: neither a tick nor the stop of the drive ever waits for them.
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -147,8 +157,9 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.cursor import boot_identity
 from src.record.drive_tap import tap_drive
-from src.record.export import RecordExporter
+from src.record.export import RecordExporter, RecordIo
 from src.record.journal import STOP_TIMEOUT, Activity, Journal
 from src.record.session import (
     RecordInodesLow,
@@ -158,6 +169,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
+from src.record_uplink import RecordSource
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -247,7 +259,7 @@ SENSOR_PERIOD: Final[Seconds] = Seconds(1.0)
 """Every sensor window is re-processed once a second, off the loop."""
 
 CLOUD_PERIOD: Final[Seconds] = Seconds(1.0)
-"""One dashboard step a second: telemetry is sampled at 1 Hz."""
+"""One dashboard step a second. What it sends of a session is read back from its record."""
 
 STOP_POLL: Final[Seconds] = Seconds(0.05)
 STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
@@ -1239,6 +1251,7 @@ def build_panel(
             programs_enabled=config.programs_enabled,
             software_version=read_software_version(),
             record_degraded=None if recorder is None else recorder.is_degraded,
+            records=None if journal is None else record_source(journal, clock),
         )
     return LocalPanel(
         clock=clock,
@@ -1275,6 +1288,22 @@ async def journal_stopped(journal: Journal) -> bool:
             break
         await asyncio.sleep(STOP_POLL)
     return journal.stopped
+
+
+def record_source(journal: Journal, clock: Clock) -> RecordSource:
+    """The session records, as the dashboard link reads them back to send them.
+
+    One thread of its own for those reads and for the cursor it writes, apart
+    from the threads of the downloads and from every other thread of the
+    console: a records directory that stops answering holds the sending, and
+    nothing else. The system's boot identifier is read here, once: startup
+    I/O, with nothing turning.
+    """
+
+    def current() -> Path | None:
+        return journal.status(clock.monotonic()).path
+
+    return RecordSource(root=journal.root, current=current, io=RecordIo(1), boot_id=boot_identity())
 
 
 def build_recorder(
