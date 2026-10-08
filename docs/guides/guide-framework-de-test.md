@@ -440,7 +440,7 @@ Options utiles : `--workers N` (0 = un par cœur, défaut), `--out DIR` (où
 événement).
 
 ```sh
-$PY -m simulation.run --list                 # les 66 scénarios
+$PY -m simulation.run --list                 # les 67 scénarios
 $PY -m simulation.run manual_27_rpm --csv    # un scénario, plus un CSV
 $PY -m simulation.run --all                  # tous, plus simulation/out/summary.md
 ```
@@ -1131,7 +1131,7 @@ Tout se passe **depuis `raspberry-pi/`**, sans `PYTHONPATH`.
 
 ```sh
 cd raspberry-pi
-.venv/bin/python -m pytest tests/test_safety.py -q                     # un fichier (182 tests)
+.venv/bin/python -m pytest tests/test_safety.py -q                     # un fichier (202 tests)
 .venv/bin/python -m pytest tests/test_safety.py -q -k collapse         # les noms qui contiennent "collapse"
 .venv/bin/python -m pytest "tests/test_safety.py::test_a_falling_heart_rate_ends_the_session_although_it_reads_as_below_zone" -q
 ```

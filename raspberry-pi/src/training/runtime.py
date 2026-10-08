@@ -1222,6 +1222,7 @@ class TrainingRuntime:
         "_last_sample",
         "_last_status",
         "_last_status_at",
+        "_last_usable_sample",
         "_latched",
         "_limits",
         "_link_open",
@@ -1425,6 +1426,9 @@ class TrainingRuntime:
     def _initialise_evidence(self) -> None:
         """Evidence and output, as a runtime nobody has started holds them."""
         self._last_sample: HeartRateSample | None = None
+        # The latest fresh sample that carried a usable rate: what the level
+        # rules go on judging when the fresh samples after it carry none.
+        self._last_usable_sample: HeartRateSample | None = None
         self._decision: ControlDecision | None = None
         self._counters: ZoneCounters = ZoneCounters(
             in_zone=Seconds(0.0), above_zone=Seconds(0.0), below_zone=Seconds(0.0)
@@ -1642,6 +1646,19 @@ class TrainingRuntime:
         rejected" is four materially different situations to whoever is watching
         the screen - the pipeline stopped, the electrodes are the problem, the
         detector is, or one reading was an artefact.
+
+        **The last usable sample is kept beside the last one.** The supervisor
+        is shown one sample a tick, and this method can be called several times
+        between two ticks (the bridge drains a backlog in one pump, and it runs
+        on its own task). A fresh sample with no rate in it replaces the last
+        sample, as it must: the screen and ``hr_stale`` need to know nothing is
+        being measured. It does not replace the last USABLE one, which is what
+        the level rules go on judging until it is stale
+        (:meth:`~src.training.safety.SafetySupervisor._level_rate`). The gate
+        is the same sequence gate, and the test is the sample's own
+        ``usable_bpm``, the one the supervisor applies: the tracker's
+        plausibility and jump gates decide what the control law regulates on,
+        not what the safety rules are shown.
         """
         sample = HeartRateSample(bpm=heart_rate, quality=quality, seq=seq, at=now)
         # Read the watermark BEFORE observing: observe() advances it on any new
@@ -1650,6 +1667,8 @@ class TrainingRuntime:
         outcome = self._tracker.observe(sample)
         if is_new:
             self._last_sample = sample
+            if sample.usable_bpm is not None:
+                self._last_usable_sample = sample
         return outcome
 
     def presence_ping(self) -> Monotonic:
@@ -2717,6 +2736,8 @@ class TrainingRuntime:
         ``envelope`` is derived from it and from the drive's ramp.
         ``stopped_by`` is a fact about the applied setpoint too (it came back
         to zero, and nobody had asked): see :meth:`_note_standstill`.
+        ``last_usable_heart_rate`` is a measurement like ``heart_rate``: the
+        last fresh sample that carried a usable rate (:meth:`observe_ecg`).
 
         ``session_over`` makes one rule quieter and no other
         (``session_overrun`` stops judging a session that has ended), so it is
@@ -2749,6 +2770,7 @@ class TrainingRuntime:
             commanded_rpm=self._applied_rpm,
             ramping=self._is_ramping(now),
             heart_rate=self._last_sample,
+            last_usable_heart_rate=self._last_usable_sample,
             drive_state=DriveState.COMM_LOST if status is None else status.state,
             measured_rpm=None if status is None else status.output_rpm,
             current=None if status is None else status.current,

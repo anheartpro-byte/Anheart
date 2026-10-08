@@ -90,7 +90,7 @@ gros (nombre de tests collectés) :
 | `test_hr_control.py` | 246 | la loi de commande FC → vitesse |
 | `test_plan.py` | 244 | profils, programmes, validation pour un passager |
 | `test_training_types.py` | 238 | types du domaine (verdicts, qualités de signal…) |
-| `test_safety.py` | 182 | le superviseur de sécurité, règle par règle |
+| `test_safety.py` | 202 | le superviseur de sécurité, règle par règle |
 | `test_web_api.py`, `test_web_panel.py` | 142 + 11 | les routes HTTP de la console locale |
 | `test_atv320.py`, `test_drive_contract.py`, `test_ftdi_link.py` | 139 + 79 + 65 | le pilote Modbus ATV320 et la liaison FTDI |
 | `test_simulated_drive.py`, `test_sim.py` | 97 + 114 | les simulateurs (variateur, BITalino, physiologie) |
@@ -266,7 +266,7 @@ usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT]
 | Option | Effet |
 |---|---|
 | `scenario` | nom (`manual_27_rpm`) ou chemin d'un fichier `.json` |
-| `--list` | liste les scénarios (66 aujourd'hui) |
+| `--list` | liste les scénarios (67 aujourd'hui) |
 | `--all` | lance tous les scénarios et écrit `simulation/out/summary.md` |
 | `--csv` | écrit aussi un CSV des lignes de la trace |
 | `--out DIR` | dossier de sortie (défaut `simulation/out/`, ignoré par git) |
@@ -385,7 +385,7 @@ thèmes clair et sombre). Ouvrez-le dans un navigateur.
 ## 7. Le visualiseur 2D : `simulation.live`
 
 > Le même visualiseur est aussi **en ligne**, sans rien installer :
-> <https://anheart-simulation.vercel.app> (62 scénarios sur 66, vitesse de 10x
+> <https://anheart-simulation.vercel.app> (63 scénarios sur 67, vitesse de 10x
 > à 200x). Ses limites et son déploiement sont décrits dans
 > [deploiement.md](deploiement.md#6-le-moteur-de-simulation-hébergé).
 

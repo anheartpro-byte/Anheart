@@ -230,13 +230,25 @@ class Rig:
         """LFRD read back this tick, or ``None`` when no read followed the write."""
         self.envelope: SpeedEnvelope | None = None
         """The band the runtime says the shaft may be in, or ``None`` (the older ``ramping``)."""
+        self.last_usable: HeartRateSample | None = None
+        """The last fresh sample that carried a usable rate, kept as the runtime keeps it."""
+        self._seq_kept: int | None = None
 
     def observation(self) -> SafetyObservation:
-        """Build the observation for the current clock instant."""
+        """Build the observation for the current clock instant.
+
+        The last usable sample is kept exactly as ``TrainingRuntime.observe_ecg``
+        keeps it: replaced by a sample whose ``seq`` advanced and which carries
+        a usable rate, and by nothing else.
+        """
         now = self.clock.monotonic()
         sample: HeartRateSample | None = None
         if self.heart_rate_present:
             sample = HeartRateSample(bpm=self.bpm, quality=self.quality, seq=self.seq, at=now)
+        if sample is not None and sample.is_new_evidence_after(self._seq_kept):
+            self._seq_kept = sample.seq
+            if sample.usable_bpm is not None:
+                self.last_usable = sample
         return SafetyObservation(
             now=now,
             phase=self.phase,
@@ -245,6 +257,7 @@ class Rig:
             commanded_rpm=self.commanded,
             ramping=self.ramping,
             heart_rate=sample,
+            last_usable_heart_rate=self.last_usable,
             drive_state=self.drive_state,
             measured_rpm=self.measured,
             current=self.current,
@@ -397,6 +410,11 @@ def test_the_person_specific_limits_have_no_defaults() -> None:
             {"hr_stale_ramp_after": Seconds(20.0)},
             "hr_stale_ramp_after",
             id="stale-ramp-before-reduce",
+        ),
+        pytest.param(
+            {"hr_hard_max_dwell": Seconds(10.0)},
+            "hr_stale_freeze_after (10.0) must be greater than hr_hard_max_dwell (10.0)",
+            id="dwell-not-shorter-than-staleness",
         ),
         pytest.param({"no_load_floor_a": Amperes(3.0)}, "current_warn_a", id="floor-above-warning"),
         pytest.param({"current_trip_a": Amperes(1.0)}, "current_trip_a", id="trip-below-warning"),
@@ -1297,6 +1315,648 @@ def test_the_recovery_phase_is_still_supervised() -> None:
     rig.tick()
 
     assert rig.action_for(RULE_HR_CRITICAL) is SafetyAction.QUICK_STOP
+
+
+# =========================================================================
+# The level rules judge the last usable rate (hr_hard_max, hr_critical)
+# =========================================================================
+#
+# A fresh reading with no rate in it says nothing could be measured. It does not
+# say the heart came back down, so it neither restarts the hard-maximum dwell nor
+# takes back a rate that was measured: the last usable rate is judged in its
+# place until it is stale, and only a usable rate under the level releases.
+
+
+def _lose_the_signal(rig: Rig, quality: SignalQuality = SignalQuality.NO_SIGNAL) -> None:
+    """From the next tick on, every reading is fresh and carries no rate."""
+    rig.bpm = None
+    rig.quality = quality
+    rig.fresh = True
+
+
+def test_a_noisy_signal_above_the_hard_maximum_still_ends_the_session() -> None:
+    """One reading in five carries a rate, and that rate is above the limit.
+
+    The four in between are fresh and carry none - the grade a noisy window
+    gets, and what the independent confirmation hands on when it withholds a
+    rate. None of them restarts the five-second dwell: no five continuous
+    seconds of readings WITH a rate exist anywhere in this signal, and the
+    rule fires all the same, five seconds after the first reading above the
+    limit, to the tick (a quarter of a second a tick, which is exact in
+    binary).
+    """
+    rig = Rig()
+    verdicts: list[SafetyVerdict | None] = []
+    for step in range(21):
+        usable = step % 5 == 0
+        rig.bpm = Bpm(155) if usable else None
+        rig.quality = SignalQuality.GOOD if usable else SignalQuality.NOISY
+        rig.tick(Seconds(0.25))
+        verdicts.append(rig.verdict_for(RULE_HR_HARD_MAX))
+
+    assert all(verdict is None for verdict in verdicts[:20])
+    verdict = verdicts[20]
+    assert verdict is not None
+    assert verdict.action is SafetyAction.RAMP_DOWN
+    assert verdict.latched is True
+    assert "5.0 s" in verdict.detail
+
+
+def test_an_electrode_lost_during_the_hard_maximum_dwell_does_not_restart_it() -> None:
+    """152 against a limit of 150 for three seconds, then a flat lead.
+
+    The dwell began on a measured rate. Losing the signal is not the rate
+    coming back down, so the dwell elapses on the last rate known and the
+    session ends five seconds after the first reading above the limit, two
+    after the last one - eight seconds before ``hr_stale`` has anything to
+    say, and its first word would only have held the speed.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(152)
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(3.0))
+    _lose_the_signal(rig)
+
+    rig.tick(Seconds(1.5))
+    assert rig.verdict_for(RULE_HR_HARD_MAX) is None
+    rig.tick(Seconds(0.5))
+    verdict = rig.verdict_for(RULE_HR_HARD_MAX)
+
+    assert verdict is not None
+    assert verdict.action is SafetyAction.RAMP_DOWN
+    assert verdict.latched is True
+    assert rig.verdict_for(RULE_HR_STALE) is None
+    floor = rig.floor()
+    assert floor is not None
+    assert floor.rule == RULE_HR_HARD_MAX
+
+
+def test_a_critical_rate_is_not_taken_back_by_a_reading_with_no_rate() -> None:
+    """The critical level, across an acknowledgement.
+
+    The rule has no dwell, so there is none to restart: what must hold here is
+    that a reading with no rate does not take the measured excess back. The
+    last rate known is still the last rate known: the rule goes on firing on
+    it with the electrodes off, and an acknowledgement given a moment later
+    does not stand - the floor is raised again on the very next tick.
+    """
+    rig = Rig()
+    rig.bpm = CRITICAL
+    rig.tick()
+    assert rig.action_for(RULE_HR_CRITICAL) is SafetyAction.QUICK_STOP
+    _lose_the_signal(rig)
+
+    rig.run(Seconds(3.0))
+    still_live = rig.action_for(RULE_HR_CRITICAL)
+    acknowledged = rig.supervisor.acknowledge("Dr Ada Okonkwo")
+    cleared = rig.floor()
+    rig.tick()
+    floor = rig.floor()
+
+    assert still_live is SafetyAction.QUICK_STOP
+    assert isinstance(acknowledged, Ok)
+    assert cleared is None
+    assert floor is not None
+    assert floor.rule == RULE_HR_CRITICAL
+    assert floor.action is SafetyAction.QUICK_STOP
+
+
+def test_a_critical_reading_the_supervisor_was_never_shown_as_the_latest_still_stops() -> None:
+    """Two readings between two ticks: the critical one, then one with no rate.
+
+    The observation shows one sample a tick, and it is the later one. The
+    earlier one reaches the rules as the last usable sample, and that is
+    enough to stop the machine on the first tick after it.
+    """
+    rig = Rig()
+    rig.tick()
+    overtaken = HeartRateSample(
+        bpm=CRITICAL, quality=SignalQuality.GOOD, seq=rig.seq + 1, at=rig.clock.monotonic()
+    )
+    _lose_the_signal(rig)
+    rig.clock.advance(Seconds(0.2))
+    rig.seq += 2
+    observation = replace(rig.observation(), last_usable_heart_rate=overtaken)
+    verdict = rig.supervisor.evaluate(observation)
+
+    assert verdict is not None
+    assert verdict.rule == RULE_HR_CRITICAL
+    assert verdict.action is SafetyAction.QUICK_STOP
+    assert verdict.latched is True
+
+
+def test_only_a_usable_rate_under_the_release_level_releases_the_dwell() -> None:
+    """The one thing that restarts the five seconds, and it still does.
+
+    Above the limit for three seconds, a second with no rate, then one usable
+    reading under the release level: the heart was measured coming down, so the
+    dwell is over. Back above the limit, a full five seconds are needed again.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(160)
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(2.5))
+    _lose_the_signal(rig, SignalQuality.NOISY)
+    rig.tick(Seconds(1.0))
+
+    rig.bpm = Bpm(LIMITS.hr_hard_max_release_bpm)
+    rig.quality = SignalQuality.GOOD
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(1.5))
+    assert rig.verdict_for(RULE_HR_HARD_MAX) is None
+
+    rig.bpm = Bpm(160)
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(4.5))
+    assert rig.verdict_for(RULE_HR_HARD_MAX) is None
+    rig.tick(Seconds(0.5))
+    assert rig.action_for(RULE_HR_HARD_MAX) is SafetyAction.RAMP_DOWN
+    assert rig.floor() is not None
+
+
+def test_a_rate_inside_the_release_band_keeps_the_dwell_through_a_lost_signal() -> None:
+    """The hysteresis band applies to the last usable rate as it does to a live one."""
+    rig = Rig()
+    rig.bpm = Bpm(155)
+    rig.tick(Seconds(0.5))
+    rig.bpm = Bpm(LIMITS.hr_hard_max_release_bpm + 1)
+    rig.tick(Seconds(1.0))
+    _lose_the_signal(rig)
+
+    rig.tick(Seconds(3.5))
+    assert rig.verdict_for(RULE_HR_HARD_MAX) is None
+    rig.tick(Seconds(0.5))
+
+    assert rig.action_for(RULE_HR_HARD_MAX) is SafetyAction.RAMP_DOWN
+
+
+def test_a_signal_lost_under_the_levels_raises_no_level_verdict() -> None:
+    """No new alarm on a heart that was fine when the signal went.
+
+    The last usable rate is under both levels, so judging it changes nothing:
+    the rules stay quiet for as long as the signal is lost, and ``hr_stale``
+    alone speaks, on its own clock.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(HARD_MAX - 1)
+    rig.run(Seconds(10.0))
+    _lose_the_signal(rig)
+    rig.run(Seconds(70.0))
+
+    assert {verdict.rule for verdict in rig.live()} == {RULE_HR_STALE}
+    floor = rig.floor()
+    assert floor is not None
+    assert floor.rule == RULE_HR_STALE
+
+
+def test_one_reading_above_the_hard_maximum_then_a_lost_signal_ends_the_session() -> None:
+    """Stated plainly, because it is the price of the rule and it is intended.
+
+    A single reading above the limit followed by five seconds with no rate
+    ends the session: nothing came to say the heart was under the limit, and
+    "unknown after an excess" is treated as the excess. The same reading
+    followed by a usable rate under the release level ends nothing, exactly as
+    before - an isolated artefact on a signal that stays readable costs
+    nothing.
+    """
+    lost = Rig()
+    lost.bpm = Bpm(HARD_MAX + 1)
+    lost.tick(Seconds(0.5))
+    _lose_the_signal(lost)
+    lost.tick(Seconds(4.5))
+    before_the_dwell = lost.verdict_for(RULE_HR_HARD_MAX)
+    lost.tick(Seconds(0.5))
+
+    readable = Rig()
+    readable.bpm = Bpm(HARD_MAX + 1)
+    readable.tick(Seconds(0.5))
+    readable.bpm = Bpm(LIMITS.hr_hard_max_release_bpm)
+    readable.run(Seconds(60.0))
+
+    assert before_the_dwell is None
+    assert lost.action_for(RULE_HR_HARD_MAX) is SafetyAction.RAMP_DOWN
+    assert readable.verdict_for(RULE_HR_HARD_MAX) is None
+    assert readable.floor() is None
+
+
+def test_the_level_verdict_rises_first_and_the_stale_clock_is_left_alone() -> None:
+    """The order of verdicts when the signal is lost above the hard maximum.
+
+    The level verdict rises when its dwell elapses and latches the end of the
+    session. ``hr_stale`` then walks its own escalation at exactly ten, thirty
+    and sixty seconds after the LAST USABLE reading, as if the level rule were
+    not there: nothing the level rule does restarts that clock, and no reading
+    with no rate in it does either. The standing verdict stays the first of
+    the two to have ended the session.
+    """
+    rig = Rig()
+    rig.bpm = Bpm(152)
+    rig.tick(Seconds(0.5))
+    rig.tick(Seconds(2.5))
+    _lose_the_signal(rig)
+
+    rig.tick(Seconds(2.0))
+    before_the_dwell = rig.verdict_for(RULE_HR_HARD_MAX)
+    rig.tick(Seconds(0.5))
+    assert before_the_dwell is None
+    assert rig.action_for(RULE_HR_HARD_MAX) is SafetyAction.RAMP_DOWN
+    assert rig.verdict_for(RULE_HR_STALE) is None
+
+    rig.tick(Seconds(7.5))
+    at_ten = (rig.action_for(RULE_HR_STALE), rig.action_for(RULE_HR_HARD_MAX))
+    rig.tick(Seconds(0.5))
+    after_ten = (rig.action_for(RULE_HR_STALE), rig.action_for(RULE_HR_HARD_MAX))
+    rig.tick(Seconds(19.5))
+    at_thirty = rig.action_for(RULE_HR_STALE)
+    rig.tick(Seconds(0.5))
+    after_thirty = rig.action_for(RULE_HR_STALE)
+    rig.tick(Seconds(29.5))
+    at_sixty = rig.action_for(RULE_HR_STALE)
+    rig.tick(Seconds(0.5))
+    after_sixty = rig.action_for(RULE_HR_STALE)
+    standing = rig.standing()
+
+    assert at_ten == (SafetyAction.NONE, SafetyAction.RAMP_DOWN)
+    assert after_ten == (SafetyAction.FREEZE, SafetyAction.NONE)
+    assert at_thirty is SafetyAction.FREEZE
+    assert after_thirty is SafetyAction.REDUCE
+    assert at_sixty is SafetyAction.REDUCE
+    assert after_sixty is SafetyAction.RAMP_DOWN
+    assert standing is not None
+    assert standing.rule == RULE_HR_HARD_MAX
+    assert standing.action is SafetyAction.RAMP_DOWN
+
+
+def test_the_last_usable_rate_is_given_up_exactly_when_it_is_stale() -> None:
+    """Judged up to ten seconds old, and not one tick longer.
+
+    ``hr_stale_freeze_after`` is the one definition of "stale": at ten
+    seconds exactly the critical rule still holds the last rate known and
+    ``hr_stale`` has not begun; past it the rate is given up and ``hr_stale``
+    has begun. No tick has neither.
+    """
+    rig = Rig()
+    rig.bpm = CRITICAL
+    rig.tick(Seconds(0.5))
+    _lose_the_signal(rig)
+
+    rig.tick(Seconds(10.0))
+    at_the_bound = (rig.action_for(RULE_HR_CRITICAL), rig.action_for(RULE_HR_STALE))
+    rig.tick(Seconds(0.5))
+    past_it = (rig.action_for(RULE_HR_CRITICAL), rig.action_for(RULE_HR_STALE))
+
+    assert at_the_bound == (SafetyAction.QUICK_STOP, SafetyAction.NONE)
+    assert past_it == (SafetyAction.NONE, SafetyAction.FREEZE)
+    floor = rig.floor()
+    assert floor is not None
+    assert floor.rule == RULE_HR_CRITICAL
+
+
+def test_a_rate_left_over_from_before_is_not_judged_in_a_later_session() -> None:
+    """A stale rate is nobody's heart rate, whatever it was.
+
+    A session ends with the last usable rate above the critical level and the
+    electrodes then removed. The next session's first seconds are judged on
+    what is measured in them: a rate from twenty seconds ago, perhaps the
+    previous occupant's, stops nothing. What speaks there is ``hr_stale``,
+    which holds the speed because no rate is being measured.
+    """
+    rig = Rig()
+    rig.phase = Phase.DONE
+    rig.bpm = Bpm(CRITICAL + 5)
+    rig.tick()
+    _lose_the_signal(rig)
+    rig.run(Seconds(20.0))
+
+    rig.phase = Phase.BASELINE
+    rig.run(Seconds(8.0))
+
+    assert {verdict.rule for verdict in rig.live()} == {RULE_HR_STALE}
+    assert rig.standing_action() is SafetyAction.FREEZE
+    assert rig.floor() is None
+
+
+def _session_started_after(rate: Bpm, age_at_the_start: Seconds) -> Rig:
+    """A rig whose session starts ``age_at_the_start`` after one reading at ``rate``, then nothing.
+
+    The reading is taken with no session running (``DONE``), every reading
+    after it is fresh and carries no rate, and the first supervised tick of the
+    new session falls exactly ``age_at_the_start`` after it. Half-second ticks,
+    which are exact in binary.
+    """
+    rig = Rig()
+    rig.phase = Phase.DONE
+    rig.bpm = rate
+    rig.tick(Seconds(0.5))
+    _lose_the_signal(rig)
+    rig.tick(Seconds(age_at_the_start - 0.5))
+    rig.phase = Phase.BASELINE
+    rig.tick(Seconds(0.5))
+    return rig
+
+
+def test_a_session_started_within_ten_seconds_of_a_rate_above_a_level_is_judged_on_it() -> None:
+    """The near side of the same bound, and it is intended.
+
+    A session started a few seconds after a last usable reading above a level,
+    with nothing measured since, is judged on that reading: nothing has come
+    to say the heart is under the level, and ten seconds is too short for it
+    to have become somebody else's.
+
+    * a critical rate three seconds old stops the new session on its first
+      tick;
+    * a rate above the hard maximum two seconds old ends it five seconds
+      later: the dwell is counted INSIDE the session, from its first
+      supervised tick, not from the reading;
+    * a rate above the hard maximum six seconds old ends nothing. It is stale
+      before five seconds of session have gone by, the dwell is given up with
+      it, and ``hr_stale`` is what speaks.
+    """
+    critical = _session_started_after(CRITICAL, Seconds(3.0))
+    first_tick = critical.verdict_for(RULE_HR_CRITICAL)
+
+    recent = _session_started_after(Bpm(HARD_MAX + 2), Seconds(2.0))
+    on_the_first_tick = recent.verdict_for(RULE_HR_HARD_MAX)
+    recent.tick(Seconds(4.5))
+    before_the_dwell = recent.verdict_for(RULE_HR_HARD_MAX)
+    recent.tick(Seconds(0.5))
+    at_the_dwell = recent.verdict_for(RULE_HR_HARD_MAX)
+
+    older = _session_started_after(Bpm(HARD_MAX + 2), Seconds(6.0))
+    older.tick(Seconds(3.5))
+    older.tick(Seconds(1.0))
+    older.tick(Seconds(1.0))
+
+    assert first_tick is not None
+    assert first_tick.action is SafetyAction.QUICK_STOP
+    assert first_tick.latched is True
+    assert "taken 3.0 s ago" in first_tick.detail
+    assert on_the_first_tick is None
+    assert before_the_dwell is None
+    assert at_the_dwell is not None
+    assert at_the_dwell.action is SafetyAction.RAMP_DOWN
+    assert "taken 7.0 s ago" in at_the_dwell.detail
+    assert "for 5.0 s" in at_the_dwell.detail
+    assert {verdict.rule for verdict in older.live()} == {RULE_HR_STALE}
+    assert older.floor() is None
+
+
+def test_a_level_verdict_says_when_it_stands_on_the_last_usable_reading() -> None:
+    """The sentence the operator reads never shows a retained rate as a live one.
+
+    On the latest reading's own rate the sentence is the one it always was.
+    """
+    live = Rig()
+    live.bpm = CRITICAL
+    live.tick()
+    live_verdict = live.verdict_for(RULE_HR_CRITICAL)
+
+    retained = Rig()
+    retained.bpm = CRITICAL
+    retained.tick()
+    _lose_the_signal(retained)
+    retained.tick(Seconds(2.5))
+    retained_verdict = retained.verdict_for(RULE_HR_CRITICAL)
+
+    assert live_verdict is not None
+    assert live_verdict.detail == (
+        "heart rate 170 bpm is at or above the critical limit of 170 bpm: the speed "
+        "reference is zeroed immediately and the drive stops on its own ramp"
+    )
+    assert retained_verdict is not None
+    assert retained_verdict.detail.startswith(
+        "heart rate 170 bpm (the last usable reading, taken 2.5 s ago; no reading since has "
+        "carried a rate) is at or above the critical limit of 170 bpm"
+    )
+
+
+def test_the_hard_maximum_verdict_names_the_last_usable_reading_too() -> None:
+    rig = Rig()
+    rig.bpm = Bpm(152)
+    rig.tick(Seconds(0.5))
+    _lose_the_signal(rig)
+    rig.tick(Seconds(5.0))
+    verdict = rig.verdict_for(RULE_HR_HARD_MAX)
+
+    assert verdict is not None
+    assert verdict.detail == (
+        "heart rate 152 bpm (the last usable reading, taken 5.0 s ago; no reading since has "
+        "carried a rate) has been above the hard maximum of 150 bpm for 5.0 s"
+    )
+
+
+def test_a_sample_offered_as_the_last_usable_one_must_carry_a_usable_rate() -> None:
+    """The supervisor applies ``usable_bpm`` itself, to whatever it is handed.
+
+    A sample with a number and an untrustworthy grade is not a rate, in this
+    field as in the other. Never fabricate a vital sign.
+    """
+    rig = Rig()
+    rig.tick()
+    _lose_the_signal(rig)
+    rig.clock.advance(Seconds(0.2))
+    rig.seq += 1
+    untrusted = HeartRateSample(
+        bpm=Bpm(200), quality=SignalQuality.NOISY, seq=rig.seq, at=rig.clock.monotonic()
+    )
+    verdict = rig.supervisor.evaluate(replace(rig.observation(), last_usable_heart_rate=untrusted))
+
+    assert verdict is None
+    assert rig.verdict_for(RULE_HR_CRITICAL) is None
+    assert rig.verdict_for(RULE_HR_HARD_MAX) is None
+
+
+def test_an_observation_with_no_sample_is_judged_on_the_last_usable_rate_as_well() -> None:
+    """Total over its inputs: "no sample" is one more reading with no rate."""
+    rig = Rig()
+    rig.bpm = CRITICAL
+    rig.tick()
+    acknowledged = rig.supervisor.acknowledge("Dr Ada Okonkwo")
+    rig.heart_rate_present = False
+    rig.tick()
+
+    assert isinstance(acknowledged, Ok)
+    assert rig.action_for(RULE_HR_CRITICAL) is SafetyAction.QUICK_STOP
+
+
+def test_a_re_emitted_reading_above_the_level_is_judged_for_as_long_as_it_stays() -> None:
+    """What did not change: a reading that stays the latest one has no age limit.
+
+    The pipeline has stopped producing anything fresh, so the same usable
+    reading sits there. It is judged past the ten seconds that bound a rate
+    which fresh readings have since failed to confirm: this was the
+    conservative behaviour before, and it is kept as it was.
+    """
+    rig = Rig()
+    rig.bpm = CRITICAL
+    rig.tick()
+    rig.fresh = False
+    rig.run(Seconds(45.0))
+
+    assert rig.action_for(RULE_HR_CRITICAL) is SafetyAction.QUICK_STOP
+    assert rig.action_for(RULE_HR_STALE) is SafetyAction.REDUCE
+
+
+# -- The property, over arbitrary sequences of readings ---------------------
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _Reading:
+    """One tick of the level-rule property: what arrives, and after how long."""
+
+    advance: float
+    bpm: int | None
+    quality: SignalQuality
+    fresh: bool
+    """``False`` is the pipeline re-emitting: the previous reading stays the latest one."""
+    supervised: bool
+
+    @property
+    def usable(self) -> int | None:
+        """The rate, if this reading carries one that may be acted on."""
+        return self.bpm if self.quality is SignalQuality.GOOD else None
+
+
+_readings: Final[st.SearchStrategy[_Reading]] = st.builds(
+    _Reading,
+    advance=st.sampled_from([0.2, 0.2, 0.2, 0.4, 1.0, 2.6, 6.0]),
+    bpm=st.one_of(
+        st.none(),
+        st.integers(min_value=int(HARD_MAX) - 8, max_value=int(HARD_MAX) + 4),
+        st.integers(min_value=int(CRITICAL) - 2, max_value=int(CRITICAL) + 2),
+    ),
+    quality=st.sampled_from(
+        [SignalQuality.GOOD, SignalQuality.GOOD, SignalQuality.NOISY, SignalQuality.NO_SIGNAL]
+    ),
+    fresh=st.sampled_from([True, True, True, False]),
+    supervised=st.sampled_from([True, True, True, True, True, True, True, False]),
+)
+
+
+@final
+class _LevelModel:
+    """The rule as the requirement states it, written without the supervisor.
+
+    The rate judged is the latest reading's own when it is usable, otherwise
+    the last usable FRESH reading while it is no older than the staleness
+    bound, otherwise none. The hard maximum holds from the first judged rate
+    above it, through the release band, until a judged rate at or under the
+    release level or no judged rate at all; it fires once held for the dwell.
+    The critical level fires on any judged rate at or above it.
+    """
+
+    def __init__(self) -> None:
+        self.latest: _Reading | None = None
+        self.last_usable: tuple[int, float] | None = None
+        self.held_since: float | None = None
+
+    def standing(self, reading: _Reading) -> _Reading:
+        """The reading that is the latest one once ``reading`` has arrived."""
+        latest = self.latest
+        return reading if reading.fresh or latest is None else latest
+
+    def known(self, now: float) -> bool:
+        """Whether a last usable rate exists and is not stale at ``now``."""
+        kept = self.last_usable
+        return kept is not None and now - kept[1] <= LIMITS.hr_stale_freeze_after
+
+    def observe(self, reading: _Reading, now: float) -> int | None:
+        """Fold one reading in, and return the rate the level rules judge at ``now``."""
+        latest = self.standing(reading)
+        if latest is not self.latest:
+            self.latest = latest
+            if latest.usable is not None:
+                self.last_usable = (latest.usable, now)
+        if not reading.supervised:
+            return None
+        if latest.usable is not None:
+            return latest.usable
+        kept = self.last_usable
+        return kept[0] if kept is not None and self.known(now) else None
+
+    def hard_max_fires(self, judged: int | None, now: float) -> bool:
+        """Whether the hard-maximum verdict stands at ``now`` on the rate ``judged``."""
+        above = judged is not None and (
+            judged > HARD_MAX
+            or (self.held_since is not None and judged > LIMITS.hr_hard_max_release_bpm)
+        )
+        if not above:
+            self.held_since = None
+            return False
+        if self.held_since is None:
+            self.held_since = now
+        return now - self.held_since >= LIMITS.hr_hard_max_dwell
+
+
+@settings(max_examples=400, deadline=None)
+@given(st.lists(_readings, min_size=1, max_size=60))
+def test_the_level_rules_stand_on_the_last_usable_rate_for_any_sequence_of_readings(
+    readings: list[_Reading],
+) -> None:
+    """The requirement, over arbitrary readings, grades, repeats, gaps and phases.
+
+    After every tick the two level rules fire exactly when the requirement
+    says they do (:class:`_LevelModel`), and three consequences are asserted in
+    the requirement's own words rather than left inside the model:
+
+    1. **the last usable rate above the level for the dwell, and not stale,
+       means the verdict stands** - whatever the readings in between carried;
+    2. **a usable rate under the level releases it**: the rule is not firing
+       on the tick that reading is judged;
+    3. **a reading with no rate never releases it**: a rule that was firing
+       keeps firing through such a reading for as long as the last usable
+       rate is not stale and the phase is supervised.
+
+    And nothing a level rule does moves ``hr_stale``: that rule fires exactly
+    when the last usable fresh reading is older than its bound (or, with none
+    yet, the session), as it always has.
+    """
+    rig = Rig()
+    model = _LevelModel()
+    above_since: float | None = None
+    was_firing = False
+    was_critical = False
+
+    for reading in readings:
+        latest = model.standing(reading)
+        rig.bpm = None if latest.bpm is None else Bpm(latest.bpm)
+        rig.quality = latest.quality
+        rig.fresh = reading.fresh
+        rig.phase = Phase.HOLD if reading.supervised else Phase.DONE
+        rig.tick(Seconds(reading.advance))
+        now = float(rig.clock.monotonic())
+        known = model.known(now)
+        judged = model.observe(reading, now)
+        expected = model.hard_max_fires(judged, now)
+        firing = rig.verdict_for(RULE_HR_HARD_MAX) is not None
+        critical = rig.verdict_for(RULE_HR_CRITICAL) is not None
+        stale = rig.verdict_for(RULE_HR_STALE) is not None
+        where = (reading, judged)
+
+        assert firing == expected, where
+        assert critical == (judged is not None and judged >= CRITICAL), where
+
+        # 1. Above the level for the dwell, and not stale: the verdict stands.
+        above_since = None if judged is None or judged <= HARD_MAX else (above_since or now)
+        if above_since is not None and now - above_since >= LIMITS.hr_hard_max_dwell:
+            assert firing, where
+        # 2. A usable rate under the level releases it.
+        if reading.supervised and latest.usable is not None:
+            assert not (firing and latest.usable <= LIMITS.hr_hard_max_release_bpm), where
+            assert not (critical and latest.usable < CRITICAL), where
+        # 3. A reading with no rate never releases it.
+        if reading.supervised and latest.usable is None and known:
+            assert firing or not was_firing, where
+            assert critical or not was_critical, where
+        was_firing = firing
+        was_critical = critical
+
+        # hr_stale keeps its own clock, measured exactly as the rule measures it.
+        kept = model.last_usable
+        reference = now - float(rig.elapsed) if kept is None else kept[1]
+        expected_stale = reading.supervised and now - reference > LIMITS.hr_stale_freeze_after
+        assert stale == expected_stale, where
 
 
 # =========================================================================
