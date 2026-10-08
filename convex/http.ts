@@ -45,20 +45,19 @@ http.route({
       software_version?: unknown;
     } = {};
 
-    try {
-      const text = await req.text();
-      if (text) {
-        const parsed: unknown = JSON.parse(text);
-        // JSON that is not an object (null, a number, a string, an array) is
-        // refused before anything is recorded.
-        if (!isJsonObject(parsed)) {
-          return refuse(400, "invalid_request", "Expected a JSON object");
-        }
-        body = parsed as typeof body;
-      }
-    } catch {
-      // Empty or invalid body is OK - use defaults
+    // An empty body is a heartbeat without a field. Anything else is refused
+    // before anything is recorded, unless it is a JSON object whose stored
+    // fields have their type: text that is not JSON, JSON that is not an
+    // object, a battery level that is not a number.
+    const sent = await readOptionalJson(req);
+    if (sent === null || !validHeartbeatFields(sent)) {
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected an empty body or {batteryLevel?: number, wifiStrength?: number, activeSessionId?: string, ...}",
+      );
     }
+    body = sent as typeof body;
 
     // Record the heartbeat
     await ctx.runMutation(internal.machines.recordHeartbeat, {
@@ -140,11 +139,38 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+/**
+ * The body of a route that may be sent without one: `{}` for an empty body,
+ * the object it carries, or null for anything else (text that is not JSON,
+ * JSON that is not an object).
+ */
+async function readOptionalJson(
+  req: Request,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const text = await req.text();
+    if (text === "") return {};
+    const parsed: unknown = JSON.parse(text);
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function isNum(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
 }
 function isStr(x: unknown): x is string {
   return typeof x === "string";
+}
+
+/** The fields of a heartbeat that are stored as sent: each absent, or of its type. */
+function validHeartbeatFields(sent: Record<string, unknown>): boolean {
+  return (
+    (sent.batteryLevel === undefined || isNum(sent.batteryLevel)) &&
+    (sent.wifiStrength === undefined || isNum(sent.wifiStrength)) &&
+    (sent.activeSessionId === undefined || isStr(sent.activeSessionId))
+  );
 }
 
 function validLive(live: unknown): live is Infer<typeof liveStateValidator> {
