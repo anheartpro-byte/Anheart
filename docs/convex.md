@@ -189,9 +189,10 @@ Elle ne fait que s'allonger, et n'a pas d'`organizationId` non plus.
 
 Index `by_release`. Une ligne de `software_releases` écrite avant cette table
 n'y a aucune décision : elle est lue comme sa propre première décision (son
-niveau, ses `notes`, son `recordedBy`, son `updatedAt`), et ce premier niveau
-est écrit dans la table au moment où il change. Les deux tables sont un ajout
-au schéma : aucune donnée existante n'est à migrer.
+niveau, ses `notes`, son `recordedBy`, son `updatedAt`), et cette première
+décision est écrite dans la table à la première écriture qui suit, changement
+de niveau ou simple correction, avant que la ligne soit réécrite. Les deux
+tables sont un ajout au schéma : aucune donnée existante n'est à migrer.
 
 **Règle portée par `validationLevel`.** Une machine validée pour les séances
 programmées (M5) ne reçoit qu'une version `auto_validated` ou
@@ -872,13 +873,24 @@ Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la mêm
 requête) et son code est journalisé ; une absence de réponse devient
 `Unreachable` (on réessaie plus tard).
 
-**Corps** : les six routes `POST` attendent un objet JSON. Un corps qui est du
-JSON valide sans être un objet (`null`, un nombre, une chaîne, un booléen, un
-tableau) est refusé par **400** `invalid_request`, et rien n'est écrit. Le
-heartbeat a une tolérance que les autres n'ont pas : un corps vide, ou qui
-n'est pas du JSON, y vaut un heartbeat sans champ (200). Un test tient la
-règle pour chaque route `POST` du routeur, celles qui s'y ajouteront comprises
-(`convex/httpRoutes.test.ts`).
+**Corps** : les six routes `POST` attendent un objet JSON. Un corps qui n'en
+est pas un est refusé par **400** `invalid_request`, et rien n'est écrit :
+du texte qui n'est pas du JSON (un objet tronqué compris), ou du JSON valide
+qui n'est pas un objet (`null`, un nombre, une chaîne, un booléen, un
+tableau). La clé est jugée d'abord, puis le contrat, puis le corps : 401, 426,
+400, dans cet ordre. Un test tient la règle pour chaque route `POST` du
+routeur, celles qui s'y ajouteront comprises (`convex/httpRoutes.test.ts`).
+
+Le heartbeat a une seule tolérance que les autres n'ont pas : un corps
+**vide** y vaut un heartbeat sans champ (200). C'est ce qu'envoie le test de
+connectivité de `raspberry-pi/README.md` (un `curl` sans corps), et ce
+qu'envoyait au repos la console de l'ancien mode d'enregistrement. Il refuse
+aussi, par le même 400 et avant d'enregistrer quoi que ce soit, un objet dont
+l'un des trois champs stockés tels quels n'a pas son type : `batteryLevel` et
+`wifiStrength` sont des nombres, `activeSessionId` une chaîne. Les autres
+champs gardent leur règle, dite plus bas : un `live` mal formé est ignoré, un
+`software_version` mal formé est effacé, un champ inconnu à la racine du corps
+n'est pas lu.
 
 ### Routes utilisées par la console locale (`raspberry-pi/src/cloud_sync.py`)
 
@@ -1074,27 +1086,55 @@ npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
 npx convex run migrations/retireLegacyRecording:removeMachineConfig
 ```
 
-**Telles qu'écrites, ces deux lignes visent le déploiement de développement**,
-celui que nomme `CONVEX_DEPLOYMENT` dans `.env.local` : sans autre indication,
-`npx convex run` agit sur le déploiement de développement. Pour la production,
-deux formes, à lancer **après** le `convex deploy` de la production
-([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)) :
+**Telles qu'écrites, ces deux lignes visent le déploiement de développement.**
+Ce qui le décide est la clé `CONVEX_DEPLOY_KEY` de `.env.local`, celle du
+développement
+([deploiement.md, section 2](deploiement.md#2-les-clés-et-où-elles-sont-rangées)) :
+la CLI charge ce fichier, et une clé de déploiement présente dans
+l'environnement désigne à elle seule le déploiement visé. Deux conséquences,
+lues dans le paquet installé (convex 1.46.0,
+`src/cli/lib/deploymentSelection.ts`) :
 
-```bash
-# avec la clé de déploiement de la production, comme pour `convex deploy`
-CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
-  npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
-CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
-  npx convex run migrations/retireLegacyRecording:removeMachineConfig
+- `CONVEX_DEPLOYMENT` n'est pas consulté tant qu'une clé est là ;
+- **l'option `--prod` est ignorée.** Dans ce dépôt,
+  `npx convex run --prod …` agit sur le développement, sans le dire. Ne pas
+  s'en servir pour viser la production.
 
-# ou, depuis un compte connecté qui a accès au projet
-npx convex run --prod migrations/retireLegacyRecording:failOpenRecordingSessions
-npx convex run --prod migrations/retireLegacyRecording:removeMachineConfig
-```
+Pour la production, c'est sa clé qu'il faut passer, **après** le
+`convex deploy` de la production
+([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), en
+deux temps.
 
-Avec `CONVEX_DEPLOY_KEY`, la commande agit sur le déploiement de la clé, quoi
-que dise `CONVEX_DEPLOYMENT`. Aucune des deux formes n'a été essayée : la
-migration n'a tourné sur aucun déploiement.
+1. **Lire quel déploiement la clé désigne, avant de lancer quoi que ce
+   soit.** Une clé de déploiement commence par le type et le nom de son
+   déploiement, jusqu'au `|` qui précède sa partie secrète :
+
+   ```bash
+   sed -n 's/^CONVEX_DEPLOY_KEY_PROD=\([a-z]*:[^|]*\)|.*/\1/p' .env.local
+   ```
+
+   La ligne affichée doit être `prod:clean-giraffe-153`, le déploiement de
+   production ([deploiement.md, section 1](deploiement.md#1-les-environnements)).
+   Si elle commence par `dev:`, porte un autre nom, ou si rien ne s'affiche,
+   ne pas continuer. Cette lecture ne passe pas par la CLI et ne contacte
+   aucun déploiement : elle ne dépend donc pas de ce que la CLI choisirait,
+   et elle n'affiche pas la partie secrète de la clé.
+2. **Lancer les deux mutations avec cette clé** :
+
+   ```bash
+   CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
+     npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
+   CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
+     npx convex run migrations/retireLegacyRecording:removeMachineConfig
+   ```
+
+   Une variable déjà présente dans l'environnement l'emporte sur celle de
+   `.env.local`, que la CLI ne charge que pour les variables absentes : la
+   clé passée sur la ligne remplace donc celle du développement, pour cette
+   commande seulement.
+
+Cette forme n'a été essayée sur aucun déploiement : la migration n'a tourné
+nulle part.
 
 | Mutation | Effet | Résultat renvoyé |
 |---|---|---|
@@ -1111,10 +1151,22 @@ quatre exécutions :
 
 | Compteur | Ce qu'il doit valoir |
 |---|---|
-| `machinesChecked`, dans les deux résultats | le nombre de documents de la table `machines` du déploiement visé, machines supprimées comprises. Le comparer à ce que montre `npx convex data machines` lancé de la même façon (même variable, ou `--prod`) : c'est ce qui dit que la migration a lu ce déploiement-là, et toutes ses machines. |
+| `machinesChecked`, dans les deux résultats | le nombre de documents de la table `machines` du déploiement visé, machines supprimées comprises : la migration a lu toutes ses machines. Le compter à part, avec la commande donnée sous ce tableau. |
 | `sessionsFailed`, première exécution | le nombre de séances de l'ancien mode restées `pending` ou `active`. À noter : rien ne permet de le retrouver ensuite. |
 | `machinesCleared`, première exécution | le nombre de machines qui portaient `config`. En production, où le schéma en service (branche `main`) exige ce champ sur chaque machine, il doit être égal à `machinesChecked`. |
 | `sessionsFailed` et `machinesCleared`, **seconde exécution** | `0`. Relancer chaque mutation une fois : ce zéro est la preuve que la première a tout traité. |
+
+Pour compter les machines d'un déploiement, précéder la commande de la même
+variable `CONVEX_DEPLOY_KEY` qu'à l'étape 2 pour la production :
+
+```bash
+npx convex data machines --format jsonLines --limit 10000 | wc -l
+```
+
+`npx convex data machines` seul n'affiche que les 100 documents les plus
+récents : il ne compte pas au-delà. Avec `--format jsonLines` chaque document
+tient sur une ligne, et `--limit` repousse la borne. Si le nombre obtenu est
+égal à la limite donnée, la relever et recommencer.
 
 Le champ `machines.config` reste déclaré, facultatif, dans le schéma : le
 retirer tant que des documents le portent ferait échouer `convex deploy`. Une
