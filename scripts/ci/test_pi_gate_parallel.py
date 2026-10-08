@@ -43,7 +43,6 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Final, cast
 
-import pi_gate_shard
 import pytest
 from coverage import CoverageData
 from pi_gate_parallel import (
@@ -320,7 +319,7 @@ def pi_suite() -> Sequence[str]:
 def test_a_slow_pi_test_is_known_by_its_name_or_by_one_of_its_cases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pi_gate_shard, "PI_SLOW_SECONDS", SLOW_PI)
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
     assert pi_seconds(LONG) == 60
     # A name without a parameter is every case of that test.
     assert {pi_seconds(case) for case in FAULTS} == {10}
@@ -336,7 +335,7 @@ def test_a_slow_pi_test_is_known_by_its_name_or_by_one_of_its_cases(
 def test_the_slow_pi_tests_are_dealt_by_their_cost_and_every_other_by_its_position(
     count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pi_gate_shard, "PI_SLOW_SECONDS", SLOW_PI)
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
     nodeids = pi_suite()
     owners = dict(zip(nodeids, pi_owners(nodeids, count), strict=True))
 
@@ -366,7 +365,7 @@ def test_without_a_slow_test_the_pi_is_dealt_by_position_alone(
     nodeids = [f"tests/test_lib.py::test_{number}" for number in range(9)] + sorted(SAME_PROCESS)
     by_position = [0 if nodeid in SAME_PROCESS else n % 4 for n, nodeid in enumerate(nodeids)]
     assert list(pi_owners(nodeids, 4)) == by_position
-    monkeypatch.setattr(pi_gate_shard, "PI_SLOW_SECONDS", {})
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", {})
     assert list(pi_owners(pi_suite(), 4))[:7] == [0, 1, 2, 3, 0, 1, 2]
 
 
@@ -374,7 +373,7 @@ def test_without_a_slow_test_the_pi_is_dealt_by_position_alone(
 def test_every_pi_test_is_selected_by_exactly_one_share_the_slow_ones_included(
     count: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pi_gate_shard, "PI_SLOW_SECONDS", SLOW_PI)
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
     nodeids = pi_suite()
     owners = pi_owners(nodeids, count)
     assert len(owners) == len(nodeids)
