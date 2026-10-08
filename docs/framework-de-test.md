@@ -468,7 +468,8 @@ Tout ce que la page lit d'une trace, d'un enregistrement ou d'un flux en direct
 est inséré comme du **texte**, dans des éléments qu'elle construit elle-même
 (`createElement`, `textContent`, `createTextNode`) : nom de la trace et
 avertissements du lecteur, libellés et note de géométrie, tuiles, horloge,
-liste d'événements. Son script ne confie aucun texte à l'analyseur HTML
+liste d'événements, et les noms de scénarios reçus de `/api/scenarios`, qui
+remplissent le menu « live ». Son script ne confie aucun texte à l'analyseur HTML
 (`innerHTML` et équivalents) : un champ qui contient du balisage s'affiche tel
 qu'il est écrit.
 
@@ -505,7 +506,17 @@ qu'il est livré, sous Node (`viewer_requests.mjs`), dans un document de
 substitution qui garde ce que le script construit et met à part ce qu'il
 confierait à l'analyseur HTML. Il lit aussi les adresses demandées et la
 politique de la page. Node doit donc être présent là où tourne la batterie de
-la simulation.
+la simulation. Depuis ANH-183, le serveur de substitution peut répondre une
+liste de scénarios : un test en sert deux, dont un nom écrit comme du
+balisage, et vérifie que chacun devient le texte d'une option du menu.
+
+La démonstration hébergée sert une copie de cette page, assemblée par
+`deploy/simulation-vercel/build.sh`. Les empreintes de la politique n'ont de
+sens que si cette copie est le fichier source : `scripts/ci/deploy-workflows.test.mjs`
+lance le vrai `build.sh` dans une arborescence jetable et compare les deux
+copies qu'il produit (`dist/public/viewer/` et `dist/simulation/viewer/`) au
+fichier source, octet pour octet. Rien n'est écrit dans le dépôt ni envoyé à
+Vercel.
 
 ## 8. Écrire un nouveau scénario JSON
 
