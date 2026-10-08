@@ -89,8 +89,8 @@ END: Final[str] = "/api/machine/training/end"
 STATUS: Final[str] = "/api/machine/training/status"
 STOP_REASON: Final[str] = "arret demande depuis le tableau de bord"
 
-OTHER_MAJOR: Final[str] = "serveur incompatible (contrat 1.0 vs 2.0)"
-NO_VERSION: Final[str] = "serveur incompatible (contrat 1.0 vs inconnu)"
+OTHER_MAJOR: Final[str] = f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2.0)"
+NO_VERSION: Final[str] = f"serveur incompatible (contrat {CONTRACT_VERSION} vs inconnu)"
 
 
 def unsupported(*supported: str) -> Reply:
@@ -329,8 +329,8 @@ async def test_ex4_a_launch_of_this_major_is_armed(tmp_path: Path) -> None:
     ("version", "sentence"),
     [
         ("2.0", OTHER_MAJOR),
-        ("0.9", "serveur incompatible (contrat 1.0 vs 0.9)"),
-        ("10.0", "serveur incompatible (contrat 1.0 vs 10.0)"),
+        ("0.9", f"serveur incompatible (contrat {CONTRACT_VERSION} vs 0.9)"),
+        ("10.0", f"serveur incompatible (contrat {CONTRACT_VERSION} vs 10.0)"),
         (None, NO_VERSION),
         ("", NO_VERSION),
         ("1", NO_VERSION),
@@ -423,7 +423,7 @@ async def test_ex4_the_sentence_is_said_again_when_it_changes_or_comes_back(
     await r.step(POLL_PERIOD)
     assert await refusals_shown(watcher) == [
         OTHER_MAJOR,
-        "serveur incompatible (contrat 1.0 vs 3.0)",
+        f"serveur incompatible (contrat {CONTRACT_VERSION} vs 3.0)",
     ]
     # Compatible again: nothing is said, and a launch is armed as usual.
     r.dashboard.answer(POLL_PATH, launch_answer(None))
@@ -432,7 +432,9 @@ async def test_ex4_the_sentence_is_said_again_when_it_changes_or_comes_back(
     # The same incompatibility coming back is news again.
     r.dashboard.answer(POLL_PATH, launch_answer(None, version="3.0"))
     await r.step(POLL_PERIOD)
-    assert await refusals_shown(watcher) == ["serveur incompatible (contrat 1.0 vs 3.0)"]
+    assert await refusals_shown(watcher) == [
+        f"serveur incompatible (contrat {CONTRACT_VERSION} vs 3.0)"
+    ]
 
 
 async def test_ex4_a_malformed_launch_of_another_major_is_said_but_fails_nothing(
@@ -481,7 +483,7 @@ async def test_ex3_a_refused_contract_is_said_once_on_the_console(
         r.dashboard.answer(path, unsupported("2"))
     await r.step()
     await r.step(HEARTBEAT_PERIOD)
-    sentence = "serveur incompatible (contrat 1.0 vs 2)"
+    sentence = f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2)"
     assert await refusals_shown(watcher) == [sentence]
     assert caplog.text.count(f"dashboard: {sentence}") == 1
     assert "contract_unsupported (HTTP 426)" in caplog.text

@@ -32,6 +32,7 @@ const MAX_BATCH_SIZE = 1000;
 const MACHINE_TABLES = [
   "sessions",
   "training_telemetry",
+  "training_events",
   "machine_profiles",
   "machine_user_permissions",
   "machine_gestionnaires",

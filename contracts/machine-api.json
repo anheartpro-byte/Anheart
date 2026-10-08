@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.0",
+  "contract_version": "1.1",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "contract_exempt_routes": {

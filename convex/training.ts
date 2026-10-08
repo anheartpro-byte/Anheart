@@ -652,6 +652,102 @@ export const getMachineLive = query({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Two clocks: the machine's and the server's
+// ---------------------------------------------------------------------------
+
+/**
+ * No session started before this date: an age that would place a start
+ * earlier is not an age, and is not read.
+ */
+export const EARLIEST_SESSION_START_MS = Date.UTC(2024, 0, 1);
+
+/**
+ * How far outside its session a point or an event may be dated and still be
+ * stored: one minute before the start the machine dated, one minute after the
+ * end.
+ */
+export const SESSION_WINDOW_MARGIN_MS = 60_000;
+
+/**
+ * When a session started, on the server's clock, for a machine that says how
+ * long ago it started it (`ageMs`, counted on its monotonic clock): that long
+ * before now. The date its wall clock wrote is not read at all.
+ *
+ * Null when the machine says no age, or one that cannot be: a negative one, or
+ * one that would place the start before `notBefore`. The session is then
+ * dated as it always was, and has no machine axis (see `machineAxis`).
+ */
+function startFromAge(
+  now: number,
+  ageMs: number | undefined,
+  notBefore: number,
+): number | null {
+  if (ageMs === undefined || ageMs < 0) return null;
+  const start = now - ageMs;
+  return start >= notBefore ? start : null;
+}
+
+/**
+ * The machine's own time axis for a session: the start as the machine dated
+ * it, and what must be added to a date of that axis to place it on the
+ * server's clock (`shift`).
+ *
+ * A session has one only if its machine said how long ago it started it, when
+ * it registered it or confirmed its start: `machineStartedAt` is written then,
+ * and at no other time. Such a machine dates every point, every event and the
+ * end as that start plus the time elapsed, so one shift places them all on
+ * the server's clock, where `startedAt` and `endedAt` are.
+ *
+ * Null for every other session (a console that does not say its age, and
+ * every session stored before this rule): nothing is shifted and nothing is
+ * bounded, its dates are stored and served as the machine wrote them.
+ */
+function machineAxis(
+  session: Doc<"sessions">,
+): { start: number; shift: number } | null {
+  const start = session.machineStartedAt;
+  return start === undefined
+    ? null
+    : { start, shift: session.startedAt - start };
+}
+
+/**
+ * The dates, on the machine's axis, a point or an event of this session may
+ * carry: from one minute before the start the machine dated to one minute
+ * after the end; no upper bound while the session has not ended. The server's
+ * own clock is not compared with any of them.
+ *
+ * No bound at all for a session without a machine axis: its machine dates
+ * each point by reading its wall clock, which may be corrected, forwards or
+ * backwards, in the middle of the session. Bounding those dates would refuse
+ * what was measured.
+ */
+function sessionWindow(session: Doc<"sessions">): {
+  from: number | null;
+  to: number | null;
+} {
+  const axis = machineAxis(session);
+  if (axis === null) return { from: null, to: null };
+  return {
+    from: axis.start - SESSION_WINDOW_MARGIN_MS,
+    to:
+      session.endedAt === undefined
+        ? null
+        : session.endedAt - axis.shift + SESSION_WINDOW_MARGIN_MS,
+  };
+}
+
+function inWindow(
+  window: { from: number | null; to: number | null },
+  t: number,
+): boolean {
+  return (
+    (window.from === null || t >= window.from) &&
+    (window.to === null || t <= window.to)
+  );
+}
+
 const telemetryPoint = v.object({
   t: v.number(),
   elapsedS: v.number(),
@@ -664,7 +760,13 @@ const telemetryPoint = v.object({
   safetyAction: v.string(),
 });
 
-/** Telemetry for a session, oldest first; `sinceT` for incremental reads. */
+/**
+ * Telemetry for a session, oldest first; `sinceT` for incremental reads.
+ *
+ * `t` is served on the server's clock (see `machineAxis`), and `sinceT` is
+ * read on that same clock: a machine whose clock is wrong draws the same
+ * curve, at the same dates, as one on time.
+ */
 export const getSessionTelemetry = query({
   args: {
     sessionId: v.id("sessions"),
@@ -678,17 +780,19 @@ export const getSessionTelemetry = query({
     if (!session) return [];
     if (!(await canAccessSession(ctx, session, me))) return [];
     const limit = Math.min(Math.max(args.limit ?? 3600, 1), 7200);
+    const shift = machineAxis(session)?.shift ?? 0;
+    const sinceT = args.sinceT;
     const rows = await ctx.db
       .query("training_telemetry")
       .withIndex("by_session_and_t", (q) =>
-        args.sinceT === undefined
+        sinceT === undefined
           ? q.eq("sessionId", args.sessionId)
-          : q.eq("sessionId", args.sessionId).gt("t", args.sinceT),
+          : q.eq("sessionId", args.sessionId).gt("t", sinceT - shift),
       )
       .order("desc")
       .take(limit);
     return rows.reverse().map((r) => ({
-      t: r.t,
+      t: r.t + shift,
       elapsedS: r.elapsedS,
       phase: r.phase,
       bpm: r.bpm,
@@ -711,10 +815,10 @@ export const getSessionTelemetry = query({
  *   start of the session as the server dated it: a session the machine
  *   registered itself carries the machine's own start date, so the server's
  *   date for it is the creation of its row.
- * - `lastMeasuredAt`: when the machine says it measured it (its `t`). A point
- *   received this instant may have been measured long ago: the machine resends
- *   what it queued during a link loss, oldest first. Null while no point has
- *   arrived.
+ * - `lastMeasuredAt`: when it was measured: its `t`, placed on the server's
+ *   clock (see `machineAxis`). A point received this instant may have been
+ *   measured long ago: the machine sends again, oldest first, what it recorded
+ *   during a link loss or before a restart. Null while no point has arrived.
  *
  * Both are null for a session that is not active.
  */
@@ -733,7 +837,7 @@ async function lastSignal(
   if (latest) {
     return {
       lastSignalAt: Math.floor(latest._creationTime),
-      lastMeasuredAt: latest.t,
+      lastMeasuredAt: latest.t + (machineAxis(session)?.shift ?? 0),
     };
   }
   return {
@@ -951,8 +1055,22 @@ export const getPendingTrainingSession = internalQuery({
   },
 });
 
+/**
+ * The machine armed a launch from the dashboard: the session starts at the
+ * reception of this call.
+ *
+ * Unless the machine says both the start as it dated it (`machineStartedAt`)
+ * and how long ago that was on its monotonic clock (`sessionAgeMs`): the
+ * start is then that long before now, and the session has a machine axis. An
+ * age that would place the start before the launch itself is not read.
+ */
 export const markTrainingStarted = internalMutation({
-  args: { machineId: v.id("machines"), sessionId: v.id("sessions") },
+  args: {
+    machineId: v.id("machines"),
+    sessionId: v.id("sessions"),
+    machineStartedAt: v.optional(v.number()),
+    sessionAgeMs: v.optional(v.number()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
@@ -963,22 +1081,47 @@ export const markTrainingStarted = internalMutation({
         "session_not_pending",
         `Session is not pending (status: ${s.status})`,
       );
-    await ctx.db.patch(args.sessionId, {
-      status: "active",
-      startedAt: Date.now(),
-    });
+    const now = Date.now();
+    // While pending, `startedAt` is the date of the launch.
+    const start =
+      args.machineStartedAt === undefined
+        ? null
+        : startFromAge(now, args.sessionAgeMs, s.startedAt);
+    await ctx.db.patch(
+      args.sessionId,
+      start === null
+        ? { status: "active", startedAt: now }
+        : {
+            status: "active",
+            startedAt: start,
+            machineStartedAt: args.machineStartedAt,
+          },
+    );
     await ctx.db.patch(args.machineId, { status: "in_session" });
     return null;
   },
 });
 
-/** A session the Pi started at the machine (manual, or auto from the panel). Idempotent. */
+/**
+ * A session the Pi started at the machine (manual, or auto from the panel).
+ * Idempotent: one session per `localRef`, dated once, at its first call.
+ *
+ * `startedAt` is the start as the machine dated it, and it is the session's
+ * `startedAt`, as it always was.
+ *
+ * Unless the machine also says how long ago it started the session, on its
+ * monotonic clock (`sessionAgeMs`): the session's `startedAt` is then that
+ * long before now, on the server's clock, the date the machine wrote is kept
+ * as `machineStartedAt`, and the session has a machine axis. An age that
+ * would place the start before `EARLIEST_SESSION_START_MS` is not read.
+ */
 export const registerLocalSession = internalMutation({
   args: {
     machineId: v.id("machines"),
     localRef: v.string(),
     kind: v.union(v.literal("auto"), v.literal("manual")),
     startedAt: v.number(),
+    sessionAgeMs: v.optional(v.number()),
     operatorName: v.string(),
     userId: v.optional(v.string()),
     subjectLabel: v.optional(v.string()),
@@ -1012,12 +1155,18 @@ export const registerLocalSession = internalMutation({
         null
         ? claimedRider
         : null;
+    const start = startFromAge(
+      Date.now(),
+      args.sessionAgeMs,
+      EARLIEST_SESSION_START_MS,
+    );
     const id = await ctx.db.insert("sessions", {
       organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: userId ?? undefined,
       status: "active",
-      startedAt: args.startedAt,
+      startedAt: start ?? args.startedAt,
+      machineStartedAt: start === null ? undefined : args.startedAt,
       channels: ["ECG"],
       notes: args.occupancy ? `Occupancy: ${args.occupancy}` : undefined,
       kind: args.kind,
@@ -1051,9 +1200,17 @@ export const endTrainingSession = internalMutation({
     if (!s || s.machineId !== args.machineId)
       throw machineError("session_not_found", "Session not found");
     if (s.status === "completed" || s.status === "failed") return null; // idempotent
+    // The end as the machine dated it, or now when it dated none. Where the
+    // session has a machine axis, the machine's date is placed on the
+    // server's clock, and never before the start.
+    const axis = machineAxis(s);
+    let endedAt = args.endedAt ?? Date.now();
+    if (axis !== null && args.endedAt !== undefined) {
+      endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
+    }
     await ctx.db.patch(args.sessionId, {
       status: args.failed ? "failed" : "completed",
-      endedAt: args.endedAt ?? Date.now(),
+      endedAt,
       endReason: args.reason,
     });
     await ctx.db.patch(args.machineId, { status: "online" });
@@ -1084,25 +1241,118 @@ export const getTrainingStatus = internalQuery({
   },
 });
 
+/** What the machine is told of a batch: every item is in exactly one count. */
+const batchOutcome = v.object({
+  /** Stored by this call. */
+  stored: v.number(),
+  /** Already stored by an earlier call: left as they were. */
+  duplicates: v.number(),
+  /** Dated outside the session (see `sessionWindow`): not stored. */
+  rejected: v.number(),
+});
+
+/**
+ * Store telemetry points of a session of this machine. Idempotent: a point is
+ * one `(sessionId, t)`, and a point already stored is left as it is, with the
+ * date the server first received it. The machine may therefore send a batch
+ * again whenever it is not sure it was received (a lost answer, a restart).
+ *
+ * For a session that has a machine axis, a point dated outside the session
+ * is counted and not stored; it does not refuse the batch, whose other points
+ * are stored. For any other session no date is refused.
+ */
 export const storeTelemetry = internalMutation({
   args: {
     machineId: v.id("machines"),
     sessionId: v.id("sessions"),
     points: v.array(telemetryPoint),
   },
-  returns: v.object({ stored: v.number() }),
+  returns: batchOutcome,
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
     if (!s || s.machineId !== args.machineId)
       throw machineError("session_not_found", "Session not found");
+    const window = sessionWindow(s);
+    const outcome = { stored: 0, duplicates: 0, rejected: 0 };
     for (const p of args.points) {
+      if (!inWindow(window, p.t)) {
+        outcome.rejected++;
+        continue;
+      }
+      // `first`, not `unique`: rows written before this rule may hold the
+      // same point twice.
+      const known = await ctx.db
+        .query("training_telemetry")
+        .withIndex("by_session_and_t", (q) =>
+          q.eq("sessionId", args.sessionId).eq("t", p.t),
+        )
+        .first();
+      if (known) {
+        outcome.duplicates++;
+        continue;
+      }
       await ctx.db.insert("training_telemetry", {
         organizationId: s.organizationId,
         sessionId: args.sessionId,
         machineId: args.machineId,
         ...p,
       });
+      outcome.stored++;
     }
-    return { stored: args.points.length };
+    return outcome;
+  },
+});
+
+const trainingEvent = v.object({
+  seq: v.number(),
+  t: v.number(),
+  kind: v.string(),
+  detail: v.string(),
+  actor: v.string(),
+});
+
+/**
+ * Store events of a session of this machine, as it reads them back from the
+ * session's local record. Idempotent like `storeTelemetry`: an event is one
+ * `(sessionId, seq)`, its rank in that record, and an event already stored is
+ * left as it is. The dates are bounded as those of the telemetry are.
+ */
+export const storeEvents = internalMutation({
+  args: {
+    machineId: v.id("machines"),
+    sessionId: v.id("sessions"),
+    events: v.array(trainingEvent),
+  },
+  returns: batchOutcome,
+  handler: async (ctx, args) => {
+    const s = await ctx.db.get(args.sessionId);
+    if (!s || s.machineId !== args.machineId)
+      throw machineError("session_not_found", "Session not found");
+    const window = sessionWindow(s);
+    const outcome = { stored: 0, duplicates: 0, rejected: 0 };
+    for (const event of args.events) {
+      if (!inWindow(window, event.t)) {
+        outcome.rejected++;
+        continue;
+      }
+      const known = await ctx.db
+        .query("training_events")
+        .withIndex("by_session_and_seq", (q) =>
+          q.eq("sessionId", args.sessionId).eq("seq", event.seq),
+        )
+        .first();
+      if (known) {
+        outcome.duplicates++;
+        continue;
+      }
+      await ctx.db.insert("training_events", {
+        organizationId: s.organizationId,
+        sessionId: args.sessionId,
+        machineId: args.machineId,
+        ...event,
+      });
+      outcome.stored++;
+    }
+    return outcome;
   },
 });

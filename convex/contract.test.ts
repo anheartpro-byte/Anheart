@@ -513,6 +513,50 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
         }),
     },
     {
+      name: "training/events: no events",
+      status: 400,
+      code: "invalid_request",
+      run: (w) => post(w, "/api/machine/training/events", { sessionId: "x" }),
+    },
+    {
+      name: "training/events: a malformed event",
+      status: 400,
+      code: "invalid_request",
+      run: (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: "x",
+          events: [{ seq: 0, t: NOW, kind: "phase", detail: 12, actor: "system" }],
+        }),
+    },
+    {
+      name: "training/events: more than 200 events",
+      status: 400,
+      code: "invalid_request",
+      run: (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: "x",
+          events: Array.from({ length: 201 }, (_, seq) => ({
+            seq,
+            t: NOW,
+            kind: "phase",
+            detail: "hold",
+            actor: "system",
+          })),
+        }),
+    },
+    {
+      name: "training/events: a session of another machine",
+      status: 400,
+      code: "session_not_found",
+      run: async (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: await seedSession(w, w.otherMachine, "active"),
+          events: [
+            { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" },
+          ],
+        }),
+    },
+    {
       name: "any route: an unknown key",
       status: 401,
       code: "unauthorized",

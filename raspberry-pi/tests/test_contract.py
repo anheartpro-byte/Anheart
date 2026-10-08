@@ -171,12 +171,17 @@ def test_ex4_a_server_of_this_major_is_not_refused(announced: str) -> None:
 
 @pytest.mark.parametrize("announced", ["2.0", "0.9", "10.0", "11.0"])
 def test_ex4_a_server_of_another_major_is_refused_by_name(announced: str) -> None:
-    assert server_refusal(announced) == f"serveur incompatible (contrat 1.0 vs {announced})"
+    assert (
+        server_refusal(announced)
+        == f"serveur incompatible (contrat {CONTRACT_VERSION} vs {announced})"
+    )
 
 
 @pytest.mark.parametrize("announced", [None, "", "1", 1, 1.0, True, "v1.0", ["1.0"], "1.0.0"])
 def test_ex4_a_server_that_names_no_readable_version_is_refused(announced: object) -> None:
-    assert server_refusal(announced) == "serveur incompatible (contrat 1.0 vs inconnu)"
+    assert (
+        server_refusal(announced) == f"serveur incompatible (contrat {CONTRACT_VERSION} vs inconnu)"
+    )
 
 
 @given(
@@ -216,7 +221,10 @@ def test_ex4_the_decision_follows_this_console_s_own_major(
 def test_ex3_a_refused_contract_is_worded_with_what_the_server_serves(
     supported: tuple[str, ...], theirs: str
 ) -> None:
-    assert unsupported_refusal(supported) == f"serveur incompatible (contrat 1.0 vs {theirs})"
+    assert (
+        unsupported_refusal(supported)
+        == f"serveur incompatible (contrat {CONTRACT_VERSION} vs {theirs})"
+    )
 
 
 # =========================================================================

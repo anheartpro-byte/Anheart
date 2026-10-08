@@ -50,4 +50,5 @@ export const machineRoutes = [
   ["POST", "/api/machine/training/end"],
   ["GET", "/api/machine/training/status"],
   ["POST", "/api/machine/training/telemetry"],
+  ["POST", "/api/machine/training/events"],
 ] as const;

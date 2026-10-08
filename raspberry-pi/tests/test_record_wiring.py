@@ -18,7 +18,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.cloud_sync import HEARTBEAT_PERIOD, Refused
-from src.contract import CONTRACT_UNSUPPORTED
+from src.contract import CONTRACT_UNSUPPORTED, CONTRACT_VERSION
 from src.control_surface import EventKind as SurfaceEvent
 from src.geometry import MachineGeometry
 from src.local_config import (
@@ -247,7 +247,7 @@ async def test_an_incompatible_dashboard_said_during_a_session_is_in_the_record(
     whose detail starts with ``dashboard:``, apart from the refusals of what
     was asked at this console, which stay ``refusal``.
     """
-    sentence = "serveur incompatible (contrat 1.0 vs 2)"
+    sentence = f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2)"
     rig, dashboard, journal = recording_linked(tmp_path)
     watcher = rig.panel.hub.subscribe()
     surface = rig.panel.surface
