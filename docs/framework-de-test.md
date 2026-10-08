@@ -170,17 +170,18 @@ les systèmes qui ne préservent pas ce bit.
 **Ce que couvre le 100 % de branches.** Le seuil de 100 % ne s'applique qu'à
 la **chaîne de sécurité**, listée dans `[tool.coverage.report] include` de
 `raspberry-pi/pyproject.toml` : `units`, `result`, `clock`, `motor/*`,
-`training/*`, `sim/*`, `bitalino_client`, `geometry`, `ecg_pipeline`,
-`local_config`, `bitalino_rfcomm_macos`, `local_panel`, `panel_status`,
-`cloud_sync`, `dsp`, `sensors/*`, `presence/*`, `panel_lifecycle`,
-`task_completion` et `web/profile_writer`. Le reste du code web est mesuré mais
-ne bloque pas.
+`training/*`, `sim/*`, `bitalino_client`, `signal_processing`, `geometry`,
+`ecg_pipeline`, `local_config`, `bitalino_rfcomm_macos`, `local_panel`,
+`panel_status`, `cloud_sync`, `dsp`, `sensors/*`, `presence/*`,
+`panel_lifecycle`, `task_completion` et `web/profile_writer`. Le reste du code
+web est mesuré mais ne bloque pas.
 
 **Dette déclarée.** `src/signal_processing.py` fait partie de la chaîne de
-sécurité (la fréquence cardiaque qui pilote le moteur le traverse) mais n'est
-**pas encore** sous le seuil de 100 % ni sous les vérificateurs de types. Il est
-listé dans `[tool.anheart] coverage_pending` ; un test échoue si cette liste
-grandit.
+sécurité (la fréquence cardiaque qui pilote le moteur le traverse). Il est
+sous le seuil de 100 % (`tests/test_signal_processing.py`), mais **pas encore**
+sous les vérificateurs de types. La liste `[tool.anheart] coverage_pending`,
+qui nomme les fichiers de la chaîne hors du seuil, est vide ; un test échoue
+si elle grandit.
 
 Mesure réelle (Mac Apple silicon, 1er octobre 2026) : `GATE PASSED`, 3187
 tests passés, 100 % de branches sur la chaîne de sécurité (10386 instructions,
@@ -1997,7 +1998,8 @@ sécurité du Pi, la simulation, puis Convex et le site (leurs lignes sont
 décrites dans
 [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)).
 La colonne de couverture du Pi porte sur tout `raspberry-pi/src/`. La chaîne de sécurité est donnée à part, en trois
-temps, parce que le seuil de 100 % ne la juge pas encore en entier :
+temps, parce que la configuration peut déclarer un fichier dans la chaîne sans
+l'avoir encore mis sous le seuil de 100 % :
 
 - « fichiers sous le seuil » : la liste `include` de
   `raspberry-pi/pyproject.toml`, dont `pi-gate` exige 100 % de lignes et de
@@ -2016,7 +2018,9 @@ temps, parce que le seuil de 100 % ne la juge pas encore en entier :
 chaîne de sécurité est à 100 % ». Sur l'exécution 37623954237, les 76 fichiers
 sous le seuil étaient à 100 %, et `src/signal_processing.py`, seul fichier hors
 du seuil, à 82,5 % de lignes (132 sur 160) et 64,0 % de branches (32 sur 50) :
-la chaîne entière à 99,7 % de lignes et 99,3 % de branches.
+la chaîne entière à 99,7 % de lignes et 99,3 % de branches. Ce fichier est
+depuis passé sous le seuil (ANH-207) : la liste est vide, et le rapport écrit
+« aucun fichier » hors du seuil, « toute la chaîne est sous le seuil ».
 
 La simulation exige 100 % sur tout son code. La même partie donne la batterie
 de simulation (tests réussis, en échec, ignorés, dont les `xfail`) et le nombre

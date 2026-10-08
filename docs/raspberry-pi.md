@@ -88,7 +88,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 |---|---|---|
 | `src/bitalino_client.py` | Acquisition BITalino (seul module qui importe `bitalino`). | Échantillons horodatés et étiquetés, compteurs de pertes (trames, octets sautés, échantillons comblés, reconnexions). Porte 100 %. |
 | `src/bitalino_rfcomm_macos.py` | Transport RFCOMM via IOBluetooth sur macOS (seul module qui importe pyobjc, chargé à la demande). Adresse `rfcomm:98-d3-91-fe-4e-9f`. | Une liaison muette apparaît comme perdue. Porte 100 %. |
-| `src/signal_processing.py` | L'ancien traitement ECG (BioSPPy) qui calcule la FC de régulation. | **Pas encore** sous la vérification stricte des types ni sous la porte 100 % (listé dans `coverage_pending`). |
+| `src/signal_processing.py` | L'ancien traitement ECG (BioSPPy) qui calcule la FC de régulation, et la note de qualité qui autorise ce calcul. | Une FC n'est extraite que d'une fenêtre notée `good`. Une fenêtre qu'il ne peut pas juger (valeur non finie, moins d'une seconde, tableau qui n'est pas à une dimension, test du secteur impossible à cette fréquence d'échantillonnage ou refusé par le filtre) est notée `no_signal`, jamais `good` ; la FC devient alors « périmée » comme pour toute autre perte. Le journal ne reçoit pas une ligne par fenêtre : un avertissement avec la raison quand une suite de fenêtres non jugeables commence, un autre avec leur nombre quand elle est finie (25 fenêtres jugées d'affilée, soit 5 s). Porte 100 %. **Pas encore** sous la vérification stricte des types. |
 | `src/ecg_pipeline.py` | La frontière typée entre ce traitement et le runtime (`EcgBridge`). | Une FC n'est transmise comme utilisable que si (1) BioSPPy la juge `good`, (2) le processeur indépendant `sensors/ecg.py` juge **la même fenêtre** `GOOD`, (3) les deux FC diffèrent de 5 bpm au plus (`AGREEMENT_BPM`), et la fenêtre est continue. Sinon : `NOISY` sans FC, et la FC devient « périmée ». Porte 100 %. |
 | `src/dsp.py` | Filtres, pics, spectres pour tous les capteurs (seul module qui importe `scipy`). | Porte 100 %. |
 | `src/sensors/*` | Un processeur par voie (ECG, EDA, SpO2, RESP, EMG, LUX), un concentrateur (`hub.py`) rafraîchi chaque seconde. | Surveillance seulement ; aucune mesure ne commande le moteur (voir [section 9](#9-les-capteurs-bitalino)). Porte 100 %. |
@@ -1075,9 +1075,10 @@ l'autre. Elles sont détaillées dans
 [framework-de-test.md, « Traiter un constat »](framework-de-test.md#analyse-statique-externe--codeql-anh-196).
 
 Exceptions en cours (dans `pyproject.toml`) : `signal_processing.py` et
-`scripts/` sont hors vérification de types ; `signal_processing.py` est aussi
-hors de la porte de couverture (`coverage_pending`, liste figée par
-`tests/test_typing_contract.py`), alors qu'il calcule la FC de régulation.
+`scripts/` sont hors vérification de types, alors que le premier calcule la FC
+de régulation. Plus aucun fichier de la chaîne de sécurité n'est hors de la
+porte de couverture : la liste `coverage_pending` est vide, et
+`tests/test_typing_contract.py` échoue si un fichier y revient.
 
 ### La gate
 
