@@ -6,6 +6,8 @@
 //     --served <file>     the server answers every request but the scenario
 //                         list with this file (a trace, or a record as
 //                         /api/record gives it)
+//     --listed <file>     the server answers the scenario list with this file,
+//                         a JSON array of names; without it the list is empty
 //     --chosen <file>     the person picks this file with the file button
 //     --streamed <file>   the live stream plays this file: each line to the
 //                         listeners of its `type`, then `end`
@@ -29,7 +31,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import vm from "node:vm";
 
-const options = { served: null, chosen: null, streamed: null, click: null };
+const options = { served: null, listed: null, chosen: null, streamed: null, click: null };
 const [pagePath, ...rest] = process.argv.slice(2);
 while (rest[0]?.startsWith("--")) {
   const name = rest.shift().slice(2);
@@ -40,6 +42,7 @@ const addresses = rest;
 const html = readFileSync(pagePath, "utf8");
 const fileOf = (path) => (path === null ? null : readFileSync(path, "utf8"));
 const served = fileOf(options.served);
+const listed = fileOf(options.listed) ?? "[]";
 const chosen = fileOf(options.chosen);
 const streamed = fileOf(options.streamed);
 
@@ -134,9 +137,11 @@ async function requestsOf(address) {
     window: { devicePixelRatio: 1 },
     fetch: async (url) => {
       note("fetch", url);
-      // The scenario list is empty; anything else is the served file, or not found.
+      // The scenario list is the listed one, or empty; anything else is the
+      // served file, or not found.
       if (String(url) === "/api/scenarios") {
-        return { ok: true, status: 200, json: async () => [], text: async () => "[]" };
+        const list = { json: async () => JSON.parse(listed), text: async () => listed };
+        return { ok: true, status: 200, ...list };
       }
       return served === null
         ? { ok: false, status: 404, json: async () => ({}), text: async () => "" }
