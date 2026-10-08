@@ -861,14 +861,14 @@ cardiaque jugeaient de nouveau : électrodes retirées, `hr_stale` allait jusqu'
 `ramp_down` verrouillé de plus. Maintenant **Mode** reste `REPOS`, aucune phase
 n'est affichée (`-`, comme toujours au repos ; le champ `phase` de `/api/snapshot`
 reste `done`), et la pastille **Securite** affiche le verdict, verrouillé :
-`quick_stop` pour un E-STOP, `ramp_down` pour un défaut variateur. Aucune règle de fréquence cardiaque
-ni de présence ne se déclenche. Tout départ est refusé (409) avec le nom du verdict
-jusqu'à son acquittement par son nom, case « coup de poing » cochée pour un E-STOP. Le
-réarmement d'un défaut variateur, qui n'est accepté qu'en phase `done`, l'est tout de
-suite : il n'y a plus 5 minutes à attendre. C'est ce que la console faisait déjà après
-une séance terminée par un STOP. Vérifié par l'API sur la console en simulation
-(`raspberry-pi/tests/test_session_overrun_console.py`) ; pas rejoué dans un
-navigateur.
+`quick_stop` pour un E-STOP, `ramp_down` pour un défaut variateur. Aucune règle de
+fréquence cardiaque ni de présence ne se déclenche. Tout départ est refusé (409) avec
+le nom du verdict jusqu'à son acquittement par son nom, case « coup de poing » cochée
+pour un E-STOP. Le réarmement d'un défaut variateur, qui n'est accepté qu'en phase
+`done`, l'est tout de suite : il n'y a plus 5 minutes à attendre. C'est ce que la
+console faisait déjà après une séance terminée par un STOP. Vérifié par l'API sur la
+console en simulation (`raspberry-pi/tests/test_session_overrun_console.py`) ; pas
+rejoué dans un navigateur.
 
 Mesures et limites :
 [securite.md, section 8](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)

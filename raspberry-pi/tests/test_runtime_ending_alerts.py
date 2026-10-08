@@ -32,13 +32,24 @@ statement, instant by instant. This file proves what happens on the real tick:
 * **what stays latched**: an emergency stop and a drive fault at rest are
   still latched, shown, refused against and acknowledged by name.
 
-The fake drive and the manual clock of ``tests/test_runtime.py``. The three
-sequences run the shipped programme, the console's own limits and the
-machine's motion limits; the others the rig's 130 s programme.
+The fake drive and the manual clock of ``tests/test_runtime.py``.
+
+**What these cost, and why they are built the way they are.** Under coverage
+one run of the shipped 30-minute programme costs about half a minute of CI,
+and an hour of manual session as much. So the shipped programme is run ONCE,
+to 1600 s, and the three endings of the acceptance criterion each start from
+a copy of that same instant; the manual sessions reach a shortened limit (the
+limit is one constant, read alike by the phase machine and by what the rule
+is measured against); and everything else runs the rig's 130 s programme,
+which has the same phases and the same late endings. The instants of the
+shipped numbers that are not run here (a STOP at 1531 s or at 1799 s, the
+hour of a manual session) are judged at the rule, in
+``tests/test_safety_ending_overrun.py``.
 """
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Final
 
@@ -52,7 +63,6 @@ from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.plan import COMMISSIONED_DECEL_S, MIN_RECOVERY_S
 from src.training.runtime import (
     BENCH_RECOVERY,
-    MANUAL_SESSION_LIMIT,
     EndReason,
     ResetWhileCommanded,
     RuntimeState,
@@ -116,6 +126,15 @@ COOLDOWN: Final[float] = 10.0
 RECOVERY: Final[float] = 60.0
 """The rig programme's monitored recovery, in seconds."""
 
+LATE: Final[float] = 1600.0
+"""The instant of the acceptance criterion: 200 s before the shipped programme ends."""
+
+SHORT_LIMIT: Final[Seconds] = Seconds(180.0)
+"""The manual session limit these tests run under (3600 s on the machine).
+
+Long enough to be at the nameplate speed when it comes: the climb takes 107 s.
+"""
+
 
 def _applied(rig: Rig) -> MotorRpm:
     return rig.runtime.applied_rpm
@@ -157,11 +176,9 @@ async def _a_new_programme_starts(rig: Rig) -> None:
 
 @dataclass(frozen=True, slots=True)
 class _Late:
-    """One ending opened in the last minutes of the shipped programme."""
+    """One ending opened 200 s before the end of the shipped programme."""
 
     what: str
-    at: float
-    """Seconds after the start at which it happens."""
 
     stands: str | None
     """The rule left latched once the session is over: the one that ended it, or none."""
@@ -171,60 +188,70 @@ class _Late:
 
 
 _LATE: Final[tuple[_Late, ...]] = (
-    _Late("a STOP", 1531.0, None, 1832.0),
-    _Late("a STOP", 1600.0, None, 1901.0),
-    _Late("a STOP", 1799.0, None, 2100.0),
-    _Late("an e-stop", 1600.0, RULE_OPERATOR_ESTOP, 1901.0),
-    _Late("the electrodes taken off", 1600.0, RULE_HR_STALE, 1961.0),
-    _Late("the electrodes taken off", 1700.0, RULE_HR_STALE, 2061.0),
+    _Late("a STOP", None, 1901.0),
+    _Late("an e-stop", RULE_OPERATOR_ESTOP, 1901.0),
+    _Late("the electrodes taken off", RULE_HR_STALE, 1961.0),
 )
 
 
-@pytest.mark.parametrize("late", _LATE, ids=[f"{late.what} at {late.at:.0f} s" for late in _LATE])
-async def test_an_ending_opened_late_in_the_shipped_programme_latches_no_overrun(
-    late: _Late,
-) -> None:
+def _fork(rig: Rig) -> Rig:
+    """An independent copy of a whole rig at this instant: runtime, drive, clock, occupant.
+
+    What lets one run of the shipped programme serve several endings. The copy
+    shares nothing mutable with the original (one ``deepcopy`` call keeps the
+    three references to the clock pointing at the same new clock), and the test
+    that uses it checks that two copies given the same tick answer the same.
+    """
+    return copy.deepcopy(rig)
+
+
+async def test_an_ending_opened_late_in_the_shipped_programme_latches_no_overrun() -> None:
     """The first measured case, and the acceptance criterion. On ``develop``: 1830.2 s.
 
-    The arm is at rest: the programme is in its own recovery. A STOP is typed,
-    the emergency stop is pressed, or the electrodes come off and ``hr_stale``
-    ends the session 60 s later. Each opens a whole 300 s recovery, which ends
+    The shipped programme, 1600 s in: it is in its own recovery, the arm at
+    rest. From that same instant, three endings: a STOP is typed; the
+    emergency stop is pressed; the electrodes come off and ``hr_stale`` ends
+    the session 60 s later. Each opens a whole 300 s recovery, which ends
     after 1830 s. On every tick until the console is back at REPOS the rule
     does not fire and is not on the latched floor; what stands at the end is
     only what ended the session; one named acknowledgement clears it, and the
     next start is taken.
     """
-    rig = await _shipped()
-    await rig.run(late.at)
-    assert _applied(rig) == 0, "the programme is not in its own recovery: not this case"
-    assert rig.state() is RuntimeState.RUNNING
+    programme = await _shipped()
+    await programme.run(LATE)
+    assert _applied(programme) == 0, "the programme is not in its own recovery: not this case"
+    assert programme.state() is RuntimeState.RUNNING
+    first, second = _fork(programme), _fork(programme)
+    assert first.runtime is not second.runtime
+    one, other = await first.step(), await second.step()
+    assert one == other, "two copies of one rig did not answer the same tick alike"
 
-    feed = True
-    match late.what:
-        case "a STOP":
+    for late in _LATE:
+        rig = _fork(programme)
+        feed = late.what != "the electrodes taken off"
+        if late.what == "a STOP":
             rig.runtime.request_stop("operator pressed STOP")
-        case "an e-stop":
+        elif late.what == "an e-stop":
             rig.runtime.request_estop("console web: e-stop")
-        case _:
-            feed = False
 
-    while rig.state() is not RuntimeState.FINISHED:
-        await rig.step(feed=feed)
-        at = _since_start(rig)
-        assert _overrun(rig) is None, f"session_overrun fired over a normal ending, {at:.1f} s"
-        assert _floor_rule(rig) != RULE_SESSION_OVERRUN
-        assert at < late.over_by, "the ending did not finish: not this case"
-    assert _since_start(rig) > OLD_DEADLINE, "over before the old deadline: not this case"
-    assert _mode(rig) is RunMode.REPOS
-    assert _standing_rule(rig) == late.stands
+        while rig.state() is not RuntimeState.FINISHED:
+            await rig.step(feed=feed)
+            at = f"{late.what}, {_since_start(rig):.1f} s"
+            assert _overrun(rig) is None, f"session_overrun fired over a normal ending: {at}"
+            assert _floor_rule(rig) != RULE_SESSION_OVERRUN, at
+            assert _since_start(rig) < late.over_by, f"the ending did not finish: {at}"
+        assert _since_start(rig) > OLD_DEADLINE, f"{late.what}: over before the old deadline"
+        assert _mode(rig) is RunMode.REPOS
+        assert _standing_rule(rig) == late.stands, late.what
 
-    if late.stands is not None:
-        acknowledged = rig.runtime.acknowledge(OPERATOR, estop_released=True)
-        assert isinstance(acknowledged, Ok)
-        assert acknowledged.value.cleared == (late.stands,)
-    await rig.run(60.0, feed=feed)
-    assert _standing_rule(rig) is None
-    await _a_new_programme_starts(rig)
+        if late.stands is not None:
+            acknowledged = rig.runtime.acknowledge(OPERATOR, estop_released=True)
+            assert isinstance(acknowledged, Ok), late.what
+            assert acknowledged.value.cleared == (late.stands,)
+        await rig.run(10.0, feed=feed)
+        assert _standing_rule(rig) is None, late.what
+        await _a_new_programme_starts(rig)
+    assert programme.state() is RuntimeState.RUNNING, "an ending reached the rig it was copied from"
 
 
 # =========================================================================
@@ -246,7 +273,6 @@ class _AtTheLimit:
 
 
 _AT_THE_LIMIT: Final[tuple[_AtTheLimit, ...]] = (
-    _AtTheLimit("the capsule empty, 27 output rpm", Occupancy.BENCH, 1344, (103.0, 105.0)),
     _AtTheLimit("the capsule empty, the nameplate speed", Occupancy.BENCH, 1380, (106.0, 108.0)),
     _AtTheLimit("a person on board", Occupancy.OCCUPIED, 200, (11.0, 13.0)),
 )
@@ -254,18 +280,21 @@ _AT_THE_LIMIT: Final[tuple[_AtTheLimit, ...]] = (
 
 @pytest.mark.parametrize("case", _AT_THE_LIMIT, ids=[case.who for case in _AT_THE_LIMIT])
 async def test_a_manual_session_that_reaches_its_limit_at_speed_latches_no_overrun(
-    case: _AtTheLimit,
+    monkeypatch: pytest.MonkeyPatch, case: _AtTheLimit
 ) -> None:
-    """The second measured case, and the acceptance criterion. On ``develop``: 3630.2 s.
+    """The second measured case, and the acceptance criterion. On ``develop``: 30.2 s past it.
 
-    The real limit, an hour. The console brings the arm down at the motion
-    limits: 104 s from 1344 motor rpm, 107 s from the 1380 rpm nameplate, the
-    highest ceiling a console can be given. With a person on board a 60 s
-    recovery follows, so that session latched on ``develop`` whatever its
-    speed. Nothing fires and nothing stands, from the limit to REPOS; the
-    session ends as a completed one, and a new manual start is taken.
+    A shortened limit, an hour on the machine. The console brings the arm down
+    at the motion limits: 107 s from the 1380 rpm nameplate, the highest
+    ceiling a console can be given (104 s from the 1344 motor rpm of the
+    measured case, which is the same walk started three seconds lower). With a
+    person on board a 60 s recovery follows, so that session latched on
+    ``develop`` whatever its speed. Nothing fires and nothing stands, from the
+    limit to REPOS; the session ends as a completed one, and a new manual start
+    is taken.
     """
-    limit = float(MANUAL_SESSION_LIMIT)
+    monkeypatch.setattr(runtime_module, "MANUAL_SESSION_LIMIT", SHORT_LIMIT)
+    limit = float(SHORT_LIMIT)
     if case.occupancy is Occupancy.OCCUPIED:
         rig = await _occupied_manual(case.speed)
     else:
@@ -307,41 +336,41 @@ async def test_a_manual_session_that_reaches_its_limit_at_speed_latches_no_overr
 async def test_a_verdict_at_rest_after_a_programme_ended_by_itself_reopens_no_ending(
     arrives: str,
 ) -> None:
-    """The third measured case. On ``develop``: ARRET, 300 s of recovery, a latched ``hr_stale``.
+    """The third measured case. On ``develop``: ARRET, a whole recovery, a latched ``hr_stale``.
 
-    The shipped programme has run to its own end. A minute later the
-    electrodes are off, the rider is getting out, and somebody presses the
-    emergency stop; or the drive is switched off and reports a fault; or its
-    cable is pulled. The session stays over on every tick for the 400 s that
-    follow: REPOS, the phase ``DONE``, no ending recorded, its own end reason
-    kept, nothing commanded and the output stage off. The heart-rate rules
-    judge nobody: no ``hr_stale`` at any tick with no heart rate at all.
+    The programme has run to its own end. A minute later the electrodes are
+    off, the rider is getting out, and somebody presses the emergency stop;
+    or the drive is switched off and reports a fault; or its cable is pulled.
+    On ``develop`` that opened an ending: ARRET for the 60 s of this
+    programme's recovery (300 s on the shipped one), with ``hr_stale`` latched
+    60 s after the last reading. Here the session stays over on every tick
+    for the 200 s that follow: REPOS, the phase ``DONE``, no ending recorded,
+    its own end reason kept, nothing commanded and the output stage off. The
+    heart-rate rules judge nobody: no ``hr_stale`` at any tick with no heart
+    rate at all.
 
     And the verdict is everything it was: latched at once, the only thing
     standing, and every start refused in its name.
     """
-    rig = await _shipped()
-    await rig.run(PLANNED + 2.0)
-    assert rig.state() is RuntimeState.FINISHED
-    assert rig.runtime.end_reason is EndReason.PROGRAMME_COMPLETE
+    rig = await _programme()
+    await _run_to_its_end(rig)
     await rig.run(58.0)
     await rig.run(5.0, feed=False)
     assert _standing_rule(rig) is None
     frames = len(rig.drive.writes)
 
-    match arrives:
-        case "an e-stop":
-            rig.runtime.request_estop("console web: e-stop")
-            expected, action = RULE_OPERATOR_ESTOP, SafetyAction.QUICK_STOP
-            assert _standing_rule(rig) == expected, "the e-stop waited for a tick to latch"
-        case "a drive fault":
-            rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
-            expected, action = RULE_DRIVE_FAULT, SafetyAction.RAMP_DOWN
-        case _:
-            rig.drive.break_comms()
-            expected, action = RULE_COMMS_LOST, SafetyAction.GO_SILENT
+    if arrives == "an e-stop":
+        rig.runtime.request_estop("console web: e-stop")
+        expected, action = RULE_OPERATOR_ESTOP, SafetyAction.QUICK_STOP
+        assert _standing_rule(rig) == expected, "the e-stop waited for a tick to latch"
+    elif arrives == "a drive fault":
+        rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
+        expected, action = RULE_DRIVE_FAULT, SafetyAction.RAMP_DOWN
+    else:
+        rig.drive.break_comms()
+        expected, action = RULE_COMMS_LOST, SafetyAction.GO_SILENT
 
-    for _ in range(round(400.0 / TICK)):
+    for _ in range(round(200.0 / TICK)):
         snapshot = await rig.step(feed=False)
         at = f"{_since_start(rig):.1f} s after the start"
         assert snapshot.mode is RunMode.REPOS, f"the console left REPOS, {at}"
@@ -676,15 +705,16 @@ async def test_an_overrun_that_opens_its_own_ending_keeps_firing_until_the_sessi
 async def test_a_programme_run_to_its_end_states_no_ending_and_is_never_judged() -> None:
     """EX-2 on the tick: a session that opens no ending gives the rule nothing new to read.
 
-    The shipped programme, nobody touching anything. No ending is stated on
-    any tick, from the start to an hour of rest, so the rule reads exactly
-    what it read before this change, and it never fires.
+    A programme, nobody touching anything. No ending is stated on any tick,
+    from the first one to five minutes of rest, so the rule reads exactly what
+    it read before this change, and it never fires.
     """
-    rig = await _shipped()
+    rig = await _programme()
     with _observations() as seen:
-        await rig.run(PLANNED + 2.0)
+        await rig.run(TOTAL + 2.0)
         assert rig.state() is RuntimeState.FINISHED
-        await rig.run(600.0)
+        await rig.run(300.0)
+    assert seen, "nothing was observed: not this case"
     assert all(o.ending is None for o in seen)
     assert rig.runtime.ending is None
     assert rig.runtime.end_reason is EndReason.PROGRAMME_COMPLETE
