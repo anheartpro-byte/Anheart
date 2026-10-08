@@ -718,37 +718,36 @@ class DriveFailure:
     output_unknown: bool
 
 
-def describe_drive_error(error: DriveError) -> DriveFailure:
+def describe_drive_error(error: DriveError) -> DriveFailure:  # noqa: PLR0911  # one return per variant
     """Classify a drive error. Exhaustive, so a new variant fails the build here.
 
     One match for the whole module. The alternative - a match per call site -
     is seven places to update and seven places to get the ``output_unknown``
     reading wrong.
     """
-    failure: DriveFailure
     match error:
         case CommTimeout(after):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=f"the drive did not answer within {after:.3f} s",
                 output_unknown=False,
             )
         case BadResponse(detail):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=f"the drive's answer made no sense: {detail}",
                 output_unknown=False,
             )
         case UnexpectedState(expected, actual):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=f"the drive is in {actual.name} and the operation needed {expected.name}",
                 output_unknown=False,
             )
         case DriveFaulted(fault, raw_code):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=f"the drive is in fault: {fault.mnemonic} (LFT {raw_code})",
                 output_unknown=False,
             )
         case OutOfRange(quantity, value, low, high):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=f"{quantity} {value} is outside its domain {low}..{high}",
                 output_unknown=False,
             )
@@ -756,7 +755,7 @@ def describe_drive_error(error: DriveError) -> DriveFailure:
             # The word that energises the output stage may have landed even
             # though its reply did not, and LFRD may still hold a setpoint from
             # an earlier session - so "energised" can mean "turning".
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=(
                     f"the output stage may be energised: {detail} "
                     f"(reference zeroed: {reference_zeroed}, "
@@ -765,7 +764,7 @@ def describe_drive_error(error: DriveError) -> DriveFailure:
                 output_unknown=True,
             )
         case StopUnconfirmed(waited, last_output_rpm, detail):
-            failure = DriveFailure(
+            return DriveFailure(
                 detail=(
                     f"the shaft could not be shown to have stopped: still {last_output_rpm} rpm "
                     f"after {waited:.1f} s ({detail}); the run command was left in place so the "
@@ -773,9 +772,7 @@ def describe_drive_error(error: DriveError) -> DriveFailure:
                 ),
                 output_unknown=True,
             )
-        case _ as unreachable:
-            assert_never(unreachable)
-    return failure
+    raise assert_never(error)
 
 
 _LFT_CODE_BY_FAULT: Final[Mapping[DriveFault, RawRegister]] = MappingProxyType(
@@ -879,8 +876,7 @@ def motion_is_over(phase: Phase) -> bool:
             return True
         case Phase.BASELINE | Phase.WARMUP | Phase.HOLD:
             return False
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(phase)
 
 
 # =========================================================================
@@ -1449,15 +1445,15 @@ class TrainingRuntime:
     @property
     def mode(self) -> RunMode:
         """What the machine is doing, in the operator's words. Derived from :attr:`state`."""
-        match self.state:
+        state = self.state
+        match state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
                 return RunMode.REPOS
             case RuntimeState.ENDING:
                 return RunMode.ARRET
             case RuntimeState.RUNNING:
                 return RunMode.MANUEL if self._manual is not None else RunMode.SEANCE
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(state)
 
     @property
     def idle_link(self) -> IdleLink:
@@ -2842,8 +2838,7 @@ class TrainingRuntime:
                 )
             case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
                 return Err(refusal)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(refusal)
 
     # =====================================================================
     # Commanding

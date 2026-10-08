@@ -1045,9 +1045,10 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    signatures, `str` porteur de sens (utiliser une `Enum`), `# type: ignore` sans
    code, `assert` comme contrôle de flux, lecture directe de l'horloge.
 3. **Erreurs** : `Result[T, E]` avec unions fermées dans les chemins moteur et
-   sécurité ; chaque `match` se termine par `assert_never`, si bien qu'une
-   nouvelle variante d'erreur casse la vérification de types partout où elle
-   n'est pas traitée.
+   sécurité ; chaque `match` se termine par `assert_never` (dans un dernier
+   cas générique, ou après le `match` par `raise assert_never(sujet)` quand
+   chaque cas rend une valeur), si bien qu'une nouvelle variante d'erreur casse
+   la vérification de types partout où elle n'est pas traitée.
 4. **Horloge injectée** partout (`src/clock.py`).
 5. **Une bibliothèque non typée = un seul module** qui l'importe, avec un stub
    écrit à la main dans `stubs/` (`bitalino`, `biosppy`, `scipy`, `pymodbus`,
@@ -1064,6 +1065,14 @@ Le contrat complet est dans `.claude/skills/anheart-strict-python/SKILL.md`
    ou la cible tant que le bras tourne ; une consigne revenue à 0 en cours de
    séance sans que personne l'ait demandé termine la séance (section 5) ; rien
    ne bloque la boucle.
+
+La règle 10 du contrat donne quatre formes d'écriture que l'analyse statique
+du dépôt accepte comme les vérificateurs de types : `match` qui rend une
+valeur terminé par `raise assert_never(sujet)`, motif de classe qui lit le
+champ sur la valeur reconnue, membre de protocole abstrait dont la
+documentation est le seul corps, jamais deux modules qui s'importent l'un
+l'autre. Elles sont détaillées dans
+[framework-de-test.md, « Traiter un constat »](framework-de-test.md#analyse-statique-externe--codeql-anh-196).
 
 Exceptions en cours (dans `pyproject.toml`) : `signal_processing.py` et
 `scripts/` sont hors vérification de types ; `signal_processing.py` est aussi

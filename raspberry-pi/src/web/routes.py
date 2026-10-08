@@ -489,21 +489,17 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
                 ),
             )
         parsed = parse_profile(document, where=f"profile {profile_id!r}")
-        match parsed:
-            case Ok(profile):
-                return await _commit_profile(writer, profile, rev)
-            case Err(error):
-                raise _parse_failure(error)
+        if isinstance(parsed, Ok):
+            return await _commit_profile(writer, parsed.value, rev)
+        raise _parse_failure(parsed.error)
 
     @app.delete("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
     async def delete_profile(profile_id: str, rev: int) -> ProfileListRow:
         """Delete one profile. Deleting the last one leaves an empty store."""
         removed = await writer.delete(profile_id, StoreRev(rev))
-        match removed:
-            case Ok(_):
-                return _profile_list(store)
-            case Err(error):
-                raise _delete_failure(error)
+        if isinstance(removed, Ok):
+            return _profile_list(store)
+        raise _delete_failure(removed.error)
 
     @app.post("/api/plan/preview", dependencies=auth, tags=["profiles"])
     async def preview_plan(body: PreviewBody) -> PlanPreviewRow:
@@ -520,11 +516,9 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
             at=services.clock.unix_millis(),
             total_duration_s=_optional_seconds(body.total_duration_s),
         )
-        match resolved:
-            case Ok(program):
-                return _preview(program, geometry)
-            case Err(error):
-                raise _resolve_failure(error)
+        if isinstance(resolved, Ok):
+            return _preview(resolved.value, geometry)
+        raise _resolve_failure(resolved.error)
 
 
 def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -554,11 +548,9 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
             total_duration_s=_optional_seconds(body.total_duration_s),
             subject_age=body.subject_age,
         )
-        match submitted:
-            case Ok(command):
-                return CommandRow.of(command)
-            case Err(error):
-                raise _start_failure(error)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _start_failure(submitted.error)
 
     @app.post(
         "/api/session/stop",
@@ -576,11 +568,9 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         """
         operator = _require_operator(body.operator)
         submitted = surface.submit_end(operator=operator, reason=body.reason)
-        match submitted:
-            case Ok(command):
-                return CommandRow.of(command)
-            case Err(error):
-                raise _end_failure(error)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _end_failure(submitted.error)
 
     @app.post("/api/session/estop", dependencies=auth, tags=["session"])
     async def emergency_stop(body: EstopBody) -> EstopRow:
@@ -632,11 +622,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
         submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
-        match submitted:
-            case Ok(command):
-                return CommandRow.of(command)
-            case Err(error):
-                raise _start_failure(error)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _start_failure(submitted.error)
 
     @app.post(
         "/api/manual/target",
@@ -661,11 +649,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         submitted = surface.submit_manual_target(
             output_rpm=OutputRpm(body.output_rpm), operator=operator
         )
-        match submitted:
-            case Ok(command):
-                return CommandRow.of(command)
-            case Err(error):
-                raise _command_failure(error)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _command_failure(submitted.error)
 
     @app.post(
         "/api/drive/fault-reset",
@@ -682,11 +668,9 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         _require_motion_enabled(services)
         operator = _require_operator(body.operator)
         submitted = surface.submit_fault_reset(operator=operator)
-        match submitted:
-            case Ok(command):
-                return CommandRow.of(command)
-            case Err(error):
-                raise _command_failure(error)
+        if isinstance(submitted, Ok):
+            return CommandRow.of(submitted.value)
+        raise _command_failure(submitted.error)
 
 
 def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -717,11 +701,9 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
                 ),
             )
         recorded = surface.attest_estop_wiring(body.operator)
-        match recorded:
-            case Ok(attestation):
-                return AttestationRow.of(attestation)
-            case Err(error):
-                raise _attestation_failure(error)
+        if isinstance(recorded, Ok):
+            return AttestationRow.of(recorded.value)
+        raise _attestation_failure(recorded.error)
 
     @app.post("/api/safety/acknowledge", dependencies=auth, tags=["safety"])
     async def acknowledge(body: AckBody) -> AckRow:
@@ -733,11 +715,9 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
         to ask fails closed.
         """
         cleared = surface.acknowledge(body.operator, estop_released=body.estop_released)
-        match cleared:
-            case Ok(record):
-                return AckRow.of(record)
-            case Err(error):
-                raise _acknowledge_failure(error)
+        if isinstance(cleared, Ok):
+            return AckRow.of(cleared.value)
+        raise _acknowledge_failure(cleared.error)
 
     @app.post("/api/presence", dependencies=auth, tags=["safety"])
     async def presence(body: PresenceBody) -> PresenceRow:
@@ -787,8 +767,7 @@ def _start_failure(refusal: StartRefusal) -> HTTPException:
                 status_code=HTTPStatus.PRECONDITION_FAILED,
                 detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def _end_failure(refusal: EndRefusal) -> HTTPException:
@@ -804,8 +783,7 @@ def _end_failure(refusal: EndRefusal) -> HTTPException:
                 status_code=HTTPStatus.CONFLICT,
                 detail=f"the machine is already {refusal.state.value}",
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def _command_failure(refusal: CommandRefusal) -> HTTPException:
@@ -825,8 +803,7 @@ def _command_failure(refusal: CommandRefusal) -> HTTPException:
                     + "; try again in a moment"
                 ),
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
@@ -855,8 +832,7 @@ def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
             return HTTPException(
                 status_code=HTTPStatus.CONFLICT, detail="nothing is latched to acknowledge"
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def _attestation_failure(refusal: AttestationRefusal) -> HTTPException:
@@ -864,8 +840,7 @@ def _attestation_failure(refusal: AttestationRefusal) -> HTTPException:
     match refusal:
         case Unattributed():
             return HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=refusal.detail)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def _parse_failure(error: ProfileParseError) -> HTTPException:
@@ -882,8 +857,7 @@ def _parse_failure(error: ProfileParseError) -> HTTPException:
                 detail=f"{error.detail}: "
                 + ", ".join(violation.value for violation in error.violations),
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _resolve_failure(error: ResolveError) -> HTTPException:
@@ -900,8 +874,7 @@ def _resolve_failure(error: ResolveError) -> HTTPException:
                 detail=f"{error.detail}: "
                 + ", ".join(violation.value for violation in error.violations),
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _upsert_failure(error: UpsertError) -> HTTPException:
@@ -920,8 +893,7 @@ def _upsert_failure(error: UpsertError) -> HTTPException:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 detail=f"cannot write {error.path}: {error.detail}",
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def _delete_failure(error: DeleteError) -> HTTPException:
@@ -933,8 +905,7 @@ def _delete_failure(error: DeleteError) -> HTTPException:
             )
         case RevMismatch() | StoreUnwritable():
             return _upsert_failure(error)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 # =========================================================================
@@ -1051,11 +1022,9 @@ def _profile_list(store: ProfileStore) -> ProfileListRow:
 async def _commit_profile(writer: ProfileWriter, profile: TrainingProfile, rev: int) -> ProfileRow:
     """Write one validated profile, or raise the mapped failure."""
     written = await writer.upsert(profile, StoreRev(rev))
-    match written:
-        case Ok(_):
-            return ProfileRow.of(profile)
-        case Err(error):
-            raise _upsert_failure(error)
+    if isinstance(written, Ok):
+        return ProfileRow.of(profile)
+    raise _upsert_failure(written.error)
 
 
 def _preview(program: Program, geometry: MachineGeometry) -> PlanPreviewRow:

@@ -383,13 +383,11 @@ class Scribe:
 
     def _take(self, item: Item, now: Monotonic, dropped: int) -> Result[None, RecordError]:
         try:
-            match item:
-                case Opening():
-                    return self._open(item, now)
-                case Closing():
-                    return self._close(item, now, dropped)
-                case _:
-                    return self._append(item)
+            if isinstance(item, Opening):
+                return self._open(item, now)
+            if isinstance(item, Closing):
+                return self._close(item, now, dropped)
+            return self._append(item)
         except Exception as error:  # a recording bug costs one value, never the thread
             _logger.exception("session journal: one value could not be written")
             return Err(RecordError("append", type(error).__name__))
@@ -410,8 +408,7 @@ class Scribe:
                 return _write_raw(writer, entry)
             case Sensors():
                 return writer.sensors(entry.at, entry.readings)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(entry)
 
     def _open(self, opening: Opening, now: Monotonic) -> Result[None, RecordError]:
         previous = self._writer

@@ -63,6 +63,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import math
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -89,15 +90,21 @@ TREATED_VALUES_KEY: Final[str] = "values"
 class Treatment(Protocol):
     """The two members of ``SignalTreatment`` this boundary uses."""
 
+    @abstractmethod
     def treat_batch(
         self, samples: Sequence[Mapping[str, object]]
-    ) -> tuple[Sequence[Mapping[str, object]], Mapping[str, Mapping[str, object]]]: ...
+    ) -> tuple[Sequence[Mapping[str, object]], Mapping[str, Mapping[str, object]]]:
+        """Treat raw per-channel samples: the treated samples, and the metrics by channel."""
 
-    def metric_seq(self, channel: str) -> int: ...
+    @abstractmethod
+    def metric_seq(self, channel: str) -> int:
+        """Freshness counter of ``channel``'s metrics: it advances only on a recomputation."""
 
 
 class _TreatmentFactory(Protocol):
-    def __call__(self, fs_in: int, fs_out: int) -> Treatment: ...
+    @abstractmethod
+    def __call__(self, fs_in: int, fs_out: int) -> Treatment:
+        """A treatment from ``fs_in`` Hz in to ``fs_out`` Hz out."""
 
 
 class _SignalProcessingModule(Protocol):
@@ -336,7 +343,9 @@ few pumps instead of in one long burst that would delay the control tick.
 class SampleSource(Protocol):
     """The one call the bridge makes on an acquisition client, real or simulated."""
 
-    async def read_samples(self, count: int = ...) -> SampleBatch | None: ...
+    @abstractmethod
+    async def read_samples(self, count: int = ...) -> SampleBatch | None:
+        """The queued samples once at least ``count`` per channel are, else ``None``."""
 
 
 type BatchTap = Callable[[SampleBatch], None]
@@ -350,15 +359,19 @@ class HeartRateSink(Protocol):
     and a rejection is its to report, not this bridge's to second-guess.
     """
 
+    @abstractmethod
     def observe_ecg(
         self, now: Monotonic, seq: int, quality: SignalQuality, heart_rate: Bpm | None
-    ) -> object: ...
+    ) -> object:
+        """Take one heart-rate reading, with the sequence number that says whether it is fresh."""
 
 
 class WaveformSink(Protocol):
     """Where the waveform goes: ``TelemetryHub.record_ecg``."""
 
-    def record_ecg(self, values: Sequence[Millivolts]) -> int: ...
+    @abstractmethod
+    def record_ecg(self, values: Sequence[Millivolts]) -> int:
+        """Append treated ECG samples to the live trace. Returns the new sequence number."""
 
 
 type TreatFunction = Callable[[Treatment, SampleBatch], Awaitable[EcgFrame | None]]

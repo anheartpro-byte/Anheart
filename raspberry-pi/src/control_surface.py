@@ -57,6 +57,7 @@ once or not at all.
 from __future__ import annotations
 
 import logging
+from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Final, Protocol, final, runtime_checkable
@@ -95,11 +96,11 @@ class Acknowledger(Protocol):
     behind a screen that says "acknowledged".
     """
 
+    @abstractmethod
     def acknowledge(
         self, operator: str, *, estop_released: bool = False
     ) -> Result[SafetyAcknowledgement, AcknowledgeRefusal]:
         """Clear the latches, or refuse and say why. Synchronous, no I/O."""
-        ...
 
 
 @runtime_checkable
@@ -115,13 +116,13 @@ class TelemetrySink(Protocol):
     would unwind a tick with the motor commanded.
     """
 
+    @abstractmethod
     def publish_snapshot(self, snapshot: TelemetrySnapshot) -> None:
         """Offer the newest snapshot. May coalesce; must never block."""
-        ...
 
+    @abstractmethod
     def publish_event(self, event: SessionEvent) -> None:
         """Offer a discrete event. Must not drop it, and must never block."""
-        ...
 
 
 # =========================================================================

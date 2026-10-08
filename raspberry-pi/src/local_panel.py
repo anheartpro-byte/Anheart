@@ -83,6 +83,7 @@ import contextlib
 import logging
 import os
 import signal
+from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,7 +133,7 @@ from src.local_config import (
 from src.motor.atv320 import ATV320Drive, serial_master
 from src.motor.drive import DriveBackend
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
-from src.panel_lifecycle import PanelTasks
+from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.monitor import PresenceMonitor
@@ -271,13 +272,21 @@ class EcgClient(Protocol):
     is_connected: bool
     is_acquiring: bool
 
-    async def connect(self, timeout: float = ...) -> bool: ...  # noqa: ASYNC109  # the clients' own signature
+    @abstractmethod
+    async def connect(self, timeout: float = ...) -> bool:  # noqa: ASYNC109  # the clients' own signature
+        """Open the device. Returns whether it opened."""
 
-    async def start_acquisition(self) -> bool: ...
+    @abstractmethod
+    async def start_acquisition(self) -> bool:
+        """Start streaming. Returns whether it started."""
 
-    async def read_samples(self, count: int = ...) -> SampleBatch | None: ...
+    @abstractmethod
+    async def read_samples(self, count: int = ...) -> SampleBatch | None:
+        """The queued samples once at least ``count`` per channel are, else ``None``."""
 
-    async def disconnect(self) -> None: ...
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Stop acquiring if needed and close the device."""
 
 
 @final
@@ -443,16 +452,8 @@ class PanelReporter:
 
 
 # =========================================================================
-# The web server, behind a seam
+# The web server, behind a seam (:class:`~src.panel_lifecycle.WebRunner`)
 # =========================================================================
-
-
-class WebRunner(Protocol):
-    """Serves the page until told to exit."""
-
-    async def serve(self) -> None: ...
-
-    def request_exit(self) -> None: ...
 
 
 @final
@@ -978,8 +979,7 @@ def build_drive(config: LocalConfig, clock: Clock) -> DriveSide:
 
             drive = ATV320Drive(clock, master, link.settings, link.registers)
             return DriveSide(backend=drive, simulator=None, release=release)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(config.motor_backend)
 
 
 def _nothing() -> None:
@@ -1057,8 +1057,7 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
                 device_factory=device_factory_for(address),
             )
             return EcgSide(client=client, simulator=None, link_stats=client.link_stats)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(config.ecg_source)
 
 
 def load_panel_motion_limits(config: LocalConfig) -> MotionLimits:
@@ -1299,31 +1298,33 @@ def describe_start_refusal(refusal: StartRefusal) -> str:
     sentence is about a session that is running, and next to "start refused"
     it only blurs why.
     """
-    reason: str
+    return f"demarrage refuse : {_start_refusal_reason(refusal)}"
+
+
+def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
+    """Why the start was refused, without the words that say it was."""
     match refusal:
-        case AlreadyStarted(state=state):
-            reason = f"la machine est deja {state.value}"
+        case AlreadyStarted():
+            return f"la machine est deja {refusal.state.value}"
         case NotAttested():
-            reason = "cablage de l'arret d'urgence non atteste"
+            return "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
             said = verdict.detail.removesuffix(SELF_CLEARING)
-            reason = f"verdict {verdict.rule} a acquitter ({said})"
+            return f"verdict {verdict.rule} a acquitter ({said})"
         case LimitsMismatch(threshold=threshold):
-            reason = f"seuil {threshold} different de celui du superviseur"
+            return f"seuil {threshold} different de celui du superviseur"
         case PlanUnusable(detail=detail) | DriveUnavailable(detail=detail):
-            reason = detail
+            return detail
         case DriveParameterRefused():
-            reason = refusal.detail
+            return refusal.detail
         case DrivePrecommanded(output_rpm=rpm):
-            reason = f"variateur deja en marche ({rpm} tr/min), arret demande"
+            return f"variateur deja en marche ({rpm} tr/min), arret demande"
         case DriveInFault(report=report):
             code = "?" if report is None else f"{report.fault.mnemonic}, LFT {report.raw_code}"
-            reason = f"variateur en defaut ({code})"
+            return f"variateur en defaut ({code})"
         case RecordStorageLow():
-            reason = describe_record_storage(refusal)
-        case _ as unreachable:
-            assert_never(unreachable)
-    return f"demarrage refuse : {reason}"
+            return describe_record_storage(refusal)
+    raise assert_never(refusal)
 
 
 def describe_record_storage(refusal: RecordStorageLow) -> str:
@@ -1364,19 +1365,18 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
 def describe_resolve_error(error: ResolveError) -> str:
     """One line for a programme that could not be resolved. Exhaustive."""
     match error:
-        case UnknownProfile(profile_id=profile_id):
-            return f"demarrage refuse : programme {profile_id!r} inconnu sur cette machine"
+        case UnknownProfile():
+            return f"demarrage refuse : programme {error.profile_id!r} inconnu sur cette machine"
         case Rejected(detail=detail):
             return f"demarrage refuse : programme inadapte a ce passager ({detail})"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(error)
 
 
 def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
     """One line for a refused manual target."""
     match refusal:
-        case NoManualSession(state=state):
-            return f"consigne refusee : pas de session manuelle ({state.value})"
+        case NoManualSession():
+            return f"consigne refusee : pas de session manuelle ({refusal.state.value})"
         case ManualEnding(detail=detail):
             return f"consigne refusee : {detail}"
         case TargetOutOfRange(requested=requested, min_run=low, ceiling=high):
@@ -1386,8 +1386,7 @@ def describe_target_refusal(refusal: ManualTargetRefusal) -> str:
             )
         case HeldAtStandstill(by=by):
             return f"consigne refusee : {_held_by(by)}, puis redonner la cible"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 def describe_withdrawn_target(withdrawn: WithdrawnTarget) -> str:
@@ -1405,9 +1404,11 @@ def _held_by(by: Holding) -> str:
     a hold added later has no words until somebody writes them here.
     """
     match by:
-        case SafetyVerdict(rule=rule, latched=latched):
-            wait = "L'acquitter une fois sa cause levee" if latched else "Attendre qu'il soit leve"
-            return f"le verdict {rule} tient le bras a l'arret. {wait}"
+        case SafetyVerdict():
+            wait = (
+                "L'acquitter une fois sa cause levee" if by.latched else "Attendre qu'il soit leve"
+            )
+            return f"le verdict {by.rule} tient le bras a l'arret. {wait}"
         case RiseHold.NO_HEART_RATE:
             return (
                 "pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. "
@@ -1431,15 +1432,17 @@ def _held_by(by: Holding) -> str:
                 "le variateur n'a pas confirme la consigne, elle n'est pas redemandee. "
                 "Verifier la liaison"
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(by)
 
 
 def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
     """One line for a refused fault reset."""
     match refusal:
-        case ResetWhileCommanded(state=state, phase=phase):
-            return f"reset refuse : mouvement encore commande ({state.value}, {phase.value})"
+        case ResetWhileCommanded():
+            return (
+                "reset refuse : mouvement encore commande "
+                f"({refusal.state.value}, {refusal.phase.value})"
+            )
         case ResetBehindVerdict(verdict=verdict):
             return f"reset refuse : acquitter d'abord le verdict {verdict.rule}"
         case NoFaultToReset(state=state):
@@ -1455,8 +1458,7 @@ def describe_reset_refusal(refusal: FaultResetRefusal) -> str:
             )
         case ResetUndelivered(detail=detail):
             return f"reset refuse : {detail}"
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(refusal)
 
 
 # =========================================================================

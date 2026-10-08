@@ -67,6 +67,8 @@ from src.motor.atv320 import (
 )
 from src.motor.drive import RegisterMap
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
+from src.panel_status import EcgSource as _EcgSource
+from src.panel_status import MotorBackend as _MotorBackend
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind, parse_kind
 from src.training.plan import (
@@ -172,29 +174,15 @@ _TRUE: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 
 
-@unique
-class MotorBackend(Enum):
-    """Which drive the console commands."""
+MotorBackend = _MotorBackend
+"""Which drive the console commands (``MOTOR_BACKEND``).
 
-    SIM = "sim"
-    """``SimulatedDrive``: a full dry run, nothing opened."""
+Defined in :mod:`src.panel_status`, whose records report it, and named here
+because choosing it is this module's business: both names are the same class.
+"""
 
-    SERIAL = "serial"
-    """The ATV320 over Modbus RTU, through ``src/motor/atv320.py``."""
-
-
-@unique
-class EcgSource(Enum):
-    """Where the ECG comes from."""
-
-    SIM = "sim"
-    """``SimulatedBitalinoClient`` fed by the physiology plant."""
-
-    SERIAL = "serial"
-    """A serial device (``/dev/rfcomm0`` on the Pi, ``COM4`` on Windows)."""
-
-    RFCOMM = "rfcomm"
-    """macOS IOBluetooth RFCOMM, address ``rfcomm:XX-XX-XX-XX-XX-XX``."""
+EcgSource = _EcgSource
+"""Where the ECG comes from (``ECG_SOURCE``). Defined in :mod:`src.panel_status` likewise."""
 
 
 @unique
@@ -339,8 +327,7 @@ class LocalConfig:
                     )
                 trial = self.geometry.motor_rpm_for(OCCUPIED_INITIAL_RESULTANT_G)
                 return Ok(MotorRpm(min(self.motor_max_rpm, trial)))
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(occupancy)
 
 
 # =========================================================================
@@ -486,8 +473,7 @@ def bitalino_address(
                     )
                 )
             return Ok(address)
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(source)
 
 
 def _radius(env: Mapping[str, str]) -> Result[Metres, ConfigProblem]:

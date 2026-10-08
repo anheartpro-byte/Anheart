@@ -109,6 +109,9 @@ incomplete `match` at check time, with an error naming the variant you forgot.
 fixture to prove this stays true. Exceptions are still fine in the web layer
 and in scripts.
 
+The catch-all arm above is the form for a `match` whose arms ACT. When every
+arm RETURNS a value, the guard goes after the `match` instead: see rule 10.
+
 ## 4. Never read the clock directly
 
 Every timing decision takes `now` as a parameter or reads an injected `Clock`
@@ -230,3 +233,84 @@ between a commanded stop and a shaft observed stopped.
 If a rule blocks something genuinely correct, say so and propose the change.
 Do not weaken a check locally to get past it. Silencing a checker in the safety
 chain needs a comment naming what was verified by hand instead.
+
+## 10. Forms the code analysis and the type checkers both accept
+
+CodeQL's quality checks read the whole repository on every pull request
+(`docs/framework-de-test.md`, "Analyse statique externe"), and a finding is
+fixed in the code, never excluded. It reads four idioms differently from
+basedpyright and mypy. Write new code in the forms below: every tool accepts
+them, and none of them weakens a check.
+
+**A `match` whose arms each return a value ends with
+`raise assert_never(subject)` after the `match`, with no catch-all arm.**
+
+    def words_for(error: ResolveError) -> str:
+        match error:
+            case UnknownProfile():
+                return f"programme {error.profile_id!r} inconnu"
+            case Rejected():
+                return f"programme inadapte ({error.detail})"
+        raise assert_never(error)
+
+The analysis assumes a `match` can finish without taking a case, so a
+catch-all arm that only calls `assert_never` reads to it as a path that runs
+off the end of the function. Nothing is lost: both type checkers still refuse
+a forgotten variant, at the `match` and again at `assert_never`, naming it; an
+impossible value still raises `AssertionError`, and a test passes one so the
+line is covered. Return the value in each arm rather than assigning a variable
+arm by arm and reading it after the `match`. When the subject is a call or an
+`await`, bind it to a name first. A `match` whose arms act and return nothing
+keeps the catch-all arm of rule 3.
+
+**A class pattern matches the class, and the field is read from the matched
+value** (the two arms above). Capturing a field under its own name,
+`case UnknownProfile(profile_id=profile_id):`, is read by the analysis as a
+use of `profile_id` before it is bound; it has reported it on the first case
+of a `match` that opens a function.
+
+For an error carried by a `Result`, keep the nested form of rule 3:
+`case Err(error):`, then `match error:`, each arm reading its field from
+`error`. Each guard follows its own `match` (`LinkError` stands for
+`CommTimeout | BadResponse`):
+
+    def reading(result: Result[MotorRpm, LinkError]) -> str:
+        match result:
+            case Ok(rpm):
+                return f"{rpm} rpm"
+            case Err(error):
+                match error:
+                    case CommTimeout():
+                        return f"no answer within {error.after:.3f} s"
+                    case BadResponse():
+                        return f"unusable answer: {error.detail}"
+                raise assert_never(error)
+        raise assert_never(result)
+
+Naming the variant inside `Err(...)`, as in `case Err(BadResponse() as error):`,
+is refused by both type checkers even when every variant is handled, for the
+reason rule 3 gives.
+
+**A protocol member is declared `@abstractmethod`, and its docstring is its
+whole body**, as the standard library writes its own protocols:
+
+    class Clock(Protocol):
+        @abstractmethod
+        def monotonic(self) -> Monotonic:
+            """Seconds from an arbitrary origin, monotonically non-decreasing."""
+
+A bare `...` is reported as a statement with no effect, and without
+`@abstractmethod` it is the only body basedpyright accepts for a member that
+returns a value. A class that satisfies the protocol by its shape is
+unaffected. A class that inherits the protocol must define every member, or
+it cannot be built.
+
+**Two modules never import each other, not even under `if TYPE_CHECKING:`.**
+The analysis counts a type-only import as executed and reports the pair as an
+import cycle. Define the shared type in the one of the two that the other
+already imports, and let the other give it back under its own name when that
+name is public:
+
+    from src.panel_status import MotorBackend as _MotorBackend
+
+    MotorBackend = _MotorBackend

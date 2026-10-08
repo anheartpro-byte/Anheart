@@ -1660,17 +1660,75 @@ dans les filtres : la vue par défaut montre la branche par défaut du dépôt,
 va de même du passage hebdomadaire : comme le déclenchement nocturne de
 `ci.yml`, GitHub ne le lance que depuis la branche par défaut.
 
-**Traiter un constat.** Un constat est corrigé dans le code quand la donnée
-qu'il suit peut venir d'un tiers, ou quand la correction est simple et rend le
-code sûr de façon évidente. Sinon il est classé dans GitHub (**Dismiss alert**)
-avec sa raison écrite : la liste des constats ouverts ne doit contenir que ce
-qui reste à traiter. `paths-ignore`, dans `.github/codeql/codeql-config.yml`,
-ne sert pas à écarter un constat : il reste réservé au code généré ou installé.
-Pour un nom de fichier reçu de l'extérieur, la forme que l'analyse reconnaît est
-celle de `resolve_under`
-([`src/record/containment.py`](../raspberry-pi/src/record/containment.py)) :
-normaliser le chemin, vérifier qu'il commence par le dossier permis, puis
-n'utiliser que le chemin normalisé.
+**Traiter un constat.** La suite de qualité est active : un constat, de
+sécurité ou de qualité, se corrige dans le code, de la façon que sa règle
+attend, et la liste des constats ouverts ne doit contenir que ce qui reste à
+traiter. Trois règles :
+
+* **Corriger, pas cacher.** Pas de commentaire de suppression, pas de
+  renommage ni d'enrobage qui ferait seulement taire l'outil. Si le constat
+  montre un vrai défaut (une vérification qui n'en était pas une, une variable
+  lue avant d'être affectée sur un chemin réel), la correction vient avec un
+  test qui échoue sans elle.
+* **Un faux positif se classe après relecture.** La personne qui développe ne
+  classe rien : elle donne le numéro du constat, sa raison en une ou deux
+  phrases et sa catégorie (`false positive`, `used in tests`, `won't fix`). La
+  revue relit, puis le constat est classé dans GitHub (**Dismiss alert**) avec
+  cette raison écrite.
+* **Aucune exclusion pour faire passer.** `paths-ignore`, dans
+  `.github/codeql/codeql-config.yml`, reste réservé au code généré ou
+  installé ; aucun filtre de règle n'est ajouté
+  (`scripts/ci/analysis-workflows.test.mjs` le vérifie).
+
+Formes que l'analyse et les vérificateurs de types stricts acceptent ensemble,
+à reprendre dans le code Python nouveau. Les quatre premières sont la règle 10
+du contrat de code strict (résumé dans
+[raspberry-pi.md, section 13](raspberry-pi.md#13-le-contrat-de-code-strict-et-la-gate)),
+qui en donne un exemple chacune :
+
+* **`match` qui rend une valeur.** Une fonction qui rend une valeur dans
+  chaque cas d'un `match` exhaustif se termine, après le `match`, par
+  `raise assert_never(sujet)`, sans dernier cas générique : l'analyse suppose
+  qu'un `match` peut finir sans prendre de cas. Les deux vérificateurs de
+  types refusent toujours un cas oublié en le nommant, et une valeur
+  impossible lève toujours une `AssertionError`. Chaque cas rend sa valeur,
+  au lieu d'affecter une variable lue après le `match`. Un sujet qui est un
+  appel ou un `await` est d'abord lié à un nom. Un `match` dont les cas
+  agissent sans rien rendre garde son dernier cas générique.
+* **Motif de classe.** Le motif reconnaît la classe, et le champ se lit sur la
+  valeur reconnue (`case AlreadyStarted():` puis `refusal.state`). Capturer un
+  champ sous son propre nom (`case AlreadyStarted(state=state):`) est lu par
+  l'analyse comme un usage de `state` avant son affectation ; elle l'a signalé
+  sur le premier cas d'un `match` qui ouvre une fonction. Pour une erreur
+  portée par un `Result`, la forme imbriquée de la règle 3 reste la règle :
+  `case Err(error):`, puis `match error:`, chaque cas lisant son champ sur
+  `error`, et chaque garde après son propre `match`. Nommer la variante dans
+  `Err(...)` (`case Err(BadResponse() as error):`) est refusé par les deux
+  vérificateurs de types, même quand tous les cas sont traités.
+* **Membre de protocole.** Un membre de `typing.Protocol` est déclaré
+  `@abstractmethod` et a sa documentation pour seul corps, comme les
+  protocoles de la bibliothèque standard. Une classe qui satisfait le
+  protocole par sa forme n'est pas concernée ; une classe qui en hérite doit
+  définir tous ses membres, sinon elle ne peut pas être construite.
+* **Imports.** Deux modules ne s'importent jamais l'un l'autre, même sous
+  `if TYPE_CHECKING:` : l'analyse compte un import réservé aux types comme
+  exécuté et signale un cycle. Le type partagé se définit dans celui des deux
+  que l'autre importe déjà, et l'autre le redonne sous son propre nom quand ce
+  nom est public.
+* **Journal.** Une valeur reçue d'un tiers n'entre dans un journal qu'une fois
+  ses sauts de ligne remplacés et sa longueur bornée, comme le fait
+  `logged_header` ([`src/web/ws.py`](../raspberry-pi/src/web/ws.py)).
+* **Nom de fichier.** Pour un nom de fichier reçu de l'extérieur, la forme que
+  l'analyse reconnaît est celle de `resolve_under`
+  ([`src/record/containment.py`](../raspberry-pi/src/record/containment.py)) :
+  normaliser le chemin, vérifier qu'il commence par le dossier permis, puis
+  n'utiliser que le chemin normalisé.
+
+Ce que l'analyse lit mal aujourd'hui et qu'aucune écriture plus simple ne
+retire, donc ce qui se remet comme faux positif avec sa raison : l'instruction
+`type` et les paramètres de type ne sont pas vus comme des définitions ;
+`await` sur une tâche est lu comme une instruction sans effet ; une constante
+publique qui n'est lue que par un autre module peut être dite inutilisée.
 
 **Ce que cette analyse bloque.** Rien dans une PR : les jobs `codeql (...)` ne
 sont pas dans la protection de branche de `develop`. Les rendre obligatoires

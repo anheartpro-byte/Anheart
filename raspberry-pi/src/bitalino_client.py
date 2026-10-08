@@ -51,6 +51,7 @@ import statistics
 import subprocess
 import sys
 import threading
+from abc import abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
@@ -282,11 +283,25 @@ class Device(Protocol):
     """What the client needs from an open BITalino. Positional-only so both the
     vendor adapter and test fakes satisfy it regardless of parameter names."""
 
-    def version(self) -> str: ...
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None: ...
-    def read_chunk(self, max_bytes: int, /) -> bytes: ...
-    def stop(self) -> None: ...
-    def close(self) -> None: ...
+    @abstractmethod
+    def version(self) -> str:
+        """The firmware version string the device reports."""
+
+    @abstractmethod
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        """Start acquiring ``channels`` at ``sample_rate`` Hz."""
+
+    @abstractmethod
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        """Up to ``max_bytes`` raw bytes of the stream. Blocking; may raise."""
+
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop the acquisition."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release the link to the device."""
 
 
 type DeviceFactory = Callable[[str, float], Device]
@@ -304,7 +319,9 @@ class _TimedPort(Protocol):
 
     timeout: float | None
 
-    def read(self, size: int = 1) -> bytes: ...
+    @abstractmethod
+    def read(self, size: int = 1) -> bytes:
+        """Up to ``size`` bytes; fewer, or none, once ``timeout`` has elapsed."""
 
 
 @final

@@ -320,8 +320,7 @@ def describe_status(status: JournalStatus, root: Path) -> str:
                 f"enregistrement de seance indisponible : dossier {root} inutilisable "
                 "(creation, droits ou mesure de l'espace libre)"
             )
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(status.cause)
 
 
 def _why(status: JournalStatus) -> str:
@@ -386,8 +385,7 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
         case SurfaceEvent.SESSION_RUNNING | SurfaceEvent.SESSION_IDLE | SurfaceEvent.RECORDING:
             # States the ticks already carry, and the recorder's own messages.
             return None
-        case _ as unreachable:
-            assert_never(unreachable)
+    raise assert_never(kind)
 
 
 # =========================================================================

@@ -112,6 +112,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from abc import abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -206,21 +207,21 @@ class ModbusMaster(Protocol):
     PDU; typing it as ``object`` forces the narrowing reality requires.
     """
 
+    @abstractmethod
     def connect(self) -> bool:
         """Open the serial port. ``False`` means it did not open."""
-        ...
 
+    @abstractmethod
     def close(self) -> None:
         """Release the serial port."""
-        ...
 
+    @abstractmethod
     def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:
         """Modbus function 3."""
-        ...
 
+    @abstractmethod
     def write_register(self, address: int, value: int, slave: int = 1) -> object:
         """Modbus function 6."""
-        ...
 
 
 WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
@@ -895,13 +896,13 @@ class ATV320Drive:
             self._closed = False
             self._close_error = None
 
-            match await self._run(self._blocking_connect):
+            connected = await self._run(self._blocking_connect)
+            match connected:
                 case Err(error):
                     return Err(self._note_failure(error, self._clock.monotonic()))
                 case Ok():
                     return await self._confirm_addressing(generation)
-                case _ as unreachable:
-                    assert_never(unreachable)
+            raise assert_never(connected)
 
     async def close(self) -> Result[None, DriveError]:
         """Ramp the machine to a stop, then release the port. Latches the link down.
@@ -1326,7 +1327,8 @@ class ATV320Drive:
 
     async def _confirm_addressing(self, generation: int) -> Result[None, DriveError]:
         """One ETA read, purely as evidence that the link and addressing work."""
-        match await self._read(self._registers.eta):
+        answer = await self._read(self._registers.eta)
+        match answer:
             case Err(error):
                 return Err(error)
             case Ok(eta):
@@ -1342,8 +1344,7 @@ class ATV320Drive:
                     decode_status_word(StatusWord(eta)).name,
                 )
                 return Ok(None)
-            case _ as unreachable:
-                assert_never(unreachable)
+        raise assert_never(answer)
 
     async def _attempt_stop(self) -> DriveError | None:
         """Ramp to a stop, confirm it, and only then drop the output stage.

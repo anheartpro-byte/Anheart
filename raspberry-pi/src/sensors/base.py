@@ -32,6 +32,7 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 from __future__ import annotations
 
 import math
+from abc import abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -162,15 +163,17 @@ class SensorProcessor(Protocol):
     """One channel's processing. Stateful between calls if it needs to be; total always."""
 
     @property
-    def spec(self) -> SensorSpec: ...
+    @abstractmethod
+    def spec(self) -> SensorSpec:
+        """What the screen says about this channel, and how much history it needs."""
 
+    @abstractmethod
     def process(self, raw: Sequence[float], fs: int, at: Monotonic) -> SensorReading:
         """Process the last ``spec.window_s`` seconds of ADC counts sampled at ``fs`` Hz.
 
         ``raw`` may be shorter than the window (acquisition just started) or
         empty. Never raises.
         """
-        ...
 
 
 # =========================================================================

@@ -63,6 +63,7 @@ from __future__ import annotations
 import ctypes.util
 import logging
 import threading
+from abc import abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -276,6 +277,7 @@ class FtdiDevice(Protocol):
     real USB hardware do on demand.
     """
 
+    @abstractmethod
     def read_data(self, size: int) -> bytes:
         """At most ``size`` bytes already received. Returns ``b""`` when none.
 
@@ -283,50 +285,51 @@ class FtdiDevice(Protocol):
         timer whether or not data is waiting - which is what makes it usable as
         a non-blocking poll.
         """
-        ...
 
+    @abstractmethod
     def write_data(self, data: bytes) -> int:
         """Queue ``data`` for transmission; returns the count accepted."""
-        ...
 
+    @abstractmethod
     def close(self) -> None:
         """Release the USB interface."""
-        ...
 
 
 @runtime_checkable
 class ConfigurableFtdi(FtdiDevice, Protocol):
     """An :class:`FtdiDevice` that can also be set up. What ``Ftdi`` really is."""
 
+    @abstractmethod
     def set_baudrate(self, baudrate: int, constrain: bool = True) -> int:
         """Pick the closest achievable rate; refuse one outside 3% when constrained."""
-        ...
 
+    @abstractmethod
     def set_line_property(
         self, bits: int, stopbit: int | float, parity: str, break_: bool = False
     ) -> None:
         """Character size, stop bits and parity."""
-        ...
 
+    @abstractmethod
     def set_flowctrl(self, flowctrl: str) -> None:
         """``""`` for none. RS-485 direction is switched by the cable itself."""
-        ...
 
+    @abstractmethod
     def set_latency_timer(self, latency: int) -> None:
         """Milliseconds the chip may hold a short packet before sending it up."""
-        ...
 
+    @abstractmethod
     def purge_buffers(self) -> None:
         """Drop anything already queued in either direction."""
-        ...
 
     @property
+    @abstractmethod
     def timeouts(self) -> tuple[int, int]:
         """libusb (read, write) timeouts in milliseconds, for every transfer after this."""
-        ...
 
     @timeouts.setter
-    def timeouts(self, timeouts: tuple[int, int]) -> None: ...
+    @abstractmethod
+    def timeouts(self, timeouts: tuple[int, int]) -> None:
+        """Set both timeouts, in milliseconds."""
 
 
 type Sleeper = Callable[[float], None]
