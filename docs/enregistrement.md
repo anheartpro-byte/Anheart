@@ -331,8 +331,9 @@ le vocabulaire et les registres des observations d'appel décrites ci-dessous
 trames perdues parce que personne ne venait les prendre sont comptées dans
 l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Les lignes
 commencent avec l'enregistrement : la scrutation d'une console au repos n'y
-est pas, et les échanges d'un armement n'y sont que s'ils précèdent
-l'ouverture de moins d'un cycle (leur `t` est alors négatif).
+est pas, et les échanges qui précèdent l'ouverture n'y sont que s'ils
+attendaient encore quand le fil du journal a ouvert l'enregistrement, moins
+d'un cycle en temps normal (leur `t` est alors négatif).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel

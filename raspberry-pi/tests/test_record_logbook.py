@@ -403,8 +403,8 @@ def test_ex3_outside_a_session_a_console_event_is_a_line_of_the_logbook(tmp_path
 
 def test_ex3_a_word_withheld_stays_out_of_the_logbook_like_a_name(tmp_path: Path) -> None:
     recorder, journal, _clock = bare_recorder(tmp_path)
-    recorder.withhold("secret_programme")
-    recorder.withhold("  ")
+    recorder.withhold("secret_programme", "  ")
+    recorder.withhold("")
     recorder.note_event(
         surface_event(
             SurfaceEvent.REFUSED,
@@ -544,17 +544,53 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
     assert recorded.records() == []
     refusals = recorded.rig.refusals()
     assert len(refusals) == 1
+    # The operator is shown the age, as before.
     assert refusals[0].startswith("demarrage refuse : passager de 9 ans, minimum ")
     written = [(e["kind"], e["detail"], e["actor"]) for e in logbook_of(recorded)]
+    # The logbook keeps the reason and not the rider's age.
+    kept = refusals[0].replace("passager de 9 ans", "[redacted]")
+    assert kept.startswith("demarrage refuse : [redacted], minimum ")
     assert written[1:] == [
         ("operator_action", "start_requested", ALIAS),
-        ("refusal", f"refused: {refusals[0]}", ALIAS),
+        ("refusal", f"refused: {kept}", ALIAS),
     ]
+    assert b"9 ans" not in recorded.everything_on_disk()
     assert written[0][0] == "operator_action"
     assert str(written[0][1]).startswith("attested: ")
     on_disk = recorded.everything_on_disk()
     assert SHORT_PROFILE.encode() not in on_disk, "the programme's identifier is not written"
     assert OPERATOR.encode() not in on_disk
+
+
+async def test_ex3_a_refused_start_never_writes_the_identifier_of_the_programme_it_asked_for(
+    tmp_path: Path,
+) -> None:
+    """A launch for a programme this machine does not hold: the refusal quotes its identifier.
+
+    The operator is shown it. The logbook is not given it: neither in the line
+    of the request, nor in the line of the refusal.
+    """
+    programme = "confidential_programme_7"
+    recorded = recorded_rig(tmp_path, env=PROGRAMME_ENV)
+    surface = recorded.rig.panel.surface
+    attested = surface.attest_estop_wiring(OPERATOR)
+    assert isinstance(attested, Ok)
+    asked = surface.submit_start(
+        profile_id=programme, operator=OPERATOR, total_duration_s=None, subject_age=30
+    )
+    assert isinstance(asked, Ok), asked
+    await recorded.tick(1.0)
+
+    assert recorded.rig.refusals() == [
+        f"demarrage refuse : programme '{programme}' inconnu sur cette machine"
+    ]
+    written = [(e["kind"], e["detail"]) for e in logbook_of(recorded)]
+    assert written[1:] == [
+        ("operator_action", "start_requested"),
+        ("refusal", "refused: demarrage refuse : programme '[redacted]' inconnu sur cette machine"),
+    ]
+    assert programme.encode() not in recorded.everything_on_disk()
+    assert recorded.records() == []
 
 
 async def test_ex3_the_same_event_during_a_session_goes_to_the_sessions_record_only(

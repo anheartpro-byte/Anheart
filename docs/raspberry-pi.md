@@ -1429,10 +1429,23 @@ toutes les 0,2 s, par un échange de liste sous un verrou tenu le temps de cet
 Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
 une observation impossible à construire est comptée de même, et ne remonte
 jamais vers l'appelant : la réponse du variateur est rendue quoi qu'il arrive
-à son observation. Les trames prises vont à l'enregistrement ouvert à ce
-moment ; sans enregistrement ouvert, celles d'un armement vont à
-l'enregistrement que ce même cycle ouvre (avec un `t` légèrement négatif), et
-la scrutation d'une console au repos n'est écrite nulle part.
+à son observation. Si la liste elle-même ne peut pas être prise (une faute de
+ce qui écoute le variateur), le cycle continue : les lignes, les événements et
+les blocs bruts sont écrits, les trames de ce cycle sont perdues et comptées
+comme une écriture manquée de l'enregistrement (`write_failed`,
+`erreur d'ecriture (append : <faute>)`), et la faute est journalisée une fois.
+
+Les trames prises sont remises à un enregistrement à trois moments du cycle :
+avant qu'un enregistrement soit fermé, à celui-là (une séance ouverte **et**
+fermée pendant que le fil était occupé ailleurs, par exemple par la longue
+fermeture de la précédente, garde donc ses trames) ; avant qu'un
+enregistrement soit ouvert par-dessus un autre resté ouvert, à celui resté
+ouvert ; et une fois la file écrite, à l'enregistrement alors ouvert (les
+trames d'un armement vont à la séance qu'il arme, avec un `t` légèrement
+négatif). Quand un autre enregistrement est ouvert plus loin dans le même
+cycle, les trames commencées à partir de son début l'attendent. Sans aucun
+enregistrement ouvert, la scrutation d'une console au repos n'est écrite nulle
+part.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -1742,16 +1755,33 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 | Événement de la console | `kind` | `detail` |
 |---|---|---|
 | départ demandé | `operator_action` (`remote_command` depuis le tableau de bord) | `start_requested`, sans ses mots : ils nomment un programme par son identifiant |
-| départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur |
+| départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur, sans l'identifiant du programme ni l'âge du passager qu'elle cite (`[redacted]`) |
 | acquittement | `verdict_ack` | `acknowledged: …` |
 | réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
 | attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |
 | nouvelle du lien avec le tableau de bord | `warning` | `dashboard: …` |
 
+**Ce que ce journal peut contenir, et ce qu'on en fait.** Il n'a ni ECG, ni
+identifiant de passager, ni nom. Il garde, avec leur heure : l'alias de
+l'opérateur de chaque geste (le même pseudonyme stable que dans un
+enregistrement, 15.7) ; le nom des verdicts acquittés ; le texte de
+l'attestation ; un motif tapé à la main pour une fin ou un E-STOP ; les
+nouvelles du lien avec le tableau de bord ; et la phrase de chaque refus. De
+cette phrase, l'identifiant du programme et les mots qui donnent l'âge du
+passager (`passager de 9 ans`) sont retirés avant l'écriture : l'opérateur les
+voit à l'écran, le disque ne les reçoit pas. Elle peut encore citer le détail
+d'un verdict resté en vigueur, et donc, pour un verdict cardiaque, une
+fréquence cardiaque de la séance précédente. Ce journal est borné à 2 Mo (deux
+fichiers de 1 Mo, les lignes les plus anciennes disparaissent d'elles-mêmes),
+la rétention ne le purge jamais, il n'est pas chiffré, et **il n'est pas
+exporté** : ni la liste, ni l'archive, ni le bouton de la console ne le
+donnent. Il se lit sur le disque, sous `root` sur un Pi installé (15.7), et se
+traite comme les enregistrements.
+
 `kind`, `detail` et `actor` suivent les règles d'un événement d'enregistrement
 (15.7) : l'opérateur est un alias, jamais un nom ; les noms saisis, les
-adresses e-mail et l'identifiant du programme demandé sont retirés du texte
-(`[redacted]`). Il n'y a pas de séance, donc pas d'axe de temps de séance :
+adresses e-mail, l'identifiant du programme demandé et l'âge du passager sont
+retirés du texte (`[redacted]`). Il n'y a pas de séance, donc pas d'axe de temps de séance :
 `at` est l'heure UTC, `monotonic` l'horloge de la console en secondes, qui
 ordonne les lignes d'un même lancement de la console à travers un saut de
 l'heure. Pendant une séance, ces mêmes événements vont dans l'enregistrement

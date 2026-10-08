@@ -14,6 +14,8 @@ injected in a session is read back from ``drive_frames.jsonl``.
 
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -61,8 +63,10 @@ from src.record.drive_tap import (
     tap_drive,
 )
 from src.record.journal import Cause, Journal
+from src.record.logbook import note
 from src.record.reader import read
-from src.record.schema import DriveFrame, EventKind
+from src.record.retention import records
+from src.record.schema import DriveFrame, EventKind, Manifest, RecordError
 from src.record.writer import FRAME
 from src.result import Err, Ok, Result
 from src.training.runtime import RuntimeState
@@ -75,10 +79,12 @@ from src.units import (
     RegisterAddress,
     Seconds,
     StatusWord,
+    UnixMillis,
 )
 from tests.record_console_support import recorded_rig, set_target, start_bench, stop
 from tests.record_journal_support import clock_at_start, closing, opened, record_of, session
-from tests.test_failure_rig import BENCH_ENV
+from tests.record_support import row
+from tests.test_failure_rig import BENCH_ENV, OPERATOR, attest
 from tests.test_ftdi_link import FakeAltivar, ftdi_master
 
 # =========================================================================
@@ -625,6 +631,158 @@ def test_ex2_the_frames_of_an_arming_go_to_the_record_that_arming_opens(tmp_path
     assert frames_of(journal) == [(-0.1, "read_limits"), (-0.05, "command")]
 
 
+def started_at(index: int, origin: float) -> Manifest:
+    """The manifest of a session that started at ``origin`` on the console's clock."""
+    whole = session(index)
+    return replace(whole, clocks=replace(whole.clocks, monotonic_start=Monotonic(origin)))
+
+
+def frames_in(path: Path) -> list[tuple[float, str]]:
+    loaded = read(path)
+    assert isinstance(loaded, Ok), loaded
+    assert loaded.value.warnings == (), "closed and whole"
+    return [(frame.t, frame.kind) for frame in loaded.value.frames]
+
+
+def test_ex2_a_session_opened_and_closed_within_one_cycle_still_gets_its_frames(
+    tmp_path: Path,
+) -> None:
+    """The thread was away for the whole session (a long close before it, a disk that hung).
+
+    Its opening and its closing are taken in the same cycle. The frames waiting
+    are the session's: they are written before its record is closed, not let go.
+    """
+    clock = clock_at_start()
+    journal = Journal(tmp_path / "records", clock)
+    waiting = Waiting()
+    journal.listen(waiting)
+    journal.drain()
+
+    journal.open(session(), Privacy())
+    waiting.add(10.2)
+    waiting.add(10.6, "speed")
+    waiting.add(11.0, "emergency_zero")
+    journal.close(closing())
+    journal.drain()
+
+    assert frames_in(record_of(journal)) == [
+        (0.2, "read_status"),
+        (0.6, "speed"),
+        (1.0, "emergency_zero"),
+    ]
+    status = journal.status(clock.monotonic())
+    assert (status.degraded, status.failures, status.dropped) == (False, 0, 0)
+
+
+def test_ex2_two_sessions_within_one_cycle_each_get_the_frames_that_began_in_them(
+    tmp_path: Path,
+) -> None:
+    clock = clock_at_start()
+    journal = Journal(tmp_path / "records", clock)
+    waiting = Waiting()
+    journal.listen(waiting)
+
+    journal.open(started_at(1, 10.0), Privacy())
+    waiting.add(10.5)
+    journal.close(closing())
+    waiting.add(15.0, "read_status")  # at rest between the two: the first one's, after its end
+    # Something asked at the console between the two, as there usually is.
+    refused = note(
+        wall_clock=UnixMillis(1_791_195_015_000),
+        at=Monotonic(15.5),
+        kind=EventKind.REFUSAL,
+        detail="refused: demarrage refuse",
+        actor="op-1",
+    )
+    logged = journal.log(refused)
+    assert logged is True
+    journal.open(started_at(2, 20.0), Privacy())
+    waiting.add(20.5, "speed")
+    journal.close(closing())
+    journal.drain()
+
+    first, second = records(journal.root)
+    assert frames_in(first) == [(0.5, "read_status"), (5.0, "read_status")]
+    assert frames_in(second) == [(0.5, "speed")], "timed from its own start"
+
+
+def test_ex2_a_record_opened_over_one_still_open_leaves_it_the_frames_that_came_before(
+    tmp_path: Path,
+) -> None:
+    clock = clock_at_start()
+    journal = Journal(tmp_path / "records", clock)
+    waiting = Waiting()
+    journal.listen(waiting)
+    journal.open(started_at(1, 10.0), Privacy())
+    journal.drain()
+
+    waiting.add(10.5)
+    waiting.add(20.5, "speed")
+    journal.open(started_at(2, 20.0), Privacy())  # the first was never closed: superseded
+    journal.close(closing())
+    journal.drain()
+
+    first, second = records(journal.root)
+    assert frames_in(first) == [(0.5, "read_status")]
+    assert frames_in(second) == [(0.5, "speed")]
+
+
+class Broken:
+    """A frame source that raises until healed: a bug in whatever listens to the drive."""
+
+    def __init__(self) -> None:
+        self.inner: Waiting = Waiting()
+        self.broken: bool = True
+        self.asked: int = 0
+
+    def __call__(self) -> Taken:
+        self.asked += 1
+        if self.broken:
+            raise RuntimeError("injected: the frame source raised")
+        return self.inner()
+
+
+def test_ex2_a_frame_source_that_raises_costs_the_frames_and_never_the_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Without the fence every cycle stopped before the queue: no row, no event, no block."""
+    clock = clock_at_start()
+    journal = opened(tmp_path, clock)
+    journal.drain()
+    source = Broken()
+    journal.listen(source)
+    with caplog.at_level(logging.ERROR, logger="src.record.journal"):
+        for _ in range(5):
+            queued = journal.submit(row())
+            assert queued is True
+            clock.advance(Seconds(0.2))
+            journal.drain()
+    assert source.asked == 5, "asked at every cycle, and every cycle went on"
+    assert caplog.text.count("the drive's frames could not be taken") == 1, "said once, not 5 Hz"
+
+    status = journal.status(clock.monotonic())
+    assert status.pending == 0, "the queue was written all the same"
+    assert (status.degraded, status.cause) == (True, Cause.WRITE_FAILED)
+    assert status.failures == 5, "counted: one failure of the record per cycle without frames"
+    assert status.error == RecordError("append", "RuntimeError")
+
+    # The source works again: the frames come back, and the record says what it missed.
+    source.broken = False
+    source.inner.add(11.2)
+    clock.advance(Seconds(2.0))
+    journal.drain()
+    journal.close(closing())
+    journal.drain()
+    loaded = read(record_of(journal))
+    assert isinstance(loaded, Ok), loaded
+    recording = loaded.value
+    assert recording.warnings == ()
+    assert len(recording.rows) == 5, "every row of the session is there"
+    assert [(f.t, f.kind) for f in recording.frames] == [(1.2, "read_status")]
+    said = [e.detail for e in recording.events if e.kind is EventKind.WARNING]
+    assert said == ["record_degraded: dropped=0 failures=5 last=append:RuntimeError"]
+
+
 def test_ex2_with_no_record_open_the_frames_are_let_go_and_nothing_is_counted(
     tmp_path: Path,
 ) -> None:
@@ -829,3 +987,67 @@ def test_ex2_the_console_hands_the_configured_switch_to_the_tap(
         journal=Journal(tmp_path / "records", clock),
     )
     assert asked == [expected]
+
+
+async def test_ex2_a_session_run_while_the_journal_was_away_has_its_frames_when_it_comes_back(
+    tmp_path: Path,
+) -> None:
+    """The REAL console: a whole session, start to end, with nobody taking anything."""
+    recorded = recorded_rig(tmp_path)
+    async with recorded.rig.http() as http:
+        await attest(http)
+        started = await http.post(
+            "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+        )
+        assert started.status_code == 202, started.text
+        await recorded.tick(1.0, drain=False)
+        await set_target(http, 5.0)
+        await recorded.tick(4.0, drain=False)
+        ended = await http.post("/api/session/stop", json={"operator": OPERATOR, "reason": "done"})
+        assert ended.status_code == 202, ended.text
+        await recorded.tick(30.0, drain=False)
+        assert recorded.state() is RuntimeState.FINISHED
+        assert recorded.records() == [], "nothing was written yet: the journal was away"
+        recorded.drain()
+    recording = recorded.recording()
+    assert recording.warnings == (), "opened and closed in one cycle, and whole"
+    kinds = {frame.kind for frame in recording.frames}
+    assert {"read_status", "speed", "command"} <= kinds
+    speeds = [f.value for f in recording.frames if f.kind == "speed" and isinstance(f.value, int)]
+    assert max(speeds) > 55, "the climb the session made is in its frames"
+    assert len(recording.frames) > 5 * len(recording.rows) // 4, "a status read per tick at least"
+
+
+async def test_ex2_a_frame_source_that_raises_never_stops_the_session_or_its_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The REAL console, a tap whose source is broken: the operator is told, the record goes on."""
+
+    def raising() -> Taken:
+        raise RuntimeError("injected: the frame source raised")
+
+    def broken(backend: DriveBackend, clock: Clock, *, sdk_frames: bool) -> Tapped:
+        return Tapped(tap_drive(backend, clock, sdk_frames=sdk_frames).backend, raising)
+
+    monkeypatch.setattr(local_panel, "tap_drive", broken)
+    recorded = recorded_rig(tmp_path)
+    async with recorded.rig.http() as http:
+        await start_bench(recorded, http)
+        await set_target(http, 5.0)
+        await recorded.tick(10.0)
+        assert recorded.state() is RuntimeState.RUNNING
+        assert recorded.degraded(), "recordDegraded is set"
+        await stop(recorded, http)
+    assert recorded.state() is RuntimeState.FINISHED
+    said = recorded.said()
+    assert said[0] == (
+        "enregistrement de seance degrade : erreur d'ecriture (append : RuntimeError). "
+        "La seance et la securite continuent."
+    )
+    recording = recorded.recording()
+    assert recording.warnings == ()
+    assert len(recording.rows) > 100, "the rows, the events and the blocks were written"
+    assert recording.frames == ()
+    lost = [e.detail for e in recording.events if e.detail.startswith("record_degraded:")]
+    assert lost, "and the record says what it is missing"
+    assert lost[-1].endswith("last=append:RuntimeError")

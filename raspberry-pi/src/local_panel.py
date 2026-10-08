@@ -771,8 +771,10 @@ class LocalPanel:
         """
         operator = command.operator
         if self._recorder is not None:
-            # A refusal below may quote the programme's identifier.
-            self._recorder.withhold(command.profile_id)
+            # A refusal below may quote the programme's identifier, or the rider's
+            # age: the operator is shown both, and neither is written to disk.
+            age = command.subject_age
+            self._recorder.withhold(command.profile_id, "" if age is None else rider_words(age))
         prepared = self._prepare_programme(command)
         if isinstance(prepared, Err):
             self._refuse_programme(command, prepared.error)
@@ -1412,8 +1414,13 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
     if age is None:
         return "demarrage refuse : age du passager requis pour une seance programmee"
     if age < minimum:
-        return f"demarrage refuse : passager de {age} ans, minimum {minimum} ans (MIN_RIDER_AGE)"
+        return f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans (MIN_RIDER_AGE)"
     return None
+
+
+def rider_words(age: int) -> str:
+    """How a refusal names the rider by their age: the words the logbook is not given."""
+    return f"passager de {age} ans"
 
 
 def describe_resolve_error(error: ResolveError) -> str:

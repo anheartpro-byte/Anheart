@@ -65,7 +65,7 @@ from typing import Final, assert_never
 
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
-from src.record.drive_tap import FrameSource, Taken
+from src.record.drive_tap import FrameSource, Observation
 from src.record.ecg import Header, RawBlock
 from src.record.logbook import Logbook, Note, note
 from src.record.retention import purge
@@ -386,6 +386,7 @@ class Scribe:
         "_error",
         "_failures",
         "_frames",
+        "_frames_fault",
         "_frames_lost",
         "_frames_lost_before",
         "_logbook",
@@ -402,6 +403,7 @@ class Scribe:
         "_storage",
         "_synced_at",
         "_unlogged",
+        "_waiting",
         "_warned",
         "_writer",
     )
@@ -432,6 +434,9 @@ class Scribe:
         self._unlogged: int = 0
         self._frames_lost: int = 0
         self._frames_lost_before: int = 0
+        self._frames_fault: str | None = None
+        # The frames taken at the start of the cycle in progress, not yet handed to a record.
+        self._waiting: tuple[Observation, ...] = ()
         self._error: RecordError | None = None
         self._path: Path | None = None
         self._synced_at: Monotonic = clock.monotonic()
@@ -472,27 +477,37 @@ class Scribe:
         The progress is published every :data:`PUBLISH_PERIOD` while the cycle
         lasts, and once at the end.
 
-        The drive's observations are taken first, and go to the record that
-        was open when they were taken: a closing queued behind them does not
-        cost the last frames of its session. With no record open they wait for
-        the queue, which may open one (the frames of an arming belong to the
-        session it armed); if it does not, nobody is recording and they are
-        let go.
+        The drive's observations are taken first and handed to a record at
+        three moments, so that each goes to the record it is about whatever the
+        queue held when the thread came back:
+
+        * before a record is closed, to that record: a closing queued behind
+          them does not cost the last frames of its session, and a session
+          that opened AND closed while the thread was away (a long close of
+          the previous record, a disk that hung) still gets its frames;
+        * before a record is opened over one still open, to the one still open;
+        * once the queue is written, to the record then open: the frames of an
+          arming belong to the session it armed.
+
+        When another record is opened later in the same cycle, the frames that
+        began at or after its start wait for it. With no record open at all,
+        nobody is recording: they are let go.
         """
         now = self._clock.monotonic()
-        taken = self._taken()
-        open_before = self._writer
-        if open_before is not None:
-            self._write_frames(open_before, taken)
-        for _ in range(len(queue)):
+        self._waiting = self._taken()
+        count = len(queue)
+        for index in range(count):
             item = queue.popleft()
             self._consumed += 1
             self._samples += _sample_count(item)
+            if isinstance(item, Opening):
+                self._hand_frames(_origin(item))
+            elif isinstance(item, Closing):
+                self._hand_frames(_next_origin(queue, count - index - 1))
             self._note(self._take(item, now, dropped, unlogged))
             self._pulse()
-        opened = self._writer
-        if open_before is None and opened is not None:
-            self._write_frames(opened, taken)
+        self._hand_frames(None)
+        self._waiting = ()
         self._checkpoint(now, dropped)
         self._published_at = self._clock.monotonic()
         self._publish(self.progress())
@@ -517,18 +532,44 @@ class Scribe:
             self._failures += 1
             self._error = outcome.error
 
-    def _taken(self) -> Taken:
-        """The drive observations waiting now. The count of the lost is kept either way."""
+    def _taken(self) -> tuple[Observation, ...]:
+        """The drive observations waiting now. The count of the lost is kept either way.
+
+        Total: a source that raises costs the frames of this cycle, counted as
+        one failure of the record like any value that could not be written,
+        and never the cycle. The rows, the events and the raw blocks behind it
+        are still written.
+        """
         frames = self._frames
         if frames is None:
-            return _NO_FRAMES
-        taken = frames()
+            return ()
+        try:
+            taken = frames()
+        except Exception as error:  # an observer of the drive: it costs frames, never the record
+            fault = type(error).__name__
+            if fault != self._frames_fault:
+                # Once per kind of fault, with its traceback: this runs five times a second.
+                self._frames_fault = fault
+                _logger.exception("session journal: the drive's frames could not be taken")
+            self._note(Err(RecordError("append", fault)))
+            return ()
         self._frames_lost = taken.lost
-        return taken
+        return taken.observations
 
-    def _write_frames(self, writer: Writer, taken: Taken) -> None:
-        origin = Monotonic(writer.manifest.clocks.monotonic_start)
-        for observation in taken.observations:
+    def _hand_frames(self, before: Monotonic | None) -> None:
+        """Write the waiting frames to the record that is open, if one is.
+
+        ``before``: only those that began before that instant, the start of a
+        record opened later in this cycle; the others go on waiting for it.
+        """
+        writer = self._writer
+        if writer is None:
+            return
+        waiting = self._waiting
+        due = waiting if before is None else tuple(o for o in waiting if o.at < before)
+        self._waiting = () if before is None else tuple(o for o in waiting if o.at >= before)
+        origin = _started(writer.manifest)
+        for observation in due:
             try:
                 written = writer.frame(observation.frame(origin))
             except Exception as error:  # one frame the format refuses costs that frame
@@ -685,7 +726,26 @@ class Scribe:
             self._warned = lost
 
 
-_NO_FRAMES: Final[Taken] = Taken((), 0)
+def _started(manifest: Manifest) -> Monotonic:
+    """When the session of ``manifest`` started, on the console's clock."""
+    return Monotonic(manifest.clocks.monotonic_start)
+
+
+def _origin(opening: Opening) -> Monotonic:
+    return _started(opening.manifest)
+
+
+def _next_origin(queue: deque[Item], ahead: int) -> Monotonic | None:
+    """The start of the next record opened among the first ``ahead`` items, or ``None``.
+
+    Read by index, never by iteration: the event loop appends at the other end
+    while this looks, and only this thread ever removes.
+    """
+    for index in range(ahead):
+        item = queue[index]
+        if isinstance(item, Opening):
+            return _origin(item)
+    return None
 
 
 # =========================================================================

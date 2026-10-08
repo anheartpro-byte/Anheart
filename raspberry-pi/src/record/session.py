@@ -668,13 +668,15 @@ class SessionRecorder:
         )
 
     @_total
-    def withhold(self, word: str) -> None:
-        """Keep ``word`` out of the text written from now on, like an operator's name.
+    def withhold(self, *words: str) -> None:
+        """Keep ``words`` out of the text written from now on, like an operator's name.
 
-        For what identifies without being a name typed by an operator: the
-        identifier of the programme a start asks for, which a refusal may quote.
+        For what says something of a person or a programme without being a
+        name typed by an operator, and that a refusal may quote: the identifier
+        of the programme a start asks for, the words that give a rider's age.
+        An empty one is nothing to withhold.
         """
-        self._withheld((word,) if word.strip() else ())
+        self._withheld(tuple(word for word in words if word.strip()))
 
     def _withheld(self, words: tuple[str, ...]) -> tuple[str, ...]:
         """Add ``words`` to what is kept out of the text, and return all of it.

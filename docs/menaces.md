@@ -4,8 +4,7 @@
 |---|---|---|---|
 | 2026-10-05 | Codex, agent `/root/anh136_threat_model` — attribution technique de cette rédaction | Base source courante `4e6720b10a2aefb73f6e1c42e51b4434d00042f7`, ANH-136 | Auteur du modèle et des ajouts MEN-14 à MEN-17 ; actualisation après intégration du source ANH-121 |
 | 2026-10-05 | Codex, agent `/root/anh136_aa01af2_gate` — reviewer technique indépendant | Commit `aa01af2030d9a38d67d1f6ec070f678018f096a7`, arbre `fd7883a4cddbac2f7dc76baedd4fb6799ec6f360` | REJECT, confiance HIGH : seul blocage B1, absence de cette inscription de revue (EX-5). Recherche d'omissions effectuée : aucune menace ajoutée. [Compte rendu daté](reviews/anh-136-2026-10-05.md) |
-
-| 2026-10-08 | Agent développeur du ticket ANH-191 (attribution technique d'agent, aucune signature humaine) | Branche `develop` du 8 octobre 2026 et changements d'ANH-191 | Auteur de l'ajout MEN-18 (enregistrements de séance au repos sur le disque du Pi). Ajout d'auteur, pas encore relu par un reviewer indépendant ; aucune autre fiche modifiée |
+| 2026-10-08 | Agent développeur du ticket ANH-191 (attribution technique d'agent, aucune signature humaine) | Branche `develop` du 8 octobre 2026 et changements d'ANH-191 | Auteur de l'ajout MEN-18 (enregistrements de séance au repos sur le disque du Pi) ; aucune autre fiche modifiée. Relu le 8 octobre 2026 par un agent reviewer indépendant du rédacteur, sur le commit local `4b89bbd73568b25db1f3556810abf41cd859d412` qui a introduit cette fiche (avant rebase et publication) : APPROVE, aucun blocage. Ce verdict a été transmis par le coordinateur de la fusion ; le rapport n'est pas joint à ce dépôt et ne dit pas ici si des menaces oubliées ont été cherchées. Le SHA publié reste à relire selon la procédure ci-dessous |
 
 Ce registre nomme le commit effectivement relu. Le verdict REJECT n'est pas une
 approbation du candidat corrigé : celui-ci exige une nouvelle revue indépendante
