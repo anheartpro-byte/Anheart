@@ -3,7 +3,7 @@
  * ANH-132: the machine HTTP routes in `convex/http.ts`.
  *
  * Authentication refusals (missing header, malformed/unknown key, deleted or
- * disabled machine, regenerated key) across all nine routes are already
+ * disabled machine, regenerated key) across all ten routes are already
  * proven by `machineAuth.test.ts`; this suite does not repeat them. It covers
  * the per-route contract: malformed bodies, idempotency, machine binding, and
  * the pending-session filtering the Pi depends on.
@@ -143,6 +143,7 @@ describe("ANH-132 malformed bodies return 400 {error}", () => {
     { path: "/api/machine/training/start", body: {} },
     { path: "/api/machine/training/end", body: { sessionId: "x" } },
     { path: "/api/machine/training/telemetry", body: { sessionId: "x" } },
+    { path: "/api/machine/training/events", body: { sessionId: "x" } },
     { path: "/api/machine/profiles", body: { storeRev: "nope" } },
   ])("rejects a malformed payload on $path", async ({ path, body }) => {
     const w = await world();
@@ -261,8 +262,7 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
       points: [point],
     });
     expect(response.status).toBe(200);
-    const payload = (await response.json()) as { stored: number };
-    expect(payload.stored).toBe(1);
+    expect(await response.json()).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
   });
 
   it("refuses a session that belongs to another machine (400)", async () => {
@@ -279,6 +279,35 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
     };
     expect(payload.error).toBe("session_not_found");
     expect(payload.message).toBe("Session not found");
+  });
+});
+
+describe("ANH-129 /api/machine/training/events binding", () => {
+  const event = { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" };
+
+  it("stores the events of this machine's session", async () => {
+    const w = await world();
+    const sessionId = await seedSession(w, w.machine, "active", "auto");
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/events", {
+      sessionId,
+      events: [event],
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
+  });
+
+  it("refuses a session that belongs to another machine (400)", async () => {
+    const w = await world();
+    const foreign = await seedSession(w, w.otherMachine, "active", "auto");
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/events", {
+      sessionId: foreign,
+      events: [event],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "session_not_found",
+      message: "Session not found",
+    });
   });
 });
 
@@ -356,7 +385,7 @@ describe("ANH-132 /api/machine/profiles", () => {
 
 /**
  * Every route that reads or changes a session designated by its identifier
- * (four routes, one of them with two body forms), called by the first machine
+ * (five routes, one of them with two body forms), called by the first machine
  * for `sessionId`, with the status it answers for a session it does not know.
  */
 const sessionRoutes: Array<{
@@ -422,6 +451,17 @@ const sessionRoutes: Array<{
         ],
       }),
   },
+  {
+    route: "training/events",
+    unknownStatus: 400,
+    call: (w, sessionId) =>
+      send(w, w.machineKey, "POST", "/api/machine/training/events", {
+        sessionId,
+        events: [
+          { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" },
+        ],
+      }),
+  },
 ];
 
 const sessionStates = ["pending", "active", "completed", "failed"] as const;
@@ -475,11 +515,13 @@ describe("ANH-177 a session of another machine is answered like an unknown sessi
         machine: await ctx.db.get(w.otherMachine),
         ecg: await ctx.db.query("ecg_data").collect(),
         telemetry: await ctx.db.query("training_telemetry").collect(),
+        events: await ctx.db.query("training_events").collect(),
       }));
       expect(after.session).toEqual(before.session);
       expect(after.machine).toEqual(before.machine);
       expect(after.ecg).toEqual([]);
       expect(after.telemetry).toEqual([]);
+      expect(after.events).toEqual([]);
     },
   );
 });

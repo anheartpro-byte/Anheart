@@ -1386,7 +1386,7 @@ describe("what the dashboard is shown about machines and sessions", () => {
         sessionId,
         points: [0, 1, 2, 3, 4].map((second) => point(NOW + second * 1000)),
       }),
-    ).toEqual({ stored: 5 });
+    ).toEqual({ stored: 5, duplicates: 0, rejected: 0 });
     /** Seconds into the session of each point served. */
     const read = async (args: { sinceT?: number; limit?: number }) =>
       (

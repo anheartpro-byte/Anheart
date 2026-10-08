@@ -2334,5 +2334,6 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "POST", path: "/api/machine/training/local", tests: "httpRoutes.test.ts (idempotent)" },
   { method: "POST", path: "/api/machine/training/end", tests: "httpRoutes.test.ts (idempotent)" },
   { method: "GET", path: "/api/machine/training/status", tests: "httpRoutes.test.ts" },
-  { method: "POST", path: "/api/machine/training/telemetry", tests: "httpRoutes.test.ts (other machine refused)" },
+  { method: "POST", path: "/api/machine/training/telemetry", tests: "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, session window)" },
+  { method: "POST", path: "/api/machine/training/events", tests: "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, sizes, session window)" },
 ];

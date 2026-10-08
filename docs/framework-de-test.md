@@ -2640,6 +2640,16 @@ de maintenant, et aucune valeur :
   `lastMeasuredAt` est cette date écrite (paquet de 300 points renvoyé une
   heure après, file qui se vide paquet après paquet, séance enregistrée au
   retour de la liaison) ;
+- `convex/journalSync.test.ts` (`npm run test:convex`) vérifie ce que le
+  serveur garde d'une séance envoyée tard ou deux fois : un lot renvoyé ne
+  change ni les lignes ni la date de leur première réception. Il rejoue deux
+  consoles. Celle d'aujourd'hui, qui ne dit pas l'âge de sa séance : ses dates
+  sont stockées et servies comme avant (horloge reculée de 10 min en cours de
+  séance, machine datée de 1970 déclarée en retard : aucun point refusé,
+  jamais lue comme en direct). Celle qui dit son âge : `lastMeasuredAt` et le
+  `t` des courbes sont sur l'horloge du serveur quelle que soit l'heure de la
+  machine, et ce qu'elle envoie en retard se lit comme mesuré quand il l'a
+  été ;
 - `convex/offlineThreshold.test.ts` (`npm run test:convex`) remplace le seuil
   partagé par une autre valeur : la tâche `checkOfflineMachines` doit la
   suivre.

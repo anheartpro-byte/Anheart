@@ -282,23 +282,38 @@ http.route({
   }),
 });
 
-/** POST /api/machine/training/start {sessionId}: the Pi armed a remote launch. */
+/**
+ * POST /api/machine/training/start {sessionId, startedAt?, sessionAgeMs?}:
+ * the Pi armed a remote launch. `startedAt` is the start as the machine dated
+ * it (unix ms, its clock), `sessionAgeMs` how long ago that was on its
+ * monotonic clock. They are read together or not at all, and a value that is
+ * not a number is not read: without both, the start is dated at its
+ * reception, as for a machine that sends neither.
+ */
 http.route({
   path: "/api/machine/training/start",
   method: "POST",
   handler: machineRoute(async (ctx, req, machineId) => {
     const body = await readJson(req);
     const sessionId = sessionIdOf(ctx, body?.sessionId);
-    if (!sessionId) return refuse(400, "invalid_request", "Missing sessionId");
+    if (!body || !sessionId)
+      return refuse(400, "invalid_request", "Missing sessionId");
     await ctx.runMutation(internal.training.markTrainingStarted, {
       machineId,
       sessionId,
+      machineStartedAt: isNum(body.startedAt) ? body.startedAt : undefined,
+      sessionAgeMs: isNum(body.sessionAgeMs) ? body.sessionAgeMs : undefined,
     });
     return json(200, { success: true });
   }),
 });
 
-/** POST /api/machine/training/local {...}: register a session started at the machine. */
+/**
+ * POST /api/machine/training/local {...}: register a session started at the
+ * machine. `startedAt` is the start as the machine dated it; `sessionAgeMs`,
+ * optional, how long ago that was on its monotonic clock. Without it the
+ * session is dated as the machine wrote it.
+ */
 http.route({
   path: "/api/machine/training/local",
   method: "POST",
@@ -326,6 +341,7 @@ http.route({
         localRef: b.localRef,
         kind: b.kind,
         startedAt: b.startedAt,
+        sessionAgeMs: optNum(b.sessionAgeMs),
         operatorName: b.operatorName,
         userId: optStr(b.userId),
         subjectLabel: optStr(b.subjectLabel),
@@ -397,7 +413,14 @@ http.route({
   }, authenticateMachineRequest),
 });
 
-/** POST /api/machine/training/telemetry {sessionId, points[]} */
+/**
+ * POST /api/machine/training/telemetry {sessionId, points[]}
+ * -> {stored, duplicates, rejected}
+ *
+ * A point is one `(sessionId, t)`: sent again, it is counted in `duplicates`
+ * and stored once. A 200 acknowledges every point of the batch, stored or
+ * not: the machine has nothing to send again.
+ */
 http.route({
   path: "/api/machine/training/telemetry",
   method: "POST",
@@ -444,6 +467,77 @@ http.route({
       machineId,
       sessionId,
       points,
+    });
+    return json(200, result);
+  }),
+});
+
+/** Events accepted in one request. */
+const MAX_EVENTS_PER_BATCH = 200;
+/** Characters of free text accepted in one event. */
+const MAX_EVENT_DETAIL = 2000;
+/** A kind of the record's vocabulary: lower case, digits and underscores. */
+const EVENT_KIND = /^[a-z][a-z0-9_]{0,63}$/;
+/** `system`, `remote` or an opaque operator identifier: never a name. */
+const EVENT_ACTOR = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** One well-formed event of a request, or null. */
+function eventOf(raw: unknown) {
+  const e = (typeof raw === "object" && raw !== null ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  const { seq, t, kind, detail, actor } = e;
+  if (
+    !isNum(seq) ||
+    !Number.isInteger(seq) ||
+    seq < 0 ||
+    !isNum(t) ||
+    !isStr(kind) ||
+    !EVENT_KIND.test(kind) ||
+    !isStr(detail) ||
+    detail.length > MAX_EVENT_DETAIL ||
+    !isStr(actor) ||
+    !EVENT_ACTOR.test(actor)
+  ) {
+    return null;
+  }
+  return { seq, t, kind, detail, actor };
+}
+
+/**
+ * POST /api/machine/training/events {sessionId, events[]}
+ * -> {stored, duplicates, rejected}
+ *
+ * The events of the session's local record, each `{seq, t, kind, detail,
+ * actor}`: `seq` is its rank in the record, and an event is one
+ * `(sessionId, seq)`, stored once however many times it is sent. Sizes are
+ * bounded here: 200 events per request, 2000 characters of text per event.
+ */
+http.route({
+  path: "/api/machine/training/events",
+  method: "POST",
+  handler: machineRoute(async (ctx, req, machineId) => {
+    const b = await readJson(req);
+    const sessionId = sessionIdOf(ctx, b?.sessionId);
+    if (!b || !sessionId || !Array.isArray(b.events)) {
+      return refuse(400, "invalid_request", "Expected {sessionId, events}");
+    }
+    if (b.events.length > MAX_EVENTS_PER_BATCH) {
+      return refuse(400, "invalid_request", "At most 200 events per batch");
+    }
+    const events = [];
+    for (const raw of b.events as unknown[]) {
+      const event = eventOf(raw);
+      if (event === null) {
+        return refuse(400, "invalid_request", "Malformed event");
+      }
+      events.push(event);
+    }
+    const result = await ctx.runMutation(internal.training.storeEvents, {
+      machineId,
+      sessionId,
+      events,
     });
     return json(200, result);
   }),

@@ -462,7 +462,10 @@ aucune query Convex ne se relance. Le site ne peut pas attendre un changement de
 donnée pour dire qu'un état est périmé. Il le recalcule lui-même **chaque
 seconde**, sur l'**horloge du serveur**. L'heure du poste ne date rien. Celle
 du Pi ne sert qu'à une chose, sur le panneau d'entraînement : dire quand un
-point a été mesuré, en plus de sa réception datée par le serveur.
+point a été mesuré, en plus de sa réception datée par le serveur. Convex sait
+aussi placer lui-même cette mesure sur son horloge, pour une machine qui dit
+depuis combien de temps sa séance a commencé ; aucune console ne le dit
+encore ([convex.md, Deux horloges](convex.md#deux-horloges)).
 
 - **Le serveur date ce qu'il reçoit.** L'état d'une machine
   (`live.updatedAt`) et son dernier signal (`lastHeartbeat`) sont datés par
@@ -473,7 +476,9 @@ point a été mesuré, en plus de sa réception datée par le serveur.
   par le serveur (pour une séance démarrée à la console : son enregistrement
   par le serveur, pas le `startedAt` envoyé par le Pi). Avec lui vient
   `lastMeasuredAt` : le `t` de ce même point, la date de mesure selon le Pi
-  (voir « Panneau d'entraînement » plus bas).
+  (voir « Panneau d'entraînement » plus bas). Pour une séance dont la machine
+  dit l'âge, ce que ne fait encore aucune console, le serveur place ce `t`
+  sur sa propre horloge avant de le servir.
 - **Chaque réponse porte l'horloge du serveur.** `getMachineLive`,
   `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`
   et `getMachinesForGestionnaire` renvoient `serverNow` : l'heure du serveur au

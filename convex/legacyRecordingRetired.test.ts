@@ -66,7 +66,7 @@ describe("ANH-135 the recording routes are gone", () => {
 
   it("registers only the heartbeat, the roster, the profiles and the training routes", () => {
     const paths = http.getRoutes().map(([path]) => path);
-    expect(paths).toHaveLength(9);
+    expect(paths).toHaveLength(10);
     for (const path of paths) {
       expect(path).toMatch(
         /^\/api\/machine\/(heartbeat|roster|profiles|training\/[a-z]+)$/,

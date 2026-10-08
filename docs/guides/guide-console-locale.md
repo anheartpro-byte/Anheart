@@ -764,7 +764,7 @@ Les types d'événements :
 | `fault_reset_requested` | reset du variateur demandé |
 | `session_idle` | retour au repos |
 | `refused` (orange) | la machine a refusé une demande. Hors séance manuelle, pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
-| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici |
+| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici |
 | `recording` | l'enregistrement de séance sur le disque du Pi se dégrade (`enregistrement de seance degrade : …`) ou redevient normal (`enregistrement de seance retabli`). La séance et la sécurité continuent dans les deux cas. Non vu pendant la préparation de ce guide : ajouté après les captures, voir la [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale) |
 
 Important : une demande « acceptée » (démarrage, cible, reset) veut seulement dire
