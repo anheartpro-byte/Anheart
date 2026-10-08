@@ -11,6 +11,9 @@ What the tests pin, in the order of the file:
   be designed or that scipy refuses, a variance that overflows. Each is
   ``no_signal``, said in the log, and a property states it for any window
   holding a non-finite value;
+* the log itself: one line when a stretch of ungradable windows begins, one
+  when it is over, never a line per window, whatever the windows are (a
+  property bounds it);
 * the grades that did not change: clean, flat, clipped, mains hum;
 * what follows through ``process``: a fresh ``no_signal`` reading with no heart
   rate while the bad sample is in the window, and the rate back once it has
@@ -39,7 +42,8 @@ import sys
 from abc import abstractmethod
 from collections.abc import Mapping, MutableMapping, Sequence
 from pathlib import Path
-from typing import Final, Protocol, cast
+from types import ModuleType
+from typing import Final, Protocol, cast, override
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -72,6 +76,10 @@ class Processor(Protocol):
     def _ecg_quality(self, raw: dsp.Signal, mains_hz: float = 50.0) -> str:
         """Grade one window of raw ECG counts."""
 
+    @abstractmethod
+    def _mains_share(self, raw: dsp.Signal, mains_hz: float) -> float | None:
+        """Share of the window's variance a mains notch removes, when it can be established."""
+
 
 class ProcessorFactory(Protocol):
     """``ChannelProcessor`` itself."""
@@ -101,9 +109,12 @@ class Legacy(Protocol):
 
     BIOSPPY_AVAILABLE: bool
     ECG_MV_PER_COUNT: float
+    UNGRADED_CLEAR_WINDOWS: int
     SENSOR_SPECS: MutableMapping[str, object]
     ChannelProcessor: ProcessorFactory
     ChannelSpec: SpecFactory
+    sps: ModuleType
+    """``scipy.signal``, under the name the module filters through."""
 
 
 SOURCE: Final[Path] = Path(__file__).resolve().parent.parent / "src" / "signal_processing.py"
@@ -187,6 +198,36 @@ def _grade(processor: Processor, raw: Sequence[float], mains_hz: float = 50.0) -
     return _grade_array(processor, dsp.as_signal(raw), mains_hz)
 
 
+def _share(processor: Processor, raw: Sequence[float], mains_hz: float = 50.0) -> float | None:
+    """The mains share of one window, asked of the helper itself.
+
+    The grader only reaches it with a window that is neither flat nor
+    clipped: what it answers to any other window has no other route.
+    """
+    return processor._mains_share(dsp.as_signal(raw), mains_hz)  # pyright: ignore[reportPrivateUsage] - no public route
+
+
+class ZeroPhaseFilter(Protocol):
+    """A stand-in for ``scipy.signal.filtfilt``, called as ``filtfilt(b, a, signal)``."""
+
+    @abstractmethod
+    def __call__(self, *filter_and_signal: object) -> dsp.Signal:
+        """What the notch gives back."""
+
+
+def _zero_phase_filter(monkeypatch: pytest.MonkeyPatch, answer: ZeroPhaseFilter) -> None:
+    """Make the module's zero-phase filter ``answer``, and nothing else differ.
+
+    The module gets a copy of ``scipy.signal`` whose ``filtfilt`` is
+    ``answer``. BioSPPy and the typed processors import scipy for themselves
+    and keep the real one.
+    """
+    library = ModuleType(LEGACY.sps.__name__)
+    library.__dict__.update(LEGACY.sps.__dict__)
+    library.__dict__["filtfilt"] = answer
+    monkeypatch.setattr(LEGACY, "sps", library)
+
+
 def _ecg_processor(fs: int = FS) -> Processor:
     return LEGACY.ChannelProcessor("ECG", fs, 250)
 
@@ -215,11 +256,38 @@ NON_FINITE_WINDOWS: Final[Mapping[str, Sequence[float]]] = {
     "exactly_one_second_with_a_nan": _with(CLEAN[:FS], {500: math.nan}),
 }
 
+RAILED: Final[tuple[float, ...]] = (0.0, 1023.0) * (WINDOW // 2)
+"""Every sample at a rail: ``noisy`` when it is finite."""
+
+RAILED_NON_FINITE_WINDOWS: Final[Mapping[str, Sequence[float]]] = {
+    "railed_with_a_nan": _with(RAILED, {4000: math.nan}),
+    "railed_with_an_infinity": _with(RAILED, {4000: math.inf}),
+    "all_plus_infinity": [math.inf] * WINDOW,
+    "all_minus_infinity": [-math.inf] * WINDOW,
+    "three_infinities_in_four_over_a_heart": _with(
+        CLEAN, dict.fromkeys((i for i in range(WINDOW) if i % 4), math.inf)
+    ),
+}
+
 
 @pytest.mark.parametrize("name", list(NON_FINITE_WINDOWS))
 def test_a_window_holding_a_non_finite_sample_is_no_signal(name: str) -> None:
     """EX-2. Each of these was graded ``good``: every comparison against NaN is false."""
     grade = _grade(_ecg_processor(), NON_FINITE_WINDOWS[name])
+    assert grade == NO_SIGNAL
+
+
+@pytest.mark.parametrize("name", list(RAILED_NON_FINITE_WINDOWS))
+def test_a_corrupt_window_is_no_signal_even_when_most_of_it_sits_at_the_rails(name: str) -> None:
+    """A corrupt frame is not a saturated amplifier: it is refused before the clipping test.
+
+    This is what the explicit refusal of a non-finite sample decides and the
+    variance check behind it does not: an infinity reads as "at the top rail",
+    so without that refusal these windows are ``noisy``, a grade that tells
+    the operator to look at the electrodes when the samples themselves are
+    not numbers.
+    """
+    grade = _grade(_ecg_processor(), RAILED_NON_FINITE_WINDOWS[name])
     assert grade == NO_SIGNAL
 
 
@@ -245,11 +313,15 @@ ANY_FINITE_SAMPLE: Final[st.SearchStrategy[float]] = st.one_of(
 )
 """Mostly counts clear of the rails (what the old grader let through), then anything finite."""
 
+AT_A_RAIL: Final[st.SearchStrategy[float]] = st.sampled_from([0.0, 1.0, 3.0, 1020.0, 1023.0])
+
 ANY_FINITE_COUNTS: Final[st.SearchStrategy[list[float]]] = st.one_of(
     st.lists(ANY_FINITE_SAMPLE, max_size=40),
     st.lists(ANY_FINITE_SAMPLE, min_size=SMALL_FS, max_size=2 * SMALL_FS),
+    st.lists(AT_A_RAIL, min_size=SMALL_FS, max_size=2 * SMALL_FS),
 )
-"""Any finite samples, in or out of the ADC range: too few for a window, or enough for one."""
+"""Any finite samples, in or out of the ADC range: too few for a window, enough for one,
+or a whole window at the rails (which is ``noisy`` until a sample of it is not a number)."""
 
 
 def _stretch(start: int, length: int) -> list[float]:
@@ -295,11 +367,28 @@ def test_property_no_window_with_a_non_finite_sample_is_good(window: list[float]
 
 
 @pytest.mark.parametrize("shape", [(2, WINDOW // 2), (WINDOW, 1), (1, WINDOW)])
-def test_a_window_that_is_not_one_dimensional_is_no_signal(shape: tuple[int, int]) -> None:
+def test_a_window_that_is_not_one_dimensional_is_no_signal_and_is_said(
+    caplog: pytest.LogCaptureFixture, shape: tuple[int, int]
+) -> None:
     """A table of samples is not a signal: (8000, 1) made the mains filter raise, graded good."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
     table = dsp.as_signal(CLEAN).reshape(shape)
     grade = _grade_array(_ecg_processor(), table)
+    said = _warnings(caplog)
     assert grade == NO_SIGNAL
+    assert said == ["ECG window not graded: 2 dimensions where a signal has one"]
+
+
+@pytest.mark.parametrize(("count", "told"), [(FS - 1, "999"), (1, "1"), (0, "0")])
+def test_a_window_under_one_second_is_no_signal_and_is_said(
+    caplog: pytest.LogCaptureFixture, count: int, told: str
+) -> None:
+    """Every refusal has its line, this one too: no window is refused in silence."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    grade = _grade(_ecg_processor(), CLEAN[:count])
+    said = _warnings(caplog)
+    assert grade == NO_SIGNAL
+    assert said == [f"ECG window not graded: {told} samples are less than a second at 1000 Hz"]
 
 
 @pytest.mark.parametrize("mains_hz", [1e-9, 1e-320])
@@ -352,6 +441,269 @@ def test_a_window_whose_variance_overflows_is_no_signal(caplog: pytest.LogCaptur
     said = _warnings(caplog)
     assert grade == NO_SIGNAL
     assert said == ["ECG window not graded: its variance is not a finite positive number"]
+
+
+@pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+@pytest.mark.parametrize(
+    "given_back",
+    [[math.nan] * WINDOW, [1e200, -1e200] * (WINDOW // 2), _with(CLEAN, {4000: math.inf})],
+    ids=["all_nan", "a_variance_that_overflows", "one_infinity"],
+)
+def test_a_mains_filter_that_gives_back_non_finite_values_is_no_signal(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, given_back: list[float]
+) -> None:
+    """The window is a clean heart: it is what the notch gives back that is not a number.
+
+    Its variance is then NaN or infinite, the share NaN or minus infinity,
+    and neither is above 0.6: without the check on THAT variance the window
+    is graded ``good`` on a mains test that established nothing.
+    """
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    notched = dsp.as_signal(given_back)
+
+    def answer(*_filter_and_signal: object) -> dsp.Signal:
+        return notched
+
+    _zero_phase_filter(monkeypatch, answer)
+    grade = _grade(_ecg_processor(), CLEAN)
+    said = _warnings(caplog)
+    assert grade == NO_SIGNAL
+    assert said == ["ECG window not graded: its variance is not a finite positive number"]
+
+
+@pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")
+def test_a_window_whose_variance_overflows_is_no_signal_whatever_the_notch_gives_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The variance that is divided by is infinite, and what the notch gives back is finite.
+
+    The share would then be exactly 1: "all of it is hum", read off an
+    overflow. The check on the window's own variance is what refuses it; the
+    real notch hides that, because it gives the overflow back.
+    """
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    notched = dsp.as_signal(CLEAN)
+
+    def answer(*_filter_and_signal: object) -> dsp.Signal:
+        return notched
+
+    _zero_phase_filter(monkeypatch, answer)
+    grade = _grade(_ecg_processor(), _with(CLEAN, {4000: 1e200}))
+    said = _warnings(caplog)
+    assert grade == NO_SIGNAL
+    assert said == ["ECG window not graded: its variance is not a finite positive number"]
+
+
+def test_a_window_without_variance_has_no_mains_share_and_nothing_is_divided_by_zero(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Asked of the helper itself: the grader stops a flat window before it gets there.
+
+    A constant window has a variance of exactly zero. The helper answers that
+    the share cannot be established; dividing by it would raise instead.
+    """
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    share = _share(_ecg_processor(), [ADC_MID] * WINDOW)
+    said = _warnings(caplog)
+    assert share is None
+    assert said == ["ECG window not graded: its variance is not a finite positive number"]
+
+
+def test_the_mains_share_is_what_the_notch_removes() -> None:
+    """Nearly all of pure hum, nearly nothing of a clean heart: 0.6 sits far from both."""
+    processor = _ecg_processor()
+    of_hum = _share(processor, _sine(50.0, 200.0, WINDOW))
+    of_a_heart = _share(processor, CLEAN)
+    assert of_hum is not None
+    assert of_a_heart is not None
+    assert of_hum > 0.99
+    assert 0.0 <= of_a_heart < 0.05
+
+
+# =========================================================================
+# The log: bounded, whatever the windows are
+# =========================================================================
+
+CLEAR: Final[int] = 25
+"""Judged windows in a row that close a stretch: five seconds at five batches a second."""
+
+NOT_FINITE: Final[dsp.Signal] = dsp.as_signal(_with(CLEAN, {4000: math.nan}))
+"""A window the grade cannot judge, already an array: these tests grade hundreds."""
+
+JUDGED: Final[Mapping[str, dsp.Signal]] = {
+    "good": dsp.as_signal(CLEAN),
+    "flat": dsp.as_signal([ADC_MID] * WINDOW),
+    "railed": dsp.as_signal(RAILED),
+    "hum": dsp.as_signal(_sine(50.0, 200.0, WINDOW)),
+}
+"""One window per grade the grader reaches by judging: good, no_signal, noisy, mains_dominated."""
+
+BEGAN: Final[str] = "ECG window not graded: 1 of its 8000 samples are not finite"
+
+
+def _over(count: int) -> str:
+    return f"ECG windows graded again after {count} that could not be"
+
+
+def _grade_many(processor: Processor, window: dsp.Signal, times: int) -> None:
+    for _ in range(times):
+        _grade_array(processor, window)
+
+
+def test_a_stretch_is_over_after_five_seconds_of_judged_windows() -> None:
+    """The figure the bound below rests on, read from the module."""
+    assert LEGACY.UNGRADED_CLEAR_WINDOWS == CLEAR
+
+
+def test_a_long_stretch_of_ungradable_windows_writes_two_lines_not_one_per_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """70 s of it at five windows a second were 350 lines on the SD card: they are two.
+
+    One when the stretch begins, with its reason. One when it is over, with
+    the count, and only once 25 windows in a row were judged: not at 24.
+    """
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    _grade_many(processor, NOT_FINITE, 350)
+    during = _warnings(caplog)
+    _grade_many(processor, JUDGED["good"], CLEAR - 1)
+    not_yet = _warnings(caplog)
+    _grade_many(processor, JUDGED["good"], 1)
+    after = _warnings(caplog)
+    assert during == [BEGAN]
+    assert not_yet == [BEGAN]
+    assert after == [BEGAN, _over(350)]
+
+
+@pytest.mark.parametrize("kind", list(JUDGED))
+def test_every_window_that_was_judged_counts_towards_the_end_of_a_stretch(
+    caplog: pytest.LogCaptureFixture, kind: str
+) -> None:
+    """A flat lead, clipping and hum are judgements too: any of them closes the stretch."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    _grade_many(processor, NOT_FINITE, 1)
+    _grade_many(processor, JUDGED[kind], CLEAR)
+    said = _warnings(caplog)
+    assert said == [BEGAN, _over(1)]
+
+
+def test_an_ungradable_window_among_judged_ones_starts_the_count_again(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """24 judged, one that is not, 24 judged: one stretch still, and nothing flickers in the log."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    _grade_many(processor, NOT_FINITE, 1)
+    _grade_many(processor, JUDGED["good"], CLEAR - 1)
+    _grade_many(processor, NOT_FINITE, 1)
+    _grade_many(processor, JUDGED["good"], CLEAR - 1)
+    still_open = _warnings(caplog)
+    _grade_many(processor, JUDGED["good"], 1)
+    closed = _warnings(caplog)
+    assert still_open == [BEGAN]
+    assert closed == [BEGAN, _over(2)]
+
+
+@pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")
+@pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+def test_a_stretch_writes_its_first_reason_and_counts_every_window_whatever_its_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Four refusals in a row for four reasons: one line, the first reason, and a count of 4."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    _grade_array(processor, NOT_FINITE)
+    _grade(processor, CLEAN, 1e-9)
+    _grade(processor, _with(CLEAN, {4000: 1e200}))
+    _grade(processor, CLEAN[: FS - 1])
+    during = _warnings(caplog)
+    _grade_many(processor, JUDGED["good"], CLEAR)
+    after = _warnings(caplog)
+    assert during == [BEGAN]
+    assert after == [BEGAN, _over(4)]
+
+
+def test_a_stretch_that_is_over_leaves_the_next_one_its_own_two_lines(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    _grade_many(processor, NOT_FINITE, 3)
+    _grade_many(processor, JUDGED["good"], CLEAR)
+    _grade(processor, CLEAN[: FS - 1])
+    _grade_many(processor, JUDGED["flat"], CLEAR)
+    said = _warnings(caplog)
+    assert said == [
+        BEGAN,
+        _over(3),
+        "ECG window not graded: 999 samples are less than a second at 1000 Hz",
+        _over(1),
+    ]
+
+
+def test_judged_windows_alone_write_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    """No stretch, no line: not after 25 judged windows either."""
+    caplog.set_level(logging.WARNING, logger=MODULE_NAME)
+    processor = _ecg_processor()
+    for window in JUDGED.values():
+        _grade_many(processor, window, CLEAR + 5)
+    said = _warnings(caplog)
+    assert said == []
+
+
+class Lines(logging.Handler):
+    """What the module writes at WARNING, for a property that cannot use ``caplog``."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.lines: list[str] = []
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+SHORT_GOOD: Final[dsp.Signal] = dsp.as_signal(CLEAN[:FS])
+SHORT_NOT_FINITE: Final[dsp.Signal] = dsp.as_signal(_with(CLEAN[:FS], {500: math.nan}))
+"""One-second windows, the shortest the grader judges: the property grades thousands."""
+
+
+@settings(deadline=None, max_examples=80, suppress_health_check=[HealthCheck.too_slow])
+@given(pattern=st.lists(st.booleans(), max_size=160))
+def test_property_the_log_holds_at_most_two_lines_per_twenty_six_windows(
+    pattern: list[bool],
+) -> None:
+    """Whatever the order of gradable and ungradable windows, the log is bounded.
+
+    A stretch that was closed took at least one ungradable window and 25
+    judged ones, and wrote two lines; at most one stretch is still open, with
+    one line. The lines alternate, open then close, and every ungradable
+    window is counted exactly once by the line that closes its stretch.
+    """
+    module_log = logging.getLogger(MODULE_NAME)
+    written = Lines()
+    module_log.addHandler(written)
+    try:
+        processor = _ecg_processor()
+        for ungradable in pattern:
+            _grade_array(processor, SHORT_NOT_FINITE if ungradable else SHORT_GOOD)
+    finally:
+        module_log.removeHandler(written)
+
+    lines = written.lines
+    opened, closed = lines[0::2], lines[1::2]
+    counted = sum(int(line.split()[5]) for line in closed)
+    refused = pattern.count(True)
+    assert len(lines) <= 2 * (len(pattern) // (CLEAR + 1)) + 1
+    assert all(line.startswith("ECG window not graded: ") for line in opened)
+    assert all(line.startswith("ECG windows graded again after ") for line in closed)
+    if len(lines) % 2 == 0:
+        assert counted == refused
+    else:
+        assert counted < refused
 
 
 # =========================================================================
@@ -462,9 +814,13 @@ def test_a_non_finite_sample_gives_fresh_no_signal_readings_until_it_leaves_the_
     rate was re-emitted for 8 s with a frozen freshness counter. Now each of
     those 40 batches is a fresh reading that says ``no_signal`` and carries no
     rate; the rate is back with the first window the sample has left.
+
+    The log holds two lines for the whole episode, not forty: one for the
+    first window refused (6.2 s long then, the window was still filling),
+    one five seconds of judged windows after the last, with the count.
     """
     caplog.set_level(logging.WARNING, logger=MODULE_NAME)
-    stream = _with(_ecg(70.0, 71 * BLOCK), {30 * BLOCK + 50: math.nan})
+    stream = _with(_ecg(70.0, (71 + CLEAR) * BLOCK), {30 * BLOCK + 50: math.nan})
     seen = _feed(_ecg_processor(), stream)
     said = _warnings(caplog)
 
@@ -475,16 +831,13 @@ def test_a_non_finite_sample_gives_fresh_no_signal_readings_until_it_leaves_the_
     poisoned = seen[30:70]
     assert [metrics for _, metrics in poisoned] == [{QUALITY_KEY: NO_SIGNAL}] * 40
     assert [seq for seq, _ in poisoned] == list(range(before_seq + 1, before_seq + 41))
-    # One line per window, with its size while it fills (6.2 s, then 8 s) and no sample value.
-    held = [min(WINDOW, (batch + 1) * BLOCK) for batch in range(30, 70)]
-    assert said == [
-        f"ECG window not graded: 1 of its {size} samples are not finite" for size in held
-    ]
 
     after_seq, after = seen[70]
     assert after_seq == before_seq + 41
     assert after[QUALITY_KEY] == GOOD
     assert abs(_rate(after) - 70) <= 2
+
+    assert said == ["ECG window not graded: 1 of its 6200 samples are not finite", _over(40)]
 
 
 def test_a_window_that_cannot_be_graded_never_reaches_biosppy(

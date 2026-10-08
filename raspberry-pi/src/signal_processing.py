@@ -81,6 +81,13 @@ SENSOR_SPECS: dict[str, ChannelSpec] = {
 }
 DEFAULT_SPEC = ChannelSpec("bandpass", [3.0, 45.0], "raw", None, None)
 
+# How many ECG windows in a row the quality grade must judge before a stretch
+# of windows it could not judge is reported as over. The grade runs once per
+# batch (five a second in the console), so 25 windows are five seconds. It is
+# also what bounds the log: one line when a stretch begins and one when it is
+# over, so never more than two lines per 26 windows, whatever the windows are.
+UNGRADED_CLEAR_WINDOWS = 25
+
 
 class ChannelProcessor:
     """Stateful streaming treatment for a single channel."""
@@ -115,6 +122,14 @@ class ChannelProcessor:
         # metrics again" must not read as "a new measurement" downstream. Read
         # through SignalTreatment.metric_seq(); the runtime ignores a repeat.
         self._metric_seq = 0
+
+        # Bounded report of the ECG windows the quality grade could not judge
+        # (see _not_graded and _judged): how many in the stretch being reported
+        # (0: none open), and how many windows were judged in a row since the
+        # last of them (read only while a stretch is open; every ungradable
+        # window sets it back to 0).
+        self._ungraded = 0
+        self._judged_since = 0
 
     def process(self, raw: list[float]) -> tuple[list[float], dict]:
         """Treat a batch of raw ADC samples.
@@ -218,47 +233,84 @@ class ChannelProcessor:
         returned only when every test below could be run and was passed. A
         window that cannot be judged (not one-dimensional, shorter than a
         second, holding a NaN or an infinity, or whose mains test cannot be
-        computed) is ``no_signal``, with the reason in the log: "I do not
-        know" never reads as "fine". Every comparison against NaN is false, so
-        a non-finite window is refused before the tests that compare.
+        computed) is ``no_signal``: "I do not know" never reads as "fine".
+        Every comparison against NaN is false, so a non-finite window is
+        refused before the tests that compare.
+
+        Each refusal goes through :meth:`_not_graded` and each judged window
+        through :meth:`_judged`: the log gets the reason when a stretch of
+        ungradable windows begins and their number once it is over, never a
+        line per window.
         """
-        if raw.ndim != 1 or raw.size < self.fs_in:
+        if raw.ndim != 1:
+            self._not_graded(f"{raw.ndim} dimensions where a signal has one")
+            return "no_signal"
+        if raw.size < self.fs_in:
+            self._not_graded(f"{raw.size} samples are less than a second at {self.fs_in} Hz")
             return "no_signal"
         finite = int(np.count_nonzero(np.isfinite(raw)))
         if finite != raw.size:
-            logger.warning(
-                "ECG window not graded: %d of its %d samples are not finite",
-                raw.size - finite,
-                raw.size,
-            )
+            self._not_graded(f"{raw.size - finite} of its {raw.size} samples are not finite")
             return "no_signal"
         if np.std(raw) < 3 or (raw.max() - raw.min()) <= 5:
+            self._judged()
             return "no_signal"
         clip = float(np.mean((raw <= 3) | (raw >= 1020)))
         if clip > 0.5:
+            self._judged()
             return "noisy"
         removed = self._mains_share(raw, mains_hz)
         if removed is None:
             return "no_signal"
+        self._judged()
         if removed > 0.6:
             return "mains_dominated"
         return "good"
+
+    def _not_graded(self, reason: str) -> None:
+        """Count a window the grade could not judge; write why when a stretch of them begins.
+
+        One warning for the first window of a stretch, with its reason, and
+        none for those that follow: a non-finite sample stays eight seconds in
+        the window, and a line per window would be five lines a second on the
+        Pi's SD card for as long as the cause lasts. :meth:`_judged` writes
+        the line that closes the stretch. The reason never holds a sample
+        value: counts, rates and scipy's own message only.
+        """
+        if self._ungraded == 0:
+            logger.warning("ECG window not graded: %s", reason)
+        self._ungraded += 1
+        self._judged_since = 0
+
+    def _judged(self) -> None:
+        """Count a window the grade could judge; close a stretch of windows it could not.
+
+        A stretch is over once :data:`UNGRADED_CLEAR_WINDOWS` windows in a row
+        were judged: one warning then says how many were not. Counting them in
+        a row is what bounds the log: an ungradable window now and then
+        cannot write a line each.
+        """
+        if self._ungraded == 0:
+            return
+        self._judged_since += 1
+        if self._judged_since >= UNGRADED_CLEAR_WINDOWS:
+            logger.warning("ECG windows graded again after %d that could not be", self._ungraded)
+            self._ungraded = 0
 
     def _mains_share(self, raw: np.ndarray, mains_hz: float) -> float | None:
         """Share of the DC-corrected variance that a notch at ``mains_hz`` removes.
 
         Above 0.6 the electrodes are picking up powerline hum instead of the
-        heart. ``None``, with the reason in the log, when the share cannot be
-        established: a mains frequency no notch can be designed for at this
-        sampling rate (NaN included), a filter scipy refuses, or a variance
-        that is not a finite positive number. The caller must not grade such
-        a window ``good``.
+        heart. ``None``, with the reason handed to :meth:`_not_graded`, when
+        the share cannot be established: a mains frequency no notch can be
+        designed for at this sampling rate (NaN included), a filter scipy
+        refuses, or a variance that is not a finite positive number (of the
+        window, which would be divided by, or of what the notch gave back).
+        The caller must not grade such a window ``good``.
         """
         if not 0 < mains_hz < self.fs_in * 0.45:
-            logger.warning(
-                "ECG window not graded: no mains notch at %s Hz for a signal sampled at %s Hz",
-                mains_hz,
-                self.fs_in,
+            self._not_graded(
+                f"no mains notch at {mains_hz} Hz for a signal sampled at {self.fs_in} Hz"
             )
             return None
         hp = raw - float(np.mean(raw))
@@ -269,12 +321,12 @@ class ChannelProcessor:
             # What scipy raises when it refuses a filter or a signal: a
             # frequency out of range, an unstable notch, a signal shorter than
             # the filter's padding.
-            logger.warning("ECG window not graded: the mains notch failed: %s", e)
+            self._not_graded(f"the mains notch failed: {e}")
             return None
         vh = float(np.var(hp))
         vn = float(np.var(notched))
         if not (math.isfinite(vh) and math.isfinite(vn) and vh > 0):
-            logger.warning("ECG window not graded: its variance is not a finite positive number")
+            self._not_graded("its variance is not a finite positive number")
             return None
         return 1 - vn / vh
 
