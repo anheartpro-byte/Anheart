@@ -146,8 +146,10 @@ ignore = [
 # Same module excluded from the type checkers (see the banner at the top of
 # this file). Listed per-file rather than globally so the rules stay live for
 # every migrated module, and so removing a file from this block is part of
-# migrating it.
-"src/signal_processing.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR0911", "PLR0912", "PLR2004", "S110", "SIM105", "TRY300", "TRY400"]
+# migrating it. S110 and SIM105 (an exception swallowed without a word) are
+# no longer waived: the quality grade of this module must never fall back to
+# "good" in silence.
+"src/signal_processing.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR0911", "PLR0912", "PLR2004", "TRY300", "TRY400"]
 
 [tool.ruff.lint.flake8-bugbear]
 # NewType constructors are identity functions erased at runtime, so using one
@@ -250,10 +252,11 @@ include = [
     "src/sensors/*",
     "src/presence/*",
     "src/record/*",
-    # signal_processing.py belongs here and is NOT exempt: see [tool.anheart]
-    # coverage_pending below. It is listed there instead of here so the gate
-    # has real teeth on migrated code today rather than being switched off
-    # entirely while it is converted.
+    # The legacy ECG treatment: the quality grade that decides whether a heart
+    # rate is extracted at all, and that extraction (BioSPPy). Still outside
+    # the type checkers (see the banner at the top of this file), no longer
+    # outside this gate.
+    "src/signal_processing.py",
 ]
 fail_under = 100
 # `# pragma: no cover` is intentionally NOT an exclusion for the safety chain:
@@ -269,14 +272,13 @@ exclude_also = [
 # =========================================================================
 [tool.anheart]
 # Safety-chain modules that are NOT yet under the 100% branch-coverage gate.
-# The heart rate that commands the motor passes through both, so both must end
-# up covered; they are pinned here so the debt is explicit and a test fails if
-# this list ever grows or goes stale.
-coverage_pending = [
-    "src/signal_processing.py",
-]
+# None today: every module of the chain is in the include list above. The list
+# stays, empty, because it is the only other place a module of the chain may
+# be: a test fails if it ever grows or goes stale, and the quality report of
+# the CI reads it to name what the threshold leaves out.
+coverage_pending = []
 
-# The full set the gate must eventually cover: include + coverage_pending.
+# The full set the gate must cover: include + coverage_pending.
 safety_chain = [
     "src/units.py",
     "src/result.py",

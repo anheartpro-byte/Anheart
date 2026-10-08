@@ -163,15 +163,11 @@ def test_basedpyright_is_configured_strictly() -> None:
         assert config.get(report) == "error", f"basedpyright {report} must stay an error"
 
 
-#: Safety-chain modules still outside the coverage gate. Pinned here so the
-#: debt can only be paid down, never quietly extended: adding a module to
-#: pyproject.toml's coverage_pending without editing this literal fails the
-#: test below.
-EXPECTED_COVERAGE_PENDING: frozenset[str] = frozenset(
-    {
-        "src/signal_processing.py",
-    }
-)
+#: Safety-chain modules still outside the coverage gate: none, since the
+#: legacy ECG treatment (src/signal_processing.py) came under it. Pinned here
+#: so the debt can never quietly come back: adding a module to pyproject.toml's
+#: coverage_pending without editing this literal fails the test below.
+EXPECTED_COVERAGE_PENDING: frozenset[str] = frozenset()
 
 
 def test_coverage_gate_is_set_to_one_hundred_percent() -> None:
