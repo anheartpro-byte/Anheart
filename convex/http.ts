@@ -45,14 +45,19 @@ http.route({
       software_version?: unknown;
     } = {};
 
-    try {
-      const text = await req.text();
-      if (text) {
-        body = JSON.parse(text);
-      }
-    } catch {
-      // Empty or invalid body is OK - use defaults
+    // An empty body is a heartbeat without a field. Anything else is refused
+    // before anything is recorded, unless it is a JSON object whose stored
+    // fields have their type: text that is not JSON, JSON that is not an
+    // object, a battery level that is not a number.
+    const sent = await readOptionalJson(req);
+    if (sent === null || !validHeartbeatFields(sent)) {
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected an empty body or {batteryLevel?: number, wifiStrength?: number, activeSessionId?: string, ...}",
+      );
     }
+    body = sent as typeof body;
 
     // Record the heartbeat
     await ctx.runMutation(internal.machines.recordHeartbeat, {
@@ -118,14 +123,35 @@ function refuse(
   return machineErrorResponse(status, code, message);
 }
 
+/** True for what JSON calls an object: not null, not an array, not a scalar. */
+function isJsonObject(parsed: unknown): parsed is Record<string, unknown> {
+  return (
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+  );
+}
+
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = await req.json();
-    return typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The body of a route that may be sent without one: `{}` for an empty body,
+ * the object it carries, or null for anything else (text that is not JSON,
+ * JSON that is not an object).
+ */
+async function readOptionalJson(
+  req: Request,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const text = await req.text();
+    if (text === "") return {};
+    const parsed: unknown = JSON.parse(text);
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -136,6 +162,15 @@ function isNum(x: unknown): x is number {
 }
 function isStr(x: unknown): x is string {
   return typeof x === "string";
+}
+
+/** The fields of a heartbeat that are stored as sent: each absent, or of its type. */
+function validHeartbeatFields(sent: Record<string, unknown>): boolean {
+  return (
+    (sent.batteryLevel === undefined || isNum(sent.batteryLevel)) &&
+    (sent.wifiStrength === undefined || isNum(sent.wifiStrength)) &&
+    (sent.activeSessionId === undefined || isStr(sent.activeSessionId))
+  );
 }
 
 function validLive(live: unknown): live is Infer<typeof liveStateValidator> {

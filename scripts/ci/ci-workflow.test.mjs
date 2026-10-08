@@ -108,6 +108,23 @@ test("the Convex functions are type-checked before their tests", () => {
   assert.ok(typecheck > 0 && typecheck < steps.indexOf("run: npm run test:convex -- "));
 });
 
+// The committed bindings of the Convex functions (ANH-195). The check has no
+// job of its own: a step of `convex-tests` fails that required job. What
+// follows holds that nothing softens the step, and that it comes first.
+test("the committed bindings of Convex are checked by `convex-tests`, before its type-check", () => {
+  const name = "Check the committed bindings of the Convex functions";
+  const step = stepsOf("convex-tests").find((text) => text.startsWith(`name: ${name}\n`)) ?? "";
+  assert.match(step, /^ {8}run: node scripts\/ci\/convex-generated-api\.mjs$/m, `convex-tests: no step "${name}"`);
+  // It checks and never rewrites; nothing lets the job pass when it fails, and no condition skips it.
+  assert.doesNotMatch(step, /continue-on-error|--write/);
+  assert.equal(stepCondition("convex-tests", name), undefined);
+  const steps = jobs.get("convex-tests") ?? "";
+  assert.ok(steps.indexOf(`- name: ${name}\n`) > steps.indexOf("run: npm ci\n"));
+  assert.ok(steps.indexOf(`- name: ${name}\n`) < steps.indexOf("run: npx tsc -p convex/tsconfig.json --noEmit\n"));
+  // The workflow asks the Convex command line for nothing: it has no deployment, and must reach none.
+  assert.doesNotMatch(workflow, /\bconvex (dev|deploy|codegen|run)\b|CONVEX_DEPLOY/);
+});
+
 test("the parts of the simulation battery name every share exactly once", () => {
   const count = Number(/^ {2}SIMULATION_SHARES: '(\d+)'$/m.exec(workflow)?.[1]);
   assert.ok(Number.isInteger(count) && count > 0);

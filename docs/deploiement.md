@@ -191,8 +191,13 @@ Avant de le lancer :
    `updateMachine` refusent maintenant l'argument `config` que l'ancien site
    envoie. Tant que l'ancien site tourne contre le nouveau Convex, son bouton
    « Nouvelle session », la fin d'un enregistrement, et la création ou la
-   modification d'une machine échouent. Les autres fonctions gardent leur nom
-   et leurs arguments ; `sessions.listSessions` renvoie deux champs de plus
+   modification d'une machine échouent. **La page d'une machine et sa fenêtre
+   de modification échouent aussi**, dès le déploiement de Convex et avant
+   toute migration : l'ancien site y affiche les réglages de l'enregistreur
+   (`machine.config`), que `machines.getMachine` ne renvoie plus. La liste des
+   machines, elle, s'affiche, avec sa fenêtre de création (qui échoue à
+   l'envoi, comme dit plus haut). Les autres fonctions gardent leur nom et
+   leurs arguments ; `sessions.listSessions` renvoie deux champs de plus
    (`kind`, `origin`).
 3. Fusionner dans `main` ne déploie plus le site : il se déploie par le bouton
    « Déployer en production (main) » ([§5.1](#51-comment-il-se-déploie)).
