@@ -3,8 +3,9 @@
 Loaded only by ``pi_gate_parallel.py`` (``-p pi_gate_shard``), never by a
 plain pytest run. Each process collects the WHOLE suite, exactly as the serial
 gate does, then keeps the tests that belong to it and hands the rest back to
-pytest as deselected. Two suites are dealt out this way, each by its own rule:
-the Pi suite (the default) and the simulation battery (``--pi-gate-suite``).
+pytest as deselected. Two suites are dealt out this way, each by its own rule
+(``pi_owners``, ``simulation_owners``): the Pi suite (the default) and the
+simulation battery (``--pi-gate-suite``).
 
 Nothing here decides whether the gate passes. The plugin only writes down two
 facts, which ``pi_gate_parallel.py`` checks afterwards without trusting the
@@ -72,6 +73,122 @@ given the same number. One process runs its tests one after the other, which
 is the only guarantee two processes cannot give. A name listed here that is no
 longer collected stops the run: a stale entry would silently give the
 guarantee up.
+"""
+
+PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
+    "tests/test_cloud_contract.py": {
+        "test_nothing_else_from_a_dashboard_of_another_major_touches_a_running_session": 16,
+    },
+    "tests/test_cooldown_freeze_console.py": {
+        "test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 41,
+    },
+    "tests/test_failure_drive.py": {
+        "test_comms_loss_at_every_programme_phase_goes_silent[recovery]": 37,
+        "test_comms_loss_at_every_programme_phase_goes_silent[cooldown]": 31,
+        "test_comms_loss_at_every_programme_phase_goes_silent[hold]": 22,
+        "test_a_refused_disable_at_standstill_is_shown_to_the_operator": 11,
+        "test_comms_loss_at_every_programme_phase_goes_silent[warmup]": 11,
+        "test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic": 10,
+        "test_a_measured_speed_that_does_not_follow_trips_tracking_error": 10,
+        "test_comms_loss_in_a_manual_session_goes_silent_and_tto_stops_it[stopping]": 10,
+    },
+    "tests/test_failure_ecg.py": {
+        "test_a_signal_the_dsp_cannot_read_ends_on_hr_stale[corrupted_garbage]": 44,
+        "test_a_permanent_disconnect_at_every_phase_ends_on_hr_stale[recovery]": 34,
+        "test_a_permanent_disconnect_at_every_phase_ends_on_hr_stale[cooldown]": 28,
+        "test_a_permanent_disconnect_at_every_phase_ends_on_hr_stale[hold]": 19,
+        "test_a_signal_the_dsp_cannot_read_ends_on_hr_stale[nan_values]": 16,
+        "test_a_signal_the_dsp_cannot_read_ends_on_hr_stale[saturated]": 14,
+        "test_a_signal_the_dsp_cannot_read_ends_on_hr_stale[flat_line_electrodes_off]": 13,
+        "test_a_signal_the_dsp_cannot_read_ends_on_hr_stale[mains_50hz]": 13,
+        "test_gapped_samples_never_yield_a_false_good_heart_rate": 12,
+        "test_a_transient_disconnect_reconnects_and_the_session_carries_on": 10,
+    },
+    "tests/test_local_panel_e2e.py": {
+        "test_manual_0_300_150_0_ramps_conform_then_stop_zeroes_the_target": 32,
+        "test_a_comms_loss_goes_silent_and_nothing_resumes": 23,
+    },
+    "tests/test_manual_target_held_console.py": {
+        "test_with_a_rider_the_console_follows_a_first_target_and_refuses_one_without_a_rate": 27,
+        "test_with_a_rider_the_console_announces_a_hold_before_a_target_is_typed": 10,
+    },
+    "tests/test_panel_presence.py": {
+        "test_an_intrusion_while_turning_stops_the_motor": 11,
+    },
+    "tests/test_record_endurance.py": {
+        "test_ex10_a_few_sessions_show_no_accumulation_and_no_drift": 20,
+    },
+    "tests/test_record_session.py": {
+        "test_a_drive_fault_is_an_event_with_its_mnemonic_and_its_code": 24,
+    },
+    "tests/test_record_tick_isolation.py": {
+        "test_ex2_the_tick_takes_the_same_time_with_the_writer_active": 44,
+        "test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupied_session": 27,
+        "test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loop": 15,
+    },
+    "tests/test_runtime.py": {
+        "test_a_whole_session_actually_holds_the_occupant_in_the_zone": 20,
+        "test_a_whole_session_walks_the_phases_in_order_and_on_the_timeline": 20,
+        "test_the_setpoint_stays_inside_its_domain_for_a_whole_session": 20,
+        "test_a_phase_transition_does_not_step_the_setpoint": 13,
+    },
+    "tests/test_runtime_cooldown_freeze.py": {
+        "test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast": 44,
+        (
+            "test_on_the_shipped_programme_the_descent_under_a_freeze_is_never_behind_the_"
+            "ordinary_one"
+        ): 29,
+        "test_whenever_a_freeze_is_latched_the_programme_ends_on_time_and_never_rises": 29,
+        "test_the_shipped_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 20,
+    },
+    "tests/test_runtime_session_overrun.py": {
+        "test_the_shipped_programme_then_twice_its_length_at_rest_and_a_new_start": 26,
+        "test_whatever_ends_a_session_before_its_deadline_the_rest_latches_nothing_more": 19,
+    },
+    "tests/test_runtime_standstill.py": {
+        "test_a_heart_rate_drifting_above_the_zone_until_standstill_ends_the_session": 12,
+        "test_the_last_step_taken_by_the_regulation_after_a_warning_ends_the_session": 11,
+        "test_the_regulation_still_lowers_and_raises_the_speed_of_a_turning_arm": 10,
+    },
+    "tests/test_safety.py": {
+        "test_isolated_outliers_never_trip_the_rate_rule": 12,
+    },
+    "tests/test_safety_session_overrun.py": {
+        "test_a_session_that_is_over_is_not_judged_however_long_ago_it_started[Phase.BASELINE]": 11,
+        "test_a_session_that_is_over_is_not_judged_however_long_ago_it_started[Phase.HOLD]": 11,
+        "test_a_session_that_is_over_is_not_judged_however_long_ago_it_started[Phase.RECOVERY]": 11,
+    },
+    "tests/test_sensor_emg.py": {
+        "test_a_clean_generator_is_graded_good_nearly_always": 11,
+    },
+    "tests/test_session_overrun_console.py": {
+        "test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_takes_a_start": 60,
+        "test_a_programme_started_at_the_console_and_left_at_rest_takes_a_launch_from_the_site": 50,
+        "test_an_overrun_raised_by_a_late_stop_is_acknowledged_for_good_once_at_rest": 28,
+    },
+    "tests/test_standstill_console.py": {
+        "test_after_a_standstill_the_console_restarts_nothing_and_refuses_every_start": 18,
+    },
+}
+"""The slowest tests of the Pi, by file, in seconds: every one of ten seconds or more.
+
+Measured on CI (run 37706142121 of 8 October 2026, the first whose tests ran as
+eight shares on two runners; the seconds of the slower runner, 2.07 times
+slower on the 67 cases both ran, are brought to the faster one). A name
+without a parameter is every case of that test, each taken to cost that much;
+a name with one is that case alone, for the tests whose cases differ: a
+programme cut short at its last phase runs for six times as long as one cut
+at its first.
+
+These 52 lines name 119 of the 4267 tests and two thirds of their time. Dealt
+by their position alone, the long cases of several tests met in the same
+shares, and shares 4 to 7 had a third more work than shares 0 to 3 (1568 s
+against 1166 s, on one runner). The numbers only steer the dealing. A name
+that is no longer collected is ignored, a slow test that is
+not listed is dealt like any other: both show as an unbalanced gate, in the
+``--durations`` each process prints and in the JUnit file it leaves, never as
+a wrong verdict. To refresh the table, read those files (``junit-<share>.xml``
+in the ``pi-evidence-*`` artifacts of a run).
 """
 
 ALONE_IN_PROCESS_ZERO: Final[frozenset[str]] = frozenset({"tests/test_cohort.py"})
@@ -155,6 +272,41 @@ def shared_run(nodeid: str) -> str:
     return nodeid
 
 
+def pi_seconds(nodeid: str) -> int:
+    """What ``PI_SLOW_SECONDS`` takes a test of the Pi to cost; 0 when it does not list it."""
+    file, _, test = nodeid.partition("::")
+    listed = PI_SLOW_SECONDS.get(file, {})
+    return listed.get(test, listed.get(test.partition("[")[0], 0))
+
+
+def pi_owners(nodeids: Sequence[str], count: int) -> Sequence[int]:
+    """The process that runs each test of the Pi, in collection order.
+
+    Three rules, all of them about time only: whatever comes out of here, the
+    runner still proves from the processes' own records that every test ran
+    exactly once.
+
+    * the tests of ``SAME_PROCESS`` go to process 0;
+    * the tests ``PI_SLOW_SECONDS`` lists go, slowest first, each to the
+      process that has the least of them so far, so that every process is
+      handed about the same number of their seconds;
+    * every other test goes by its position in the collection, in turn, as
+      all of them did before that table: a run of parametrized cases is
+      spread over every process instead of landing in one.
+    """
+    load = dict.fromkeys(range(count), 0)
+    owner_of: dict[str, int] = {}
+    slow = [nodeid for nodeid in nodeids if nodeid not in SAME_PROCESS and pi_seconds(nodeid)]
+    # sorted() keeps the order of equal keys: tests of the same cost stay as collected.
+    for nodeid in sorted(slow, key=lambda nodeid: -pi_seconds(nodeid)):
+        owner_of[nodeid] = min(load, key=lambda process: (load[process], process))
+        load[owner_of[nodeid]] += pi_seconds(nodeid)
+    return [
+        0 if nodeid in SAME_PROCESS else owner_of.get(nodeid, position % count)
+        for position, nodeid in enumerate(nodeids)
+    ]
+
+
 def simulation_owners(nodeids: Sequence[str], count: int) -> Sequence[int]:
     """The process that runs each simulation test, in collection order.
 
@@ -197,10 +349,11 @@ class Share:
     suite: Suite = Suite.PI
 
     def owns(self, position: int, nodeid: str) -> bool:
-        """Whether the Pi test collected at ``position`` belongs to this process.
+        """Whether a Pi test dealt by its ``position`` in the collection belongs to this process.
 
         Positions are dealt out in turn, so a run of slow parametrized cases is
-        spread over every process instead of landing in one.
+        spread over every process instead of landing in one. This is the rule
+        of every test ``PI_SLOW_SECONDS`` does not list (see ``pi_owners``).
         """
         owner = 0 if nodeid in SAME_PROCESS else position % self.count
         return owner == self.index
@@ -209,7 +362,8 @@ class Share:
         """For each collected test, in order, whether this process runs it."""
         match self.suite:
             case Suite.PI:
-                return [self.owns(position, nodeid) for position, nodeid in enumerate(nodeids)]
+                owners = pi_owners(nodeids, self.count)
+                return [owner == self.index for owner in owners]
             case Suite.SIMULATION:
                 owners = simulation_owners(nodeids, self.count)
                 return [owner == self.index for owner in owners]
