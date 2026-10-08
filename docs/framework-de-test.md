@@ -1503,11 +1503,12 @@ des durées, au début de cette section 15).
 
 La batterie est maintenant coupée en 13 parts. Le lanceur et le greffon sont
 ceux de la gate Pi (`scripts/ci/pi_gate_parallel.py` et
-`scripts/ci/pi_gate_shard.py`, voir la section précédente) : chaque part est un
+`scripts/ci/pi_gate_shard.py`, voir
+[Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)) : chaque part est un
 processus pytest indépendant qui collecte toute la suite, n'exécute que ses
 tests, écrit ce qu'il a collecté et exécuté, et mesure sa propre couverture.
-Deux choses changent par rapport à la gate Pi : les parts sont exécutées par
-plusieurs jobs, et la règle de partage est celle de la simulation.
+Les parts sont exécutées par plusieurs jobs, ce que la gate Pi fait aussi
+depuis ANH-183, et la règle de partage est celle de la simulation.
 
 | Job | Parts | Ce qu'il exécute |
 |---|---|---|
