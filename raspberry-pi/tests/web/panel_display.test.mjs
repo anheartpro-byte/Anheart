@@ -241,6 +241,8 @@ function panelRow(overrides = {}) {
     radius_m: 1.5,
     gear_ratio: 49.79,
     motor_max_rpm: 300,
+    software_version: "pi-0.0.0-dev",
+    dashboard: { state: "not_configured", label: "non configure", detail: "", last_answer_age_s: null },
     ...overrides,
   };
 }

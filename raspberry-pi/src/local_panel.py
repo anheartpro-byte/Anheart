@@ -124,7 +124,7 @@ from src.cloud_sync import (
     SessionListener,
     StartedSession,
 )
-from src.contract import read_software_version
+from src.contract import SoftwareVersion, read_software_version
 from src.control_surface import (
     LOCAL_SUBJECT,
     ControlSurface,
@@ -142,15 +142,18 @@ from src.ecg_pipeline import (
     load_treatment,
     treat_off_loop,
 )
+from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     DEFAULT_HR_CRITICAL_BPM,
     DEFAULT_HR_HARD_MAX_BPM,
+    RETIRED_KEYS,
     CameraSource,
     CloudConfig,
     EcgSource,
     LocalConfig,
     MotorBackend,
     load_local_config,
+    retired_keys,
 )
 from src.motor.atv320 import ATV320Drive, serial_master
 from src.motor.drive import DriveBackend
@@ -462,22 +465,36 @@ def recorded_tap(first: BatchTap, recorder: SessionRecorder) -> BatchTap:
 class PanelReporter:
     """Builds :class:`~src.panel_status.PanelStatus` on request. Reads only."""
 
-    __slots__ = ("_clock", "_config", "_ecg", "_runtime")
+    __slots__ = ("_clock", "_config", "_dashboard", "_ecg", "_runtime", "_software_version")
 
     def __init__(
-        self, *, clock: Clock, config: LocalConfig, runtime: TrainingRuntime, ecg: EcgLink
+        self,
+        *,
+        clock: Clock,
+        config: LocalConfig,
+        runtime: TrainingRuntime,
+        ecg: EcgLink,
+        software_version: SoftwareVersion,
+        dashboard: LinkHealth | None,
     ) -> None:
+        """``software_version``: what this build calls itself, read once at startup.
+        ``dashboard``: what the dashboard link last heard of itself, which that link
+        alone writes; ``None`` on a console that has no machine key."""
         self._clock: Clock = clock
         self._config: LocalConfig = config
         self._runtime: TrainingRuntime = runtime
         self._ecg: EcgLink = ecg
+        self._software_version: SoftwareVersion = software_version
+        self._dashboard: LinkHealth | None = dashboard
 
     def panel_status(self) -> PanelStatus:
         """The link panel, now."""
         config = self._config
         link = config.drive_link
+        now = self._clock.monotonic()
+        dashboard = self._dashboard
         return PanelStatus(
-            at=self._clock.monotonic(),
+            at=now,
             motion_enabled=True,
             programs_enabled=config.programs_enabled,
             motor_backend=config.motor_backend,
@@ -489,6 +506,8 @@ class PanelReporter:
             radius=config.geometry.radius,
             ratio=config.geometry.ratio,
             motor_max_rpm=config.motor_max_rpm,
+            software_version=self._software_version,
+            dashboard=NOT_CONFIGURED if dashboard is None else dashboard.status(now),
         )
 
 
@@ -1168,7 +1187,15 @@ def build_panel(
     the runtime is given what that returns, which is the backend itself when
     it reports its own exchanges, and a delegating tap otherwise. The SDK's
     transport calls are kept only when ``RECORD_DRIVE_SDK_FRAMES`` asks.
+
+    The build's version is read here, once (``raspberry-pi/VERSION``): startup
+    I/O, with nothing turning. The page, the heartbeat and every record's
+    manifest are given that one value.
     """
+    version = read_software_version()
+    # What the dashboard link hears of itself, for the page. The link writes
+    # it from its own task, the page's route reads it: both on the event loop.
+    link_health = None if config.cloud is None else LinkHealth(clock.monotonic())
     motion = load_panel_motion_limits(config)
     drive = build_drive(config, clock) if drive is None else drive
     safety = SafetyLimits(
@@ -1202,6 +1229,7 @@ def build_panel(
             motion=motion,
             drive=drive,
             ecg=ecg_side,
+            software_version=version,
         )
     )
     # ONE supervisor: the surface latches the runtime's own. And the runtime
@@ -1241,7 +1269,14 @@ def build_panel(
         bridge=bridge,
         link_stats=ecg_side.link_stats,
     )
-    reporter = PanelReporter(clock=clock, config=config, runtime=runtime, ecg=ecg)
+    reporter = PanelReporter(
+        clock=clock,
+        config=config,
+        runtime=runtime,
+        ecg=ecg,
+        software_version=version,
+        dashboard=link_health,
+    )
     services = Services(
         clock=clock,
         surface=surface,
@@ -1275,9 +1310,10 @@ def build_panel(
             store=store,
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
-            software_version=read_software_version(),
+            software_version=version,
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
+            link=link_health,
         )
     return LocalPanel(
         clock=clock,
@@ -1341,15 +1377,17 @@ def build_recorder(
     motion: MotionLimits,
     drive: DriveSide,
     ecg: EcgSide,
+    software_version: SoftwareVersion,
 ) -> SessionRecorder:
-    """The session record's loop side, stamped with the configuration actually applied."""
+    """The session record's loop side, stamped with the configuration actually applied
+    and with the version of this build."""
     simulator = drive.simulator
     radius = config.geometry.radius
     leg_tip = config.leg_tip_radius
     return SessionRecorder(
         clock=clock,
         journal=journal,
-        stamp=stamp_for(config, RUNTIME_LIMITS, safety, motion),
+        stamp=stamp_for(config, RUNTIME_LIMITS, safety, motion, software_version),
         radius=radius,
         leg_tip=radius if leg_tip is None else Metres(max(float(leg_tip), float(radius))),
         sim_state=None if simulator is None else _sim_state_of(simulator),
@@ -1699,6 +1737,8 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     env = load_environment() if environ is None else environ
+    for key in retired_keys(env):
+        _logger.warning("configuration: %s is set and no longer read: %s", key, RETIRED_KEYS[key])
     loaded = load_local_config(env)
     if isinstance(loaded, Err):
         for problem in loaded.error:

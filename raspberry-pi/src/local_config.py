@@ -42,9 +42,13 @@ The session record (the local black box) has its own keys, all optional:
 ``RECORD_LOCAL_RETENTION_DAYS`` (default 30: how long a record already
 deposited AND confirmed is kept; one that was not is never purged),
 ``RECORD_MACHINE_ID`` / ``RECORD_ORGANIZATION_ID`` (opaque identifiers written
-in the manifest, ``unassigned`` when unset), ``ANHEART_SOFTWARE_VERSION``, and
-``RECORD_DRIVE_SDK_FRAMES`` (default ``false``: a bench diagnostic that also
-records the Modbus SDK's transport calls, at about four times the lines).
+in the manifest, ``unassigned`` when unset), and ``RECORD_DRIVE_SDK_FRAMES``
+(default ``false``: a bench diagnostic that also records the Modbus SDK's
+transport calls, at about four times the lines). The software version the
+manifest carries is not a key: it is a fact about the build, read from
+``raspberry-pi/VERSION`` (:func:`src.contract.read_software_version`), the
+same value the console shows and announces to the dashboard. The key that
+used to set it is listed in :data:`RETIRED_KEYS`.
 
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
 module is testable with a dict.
@@ -115,8 +119,19 @@ KEY_RECORD_ROOT: Final[str] = "RECORD_ROOT"
 KEY_RECORD_RETENTION_DAYS: Final[str] = "RECORD_LOCAL_RETENTION_DAYS"
 KEY_RECORD_MACHINE_ID: Final[str] = "RECORD_MACHINE_ID"
 KEY_RECORD_ORGANIZATION_ID: Final[str] = "RECORD_ORGANIZATION_ID"
-KEY_SOFTWARE_VERSION: Final[str] = "ANHEART_SOFTWARE_VERSION"
 KEY_RECORD_DRIVE_SDK_FRAMES: Final[str] = "RECORD_DRIVE_SDK_FRAMES"
+
+RETIRED_KEYS: Final[Mapping[str, str]] = {
+    "ANHEART_SOFTWARE_VERSION": (
+        "the session records are stamped with the VERSION file of the build, like the "
+        "version the console shows and announces"
+    ),
+}
+"""Keys this console used to read and no longer does, each with what replaced it.
+
+A value still set for one of them changes nothing; the console says so once at
+startup (:func:`retired_keys`) instead of leaving somebody to believe it took.
+"""
 
 # --- Defaults and bounds -------------------------------------------------
 DEFAULT_MOTOR_MAX_RPM: Final[MotorRpm] = MotorRpm(300)
@@ -140,13 +155,8 @@ MAX_RECORD_RETENTION_DAYS: Final[int] = 3650
 UNASSIGNED: Final[str] = "unassigned"
 """The manifest's machine and organisation until somebody names them."""
 
-UNVERSIONED: Final[str] = "unversioned"
-"""The manifest's software version when the deployment did not state one."""
-
 RECORD_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,128}")
 """An opaque, path-safe identifier: the record format refuses anything else."""
-
-RECORD_VERSION: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.+-]{1,128}")
 
 OCCUPIED_INITIAL_RESULTANT_G: Final[ResultantG] = ResultantG(1.2)
 """First-trial ceiling with a person on board, about 990 motor rpm at 1.5 m.
@@ -264,7 +274,6 @@ class RecordConfig:
 
     machine_id: str = UNASSIGNED
     organization_id: str = UNASSIGNED
-    software_version: str = UNVERSIONED
 
     drive_sdk_frames: bool = False
     """Also record the Modbus SDK's own transport calls (each request sent, each
@@ -682,19 +691,17 @@ def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem,
     organization = _record_identifier(
         env, KEY_RECORD_ORGANIZATION_ID, RECORD_IDENTIFIER, UNASSIGNED
     )
-    version = _record_identifier(env, KEY_SOFTWARE_VERSION, RECORD_VERSION, UNVERSIONED)
     sdk_frames = _flag(env, KEY_RECORD_DRIVE_SDK_FRAMES)
     if (
         isinstance(retention, Err)
         or isinstance(machine, Err)
         or isinstance(organization, Err)
-        or isinstance(version, Err)
         or isinstance(sdk_frames, Err)
     ):
         return Err(
             tuple(
                 result.error
-                for result in (retention, machine, organization, version, sdk_frames)
+                for result in (retention, machine, organization, sdk_frames)
                 if isinstance(result, Err)
             )
         )
@@ -704,7 +711,6 @@ def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem,
             retention_days=retention.value,
             machine_id=machine.value,
             organization_id=organization.value,
-            software_version=version.value,
             drive_sdk_frames=sdk_frames.value,
         )
     )
@@ -725,6 +731,11 @@ def _web(env: Mapping[str, str]) -> Result[WebConfig, ConfigProblem]:
         )
     except ValueError as error:
         return Err(ConfigProblem(f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", str(error)))
+
+
+def retired_keys(env: Mapping[str, str]) -> tuple[str, ...]:
+    """The :data:`RETIRED_KEYS` that ``env`` still gives a value to. Nothing reads them."""
+    return tuple(key for key in RETIRED_KEYS if env.get(key, "").strip())
 
 
 def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[ConfigProblem, ...]]:

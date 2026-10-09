@@ -150,6 +150,12 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
         "test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupied_session": 27,
         "test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loop": 15,
     },
+    "tests/test_link_indicator.py": {
+        # Not measured on CI yet: taken from its time on a workstation and from what
+        # the acceptance test below costs on both.
+        "test_b2_a_session_of_which_nothing_arrives_stops_reading_joignable_on_the_console": 32,
+        "test_acceptance_a_dashboard_answers_426_in_the_middle_of_a_session": 13,
+    },
     "tests/test_runtime.py": {
         "test_a_whole_session_actually_holds_the_occupant_in_the_zone": 20,
         "test_a_whole_session_walks_the_phases_in_order_and_on_the_timeline": 20,

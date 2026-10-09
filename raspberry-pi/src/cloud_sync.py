@@ -61,6 +61,17 @@ machine goes on exactly as it would with no dashboard. A session that runs
 while the console is refused loses nothing: it is on disk, and is sent whole,
 with its end, once the two sides agree again.
 
+What the operator reads of the link
+-----------------------------------
+Every exchange above is also told to a :class:`~src.link_state.LinkHealth`
+(:meth:`CloudSync._note`), which the console's page reads as one standing
+state: reachable, unreachable, incompatible, key refused, in error. No request
+is made for it: it is what the exchanges the link makes anyway have last said.
+It reads reachable only on an answer in the dashboard's own shape that took
+what was sent (a success, or a refusal under one of its stable codes), on a
+route that carries the heartbeat or the session. The stop question's answers
+say the dashboard is there and nothing more.
+
 One thing crosses every contract: **a stop**. "Stop" means the same under any
 version, and refusing one is never the safe side. The status route answers
 whatever contract the console announces, and its answer ends the session
@@ -90,6 +101,7 @@ from src.contract import (
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
     SERVER_VERSION_FIELD,
+    STABLE_CODES,
     UNKNOWN_SOFTWARE_VERSION,
     ErrorCode,
     SoftwareVersion,
@@ -99,6 +111,7 @@ from src.contract import (
     unsupported_refusal,
 )
 from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
+from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.record_uplink import (
     Acked,
@@ -151,6 +164,9 @@ the contract is not served, the server asks to wait. A 5xx is one too."""
 
 SERVER_ERROR: Final[int] = 500
 
+KEY_STATUSES: Final[frozenset[int]] = frozenset({401, 403})
+"""Among those, the refusals that say this machine's key is not accepted."""
+
 FINAL_CODES: Final[frozenset[str]] = frozenset(
     {"invalid_request", "session_not_found", "session_not_pending", "machine_not_found"}
 )
@@ -172,6 +188,9 @@ class Unreachable:
     """No answer: no network, a timeout, or a reply that is not JSON."""
 
     detail: str
+    status: int | None = None
+    """The HTTP status of a reply that was no answer (a page of HTML, say); ``None``
+    when nothing came back at all."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +278,9 @@ def _answer(response: httpx.Response) -> Result[Document, CloudError]:
     if response.status_code >= httpx.codes.BAD_REQUEST:
         return Err(_refusal(response.status_code, document))
     if document is None:
-        return Err(Unreachable(f"HTTP {response.status_code}: not a JSON object"))
+        return Err(
+            Unreachable(f"HTTP {response.status_code}: not a JSON object", response.status_code)
+        )
     return Ok(document)
 
 
@@ -281,10 +302,35 @@ def _refusal(status: int, document: Document | None) -> Refused:
     )
 
 
+LOGGED_WORDS_LIMIT: Final[int] = 200
+"""Most characters the dashboard's own words take in the log, quotes and escapes included."""
+
+
+def logged_words(words: str) -> str:
+    """The dashboard's own words as the log writes them: quoted, on one line, and bounded.
+
+    The same form as a peer's header in the log of the page's socket
+    (:func:`~src.web.ws.logged_header`): line breaks replaced first, then
+    quoted and escaped the way ``%r`` would write it, and that written form
+    cut to :data:`LOGGED_WORDS_LIMIT` characters, the cut stated with the
+    length received.
+    """
+    single = words.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    written = repr(single)
+    if len(written) <= LOGGED_WORDS_LIMIT:
+        return written
+    return f"{written[:LOGGED_WORDS_LIMIT]}... ({len(single)} characters received)"
+
+
 def describe_refusal(refused: Refused) -> str:
-    """One log line for a refusal: its stable code first, then the status and the words."""
+    """A refusal in a few words: its stable code first, then the status and the words.
+
+    The words are the dashboard's: they are kept on one line and bounded
+    (:func:`~src.link_state.bounded`), since this goes into other sentences,
+    the reason of a stop among them.
+    """
     code = "sans code" if refused.code is None else refused.code
-    return f"{code} (HTTP {refused.status}): {refused.detail}"
+    return f"{code} (HTTP {refused.status}): {bounded(refused.detail)}"
 
 
 # =========================================================================
@@ -498,6 +544,7 @@ class CloudSync:
         "_last_poll",
         "_last_refused",
         "_last_status",
+        "_link",
         "_next_profiles",
         "_online",
         "_programs_enabled",
@@ -527,13 +574,17 @@ class CloudSync:
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
         record_degraded: Callable[[], bool] | None = None,
         records: RecordSource | None = None,
+        link: LinkHealth | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
         ``records``: the session records the telemetry, the events and the end of every
         session are read back from; ``None`` on a console that records nothing, which
-        then only declares and ends its sessions."""
+        then only declares and ends its sessions. ``link``: where what each exchange
+        says of the link is kept for the console's page; ``None``: one of this object's
+        own."""
         self._clock: Clock = clock
+        self._link: LinkHealth = LinkHealth(clock.monotonic()) if link is None else link
         self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
         self._runtime: RuntimeView = runtime
@@ -571,6 +622,11 @@ class CloudSync:
     def online(self) -> bool:
         """Whether the last exchange with the dashboard got an answer."""
         return self._online
+
+    @property
+    def link(self) -> LinkStatus:
+        """What the operator reads of the link now (:mod:`src.link_state`)."""
+        return self._link.status(self._clock.monotonic())
 
     @property
     def current_session_id(self) -> str | None:
@@ -707,6 +763,7 @@ class CloudSync:
             return
         launch = _launch_of(polled.value)
         refusal = server_refusal(polled.value.get(SERVER_VERSION_FIELD))
+        self._link.announced(refusal)
         if refusal is not None:
             # An answer of another major arms nothing here, whatever it carries.
             self._refuse_server(refusal, launch)
@@ -777,7 +834,9 @@ class CloudSync:
             return
         self._last_status = now
         sent = await self._transport.get("/api/machine/training/status", {"sessionId": session_id})
-        self._note(sent)
+        # This route answers under every contract: its answers say nothing of
+        # whether the dashboard serves this console's.
+        self._note(sent, contract=False)
         if isinstance(sent, Err):
             return
         if self._uplink.following != session_id:
@@ -810,28 +869,76 @@ class CloudSync:
         if isinstance(ended, Err):
             _logger.warning("dashboard stop not accepted by the console: %s", ended.error)
 
-    def _note(self, result: Result[Document, CloudError]) -> None:
+    def _note(self, result: Result[Document, CloudError], *, contract: bool = True) -> None:
+        """Log what an exchange says of the link, and tell the console's indicator.
+
+        ``contract``: the route answers only a console whose major the
+        dashboard serves. What the indicator is told is memory only, and
+        nothing is decided on it: the sending, the launches and the stops go
+        by the answer itself, exactly as without it.
+        """
         was = self._online
         self._online = True
+        now = self._clock.monotonic()
         if isinstance(result, Err):
             match result.error:
-                case Unreachable(detail=detail):
+                case Unreachable() as lost:
                     self._online = False
+                    if lost.status is None:
+                        self._link.silent(lost.detail, contract=contract)
+                    else:
+                        # Something replied, and not in the dashboard's shape.
+                        reason = f"HTTP {lost.status} : {NOT_THE_DASHBOARD}"
+                        self._link.unrecognised(reason, contract=contract)
                     if was:
-                        _logger.warning("dashboard unreachable: %s", detail)
+                        _logger.warning("dashboard unreachable: %s", lost.detail)
                 case Refused() as refused:
                     # An answer, even a refusal, is a working link.
+                    self._tell_refusal(now, refused, contract=contract)
                     self._hear_refusal(refused)
                 case _ as unreachable:
                     assert_never(unreachable)
+        else:
+            self._link.answered(now, contract=contract)
         if self._online and not was:
             _logger.info("dashboard reachable")
+
+    def _tell_refusal(self, now: Monotonic, refused: Refused, *, contract: bool) -> None:
+        """Which of the link's states a refusal speaks of. Its status and stable code only:
+        the dashboard's own sentence stays in the log.
+
+        Only a refusal under one of the dashboard's stable codes is taken for
+        the dashboard's answer about what was sent. A refused key and an
+        error are read from the status alone, and never read as reachable. Any
+        other refusal (a 404 or a 400 with no stable code) could come from
+        anything that listens at the address: it proves nothing.
+        """
+        words = f"HTTP {refused.status}"
+        if refused.code is not None:
+            words = f"{words} ({refused.code})"
+        if refused.code == CONTRACT_UNSUPPORTED:
+            sentence = unsupported_refusal(refused.supported)
+            self._link.contract_refused(now, sentence, contract=contract)
+        elif refused.status in KEY_STATUSES:
+            self._link.key_refused(now, words, contract=contract)
+        elif refused.status in HELD_STATUSES or refused.status >= SERVER_ERROR:
+            self._link.errored(words, contract=contract)
+        elif refused.code in STABLE_CODES:
+            # The dashboard read the request and refused it: it is there, and working.
+            self._link.answered(now, contract=contract)
+        else:
+            self._link.unrecognised(f"{words} : {NOT_THE_DASHBOARD}", contract=contract)
 
     def _hear_refusal(self, refused: Refused) -> None:
         """Log a refusal by its stable code, once; a refused contract goes to the console."""
         if refused != self._last_refused:
             self._last_refused = refused
-            _logger.warning("dashboard refused a request: %s", describe_refusal(refused))
+            _logger.warning(
+                "dashboard refused a request: %s (HTTP %d): %s",
+                "sans code" if refused.code is None else refused.code,
+                refused.status,
+                logged_words(refused.detail),
+            )
         if refused.code == CONTRACT_UNSUPPORTED:
             self._refuse_server(unsupported_refusal(refused.supported), None)
 

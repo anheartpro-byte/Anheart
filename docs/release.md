@@ -46,7 +46,7 @@ Les trois avancent séparément : une release peut ne publier qu'un composant.
 
 | Composant | Tag | Écrit par le script dans | Lu par |
 |---|---|---|---|
-| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | la console, qui le lit une fois au démarrage (`src/contract.py`) et l'envoie dans chaque heartbeat (`software_version`) ; la fiche machine du site l'affiche. La console locale ne l'affiche pas encore : c'est le sujet d'ANH-210 ([section 8](#8-limites-et-reste-à-faire)). |
+| Raspberry Pi | `pi-X.Y.Z` | `raspberry-pi/VERSION` | la console, qui le lit une fois au démarrage (`src/contract.py`) : elle l'affiche sur sa page (pastille **Version**), l'envoie dans chaque heartbeat (`software_version`) et l'écrit dans le manifeste de chaque enregistrement de séance ; la fiche machine du site l'affiche. |
 | Convex | `cloud-X.Y.Z` | `convex/VERSION` et la constante `CLOUD_VERSION` de `convex/cloudVersion.ts` | le code déployé : `npx convex run softwareReleases:deployedCloudVersion` répond la version du déploiement visé. |
 | Site | `web-X.Y.Z` | `package.json` et `package-lock.json` (champ `version`) | `next.config.ts`, qui la fige à la construction ; le pied de page de l'accueil et de la FAQ l'affiche. |
 
@@ -622,7 +622,6 @@ n'a changé.
 | Quoi | Qui ou quel ticket |
 |---|---|
 | Faire la première release réelle (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) | le responsable du produit, [section 3](#3-le-déroulé) |
-| Afficher la version sur la console locale | ANH-210 ; `read_software_version` (`src/contract.py`) lit déjà `raspberry-pi/VERSION` côté Pi |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant la première release |
 | Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant la première release partielle |

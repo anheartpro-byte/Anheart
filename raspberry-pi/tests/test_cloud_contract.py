@@ -279,12 +279,12 @@ async def test_ex5_the_log_carries_the_code_once_per_distinct_refusal(
     r.dashboard.answer(HEARTBEAT, unauthorized)
     await r.step()
     await r.step(HEARTBEAT_PERIOD)
-    line = "dashboard refused a request: unauthorized (HTTP 401): Invalid API key"
+    line = "dashboard refused a request: unauthorized (HTTP 401): 'Invalid API key'"
     assert caplog.text.count(line) == 1
     assert r.sync.online  # an answer, even a refusal, is a working link
     r.dashboard.answer(HEARTBEAT, Err(Refused(500, "HTTP 500")))
     await r.step(HEARTBEAT_PERIOD)
-    assert "dashboard refused a request: sans code (HTTP 500): HTTP 500" in caplog.text
+    assert "dashboard refused a request: sans code (HTTP 500): 'HTTP 500'" in caplog.text
 
 
 async def test_ex5_a_refused_start_is_logged_with_its_code(

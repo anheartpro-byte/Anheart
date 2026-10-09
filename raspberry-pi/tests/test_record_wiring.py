@@ -324,7 +324,6 @@ def test_the_record_defaults_to_data_records_thirty_days_and_no_identity() -> No
     assert record.root == Path("data/records")
     assert record.retention_days == 30
     assert (record.machine_id, record.organization_id) == ("unassigned", "unassigned")
-    assert record.software_version == "unversioned"
     assert record.drive_sdk_frames is False, "ANH-191: the SDK's transport calls are a bench option"
     blank = {
         **SIM_ENV,
@@ -343,7 +342,6 @@ def test_every_record_key_can_be_set() -> None:
             "RECORD_LOCAL_RETENTION_DAYS": "0",
             "RECORD_MACHINE_ID": "k17machine_A-1",
             "RECORD_ORGANIZATION_ID": "org_2abc",
-            "ANHEART_SOFTWARE_VERSION": "2026.10.1+g1a2b3c4",
             "RECORD_DRIVE_SDK_FRAMES": "true",
         }
     )
@@ -352,7 +350,6 @@ def test_every_record_key_can_be_set() -> None:
         retention_days=0,
         machine_id="k17machine_A-1",
         organization_id="org_2abc",
-        software_version="2026.10.1+g1a2b3c4",
         drive_sdk_frames=True,
     )
 
@@ -367,7 +364,6 @@ def test_every_record_key_can_be_set() -> None:
         ("RECORD_MACHINE_ID", "../escape"),
         ("RECORD_ORGANIZATION_ID", "jean.dupont@example.org"),
         ("RECORD_ORGANIZATION_ID", "x" * 129),
-        ("ANHEART_SOFTWARE_VERSION", "version one"),
         ("RECORD_DRIVE_SDK_FRAMES", "sometimes"),
     ],
 )
@@ -383,7 +379,6 @@ def test_every_record_problem_is_reported_with_the_others() -> None:
             "RECORD_LOCAL_RETENTION_DAYS": "never",
             "RECORD_MACHINE_ID": "a name",
             "RECORD_ORGANIZATION_ID": "another name",
-            "ANHEART_SOFTWARE_VERSION": "v 1",
         }
     )
     assert {problem.key for problem in found} == {
@@ -391,7 +386,6 @@ def test_every_record_problem_is_reported_with_the_others() -> None:
         "RECORD_LOCAL_RETENTION_DAYS",
         "RECORD_MACHINE_ID",
         "RECORD_ORGANIZATION_ID",
-        "ANHEART_SOFTWARE_VERSION",
     }
     assert "identifiant opaque attendu" in next(
         problem.detail for problem in found if problem.key == "RECORD_MACHINE_ID"
