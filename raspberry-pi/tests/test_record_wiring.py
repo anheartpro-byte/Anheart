@@ -31,6 +31,7 @@ from src.local_panel import build_panel
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.record.journal import Journal
 from src.record.reader import read
+from src.record.retention import records
 from src.record.schema import EventKind
 from src.record.session import operator_alias
 from src.result import Err, Ok
@@ -213,9 +214,9 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     await rig.run(5.0)
     await rig.panel.close()
 
-    records = [path for path in journal.root.iterdir() if not path.name.startswith(".")]
-    assert [path.name.split("_", 1)[1] for path in records] == ["remote-1"]
-    loaded = read(records[0])
+    found = records(journal.root)
+    assert [path.name.split("_", 1)[1] for path in found] == ["remote-1"]
+    loaded = read(found[0])
     assert isinstance(loaded, Ok)
     recording = loaded.value
     assert recording.warnings == ()
@@ -227,7 +228,8 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     assert manifest.profile.subject_hr_max == 170
     remote = [(e.kind, e.actor) for e in recording.events if e.actor == "remote"]
     assert (EventKind.REMOTE_COMMAND, "remote") in remote
-    on_disk = b"".join(p.read_bytes() for p in records[0].rglob("*") if p.is_file())
+    # The whole records directory: the session's record and the logbook beside it.
+    on_disk = b"".join(p.read_bytes() for p in journal.root.rglob("*") if p.is_file())
     assert b"Dr Manager" not in on_disk
     assert b"machine-key" not in on_disk
 
@@ -276,9 +278,9 @@ async def test_an_incompatible_dashboard_said_during_a_session_is_in_the_record(
             shown.append((payload.event.kind, payload.event.detail))
     assert (SurfaceEvent.DASHBOARD, sentence) in shown, "the operator was shown it"
 
-    records = [path for path in journal.root.iterdir() if not path.name.startswith(".")]
-    assert len(records) == 1
-    loaded = read(records[0])
+    found = records(journal.root)
+    assert len(found) == 1
+    loaded = read(found[0])
     assert isinstance(loaded, Ok)
     recording = loaded.value
     assert recording.warnings == ()
@@ -292,7 +294,7 @@ async def test_an_incompatible_dashboard_said_during_a_session_is_in_the_record(
     # In the file itself, as written: one line, of kind ``warning``.
     lines = [
         line
-        for line in (records[0] / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (found[0] / "events.jsonl").read_text(encoding="utf-8").splitlines()
         if sentence in line
     ]
     assert len(lines) == 1
@@ -323,6 +325,7 @@ def test_the_record_defaults_to_data_records_thirty_days_and_no_identity() -> No
     assert record.retention_days == 30
     assert (record.machine_id, record.organization_id) == ("unassigned", "unassigned")
     assert record.software_version == "unversioned"
+    assert record.drive_sdk_frames is False, "ANH-191: the SDK's transport calls are a bench option"
     blank = {
         **SIM_ENV,
         "RECORD_ROOT": " ",
@@ -341,6 +344,7 @@ def test_every_record_key_can_be_set() -> None:
             "RECORD_MACHINE_ID": "k17machine_A-1",
             "RECORD_ORGANIZATION_ID": "org_2abc",
             "ANHEART_SOFTWARE_VERSION": "2026.10.1+g1a2b3c4",
+            "RECORD_DRIVE_SDK_FRAMES": "true",
         }
     )
     assert record == RecordConfig(
@@ -349,6 +353,7 @@ def test_every_record_key_can_be_set() -> None:
         machine_id="k17machine_A-1",
         organization_id="org_2abc",
         software_version="2026.10.1+g1a2b3c4",
+        drive_sdk_frames=True,
     )
 
 
@@ -363,6 +368,7 @@ def test_every_record_key_can_be_set() -> None:
         ("RECORD_ORGANIZATION_ID", "jean.dupont@example.org"),
         ("RECORD_ORGANIZATION_ID", "x" * 129),
         ("ANHEART_SOFTWARE_VERSION", "version one"),
+        ("RECORD_DRIVE_SDK_FRAMES", "sometimes"),
     ],
 )
 def test_a_bad_record_key_is_named_and_refuses_the_configuration(key: str, value: str) -> None:

@@ -269,10 +269,10 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    and the STO jumper has been removed »), par un opérateur nommé.
 3. Aucun verdict en vigueur (sinon il faut acquitter).
 4. Runtime au repos (`IDLE` ou `FINISHED`).
-5. Sur la console : au moins 500 Mo libres sous le dossier d'enregistrement de
-   séance, d'après la dernière mesure du fil du journal ; refus aussi si cet
-   espace n'a pas pu être mesuré, ou si la mesure a plus de 15 s
-   (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
+5. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
+   d'enregistrement de séance, d'après la dernière mesure du fil du journal ;
+   refus aussi si cet espace n'a pas pu être mesuré, ou si la mesure a plus de
+   15 s (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
 6. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
@@ -1126,6 +1126,7 @@ sort avec le code 2.
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
 | `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation). Dans l'image Docker, le script d'entrée la règle sur le contenu de `VERSION` quand la configuration ne la règle pas ([pi-image.md](pi-image.md#la-version)) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
+| `RECORD_DRIVE_SDK_FRAMES` | `false` | diagnostic de banc de la liaison variateur : enregistre aussi les appels du SDK Modbus avec leurs octets (chaque demande envoyée, chaque fragment reçu), en plus des transactions de registre. Environ 0,95 Mo par minute au lieu de 0,2 Mo avec le vrai pilote ([15.2](#152-aucune-écriture-dans-la-boucle)) ; sans effet sur le simulateur | `true` ou `false` |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
 par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale
@@ -1335,11 +1336,15 @@ puisse jamais ralentir ni arrêter la boucle de contrôle**.
 
 > **Ce qui a été vérifié, et ce qui ne l'a pas été.** Tout ce qui suit est
 > couvert par les tests automatiques, sur la console en simulation
-> (`tests/test_record_*.py`, `simulation/tests/test_record_console_parity.py`).
+> (`tests/test_record_*.py`, `tests/test_exit_deadline.py`,
+> `simulation/tests/test_record_console_parity.py`).
 > Rien n'a été mesuré sur un vrai Pi ni sur une carte SD : les durées
-> d'écriture réelles, l'usure de la carte et le comportement à une vraie
-> coupure de courant ne sont pas connus. Le test de coupure tue le processus
-> (`SIGKILL`) ; il ne coupe pas l'alimentation.
+> d'écriture réelles, l'usure de la carte, le nombre d'inodes de sa partition,
+> la durée de fermeture d'un long enregistrement, le débit des trames du vrai
+> variateur et le comportement à une vraie coupure de courant ne sont pas
+> connus. Le test de coupure tue le processus (`SIGKILL`) ; il ne coupe pas
+> l'alimentation. Le système de fichiers à court d'inodes et le disque qui ne
+> répond plus sont simulés dans les tests, jamais provoqués sur un vrai disque.
 
 ### 15.1 Où, et quand
 
@@ -1350,14 +1355,16 @@ locale aléatoire.
 
 | Moment | Ce qui se passe |
 |---|---|
-| Démarrage de la console | le dossier racine est créé s'il manque, mis en mode 700, et son espace libre est mesuré |
+| Démarrage de la console | le dossier racine est créé s'il manque, mis en mode 700, et son espace libre est mesuré, en octets et en inodes |
 | Le runtime vient d'armer une séance | le dossier de la séance est créé avec son manifeste d'ouverture (`ended_at` et `end_reason` à `null`) |
 | Chaque tic (5 Hz) | une ligne de `ticks.csv` ; un événement à chaque changement de phase, de verdict ou de défaut variateur |
+| Chaque appel au variateur | une ligne de `drive_frames.jsonl` : ce qui a été demandé, ce qui a été répondu, en combien de temps (15.2) |
 | Chaque lot du BITalino | un bloc brut `ecg_raw/NNNNNN.bin.gz`, toutes voies, **avant** tout traitement |
 | Chaque seconde | les indicateurs des capteurs dans `sensors.csv` |
 | Événement de la console pendant la séance | demande de fin, E-STOP, réarmement, attestation (`operator_action`, ou `remote_command` si elle vient du tableau de bord) ; acquittement (`verdict_ack`) ; refus (`refusal`) ; nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` (`warning`, détail préfixé `dashboard:` : ce n'est pas le refus d'une demande faite sur la console, et le format n'a pas de type propre pour elle) |
 | La phase de la séance atteint `DONE` | événement `end`, manifeste final (`ended_at`, `end_reason`, observation finale), `checksums.sha256` |
 | Sortie de la console en cours de séance | même fermeture, **après** l'arrêt du variateur, avec le motif du runtime (`shutdown` si rien d'autre n'avait déjà mis fin à la séance) et le compte rendu de l'arrêt ; la sortie attend le fil du journal au plus 5 s, sans emprunter de fil à personne |
+| Événement de la console sans séance enregistrée | une ligne du journal hors séance, `logbook/events.jsonl` (15.9) : départ demandé, départ refusé, acquittement, réarmement, nouvelle du lien avec le tableau de bord |
 
 La fermeture suit la phase `DONE` et non l'état `FINISHED` du runtime, exprès.
 Après un STOP ordinaire, c'est le même tic. Derrière un défaut variateur
@@ -1365,8 +1372,9 @@ verrouillé, le runtime reste `ENDING` jusqu'à ce qu'un opérateur réarme le
 défaut, ce qui peut être le lendemain matin : la descente et la récupération
 surveillée sont finies, et un enregistrement resté ouvert grossirait de cinq
 lignes par seconde sans personne à bord. Conséquence : ce que l'opérateur fait
-**après** la fermeture (acquitter, réarmer) n'est dans aucun enregistrement,
-comme les départs refusés.
+**après** la fermeture (acquitter, réarmer) n'est pas dans l'enregistrement de
+la séance, qui ne change plus une fois fermé. C'est écrit dans le journal hors
+séance (15.9), comme les départs refusés.
 
 `end_reason` reprend le motif du runtime (`programme_complete`,
 `operator_stop`, `emergency_stop`, `safety_verdict`, `tick_exception`,
@@ -1397,10 +1405,87 @@ pas d'appel système, pas d'attente. La file est bornée à 4096 valeurs et à
 200 000 échantillons bruts en attente (environ une demi-minute de six voies) ;
 au-delà, la valeur la plus récente est refusée et comptée.
 
+**Les trames du variateur ne passent pas par cette file**, ni par la boucle.
+Elles attendent dans une liste bornée à part (4096 observations,
+`src/record/drive_tap.py`) que le fil du journal vient prendre à chaque cycle,
+toutes les 0,2 s. Noter une observation, c'est un ajout à un bout d'une
+`deque` ; le fil du journal prend par l'autre bout, une observation à la fois,
+**sans prendre aucun verrou** : arrêté n'importe où, même au milieu de sa
+prise, il ne tient rien dont un appel au variateur a besoin. Le seul verrou
+est entre ceux qui notent (pour que la borne et le compte restent exacts si
+deux d'entre eux notent en même temps), et le fil du journal n'y touche
+jamais. Une première version prenait la liste sous un verrou partagé avec
+celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
+avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
+(l'appel au variateur attendait quand ce fil était arrêté dans sa prise).
+Selon le variateur branché :
+
+- le pilote ATV320 rapporte lui-même ses échanges Modbus dans un journal
+  d'échanges désormais borné (`ExchangeLog(clock, capacity)`), depuis ses
+  propres fils de travail : rien n'est placé entre le runtime et le pilote.
+  Par défaut, ce sont les **transactions de registre** (`modbus_read`,
+  `modbus_write`) : ce qui a été demandé à quel registre, ce qui a été
+  répondu, en combien de temps. Les appels du SDK Modbus (`modbus_send`,
+  `modbus_receive_chunk`, avec leurs octets) ne sont gardés que si
+  `RECORD_DRIVE_SDK_FRAMES=true` : voir plus bas ;
+- un variateur qui ne rapporte rien (le simulateur) est enveloppé par une
+  prise (`CallTap`) qui délègue chaque appel, rend la réponse telle quelle,
+  puis note l'appel : les mêmes observations d'appel que la simulation
+  (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`,
+  `read_failed`, `read_limits`), avec les mêmes registres. Jamais les deux à
+  la fois.
+
+Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
+une observation impossible à construire est comptée de même, et ne remonte
+jamais vers l'appelant : la réponse du variateur est rendue quoi qu'il arrive
+à son observation. Si la liste elle-même ne peut pas être prise (une faute de
+ce qui écoute le variateur), le cycle continue : les lignes, les événements et
+les blocs bruts sont écrits, les trames de ce cycle sont perdues et comptées
+comme une écriture manquée de l'enregistrement (`write_failed`,
+`erreur d'ecriture (append : <faute>)`), et la faute est journalisée une fois.
+
+Les trames prises sont remises à un enregistrement à trois moments du cycle :
+avant qu'un enregistrement soit fermé, à celui-là (une séance ouverte **et**
+fermée pendant que le fil était occupé ailleurs, par exemple par la longue
+fermeture de la précédente, garde donc ses trames) ; avant qu'un
+enregistrement soit ouvert par-dessus un autre resté ouvert, à celui resté
+ouvert ; et une fois la file écrite, à l'enregistrement alors ouvert (les
+trames d'un armement vont à la séance qu'il arme, avec un `t` légèrement
+négatif). Quand un autre enregistrement est ouvert plus loin dans le même
+cycle, les trames commencées à partir de son début l'attendent. Sans aucun
+enregistrement ouvert, la scrutation d'une console au repos n'est écrite nulle
+part.
+
+Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
+fin, donc sans aucun inode de plus :
+
+| Variateur | `RECORD_DRIVE_SDK_FRAMES` | Lignes | Taille par minute à 5 Hz |
+|---|---|---|---|
+| simulateur (console en simulation) | sans effet | 11,5 par seconde : les observations d'appel | 80 ko |
+| pilote ATV320, liaison FTDI simulée | `false` (défaut) | 6 par tic : une écriture de consigne et une lecture d'état de cinq registres | 0,21 Mo |
+| pilote ATV320, liaison FTDI simulée | `true` | 24 par tic : les mêmes six, plus pour chacune la demande envoyée et les fragments de sa réponse | 0,94 Mo |
+
+**`RECORD_DRIVE_SDK_FRAMES` est un diagnostic de banc**, éteint par défaut.
+Les transactions de registre disent ce que le variateur a répondu, ce qu'il
+faut pour analyser un défaut ; les appels du SDK n'y ajoutent que les octets
+du fil et leurs durées, utiles pour chercher une panne de la liaison série
+elle-même (réponses fragmentées, délais, octets parasites). Allumé, il
+multiplie les lignes par quatre et fait de `drive_frames.jsonl` sept fois le
+reste d'un enregistrement de deux voies : à allumer le temps d'un essai, pas à
+laisser sur une machine en service. Il ne retire ni ne change aucune ligne de
+registre, et ses lignes ne prennent pas de place dans la liste bornée quand il
+est éteint. Ces chiffres viennent d'une liaison simulée : le nombre de
+fragments par réponse dépendra de la vraie liaison série, à mesurer sur le
+banc avant de dimensionner le disque.
+
 Ce que le fil du journal fait aussi, parce que ce sont des accès au disque :
-mesurer l'espace libre toutes les 5 s, et appliquer la rétention entre deux
-séances (15.5). La porte de départ et l'état affiché ne font que lire sa
-dernière publication.
+mesurer l'espace libre toutes les 5 s (octets et inodes), écrire le journal
+hors séance (15.9), et appliquer la rétention entre deux séances (15.5). La
+porte de départ et l'état affiché ne font que lire sa dernière publication.
+Pendant un cycle long (un retard à écrire sur une carte lente, la fermeture
+d'un enregistrement, la rétention), il mesure et publie quand même, entre deux
+fichiers, et il dit avant de commencer ce qu'il commence (`Activity` :
+`closing`, `purging`) : voir 15.4.
 
 Ce qu'un arrêt brutal peut faire perdre : ce qui n'avait pas encore été vidé
 de la file (0,2 s au plus) si le processus est tué ; jusqu'à 2 s de plus si
@@ -1416,7 +1501,7 @@ fil du journal et lue par la boucle comme un état.
 | Cause (`Cause`) | Quand | Message à l'opérateur (événement `recording`) |
 |---|---|---|
 | `write_failed` | le disque a refusé une écriture ou la création du dossier (plein, droits, E/S) | `enregistrement de seance degrade : disque plein (append). La seance et la securite continuent.` (ou `ecriture refusee, droits insuffisants`, ou `erreur d'ecriture`) |
-| `queue_full` | la file bornée a refusé des valeurs | `enregistrement de seance degrade : file d'ecriture pleine, des mesures sont perdues. …` |
+| `queue_full` | la file bornée a refusé des valeurs, ou la liste bornée des trames du variateur a refusé des observations | `enregistrement de seance degrade : file d'ecriture pleine, des mesures sont perdues. …` |
 | `stalled` | des valeurs attendent et le fil n'en a consommé aucune depuis 5 s : le disque ne répond plus | `enregistrement de seance degrade : le disque ne repond plus (<n> elements en attente). …` |
 | `storage_unavailable` | le dossier racine ne peut être ni créé, ni mis en 700, ni mesuré | `enregistrement de seance indisponible : dossier <chemin> inutilisable (creation, droits ou mesure de l'espace libre)` |
 
@@ -1425,7 +1510,8 @@ Le message est dit une fois par changement de cause, puis
 dans le battement de cœur vers le tableau de bord, champ `recordDegraded`
 (section 8). Dès que le disque accepte de nouveau une écriture, l'enregistrement
 le dit lui-même par un événement `warning` :
-`record_degraded: dropped=<n> failures=<n> last=<opération>:<erreur>`.
+`record_degraded: dropped=<n> failures=<n> last=<opération>:<erreur>`, avec
+`drive_frames_lost=<n>` avant `last=` quand des trames du variateur manquent.
 
 Une ligne coupée par un disque plein est retirée du fichier (retour à la
 dernière ligne complète) : l'enregistrement reste lisible et reprend si de la
@@ -1433,6 +1519,14 @@ place revient. Un bogue de l'enregistreur lui-même est traité de la même
 façon : ses points d'entrée ne lèvent jamais, la faute est journalisée une
 fois, l'enregistrement est déclaré dégradé
 (`… erreur interne de l'enregistreur …`).
+
+**`recordDegraded` parle d'un enregistrement, pas de la console.** Tous les
+comptes derrière ce signal (écritures refusées, valeurs et trames perdues,
+fautes de l'enregistreur lui-même) repartent de zéro à l'ouverture de
+l'enregistrement suivant. Le signal reste donc vrai entre deux séances quand
+le dernier enregistrement est incomplet, et redevient faux dès qu'une nouvelle
+séance s'enregistre normalement, sans redémarrer la console. Avant, une faute
+interne de l'enregistreur le laissait vrai jusqu'au redémarrage.
 
 ### 15.4 Départ refusé sous 500 Mo
 
@@ -1457,17 +1551,53 @@ trois mesures manquées), la porte refuse, quoi que dise ce chiffre :
 
 `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus`
 
-Le refus se lève de lui-même à la mesure suivante. Limite connue : le fil du
-journal ne mesure pas pendant qu'il applique la rétention (15.5), donc une
-purge qui durerait plus de 15 s refuserait les départs jusqu'à sa fin, avec
-cette même phrase. Aujourd'hui rien ne pose le marqueur de dépôt : la purge ne
-supprime rien et dure quelques millisecondes.
+Le refus se lève de lui-même à la mesure suivante.
+
+**Un cycle long n'est pas un disque mort.** Fermer un enregistrement relit
+chacun de ses fichiers pour les sommes de contrôle (18 000 pour une heure), et
+la rétention supprime des dossiers entiers. Le fil du journal mesure donc le
+disque et publie **entre deux fichiers** de tout ce qui dure : une fermeture
+ou une purge longue sur un disque sain ne périme plus la mesure et ne refuse
+plus aucun départ. Quand une seule étape dépasse quand même 15 s, la porte
+refuse, et dit ce que ce fil avait annoncé commencer, au lieu d'affirmer que
+le disque ne répond plus :
+
+`demarrage refuse : enregistrement de seance impossible pour l'instant : la fermeture d'un enregistrement est en cours sous <dossier>, derniere mesure de l'espace libre il y a <n> s. Reessayer dans un instant`
+
+(ou `la purge des enregistrements deposes est en cours`). La phrase
+`le disque ne repond plus` reste celle d'une mesure périmée sans rien
+d'annoncé : le fil est alors bloqué dans une écriture ordinaire. Mesuré sur le
+poste de développement (SSD, cache chaud) : fermer un enregistrement d'une
+heure, 18 007 fichiers et 8,8 Mo, prend 1,5 s. Sur une carte SD, cache froid,
+ce temps n'est pas connu.
+
+**Inodes.** Un enregistrement est fait de milliers de petits fichiers (un bloc
+brut par lot d'acquisition, soit cinq par seconde), et un système de fichiers
+peut manquer d'inodes avec des mégaoctets libres : toute écriture est alors
+refusée. Le fil du journal mesure donc aussi les inodes libres, et la porte
+refuse sous **36 016 inodes libres** (`MIN_FREE_INODES`) :
+
+`demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace`
+
+D'où vient ce seuil : une séance de la plus longue durée que la console mène
+seule (l'heure d'une séance manuelle, `MANUAL_SESSION_LIMIT`) crée 18 000
+blocs bruts et 8 autres entrées (son dossier, `ecg_raw/`, le manifeste, les
+quatre flux, les sommes de contrôle), soit 18 008 inodes. La porte n'est
+interrogée qu'une fois, à l'armement, et doit laisser la place de toute la
+séance qu'elle arme : une fois ce nombre. Et autant encore pour ce qu'elle ne
+connaît pas : un programme de plus d'une heure, la descente et la récupération
+après l'heure, le journal hors séance, et le reste de ce qui partage le
+système de fichiers (sur le Pi, le système lui-même). Un système de fichiers
+qui ne compte pas ses inodes (il en annonce zéro au total) n'est pas refusé
+pour cela. Le manque d'octets est dit avant le manque d'inodes.
 
 Ordre de grandeur mesuré en simulation, deux voies : une séance de 10 minutes
 fait 3 092 fichiers et 1,3 Mo de contenu, mais 13,5 Mo **occupés** sur un
 système de fichiers à blocs de 4 ko, parce que chaque lot brut de 0,2 s est un
-petit fichier. Soit environ 40 Mo et 9 000 fichiers pour 30 minutes. La porte
-compte les octets libres, **pas les inodes libres**.
+petit fichier. Soit environ 40 Mo et 9 000 fichiers pour 30 minutes, sans les
+trames du variateur (15.2). Sur un ext4 créé par défaut (un inode pour 16 Kio,
+valeur non vérifiée sur la carte du Pi), 500 Mo libres valent environ 30 000
+inodes : c'est le seuil des inodes qui refuse le premier.
 
 ### 15.5 Rétention : rien n'est purgé sans dépôt confirmé
 
@@ -1526,6 +1656,21 @@ La sortie de la console n'emprunte aucun fil non plus : elle demande au fil du
 journal de finir et regarde toutes les 50 ms, pendant 5 s au plus, s'il a
 fini.
 
+**Rien ne retient le processus une fois la console arrêtée.** Les fils
+`record-io` et `record-journal` sont des démons, mais pas ceux du serveur web,
+qui lisent et envoient ses fichiers (une archive, puis la suppression de son
+fichier temporaire ; la page elle-même). Mesuré dans un processus à part
+(`tests/test_exit_deadline.py`) : avec un de ces fils bloqué sur un disque qui
+ne répond plus, le variateur est arrêté en 50 ms après le `SIGTERM`, puis le
+processus ne sort pas (toujours là après 45 s, jusqu'à être tué ; sur le Pi,
+systemd attendrait ses 90 s). Depuis, dès que la console a fini de s'arrêter
+(le variateur d'abord, puis l'enregistrement), un fil démon donne 5 s au
+processus pour sortir de lui-même (`EXIT_GRACE`), puis le dit
+(`console exit forced … a thread did not come back`) et termine le processus
+avec le code de sortie qu'il allait rendre. Une sortie ordinaire emporte ce
+fil avec elle et rien n'est forcé. L'ordre ne change pas : cette échéance
+n'est armée qu'après l'arrêt du variateur.
+
 Seul un dossier d'enregistrement directement sous la racine peut être nommé.
 Le nom reçu passe deux contrôles, chacun suffisant seul : il doit avoir la
 forme d'un nom d'enregistrement, puis le chemin qu'il donne est normalisé,
@@ -1548,14 +1693,45 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 - **Passager** : `subject_id` est l'identifiant transmis par le tableau de
   bord, ou `null` pour un départ tapé à la console. Le nom affiché du
   programme n'est pas écrit.
-- **Au repos** : le dossier racine est en mode 700. Lancée à la main, la
-  console le crée sous le compte qui la lance. Sur un Pi installé par
-  `scripts/install.sh`, c'est `/var/lib/anheart/records`, propriété du compte
-  `anheart` ; la console y écrit sous `root`, depuis son conteneur
-  ([pi-image.md](pi-image.md#sous-quel-compte)). **Il n'y a pas de chiffrement
-  au repos.** C'est la règle d'attente
-  du ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
+- **Au repos** : le dossier racine est en mode 700, et tout ce que la console
+  y crée est privé dès sa création : chaque dossier en 700 (le dossier d'une
+  séance, `ecg_raw/`, `logbook/`), chaque fichier en 600 (manifeste, flux,
+  blocs bruts, sommes de contrôle, marqueur de dépôt posé à côté, journal hors
+  séance, archive temporaire d'un export). Le mode est donné à l'appel qui
+  crée le fichier : il n'y a pas d'instant où il est lisible par d'autres, et
+  le `umask` du processus ne peut que restreindre. Lancée à la main, la
+  console crée le tout sous le compte qui la lance. **Les enregistrements déjà
+  sur le disque ne sont pas modifiés** : ils gardent leurs modes 755 / 644,
+  sous la racine en 700 qui les protégeait déjà. La console ne les réécrit ni
+  au démarrage ni plus tard (ce serait parcourir des milliers de fichiers de
+  sa propre initiative) ; les resserrer est un geste manuel, machine au
+  repos : `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
+  repos** ([menaces.md](menaces.md), MEN-18). C'est la règle d'attente du
+  ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
   HDS / RGPD (ANH-172).
+- **Sur un Pi installé, la console tourne sous `root`**
+  ([pi-image.md](pi-image.md#sous-quel-compte)). Le dossier racine,
+  `/var/lib/anheart/records`, appartient au compte `anheart` (mode 700), mais
+  tout ce que la console y crée appartient à `root` : chaque dossier de
+  séance, ses fichiers, et le journal hors séance. Avec les modes 700 / 600,
+  **ils ne sont donc lisibles que par `root`, et plus par le compte
+  `anheart`**, qui les lisait tant qu'ils étaient en 755 / 644. Le compte
+  `anheart` voit encore les noms des dossiers, pas leur contenu. Pour lire un
+  enregistrement, un technicien a deux moyens :
+  1. **par la console**, machine au repos, sans compte sur le Pi : le bouton
+     « Exporter l'enregistrement » de la page Configuration pour le plus
+     récent, ou `GET /api/records` puis `GET /api/records/{nom}/archive` avec
+     le jeton de la console pour un autre (15.6). C'est le moyen à préférer :
+     l'archive garde les modes privés, et rien n'est changé sur le Pi ;
+  2. **sur le Pi, avec `sudo`** : `sudo ls /var/lib/anheart/records`, puis
+     lire ou copier le dossier voulu sous `root`. C'est le seul moyen pour le
+     journal hors séance, qui n'a pas de route d'export :
+     `sudo less /var/lib/anheart/records/logbook/events.jsonl`.
+
+  Ne pas changer le propriétaire ni les modes des dossiers pour les lire : un
+  enregistrement contient l'ECG brut de la séance. Cela changera quand la
+  console tournera sous le compte `anheart`, sans privilèges (ANH-151) : les
+  nouveaux enregistrements appartiendront alors à ce compte.
 - `config_hash` et `medical_parameters_version` sont des SHA-256 de la
   configuration appliquée (géométrie, plafonds, paliers cardiaques et autres
   limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni
@@ -1563,10 +1739,75 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 ### 15.8 Ce qui n'est pas enregistré aujourd'hui
 
-- Les trames Modbus du variateur : `drive_frames.jsonl` existe et reste vide
-  sur la console (le journal des échanges du pilote n'a ni borne ni vidage).
+- Les échanges avec le variateur d'une console au repos, et ceux d'un
+  armement qui précèdent de plus d'un cycle (0,2 s) l'ouverture de
+  l'enregistrement : `drive_frames.jsonl` commence avec l'enregistrement.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`).
-- Ce qui se passe hors séance : départs refusés, acquittements et réarmements
-  après la fermeture de l'enregistrement.
+- Hors séance, les changements d'état que personne n'a demandés (un verdict
+  ou un défaut variateur qui apparaît ou disparaît console au repos) : le
+  journal hors séance (15.9) ne garde que les événements de la console.
+
+### 15.9 Le journal hors séance
+
+Un enregistrement fermé ne change plus : ses sommes de contrôle indexent
+chaque fichier, un dépôt y est lié, et le reader signale toute modification.
+Ce qui se passe à la console **sans séance enregistrée** n'a donc pas sa place
+dans un enregistrement, et n'était écrit nulle part. C'est maintenant une
+ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
+
+```json
+{"at":"2026-10-08T10:11:12.345Z","monotonic":1234.5,"kind":"refusal","detail":"refused: demarrage refuse : ...","actor":"op-0123456789abcdef"}
+```
+
+| Événement de la console | `kind` | `detail` |
+|---|---|---|
+| départ demandé | `operator_action` (`remote_command` depuis le tableau de bord) | `start_requested`, sans ses mots : ils nomment un programme par son identifiant |
+| départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur, sans l'identifiant du programme ni l'âge du passager qu'elle cite (`[redacted]`) |
+| acquittement | `verdict_ack` | `acknowledged: …` |
+| réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
+| attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |
+| nouvelle du lien avec le tableau de bord | `warning` | `dashboard: …` |
+
+**Ce que ce journal peut contenir, et ce qu'on en fait.** Il n'a ni ECG, ni
+identifiant de passager, ni nom. Il garde, avec leur heure : l'alias de
+l'opérateur de chaque geste (le même pseudonyme stable que dans un
+enregistrement, 15.7) ; le nom des verdicts acquittés ; le texte de
+l'attestation ; un motif tapé à la main pour une fin ou un E-STOP ; les
+nouvelles du lien avec le tableau de bord ; et la phrase de chaque refus. De
+cette phrase, l'identifiant du programme et les mots qui donnent l'âge du
+passager (`passager de 9 ans`) sont retirés avant l'écriture : l'opérateur les
+voit à l'écran, le disque ne les reçoit pas. Elle peut encore citer le détail
+d'un verdict resté en vigueur, et donc, pour un verdict cardiaque, une
+fréquence cardiaque de la séance précédente. Ce journal est borné à 2 Mo (deux
+fichiers de 1 Mo, les lignes les plus anciennes disparaissent d'elles-mêmes),
+la rétention ne le purge jamais, il n'est pas chiffré, et **il n'est pas
+exporté** : ni la liste, ni l'archive, ni le bouton de la console ne le
+donnent. Il se lit sur le disque, sous `root` sur un Pi installé (15.7), et se
+traite comme les enregistrements.
+
+`kind`, `detail` et `actor` suivent les règles d'un événement d'enregistrement
+(15.7) : l'opérateur est un alias, jamais un nom ; les noms saisis, les
+adresses e-mail, l'identifiant du programme demandé et l'âge du passager sont
+retirés du texte (`[redacted]`). Il n'y a pas de séance, donc pas d'axe de temps de séance :
+`at` est l'heure UTC, `monotonic` l'horloge de la console en secondes, qui
+ordonne les lignes d'un même lancement de la console à travers un saut de
+l'heure. Pendant une séance, ces mêmes événements vont dans l'enregistrement
+de la séance, et pas ici.
+
+- **Écrit hors de la boucle**, comme le reste : la boucle remet la ligne à la
+  file du journal (`Journal.log`), bornée par la même limite de 4096 valeurs ;
+  une ligne refusée faute de place est comptée avec les valeurs perdues
+  (`queue_full`), et le journal l'écrit avant sa ligne suivante
+  (`logbook: dropped=<n>`). `fsync` toutes les 2 s au plus, seulement s'il y a
+  eu une ligne.
+- **Borné sur le disque** : quand la ligne suivante ferait passer
+  `events.jsonl` au-delà de 1 Mo, il devient `events.1.jsonl` (qui remplace le
+  précédent) et un nouveau fichier commence. Deux fichiers, 1 Mo chacun au
+  plus, les lignes les plus récentes toujours gardées. La rétention (15.5) n'y
+  touche pas.
+- **Pas un enregistrement** : le nom `logbook` n'a ni la forme d'un dossier
+  d'enregistrement, ni celle d'un marqueur posé à côté d'un dossier
+  (`<dossier>.deposit.json`). La liste, l'export et la purge ne le voient pas.
+  Il n'a pas de route d'export : il se lit sur le disque.

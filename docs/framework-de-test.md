@@ -1494,7 +1494,9 @@ que soit la règle.
   leur durée mesurée en CI : 52 lignes à la mesure, qui désignaient 119 des
   4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a réécrit
   trois de ces tests : leurs remplaçants sont distribués par leur rang
-  jusqu'à la prochaine mise à jour de la table). Ils sont distribués du plus lent au moins
+  jusqu'à la prochaine mise à jour de la table ; plus sept lignes ajoutées par
+  ANH-191 pour ses propres tests, dont la durée est estimée d'après un poste
+  de développement et reste à remplacer par une mesure en CI). Ils sont distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
   paramètre vaut pour chaque cas du test : les 67 cas de
   `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
@@ -3607,14 +3609,18 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 ### 16.8 Limites connues
 
 * **Séances réelles.** La console écrit un enregistrement au format commun
-  (ANH-128), que le rejeu refuse aujourd'hui (code 2) en donnant ses trois
+  (ANH-128), que le rejeu refuse aujourd'hui (code 2) en donnant ses deux
   raisons : ses événements d'entrée sont du texte (`manual session started`,
-  `end_requested: done`) et non les commandes du vocabulaire ; son
-  `drive_frames.jsonl` est vide ; son manifeste n'a pas de géométrie. Il lui
-  manque aussi les tics du repos et `t_received` sur les blocs d'ECG.
+  `end_requested: done`) et non les commandes du vocabulaire ; son manifeste
+  n'a pas de géométrie. Son `drive_frames.jsonl` n'est plus vide (ANH-191) :
+  la console en simulation y écrit les observations d'appel que le rejeu
+  attend, depuis l'ouverture de l'enregistrement. Il lui manque encore les
+  tics du repos, avec les réponses du variateur à ces tics, et `t_received`
+  sur les blocs d'ECG.
   `test_record_console_parity.py` construit cet enregistrement avec la vraie
-  console et vérifie ce refus : le jour où la console écrit ce qu'il faut, ce
-  test échoue, et se remplace par un rejeu.
+  console, vérifie ce refus, et vérifie que la console et la simulation
+  écrivent les mêmes observations d'appel : le jour où la console écrit ce
+  qu'il faut, le test du refus échoue, et se remplace par un rejeu.
 * **Échanges natifs.** Le magnétophone rejoue les observations d'appel du
   variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
   Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement

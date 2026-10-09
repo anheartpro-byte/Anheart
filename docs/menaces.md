@@ -4,6 +4,7 @@
 |---|---|---|---|
 | 2026-10-05 | Codex, agent `/root/anh136_threat_model` — attribution technique de cette rédaction | Base source courante `4e6720b10a2aefb73f6e1c42e51b4434d00042f7`, ANH-136 | Auteur du modèle et des ajouts MEN-14 à MEN-17 ; actualisation après intégration du source ANH-121 |
 | 2026-10-05 | Codex, agent `/root/anh136_aa01af2_gate` — reviewer technique indépendant | Commit `aa01af2030d9a38d67d1f6ec070f678018f096a7`, arbre `fd7883a4cddbac2f7dc76baedd4fb6799ec6f360` | REJECT, confiance HIGH : seul blocage B1, absence de cette inscription de revue (EX-5). Recherche d'omissions effectuée : aucune menace ajoutée. [Compte rendu daté](reviews/anh-136-2026-10-05.md) |
+| 2026-10-08 | Agent développeur du ticket ANH-191 (attribution technique d'agent, aucune signature humaine) | Branche `develop` du 8 octobre 2026 et changements d'ANH-191 | Auteur de l'ajout MEN-18 (enregistrements de séance au repos sur le disque du Pi) ; aucune autre fiche modifiée. Relu le 8 octobre 2026 par un agent reviewer indépendant du rédacteur, sur le commit local `4b89bbd73568b25db1f3556810abf41cd859d412` qui a introduit cette fiche (avant rebase et publication) : APPROVE, aucun blocage. Ce verdict a été transmis par le coordinateur de la fusion ; le rapport n'est pas joint à ce dépôt et ne dit pas ici si des menaces oubliées ont été cherchées. Le SHA publié reste à relire selon la procédure ci-dessous |
 
 Ce registre nomme le commit effectivement relu. Le verdict REJECT n'est pas une
 approbation du candidat corrigé : celui-ci exige une nouvelle revue indépendante
@@ -84,7 +85,7 @@ par endpoint. Les liens ci-dessous incluent les traversées entre couches.
 
 | Flux | Frontière / données | STRIDE et menaces |
 |---|---|---|
-| F1 tablette ↔ Pi | Navigateur/LAN → API et WebSocket ; commandes, jeton, télémétrie | S/T/E MEN-02, MEN-05 ; R MEN-03 ; I/D MEN-05 |
+| F1 tablette ↔ Pi | Navigateur/LAN → API et WebSocket ; commandes, jeton, télémétrie, export d'un enregistrement | S/T/E MEN-02, MEN-05 ; R MEN-03 ; I/D MEN-05 ; I MEN-18 |
 | F2 Pi ↔ variateur | Processus/port série → Modbus ; consignes et retours | S/T/D MEN-14 ; E MEN-04 ; R MEN-11 ; I : paramètres lisibles après accès local (MEN-04) |
 | F3 BITalino → Pi | Bluetooth/capteur → traitement ; ECG et qualité | S/T/D MEN-15 ; I MEN-13 ; R MEN-11 ; E MEN-04 |
 | F4 Pi ↔ Convex | Appareil → Internet/cloud ; Bearer, roster, AUTO, télémétrie | S/E MEN-01, MEN-02 ; T MEN-08, MEN-11 ; R MEN-03, MEN-11 ; I MEN-09, MEN-13 ; D MEN-12 |
@@ -93,7 +94,9 @@ par endpoint. Les liens ci-dessous incluent les traversées entre couches.
 | F7 CI → Vercel / Convex | Code tiers/runner → artefact et autorité de déploiement | S/T/E MEN-06, MEN-16 ; R MEN-16 ; I MEN-13, MEN-16 ; D MEN-16 |
 | F8 OTA → Pi | Distribution/signature → installation du logiciel de sécurité | S/T/E MEN-10 ; R MEN-10, MEN-16 ; I MEN-04 ; D MEN-10 |
 
-Couche Pi : MEN-02, MEN-04, MEN-05, MEN-10, MEN-11, MEN-14, MEN-15.
+Couche Pi : MEN-02, MEN-04, MEN-05, MEN-10, MEN-11, MEN-14, MEN-15, MEN-18
+(données au repos sur le disque du Pi : pas un flux, d'où son absence des
+autres lignes du tableau).
 Couche Convex : MEN-01, MEN-03, MEN-08, MEN-09, MEN-12, MEN-13, MEN-17.
 Couche site/Clerk : MEN-03, MEN-07, MEN-08, MEN-09, MEN-17.
 Couche build/livraison : MEN-06, MEN-10, MEN-13, MEN-16.
@@ -353,6 +356,21 @@ F5, F6 · Convex/site · S, I, E · Haute, identité et santé ; personne indire
 
 **Preuve de fermeture attendue.** Compte synthétique A ne peut lier la fiche non revendiquée B en fournissant son e-mail ; invitation signée autorisée et rejeu webhook idempotent.
 
+## MEN-18 Enregistrements de séance non chiffrés sur le disque du Pi
+
+- Status: OPEN
+- Issues: [ANH-172](https://linear.app/anheart/issue/ANH-172/donnees-de-sante-decision-avis-ecrit-juriste-ou-dpo-sur-convex-clerk), [ANH-130](https://linear.app/anheart/issue/ANH-130/depot-des-enregistrements-de-seance-dans-convex-storage-organise-par), [ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu), [ANH-191](https://linear.app/anheart/issue/ANH-191/boite-noire-suites-danh-128-inodes-trames-variateur-journal-hors)
+
+F1 (export) et stockage local · Pi · I · Haute, confidentialité santé ; personne indirectement.
+
+**Scénario.** Le support de stockage du Pi sort de la machine (perte, vol, retour en maintenance, réemploi), ou une personne obtient un accès privilégié au système : les enregistrements de séance qui s'y trouvent sont lus. Ils contiennent l'ECG brut et les autres voies du capteur, la fréquence cardiaque, le déroulé de chaque séance, l'identifiant du passager transmis par le tableau de bord et un pseudonyme stable de l'opérateur.
+
+**Existant vérifié dans le source.** [`prepare_root`](../raspberry-pi/src/record/journal.py) réserve le dossier des enregistrements au compte de la console (mode 700). [`Writer.create`, `create_private` et `write_file`](../raspberry-pi/src/record/writer.py) créent chaque dossier de séance en 700 et chaque fichier en 600, dès l'appel qui le crée ; le journal hors séance ([`Logbook`](../raspberry-pi/src/record/logbook.py)) et le marqueur de dépôt ([`confirm_deposit`](../raspberry-pi/src/record/retention.py)) suivent la même règle ([ANH-191](https://linear.app/anheart/issue/ANH-191/boite-noire-suites-danh-128-inodes-trames-variateur-journal-hors)). Un enregistrement ne porte ni nom de passager, ni nom d'opérateur ([`operator_alias`, `redact`](../raspberry-pi/src/record/session.py)), ni adresse e-mail, ni clé de machine. L'export passe par la console, derrière son jeton, machine au repos ([`_register_records`](../raspberry-pi/src/web/routes.py)). Ces droits de fichiers ne valent que sur la machine en marche et contre un compte sans privilèges : **les enregistrements ne sont pas chiffrés au repos**, et une archive exportée ne l'est pas non plus. Les enregistrements créés avant ce changement gardent leurs modes d'origine sous le dossier en 700. Aucun enregistrement n'est purgé sans dépôt confirmé hors de la machine, et ce dépôt n'existe pas encore : ils s'accumulent sur le disque. L'alias de l'opérateur est un pseudonyme, pas un anonymat. Sur un Pi installé, la console écrit encore sous un compte privilégié ([pi-image.md](pi-image.md#sous-quel-compte)). Rien de ceci n'a été vérifié sur une machine réelle.
+
+**Manquant.** [ANH-172](https://linear.app/anheart/issue/ANH-172/donnees-de-sante-decision-avis-ecrit-juriste-ou-dpo-sur-convex-clerk) doit dire ce qui est exigé du disque du Pi (chiffrement au repos ou purge après dépôt) et les durées de conservation. [ANH-130](https://linear.app/anheart/issue/ANH-130/depot-des-enregistrements-de-seance-dans-convex-storage-organise-par) apporte le dépôt hors de la machine, condition de la purge locale déjà écrite. [ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu) durcit l'accès au système et fait tourner la console sans privilèges. La forme de l'alias de l'opérateur est une décision ouverte du chef de projet, inscrite dans [ANH-191](https://linear.app/anheart/issue/ANH-191/boite-noire-suites-danh-128-inodes-trames-variateur-journal-hors). Le contrôle retenu (chiffrement, purge, ou les deux) n'est pas encore choisi : aucun n'est annoncé ici comme fait.
+
+**Preuve de fermeture attendue.** Avis ANH-172 joint et appliqué ; sur une machine d'essai, selon le contrôle retenu, des enregistrements synthétiques illisibles une fois le support sorti de la machine, ou absents du disque au terme de la durée de conservation après un dépôt confirmé ; droits des dossiers et fichiers constatés sur un Pi installé ; décision écrite sur l'alias de l'opérateur.
+
 ## Traçabilité vérifiable et entretien
 
 Le format consommé par le test est un titre `## MEN-nn`, une ligne
@@ -374,7 +392,8 @@ invalide, ticket absent du registre ou lien ne correspondant pas au ticket.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
 `get_issue`. Chaque ligne porte sa date de lecture : 2026-10-05 pour le lot
-initial, 2026-10-06 pour ANH-177. Aucun jeton Linear n'est requis en CI.
+initial, 2026-10-06 pour ANH-177, 2026-10-08 pour ANH-172 et ANH-191
+(MEN-18). Aucun jeton Linear n'est requis en CI.
 Ce snapshot atteste **l'existence au jour de lecture**, pas le statut actuel,
 l'achèvement d'une mesure ou la présence d'un backlink dans le ticket.
 

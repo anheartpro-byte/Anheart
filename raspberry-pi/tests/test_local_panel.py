@@ -34,11 +34,13 @@ from src.local_panel import (
     ECG_RETRY,
     EXIT_CONFIG,
     EXIT_FAILED,
+    EXIT_GRACE,
     EXIT_OK,
     DriveSide,
     EcgLink,
     LocalPanel,
     UvicornRunner,
+    bound_exit,
     build_drive,
     build_ecg_client,
     build_panel,
@@ -570,14 +572,61 @@ def test_main_refuses_a_bad_configuration_with_every_problem(
 
 def test_main_runs_the_console_on_a_good_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[LocalConfig] = []
+    handed: list[Callable[[int], object]] = []
 
-    async def fake(config: LocalConfig) -> int:
+    async def fake(config: LocalConfig, *, stopped: Callable[[int], object]) -> int:
         seen.append(config)
+        handed.append(stopped)  # kept, never called: it would end this very process
         return EXIT_OK
 
     monkeypatch.setattr(local_panel, "run_console", fake)
     assert main(BASE_ENV) == EXIT_OK
     assert seen[0].motor_backend is MotorBackend.SIM
+    assert handed == [bound_exit], "ANH-191 EX-7: the entry point bounds its own exit"
+
+
+# =========================================================================
+# ANH-191 EX-7: once the console has stopped, nothing holds the process
+# =========================================================================
+
+
+async def test_ex7_run_console_says_it_has_stopped_with_the_code_it_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(local_panel, "UvicornRunner", _fake_runner)
+    stop = asyncio.Event()
+    stop.set()
+    codes: list[int] = []
+    code = await run_console(config_from(_recording_env(tmp_path)), stop=stop, stopped=codes.append)
+    assert code == EXIT_OK
+    assert codes == [EXIT_OK], "said once the console has stopped, and before the caller goes on"
+
+
+async def test_ex7_a_console_that_raises_has_still_stopped_and_says_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(_self: LocalPanel, _stop: asyncio.Event, _web: object) -> int:
+        raise RuntimeError("injected: the console's run raised")
+
+    monkeypatch.setattr(LocalPanel, "run", broken)
+    codes: list[int] = []
+    with pytest.raises(RuntimeError, match="injected"):
+        await run_console(config_from(_recording_env(tmp_path)), stopped=codes.append)
+    assert codes == [EXIT_FAILED]
+
+
+def test_ex7_the_exit_deadline_ends_the_process_with_its_code_when_nothing_else_does(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Driven here with a harmless ``leave``; the real one is measured in a process of its own."""
+    left: list[int] = []
+    deadline = bound_exit(EXIT_FAILED, grace=Seconds(0.01), leave=left.append)
+    deadline.join(5.0)
+    assert left == [EXIT_FAILED]
+    assert deadline.daemon, "an ordinary exit takes the deadline with it"
+    assert deadline.name == "exit-deadline"
+    assert "console exit forced 0 s after the console stopped" in caplog.text
+    assert Seconds(5.0) == EXIT_GRACE, "what the console gives itself when nobody says otherwise"
 
 
 def test_main_reads_the_environment_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:

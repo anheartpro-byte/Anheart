@@ -20,6 +20,7 @@ from src.ecg_pipeline import TreatFunction
 from src.local_panel import CloudTransportFactory
 from src.record.journal import Journal
 from src.record.reader import Recording, read
+from src.record.retention import records
 from src.record.session import SessionRecorder
 from src.result import Ok
 from src.training.runtime import RuntimeState
@@ -68,7 +69,7 @@ class RecordedRig:
 
     def records(self) -> list[Path]:
         """Every record directory, oldest first (the names start with the UTC start)."""
-        return sorted(path for path in self.root.iterdir() if not path.name.startswith("."))
+        return list(records(self.root))
 
     def only_record(self) -> Path:
         records = self.records()
@@ -87,9 +88,13 @@ class RecordedRig:
         return [e.detail for e in self.rig.events if e.kind is EventKind.RECORDING]
 
     def everything_on_disk(self) -> bytes:
+        return self.everything_under(self.root)
+
+    def everything_under(self, where: Path) -> bytes:
+        """Every file under ``where`` and every name: equal twice means nothing changed."""
         return b"".join(
-            path.read_bytes() for path in sorted(self.root.rglob("*")) if path.is_file()
-        ) + "\n".join(path.name for path in self.root.rglob("*")).encode("utf-8")
+            path.read_bytes() for path in sorted(where.rglob("*")) if path.is_file()
+        ) + "\n".join(path.name for path in where.rglob("*")).encode("utf-8")
 
 
 def recorded_rig(
