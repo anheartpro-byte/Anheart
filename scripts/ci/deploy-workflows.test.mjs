@@ -61,6 +61,8 @@ const BUTTONS = [
     branch: "main",
     target: "production",
     shown: "production",
+    // The button, and the release pipeline (release.yml), which calls these jobs after Convex.
+    starts: ["workflow_dispatch", "workflow_call"],
     inputs: ["project", "confirmation"],
     request: [GUARD, CONFIRM, REMIND],
     pull: "pull --yes --environment=production",
@@ -74,6 +76,7 @@ const BUTTONS = [
     branch: "develop",
     target: "preview",
     shown: "préversion",
+    starts: ["workflow_dispatch"],
     inputs: ["project", "production_data"],
     request: [GUARD, AGREE, REMIND],
     pull: "pull --yes --environment=preview --git-branch=develop",
@@ -236,15 +239,37 @@ test("no push deploys: the configuration both Vercel projects read turns Git dep
 });
 
 test("each button has its French name, and starts by hand and from nothing else", () => {
-  for (const { file, name, text, inputs } of BUTTONS) {
+  for (const { file, name, text, inputs, starts } of BUTTONS) {
     assert.equal(text.split("\n")[0], `name: ${name}`, file);
-    // `on:` is written once, as a block, and holds one event.
+    // `on:` is written once, as a block, and holds the button, alone or with the call of the release pipeline.
     assert.deepEqual(text.match(/^on:.*$/gm), ["on:"], file);
-    assert.deepEqual(keysUnder(text, "on"), ["workflow_dispatch"], file);
-    assert.doesNotMatch(text, /pull_request|workflow_run|workflow_call|repository_dispatch|deployment_status|schedule/, file);
+    assert.deepEqual(keysUnder(text, "on"), starts, file);
+    assert.doesNotMatch(text, /pull_request|workflow_run|repository_dispatch|deployment_status|schedule|\bpush:/, file);
+    assert.equal(text.includes("workflow_call"), starts.includes("workflow_call"), file);
     assert.deepEqual(keysUnder(text, "    inputs"), inputs, file);
     assert.deepEqual(block(text, "      project").slice(1), ["required: true", "type: choice", "options:", ...CHOICES.map((choice) => `- ${choice}`)], file);
   }
+});
+
+test("the production button can be called by the release pipeline alone, with the two inputs a person gives it", () => {
+  // The same jobs then run, behind the same guards: the pipeline deploys production to Vercel by them, not by a copy.
+  const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
+  assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"], "the call declares a secret or an output");
+  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string"]);
+  // What the pipeline passes for `project` is one of the choices of the button: each of its jobs reads it by name.
+  const release = workflow("release.yml");
+  const passed = [
+    ...release.matchAll(
+      /^ {4}uses: \.\/\.github\/workflows\/deploy-production\.yml\n {4}with:\n {6}project: (.*)\n {6}confirmation: \$\{\{ inputs\.confirmation \}\}\n {4}secrets: inherit$/gm,
+    ),
+  ].map((match) => match[1] ?? "");
+  assert.deepEqual(passed, ["site", "simulation"]);
+  for (const project of passed) assert.ok(CHOICES.includes(project), project);
+  // No other workflow calls a button, and the preview button cannot be called at all.
+  for (const file of ["ci.yml", "codeql.yml", "pi-install.yml", "deploy-preview.yml", "deploy-production.yml"]) {
+    assert.doesNotMatch(workflow(file), /uses: \.\/\.github\/workflows\/deploy-/, file);
+  }
+  assert.doesNotMatch(release, /deploy-preview\.yml/);
 });
 
 test("the jobs and their steps are the ones this file knows about, the same behind both buttons", () => {
