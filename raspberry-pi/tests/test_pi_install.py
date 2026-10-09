@@ -39,13 +39,8 @@ from typing import Final
 
 import pytest
 
-from src.local_config import (
-    RECORD_VERSION,
-    UNVERSIONED,
-    EcgSource,
-    MotorBackend,
-    load_local_config,
-)
+from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_PATH, read_software_version
+from src.local_config import EcgSource, MotorBackend, load_local_config
 from src.result import Ok
 
 CONSOLE: Final[Path] = Path(__file__).resolve().parents[1]
@@ -738,10 +733,13 @@ def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:
 # =========================================================================
 
 UNSET: Final[str] = "<unset>"
+RETIRED_KEY: Final[str] = "ANHEART_SOFTWARE_VERSION"
+"""The key the image used to hand the console its version through. Nothing reads it now."""
 
 
-def _stamped(directory: Path, *, built: str | None, configured: str | None = None) -> str:
-    """What the entrypoint, run in ``directory``, hands the console as its software version.
+def _handed(directory: Path, *, built: str | None, configured: str | None = None) -> str:
+    """What the entrypoint, run in ``directory``, leaves in the console's environment
+    under the retired key.
 
     ``built`` is the content of the ``VERSION`` file there (``None``: no file),
     ``configured`` what the machine's configuration sets (``None``: nothing).
@@ -751,9 +749,9 @@ def _stamped(directory: Path, *, built: str | None, configured: str | None = Non
         (directory / "VERSION").write_text(built, encoding="utf-8")
     environment = {"PATH": os.environ["PATH"]}
     if configured is not None:
-        environment["ANHEART_SOFTWARE_VERSION"] = configured
+        environment[RETIRED_KEY] = configured
     done = subprocess.run(  # noqa: S603  # fixed argv, the entrypoint of this repository
-        [SH, str(ENTRYPOINT), SH, "-c", f'printf %s "${{ANHEART_SOFTWARE_VERSION-{UNSET}}}"'],
+        [SH, str(ENTRYPOINT), SH, "-c", f'printf %s "${{{RETIRED_KEY}-{UNSET}}}"'],
         cwd=directory,
         env=environment,
         capture_output=True,
@@ -765,71 +763,52 @@ def _stamped(directory: Path, *, built: str | None, configured: str | None = Non
     return done.stdout
 
 
-@needs_sh
-def test_the_image_stamps_its_records_with_the_version_it_was_built_from(tmp_path: Path) -> None:
-    """Without this the records of an installed Pi all said ``unversioned``."""
+def test_ex5_the_records_of_an_installed_pi_carry_the_version_the_image_was_built_from() -> None:
+    """The console reads the image's ``VERSION`` itself: the page, the heartbeat, the manifest.
+
+    Before, the entrypoint handed it over through the environment, for the
+    manifest alone, and a console started any other way wrote ``unversioned``.
+    """
     version = _version()
-    stamped = _stamped(tmp_path, built=_read(VERSION_FILE))
-    assert stamped == version
-    loaded = load_local_config(
-        {
-            "MOTOR_BACKEND": "sim",
-            "ECG_SOURCE": "sim",
-            "ARM_RADIUS_M": "1.5",
-            "ANHEART_SOFTWARE_VERSION": stamped,
-        }
-    )
-    assert isinstance(loaded, Ok)
-    assert loaded.value.record.software_version == version
-    assert version != UNVERSIONED
+    assert read_software_version() == version
+    assert version != UNKNOWN_SOFTWARE_VERSION
+    # The end-to-end install still requires it of a real record on a real machine.
+    assert r"\"software_version\":\"$version\"" in _read(END_TO_END)
 
 
 @needs_sh
-@pytest.mark.parametrize(
-    "built",
-    [
-        "pi-1.4.2\n",
-        "pi-1.4.2",
-        "1.0+build_7\n",
-        "x" * 128 + "\n",
-        "x" * 129 + "\n",
-        "",
-        "\n",
-        "pi 1.4.2\n",
-        "pi/1.4.2\n",
-        "pi-1.4.2\nsecond line\n",
-        "pi-\u00e9\n",
-        "$(id)\n",
-    ],
-)
-def test_the_image_only_stamps_a_version_the_console_accepts(tmp_path: Path, built: str) -> None:
-    """A value the console refuses would stop it at startup (exit 2): never exported."""
-    # The shell reads the file the way ``$(cat VERSION)`` does: trailing newlines off.
-    read = built.rstrip("\n")
-    accepted = RECORD_VERSION.fullmatch(read) is not None
-    assert _stamped(tmp_path, built=built) == (read if accepted else UNSET)
+@pytest.mark.parametrize("built", ["pi-1.4.2\n", "$(id)\n", None])
+def test_ex5_the_entrypoint_hands_the_console_no_version(tmp_path: Path, built: str | None) -> None:
+    """Whatever ``VERSION`` holds, the entrypoint neither reads it nor exports anything of it."""
+    handed = _handed(tmp_path, built=built)
+    assert handed == UNSET
+    # What the machine's configuration sets is passed on untouched, and ignored by the console.
+    passed_on = _handed(tmp_path, built=built, configured="set-by-hand")
+    assert passed_on == "set-by-hand"
+    entrypoint = _read(ENTRYPOINT)
+    assert RETIRED_KEY not in entrypoint
+    assert "cat VERSION" not in entrypoint
+    assert "export " not in entrypoint
 
 
-@needs_sh
-def test_the_image_stamps_nothing_without_a_version_file(tmp_path: Path) -> None:
-    assert _stamped(tmp_path, built=None) == UNSET
+def test_ex5_no_example_configuration_offers_the_retired_key() -> None:
+    for template in (ENV_TEMPLATE, CONSOLE / ".env.example"):
+        assert RETIRED_KEY not in _read(template), template.name
+    unit = "\n".join(_unit_lines())
+    assert RETIRED_KEY not in unit
+    assert RETIRED_KEY not in _read(INSTALLER)
+    assert RETIRED_KEY not in _read(DOCKERFILE)
 
 
-@needs_sh
-def test_a_version_set_in_the_configuration_is_kept(tmp_path: Path) -> None:
-    """The key stays the machine's to set; a blank one counts as not set, as for the console."""
-    assert _stamped(tmp_path, built="pi-1.4.2\n", configured="set-by-hand") == "set-by-hand"
-    assert _stamped(tmp_path, built="pi-1.4.2\n", configured="") == "pi-1.4.2"
-
-
-def test_the_entrypoint_finds_the_version_file_where_the_image_puts_it() -> None:
-    """``VERSION`` is read from the working directory: ``/app``, which the unit leaves alone."""
+def test_the_console_finds_the_version_file_where_the_image_puts_it() -> None:
+    """``VERSION`` is read next to ``src/``, wherever the console is started from."""
+    assert VERSION_PATH == VERSION_FILE
     dockerfile = _read(DOCKERFILE)
-    assert dockerfile.index("\nWORKDIR /app\n") < dockerfile.index("\nCOPY VERSION ./VERSION\n")
+    workdir = dockerfile.index("\nWORKDIR /app\n")
     assert len(_captures(r"^(WORKDIR) ", dockerfile)) == 1
-    words = _directive("ExecStart")[0].split()
-    assert "--workdir" not in words
-    assert "-w" not in words
+    # Both copied under the one working directory: /app/src and /app/VERSION.
+    assert workdir < dockerfile.index("\nCOPY src/ ./src/\n")
+    assert workdir < dockerfile.index("\nCOPY VERSION ./VERSION\n")
 
 
 # =========================================================================

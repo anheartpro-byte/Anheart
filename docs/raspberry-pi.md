@@ -113,6 +113,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
+| `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : joignable, injoignable, incompatible, clé refusée, en erreur, en attente, non configuré. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; jamais « joignable » sans réponse depuis 25 s, jamais « injoignable » sur une seule requête perdue (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
 | `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
@@ -1497,7 +1498,7 @@ sort avec le code 2.
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
-| `ANHEART_SOFTWARE_VERSION` | `unversioned` | version du logiciel écrite dans le manifeste (même clé que la simulation). Dans l'image Docker, le script d'entrée la règle sur le contenu de `VERSION` quand la configuration ne la règle pas ([pi-image.md](pi-image.md#la-version)) | lettres ASCII, chiffres, `_`, `.`, `+`, `-` |
+| `ANHEART_SOFTWARE_VERSION` | - | **n'est plus lue.** La version écrite dans le manifeste (`software_version`) est le contenu de `raspberry-pi/VERSION` (`/app/VERSION` dans l'image), la même que celle de la page et du heartbeat ([section 14](#14-versions-et-compatibilité)). Une valeur encore réglée ne change rien et n'arrête plus le démarrage, même mal formée : la console l'écrit une fois dans son journal (`configuration: ANHEART_SOFTWARE_VERSION is set and no longer read`) | - |
 | `RECORD_DRIVE_SDK_FRAMES` | `false` | diagnostic de banc de la liaison variateur : enregistre aussi les appels du SDK Modbus avec leurs octets (chaque demande envoyée, chaque fragment reçu), en plus des transactions de registre. Environ 0,95 Mo par minute au lieu de 0,2 Mo avec le vrai pilote ([15.2](#152-aucune-écriture-dans-la-boucle)) ; sans effet sur le simulateur | `true` ou `false` |
 
 Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
@@ -1631,7 +1632,12 @@ Ce que fait la console :
   `raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker). Le dépôt y porte
   `pi-0.0.0-dev` ; le script de release (`scripts/release.sh`, voir
   [release.md](release.md)) y écrit le tag de chaque version. Fichier absent, illisible ou mal formé : la console démarre
-  quand même et annonce `pi-unknown`, jamais une version devinée.
+  quand même et annonce `pi-unknown`, jamais une version devinée. Cette valeur
+  unique sert trois fois : la page l'affiche (pastille **Version**), chaque
+  heartbeat l'annonce, et le manifeste de chaque enregistrement de séance la
+  porte (`software_version`). Aucune variable d'environnement ne la règle :
+  `ANHEART_SOFTWARE_VERSION`, qui réglait autrefois celle du manifeste seul,
+  n'est plus lue ([12.1](#121-clés-lues-par-la-console-srclocal_configpy)).
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les
@@ -1669,6 +1675,31 @@ toutes les 60 s tant que l'incompatibilité dure (`INCOMPATIBLE_REPEAT`) : la
 liste n'est envoyée qu'aux écrans connectés à ce moment-là, et une page ouverte
 plus tard doit l'apprendre aussi. Le journal, lui, ne l'écrit qu'au changement.
 
+**L'état du lien, en permanence.** En plus de cet événement, la page porte la
+pastille **Serveur**, sur toutes les pages : `joignable`, `injoignable`,
+`incompatible`, `cle refusee`, `en erreur`, `en attente` ou `non configure`
+([console-locale.md](console-locale.md#pastille-serveur--le-lien-avec-le-tableau-de-bord)).
+`src/link_state.py` tient cet état à partir de ce que chaque échange du lien a
+dit, et `/api/panel` le sert :
+
+* le lien ne fait **aucune requête pour lui** : il note ce que disent le
+  heartbeat, les lancements, l'envoi des séances et la question d'arrêt, qu'il
+  fait de toute façon. La page le lit par la route qu'elle interroge déjà
+  chaque seconde. Rien n'en est lu ni écrit dans le tic de commande ;
+* une clé refusée (401, 403) et un contrat refusé (426) sont affichés à la
+  première réponse qui le dit, et tiennent jusqu'à la preuve du contraire. La
+  route `/api/machine/training/status`, qui répond sous n'importe quel contrat
+  pour qu'un arrêt passe toujours, ne prouve rien du contrat : pendant une
+  séance sous un 426, la pastille reste `incompatible` alors que cette route
+  répond toutes les 3 s ;
+* un silence, ou des erreurs du serveur (5xx, 408, 425, 429), ne changent
+  l'affichage qu'après **25 s** sans aucune réponse utilisable
+  (`UNREACHABLE_AFTER`, deux heartbeats et demi) : une requête lente ou perdue
+  ne fait pas clignoter la pastille. Le retour est immédiat ;
+* le motif affiché sous la pastille ne reprend, de ce que le serveur envoie,
+  que le code HTTP, le code stable et les majeures servies, sur une ligne de
+  160 caractères au plus. La phrase du serveur reste dans le journal.
+
 Pourquoi la version du contrat est une constante du code, et non lue dans le
 fichier partagé à l'exécution : la console est déployée avec le seul dossier
 `raspberry-pi/` (`scripts/pi/deploy.sh`, contexte de construction Docker), donc
@@ -1690,9 +1721,13 @@ Non fait par ce logiciel :
   `dashboard:` ([15.1](#151-où-et-quand)).
 * Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
   utilisent un transport factice des deux côtés.
-* La console n'affiche de l'état du lien que la phrase
-  `serveur incompatible (...)` : ni la version du serveur, ni ce qui reste à
-  envoyer ne sont montrés sur la page (ticket ANH-210).
+* La pastille **Serveur** dit l'état du lien, pas ce qu'il reste à envoyer :
+  le nombre de séances que le tableau de bord n'a pas encore reçues entières
+  n'est pas montré sur la page.
+* Une incompatibilité que la console a lue dans une annonce du serveur
+  (`/api/machine/training/poll`) n'est levée que par l'annonce suivante, et la
+  console ne pose cette question qu'au repos avec `PROGRAMS_ENABLED=true` :
+  pendant une séance, la pastille garde ce que la dernière annonce a dit.
 
 Sous un 426, rien n'est acquitté et **rien n'est abandonné**
 ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)) : la séance en cours
@@ -1702,6 +1737,17 @@ de la console (ou que la console, mise à jour et redémarrée, parle celle du
 serveur), la séance est déclarée, envoyée entière et **close avec sa raison**.
 D'ici là elle reste `active` côté Convex pour une séance lancée du site, et
 inconnue de Convex pour une séance démarrée à la machine.
+
+Le cas d'un changement de majeure **au milieu** d'une séance est rejoué sur la
+console entière, en simulation, par
+`tests/test_link_indicator.py::test_acceptance_a_dashboard_answers_426_in_the_middle_of_a_session` :
+une séance déjà connue du tableau de bord, qui se met à répondre 426. La page
+lit `incompatible` tant que cela dure, la séance continue puis se termine à la
+console, rien n'atteint le tableau de bord et rien n'est abandonné ; quand la
+majeure est de nouveau servie, la page lit `joignable`, chaque seconde de
+l'enregistrement est sur le tableau de bord une seule fois, et la séance y est
+close avec `operator_stop`. Le tableau de bord de ce test est un double en
+mémoire, pas un déploiement Convex.
 
 ---
 

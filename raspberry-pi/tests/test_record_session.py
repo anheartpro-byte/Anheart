@@ -22,6 +22,7 @@ from src import local_panel
 from src.bitalino_client import ChannelData, LinkStats, SampleBatch
 from src.clock import ManualClock
 from src.cloud_sync import DASHBOARD_OPERATOR
+from src.contract import SoftwareVersion
 from src.control_surface import EventKind as SurfaceEvent
 from src.control_surface import SessionEvent
 from src.local_panel import (
@@ -329,17 +330,17 @@ def test_the_manifest_of_a_dashboard_launch_carries_identifiers_only(tmp_path: P
 def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
     limits = RuntimeLimits(slew=RpmPerSecond(15.0), start_hysteresis_rpm=MotorRpm(10))
     safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
+    version = SoftwareVersion("pi-1.4.2")
     env = {
         **BENCH_ENV,
         "RECORD_MACHINE_ID": "machine-7",
         "RECORD_ORGANIZATION_ID": "org-9",
-        "ANHEART_SOFTWARE_VERSION": "1.4.2+abc",
     }
-    base = stamp_for(config_of(env), limits, safety, DEFAULT_MOTION_LIMITS)
+    base = stamp_for(config_of(env), limits, safety, DEFAULT_MOTION_LIMITS, version)
     assert (base.machine_id, base.organization_id, base.software_version) == (
         "machine-7",
         "org-9",
-        "1.4.2+abc",
+        "pi-1.4.2",
     )
     assert re.fullmatch(r"[0-9a-f]{64}", base.config_hash)
     assert re.fullmatch(r"[0-9a-f]{64}", base.medical_parameters_version)
@@ -350,10 +351,10 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         "MACHINE_API_KEY": "machine-key",
         "CONVEX_URL": "https://example.convex.site",
     }
-    assert stamp_for(config_of(secrets), limits, safety, DEFAULT_MOTION_LIMITS) == base
+    assert stamp_for(config_of(secrets), limits, safety, DEFAULT_MOTION_LIMITS, version) == base
 
     other_radius = stamp_for(
-        config_of({**env, "ARM_RADIUS_M": "1.6"}), limits, safety, DEFAULT_MOTION_LIMITS
+        config_of({**env, "ARM_RADIUS_M": "1.6"}), limits, safety, DEFAULT_MOTION_LIMITS, version
     )
     assert other_radius.config_hash != base.config_hash
     assert other_radius.medical_parameters_version == base.medical_parameters_version
@@ -363,6 +364,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         limits,
         SafetyLimits(hard_max_bpm=Bpm(150), critical_bpm=Bpm(160)),
         DEFAULT_MOTION_LIMITS,
+        version,
     )
     assert other_tiers.medical_parameters_version != base.medical_parameters_version
     assert other_tiers.config_hash != base.config_hash
@@ -372,8 +374,35 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         limits,
         safety,
         DEFAULT_MOTION_LIMITS,
+        version,
     )
     assert serial.config_hash != base.config_hash
+
+
+def test_ex5_the_stamp_takes_its_version_from_the_build_and_never_from_the_environment() -> None:
+    """EX-5: the version is what the caller read in ``VERSION``; the retired key changes nothing."""
+    limits = RuntimeLimits(slew=RpmPerSecond(15.0), start_hysteresis_rpm=MotorRpm(10))
+    safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
+    built = SoftwareVersion("pi-1.4.2")
+    plain = stamp_for(config_of(BENCH_ENV), limits, safety, DEFAULT_MOTION_LIMITS, built)
+    overridden = stamp_for(
+        config_of({**BENCH_ENV, "ANHEART_SOFTWARE_VERSION": "set-by-hand"}),
+        limits,
+        safety,
+        DEFAULT_MOTION_LIMITS,
+        built,
+    )
+    assert plain.software_version == "pi-1.4.2"
+    assert overridden == plain
+    # The version is a fact about the build, not a setting: another build, the same hashes.
+    other = stamp_for(
+        config_of(BENCH_ENV), limits, safety, DEFAULT_MOTION_LIMITS, SoftwareVersion("pi-1.4.3")
+    )
+    assert other.software_version == "pi-1.4.3"
+    assert (other.config_hash, other.medical_parameters_version) == (
+        plain.config_hash,
+        plain.medical_parameters_version,
+    )
 
 
 # =========================================================================

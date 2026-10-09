@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import fields
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from pydantic import TypeAdapter
 
 from simulation.scenario import Scenario, SessionKind
 from src.clock import Clock
+from src.contract import read_software_version
 from src.record.codec import document
 from src.record.rows import JsonValue
 from src.record.schema import Clocks, GeometrySnapshot, Manifest, Profile
@@ -73,7 +73,8 @@ def manifest_for(
         subject_id="synthetic-subject",
         profile=frozen,
         config_hash=config_hash,
-        software_version=os.environ.get("ANHEART_SOFTWARE_VERSION", "unversioned"),
+        # The build the scenario ran: raspberry-pi/VERSION, as on the console.
+        software_version=read_software_version(),
         contract_version="2",
         medical_parameters_version=hashlib.sha256(SHIPPED_DEFAULTS_PATH.read_bytes()).hexdigest(),
         clocks=Clocks(monotonic_start=origin, utc_start=stamp, ntp_offset_s=None),

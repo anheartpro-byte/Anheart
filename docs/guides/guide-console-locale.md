@@ -45,6 +45,13 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > personne à bord déclarée par l'API, que la page ne propose pas. Six captures ont été
 > reprises ce jour-là (voir l'annexe) ; ces nouveaux éléments n'ont pas de capture à
 > eux.
+>
+> L'ajout du 9 octobre 2026 (ticket ANH-210) décrit deux pastilles de plus dans la
+> barre latérale, **Serveur** et **Version**, la ligne de détail sous les pastilles et
+> une troisième pastille dans la barre de la vue mobile (§5, §9, §12, §13.10). Il vient
+> du code et des tests automatiques ; il n'a pas été rejoué dans un navigateur, ni face
+> à un vrai tableau de bord. **Aucune capture n'a été reprise** : celles de ce guide
+> montrent encore six pastilles, sans **Serveur** ni **Version**.
 
 ---
 
@@ -341,6 +348,10 @@ Repères de la capture (barre latérale, de haut en bas) :
 6. **Securite** (`none`) : action de sécurité en cours.
 7. **Console** (`mouvement actif`) : cette console peut commander le moteur.
 8. Ligne `127.0.0.1:8731 boucle locale · sans jeton` : adresse d'écoute et protection.
+   Depuis le 9 octobre 2026, deux pastilles s'affichent entre les repères 7 et 8,
+   **Serveur** et **Version**, suivies d'une ligne de détail sur le lien avec le
+   tableau de bord. La capture date d'avant ; elles sont décrites dans le tableau
+   ci-dessous.
 9. Navigation : **Tableau de bord**, **Capteurs** (avec un point de couleur par
    capteur, et son canal `A1` à `A6`), **Seance**, **Configuration**, **Securite**.
 10. Pied de page, à gauche : `liaison ouverte · repos` (liaison et mode). Pendant une
@@ -372,6 +383,26 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle termine la séance : arrêt en douceur (`ramp_down`), arrêt d'urgence (`quick_stop`), ou arrêt définitif pour ce processus (`go_silent`). Avec le `ramp_down` de la règle `session_standstill`, la vitesse commandée est déjà à 0 quand la pastille passe au rouge et la vitesse mesurée suit. Dans tous les cas, c'est Rotation qui dit que le bras est arrêté |
 | **Console** | `mouvement actif` (orange) | la console peut commander le moteur (cas normal aujourd'hui) |
 | | `LECTURE SEULE` | la console refuse tout mouvement (n'arrive pas avec la console actuelle) |
+| **Serveur** | `joignable` (vert) | le tableau de bord (le site) répond à cette console : ce que fait la machine y arrive, et un lancement ou un arrêt demandé du site peut arriver ici |
+| | `en attente` (orange) | la console vient de démarrer et le tableau de bord n'a pas encore répondu. Au bout de 25 s sans réponse, la pastille passe à `injoignable` |
+| | `injoignable` (rouge) | plus aucune réponse du tableau de bord depuis 25 s (réseau coupé, le plus souvent). La machine fonctionne comme sans tableau de bord. La séance en cours n'est pas perdue : elle est enregistrée sur le Pi et envoyée au retour du lien |
+| | `incompatible` (rouge) | le tableau de bord et la console ne sont pas de la même version de contrat : l'un des deux doit être mis à jour. Aucun lancement venu du site n'est accepté tant que cela dure ; un arrêt demandé du site, lui, passe toujours. La séance en cours continue et sera envoyée entière, avec sa fin, une fois les versions accordées |
+| | `cle refusee` (rouge) | le tableau de bord répond mais ne reconnaît pas la clé de cette machine (`MACHINE_API_KEY`) : machine supprimée ou désactivée sur le site, ou clé remplacée |
+| | `en erreur` (rouge) | depuis 25 s, le tableau de bord ne répond que par des erreurs de son côté. Le réseau fonctionne ; c'est le site qui est en panne |
+| | `non configure` | cette console n'a pas de clé de machine : elle n'échange rien avec le tableau de bord. Normal pour un banc d'essai ou une simulation |
+| **Version** | par exemple `pi-0.0.0-dev` | la version du logiciel de cette console. C'est celle que le tableau de bord affiche pour la machine et que porte chaque enregistrement de séance. `pi-unknown` : la version n'a pas pu être lue |
+
+**Serveur n'est pas Liaison.** **Liaison** dit si *cette page* reçoit les données de
+la console. **Serveur** dit si *la console* joint le tableau de bord. Une console peut
+être `en direct` et `injoignable` à la fois : la page est à jour, et la machine tourne
+sans le site.
+
+Sous les pastilles, une ligne précise le motif et l'âge de la dernière réponse du
+tableau de bord, par exemple
+`serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`. Une seule
+requête lente ne fait pas passer la pastille au rouge : elle dit encore `joignable`
+pendant 25 s, et c'est cet âge qui grandit. Si la pastille est **barrée**, c'est la
+console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
 
 ### STOP : l'arrêt normal
 
@@ -768,7 +799,7 @@ Les types d'événements :
 | `fault_reset_requested` | reset du variateur demandé |
 | `session_idle` | retour au repos |
 | `refused` (orange) | la machine a refusé une demande. Hors séance manuelle, pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
-| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici |
+| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici. La ligne défile avec les autres ; l'état, lui, se lit en permanence sur la pastille **Serveur** (§5) |
 | `recording` | l'enregistrement de séance sur le disque du Pi se dégrade (`enregistrement de seance degrade : …`) ou redevient normal (`enregistrement de seance retabli`). La séance et la sécurité continuent dans les deux cas. Non vu pendant la préparation de ce guide : ajouté après les captures, voir la [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale) |
 
 Important : une demande « acceptée » (démarrage, cible, reset) veut seulement dire
@@ -1052,7 +1083,9 @@ Repères :
 
 1. Bouton **☰ Menu** : ouvre la barre latérale.
 2. Deux pastilles toujours visibles : le **mode** (`SEANCE`) et la **rotation**
-   (`EN ROTATION`).
+   (`EN ROTATION`). Depuis le 9 octobre 2026 une troisième les suit, le lien avec le
+   tableau de bord (`serveur joignable`, `serveur incompatible`…, comme la pastille
+   **Serveur** du §5) ; la capture date d'avant.
 3. Les cartes s'empilent les unes sous les autres.
 4. **STOP** et **E-STOP** restent fixés en bas de l'écran, sur toutes les pages.
 
@@ -1060,7 +1093,8 @@ Repères :
 
 Repères :
 
-1. Les six pastilles d'état.
+1. Les pastilles d'état : six sur la capture, huit depuis le 9 octobre 2026 avec
+   **Serveur** et **Version** (§5).
 2. La navigation complète, avec les capteurs.
 3. Toucher la zone de droite (le contenu) referme le menu.
 
@@ -1546,7 +1580,8 @@ Repères :
 
 1. Bandeau rouge **NO LIVE DATA** : `la liaison avec la machine est coupee - la machine tourne peut-etre encore`.
 2. Liaison `hors ligne`. Les autres pastilles de la barre latérale (Mode, Etat,
-   Rotation, Securite, Console) sont **barrées et grises**.
+   Rotation, Securite, Console, et Serveur depuis le 9 octobre 2026) sont **barrées
+   et grises**. Version ne l'est pas : elle ne change pas tant que la console tourne.
 3. Grands nombres barrés (`70`, `0.00`) : ce sont les dernières valeurs connues, pas
    les valeurs actuelles.
 4. Les pastilles des cartes sont barrées et grises elles aussi : `inactif`, `good`,
@@ -1556,8 +1591,8 @@ Repères :
 
 La capture a été prise une quinzaine de secondes après l'arrêt de la console. Tout
 n'est pas barré au même instant : ce qui vient des données en continu l'est après
-2 s, la pastille Console et celle du BITalino après 3,5 s, Etat et la pastille de
-l'attestation après 12 s.
+2 s, la pastille Console, la pastille Serveur et celle du BITalino après 3,5 s,
+Etat et la pastille de l'attestation après 12 s.
 
 La note rouge de la carte Mode MANUEL (`a latched safety verdict stands (drive_fault) ...`)
 vient d'avant la coupure : un défaut variateur injecté au repos, puis un démarrage

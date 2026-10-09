@@ -48,6 +48,7 @@ from src.control_surface import (
     StartManual,
     StartSession,
 )
+from src.link_state import LinkStatus, label_of
 from src.motor.drive import FaultReport
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.monitor import (
@@ -589,6 +590,34 @@ class EcgLinkRow:
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardLinkRow:
+    """The link with the dashboard, as the operator reads it. Part of ``GET /api/panel``."""
+
+    state: str
+    """The :class:`~src.link_state.LinkState`, by its wire value."""
+
+    label: str
+    """The word the page shows for it."""
+
+    detail: str
+    """Why, in a few words; one bounded line of plain text, possibly empty. Part of it
+    may be the dashboard's own words: the page writes it as text, never as markup."""
+
+    last_answer_age_s: float | None
+    """Seconds since the dashboard last answered; null when it never has."""
+
+    @classmethod
+    def of(cls, status: LinkStatus) -> DashboardLinkRow:
+        """Render a :class:`~src.link_state.LinkStatus`."""
+        return cls(
+            state=status.state.value,
+            label=label_of(status.state),
+            detail=status.detail,
+            last_answer_age_s=_finite(status.last_answer_age),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     """The local console's link panel. ``GET /api/panel``."""
 
@@ -604,6 +633,10 @@ class PanelRow:
     radius_m: float | None
     gear_ratio: float | None
     motor_max_rpm: int
+    software_version: str
+    """This build's version (``raspberry-pi/VERSION``); ``pi-unknown`` when it has none."""
+
+    dashboard: DashboardLinkRow
 
     @classmethod
     def of(cls, status: PanelStatus) -> PanelRow:
@@ -620,6 +653,8 @@ class PanelRow:
             radius_m=_finite(status.radius),
             gear_ratio=_finite(status.ratio),
             motor_max_rpm=int(status.motor_max_rpm),
+            software_version=status.software_version,
+            dashboard=DashboardLinkRow.of(status.dashboard),
         )
 
 

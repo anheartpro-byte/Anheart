@@ -283,13 +283,20 @@ construite. Le même fichier est copié dans l'image (`/app/VERSION`) et l'image
 porte l'étiquette `org.opencontainers.image.version`. Le test de bout en bout
 compare les trois.
 
-**Les enregistrements de séance portent cette version.** Le script d'entrée de
-l'image (`docker/entrypoint.sh`) donne à la console `ANHEART_SOFTWARE_VERSION`,
-lue dans `/app/VERSION`, sauf si la configuration de la machine règle déjà
-cette clé. Le manifeste de chaque enregistrement (`software_version`) porte
-donc la version de l'image, et non plus `unversioned`. Un fichier `VERSION`
-absent ou mal formé ne change rien : la console démarre quand même et écrit
-`unversioned`.
+**La console, le tableau de bord et les enregistrements de séance portent cette
+version.** La console lit elle-même `/app/VERSION`, une fois, au démarrage
+(`src/contract.py`). Elle l'affiche sur sa page (pastille **Version**),
+l'annonce au tableau de bord dans chaque heartbeat et l'écrit dans le manifeste
+de chaque enregistrement (`software_version`). Un fichier `VERSION` absent,
+illisible ou mal formé ne l'empêche pas de démarrer : les trois disent alors
+`pi-unknown`.
+
+Le script d'entrée de l'image (`docker/entrypoint.sh`) ne s'occupe plus de la
+version. Il donnait auparavant à la console la variable
+`ANHEART_SOFTWARE_VERSION`, pour le manifeste seul : cette variable n'est plus
+lue. Si `/etc/anheart/anheart.env` la règle encore, la ligne est sans effet et
+peut être retirée ; la console le signale une fois dans son journal au
+démarrage.
 
 **Une image absente ne se télécharge pas.** L'unité lance `docker run` avec
 `--pull never` : si l'image de la version installée n'est pas sur la machine,

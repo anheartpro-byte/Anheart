@@ -10,7 +10,9 @@ something does not work:
 * how the BITalino link is doing (connected, acquiring, the decoder's
   :class:`~src.bitalino_client.LinkStats`, what the DSP bridge has treated);
 * whether motion is enabled at all in this build, and the geometry every g on
-  the screen was computed with.
+  the screen was computed with;
+* which build this console is (``raspberry-pi/VERSION``), and how its link with
+  the dashboard is doing (:mod:`src.link_state`).
 
 These are plain frozen records. The composition root
 (:mod:`src.local_panel`) builds one on request through :class:`PanelSource`;
@@ -25,7 +27,9 @@ from enum import Enum, unique
 from typing import Protocol
 
 from src.bitalino_client import LinkStats
+from src.contract import SoftwareVersion
 from src.ecg_pipeline import EcgBridgeStats
+from src.link_state import LinkStatus
 from src.training.runtime import IdleLink, RiseHold
 from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
 
@@ -112,6 +116,16 @@ class PanelStatus:
     radius: Metres
     ratio: GearRatio
     motor_max_rpm: MotorRpm
+
+    software_version: SoftwareVersion
+    """What this build calls itself: ``raspberry-pi/VERSION``, read once at startup.
+
+    The same value the heartbeat announces and every session record's
+    manifest is stamped with.
+    """
+
+    dashboard: LinkStatus
+    """The link with the dashboard, as the operator reads it now."""
 
 
 class PanelSource(Protocol):

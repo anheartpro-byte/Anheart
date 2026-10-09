@@ -1,7 +1,7 @@
 # Manuel opérateur : la console de la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 8 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
+> Version du 9 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
 > cette date. Aucun client ne l'a encore utilisé.
 >
 > - Les captures d'écran viennent d'essais en simulation (machine simulée),
@@ -194,10 +194,12 @@ La console écrit ses libellés sans accents (par exemple **Securite**,
 **Seance**). Ce manuel les reproduit tels qu'ils s'affichent. Les titres des
 cartes apparaissent en majuscules à l'écran.
 
-### Les six pastilles d'état
+### Les pastilles d'état
 
 Elles sont à gauche, sur toutes les pages. Vert : normal. Orange : quelque
-chose est en cours. Rouge : problème ou arrêt.
+chose est en cours. Rouge : problème ou arrêt. Les six premières parlent de la
+machine, les deux dernières de la console elle-même. La capture ci-dessus peut
+dater d'une version antérieure de l'écran, qui n'en montrait que six.
 
 | Pastille | Ce qu'elle affiche | Ce que cela veut dire |
 |---|---|---|
@@ -216,6 +218,16 @@ chose est en cours. Rouge : problème ou arrêt.
 | **Securite** | « none » | La console ne demande aucune action de sécurité. |
 | | toute autre valeur | La console agit seule : voir la [section 9.2](#92-la-console-agit-seule). |
 | **Console** | « mouvement actif » | La console peut commander le moteur. |
+| **Serveur** | « joignable » | La console échange avec le site web. |
+| | « en attente » | La console vient de démarrer et le site web n'a pas encore répondu. |
+| | « injoignable », « incompatible », « cle refusee », « en erreur » | La console n'échange plus normalement avec le site web. Une séance déjà en cours continue selon les règles de la console, et ses mesures restent enregistrées sur la machine. L'affichage du site peut se figer, et le site peut ne plus pouvoir demander l'arrêt ([section 7](#7-séance-lancée-depuis-le-site)). Une ligne sous les pastilles en donne le motif. |
+| | « non configure » | Cette console n'est pas reliée au site web. |
+| **Version** | par exemple « pi-0.0.0-dev » | La version du logiciel de la console. |
+
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand **Serveur** n'affiche pas « joignable » pendant une séance ou avant
+> d'en commencer une, en particulier pour une séance lancée depuis le site
+> ([section 7](#7-séance-lancée-depuis-le-site)), et qui prévenir.
 
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
@@ -1209,7 +1221,8 @@ En cas d'urgence médicale, appelez d'abord les services d'urgence.
 Ce qu'il est utile de noter pour le support :
 
 - l'heure, et ce que vous étiez en train de faire ;
-- la valeur des six pastilles ;
+- la valeur de toutes les pastilles d'état, **Serveur** et **Version**
+  comprises, et la ligne affichée sous elles ;
 - les lignes « regle » et « detail » de la page **Securite** ;
 - les dernières lignes de la liste **Evenements** ;
 - le texte de l'encadré rouge du variateur, s'il y en a un.

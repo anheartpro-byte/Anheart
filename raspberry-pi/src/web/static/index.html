@@ -87,6 +87,8 @@
   <span class="brand">AnHeart</span>
   <span id="mobile-mode" class="pill">&mdash;</span>
   <span id="mobile-motion" class="pill">&mdash;</span>
+  <!-- The link with the dashboard, as in the sidebar: it is on screen at every width. -->
+  <span id="mobile-dashboard" class="pill">serveur -</span>
 </div>
 
 <div class="shell">
@@ -101,6 +103,14 @@
     The machine at a glance, on every page. The mode comes from the snapshot
     (REPOS / MANUEL / SEANCE / ARRET), the run state from /api/status, the
     link chip from the same liveness check that raises the banner.
+
+    Two links, two chips. "Liaison" is this page's link with the console.
+    "Serveur" is the console's link with the dashboard (the Convex site), as
+    the console states it in /api/panel: joignable, injoignable, incompatible,
+    cle refusee, en erreur, en attente, non configure. It is a standing state,
+    not an event: a page opened an hour into an incompatibility reads it at
+    once. The line under the chips says why, and how old the last answer is.
+    "Version" is the build this console runs (raspberry-pi/VERSION).
   -->
   <dl class="chips">
     <dt>Mode</dt><dd><span id="run-mode" class="pill">REPOS</span></dd>
@@ -109,7 +119,10 @@
     <dt>Rotation</dt><dd><span id="side-motion" class="pill">&mdash;</span></dd>
     <dt>Securite</dt><dd><span id="side-safety" class="pill">&mdash;</span></dd>
     <dt>Console</dt><dd><span id="console-mode" class="pill">&mdash;</span></dd>
+    <dt>Serveur</dt><dd><span id="dashboard-link" class="pill">-</span></dd>
+    <dt>Version</dt><dd><span id="software-version" class="pill">-</span></dd>
   </dl>
+  <div id="dashboard-link-detail" class="bind"></div>
   <div id="bind" class="bind">&mdash;</div>
 
   <nav class="nav">

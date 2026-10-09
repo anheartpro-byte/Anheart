@@ -91,7 +91,7 @@ gros (nombre de tests collectés) :
 | `test_plan.py` | 244 | profils, programmes, validation pour un passager |
 | `test_training_types.py` | 238 | types du domaine (verdicts, qualités de signal…) |
 | `test_safety.py` | 202 | le superviseur de sécurité, règle par règle |
-| `test_web_api.py`, `test_web_panel.py` | 142 + 11 | les routes HTTP de la console locale |
+| `test_web_api.py`, `test_web_panel.py` | 142 + 21 | les routes HTTP de la console locale |
 | `test_atv320.py`, `test_drive_contract.py`, `test_ftdi_link.py` | 139 + 79 + 65 | le pilote Modbus ATV320 et la liaison FTDI |
 | `test_simulated_drive.py`, `test_sim.py` | 97 + 114 | les simulateurs (variateur, BITalino, physiologie) |
 | `test_drive_faults_complete.py` | 78 | **chacun** des 66 codes LFT injecté sur la vraie console |
@@ -99,6 +99,7 @@ gros (nombre de tests collectés) :
 | `test_cloud_sync.py` | 113 | le lien avec Convex (lancement, arrêt, réseau mort, ce que chaque réponse du serveur veut dire) |
 | `test_record_cursor.py`, `test_record_upload.py`, `test_record_uplink.py` | 33 + 64 + 139 | l'envoi des séances relues sur le disque : curseur, relecture à 1 Hz, ordre, reprise, réponses ([détail](#synchronisation-par-relecture-du-journal-local-anh-129)) |
 | `test_cloud_journal_e2e.py`, `test_cloud_journal_wiring.py` | 2 + 39 | le test d'acceptation de la synchronisation (coupure, console tuée, reprise) et son câblage dans la vraie console |
+| `test_link_state.py`, `test_link_indicator.py` | 26 + 20 | l'état du lien avec le tableau de bord que la page affiche (pastille **Serveur**) : chaque état, le délai de 25 s avant « injoignable », l'absence de clignotement sur une requête perdue, le lien réel face à un tableau de bord scripté ; et le test d'acceptation d'un tableau de bord qui répond 426 au milieu d'une séance, sur la console en simulation |
 | `test_sensor_*.py` | 35 à 57 chacun | un fichier par capteur (ECG, EDA, SpO2, RESP, EMG, LUX) |
 | `test_presence_*.py`, `test_panel_presence.py` | 147 au total | la caméra / présence opérateur |
 | `test_local_panel.py`, `test_local_panel_e2e.py` | 60 + 6 | la console assemblée |
@@ -3561,7 +3562,8 @@ d'un scénario de la batterie (lettres, chiffres, `_`) : un chemin est refusé.
 
 L'export est reproductible : `record_id` et `local_ref` sont dérivés du nom du
 scénario, les dates viennent de l'horloge du harness, et `software_version`
-vaut toujours `unversioned`, quelle que soit la variable d'environnement.
+vaut toujours `unversioned`, quelle que soit la version du dépôt
+(`raspberry-pi/VERSION`, que porte l'enregistrement d'un scénario lancé hors export).
 Exporter deux fois le même scénario donne la même archive, octet pour octet.
 Et une archive qui contient déjà exactement cet enregistrement n'est pas
 réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
