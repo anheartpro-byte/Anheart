@@ -17,10 +17,10 @@ from typing import Final, Literal
 
 import pytest
 
-import src.record.logbook as logbook_module
 import src.record.writer as writer_module
 from src.control_surface import EventKind as SurfaceEvent
 from src.motor.drive import DriveFault
+from src.record import logbook as logbook_module
 from src.record.codec import Privacy
 from src.record.journal import FSYNC_PERIOD, Cause, Journal, Limits
 from src.record.logbook import ACTIVE, DIRECTORY, PREVIOUS, Logbook, Note, note

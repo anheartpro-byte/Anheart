@@ -27,9 +27,9 @@ from typing import Final
 
 import pytest
 
-import src.record.journal as journal_module
 from src.clock import ManualClock
 from src.local_panel import describe_record_storage, describe_start_refusal
+from src.record import journal as journal_module
 from src.record.codec import Privacy
 from src.record.journal import (
     MIN_FREE_BYTES,
