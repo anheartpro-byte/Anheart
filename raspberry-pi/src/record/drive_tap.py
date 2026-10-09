@@ -26,15 +26,21 @@ What both guarantee:
 * **bounded**: at most ``capacity`` observations wait. Past that the newest is
   refused and counted (:attr:`Taken.lost`), and the record says so.
 * **never in the way of the drive**: the answer of the drive is returned
-  whatever happens to its observation. Noting one is an append under a lock
-  that is only ever held for one list operation; the journal thread takes the
-  list by swapping it, and writes after it let the lock go.
+  whatever happens to its observation. Noting one is an append at one end of
+  a ``deque``; the journal thread takes from the other end, one observation
+  at a time, and **takes no lock to do it**: stopped anywhere, even in the
+  middle of taking, it holds nothing a drive call needs. (A stepping test
+  holds that thread before each of its instructions and makes a drive call:
+  ``tests/test_record_tick_isolation.py``.) The only lock is between those
+  who note, so that the bound and the count stay exact if two of them ever
+  note at once; the journal thread never touches it.
 * **total**: an observation that cannot be built is one observation lost,
   counted like a refused one. It never reaches the caller.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -171,27 +177,32 @@ def _nothing() -> tuple[Registers, Values]:
 class CallTap:
     """A ``DriveBackend`` that delegates to ``inner`` and notes every call. See the module.
 
-    Mutable. ``_waiting`` and ``_lost`` are shared between whoever calls the
-    drive (the event loop; the emergency path, which may be another thread)
-    and the journal thread: both are read and written under ``_lock`` only.
+    Mutable. ``_waiting`` is appended to by whoever calls the drive (the event
+    loop; the emergency path, which may be another thread) and emptied by the
+    journal thread from its other end, with no lock between the two sides.
+    ``_noting`` is held by those who note only, for one append: the journal
+    thread reads ``_lost`` (an ``int``) and never takes it.
     """
 
-    __slots__ = ("_capacity", "_clock", "_inner", "_lock", "_lost", "_waiting")
+    __slots__ = ("_capacity", "_clock", "_inner", "_lost", "_noting", "_waiting")
 
     def __init__(self, inner: DriveBackend, clock: Clock, capacity: int = FRAME_BACKLOG) -> None:
         self._inner: DriveBackend = inner
         self._clock: Clock = clock
         self._capacity: int = capacity
-        self._waiting: list[Observation] = []
+        self._waiting: deque[Observation] = deque()
         self._lost: int = 0
-        self._lock: Lock = Lock()
+        self._noting: Lock = Lock()
 
     def take(self) -> Taken:
-        """The journal thread's side: swap the list out, and return."""
-        with self._lock:
-            waiting = self._waiting
-            self._waiting = []
-            return Taken(tuple(waiting), self._lost)
+        """The journal thread's side: what waits now, oldest first. It takes no lock.
+
+        As many as were there when it began, one ``popleft`` each: what is
+        noted meanwhile waits for the next cycle. Only this side removes, so
+        every one of them is there to take.
+        """
+        waiting = [self._waiting.popleft() for _ in range(len(self._waiting))]
+        return Taken(tuple(waiting), self._lost)
 
     def _note(
         self,
@@ -213,10 +224,10 @@ class CallTap:
                 latency_ms=(self._clock.monotonic() - started) * 1000,
             )
         except Exception:  # an observer: what it cannot say is lost, never raised
-            with self._lock:
+            with self._noting:
                 self._lost += 1
             return
-        with self._lock:
+        with self._noting:
             if len(self._waiting) >= self._capacity:
                 self._lost += 1
                 return

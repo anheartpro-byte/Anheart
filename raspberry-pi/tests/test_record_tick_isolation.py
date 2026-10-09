@@ -13,7 +13,10 @@ Five angles on the one safety requirement of the black box:
   line of ``src/record/`` it runs, through the opening of a record, its
   rows, its closing and the periodic work, and at each of them the calls a
   tick makes return at once. A tick that waits on that thread only now and
-  then, too rarely for a median, has no line to hide behind (ANH-183);
+  then, too rarely for a median, has no line to hide behind (ANH-183). Since
+  ANH-191 the thread also takes the drive's frames and writes the logbook,
+  and a tick also notes each drive call and each console event: both sides
+  are in that test;
 * **structural**: while a recorded session ticks, the thread that runs the
   loop opens, creates, renames, truncates and flushes NOTHING under the
   records directory. Every one of those is the journal thread's;
@@ -48,13 +51,20 @@ from src.clock import ManualClock, RealClock
 from src.control_surface import EventKind
 from src.ecg_pipeline import treat_off_loop
 from src.local_panel import EXIT_OK, DriveSide, LocalPanel, build_panel
+from src.motor import observation as observation_module
+from src.motor.observation import Exchange, ExchangeKind, ExchangeLog
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.record import export as export_module
 from src.record import journal as journal_module
 from src.record.codec import Privacy
+from src.record.drive_tap import CallTap, Taken, exchange_source
 from src.record.export import RecordEntry
-from src.record.journal import STOP_TIMEOUT, Cause, Item, Journal, Limits, Progress, Scribe
+from src.record.journal import STOP_TIMEOUT, Activity, Cause, Item, Journal, Limits, Scribe
+from src.record.logbook import ACTIVE as LOGBOOK_FILE
+from src.record.logbook import DIRECTORY as LOGBOOK
+from src.record.logbook import note
 from src.record.reader import read
+from src.record.retention import records
 from src.record.schema import Event as RecordEvent
 from src.record.schema import EventKind as RecordEventKind
 from src.result import Ok
@@ -62,7 +72,7 @@ from src.telemetry import PayloadKind
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_LOOP_STALL
 from src.training.types import Occupancy, TelemetrySnapshot
-from src.units import Monotonic, OutputRpm, Seconds, UnixMillis
+from src.units import Monotonic, OutputRpm, RawRegister, RegisterAddress, Seconds, UnixMillis
 from tests.record_console_support import recorded_rig, set_target
 from tests.record_journal_support import (
     batch,
@@ -305,6 +315,13 @@ def test_ex2_the_verdict_on_the_tick_sees_a_wait_and_not_the_load_of_the_machine
 RECORD_SOURCES: Final[str] = str(Path(journal_module.__file__).resolve().parent)
 """``src/record/``: the journal thread is held before every instruction of it."""
 
+HELD_SOURCES: Final[tuple[str, ...]] = (
+    RECORD_SOURCES,
+    str(Path(observation_module.__file__).resolve()),
+)
+"""Where the journal thread is held: ``src/record/``, and the exchange log of the drive
+seam, which that thread drains since ANH-191 (``src/motor/observation.py``)."""
+
 WAITED: Final[float] = 5.0
 """Seconds. A call of a tick that has not returned after this was waiting on the journal
 thread, which is held: nothing but this test lets it go, so the wait would never end. No
@@ -319,7 +336,7 @@ judges no speed."""
 
 @dataclass(frozen=True, slots=True)
 class Stop:
-    """Where the journal thread was held: before an instruction of this line of ``src/record/``."""
+    """Where the journal thread was held: before an instruction of this line of the held sources."""
 
     file: str
     function: str
@@ -335,7 +352,7 @@ def line_of(code: CodeType, offset: int) -> int:
 
 
 class Stepper:
-    """Holds the journal thread before each instruction of ``src/record/`` it has not run yet.
+    """Holds the journal thread before each instruction of ``HELD_SOURCES`` it has not run yet.
 
     Mutable on purpose: two threads hand each other the turn through it. The
     journal thread is held inside ``arrived``, which the interpreter calls
@@ -361,7 +378,7 @@ class Stepper:
 
     def arrived(self, code: CodeType, offset: int) -> object:
         """Called by the interpreter, in the thread about to run that instruction of ``code``."""
-        if not code.co_filename.startswith(RECORD_SOURCES):
+        if not code.co_filename.startswith(HELD_SOURCES):
             return sys.monitoring.DISABLE
         thread = threading.current_thread()
         if thread.name != "record-journal" or thread.ident in self._strangers:
@@ -432,20 +449,40 @@ def stepped() -> Generator[Stepper]:
 def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ANH-183 EX-8: nowhere in its cycle does the journal thread hold what a tick needs."""
+    """ANH-183 EX-8: nowhere in its cycle does the journal thread hold what a tick needs.
+
+    ANH-191 gave that thread two more things to do, and the tick three more
+    calls. The thread takes the drive's frames at every cycle and writes the
+    logbook: it is held in that code too. A tick notes each call it makes to
+    the drive, the native driver notes each exchange (on its worker, which the
+    tick awaits), and a console event becomes a line for the logbook: each of
+    the three is made at every stop, and must return at once like the others.
+    """
     monkeypatch.setattr(journal_module, "STALL_AFTER", Seconds(1e9))
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_791_195_000_000))
     roomy = Limits(entries=1_000_000, samples=100_000_000)
     journal = Journal(
         tmp_path / "records", clock, limits=roomy, period=Seconds(0.001), retention_days=30
     )
+    # Both kinds of drive at once, each with room for a frame per stop: the tap around
+    # one that reports nothing, and the exchange log of one that reports its own.
+    tap = CallTap(SimulatedDrive(clock), clock, capacity=1_000_000)
+    exchanges = ExchangeLog(clock, capacity=1_000_000)
+    reported = exchange_source(exchanges)
+
+    def frames() -> Taken:
+        """What the journal thread takes at every cycle: it is held inside both."""
+        noted = tap.take()
+        native = reported()
+        return Taken((*noted.observations, *native.observations), noted.lost + native.lost)
+
+    journal.listen(frames)
+    drive_calls = asyncio.new_event_loop()
     cycles: list[int] = []
     whole_cycle = Scribe.cycle
 
-    def counted(
-        scribe: Scribe, queue: deque[Item], dropped: int, publish: Callable[[Progress], None]
-    ) -> None:
-        whole_cycle(scribe, queue, dropped, publish)
+    def counted(scribe: Scribe, queue: deque[Item], dropped: int, unlogged: int) -> None:
+        whole_cycle(scribe, queue, dropped, unlogged)
         cycles.append(len(queue))
 
     monkeypatch.setattr(Scribe, "cycle", counted)
@@ -458,9 +495,35 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
             assert journal.submit(row()), "a value was refused: nothing was queued at this stop"
         else:
             journal.close(closing())  # never refused; with no record open the thread drops it
+        # A call to the drive, through the tap that notes it for the record.
+        drive_calls.run_until_complete(tap.read_status())
+        # An exchange of the native driver, at the one entry every one of them goes through.
+        exchanges.append(
+            Exchange(
+                at=clock.monotonic(),
+                kind=ExchangeKind.READ,
+                register=RegisterAddress(3201),
+                value=RawRegister(0x0637),
+                ok=True,
+                latency_ms=1.0,
+                detail="read",
+            )
+        )
+        # A console event, session or not: a line for the logbook.
+        line = note(
+            wall_clock=clock.unix_millis(),
+            at=clock.monotonic(),
+            kind=RecordEventKind.REFUSAL,
+            detail="refused: demarrage refuse",
+            actor="op-1",
+        )
+        logged = journal.log(line)
+        assert logged, "a line of the logbook was refused: nothing was queued at this stop"
         status = journal.status(clock.monotonic())
         assert status.recording is recording[0]
         assert status.free_bytes == journal.storage.free_bytes
+        # What the arming gate reads besides the free space.
+        assert journal.activity in tuple(Activity)
 
     try:
         with stepped() as stepper:
@@ -533,6 +596,7 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
     finally:
         # Passed or not, this test leaves no journal thread running behind it.
         ended = journal.stop()
+        drive_calls.close()
     assert ended
     # The thread really was held all along its cycle: in its own loop, in the writing of each
     # kind of value, in the periodic work and in the retention.
@@ -554,17 +618,38 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         ("writer.py", "sync"),
         ("writer.py", "close"),
         ("retention.py", "purge"),
+        # ANH-191: taking the drive's frames, handing them to a record, and the logbook.
+        ("journal.py", "_taken"),
+        ("drive_tap.py", "take"),
+        ("observation.py", "drain"),
+        ("journal.py", "_hand_frames"),
+        ("drive_tap.py", "frame"),
+        ("writer.py", "frame"),
+        ("journal.py", "_log"),
+        ("logbook.py", "append"),
+        ("logbook.py", "sync"),
     ):
         assert expected in functions, f"the journal thread was never held in {expected}"
     assert len(stops) > 1000, f"the journal thread was held {len(stops)} times only"
+    # Held inside the taking itself, for both kinds of drive, at more than one instruction of
+    # it: where a lock shared with whoever notes would be held.
+    for file, function in (("drive_tap.py", "take"), ("observation.py", "drain")):
+        inside = [stop for stop in stops if (stop.file, stop.function) == (file, function)]
+        assert len(inside) > 3, f"{file}: the journal thread was held {len(inside)} times in it"
     # And it was writing: the three records are there, the first with a row for each of the
     # stops made while it was open, and closed the way the loop asked.
-    records = sorted(path for path in journal.root.iterdir() if path.is_dir())
-    assert [path.name.rpartition("_")[2] for path in records] == ["local-1", "local-2", "local-3"]
-    first = read(records[0])
+    found = records(journal.root)
+    assert [path.name.rpartition("_")[2] for path in found] == ["local-1", "local-2", "local-3"]
+    first = read(found[0])
     assert isinstance(first, Ok)
     assert first.value.manifest.end_reason == "operator_stop"
     assert len(first.value.rows) > 500, "the rows queued while the thread was held were not written"
+    # The frames noted and the lines logged at each stop were taken and written as well.
+    kinds = {frame.kind for frame in first.value.frames}
+    assert kinds == {"read_failed", "modbus_read"}, kinds
+    assert len(first.value.frames) > 1000, "a drive call and an exchange per stop"
+    logged_lines = (journal.root / LOGBOOK / LOGBOOK_FILE).read_text(encoding="utf-8").splitlines()
+    assert len(logged_lines) > 1000, "a line of the logbook per stop"
     assert not journal.status(clock.monotonic()).degraded
 
 

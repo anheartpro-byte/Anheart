@@ -1494,7 +1494,9 @@ que soit la règle.
   leur durée mesurée en CI : 52 lignes à la mesure, qui désignaient 119 des
   4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a réécrit
   trois de ces tests : leurs remplaçants sont distribués par leur rang
-  jusqu'à la prochaine mise à jour de la table). Ils sont distribués du plus lent au moins
+  jusqu'à la prochaine mise à jour de la table ; plus sept lignes ajoutées par
+  ANH-191 pour ses propres tests, dont la durée est estimée d'après un poste
+  de développement et reste à remplacer par une mesure en CI). Ils sont distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
   paramètre vaut pour chaque cas du test : les 67 cas de
   `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix

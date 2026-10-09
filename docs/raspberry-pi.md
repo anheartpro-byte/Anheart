@@ -1408,8 +1408,17 @@ au-delà, la valeur la plus récente est refusée et comptée.
 **Les trames du variateur ne passent pas par cette file**, ni par la boucle.
 Elles attendent dans une liste bornée à part (4096 observations,
 `src/record/drive_tap.py`) que le fil du journal vient prendre à chaque cycle,
-toutes les 0,2 s, par un échange de liste sous un verrou tenu le temps de cet
-échange. Selon le variateur branché :
+toutes les 0,2 s. Noter une observation, c'est un ajout à un bout d'une
+`deque` ; le fil du journal prend par l'autre bout, une observation à la fois,
+**sans prendre aucun verrou** : arrêté n'importe où, même au milieu de sa
+prise, il ne tient rien dont un appel au variateur a besoin. Le seul verrou
+est entre ceux qui notent (pour que la borne et le compte restent exacts si
+deux d'entre eux notent en même temps), et le fil du journal n'y touche
+jamais. Une première version prenait la liste sous un verrou partagé avec
+celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
+avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
+(l'appel au variateur attendait quand ce fil était arrêté dans sa prise).
+Selon le variateur branché :
 
 - le pilote ATV320 rapporte lui-même ses échanges Modbus dans un journal
   d'échanges désormais borné (`ExchangeLog(clock, capacity)`), depuis ses

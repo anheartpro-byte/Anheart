@@ -82,6 +82,13 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     "tests/test_cooldown_freeze_console.py": {
         "test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 41,
     },
+    "tests/test_exit_deadline.py": {
+        "test_ex7_measured_without_the_deadline_a_send_stuck_on_the_disk_holds_the_exit": 14,
+        (
+            "test_ex7_with_the_deadline_the_process_leaves_within_the_grace_once_the_drive_"
+            "is_stopped"
+        ): 12,
+    },
     "tests/test_failure_drive.py": {
         "test_comms_loss_at_every_programme_phase_goes_silent[recovery]": 37,
         "test_comms_loss_at_every_programme_phase_goes_silent[cooldown]": 31,
@@ -115,8 +122,19 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     "tests/test_panel_presence.py": {
         "test_an_intrusion_while_turning_stops_the_motor": 11,
     },
+    "tests/test_record_drive_frames.py": {
+        "test_ex2_acceptance_a_drive_fault_injected_in_a_simulated_session_is_in_drive_frames": 21,
+        "test_ex2_the_sdk_frames_switch_on_the_real_driver_both_positions_measured": 12,
+        "test_ex2_measured_what_the_frames_add_to_a_minute_of_record": 10,
+    },
     "tests/test_record_endurance.py": {
         "test_ex10_a_few_sessions_show_no_accumulation_and_no_drift": 20,
+    },
+    "tests/test_record_inodes.py": {
+        "test_ex1_acceptance_a_start_is_refused_before_the_record_becomes_impossible": 13,
+    },
+    "tests/test_record_logbook.py": {
+        "test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_logbook": 21,
     },
     "tests/test_record_session.py": {
         "test_a_drive_fault_is_an_event_with_its_mnemonic_and_its_code": 24,
@@ -176,6 +194,13 @@ without a parameter is every case of that test, each taken to cost that much;
 a name with one is that case alone, for the tests whose cases differ: a
 programme cut short at its last phase runs for six times as long as one cut
 at its first.
+
+The seven lines of ANH-191 (``test_exit_deadline.py``, ``test_record_drive_frames.py``,
+``test_record_inodes.py``, ``test_record_logbook.py``) were written before any
+run had measured those tests: their seconds are the times of a developer's
+machine at the ratio the measured neighbours show (about five; the two exit
+tests wait 7 s and 5 s on a real clock, plus a process to start). Replace them
+with measured ones at the next refresh.
 
 The 52 lines measured then named 119 of the 4267 tests and two thirds of their
 time; three of them named tests that were rewritten since (ANH-185) and are

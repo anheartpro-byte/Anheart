@@ -14,10 +14,12 @@ injected in a session is read back from ``drive_frames.jsonl``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, override
 
 import pytest
 
@@ -126,6 +128,44 @@ def test_ex2_a_bounded_exchange_log_refuses_the_newest_and_counts_it() -> None:
     log.append(exchange(9.0, 9))
     after = log.drain()
     assert after == Drained((exchange(9.0, 9),), refused=2)
+
+
+EACH: Final[int] = 5_000
+"""Appended by each of two threads while a third takes: enough for them to meet often."""
+
+
+def test_ex2_exchanges_appended_while_another_thread_drains_are_taken_once_or_counted() -> None:
+    """The drain takes no lock: what it must still give is every exchange once, or its count."""
+    log = ExchangeLog(ManualClock(), capacity=64)
+    taken: list[Exchange] = []
+    over = threading.Event()
+
+    def appending(base: int) -> None:
+        for index in range(EACH):
+            log.append(exchange(float(base + index)))
+
+    def draining() -> None:
+        while not over.is_set():
+            taken.extend(log.drain().entries)
+
+    consumer = threading.Thread(target=draining)
+    producers = [threading.Thread(target=appending, args=(base,)) for base in (0, 1_000_000)]
+    consumer.start()
+    for producer in producers:
+        producer.start()
+    for producer in producers:
+        producer.join(60.0)
+    over.set()
+    consumer.join(60.0)
+    last = log.drain()
+    taken.extend(last.entries)
+
+    assert len(taken) + last.refused == 2 * EACH, "each one was taken, or counted as refused"
+    stamps = [float(entry.at) for entry in taken]
+    assert len(set(stamps)) == len(stamps), "none was taken twice"
+    for low, high in ((0, 1_000_000), (1_000_000, 2_000_000)):
+        own = [stamp for stamp in stamps if low <= stamp < high]
+        assert own == sorted(own), "and each thread's exchanges came out in the order it made them"
 
 
 def test_ex2_an_exchange_log_keeps_the_sdk_calls_unless_asked_for_registers_only() -> None:
@@ -376,6 +416,53 @@ async def test_ex2_an_observation_that_cannot_be_built_is_lost_and_never_raised(
     )
     taken = tap.take()
     assert taken == Taken((), lost=1)
+
+
+class Quiet(Scripted):
+    """Answers at once and moves no clock: safe to call from two threads at a time."""
+
+    @override
+    def _answer(self, what: str) -> None:
+        """Nothing to remember here: the test reads what the tap noted."""
+
+
+def test_ex2_calls_noted_while_another_thread_takes_are_taken_once_or_counted() -> None:
+    """Two threads call the drive through the tap while a third takes, as the journal does."""
+    clock = ManualClock(Monotonic(100.0))
+    tap = CallTap(Quiet(clock), clock, capacity=64)
+    taken: list[Observation] = []
+    over = threading.Event()
+
+    async def calling(base: int) -> None:
+        for index in range(EACH):
+            written = await tap.write_speed(MotorRpm(base + index))
+            assert isinstance(written, Ok)
+
+    def taking() -> None:
+        while not over.is_set():
+            taken.extend(tap.take().observations)
+
+    consumer = threading.Thread(target=taking)
+    callers = [
+        threading.Thread(target=asyncio.run, args=(calling(base),)) for base in (0, 1_000_000)
+    ]
+    consumer.start()
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(60.0)
+    over.set()
+    consumer.join(60.0)
+    last = tap.take()
+    taken.extend(last.observations)
+
+    assert len(taken) + last.lost == 2 * EACH, "each call was taken, or counted as lost"
+    speeds = [o.value for o in taken if isinstance(o.value, int)]
+    assert len(speeds) == len(taken)
+    assert len(set(speeds)) == len(speeds), "none was taken twice"
+    for low, high in ((0, 1_000_000), (1_000_000, 2_000_000)):
+        own = [speed for speed in speeds if low <= speed < high]
+        assert own == sorted(own), "and each thread's calls came out in the order it made them"
 
 
 def test_ex2_a_backend_that_reports_its_own_exchanges_is_not_wrapped() -> None:
