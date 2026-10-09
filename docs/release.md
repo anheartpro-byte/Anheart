@@ -593,6 +593,24 @@ macOS (bash 3.2). Première exécution sous Linux le 7 octobre 2026 (exécution
 37703336157) : 86 tests réussis en 41 s, et le job `docs` entier en 48 s, contre
 une dizaine de secondes avant ces tests.
 
+Les dépôts jetables sont **silencieux** (ANH-183). Après un commit, une fusion
+ou un fetch, et après un push dans le dépôt qui le reçoit, git lance
+`git maintenance run --auto --detach` : un processus fait pour continuer à
+travailler sous `objects/` une fois la commande rendue. Le ménage d'un test
+supprimait alors un dossier où quelque chose pouvait encore écrire, et `docs`,
+vérification obligatoire, a échoué sous Linux sur un test de release
+(`ENOTEMPTY ... rmdir .../origin.git/objects`). Chaque dépôt jetable reçoit
+donc, dans sa propre configuration, `gc.auto = 0`, `maintenance.auto = false`,
+`receive.autogc = false` et les deux `autoDetach` à `false`. Dans la
+configuration du dépôt, et non par l'environnement : ce que disent
+`GIT_CONFIG_COUNT` et ses pareils n'atteint pas le dépôt qui reçoit un push
+local. La suppression du dossier, elle, réessaie quelques fois si une entrée y
+apparaît pendant qu'elle le vide. Deux tests tiennent ce support : la trace de
+git ne montre plus aucune maintenance lancée, d'un côté ou de l'autre d'un
+push, ni par `release.sh` ; un dossier où un processus écrit encore pendant un
+tiers de seconde est supprimé quand même. Aucune assertion des tests de release
+n'a changé.
+
 ---
 
 ## 8. Limites et reste à faire

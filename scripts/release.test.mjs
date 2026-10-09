@@ -7,8 +7,10 @@
  * real repository. The last block checks the real files of this repository.
  */
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -58,6 +60,46 @@ const GIT_ENV = {
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" }).trim();
+}
+
+/**
+ * What makes a throwaway repository quiet: git starts nothing in it that
+ * outlives the command that was run.
+ *
+ * After a commit, a merge or a fetch, and after a push in the repository that
+ * receives it, git runs `git maintenance run --auto --detach`: a process meant
+ * to go on working under `objects/` once the command has returned. The cleanup
+ * of a test then removed a directory something could still write to, and now
+ * and then failed with ENOTEMPTY on `origin.git/objects` (ANH-183). These
+ * repositories live for one test: they need no maintenance.
+ *
+ * Written in the configuration of each repository, not handed through the
+ * environment: what GIT_CONFIG_COUNT and the like say does not reach the
+ * repository a local push writes to.
+ */
+const QUIET = `[gc]
+\tauto = 0
+\tautoDetach = false
+[maintenance]
+\tauto = false
+\tautoDetach = false
+[receive]
+\tautogc = false
+`;
+
+/** @param {string} gitDir the directory of a repository that was just created: `.git`, or a bare one */
+function quiet(gitDir) {
+  appendFileSync(join(gitDir, "config"), QUIET);
+}
+
+/**
+ * Remove a throwaway directory, whatever is left in it. Nothing should still
+ * be writing there (see QUIET). Should something be, a directory that gains an
+ * entry while it is being emptied is tried again, a little later each time,
+ * instead of failing the test that used it.
+ */
+function remove(dir) {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 function write(repo, path, content) {
@@ -128,7 +170,7 @@ const HISTORY = [
  */
 function fixture(t, history = HISTORY) {
   const dir = mkdtempSync(join(tmpdir(), "anheart-release-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => remove(dir));
   const origin = join(dir, "origin.git");
   const work = join(dir, "work");
   const bin = join(dir, "bin");
@@ -141,6 +183,8 @@ function fixture(t, history = HISTORY) {
 
   git(dir, "init", "--quiet", "--bare", "--initial-branch=main", origin);
   git(dir, "init", "--quiet", "--initial-branch=main", work);
+  quiet(origin);
+  quiet(join(work, ".git"));
   git(work, "remote", "add", "origin", origin);
   const manifest = { name: "fixture", version: "0.0.0-dev", private: true };
   commit(work, "socle", {
@@ -327,6 +371,70 @@ function refuses(result, message) {
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, message);
 }
+
+// ---------------------------------------------------------------------------
+// The throwaway repositories themselves (ANH-183): quiet, and removed for good
+// ---------------------------------------------------------------------------
+
+test("a throwaway repository starts no maintenance, on either side of a push", (t) => {
+  const fx = fixture(t);
+  /** Run a git command of the tests with git's own trace of what it starts, on both sides. */
+  const traced = (...args) => {
+    const done = spawnSync("git", args, { cwd: fx.work, env: { ...GIT_ENV, GIT_TRACE: "1" }, encoding: "utf8" });
+    assert.equal(done.status, 0, done.stderr);
+    return done.stderr;
+  };
+  write(fx.work, "docs/note.md", "# Note\n");
+  git(fx.work, "add", "-A");
+  const started = [
+    traced("commit", "--quiet", "-m", "ANH-99 : une note (#99)"),
+    traced("push", "--quiet", "origin", "develop"),
+    traced("fetch", "--quiet", "--tags", "origin"),
+    traced("merge", "--quiet", "--no-ff", "-m", "Merge", "origin/main"),
+  ].join("\n");
+  // The trace is the one of both repositories: the push was received by origin.
+  assert.match(started, /run_command: .*git-receive-pack/);
+  assert.doesNotMatch(started, /git[- ](maintenance|gc)\b/);
+  // And git reads the settings where they were written, in the two repositories.
+  for (const repo of [fx.origin, fx.work]) {
+    assert.equal(git(repo, "config", "--local", "--get", "maintenance.auto"), "false");
+    assert.equal(git(repo, "config", "--local", "--get", "gc.auto"), "0");
+    assert.equal(git(repo, "config", "--local", "--get", "receive.autogc"), "false");
+  }
+  // release.sh runs its own git commands in the same repositories: nothing of it is left behind either.
+  const run = fx.run(["prepare", ...ALL], { env: { GIT_TRACE: "1" } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stderr, /run_command: .*git-receive-pack/);
+  assert.doesNotMatch(run.stderr, /git[- ](maintenance|gc)\b/);
+});
+
+test("a throwaway directory is removed even when an entry appears while it is being emptied", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "anheart-release-"));
+  const objects = join(dir, "origin.git", "objects");
+  mkdirSync(objects, { recursive: true });
+  // What a process left behind would do: go on writing under objects/ for a third of a second.
+  const writer = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const { writeFileSync } = require("node:fs");
+       const until = Date.now() + 300;
+       for (let n = 0; Date.now() < until; n += 1) {
+         try { writeFileSync(process.argv[1] + "/late-" + n, ""); } catch { break; }
+       }`,
+      objects,
+    ],
+    { stdio: "ignore" },
+  );
+  const over = once(writer, "exit");
+  while (!existsSync(join(objects, "late-0")) && writer.exitCode === null) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.ok(existsSync(join(objects, "late-0")), "the writer never wrote");
+  remove(dir);
+  await over;
+  assert.ok(!existsSync(dir), "the directory is still there");
+});
 
 // ---------------------------------------------------------------------------
 // EX-1: the script writes the version files and puts the tags on main
