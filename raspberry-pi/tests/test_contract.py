@@ -31,6 +31,7 @@ from src.contract import (
     MAJORS_SHOWN,
     MAX_REFUSAL_SENTENCE,
     SERVER_VERSION_FIELD,
+    STABLE_CODES,
     UNKNOWN_SOFTWARE_VERSION,
     VERSION_PATH,
     ContractVersion,
@@ -76,6 +77,9 @@ def test_ex1_the_code_of_a_refused_contract_is_one_of_the_shared_codes() -> None
     assert CONTRACT_UNSUPPORTED in codes
     for code in cast("dict[str, object]", codes):
         assert error_code_of(code) == code  # every shared code is one this console can log
+    # And they are, all of them and no other, what this console takes for the
+    # dashboard's own refusal.
+    assert set(cast("dict[str, object]", codes)) == STABLE_CODES
 
 
 # =========================================================================

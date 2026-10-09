@@ -383,12 +383,12 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `ramp_down`, `quick_stop`, `go_silent` (rouge) | une règle termine la séance : arrêt en douceur (`ramp_down`), arrêt d'urgence (`quick_stop`), ou arrêt définitif pour ce processus (`go_silent`). Avec le `ramp_down` de la règle `session_standstill`, la vitesse commandée est déjà à 0 quand la pastille passe au rouge et la vitesse mesurée suit. Dans tous les cas, c'est Rotation qui dit que le bras est arrêté |
 | **Console** | `mouvement actif` (orange) | la console peut commander le moteur (cas normal aujourd'hui) |
 | | `LECTURE SEULE` | la console refuse tout mouvement (n'arrive pas avec la console actuelle) |
-| **Serveur** | `joignable` (vert) | le tableau de bord (le site) répond à cette console : ce que fait la machine y arrive, et un lancement ou un arrêt demandé du site peut arriver ici |
+| **Serveur** | `joignable` (vert) | le tableau de bord (le site) prend en ce moment ce que cette console lui envoie : il y a moins de 25 s, il a répondu à l'un de ses envois. Un lancement ou un arrêt demandé du site peut arriver ici. Cela ne dit pas que toute la séance en cours y est déjà : ce qu'il reste à envoyer n'est pas affiché |
 | | `en attente` (orange) | la console vient de démarrer et le tableau de bord n'a pas encore répondu. Au bout de 25 s sans réponse, la pastille passe à `injoignable` |
-| | `injoignable` (rouge) | plus aucune réponse du tableau de bord depuis 25 s (réseau coupé, le plus souvent). La machine fonctionne comme sans tableau de bord. La séance en cours n'est pas perdue : elle est enregistrée sur le Pi et envoyée au retour du lien |
+| | `injoignable` (rouge) | plus rien de reconnaissable ne revient du tableau de bord depuis 25 s : réseau coupé le plus souvent, ou adresse qui n'est pas celle du tableau de bord (le motif dit alors `pas une reponse du tableau de bord`). La machine fonctionne comme sans tableau de bord. La séance en cours n'est pas perdue : elle est enregistrée sur le Pi et envoyée au retour du lien |
 | | `incompatible` (rouge) | le tableau de bord et la console ne sont pas de la même version de contrat : l'un des deux doit être mis à jour. Aucun lancement venu du site n'est accepté tant que cela dure ; un arrêt demandé du site, lui, passe toujours. La séance en cours continue et sera envoyée entière, avec sa fin, une fois les versions accordées |
 | | `cle refusee` (rouge) | le tableau de bord répond mais ne reconnaît pas la clé de cette machine (`MACHINE_API_KEY`) : machine supprimée ou désactivée sur le site, ou clé remplacée |
-| | `en erreur` (rouge) | depuis 25 s, le tableau de bord ne répond que par des erreurs de son côté. Le réseau fonctionne ; c'est le site qui est en panne |
+| | `en erreur` (rouge) | le tableau de bord est là, mais depuis 25 s il ne prend rien de ce que la console envoie : il répond par des erreurs de son côté, ou seulement à la question d'arrêt d'une séance. Le réseau fonctionne ; c'est le site qui est en panne, et il ne reçoit rien de la machine pendant ce temps |
 | | `non configure` | cette console n'a pas de clé de machine : elle n'échange rien avec le tableau de bord. Normal pour un banc d'essai ou une simulation |
 | **Version** | par exemple `pi-0.0.0-dev` | la version du logiciel de cette console. C'est celle que le tableau de bord affiche pour la machine et que porte chaque enregistrement de séance. `pi-unknown` : la version n'a pas pu être lue |
 
@@ -2043,6 +2043,10 @@ Pour être clair sur ce que ce guide garantit :
 ---
 
 ### Annexe : liste des captures
+
+Toutes ces captures datent d'avant le 9 octobre 2026 : leur barre latérale montre six
+pastilles, sans **Serveur** ni **Version**, et la barre de la vue mobile deux pastilles
+au lieu de trois. Aucune n'a été reprise depuis.
 
 | Fichier | Ce qu'il montre |
 |---|---|

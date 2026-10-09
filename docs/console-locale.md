@@ -257,43 +257,64 @@ lit `incompatible` tout de suite.
 | Valeur | Couleur | Quand | Que faire |
 |---|---|---|---|
 | `non configure` | sans couleur | la console n'a pas de clé de machine (`MACHINE_API_KEY` vide) : elle n'échange rien avec le tableau de bord | rien si c'est voulu ; sinon régler `MACHINE_API_KEY` et `CONVEX_URL` ([raspberry-pi.md](raspberry-pi.md#121-clés-lues-par-la-console-srclocal_configpy)) et redémarrer la console |
-| `en attente` | orange | une clé est réglée, la console vient de démarrer et le tableau de bord n'a pas encore répondu. 25 s au plus | attendre |
-| `joignable` | vert | le tableau de bord répond, accepte la clé de la machine et sert le contrat de la console | rien |
-| `injoignable` | rouge | plus aucune réponse utilisable depuis 25 s : pas de réseau, délai dépassé, ou une réponse qui ne vient pas du tableau de bord | vérifier le réseau du Pi. La machine fonctionne comme sans tableau de bord ; ce qu'une séance lui doit reste sur le disque et part au retour du lien |
+| `en attente` | orange | une clé est réglée, la console vient de démarrer et rien n'est encore revenu du tableau de bord. 25 s au plus | attendre |
+| `joignable` | vert | il y a moins de 25 s, le tableau de bord a pris quelque chose que la console lui a envoyé (son heartbeat, un lancement demandé, un envoi de séance) : il a répondu dans sa propre forme, par un succès ou par le refus d'une demande sous l'un de ses codes stables. Rien d'autre ne donne `joignable` | rien |
+| `injoignable` | rouge | depuis 25 s, rien de reconnaissable n'est revenu : pas de réseau, délai dépassé, ou une réponse qui n'est pas celle du tableau de bord (un 404 ou un 400 sans code stable, une page HTML) | vérifier le réseau du Pi, puis `CONVEX_URL` si le motif dit `pas une reponse du tableau de bord`. La machine fonctionne comme sans tableau de bord ; ce qu'une séance lui doit reste sur le disque et part au retour du lien |
 | `incompatible` | rouge | le tableau de bord n'est pas de la même majeure de contrat : il l'a répondu (426), ou la console l'a lu dans la version qu'il annonce. Affiché dès la première réponse qui le dit | mettre à jour le côté en retard. Aucun lancement distant n'est armé tant que cela dure ; un arrêt demandé du tableau de bord, lui, passe toujours |
-| `cle refusee` | rouge | le tableau de bord répond et refuse la clé de la machine (401 ou 403). Affiché dès la première réponse qui le dit | vérifier `MACHINE_API_KEY` : la machine a pu être supprimée ou désactivée sur le tableau de bord, ou sa clé remplacée |
-| `en erreur` | rouge | depuis 25 s le tableau de bord ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429) | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau |
+| `cle refusee` | rouge | le tableau de bord refuse la clé de la machine (401 ou 403). Affiché dès la première réponse qui le dit | vérifier `MACHINE_API_KEY` : la machine a pu être supprimée ou désactivée sur le tableau de bord, ou sa clé remplacée |
+| `en erreur` | rouge | le tableau de bord est là, et depuis 25 s il ne prend rien de ce que la console envoie : il ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429), ou bien il répond encore à la question d'arrêt d'une séance alors que le heartbeat et les envois échouent | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau. Pendant ce temps le tableau de bord ne reçoit rien de la machine |
 
 La ligne sous les pastilles donne le motif, puis l'âge de la dernière réponse :
 `serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`,
 `HTTP 401 (unauthorized) · derniere reponse il y a 4 s`,
+`HTTP 500 · derniere reponse il y a 2 s`,
+`HTTP 404 : pas une reponse du tableau de bord`,
 `POST /api/machine/heartbeat: ConnectTimeout('') · derniere reponse il y a 31 s`
 (en minutes au-delà de 100 s : `il y a 3 min`). Sans clé elle dit
 `aucune cle de machine (MACHINE_API_KEY) : rien n'est echange`. Le motif tient sur une
 ligne de 160 caractères au plus, écrite comme du texte. De ce que le tableau de bord
 envoie, seuls y entrent le code HTTP, son code stable et les majeures qu'il dit servir
 (les quatre premières, puis le nombre des autres) ; sa phrase reste dans le journal de
-la console.
+la console. L'âge est celui de la dernière réponse reconnue comme venant du tableau de
+bord, question d'arrêt comprise.
 
-Ce qu'il faut savoir pour la lire :
+Deux règles suffisent pour la lire :
 
-- **Elle ne clignote pas sur une requête lente.** Une requête perdue ou un délai
-  dépassé ne change rien à la pastille : il faut que plus rien d'utilisable ne soit
-  revenu depuis 25 s, soit deux heartbeats et demi (un toutes les 10 s). Un heartbeat
-  perdu ne se voit donc pas, deux de suite si. Pendant ces 25 s la pastille dit encore
-  `joignable` et c'est l'âge de la dernière réponse, sur la ligne du dessous, qui
-  grandit. Le retour, lui, est immédiat : la première réponse la remet à `joignable`.
-- **`incompatible` et `cle refusee` tiennent jusqu'à la preuve du contraire.** La
-  question d'arrêt (`/api/machine/training/status`) reçoit une réponse sous n'importe
-  quel contrat, toutes les 3 s pendant une séance : elle ne prouve rien du contrat, et
-  la pastille reste `incompatible`. Elle prouve en revanche que la clé est acceptée.
+- **L'état est ce qu'ont dit en dernier les routes qui portent le heartbeat et la
+  séance**, tant qu'elles le redisent. Ce sont elles que le tableau de bord ne sert qu'à
+  une console dont il accepte la clé et sert le contrat. La dernière chose dite
+  l'emporte : un 426 après un 401 se lit `incompatible`, puisque le tableau de bord
+  vérifie la clé avant le contrat.
+- **Ce qui n'est pas la réponse du tableau de bord ne prouve rien.** Un silence, une
+  erreur du serveur, un 404 ou un 400 sans code stable, une page HTML : rien de cela ne
+  donne `joignable` ni n'efface un refus. Cela ne change la pastille que lorsque ces
+  routes n'ont plus rien dit de reconnaissable depuis 25 s.
+
+Ce qui en découle :
+
+- **Elle ne clignote pas sur une requête lente.** 25 s valent deux heartbeats et demi
+  (un toutes les 10 s) : un heartbeat perdu ne se voit pas, deux de suite si. Pendant
+  ces 25 s la pastille garde son état et c'est l'âge de la dernière réponse, sur la
+  ligne du dessous, qui grandit. Le retour, lui, est immédiat : la première réponse qui
+  prend ce que la console envoie la remet à `joignable`.
+- **La question d'arrêt ne prouve rien et ne maintient rien.** Le tableau de bord y
+  répond sous n'importe quel contrat, toutes les 3 s pendant une séance, pour qu'un
+  arrêt passe toujours (`/api/machine/training/status`). Ses réponses gardent fraîche
+  l'âge de la dernière réponse, et c'est tout : elles ne donnent pas `joignable`,
+  n'effacent pas `incompatible`, et ne remettent pas le délai de 25 s à zéro. Une séance
+  dont le heartbeat et les envois échouent se lit donc `en erreur` au bout de 25 s, avec
+  le motif, même si la question d'arrêt reçoit toujours sa réponse.
 - **Une incompatibilité lue dans une annonce ne se lève qu'à l'annonce suivante.**
   Quand c'est la console qui a refusé la version annoncée par le tableau de bord
   (`/api/machine/training/poll`), seule une annonce de sa propre majeure lève l'état.
   La console ne pose cette question qu'au repos et avec `PROGRAMS_ENABLED=true` :
   pendant une séance, la pastille garde donc ce que la dernière annonce a dit.
-- **Un tableau de bord qui se tait après un refus finit `injoignable`.** Au bout de
-  25 s sans réponse, la pastille ne répète pas le dernier refus entendu.
+- **Un refus qui n'est plus redit ne dure pas.** 25 s après le dernier 426 ou le dernier
+  401, si ces routes ne disent plus rien, la pastille passe à `injoignable`, ou à
+  `en erreur` si quelque chose du tableau de bord répond encore.
+- **`joignable` ne dit pas que tout est arrivé.** Il dit que le tableau de bord prend
+  ce que la console envoie en ce moment. Ce qu'il reste à lui envoyer d'une séance n'est
+  pas montré sur la page.
 - **Aucune requête n'est faite pour elle.** L'état vient des échanges que le lien fait
   de toute façon (heartbeat, lancements, envoi des séances, question d'arrêt). Rien
   n'en est lu ni écrit dans le tic de commande.
@@ -308,9 +329,11 @@ illisible ou mal formé : `pi-unknown`.
 
 Vérifié par `raspberry-pi/tests/test_link_state.py` (chaque état, les 25 s, l'absence
 de clignotement), `raspberry-pi/tests/test_link_indicator.py` (le lien réel face à un
-tableau de bord scripté, puis la console en simulation face à un tableau de bord qui
-répond 426 au milieu d'une séance) et `raspberry-pi/tests/web/panel_dashboard_link.test.mjs`
-(la page). Pas rejoué dans un navigateur, ni face à un déploiement Convex réel.
+tableau de bord scripté, puis la console en simulation à travers son transport HTTP :
+un tableau de bord qui répond 426 au milieu d'une séance, une adresse qui n'est pas le
+tableau de bord, une séance dont rien n'arrive alors que la question d'arrêt est
+servie) et `raspberry-pi/tests/web/panel_dashboard_link.test.mjs` (la page). Pas
+rejoué dans un navigateur, ni face à un déploiement Convex réel.
 
 ### Navigation
 

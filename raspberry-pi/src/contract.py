@@ -68,6 +68,24 @@ SERVER_VERSION_FIELD: Final[str] = "server_contract_version"
 CONTRACT_UNSUPPORTED: Final[ErrorCode] = ErrorCode("contract_unsupported")
 """The code of the 426 a server answers to a major it does not serve."""
 
+STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
+    {
+        CONTRACT_UNSUPPORTED,
+        ErrorCode("unauthorized"),
+        ErrorCode("invalid_request"),
+        ErrorCode("session_not_found"),
+        ErrorCode("session_not_pending"),
+        ErrorCode("machine_not_found"),
+        ErrorCode("request_failed"),
+    }
+)
+"""Every stable code the dashboard refuses a request under. Pinned to the shared file.
+
+A refusal that carries one of them is in the dashboard's own shape: it is the
+dashboard that answered. A refusal that carries none, or a word that is not
+one of these, could come from anything that listens at the address.
+"""
+
 UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
 

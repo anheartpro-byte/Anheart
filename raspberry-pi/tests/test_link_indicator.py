@@ -18,7 +18,7 @@ The state machine itself, instant by instant, is in ``tests/test_link_state.py``
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, Final, cast, override
@@ -30,11 +30,15 @@ from src import local_panel
 from src.clock import ManualClock
 from src.cloud_sync import (
     HEARTBEAT_PERIOD,
+    LOGGED_WORDS_LIMIT,
+    POLL_PERIOD,
     STATUS_PERIOD,
     CloudError,
     Document,
     HttpxTransport,
     Refused,
+    describe_refusal,
+    logged_words,
 )
 from src.contract import (
     CONTRACT_UNSUPPORTED,
@@ -59,13 +63,12 @@ from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Monotonic, Seconds, UnixMillis
-from src.web.schemas import PanelRow
+from src.web.schemas import DashboardLinkRow, PanelRow
 from tests.fake_dashboard import END, LOCAL, TELEMETRY, FakeDashboard
 from tests.test_cloud_contract import HEARTBEAT, OTHER_MAJOR, STATUS, unsupported
 from tests.test_cloud_sync import (
     DOWN,
     LAUNCH,
-    NO,
     POLL_PATH,
     Dashboard,
     Reply,
@@ -266,14 +269,15 @@ async def test_a_refused_contract_stays_incompatible_while_the_stop_question_is_
     assert read_link(r) == LinkStatus(LinkState.REACHABLE, "", Seconds(0.0))
 
 
-async def test_the_stop_question_keeps_the_last_answer_fresh_and_proves_nothing_of_the_contract(
+async def test_the_stop_question_keeps_the_last_answer_fresh_and_keeps_no_state_alive(
     tmp_path: Path,
 ) -> None:
     """The stop watch asks every 3 s, from its own task: an answer, never a proof.
 
     After a 426, everything but the stop question goes silent. Its answers
-    alone keep the link from reading unreachable, and its last answer is
-    never more than a few seconds old; they do not make it read reachable.
+    keep the age of the last answer under a few seconds; they neither make
+    the link read reachable nor keep ``incompatible`` standing: 25 s after
+    the last 426, the chip says the dashboard answers and takes nothing.
     """
     r = rig(tmp_path)
     r.dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
@@ -287,13 +291,21 @@ async def test_the_stop_question_keeps_the_last_answer_fresh_and_proves_nothing_
 
     every_route(r.dashboard, DOWN, status=status_answer())
     asked = len(r.dashboard.to(STATUS))
+    seen: list[LinkState] = []
     for _ in range(90):
         await r.step()
         status = read_link(r)
-        assert status.state is LinkState.INCOMPATIBLE
+        seen.append(status.state)
         assert status.last_answer_age is not None
         assert status.last_answer_age <= STATUS_PERIOD
     assert len(r.dashboard.to(STATUS)) >= asked + 25
+    assert LinkState.REACHABLE not in seen
+    assert LinkState.UNREACHABLE not in seen, "the stop question is answered: it is there"
+    turn = seen.index(LinkState.SERVER_ERROR)
+    assert set(seen[:turn]) == {LinkState.INCOMPATIBLE}
+    assert set(seen[turn:]) == {LinkState.SERVER_ERROR}
+    assert int(UNREACHABLE_AFTER - HEARTBEAT_PERIOD) <= turn <= int(UNREACHABLE_AFTER)
+    assert read_link(r).detail == "no route to host"
 
     # The stop question falls silent too: now nothing answers, and that is what is read.
     every_route(r.dashboard, DOWN)
@@ -347,12 +359,97 @@ async def test_a_dashboard_that_only_answers_errors_reads_en_erreur_after_the_sa
     assert read_link(r).detail == words
 
 
-async def test_a_refusal_of_what_was_sent_is_a_dashboard_that_works(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        Refused(400, "Session not found", ErrorCode("session_not_found")),
+        Refused(404, "Session not found", ErrorCode("session_not_found")),
+        Refused(400, "boom", ErrorCode("request_failed")),
+    ],
+)
+async def test_a_refusal_under_a_stable_code_is_the_dashboard_taking_what_was_sent(
+    tmp_path: Path, refusal: Refused
+) -> None:
+    """The dashboard read the request, under this key and this contract, and refused it."""
     r = rig(tmp_path)
-    every_route(r.dashboard, NO)  # 400, about the request
+    every_route(r.dashboard, Err(refusal))
     for _ in range(40):
         await r.step()
         assert read_link(r).state is LinkState.REACHABLE
+
+
+@pytest.mark.parametrize(
+    ("refusal", "reason"),
+    [
+        (Refused(404, "HTTP 404"), "HTTP 404 : pas une reponse du tableau de bord"),
+        (Refused(400, "no"), "HTTP 400 : pas une reponse du tableau de bord"),
+        # A word in ``error`` that is none of the dashboard's stable codes.
+        (
+            Refused(404, "not_found", ErrorCode("not_found")),
+            "HTTP 404 (not_found) : pas une reponse du tableau de bord",
+        ),
+        (Refused(418, "teapot"), "HTTP 418 : pas une reponse du tableau de bord"),
+    ],
+)
+async def test_b1_a_refusal_that_is_not_in_the_dashboards_shape_never_reads_reachable(
+    tmp_path: Path, refusal: Refused, reason: str
+) -> None:
+    """Something answers at the address, and it is not the dashboard: no proof of anything."""
+    r = rig(tmp_path)
+    every_route(r.dashboard, Err(refusal))
+    born = r.clock.monotonic()
+    for _ in range(60):
+        await r.step()
+        since = r.clock.monotonic() - born
+        status = read_link(r)
+        expected = LinkState.UNREACHABLE if since >= UNREACHABLE_AFTER else LinkState.WAITING
+        assert status.state is expected, since
+        assert status.detail == reason
+        assert status.last_answer_age is None, "nothing of the dashboard was ever heard"
+
+
+async def test_b1_a_route_that_answers_a_404_with_no_code_does_not_unsay_a_refused_contract(
+    tmp_path: Path,
+) -> None:
+    """The sequence that made the chip change eight times a minute: it must not move."""
+    r = rig(tmp_path)
+    every_route(r.dashboard, unsupported("2"))
+    r.dashboard.answer("/api/machine/profiles", Err(Refused(404, "HTTP 404")))
+    await r.step()
+    seen: list[LinkState] = []
+    for _ in range(60):
+        await r.step()
+        seen.append(read_link(r).state)
+    assert len(r.dashboard.to("/api/machine/profiles")) >= 3, "the odd route was asked meanwhile"
+    assert set(seen) == {LinkState.INCOMPATIBLE}
+    assert read_link(r).detail == SENTENCE
+
+
+async def test_a_426_after_a_refused_key_reads_incompatible_and_a_401_after_it_the_key_again(
+    tmp_path: Path,
+) -> None:
+    """The dashboard checks the key before the contract: a 426 proves the key was taken."""
+    unauthorized: Reply = Err(Refused(401, "Invalid API key", ErrorCode("unauthorized")))
+    r = rig(tmp_path)
+    every_route(r.dashboard, unauthorized)
+    await r.step()
+    assert read_link(r).state is LinkState.KEY_REFUSED
+
+    # The key is put right; the dashboard turns out to serve another major.
+    every_route(r.dashboard, unsupported("2"))
+    await r.step(float(POLL_PERIOD))
+    seen: set[LinkState] = set()
+    for _ in range(60):
+        await r.step()
+        seen.add(read_link(r).state)
+    assert seen == {LinkState.INCOMPATIBLE}, "not the refused key of a minute ago"
+    assert read_link(r).detail == SENTENCE
+
+    # And the latest statement is the one read, the other way round too.
+    every_route(r.dashboard, unauthorized)
+    await r.step(float(POLL_PERIOD))
+    assert read_link(r).state is LinkState.KEY_REFUSED
+    assert read_link(r).detail == "HTTP 401 (unauthorized)"
 
 
 async def test_a_426_listing_hundreds_of_majors_reaches_the_indicator_as_a_short_sentence(
@@ -682,6 +779,295 @@ def the_record_the_page_and_the_heartbeat_carry_the_version_of_the_build(
     assert announced_versions(s.dashboard) == [BUILT]
 
 
+type Answering = Callable[[httpx.Request], httpx.Response]
+
+
+@dataclass
+class Wired:
+    """The real console behind the real HTTP transport, and the operator's browser."""
+
+    console: Console
+    journal: Journal
+    transport: HttpxTransport
+    browser: httpx.AsyncClient
+    shown: list[DashboardLinkRow] = field(default_factory=list[DashboardLinkRow])
+    """What the page was served about the link, once per simulated second."""
+
+    async def seconds(self, count: int) -> None:
+        """``count`` seconds of the console's life, the page polling once in each."""
+        for _ in range(count):
+            for _tick in range(round(1.0 / TICK)):
+                await self.console.tick(float(TICK))
+                self.journal.drain()
+                await self.console.panel.cloud_stop_step()
+            await self.console.panel.cloud_step()
+            row = parse(PanelRow, await self.browser.get("/api/panel"))
+            self.shown.append(row.dashboard)
+
+    def labels(self, since: int = 0) -> list[str]:
+        return [row.label for row in self.shown[since:]]
+
+    async def close(self) -> None:
+        await self.browser.aclose()
+        await self.console.panel.close()
+        await self.transport.close()
+
+
+def wired(tmp_path: Path, answering: Answering) -> Wired:
+    """The console of ``LINKED_ENV``, recording, whose dashboard is ``answering`` over HTTP."""
+    clock = ManualClock(Monotonic(10.0), UnixMillis(TRUE_EPOCH_MS))
+    journal = Journal(tmp_path / "records", clock)
+    transport = transport_answering(answering)
+
+    def to_the_dashboard(_config: CloudConfig) -> HttpxTransport:
+        return transport
+
+    console, _ = make_rig(
+        tmp_path, env=LINKED_ENV, clock=clock, transport=to_the_dashboard, journal=journal
+    )
+    return Wired(console=console, journal=journal, transport=transport, browser=console.http())
+
+
+def replying(
+    status: int, *, json: Mapping[str, JsonValue] | None = None, page: str | None = None
+) -> Answering:
+    """Something that answers the same thing to every request, whatever the route."""
+
+    def answer(_request: httpx.Request) -> httpx.Response:
+        if json is not None:
+            return httpx.Response(status, json=dict(json))
+        return httpx.Response(status, text=page or "")
+
+    return answer
+
+
+NOT_THE_DASHBOARD_REASON: Final[str] = "pas une reponse du tableau de bord"
+
+
+@pytest.mark.parametrize(
+    ("answering", "reason"),
+    [
+        pytest.param(
+            replying(404, json={"detail": "Not Found"}),
+            f"HTTP 404 : {NOT_THE_DASHBOARD_REASON}",
+            id="a 404 with no stable code",
+        ),
+        pytest.param(
+            replying(404, page="<html><h1>Not Found</h1></html>"),
+            f"HTTP 404 : {NOT_THE_DASHBOARD_REASON}",
+            id="a 404 page of HTML",
+        ),
+        pytest.param(
+            replying(400, json={"error": "Bad Request"}),
+            f"HTTP 400 : {NOT_THE_DASHBOARD_REASON}",
+            id="a 400 with a sentence and no stable code",
+        ),
+        pytest.param(
+            replying(404, json={"error": "not_found"}),
+            f"HTTP 404 (not_found) : {NOT_THE_DASHBOARD_REASON}",
+            id="a 404 under a word that is none of the stable codes",
+        ),
+        pytest.param(
+            replying(200, page="<html><h1>Welcome</h1></html>"),
+            f"HTTP 200 : {NOT_THE_DASHBOARD_REASON}",
+            id="a page of HTML with 200",
+        ),
+    ],
+)
+async def test_b1_an_address_that_is_not_the_dashboard_never_reads_joignable_on_the_console(
+    tmp_path: Path, answering: Answering, reason: str
+) -> None:
+    """The finding of the review, replayed: such an address read ``joignable`` after 1 s.
+
+    Through the real HTTP transport and the console's own route. It reads
+    ``en attente``, then ``injoignable`` 25 s after the console started, with a
+    reason that says what answered is not the dashboard.
+    """
+    w = wired(tmp_path, answering)
+    await w.seconds(60)
+    await w.close()
+    labels = w.labels()
+    turn = labels.index("injoignable")
+    # The page polls once a second: the read that falls on the 25th second is either.
+    assert turn in (int(UNREACHABLE_AFTER) - 1, int(UNREACHABLE_AFTER))
+    assert set(labels[:turn]) == {"en attente"}
+    assert set(labels[turn:]) == {"injoignable"}
+    assert {row.detail for row in w.shown} == {reason}
+    assert {row.last_answer_age_s for row in w.shown} == {None}
+
+
+def refusing_the_contract_but_for_one_odd_route(request: httpx.Request) -> httpx.Response:
+    """426 to every route under the contract, but one that answers a 404 with no code."""
+    if request.url.path == STATUS:
+        return httpx.Response(
+            200, json={"active": True, "stopRequested": False, SERVER_VERSION_FIELD: "2.0"}
+        )
+    if request.url.path == "/api/machine/profiles":
+        return httpx.Response(404, json={"detail": "Not Found"})
+    return httpx.Response(
+        426,
+        json={"error": "contract_unsupported", "message": "Unsupported", "supported": ["2"]},
+    )
+
+
+async def test_b1_the_chip_does_not_flip_between_incompatible_and_joignable_on_the_console(
+    tmp_path: Path,
+) -> None:
+    """The second replay of the review: eight changes in 60 s. Now none."""
+    w = wired(tmp_path, refusing_the_contract_but_for_one_odd_route)
+    await w.seconds(60)
+    await w.close()
+    assert set(w.labels()) == {"incompatible"}
+    assert {row.detail for row in w.shown} == {SENTENCE}
+
+
+@dataclass
+class Faltering:
+    """A dashboard that takes everything, then fails everything but the stop question.
+
+    ``errors``: it answers 500 to the heartbeat and to what the session sends.
+    ``lost``: those requests get no answer at all. The stop question is served
+    throughout, as it is by the real dashboard: a stop must always get through.
+    """
+
+    mode: str = "taking"
+    stop_questions: int = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        route = request.url.path
+        if route == STATUS:
+            self.stop_questions += 1
+            return httpx.Response(
+                200,
+                json={
+                    "active": True,
+                    "stopRequested": False,
+                    SERVER_VERSION_FIELD: CONTRACT_VERSION,
+                },
+            )
+        if self.mode == "errors":
+            return httpx.Response(500, text="Internal Server Error")
+        if self.mode == "lost":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if route == LOCAL:
+            return httpx.Response(200, json={"sessionId": "cloud-1"})
+        if route == POLL_PATH:
+            return httpx.Response(
+                200, json={"session": None, SERVER_VERSION_FIELD: CONTRACT_VERSION}
+            )
+        return httpx.Response(200, json={"success": True})
+
+
+async def test_b2_a_session_of_which_nothing_arrives_stops_reading_joignable_on_the_console(
+    tmp_path: Path,
+) -> None:
+    """The replay of the review: 500 then lost for 120 s each, the stop question served.
+
+    The chip read ``joignable`` with an empty reason throughout, while the
+    dashboard would have shown the machine offline after 90 s. Now: 25 s
+    after the last answer that took something, it reads ``en erreur`` with
+    the reason, for as long as that lasts; the age of the last answer stays
+    under a few seconds, since the stop question is answered.
+    """
+    dashboard = Faltering()
+    w = wired(tmp_path, dashboard)
+    await attest(w.browser)
+    started = await w.browser.post(
+        "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+    )
+    assert started.status_code == 202, started.text
+    await w.seconds(12)
+    assert w.labels()[-1] == "joignable"
+    assert dashboard.stop_questions >= 2, "the session is followed: its stop is asked for"
+
+    dashboard.mode = "errors"
+    errors_from = len(w.shown)
+    await w.seconds(120)
+    dashboard.mode = "lost"
+    lost_from = len(w.shown)
+    await w.seconds(120)
+    assert w.console.panel.runtime.state is RuntimeState.RUNNING, "the session goes on"
+    assert dashboard.stop_questions >= 70, "asked about every 3 s all along"
+
+    failing = w.shown[errors_from:]
+    labels = [row.label for row in failing]
+    turn = labels.index("en erreur")
+    # Not before 25 s have passed since something was last taken, and that was
+    # at most one heartbeat period before the errors began.
+    assert int(UNREACHABLE_AFTER - HEARTBEAT_PERIOD) <= turn < int(UNREACHABLE_AFTER)
+    assert set(labels[:turn]) == {"joignable"}
+    assert set(labels[turn:]) == {"en erreur"}, "to the end, and never injoignable"
+    assert {row.detail for row in w.shown[errors_from + turn : lost_from]} == {"HTTP 500"}
+    lost = {row.detail for row in w.shown[lost_from + int(HEARTBEAT_PERIOD) :]}
+    assert all(
+        reason.startswith("POST /api/machine/") and "ReadTimeout" in reason for reason in lost
+    ), lost
+    ages = [row.last_answer_age_s for row in failing]
+    assert all(age is not None and age <= float(STATUS_PERIOD) + 1.0 for age in ages)
+
+    # The dashboard takes again: joignable at the first thing it takes, and it stays.
+    dashboard.mode = "taking"
+    back_from = len(w.shown)
+    await w.seconds(40)
+    back = w.labels(back_from)
+    first = back.index("joignable")
+    assert first <= int(HEARTBEAT_PERIOD)
+    assert set(back[:first]) == {"en erreur"}
+    assert set(back[first:]) == {"joignable"}
+    assert w.shown[-1].detail == ""
+    await w.close()
+
+
+def test_the_dashboards_words_are_logged_quoted_on_one_bounded_line() -> None:
+    """What is logged of a refusal is bounded: its words in quotes, on one line, cut."""
+    assert logged_words("Invalid API key") == "'Invalid API key'"
+    broken = logged_words("Invalid\r\nAPI key\n\x1b[31m red\tink")
+    assert broken == "'Invalid API key \\x1b[31m red\\tink'"
+    assert "\n" not in broken
+    assert "\x1b" not in broken
+    wall = logged_words("x" * 50_101)
+    assert wall == "'" + "x" * (LOGGED_WORDS_LIMIT - 1) + "... (50101 characters received)"
+    # What other sentences quote of a refusal, the reason of a stop among them,
+    # is one bounded line too.
+    refused = Refused(
+        400, "Session\nnot \x1b[31mfound " + "!" * 50_000, ErrorCode("session_not_found")
+    )
+    said = describe_refusal(refused)
+    assert said.startswith("session_not_found (HTTP 400): Session not [31mfound !!!")
+    assert len(said) == len("session_not_found (HTTP 400): ") + MAX_DETAIL
+    assert said.isprintable()
+    # A refusal of ordinary length reads as it always did.
+    short = describe_refusal(Refused(400, "Session not found", ErrorCode("session_not_found")))
+    assert short == "session_not_found (HTTP 400): Session not found"
+
+
+async def test_a_refusal_with_fifty_thousand_characters_is_one_short_line_of_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="src.cloud_sync")
+    head = "Invalid\nAPI key \x1b[31m"
+    words = head + "x" * (50_101 - len(head))
+    r = rig(tmp_path)
+    every_route(r.dashboard, Err(Refused(401, words, ErrorCode("unauthorized"))))
+    await r.step()
+    await r.step(float(HEARTBEAT_PERIOD))
+    lines = [
+        record.getMessage() for record in caplog.records if "refused a request" in record.message
+    ]
+    assert len(lines) == 1, "said once per distinct refusal, as before"
+    line = lines[0]
+    assert line.startswith(
+        "dashboard refused a request: unauthorized (HTTP 401): 'Invalid API key \\x1b[31mxxx"
+    )
+    assert line.endswith("... (50101 characters received)")
+    assert "\n" not in line
+    assert "\x1b" not in line
+    assert len(line) <= 60 + LOGGED_WORDS_LIMIT + 40
+    assert (
+        max(len(record.getMessage()) for record in caplog.records) <= 60 + LOGGED_WORDS_LIMIT + 40
+    )
+
+
 MANY: Final[int] = 5000
 """How many majors the dashboard of the next test lists in its 426."""
 
@@ -876,24 +1262,26 @@ class Counted(LinkHealth):
     """A :class:`LinkHealth` that says which of its entries were called, and does the same."""
 
     calls: ClassVar[list[str]] = []
-    proofs: ClassVar[list[bool]] = []
-    """For each ``answered``, in order: whether it was taken as proof of the contract."""
+    routes: ClassVar[list[bool]] = []
+    """For each exchange told, in order: whether its route carries the heartbeat or the session."""
 
     @override
     def answered(self, now: Monotonic, *, contract: bool) -> None:
         Counted.calls.append("answered")
-        Counted.proofs.append(contract)
+        Counted.routes.append(contract)
         super().answered(now, contract=contract)
 
     @override
-    def key_refused(self, now: Monotonic, detail: str) -> None:
+    def key_refused(self, now: Monotonic, detail: str, *, contract: bool) -> None:
         Counted.calls.append("key_refused")
-        super().key_refused(now, detail)
+        Counted.routes.append(contract)
+        super().key_refused(now, detail, contract=contract)
 
     @override
-    def contract_refused(self, now: Monotonic, sentence: str) -> None:
+    def contract_refused(self, now: Monotonic, sentence: str, *, contract: bool) -> None:
         Counted.calls.append("contract_refused")
-        super().contract_refused(now, sentence)
+        Counted.routes.append(contract)
+        super().contract_refused(now, sentence, contract=contract)
 
     @override
     def announced(self, refusal: str | None) -> None:
@@ -901,23 +1289,36 @@ class Counted(LinkHealth):
         super().announced(refusal)
 
     @override
-    def silent(self, detail: str) -> None:
+    def silent(self, detail: str, *, contract: bool) -> None:
         Counted.calls.append("silent")
-        super().silent(detail)
+        Counted.routes.append(contract)
+        super().silent(detail, contract=contract)
 
     @override
-    def errored(self, detail: str) -> None:
+    def errored(self, detail: str, *, contract: bool) -> None:
         Counted.calls.append("errored")
-        super().errored(detail)
+        Counted.routes.append(contract)
+        super().errored(detail, contract=contract)
+
+    @override
+    def unrecognised(self, detail: str, *, contract: bool) -> None:
+        Counted.calls.append("unrecognised")
+        Counted.routes.append(contract)
+        super().unrecognised(detail, contract=contract)
 
     @override
     def status(self, now: Monotonic) -> LinkStatus:
         Counted.calls.append("status")
         return super().status(now)
 
+    @classmethod
+    def forget(cls) -> None:
+        cls.calls.clear()
+        cls.routes.clear()
+
 
 FEEDS: Final[frozenset[str]] = frozenset(
-    {"answered", "key_refused", "contract_refused", "silent", "errored"}
+    {"answered", "key_refused", "contract_refused", "silent", "errored", "unrecognised"}
 )
 """The entries of :class:`LinkHealth` an exchange is told through, one per exchange."""
 
@@ -932,9 +1333,9 @@ def heard_one_for_one(dashboard: Dashboard) -> list[str]:
     feeds = [name for name in Counted.calls if name in FEEDS]
     assert len(feeds) == len(dashboard.calls), "an exchange the indicator never heard of"
     assert set(feeds) == {"answered"}, "this dashboard answers everything"
-    assert len(Counted.proofs) == len(dashboard.calls)
-    for (_method, path, _body), proof in zip(dashboard.calls, Counted.proofs, strict=True):
-        assert proof == (path != STATUS), path
+    assert len(Counted.routes) == len(dashboard.calls)
+    for (_method, path, _body), carries in zip(dashboard.calls, Counted.routes, strict=True):
+        assert carries == (path != STATUS), path
     return list(dict.fromkeys(path for _method, path, _body in dashboard.calls))
 
 
@@ -948,8 +1349,7 @@ async def test_the_indicator_hears_every_exchange_of_a_session_started_at_the_ma
     question's answers were not taken as proof of the contract.
     """
     monkeypatch.setattr(local_panel, "LinkHealth", Counted)
-    Counted.calls.clear()
-    Counted.proofs.clear()
+    Counted.forget()
     linked_console, dashboard, journal = recording_linked(tmp_path)
     dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
     surface = linked_console.panel.surface
@@ -984,8 +1384,7 @@ async def test_the_indicator_hears_the_greeting_of_a_session_launched_from_the_d
 ) -> None:
     """A launch: its start is confirmed by the stop watch's task, then its stop is asked."""
     monkeypatch.setattr(local_panel, "LinkHealth", Counted)
-    Counted.calls.clear()
-    Counted.proofs.clear()
+    Counted.forget()
     linked_console = linked(tmp_path)
     dashboard = linked_console.dashboard
     dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
@@ -1011,8 +1410,7 @@ async def test_the_control_tick_neither_feeds_nor_reads_the_indicator(
     """
     monkeypatch.setattr(local_panel, "LinkHealth", Counted)
     calls = Counted.calls
-    calls.clear()
-    Counted.proofs.clear()
+    Counted.forget()
     s = scene(tmp_path)
     async with s.browser as browser:
         await attest(browser)

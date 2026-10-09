@@ -113,7 +113,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
-| `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : joignable, injoignable, incompatible, clé refusée, en erreur, en attente, non configuré. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; jamais « joignable » sans réponse depuis 25 s, jamais « injoignable » sur une seule requête perdue (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
+| `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
 | `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
@@ -1665,8 +1665,12 @@ Ce que fait la console :
   réarmer quoi que ce soit.
 * **Les refus du serveur** arrivent sous la forme
   `{error: <code stable>, message: <texte>}`. Le code est ce que le journal de
-  la console porte (`session_not_found (HTTP 400): Session not found`) ; un
-  refus identique au précédent n'est pas réécrit.
+  la console porte, suivi du texte du serveur entre guillemets, sur une seule
+  ligne et borné à 200 caractères
+  (`session_not_found (HTTP 400): 'Session not found'`) ; un refus identique au
+  précédent n'est pas réécrit. Quand ce texte est repris dans une autre phrase,
+  le motif d'un arrêt par exemple, il tient sur une ligne de 160 caractères au
+  plus.
 
 L'affichage sur la console est un événement de type `dashboard`, sans nom
 d'opérateur, dans la liste **Evenements** (voir
@@ -1690,16 +1694,29 @@ dit, et `/api/panel` le sert :
   heartbeat, les lancements, l'envoi des séances et la question d'arrêt, qu'il
   fait de toute façon. La page le lit par la route qu'elle interroge déjà
   chaque seconde. Rien n'en est lu ni écrit dans le tic de commande ;
-* une clé refusée (401, 403) et un contrat refusé (426) sont affichés à la
-  première réponse qui le dit, et tiennent jusqu'à la preuve du contraire. La
-  route `/api/machine/training/status`, qui répond sous n'importe quel contrat
-  pour qu'un arrêt passe toujours, ne prouve rien du contrat : pendant une
-  séance sous un 426, la pastille reste `incompatible` alors que cette route
-  répond toutes les 3 s ;
-* un silence, ou des erreurs du serveur (5xx, 408, 425, 429), ne changent
-  l'affichage qu'après **25 s** sans aucune réponse utilisable
-  (`UNREACHABLE_AFTER`, deux heartbeats et demi) : une requête lente ou perdue
-  ne fait pas clignoter la pastille. Le retour est immédiat ;
+* l'état est ce qu'ont dit **en dernier les routes qui portent le heartbeat et
+  la séance**, tant qu'elles le redisent. `joignable` demande une réponse dans
+  la forme du tableau de bord qui prend ce qui a été envoyé : un succès, ou le
+  refus d'une demande sous l'un de ses codes stables (ceux de
+  `contracts/machine-api.json`, épinglés par `tests/test_contract.py`). Une
+  clé refusée (401, 403) et un contrat refusé (426) sont affichés à la première
+  réponse qui le dit ; la dernière chose dite l'emporte, donc un 426 après un
+  401 se lit `incompatible` ;
+* **ce qui n'est pas la réponse du tableau de bord ne prouve rien** : un
+  silence, une erreur du serveur (5xx, 408, 425, 429), un 404 ou un 400 sans
+  code stable, une page HTML. Rien de cela ne donne `joignable` ni n'efface un
+  refus, et cela ne change l'affichage qu'après **25 s** sans rien de
+  reconnaissable sur ces routes (`UNREACHABLE_AFTER`, deux heartbeats et
+  demi) : une requête lente ou perdue ne fait pas clignoter la pastille. Le
+  retour est immédiat ;
+* la route `/api/machine/training/status`, qui répond sous n'importe quel
+  contrat pour qu'un arrêt passe toujours, est à part : ses réponses gardent
+  fraîche l'âge de la dernière réponse et ne changent rien d'autre. Elles ne
+  prouvent ni le contrat ni que le tableau de bord prend quoi que ce soit, et
+  ne remettent pas le délai à zéro. Une séance dont le heartbeat et les envois
+  échouent pendant que cette route répond se lit `en erreur` au bout de 25 s,
+  avec le motif ; sans elle, `injoignable` ou `en erreur` selon ce qui est
+  revenu en dernier ;
 * le motif affiché sous la pastille ne reprend, de ce que le serveur envoie,
   que le code HTTP, le code stable et les majeures servies, sur une ligne de
   160 caractères au plus. La phrase du serveur reste dans le journal.
