@@ -247,8 +247,11 @@ D'où l'ordre :
 2. **Convex ensuite**, quand toutes les consoles sont à jour.
 3. **Jamais pendant une séance.** Une séance en cours au moment où Convex cesse
    de servir la majeure de la console continue sous le seul superviseur local
-   et s'arrête normalement à la console ; sa télémétrie et sa fin, refusées,
-   sont abandonnées, et elle reste `active` dans Convex.
+   et s'arrête normalement à la console. Sa télémétrie, ses événements et sa
+   fin, refusés, ne sont plus abandonnés : ils restent sur le disque de la
+   console, qui les envoie quand les deux côtés partagent de nouveau une
+   majeure (après sa propre mise à jour, donc son redémarrage, si c'est elle
+   qui était en retard). D'ici là la séance reste `active` dans Convex.
 
 `scripts/pi/preflight.sh` dit dans quelle situation se trouve une console avant
 de la démarrer ([section 7.5](#75-vérifier-puis-démarrer)).
@@ -349,22 +352,45 @@ un document non conforme.
   retire, et un point présent deux fois est simplement compté déjà reçu s'il
   est envoyé de nouveau.
 - Les dates des séances existantes ne bougent pas, et celles des séances
-  créées après le déploiement par les consoles d'aujourd'hui non plus : elles
-  sont datées comme avant. Le serveur ne date lui-même une séance, et ne
-  borne ses points, que si la machine dit l'âge de sa séance, ce qu'aucune
-  console ne fait encore
+  créées après le déploiement par une console d'une version antérieure non
+  plus : elles sont datées comme avant. Le serveur ne date lui-même une
+  séance, et ne borne ses points, que si la machine dit l'âge de sa séance,
+  ce que fait la console de ce dépôt
   ([convex.md, Deux horloges](convex.md#deux-horloges)).
 - La table `training_events` est dans la liste de la migration
   multi-organisation (`MACHINE_TABLES`) : des événements reçus avant cette
   migration suivent l'organisation de leur machine quand elle tourne.
 
-**Ordre.** Ce changement est une mineure : il ne demande pas l'ordre de la
+**Ordre : pour cette mineure, Convex d'abord.** Ce changement ne demande pas
+l'ordre de la
 [section 3.4](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite),
-qui vaut pour un changement de majeure. Une console restée en `1.0` fonctionne
-sans changement avec ce Convex : même corps, mêmes statuts, des champs de plus
-dans des réponses qu'elle ne lit pas, les mêmes dates stockées et servies, le
-même verdict de fraîcheur. Seule différence : un lot qu'elle renvoie n'est
-plus stocké deux fois.
+qui vaut pour un changement de majeure, et les deux ordres sont sans danger.
+
+| Situation | Effet |
+|---|---|
+| Console antérieure, Convex `1.1` | Rien ne change pour elle : même corps, mêmes statuts, des champs de plus dans des réponses qu'elle ne lit pas, les mêmes dates stockées et servies, le même verdict de fraîcheur. Seule différence : un lot qu'elle renvoie n'est plus stocké deux fois. |
+| Console de ce dépôt, Convex `1.1` | Le fonctionnement prévu : rien de perdu ni de doublé après une coupure ou un redémarrage, séances datées par le serveur. |
+| Console de ce dépôt, Convex resté au contrat `1.0` | Elle fonctionne. Les événements restent dus sur son disque (la route répond 404) et partent une fois Convex déployé : dans la minute pour une séance en cours, **au démarrage suivant de la console** pour une séance déjà finie. Un lot renvoyé après une réponse perdue ou un redémarrage est **stocké deux fois**, et ces doublons restent. Les séances sont datées par la console : une machine à l'heure fausse apparaît à sa date. |
+
+**Sur une console qui a déjà des enregistrements.** Les enregistrements faits
+avant cette version n'ont pas de curseur : ils ne sont **pas** envoyés, ni au
+premier démarrage ni plus tard, et restent sur le disque tels quels. À son
+premier démarrage, la console en écrit la liste une fois, dans
+`.sync-baseline.json` à côté des enregistrements, et dit dans sa liste
+d'événements combien elle en met de côté (`liste des enregistrements
+anterieurs a la synchronisation etablie : N enregistrement(s) ...`) : c'est
+attendu. Aucun geste n'est demandé.
+Les fichiers `<nom du dossier>.sync.json` qui apparaissent ensuite à côté des
+dossiers d'enregistrement sont les curseurs de la synchronisation
+([raspberry-pi.md §8.1](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) :
+supprimer ou abîmer un curseur fait seulement **renvoyer** l'enregistrement
+depuis son début, au démarrage suivant ; le serveur ne stocke qu'une fois ce
+qu'il a déjà. Ne pas supprimer `.sync-baseline.json` sans le vouloir : la
+liste serait refaite de tout ce qui n'a pas de curseur, et un enregistrement
+qui attendait d'être envoyé ne le serait plus (la console le dit, avec le
+nombre). Un enregistrement fait plus tard sans clé configurée est envoyé dès
+qu'une clé l'est de nouveau
+([raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)).
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.

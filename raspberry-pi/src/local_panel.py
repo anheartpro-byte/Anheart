@@ -78,6 +78,20 @@ that reports none (the simulator) is wrapped by a tap that notes each call
 (:mod:`src.record.drive_tap`). What is asked at the console while no session
 is recorded goes to the logbook (:mod:`src.record.logbook`).
 
+The dashboard is told from the record
+-------------------------------------
+
+What the dashboard receives of a session (telemetry, events, end) is read back
+from that session's record, from the place the dashboard last acknowledged
+(:mod:`src.record_uplink`): a lost link, or a console that restarts, loses
+nothing of a session that is on disk. Those reads have a thread of their own
+(:func:`record_source`), and the dashboard task that asks for them is cancelled
+first at exit: neither a tick nor the stop of the drive ever waits for them.
+
+A stop asked for from the dashboard is looked for by another task
+(:meth:`LocalPanel.cloud_stop_step`), which does nothing else: the question
+keeps its cadence while the sending waits on a slow disk or a slow upload.
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -147,8 +161,9 @@ from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, Presence
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record.cursor import boot_identity
 from src.record.drive_tap import tap_drive
-from src.record.export import RecordExporter
+from src.record.export import RecordExporter, RecordIo
 from src.record.journal import STOP_TIMEOUT, Activity, Journal
 from src.record.session import (
     RecordInodesLow,
@@ -158,6 +173,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
+from src.record_uplink import RecordSource
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
 from src.sim.bitalino import SimulatedBitalinoClient
@@ -247,7 +263,12 @@ SENSOR_PERIOD: Final[Seconds] = Seconds(1.0)
 """Every sensor window is re-processed once a second, off the loop."""
 
 CLOUD_PERIOD: Final[Seconds] = Seconds(1.0)
-"""One dashboard step a second: telemetry is sampled at 1 Hz."""
+"""One dashboard step a second. What it sends of a session is read back from its record."""
+
+STOP_WATCH_PERIOD: Final[Seconds] = Seconds(0.05)
+"""How often the stop watch looks whether its question is due. The question itself is
+asked every :data:`~src.cloud_sync.STATUS_PERIOD`; this only bounds how late it can be,
+and a look that finds nothing due reads a clock and returns."""
 
 STOP_POLL: Final[Seconds] = Seconds(0.05)
 STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
@@ -893,6 +914,22 @@ class LocalPanel:
         except Exception:  # see the docstring: an observer must not stop the machine
             _logger.exception("dashboard link step failed; the session is unaffected")
 
+    async def cloud_stop_step(self) -> None:
+        """Look whether the dashboard wants the running session stopped. No-op without a link.
+
+        A task of its own, apart from :meth:`cloud_step`: that one may wait
+        seconds on a record read or on an upload, and a stop asked for from
+        the dashboard must not wait behind it. The same fence, for the same
+        reason: a bug in the watch must not bring a running session down.
+        """
+        cloud = self._cloud
+        if cloud is None:
+            return
+        try:
+            await cloud.watch_stop()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("dashboard stop watch failed; the session is unaffected")
+
     # --- running and stopping --------------------------------------------
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
@@ -905,6 +942,7 @@ class LocalPanel:
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
+            asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
         )
         failed = await PanelTasks(stop, web, self.close).run(control, observers)
         return EXIT_FAILED if failed else EXIT_OK
@@ -1239,6 +1277,7 @@ def build_panel(
             programs_enabled=config.programs_enabled,
             software_version=read_software_version(),
             record_degraded=None if recorder is None else recorder.is_degraded,
+            records=None if journal is None else record_source(journal, clock),
         )
     return LocalPanel(
         clock=clock,
@@ -1275,6 +1314,22 @@ async def journal_stopped(journal: Journal) -> bool:
             break
         await asyncio.sleep(STOP_POLL)
     return journal.stopped
+
+
+def record_source(journal: Journal, clock: Clock) -> RecordSource:
+    """The session records, as the dashboard link reads them back to send them.
+
+    One thread of its own for those reads and for the cursor it writes, apart
+    from the threads of the downloads and from every other thread of the
+    console: a records directory that stops answering holds the sending, and
+    nothing else. The system's boot identifier is read here, once: startup
+    I/O, with nothing turning.
+    """
+
+    def current() -> Path | None:
+        return journal.status(clock.monotonic()).path
+
+    return RecordSource(root=journal.root, current=current, io=RecordIo(1), boot_id=boot_identity())
 
 
 def build_recorder(

@@ -270,7 +270,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. |
-| `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Avec **toute console d'aujourd'hui** : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. Pour une séance dont la machine dit l'âge, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). |
+| `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
 | `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
 | `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
@@ -299,14 +299,14 @@ première fois (`storeTelemetry`).
 `t` est une date en ms Unix **sur l'horloge de la machine**. C'est l'identité
 du point et son rang dans la séance. Ce qu'elle vaut dépend de la console :
 
-- la console d'aujourd'hui (contrat 1.0) y écrit l'heure murale de la machine
-  à l'instant de la mesure. `t` est stocké et servi tel quel : `t` sert à
-  l'axe des courbes et à dire quand un point a été **mesuré**
-  (`lastMeasuredAt`) ;
-- une console qui dit l'âge de sa séance y écrit le début qu'elle a daté plus
-  le temps écoulé. Les lectures (`getSessionTelemetry`, `lastMeasuredAt`)
-  placent alors `t` sur l'horloge du serveur (voir
-  [Deux horloges](#deux-horloges)).
+- la console de ce dépôt, qui dit l'âge de sa séance, y écrit le début
+  qu'elle a daté plus le temps écoulé sur son horloge monotone. Les lectures
+  (`getSessionTelemetry`, `lastMeasuredAt`) placent alors `t` sur l'horloge
+  du serveur (voir [Deux horloges](#deux-horloges)) ;
+- une console antérieure, qui ne dit pas cet âge, y écrit l'heure murale de
+  la machine à l'instant de la mesure. `t` est stocké et servi tel quel : il
+  sert à l'axe des courbes et à dire quand un point a été **mesuré**
+  (`lastMeasuredAt`).
 
 Dans les deux cas `t` ne dit pas qu'une séance envoie encore : la date de
 **réception** d'un point est le `_creationTime` que Convex donne à sa ligne
@@ -327,7 +327,9 @@ ou un identifiant opaque d'opérateur, jamais un nom). Index
 `seq` est le rang de l'événement dans l'enregistrement. **Une ligne par
 `(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
 de nouveau (`storeEvents`). Aucune fonction publique ne lit encore cette
-table : la machine l'écrit, les tests la lisent.
+table : la machine l'écrit, les tests la lisent. Seuls les événements d'une
+séance y arrivent, ceux de son enregistrement : rien de ce que la console
+noterait hors séance n'est envoyé.
 
 ### Deux horloges
 
@@ -340,14 +342,16 @@ combien de temps sa séance a commencé (`sessionAgeMs`, compté sur son horloge
 monotone, envoyé avec `training/local` ou, pour un lancement du site, avec
 `training/start` et la date de début `startedAt`) ?
 
-**La console d'aujourd'hui ne le dit pas** : elle parle le contrat 1.0 et
-n'envoie pas ce champ. Tout ce qui suit sous « Une console qui dit son âge »
-est en place côté Convex et **ne s'applique à aucune console existante**.
+**La console de ce dépôt le dit** depuis qu'elle relit ses enregistrements
+pour les envoyer : pour toute séance en cours, et pour toute séance qu'elle
+envoie après coup tant que le système du Pi n'a pas redémarré entre-temps
+([raspberry-pi.md](raspberry-pi.md#85-les-dates)). Une console d'une version
+antérieure ne le dit pas, quel que soit le contrat qu'elle annonce.
 
-#### Une console qui ne dit pas son âge (toute console d'aujourd'hui)
+#### Une console qui ne dit pas son âge (version antérieure)
 
-Convex se comporte comme avant ce changement, à une exception près : un point
-envoyé deux fois n'est stocké qu'une fois.
+Convex se comporte comme avant l'arrivée de `sessionAgeMs`, à une exception
+près : un point envoyé deux fois n'est stocké qu'une fois.
 
 - Une séance démarrée à la machine est datée comme la machine l'a écrit
   (`startedAt`), une fin aussi. Une séance lancée du site commence à la
@@ -356,10 +360,16 @@ envoyé deux fois n'est stocké qu'une fois.
   Il est stocké tel quel, **sans borne** : aucune date n'est refusée, y
   compris après une correction de l'horloge de la machine en cours de séance,
   vers l'avant ou vers l'arrière.
-- Les lectures servent ces dates telles quelles. Un point envoyé en retard
-  porte une date de mesure ancienne : le site ne le montre pas comme actuel.
-  Une machine dont l'horloge est fausse n'est donc pas montrée en direct, et
-  une séance datée de 1970 s'affiche en 1970.
+- Les lectures servent ces dates telles quelles : c'est l'heure murale de la
+  machine qui dit quand un point a été mesuré. Si elle est juste, un point
+  envoyé en retard porte une date de mesure ancienne et le site ne le montre
+  pas comme actuel. Si elle est fausse, le verdict du site l'est d'autant :
+  en retard de 20 s ou plus, ou en avance de plus de 5 s, la machine n'est
+  jamais montrée en direct (sens sûr), et une séance datée de 1970 s'affiche
+  en 1970 ; **en avance de X, un point envoyé en retard peut être lu comme
+  actuel jusqu'à 20 s + X après sa mesure**. Ce dernier cas, le seul dans le
+  sens dangereux, existait avant et reste entier pour une telle console
+  ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)).
 - `machineStartedAt` reste absent : la séance n'a pas d'axe machine.
 
 #### Une console qui dit son âge
@@ -395,10 +405,20 @@ pas.
 #### Ce qu'un âge faux peut faire, et ce qui le borne
 
 L'âge vient de la machine. Un âge trop petit (0 pour une séance d'il y a une
-heure) fait lire ses mesures comme plus récentes qu'elles ne sont : c'est la
-seule façon qu'a une machine de faire lire comme actuelles des données
-anciennes, et Convex ne peut pas la fermer contre une machine qui ment. Ce qui
-la borne :
+heure) fait lire ses mesures comme plus récentes qu'elles ne sont. Pour une
+console qui dit son âge, c'est la seule façon de faire lire comme actuelles
+des données anciennes : son heure murale ne date plus rien, et le cas « en
+avance de X » d'une console qui ne le dit pas n'existe plus pour elle. Convex
+ne peut pas fermer cette façon-là contre une machine qui ment.
+
+Un âge honnête, lui, est exact au délai d'acheminement de la déclaration
+près : la console le calcule à l'envoi, le serveur le lit à la réception, et
+toute mesure de la séance est lue plus récente de ce délai. C'est d'ordinaire
+une fraction de seconde. La console n'attend pas une réponse plus de 3 s, mais
+une requête que le serveur traiterait plus tard daterait la séance d'autant,
+et la séance n'est datée qu'une fois : rien ne borne ce délai côté serveur.
+
+Ce qui borne un âge faux :
 
 - la machine est authentifiée par sa clé et n'écrit que dans ses propres
   séances : l'effet se limite à l'affichage de ses propres mesures ;
@@ -869,9 +889,15 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `machine_not_found` | 400 | La machine a disparu entre l'authentification et l'écriture. |
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
 
-Côté Pi, toute réponse ≥ 400 devient `Refused` (on ne réessaie pas la même
-requête) et son code est journalisé ; une absence de réponse devient
-`Unreachable` (on réessaie plus tard).
+Côté Pi, une absence de réponse devient `Unreachable`, toute réponse ≥ 400
+devient `Refused`, et son code est journalisé. Pour ce que la console envoie
+d'une séance, `answer_of` (`raspberry-pi/src/cloud_sync.py`) en tire l'une de
+quatre suites : acquitté ; **retenu** (pas de réponse, 401, 403, 408, 425,
+426, 429, 5xx : rien n'est reçu, rien n'est abandonné, la même requête est
+refaite après 15 s) ; route inconnue (404 sans code) ; refusé (tout autre
+cas, définitif quand le code est `invalid_request`, `session_not_found`,
+`session_not_pending` ou `machine_not_found`). Détail :
+[raspberry-pi.md](raspberry-pi.md#83-ce-que-chaque-réponse-fait-au-curseur).
 
 **Corps** : les sept routes `POST` attendent un objet JSON. Un corps qui n'en
 est pas un est refusé par **400** `invalid_request`, et rien n'est écrit :
@@ -899,11 +925,12 @@ n'est pas lu.
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
-| `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant (la console n'envoie pas encore les deux champs facultatifs) |
-| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | une fois par séance démarrée à la machine ; idempotent par `localRef` |
+| `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs |
+| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
-| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored, duplicates, rejected}` | lots de 300 points max, toutes les 5 s |
-| `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | à la fin, après la télémétrie restante |
+| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 2 s pour ce qui est en retard |
+| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements max, 2000 caractères de texte par événement) | `{stored, duplicates, rejected}` | avec la télémétrie, 200 événements max par envoi |
+| `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | quand l'enregistrement de la séance est fermé et sa télémétrie acquittée ; sans `endedAt` pour un lancement que la machine a refusé |
 
 Détails du contrat :
 
@@ -922,7 +949,9 @@ Détails du contrat :
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
   pas la sienne ; il termine le lancement par `/training/end` avec la raison
   `refusee par la machine : serveur incompatible (contrat X vs Y)`.
-- **Arrêt demandé** : si `status` répond `stopRequested: true` ou
+- **Arrêt demandé** : le Pi pose la question `status` toutes les 3 s par une
+  tâche à part, qui n'attend derrière aucun envoi. Si `status` répond
+  `stopRequested: true` ou
   `active: false`, le Pi fait un arrêt ordinaire sur la rampe réglée, attribué
   à l'opérateur « tableau de bord », **quelle que soit la version** annoncée
   par la réponse (même majeure, autre majeure, absente ou illisible). Ces deux
@@ -931,12 +960,26 @@ Détails du contrat :
   peut lancer, reprendre ou réarmer quoi que ce soit.
 - **Lancement refusé par le Pi** : le Pi termine la séance `pending` par
   `/training/end` avec `failed: true` et une raison qui commence par
-  `refusee par la machine : `. Un lancement ni démarré ni refusé en 60 s est
-  terminé avec « la boucle n'a ni demarre ni refuse ».
-- **Annulé entre-temps** : si `/training/start` est refusé (séance annulée sur le
-  site entre le poll et l'armement), le Pi arrête la séance qu'il vient d'armer.
+  `refusee par la machine : `, sans `endedAt` : le serveur date ce refus. Un
+  lancement ni démarré ni refusé en 60 s est terminé avec « la boucle n'a ni
+  demarre ni refuse ».
+- **Départ non pris** : si `/training/start` reçoit autre chose qu'un oui, le
+  Pi arrête la séance qu'il vient d'armer, tout de suite et une fois. Cela
+  vaut pour un refus (séance annulée sur le site entre le poll et
+  l'armement) comme pour une réponse retenue (426, 401, 403, 5xx) : une
+  séance lancée du site ne tourne pas là où le site ne pourrait pas
+  l'arrêter. Retenue, la confirmation reste due et est refaite. Seule
+  l'absence de réponse exploitable (réseau coupé, délai dépassé, réponse 2xx
+  qui n'est pas un objet JSON) laisse tourner la séance, sous le superviseur
+  local. La confirmation part dès que la séance est armée, par la même tâche
+  que la question d'arrêt : elle n'attend aucune lecture d'enregistrement, ni
+  la retenue de 15 s posée par une autre requête restée sans réponse.
 - **Fin** : `failed` vaut `false` pour `programme_complete` et `operator_stop`,
-  `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`.
+  `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`,
+  et pour `interrupted` : la raison d'une séance dont la console a été tuée
+  avant la fin, envoyée après son redémarrage. La raison est celle de
+  l'enregistrement local, suivie du texte de l'arrêt quand il y en a un
+  (`operator_stop: <texte>`).
 - **Un lot peut être envoyé deux fois.** `training/telemetry` et
   `training/events` n'écrivent un point (`(sessionId, t)`) ou un événement
   (`(sessionId, seq)`) qu'une fois. La réponse compte chaque élément du lot
@@ -946,33 +989,36 @@ Détails du contrat :
   le lot : la machine n'a rien à renvoyer, et renvoyer ne coûte rien.
 - **Pas de limite « données trop anciennes ».** Aucune route d'entraînement
   ne refuse un point parce qu'il est vieux : une séance d'il y a une semaine
-  s'envoie entière. Pour la console d'aujourd'hui, qui ne dit pas l'âge de sa
-  séance, **aucune date n'est refusée** et `rejected` vaut toujours 0. La
-  seule borne est de cohérence, elle ne vaut que pour une séance dont la
-  machine dit l'âge, et elle se lit sur l'horloge **de la machine**
+  s'envoie entière. Pour une console qui ne dit pas l'âge de sa séance,
+  **aucune date n'est refusée** et `rejected` vaut toujours 0. La seule borne
+  est de cohérence, elle ne vaut que pour une séance dont la machine dit
+  l'âge, et elle se lit sur l'horloge **de la machine**
   ([Deux horloges](#deux-horloges)) : hors de ses bornes un point ou un
   événement est compté `rejected`, sans refuser le lot.
 - **Dates** : `startedAt` (dans `training/local` et `training/start`) est le
   début tel que la machine l'a daté ; `sessionAgeMs`, facultatif, le temps
   écoulé depuis, compté sur son horloge monotone. Une valeur qui n'est pas un
   nombre n'est pas lue. C'est la présence de `sessionAgeMs` qui change ce que
-  le serveur fait des dates : [Deux horloges](#deux-horloges). La console
-  d'aujourd'hui ne l'envoie pas.
+  le serveur fait des dates : [Deux horloges](#deux-horloges). La console de
+  ce dépôt l'envoie toujours quand elle peut le compter.
 - **Événements** : `seq` entier positif ou nul, `t` nombre, `kind` de 64
   caractères au plus (minuscules, chiffres, `_`, une lettre d'abord), `detail`
   de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
   chiffres, `_` et `-`. Un événement mal formé refuse tout le lot (400
   `invalid_request`, « Malformed event »), comme un point mal formé.
-- **Réseau perdu** : la séance continue sous le seul superviseur local. La
-  télémétrie en attente est bornée à 3600 points (1 h), les plus anciens
-  sont jetés d'abord ; 20 séances terminées au plus restent dues.
+- **Réseau perdu, serveur d'un autre contrat, console redémarrée** : la
+  séance continue sous le seul superviseur local, et rien de ce qu'elle doit
+  au tableau de bord n'attend en mémoire. C'est dans son enregistrement sur
+  le disque du Pi, relu depuis un curseur : au retour du lien, la console
+  envoie ce qui manque, la séance en cours d'abord, puis les précédentes de
+  la plus ancienne à la plus récente, sans limite d'ancienneté ni de nombre
+  ([raspberry-pi.md §8](raspberry-pi.md#8-la-synchronisation-avec-le-tableau-de-bord)).
 
 ### Route présente mais non appelée par la console locale
 
 | Méthode et chemin | Rôle |
 |---|---|
 | `GET /api/machine/roster` | `{riders: [{userId, name, hrMax}]}` : patients ayant le droit sur la machine. **Aucun code du Pi ne l'appelle.** |
-| `POST /api/machine/training/events` | Corps `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements max, 2000 caractères de texte par événement), réponse `{stored, duplicates, rejected}`. La séance doit appartenir à la machine. **La console ne l'appelle pas encore** : elle le fera en relisant son enregistrement local. |
 
 ### Routes retirées
 
@@ -1326,7 +1372,7 @@ régressions locales exécutables.
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
 | 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
-| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end`, et ne le rattrape pas au redémarrage. Trouvé à l'essai du 1er octobre 2026. | La séance reste `active` dans Convex indéfiniment. La machine repasse `online` au redémarrage. |
+| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |
 
 Fait le 1er octobre 2026 : déploiement sur l'environnement de développement,
 essai de bout en bout avec un Pi en simulation complète. Reste à faire, dans
@@ -1360,6 +1406,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
 | `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
@@ -1472,8 +1519,19 @@ Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
 elle n'envoie aucun des champs ajoutés, ne lit pas ceux de la réponse, et
 n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
-plus stocké deux fois. La console de ce dépôt annonce `1.1` dans son en-tête
-et se comporte encore ainsi : elle n'envoie pas `sessionAgeMs`.
+plus stocké deux fois.
+
+La console de ce dépôt est en `1.1` et s'en sert : elle envoie les événements,
+dit l'âge de ses séances, et compte sur l'idempotence pour renvoyer sans
+doublon. Face à un Convex resté en `1.0`, elle fonctionne, moins bien : la
+route des événements lui répond 404, les événements restent dus sur son
+disque (redemandés une fois par minute tant que la séance s'envoie, puis à
+chaque démarrage de la console) ; un lot
+qu'elle renvoie après une réponse perdue ou un redémarrage est stocké deux
+fois ; et ses séances sont datées par elle, puisque ce Convex ne lit pas
+`sessionAgeMs`. Rien n'est perdu ni bloqué. D'où l'ordre conseillé pour cette
+mineure : Convex d'abord
+([deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)).
 
 ### Matrice de compatibilité
 

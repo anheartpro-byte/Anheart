@@ -1873,7 +1873,7 @@ patient (pour lui même, avec le droit de lancement).
 | Rouge « Au-dessus de la zone » qui dure | La FC dépasse la zone. | La machine réduit d'elle même ; surveiller ; arrêter si besoin. |
 | Bouclier orange et « Action de sécurité : ... » | La machine applique une action de sécurité. | Suivre ; l'action est décidée par la machine. |
 | Chiffres figés, plus de nouveaux points, puis au bout de 20 s le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » | Liaison Internet de la machine coupée, ou machine arrêtée. | Voir [§6.3](#63-si-la-machine-est-hors-ligne). |
-| Chiffres remplacés par « - » sous le bandeau « La machine envoie, mais ses mesures ne sont pas datées de maintenant… », alors que les courbes avancent | La machine rattrape une coupure de liaison, ou son horloge est déréglée. | Attendre la fin du rattrapage (5 s par tranche de 5 minutes de coupure). Si le bandeau reste : faire vérifier l'heure de la machine ; d'ici là, suivre la séance à la machine. |
+| Chiffres remplacés par « - » sous le bandeau « La machine envoie, mais ses mesures ne sont pas datées de maintenant… », alors que les courbes avancent | La machine rattrape une coupure de liaison, ou son horloge est déréglée. | Attendre la fin du rattrapage (environ 2 s par tranche de 5 minutes de coupure). Si le bandeau reste : faire vérifier l'heure de la machine ; d'ici là, suivre la séance à la machine. |
 
 ### P12. Annuler ou arrêter une séance à distance
 
@@ -2046,8 +2046,15 @@ données** : chaque seconde, il dit « En direct » ou « Données périmées »
 **Les horloges.** Pour cet âge, le site ne lit pas l'heure de votre poste. Le
 serveur date ce qu'il reçoit (chaque signal, chaque paquet de points) et joint
 sa propre heure à chaque réponse ; le site y ajoute le temps qu'il a compté
-depuis. L'heure de la machine ne sert qu'au panneau de la vue en direct, pour
-dire quand un point a été **mesuré**. Ce qu'il reste à savoir :
+depuis. L'heure de la machine ne date pas non plus une séance **en cours**
+quand le logiciel de la machine et celui du serveur sont ceux de ce guide : la
+machine dit au serveur depuis combien de temps sa séance a commencé, et le
+serveur date lui-même le début, la fin et chaque mesure. L'heure de la machine
+sert encore au panneau de la vue en direct, pour dire quand un point a été
+**mesuré**, dans trois cas : une machine restée à un logiciel antérieur ; un
+serveur resté à une version antérieure ; et une séance que la machine envoie
+après que son système a redémarré (elle ne sait plus dire depuis quand la
+séance avait commencé). Ce qu'il reste à savoir :
 
 - **Délai le plus long, en chiffres.** Sur une page déjà ouverte : 90 s pour
   une machine, 20 s pour le panneau, à la seconde près. Sur une page que vous
@@ -2062,7 +2069,8 @@ dire quand un point a été **mesuré**. Ce qu'il reste à savoir :
 - si l'heure du poste est avancée d'un coup pendant que la page est ouverte,
   tout paraît périmé jusqu'au signal suivant (10 s au plus pour une machine
   qui envoie) ;
-- **panneau de la vue en direct, horloge de la machine.** Si elle retarde de
+- **panneau de la vue en direct, dans les trois cas où l'horloge de la
+  machine date la mesure.** Si elle retarde de
   plus de 15 s environ, ou avance de plus de 5 s environ, le panneau affiche
   le bandeau « La machine envoie, mais ses mesures ne sont pas datées de
   maintenant… » et aucun chiffre, alors que la machine envoie normalement.
@@ -2074,7 +2082,13 @@ dire quand un point a été **mesuré**. Ce qu'il reste à savoir :
   avance **et** points renvoyés après une coupure ; un chiffre peut alors
   passer pour actuel jusqu'à 20 s plus cette avance après sa mesure. L'axe des
   courbes et, pour une séance démarrée à la console, le chronomètre restent à
-  l'heure de la machine.
+  l'heure de la machine. Un cas particulier a été mesuré : une séance envoyée
+  après un redémarrage du système de la machine, dont l'horloge avançait
+  d'exactement le retard de cet envoi, s'affiche en direct le temps de son
+  envoi, jusqu'à ce que sa fin arrive. Rien de cela ne vaut pour une séance en
+  cours d'une machine et d'un serveur au logiciel de ce guide : une horloge de
+  machine fausse, ou corrigée en cours de séance, ne change ni ce qui est
+  affiché ni ce qui est enregistré.
 
 ### 6.3 Si la machine est hors ligne
 
@@ -2082,7 +2096,7 @@ dire quand un point a été **mesuré**. Ce qu'il reste à savoir :
 |---|---|---|
 | Machine hors ligne **avant** le lancement | Le bouton **Lancer une séance auto** est grisé (**Mes machines**), ou le serveur refuse (« Machine is offline »). | Vérifier l'alimentation, le réseau, et que la console de la machine tourne. |
 | Machine qui se coupe **pendant** l'attente | La séance reste **en attente** : personne ne la prend. | **L'annuler** ([P12](#p12-annuler-ou-arrêter-une-séance-à-distance)). **Ne la laissez pas traîner** : si la machine revient en ligne plus tard, elle la prendra et tentera de démarrer, même des heures après. |
-| Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis, au bout de 20 s, sont remplacés par « - » et grisés sous le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » ; à 90 s, l'état de la machine passe « Données périmées » et son statut « Hors ligne », à la même seconde. La machine, elle, continue selon ses propres règles de sécurité. Elle garde jusqu'à une heure de points et les renvoie au retour de la liaison, les plus anciens d'abord, 300 toutes les 5 s. **Pendant ce rattrapage, l'écran ne montre aucun chiffre comme actuel** : les courbes se complètent, les grands chiffres restent à « - » sous le bandeau « La machine envoie, mais ses mesures ne sont pas datées de maintenant… », qui part au premier point mesuré depuis moins de 20 s. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
+| Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis, au bout de 20 s, sont remplacés par « - » et grisés sous le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » ; à 90 s, l'état de la machine passe « Données périmées » et son statut « Hors ligne », à la même seconde. La machine, elle, continue selon ses propres règles de sécurité. Elle enregistre toute la séance sur son disque et envoie ce qui manque au retour de la liaison, les points les plus anciens d'abord, 300 toutes les 2 s, quelle que soit la durée de la coupure, et même si sa console a redémarré entre-temps. **Pendant ce rattrapage, l'écran ne montre aucun chiffre comme actuel** : les courbes se complètent, les grands chiffres restent à « - » sous le bandeau « La machine envoie, mais ses mesures ne sont pas datées de maintenant… », qui part au premier point mesuré depuis moins de 20 s. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
 | Arrêt demandé pendant une coupure | La demande attend sur le serveur ; la machine l'exécutera à son retour si la séance tourne encore. | Agir à la machine. |
 
 ### 6.4 Séances démarrées à la machine (manuelles ou auto)
@@ -2105,6 +2119,14 @@ n'apparaît donc pas pareil :
 Une séance **manuelle** porte en plus la mention « Manuel : uniquement depuis la
 console de la machine » ; sa carte **Entraînement** n'a en général ni zone ni
 programme (champs affichés « - »).
+
+Une séance démarrée à la machine **sans liaison** apparaît sur le site au
+retour de la liaison, entière : ses courbes, et sa fin avec sa raison. Si la
+console de la machine a été arrêtée ou a redémarré avant d'avoir pu la
+déclarer, la séance apparaît quand même, après le redémarrage, avec un
+identifiant à la place du nom de l'opérateur (`op-…`) et sans nom de
+programme. Une séance que la console n'a pas pu finir (console arrêtée
+brutalement) apparaît **échouée**, avec la raison `interrupted`.
 
 <a id="65-pourquoi-programmes-auto-désactivés-sur-cette-machine"></a>
 

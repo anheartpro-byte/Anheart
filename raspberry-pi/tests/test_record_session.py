@@ -8,6 +8,7 @@ the operator's HTTP API, and reads the record back with the shared reader.
 from __future__ import annotations
 
 import errno
+import json
 import logging
 import re
 from dataclasses import replace
@@ -38,6 +39,8 @@ from src.record.journal import (
     JournalStatus,
     Storage,
 )
+from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
+from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.reader import read
 from src.record.schema import EventKind, RecordError
 from src.record.session import (
@@ -875,7 +878,9 @@ def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(
         "Jean Dupont (tableau de bord)",
         "Jean Dupont",
     )
-    assert names_of("tableau de bord") == ("tableau de bord",)
+    # The dashboard's own label is nobody's name: the words of a stop it asks
+    # for, which contain it, are what it shows as the reason of the end.
+    assert names_of("tableau de bord") == ()
     assert names_of("   ") == ()
     recorder, journal, _clock = bare_recorder(tmp_path)
     recorder.begin(
@@ -892,6 +897,46 @@ def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(
     detail = loaded.value.events[-1].detail
     assert detail.startswith("refused: [redacted] a dit : xxx")
     assert len(detail) == MAX_TEXT - len("Jean Dupont") + len("[redacted]")
+
+
+def test_the_dashboard_s_label_is_written_while_names_and_withheld_words_are_not(
+    tmp_path: Path,
+) -> None:
+    """Both rules at once, in the logbook and then in a session's record: the label of the
+    dashboard is nobody's name, and the words of a stop it asks for are kept; the name of
+    whoever launched from it, the identifier of a programme and the words that give a
+    rider's age are withheld all the same, in the same sentences."""
+    recorder, journal, _clock = bare_recorder(tmp_path)
+    launcher = f"Jean Dupont ({DASHBOARD_OPERATOR})"
+    stop = f"arret demande depuis le {DASHBOARD_OPERATOR}"
+    refusal = (
+        f"secret_programme refuse a Jean Dupont, passager de 9 ans, par le {DASHBOARD_OPERATOR}"
+    )
+    kept = f"[redacted] refuse a [redacted], [redacted], par le {DASHBOARD_OPERATOR}"
+
+    recorder.withhold("secret_programme", "passager de 9 ans")
+    recorder.note_event(surface_event(SurfaceEvent.REFUSED, launcher, refusal, 1.0))
+    recorder.note_event(surface_event(SurfaceEvent.END_REQUESTED, DASHBOARD_OPERATOR, stop, 2.0))
+    journal.drain()
+    logbook = [
+        json.loads(line)["detail"]
+        for line in (journal.root / LOGBOOK / LOGBOOK_ACTIVE).read_text("utf-8").splitlines()
+    ]
+    assert logbook == [f"refused: {kept}", f"end_requested: {stop}"]
+
+    recorder.begin(SessionRequest(occupancy=Occupancy.BENCH, operator=launcher))
+    recorder.withhold("secret_programme", "passager de 9 ans")
+    recorder.note_event(surface_event(SurfaceEvent.REFUSED, DASHBOARD_OPERATOR, refusal, 11.0))
+    recorder.note_event(surface_event(SurfaceEvent.END_REQUESTED, DASHBOARD_OPERATOR, stop, 12.0))
+    journal.drain()
+    path = journal.status(Monotonic(0.0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    assert [event.detail for event in loaded.value.events[-2:]] == [
+        f"refused: {kept}",
+        f"end_requested: {stop}",
+    ]
 
 
 def test_past_too_many_operator_names_the_text_is_withheld_not_leaked(tmp_path: Path) -> None:
