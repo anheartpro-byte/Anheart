@@ -875,7 +875,9 @@ def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(
         "Jean Dupont (tableau de bord)",
         "Jean Dupont",
     )
-    assert names_of("tableau de bord") == ("tableau de bord",)
+    # The dashboard's own label is nobody's name: the words of a stop it asks
+    # for, which contain it, are what it shows as the reason of the end.
+    assert names_of("tableau de bord") == ()
     assert names_of("   ") == ()
     recorder, journal, _clock = bare_recorder(tmp_path)
     recorder.begin(

@@ -2046,12 +2046,15 @@ données** : chaque seconde, il dit « En direct » ou « Données périmées »
 **Les horloges.** Pour cet âge, le site ne lit pas l'heure de votre poste. Le
 serveur date ce qu'il reçoit (chaque signal, chaque paquet de points) et joint
 sa propre heure à chaque réponse ; le site y ajoute le temps qu'il a compté
-depuis. L'heure de la machine ne date rien non plus quand son logiciel est
-celui de ce guide : la machine dit au serveur depuis combien de temps sa
-séance a commencé, et le serveur date lui-même le début, la fin et chaque
-mesure. Une machine restée à un logiciel antérieur ne le dit pas : son heure
-sert alors au panneau de la vue en direct, pour dire quand un point a été
-**mesuré**. Ce qu'il reste à savoir :
+depuis. L'heure de la machine ne date pas non plus une séance **en cours**
+quand le logiciel de la machine et celui du serveur sont ceux de ce guide : la
+machine dit au serveur depuis combien de temps sa séance a commencé, et le
+serveur date lui-même le début, la fin et chaque mesure. L'heure de la machine
+sert encore au panneau de la vue en direct, pour dire quand un point a été
+**mesuré**, dans trois cas : une machine restée à un logiciel antérieur ; un
+serveur resté à une version antérieure ; et une séance que la machine envoie
+après que son système a redémarré (elle ne sait plus dire depuis quand la
+séance avait commencé). Ce qu'il reste à savoir :
 
 - **Délai le plus long, en chiffres.** Sur une page déjà ouverte : 90 s pour
   une machine, 20 s pour le panneau, à la seconde près. Sur une page que vous
@@ -2066,8 +2069,8 @@ sert alors au panneau de la vue en direct, pour dire quand un point a été
 - si l'heure du poste est avancée d'un coup pendant que la page est ouverte,
   tout paraît périmé jusqu'au signal suivant (10 s au plus pour une machine
   qui envoie) ;
-- **panneau de la vue en direct, horloge d'une machine au logiciel
-  antérieur.** Si elle retarde de
+- **panneau de la vue en direct, dans les trois cas où l'horloge de la
+  machine date la mesure.** Si elle retarde de
   plus de 15 s environ, ou avance de plus de 5 s environ, le panneau affiche
   le bandeau « La machine envoie, mais ses mesures ne sont pas datées de
   maintenant… » et aucun chiffre, alors que la machine envoie normalement.
@@ -2079,9 +2082,13 @@ sert alors au panneau de la vue en direct, pour dire quand un point a été
   avance **et** points renvoyés après une coupure ; un chiffre peut alors
   passer pour actuel jusqu'à 20 s plus cette avance après sa mesure. L'axe des
   courbes et, pour une séance démarrée à la console, le chronomètre restent à
-  l'heure de la machine. Rien de cela ne vaut pour une machine au logiciel de
-  ce guide : une horloge de machine fausse, ou corrigée en cours de séance, ne
-  change ni ce qui est affiché ni ce qui est enregistré.
+  l'heure de la machine. Un cas particulier a été mesuré : une séance envoyée
+  après un redémarrage du système de la machine, dont l'horloge avançait
+  d'exactement le retard de cet envoi, s'affiche en direct le temps de son
+  envoi, jusqu'à ce que sa fin arrive. Rien de cela ne vaut pour une séance en
+  cours d'une machine et d'un serveur au logiciel de ce guide : une horloge de
+  machine fausse, ou corrigée en cours de séance, ne change ni ce qui est
+  affiché ni ce qui est enregistré.
 
 ### 6.3 Si la machine est hors ligne
 

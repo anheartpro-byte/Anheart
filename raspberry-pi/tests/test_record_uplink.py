@@ -35,11 +35,13 @@ from src.clock import ManualClock
 from src.record.cursor import Cursor, NoCursor, cursor_of, load, store
 from src.record.export import BUSY, TIMEOUT, RecordIo
 from src.record.schema import RecordError
-from src.record.upload import MAX_POINTS, read_head
+from src.record.upload import MAX_POINTS, READ_CHUNK, Batch, read_batch, read_head
 from src.record_uplink import (
     BIND_GRACE,
     CATCH_UP_PERIOD,
     CLOSE_GRACE,
+    CURSOR_UNWRITTEN,
+    DECLARED_WITHOUT_RECORD,
     END_PATH,
     EVENTS_PATH,
     EVENTS_RETRY_PERIOD,
@@ -47,6 +49,7 @@ from src.record_uplink import (
     MAX_REFUSALS,
     RETRY_PERIOD,
     START_PATH,
+    START_UNKNOWN,
     TELEMETRY_PATH,
     TELEMETRY_PERIOD,
     UNOBSERVED_END,
@@ -68,6 +71,7 @@ from tests.record_uplink_support import (
     cursor_of_record,
     launched_programme,
     recording,
+    tie,
 )
 
 START = EPOCH_MS + 100_000
@@ -143,8 +147,9 @@ async def test_ex8_unreachable_the_record_goes_on_and_the_session_is_declared_wh
     record.tick(1.0)
     await b.step()
     assert b.link.paths() == ["local"]
-    # Before any answer, the record has its cursor: a restart would take it up again.
-    assert load(record.path) == Cursor(boot_id=BOOT)
+    # Before any answer, the record has its cursor, which names it: a restart
+    # takes it up where the dashboard stopped, with the age of its session.
+    assert load(record.path) == Cursor(local_ref="ref-live", boot_id=BOOT)
 
     for _ in range(int(RETRY_PERIOD) - 1):
         record.tick(1.0)
@@ -180,8 +185,8 @@ async def test_ex8_a_session_waits_for_its_record_to_be_declared_under_its_refer
     assert b.link.to(LOCAL_PATH)[0]["localRef"] == "ref-late"
 
 
-async def test_ex8_a_session_that_gets_no_record_is_declared_without_and_never_bound_to_one(
-    tmp_path: Path,
+async def test_ex8_a_session_that_gets_no_record_in_time_is_declared_without_and_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The disk gave no record in time: the dashboard still learns of the session."""
     b = bench(tmp_path)
@@ -195,14 +200,9 @@ async def test_ex8_a_session_that_gets_no_record_is_declared_without_and_never_b
     assert re.fullmatch(r"[0-9a-f]{32}", reference)
     assert declared[0]["startedAt"] == START
     assert declared[0]["sessionAgeMs"] == 10_000
-
-    # A record that appears afterwards carries another reference: left alone.
-    late = recording(tmp_path, b.clock, "ref-too-late")
-    b.disk.current = late.path
-    late.tick(3.0)
-    await b.run(6)
-    assert b.link.to(TELEMETRY_PATH) == []
-    assert load(late.path) == NoCursor()
+    # Said, in the log and on the console: its measurements may never arrive.
+    assert "declared without its record" in caplog.text
+    assert b.said == [DECLARED_WITHOUT_RECORD]
 
     b.uplink.finished(ENDED)
     await b.step()
@@ -211,9 +211,39 @@ async def test_ex8_a_session_that_gets_no_record_is_declared_without_and_never_b
             "sessionId": "cloud-1",
             "failed": False,
             "reason": "operator_stop: fini",
-            "endedAt": START + 16_000,
+            "endedAt": START + 10_000,
         }
     ]
+    assert b.uplink.owed == 0
+    assert b.said == [DECLARED_WITHOUT_RECORD], "said once"
+
+
+async def test_ex8_a_record_that_appears_after_the_session_was_declared_is_tied_then_and_sent(
+    tmp_path: Path,
+) -> None:
+    """Late, the record is still this session's: what the dashboard was told stands."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock))
+    await b.run(int(BIND_GRACE))
+    assert len(b.link.to(LOCAL_PATH)) == 1
+    assert b.link.to(TELEMETRY_PATH) == []
+
+    late = recording(tmp_path, b.clock, "ref-late")
+    b.disk.current = late.path
+    late.tick(3.0)
+    await b.run(6)
+
+    # Not declared a second time: the session the dashboard named goes on.
+    assert len(b.link.to(LOCAL_PATH)) == 1
+    assert b.link.seconds("cloud-1") == [0.0, 1.0, 2.0]
+    cursor = cursor_of_record(late.path)
+    assert (cursor.local_ref, cursor.session_id) == ("ref-late", "cloud-1")
+
+    late.close()
+    b.uplink.finished(ENDED)
+    await b.run(2)
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-1"]
+    assert cursor_of_record(late.path).state == "complete"
     assert b.uplink.owed == 0
 
 
@@ -364,6 +394,88 @@ async def test_a_start_the_dashboard_refuses_has_the_running_session_stopped_at_
 
     assert b.cancelled == ["session_not_pending (HTTP 400): cancelled"]
     assert len(b.link.to(START_PATH)) == 1
+    assert b.following() is None, "stopped: no stop is looked for after"
+
+
+@pytest.mark.parametrize(
+    ("answer", "words"),
+    [
+        (
+            Held("contract_unsupported (HTTP 426): no", refused=True),
+            "contract_unsupported (HTTP 426): no",
+        ),
+        (Held("sans code (HTTP 401): key", refused=True), "sans code (HTTP 401): key"),
+        (Held("sans code (HTTP 503): later", refused=True), "sans code (HTTP 503): later"),
+        (RouteMissing(), START_UNKNOWN),
+    ],
+)
+async def test_a_start_the_dashboard_does_not_take_for_its_own_reasons_stops_the_session_once(
+    tmp_path: Path, answer: Held | RouteMissing, words: str
+) -> None:
+    """Its contract, its key, an error of its own: the machine must not run on unconfirmed.
+
+    Nobody on the dashboard could stop a session it does not hold started.
+    The confirmation stays owed: it is made again, and the record sent, once
+    the dashboard takes it.
+    """
+    b = bench(tmp_path)
+    b.link.answer(START_PATH, answer)
+    b.uplink.begin(armed(b.clock, remote="k17remote"))
+    record = recording(tmp_path, b.clock, remote="k17remote")
+    b.disk.current = record.path
+    record.tick(1.0)
+
+    await b.step()
+    assert b.cancelled == [words]
+    assert b.following() is None
+    for _ in range(3):
+        await b.step(float(RETRY_PERIOD))
+
+    assert b.cancelled == [words], "stopped once, however often the start is asked again"
+    assert b.link.paths() == ["start"] * 4
+    assert cursor_of_record(record.path).start_confirmed is False
+
+    del b.link.answers[START_PATH]
+    await b.step(float(RETRY_PERIOD))
+    assert cursor_of_record(record.path).start_confirmed is True
+    assert b.link.paths()[4:6] == ["start", "telemetry"]
+    assert b.cancelled == [words]
+
+
+async def test_a_record_taken_up_after_a_restart_whose_start_is_not_taken_stops_nothing(
+    tmp_path: Path,
+) -> None:
+    """Nothing runs any more: there is nothing to stop, only a confirmation still owed."""
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, remote="k17remote")
+    left.tick(2.0)
+    left.close()
+    tie(left.path, Cursor(session_id="k17remote", start_confirmed=False))
+    old.link.answer(START_PATH, Held("sans code (HTTP 503): later", refused=True))
+
+    b = old.restarted()
+    await b.step()
+
+    assert b.link.paths() == ["start"]
+    assert b.cancelled == []
+
+
+async def test_a_stop_forwarded_is_kept_with_its_session_and_gone_with_it(tmp_path: Path) -> None:
+    """It neither hides a stop asked for in the next session nor stands for one."""
+    b = bench(tmp_path, recording=False)
+    b.uplink.stop_forwarded()  # nothing runs: nothing to mark
+    b.uplink.begin(armed(b.clock, remote="first"))
+    await b.step()
+    assert b.following() == "first"
+
+    b.uplink.stop_forwarded()
+    assert b.following() is None, "asked once: no stop is looked for again"
+    assert b.uplink.session_id == "first"
+
+    b.uplink.finished(ENDED)
+    b.uplink.begin(armed(b.clock, remote="second"))
+    await b.step()
+    assert b.following() == "second", "the next session's stop is looked for"
 
 
 # =========================================================================
@@ -431,6 +543,7 @@ async def test_ex2_the_cursor_is_written_when_the_dashboard_acknowledges(tmp_pat
 
     cursor = cursor_of_record(record.path)
     assert cursor == Cursor(
+        local_ref="ref-1",
         session_id="cloud-1",
         boot_id=BOOT,
         ticks_offset=(record.path / "ticks.csv").stat().st_size,
@@ -770,6 +883,9 @@ async def test_the_end_is_the_record_s_sent_after_its_last_point_and_closes_the_
     record.close("operator_stop", stop="operator pressed STOP")
     b.uplink.finished(RuntimeEnd(failed=True, reason="what the runtime said, unused"))
 
+    # Its last points wait their turn, two seconds after the batch before them.
+    await b.step()
+    assert b.link.paths() == ["local", "telemetry"]
     await b.step()
 
     assert b.link.paths() == ["local", "telemetry", "telemetry", "events", "end"]
@@ -1134,7 +1250,7 @@ async def test_ex4_what_earlier_runs_left_is_taken_up_oldest_first_after_the_run
         left = recording(tmp_path, clock, f"ref-{index}")
         left.tick(3.0)
         left.close("operator_stop", stop=None)
-        assert isinstance(store(left.path, Cursor(boot_id="an-earlier-boot")), Ok)
+        tie(left.path, Cursor(boot_id="an-earlier-boot"))
         names.append(left.path.name)
     # Never opened by the synchronisation, and already whole: both left alone.
     clock.advance(Seconds(3600.0))
@@ -1143,7 +1259,7 @@ async def test_ex4_what_earlier_runs_left_is_taken_up_oldest_first_after_the_run
     clock.advance(Seconds(3600.0))
     whole = recording(tmp_path, clock, "ref-whole")
     whole.tick(3.0)
-    assert isinstance(store(whole.path, Cursor(state="complete", end="sent")), Ok)
+    tie(whole.path, Cursor(state="complete", end="sent"))
     clock.advance(Seconds(3600.0))
 
     b = old.restarted()
@@ -1173,7 +1289,7 @@ async def test_ex4_a_record_declared_after_a_restart_is_described_by_its_manifes
     old = bench(tmp_path)
     left = recording(tmp_path, old.clock, "ref-undeclared")
     left.tick(5.0)
-    assert isinstance(store(left.path, Cursor(boot_id=BOOT)), Ok)
+    tie(left.path, Cursor(boot_id=BOOT))
     old.clock.advance(Seconds(300.0))
 
     b = old.restarted()
@@ -1200,7 +1316,7 @@ async def test_ex4_after_a_restart_of_the_system_the_age_of_a_session_is_not_cla
     old = bench(tmp_path, boot_id=boot_now)
     left = recording(tmp_path, old.clock, "ref-undeclared")
     left.tick(2.0)
-    assert isinstance(store(left.path, Cursor(boot_id=boot_now and BOOT)), Ok)
+    tie(left.path, Cursor(boot_id=boot_now and BOOT))
 
     b = old.restarted(boot_id=boot_now)
     await b.run(3)
@@ -1214,7 +1330,7 @@ async def test_ex4_a_clock_that_reads_before_the_record_s_start_claims_no_age(
     later = ManualClock(Monotonic(1000.0), UnixMillis(EPOCH_MS))
     left = recording(tmp_path, later, "ref-undeclared")
     left.tick(2.0)
-    assert isinstance(store(left.path, Cursor(boot_id=BOOT)), Ok)
+    tie(left.path, Cursor(boot_id=BOOT))
 
     b = bench(tmp_path)
     await b.run(3)
@@ -1267,6 +1383,145 @@ async def test_ex4_a_launch_taken_up_without_a_cursor_is_confirmed_again_and_not
     assert b.link.to(END_PATH)[0]["sessionId"] == "k17remote"
 
 
+async def test_a_session_tied_to_its_record_while_the_link_is_held_has_its_cursor_at_once(
+    tmp_path: Path,
+) -> None:
+    """Written when the two are tied, whatever the link says: not at the first answer.
+
+    With the cursor on disk a console that restarts takes the record up where
+    the dashboard stopped, and can still say how long ago the session began.
+    """
+    b = bench(tmp_path)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.owe_refusal("k17pending", "refusee par la machine : console occupee")
+    await b.step()  # the link holds: nothing is sent for a while
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock, "ref-held")
+    b.disk.current = record.path
+    record.tick(1.0)
+
+    await b.step()
+
+    assert b.link.paths() == ["end"], "held: the session was not even declared"
+    assert load(record.path) == Cursor(local_ref="ref-held", boot_id=BOOT)
+
+
+async def test_ex4_a_record_never_tied_to_a_cursor_is_sent_whole_at_the_next_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The console was killed in the session's first second, or its disk refused the cursor."""
+    first = bench(tmp_path)
+    await first.step()  # the directory is listed once: nothing older is there
+    lost = recording(tmp_path, first.clock, "ref-lost")
+    lost.tick(4.0)
+    lost.event()
+    assert load(lost.path) == NoCursor()
+    first.clock.advance(Seconds(600.0))
+
+    b = first.restarted()
+    await b.run(4)
+
+    assert "was never tied to a cursor: sent from its start" in caplog.text
+    assert [body["localRef"] for body in b.link.to(LOCAL_PATH)] == ["ref-lost"]
+    assert b.link.seconds() == [0.0, 1.0, 2.0, 3.0]
+    assert b.link.ranks() == [0]
+    # Nobody closed it: the console stopped before the session did.
+    assert [body["reason"] for body in b.link.to(END_PATH)] == ["interrupted"]
+    assert cursor_of_record(lost.path).state == "complete"
+    assert b.uplink.owed == 0
+
+
+async def test_the_record_open_now_is_not_listed_with_those_of_before(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Not tied to its session yet (its manifest cannot be read): it is the running one's."""
+    first = bench(tmp_path)
+    await first.step()  # the directory was listed once before: nothing older is there
+
+    b = first.restarted()
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock, "ref-now")
+    b.disk.current = record.path
+    record.tick(2.0)
+    (record.path / "manifest.json").rename(record.path / "manifest.away")
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(int(BIND_GRACE) + 2)
+    assert b.said == [DECLARED_WITHOUT_RECORD]
+    assert "left until the next start" not in caplog.text
+    assert b.uplink.owed == 1, "the running session, and nothing taken for an older record"
+
+    (record.path / "manifest.away").rename(record.path / "manifest.json")
+    record.tick(2.0)
+    await b.run(3)
+
+    assert len(b.link.to(LOCAL_PATH)) == 1
+    assert b.link.seconds("cloud-1") == [0.0, 1.0, 2.0, 3.0]
+
+
+async def test_ex4_a_record_older_than_the_synchronisation_is_never_sent(tmp_path: Path) -> None:
+    """There, without a cursor, the first time the directory is listed: left alone for good."""
+    old = bench(tmp_path)
+    older = recording(tmp_path, old.clock, "ref-older-software")
+    older.tick(3.0)
+    older.close()
+
+    for _ in range(2):
+        b = old.restarted()
+        await b.run(4)
+        assert b.link.sent == []
+        assert load(older.path) == NoCursor()
+
+
+async def test_a_complete_cursor_of_another_record_does_not_hide_the_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A cursor file copied or renamed by hand says nothing of the record it sits next to."""
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-mine")
+    left.tick(3.0)
+    left.close()
+    foreign = Cursor(local_ref="ref-other", session_id="cloud-9", state="complete", end="sent")
+    assert isinstance(store(left.path, foreign), Ok)
+
+    b = old.restarted()
+    await b.run(4)
+
+    assert "cannot be used (of another record): sent again from its start" in caplog.text
+    assert [body["localRef"] for body in b.link.to(LOCAL_PATH)] == ["ref-mine"]
+    assert b.link.seconds("cloud-1") == [0.0, 1.0, 2.0]
+    assert cursor_of_record(left.path).local_ref == "ref-mine"
+
+
+async def test_a_record_with_a_line_too_long_is_sent_whole_and_does_not_hold_back_the_next(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """More zeroes than one reading holds, with no end of line: passed over, said, and on."""
+    old = bench(tmp_path)
+    torn = recording(tmp_path, old.clock, "ref-torn")
+    torn.tick(2.0)
+    with (torn.path / "ticks.csv").open("ab") as handle:
+        handle.write(b"\x00" * (READ_CHUNK * 2 + 77) + b"\n")
+    torn.tick(2.0)
+    torn.close()
+    tie(torn.path, Cursor(session_id="cloud-torn"))
+    old.clock.advance(Seconds(3600.0))
+    behind = recording(tmp_path, old.clock, "ref-behind")
+    behind.tick(2.0)
+    behind.close()
+    tie(behind.path, Cursor(session_id="cloud-behind"))
+
+    b = old.restarted()
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(12)
+
+    assert b.link.seconds("cloud-torn") == [0.0, 1.0, 2.0, 3.0]
+    assert "1 lines of ticks of the record of session cloud-torn cannot be read" in caplog.text
+    assert "does not match its record" not in caplog.text
+    assert b.link.seconds("cloud-behind") == [0.0, 1.0]
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-torn", "cloud-behind"]
+    assert b.uplink.owed == 0
+
+
 async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beginning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1276,7 +1531,7 @@ async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beg
     left.event(2)
     left.close()
     wrong = Cursor(session_id="cloud-9", ticks_offset=7, last_t=START + 2000, last_seq=5)
-    assert isinstance(store(left.path, wrong), Ok)
+    tie(left.path, wrong)
 
     b = old.restarted()
     await b.run(5)
@@ -1293,13 +1548,22 @@ async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beg
 
 
 async def test_ex5_catching_up_sends_at_most_one_batch_of_300_points_every_2_s(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     old = bench(tmp_path)
     left = recording(tmp_path, old.clock)
     left.tick(4 * MAX_POINTS + 10.0, hertz=1)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-1")), Ok)
+    tie(left.path, Cursor(session_id="cloud-1"))
+    readings: list[int] = []
+
+    def counted(
+        record: Path, *, start_ms: int, cursor: Cursor, with_last_tick: bool
+    ) -> Result[Batch, RecordError]:
+        readings.append(cursor.ticks_offset)
+        return read_batch(record, start_ms=start_ms, cursor=cursor, with_last_tick=with_last_tick)
+
+    monkeypatch.setattr("src.record_uplink.read_batch", counted)
 
     b = old.restarted()
     times: list[float] = []
@@ -1314,6 +1578,9 @@ async def test_ex5_catching_up_sends_at_most_one_batch_of_300_points_every_2_s(
     assert sizes == [MAX_POINTS] * 4 + [10]
     assert [later - earlier for earlier, later in pairwise(times)] == [float(CATCH_UP_PERIOD)] * 4
     assert len(b.link.to(END_PATH)) == 1
+    # A record that is behind is not even read before its turn: one reading a batch.
+    assert len(readings) == len(sizes)
+    assert len(set(readings)) == len(readings)
 
 
 async def test_ex5_nothing_of_an_older_session_is_sent_while_the_running_one_is_behind(
@@ -1323,7 +1590,7 @@ async def test_ex5_nothing_of_an_older_session_is_sent_while_the_running_one_is_
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(MAX_POINTS + 50.0, hertz=1)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-old")), Ok)
+    tie(left.path, Cursor(session_id="cloud-old"))
     old.clock.advance(Seconds(3600.0))
 
     b = old.restarted()
@@ -1331,7 +1598,7 @@ async def test_ex5_nothing_of_an_older_session_is_sent_while_the_running_one_is_
     live = recording(tmp_path, b.clock, "ref-now")
     b.disk.current = live.path
     live.tick(2 * MAX_POINTS + 20.0, hertz=1)
-    await b.run(8)
+    await b.run(10)
 
     order = [body["sessionId"] for body in b.link.to(TELEMETRY_PATH)]
     assert order == ["cloud-1", "cloud-1", "cloud-1", "cloud-old", "cloud-old"]
@@ -1343,7 +1610,7 @@ async def test_ex5_the_session_that_just_ended_goes_before_the_older_ones(tmp_pa
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(2 * MAX_POINTS + 5.0, hertz=1)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-old")), Ok)
+    tie(left.path, Cursor(session_id="cloud-old"))
     old.clock.advance(Seconds(3600.0))
 
     b = old.restarted()
@@ -1373,7 +1640,7 @@ async def test_ex5_sessions_that_ended_while_the_link_was_down_wait_oldest_first
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(3.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(boot_id="an-earlier-boot")), Ok)
+    tie(left.path, Cursor(boot_id="an-earlier-boot"))
     old.clock.advance(Seconds(3600.0))
 
     b = old.restarted()
@@ -1400,6 +1667,97 @@ async def test_ex5_sessions_that_ended_while_the_link_was_down_wait_oldest_first
     assert declared[-4:] == ["ref-third", "ref-old", "ref-first", "ref-second"]
     assert len(b.link.to(END_PATH)) == 4
     assert b.uplink.owed == 0
+
+
+async def batch_times(b: Bench, steps: int) -> list[tuple[float, str, int]]:
+    """Step ``steps`` times; when each batch of telemetry went, for which session, how large."""
+    seen: list[tuple[float, str, int]] = []
+    for _ in range(steps):
+        before = len(b.link.to(TELEMETRY_PATH))
+        await b.step()
+        for body in b.link.to(TELEMETRY_PATH)[before:]:
+            points = cast("tuple[object, ...]", body["points"])
+            seen.append((float(b.clock.monotonic()), str(body["sessionId"]), len(points)))
+    return seen
+
+
+async def test_ex5_never_two_batches_less_than_2_s_apart_when_the_running_session_catches_up(
+    tmp_path: Path,
+) -> None:
+    """The last batch of a session that was behind, then an older record: not in one step."""
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(MAX_POINTS + 40.0, hertz=1)
+    left.close()
+    tie(left.path, Cursor(session_id="cloud-old"))
+    old.clock.advance(Seconds(3600.0))
+
+    b = old.restarted()
+    b.uplink.begin(armed(b.clock))
+    live = recording(tmp_path, b.clock, "ref-now")
+    b.disk.current = live.path
+    live.tick(MAX_POINTS + 110.0, hertz=1)
+    seen = await batch_times(b, 12)
+
+    assert [(session, size) for _at, session, size in seen] == [
+        ("cloud-1", MAX_POINTS),
+        ("cloud-1", 110),
+        ("cloud-old", MAX_POINTS),
+        ("cloud-old", 40),
+    ]
+    gaps = [later - earlier for (earlier, _s, _n), (later, _t, _m) in pairwise(seen)]
+    assert gaps == [float(CATCH_UP_PERIOD)] * 3
+
+
+async def test_ex5_never_two_batches_less_than_2_s_apart_when_a_session_ends_and_is_handed_over(
+    tmp_path: Path,
+) -> None:
+    """Its points of the last seconds wait two seconds after the batch it sent while running."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock)
+    b.disk.current = record.path
+    seen: list[tuple[float, str, int]] = []
+    for _ in range(6):
+        record.tick(1.0)
+        seen += await batch_times(b, 1)
+    record.tick(1.0)
+    record.close()
+    b.uplink.finished(ENDED)
+    seen += await batch_times(b, 4)
+
+    assert [size for _at, _session, size in seen] == [1, 5, 1]
+    gaps = [later - earlier for (earlier, _s, _n), (later, _t, _m) in pairwise(seen)]
+    assert gaps == [float(TELEMETRY_PERIOD), float(CATCH_UP_PERIOD)]
+    assert len(b.link.to(END_PATH)) == 1
+
+
+async def test_ex5_a_running_session_up_to_date_waits_its_turn_behind_a_batch_of_catching_up(
+    tmp_path: Path,
+) -> None:
+    """One pace for all: its five seconds of points go two seconds after an older batch."""
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(4 * MAX_POINTS + 0.0, hertz=1)
+    left.close()
+    tie(left.path, Cursor(session_id="cloud-old"))
+    old.clock.advance(Seconds(3600.0))
+
+    b = old.restarted()
+    b.uplink.begin(armed(b.clock))
+    live = recording(tmp_path, b.clock, "ref-now")
+    b.disk.current = live.path
+    seen: list[tuple[float, str, int]] = []
+    for _ in range(14):
+        live.tick(1.0)
+        seen += await batch_times(b, 1)
+
+    gaps = [later - earlier for (earlier, _s, _n), (later, _t, _m) in pairwise(seen)]
+    assert min(gaps) >= float(CATCH_UP_PERIOD)
+    sessions = [session for _at, session, _size in seen]
+    assert sessions.count("cloud-old") == 4
+    assert sessions.count("cloud-1") >= 2, "the running session is not starved"
+    assert b.link.seconds("cloud-1") == [float(s) for s in range(len(b.link.seconds("cloud-1")))]
 
 
 # =========================================================================
@@ -1503,6 +1861,8 @@ async def test_a_cursor_the_disk_refuses_is_said_once_and_written_when_it_can(
 
     assert load(record.path) == NoCursor()
     assert caplog.text.count("could not be written (OSError:ENOSPC)") == 1
+    # On the console too, once: after a restart it would be sent again from its start.
+    assert b.said == [CURSOR_UNWRITTEN]
     # The sending went on all the same: every second sent once, none twice.
     sent = b.link.seconds()
     assert sent == [float(second) for second in range(len(sent))]
@@ -1520,7 +1880,7 @@ async def test_a_listing_that_fails_at_startup_is_made_again_later(tmp_path: Pat
     left = recording(tmp_path, old.clock)
     left.tick(2.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-1")), Ok)
+    tie(left.path, Cursor(session_id="cloud-1"))
     io = Scripted()
     io.fail = TIMEOUT
 
@@ -1542,7 +1902,7 @@ async def test_an_older_record_a_slow_disk_does_not_give_keeps_its_place(
     left = recording(tmp_path, old.clock)
     left.tick(2.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-1")), Ok)
+    tie(left.path, Cursor(session_id="cloud-1"))
     io = Scripted()
 
     b = old.restarted(io=io)
@@ -1568,13 +1928,13 @@ async def test_an_older_record_that_cannot_be_read_is_left_until_the_next_start(
     old = bench(tmp_path)
     broken = recording(tmp_path, old.clock, "ref-broken")
     broken.tick(2.0)
-    assert isinstance(store(broken.path, Cursor(session_id="cloud-1")), Ok)
+    tie(broken.path, Cursor(session_id="cloud-1"))
     (broken.path / "manifest.json").write_bytes(b"{")
     old.clock.advance(Seconds(60.0))
     good = recording(tmp_path, old.clock, "ref-good")
     good.tick(2.0)
     good.close()
-    assert isinstance(store(good.path, Cursor(session_id="cloud-2")), Ok)
+    tie(good.path, Cursor(session_id="cloud-2"))
 
     b = old.restarted()
     await b.run(6)
@@ -1592,7 +1952,7 @@ async def test_an_older_record_whose_streams_cannot_be_read_is_left_until_the_ne
     left = recording(tmp_path, old.clock)
     left.tick(2.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-1")), Ok)
+    tie(left.path, Cursor(session_id="cloud-1"))
     (left.path / "events.jsonl").unlink()
 
     b = old.restarted()
@@ -1614,7 +1974,7 @@ async def test_an_older_record_being_sent_waits_for_a_slow_disk(
     left = recording(tmp_path, old.clock)
     left.tick(2 * MAX_POINTS + 0.0, hertz=1)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-1")), Ok)
+    tie(left.path, Cursor(session_id="cloud-1"))
     io = Scripted()
 
     b = old.restarted(io=io)
@@ -1636,7 +1996,7 @@ async def test_a_session_that_ends_while_the_disk_is_read_goes_first(tmp_path: P
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(2.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-old")), Ok)
+    tie(left.path, Cursor(session_id="cloud-old"))
     io = Scripted()
 
     b = old.restarted(io=io)
@@ -1660,7 +2020,7 @@ async def test_an_end_that_arrives_during_a_request_takes_the_place_and_the_reco
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(2.0)
     left.close()
-    assert isinstance(store(left.path, Cursor(session_id="cloud-old")), Ok)
+    tie(left.path, Cursor(session_id="cloud-old"))
 
     b = old.restarted()
 
@@ -1685,7 +2045,7 @@ async def test_ex4_a_record_of_an_earlier_boot_dated_by_a_clock_never_set_is_dat
     never_set = ManualClock(Monotonic(50.0), UnixMillis(0))
     left = recording(tmp_path, never_set, "ref-1970")
     left.tick(5.0)
-    assert isinstance(store(left.path, Cursor(boot_id="an-earlier-boot")), Ok)
+    tie(left.path, Cursor(boot_id="an-earlier-boot"))
 
     b = bench(tmp_path)
     await b.run(3)
@@ -1770,13 +2130,33 @@ async def test_a_session_that_ends_unbound_with_an_unreadable_record_ends_as_the
     assert load(record.path) == NoCursor()
 
 
-async def test_an_answer_of_an_unknown_kind_fails_loudly(tmp_path: Path) -> None:
+@pytest.mark.parametrize("remote", [None, "k17remote"])
+async def test_an_answer_of_an_unknown_kind_fails_loudly(
+    tmp_path: Path, remote: str | None
+) -> None:
+    """To a declaration as to the confirmation of a launch."""
     b = bench(tmp_path, recording=False)
-    b.link.answer(LOCAL_PATH, cast("Acked", object()))
-    b.uplink.begin(armed(b.clock))
+    b.link.answer(LOCAL_PATH if remote is None else START_PATH, cast("Acked", object()))
+    b.uplink.begin(armed(b.clock, remote=remote))
 
     with pytest.raises(AssertionError):
         await b.step()
+
+
+async def test_the_end_of_a_refused_launch_that_the_link_holds_is_made_again(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.owe_refusal("k17pending", "refusee par la machine : console occupee")
+
+    await b.step()
+    assert b.refusal_owed(), "still owed: no other launch is asked for"
+    del b.link.answers[END_PATH]
+    await b.step(float(RETRY_PERIOD))
+
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["k17pending"] * 2
+    assert not b.refusal_owed()
 
 
 def test_a_manifest_alone_describes_a_programme_without_its_name(tmp_path: Path) -> None:

@@ -15,10 +15,11 @@ from pathlib import Path
 from typing import cast
 
 from src.clock import ManualClock
-from src.record.cursor import Cursor, CursorRead, load
+from src.record.cursor import Cursor, CursorRead, load, store
 from src.record.export import RecordIo
 from src.record.rows import JsonValue
 from src.record.schema import EndObservation, Event, EventKind, Manifest, Profile
+from src.record.upload import read_head
 from src.record.writer import Writer
 from src.record_uplink import (
     EVENTS_PATH,
@@ -114,6 +115,8 @@ class Bench:
     disk: Disk
     uplink: RecordUplink
     cancelled: list[str]
+    said: list[str]
+    """What the operator was told on the console, in order."""
 
     async def step(self, seconds: float = 1.0) -> None:
         self.clock.advance(Seconds(seconds))
@@ -164,8 +167,15 @@ def bench(
         if recording
         else None
     )
-    uplink = RecordUplink(clock=clock, sender=link, source=source, start_refused=cancelled.append)
-    return Bench(clock=clock, link=link, disk=disk, uplink=uplink, cancelled=cancelled)
+    said: list[str] = []
+    uplink = RecordUplink(
+        clock=clock,
+        sender=link,
+        source=source,
+        start_refused=cancelled.append,
+        said=said.append,
+    )
+    return Bench(clock=clock, link=link, disk=disk, uplink=uplink, cancelled=cancelled, said=said)
 
 
 def armed(clock: ManualClock, *, remote: str | None = None, kind: str = "manual") -> ArmedSession:
@@ -282,6 +292,16 @@ def launched_programme(root: Path) -> Path:
     created = Writer.create(root, described_as)
     assert isinstance(created, Ok)
     return created.value.path
+
+
+def tie(record: Path, cursor: Cursor | None = None) -> None:
+    """Leave ``cursor`` on disk as the cursor of ``record``: it names that record."""
+    head = read_head(record)
+    assert isinstance(head, Ok)
+    named = dataclasses.replace(
+        Cursor() if cursor is None else cursor, local_ref=head.value.local_ref
+    )
+    assert isinstance(store(record, named), Ok)
 
 
 def cursor_of_record(record: Path) -> Cursor:

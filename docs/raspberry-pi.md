@@ -111,7 +111,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
-| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire. Porte 100 %. |
+| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
@@ -146,7 +146,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `ecg_step` | 0,2 s (`ECG_PERIOD`) | garde le BITalino connecté (nouvel essai toutes les 5 s au plus, délai de connexion 30 s) et pompe les échantillons vers le traitement ECG (sur un fil de travail) |
 | `sensor_step` | 1 s | retraite la fenêtre de chaque capteur |
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
-| `cloud_step` | 1 s | une étape du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
+| `cloud_step` | 1 s | une étape d'envoi du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
+| `cloud_stop_step` | 50 ms | regarde si la question de l'arrêt demandé du tableau de bord est due (toutes les 3 s en séance) et la pose. Une tâche à elle : elle n'attend ni l'envoi ni le disque |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -987,7 +988,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
-| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s tant que le tableau de bord tient la séance pour démarrée et non finie, **avant** ce que l'étape envoie de la séance |
+| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s tant que le tableau de bord tient la séance pour démarrée et non finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
 Règles :
 
@@ -1006,6 +1007,16 @@ Règles :
   séance (8.1).
 * Un arrêt venu du tableau de bord est attribué à « tableau de bord ». Il est
   honoré **quelle que soit la version de contrat** du serveur (section 14).
+  Il appartient à sa séance : transmis une fois, il ne masque pas l'arrêt
+  demandé pour la suivante, et une réponse arrivée après la fin de la séance
+  qu'elle concerne n'arrête pas celle qui a commencé entre-temps.
+* **Une séance lancée du tableau de bord reste arrêtable depuis le tableau de
+  bord, ou ne tourne pas.** Si le tableau de bord répond à la confirmation de
+  son départ par autre chose qu'un oui (séance annulée entre-temps, mais aussi
+  426, 401, 403, 5xx, route inconnue), la console arrête la séance tout de
+  suite, une fois : personne ne pourrait l'arrêter depuis le site. Sans
+  réponse du tout (réseau coupé), la séance continue sous le seul superviseur
+  local, comme toute séance sans tableau de bord.
 * Un lancement venu d'un serveur d'une autre majeure de contrat, ou qui
   n'annonce pas sa version, n'est **jamais armé** : voir
   [Versions et compatibilité](#14-versions-et-compatibilité).
@@ -1035,12 +1046,14 @@ mesure.
 
 | Propriété | Comment |
 |---|---|
-| Créé dès que la console relie la séance à son enregistrement, dans la seconde qui suit le départ, avant toute réponse du tableau de bord | un enregistrement qui a un curseur est un enregistrement que la console reprendra |
+| Créé dès que la console relie la séance à son enregistrement, dans la seconde qui suit le départ, avant toute réponse du tableau de bord et même quand le lien est retenu | avec son curseur, un enregistrement est repris où le tableau de bord s'était arrêté, et la console peut encore dire l'âge de la séance |
+| Lié à son enregistrement | il porte la référence du manifeste (`local_ref`) : un curseur qui en nomme un autre (un fichier copié ou renommé à la main) n'est pas utilisé, même s'il dit `complete`, et l'enregistrement est renvoyé depuis son début |
 | Écrit après chaque acquittement | fichier temporaire privé dans le même dossier, `fsync`, puis renommage : un lecteur voit l'ancien curseur ou le nouveau, jamais la moitié d'un |
 | Privé | mode 600, comme le dossier racine est en 700 |
 | Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
 | Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture |
-| Un enregistrement **sans aucun curseur** | n'est pas envoyé : la synchronisation ne l'a jamais ouvert. C'est le cas des enregistrements faits par une version antérieure de ce logiciel, ou faits sans tableau de bord configuré. Supprimer un curseur à la main retire donc l'enregistrement de la synchronisation |
+| Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait par une version antérieure de ce logiciel, ou sans tableau de bord configuré. Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur) |
+| Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, ou disque qui a refusé le curseur). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
 
 **La télémétrie à 1 Hz.** `ticks.csv` est écrit à 5 Hz. Le point d'une seconde
 de la séance est son **premier tic**. La règle ne dépend que du fichier :
@@ -1051,13 +1064,27 @@ Un trou dans les tics reste un trou dans les points : rien n'est inventé.
 **Seules les lignes complètes sont lues.** Une dernière ligne en cours
 d'écriture est laissée à la lecture suivante. Une ligne complète
 incompréhensible est passée et comptée dans le journal de la console : elle ne
-retient pas ce qui la suit. Un événement illisible garde son rang.
+retient pas ce qui la suit. Un événement illisible garde son rang. Une suite
+d'octets sans fin de ligne plus longue qu'une lecture (512 kio : des zéros
+laissés par une coupure de courant, par exemple) n'est pas une ligne : elle
+est passée elle aussi, sur autant de lectures qu'il faut, comptée une fois, et
+ce qui la suit est lu. Le curseur retient qu'il est au milieu d'elle
+(`ticks_mid_line`, `events_mid_line`).
 
 **Ce qui n'est pas envoyé.** Les trames du variateur (`drive_frames.jsonl`),
-les blocs ECG bruts et `sensors.csv` ne sont ni lus ni envoyés : ils
-voyageront avec le dépôt des enregistrements complets (ANH-130). Les
-événements hors séance du journal de bord (`logbook/`) ne sont pas
-synchronisés non plus.
+les blocs ECG bruts (`ecg_raw/`) et `sensors.csv` ne sont ni lus ni envoyés :
+ils voyageront avec le dépôt des enregistrements complets (ANH-130). Seuls les
+événements d'une séance, ceux de son `events.jsonl`, sont envoyés : rien de
+ce que la console noterait hors séance ne l'est.
+
+**Ce que la console dit quand une séance n'arrivera pas comme prévu.** Dans la
+liste d'événements de la page, sous la même forme que
+`serveur incompatible (...)`, et dans le journal :
+
+| Phrase | Quand |
+|---|---|
+| `seance declaree sans son enregistrement : le tableau de bord n'en recevra les mesures que si l'enregistrement apparait` | l'enregistrement n'est pas apparu dans les 10 s qui suivent le départ. S'il apparaît plus tard, il est lié à la séance à ce moment-là et ses mesures partent |
+| `curseur de synchronisation non ecrit : apres un redemarrage, la seance serait renvoyee au tableau de bord depuis son debut` | le disque refuse le curseur. L'envoi continue ; dit une fois par panne |
 
 ### 8.2 Dans quel ordre
 
@@ -1074,11 +1101,14 @@ Pour une séance : la **déclaration** (ou la confirmation du départ) d'abord,
 puis la télémétrie, les événements, et la **fin** quand l'enregistrement est
 fermé et sa télémétrie acquittée.
 
-Débit : une séance à jour envoie toutes les 5 s ce qu'elle a mesuré depuis.
-Tout ce qui est en retard (une séance en cours après une coupure, ou une
-séance d'avant) va à **un lot de 300 points au plus toutes les 2 s**. Une fin
-sans enregistrement (un lancement refusé) n'attend pas ce rythme : c'est une
-petite requête.
+Débit : **jamais deux lots de télémétrie à moins de 2 s l'un de l'autre,
+quelles que soient les séances, chacun de 300 points au plus.** Une séance en
+cours qui est à jour envoie toutes les 5 s ce qu'elle a mesuré depuis ; si un
+lot de rattrapage vient de partir, elle attend son tour, 2 s au plus. Une
+séance en retard n'est pas même relue avant son tour. Ne portent pas de
+télémétrie et n'attendent donc pas ce rythme : une déclaration, une fin sans
+enregistrement (un lancement refusé), et la fin d'une séance dont tous les
+points sont déjà partis.
 
 ### 8.3 Ce que chaque réponse fait au curseur
 
@@ -1094,18 +1124,22 @@ refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
 ni le refus d'un lancement ne l'attendent ; les séances plus anciennes rangées
 derrière elle, si.
 
-Deux refus ont un effet propre. Un **départ** que le tableau de bord refuse
-(séance annulée sur le site entre le poll et l'armement) fait arrêter la
-séance en cours, tout de suite, sans nouvel essai. Une **déclaration** refusée
-pour de bon clôt l'enregistrement sans rien en envoyer : sans séance côté
-tableau de bord, rien ne peut être reçu.
+Deux requêtes ont un effet propre. La **confirmation d'un départ** : toute
+réponse autre qu'un oui fait arrêter la séance en cours, tout de suite et une
+seule fois. Refusée (séance annulée sur le site entre le poll et l'armement),
+elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
+reste due et est refaite toutes les 15 s, puis l'enregistrement est envoyé,
+quand le serveur l'accepte. Seule l'absence de toute réponse laisse tourner
+la séance. Une **déclaration** refusée pour de bon clôt l'enregistrement sans
+rien en envoyer : sans séance côté tableau de bord, rien ne peut être reçu.
 
 ### 8.4 Après un redémarrage de la console
 
 À sa première étape où la séance en cours ne lui prend pas la place, le lien
-liste une fois les enregistrements dont le curseur ne dit pas `complete`, du
-plus ancien au plus récent, et retire les curseurs orphelins. Chacun est
-repris où le tableau de bord s'était arrêté :
+liste une fois, du plus ancien au plus récent, les enregistrements dont le
+curseur ne dit pas `complete` et ceux, apparus depuis sa toute première
+liste, qui n'ont pas de curseur ; il retire les curseurs orphelins. Chacun
+est repris où le tableau de bord s'était arrêté :
 
 - **déjà déclaré** : le curseur porte l'identifiant de la séance, rien n'est
   redéclaré ;
@@ -1113,6 +1147,9 @@ repris où le tableau de bord s'était arrêté :
   avec ce que dit son manifeste. L'enregistrement ne contient aucun nom : la
   séance apparaît avec l'alias de l'opérateur (`op-…`) et sans nom de
   programme ;
+- **jamais lié à son curseur** (console tuée dans la première seconde, disque
+  qui refusait le curseur) : il est envoyé depuis son début ; le tableau de
+  bord ne stocke qu'une fois ce qu'il aurait déjà ;
 - **jamais fermé** (la console a été tuée pendant la séance) : il se termine
   par `interrupted`, séance échouée, datée de son dernier tic ;
 - **fermé** : il se termine par la raison de son manifeste
@@ -1170,8 +1207,19 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
 - **Un disque qui ne répond pas** retient l'envoi et rien d'autre : l'étape
   suivante trouve le fil occupé et rend la main tout de suite, sans rien
   empiler. Une séance démarrée à la machine dont l'enregistrement n'apparaît
-  pas en 10 s est déclarée quand même, sans enregistrement : le tableau de
-  bord apprend son départ et sa fin, pas ses mesures.
+  pas en 10 s est déclarée quand même, sans enregistrement, et la console le
+  dit (8.1) : le tableau de bord apprend son départ et sa fin, et ses mesures
+  seulement si l'enregistrement finit par apparaître.
+- **L'arrêt demandé du tableau de bord n'attend derrière rien.** La question
+  (`GET training/status`, toutes les 3 s) est posée par une tâche à elle,
+  `cloud_stop_step`, qui regarde toutes les 50 ms si elle est due et ne fait
+  rien d'autre. L'étape d'envoi (`cloud_step`) peut attendre une lecture, une
+  écriture de curseur, un envoi ou tout un rattrapage : la question garde sa
+  cadence. Mesuré en temps simulé sur une séance de 80 s, intervalle entre
+  deux questions (médiane / maximum) : 3,05 / 3,05 s lien et disque sains ;
+  3,05 / 3,05 s avec des lectures à 1,8 s ; 3,00 / 3,00 s avec chaque requête
+  à 2,5 s et un rattrapage en cours, pendant que l'étape d'envoi, elle, dure
+  jusqu'à 20 s.
 - **La sortie n'attend pas.** À la sortie de la console, la tâche du lien est
   annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
   réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas
@@ -1190,13 +1238,18 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   « en séance » pour le site tant que le runtime n'a pas fini. La console ne
   demande plus au tableau de bord si un arrêt est voulu : il tient la séance
   pour finie, et sa réponse se lirait comme une demande d'arrêt.
-- Une étape du lien enchaîne quelques lectures et quelques requêtes, chacune
+- Une étape d'envoi enchaîne quelques lectures et quelques requêtes, chacune
   bornée (2 s par lecture, 10 s pour la liste du démarrage, 3 s par requête).
-  Sur un disque ou un réseau lents sans être morts, une étape peut donc durer
-  plusieurs secondes, et quelques dizaines dans le pire cas où chaque
-  opération approche de sa borne. La demande d'arrêt du tableau de bord est
-  lue une fois par étape, avant tout envoi : elle attend d'autant. Le tic,
-  l'arrêt à la console et le superviseur n'en dépendent pas.
+  Sur un disque ou un réseau lents sans être morts, elle peut donc durer
+  plusieurs secondes, et une vingtaine dans le cas mesuré plus haut. Le
+  battement de cœur, les programmes et le poll, qui sont dans cette étape,
+  attendent d'autant (le seuil hors ligne du tableau de bord est à 90 s). La
+  demande d'arrêt du tableau de bord n'y est pas : elle a sa tâche (8.6). Le
+  tic, l'arrêt à la console et le superviseur n'en dépendent pas non plus.
+- Une séance déclarée sans son enregistrement, dont l'enregistrement
+  n'apparaît qu'après la fin de la séance, est envoyée au démarrage suivant
+  sous la référence de son manifeste : le tableau de bord en garde alors deux
+  séances, l'une sans mesures.
 - Une console qui n'enregistre pas (construite sans journal, ce qui n'arrive
   que dans les tests) déclare et termine ses séances, sans télémétrie.
 - Face à un Convex antérieur au contrat 1.1 : les événements restent dus, un
@@ -1840,7 +1893,11 @@ Le curseur de synchronisation d'un enregistrement
 (`<nom du dossier>.sync.json`, [8.1](#81-ce-qui-est-envoyé-vient-du-disque))
 est lui aussi à côté du dossier. La purge ne le retire pas : c'est la
 synchronisation qui retire, à chaque démarrage de la console, tout curseur
-dont le dossier n'existe plus.
+dont le dossier n'existe plus. Elle tient au même endroit un fichier
+`.sync-baseline.json` : la liste, faite une fois, des enregistrements qui
+étaient là sans curseur avant elle. La purge ne le touche pas ; le supprimer
+ne fait rien envoyer d'ancien (la liste est refaite de ce qui n'a pas de
+curseur à ce moment-là).
 
 > **Aujourd'hui, rien n'écrit ce marqueur.** Le dépôt hors de la machine
 > (Convex Storage, ANH-130) n'existe pas encore et attend un avis juridique.

@@ -43,6 +43,7 @@ Rien d'autre n'entre dans le dossier. Sur le Pi, la confirmation d'un dépôt
 hors de la machine est un fichier **à côté** du dossier
 (`<nom du dossier>.deposit.json`), pas dedans, et le curseur de la
 synchronisation avec le tableau de bord aussi (`<nom du dossier>.sync.json`,
+avec, une fois pour tout le répertoire, `.sync-baseline.json` ;
 [raspberry-pi.md](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) : le
 dossier reste exactement ces sept entrées et se relit sans avertissement,
 déposé ou non, synchronisé ou non. Un fichier

@@ -270,7 +270,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. |
-| `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
+| `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
 | `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
 | `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
@@ -328,8 +328,8 @@ ou un identifiant opaque d'opérateur, jamais un nom). Index
 `(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
 de nouveau (`storeEvents`). Aucune fonction publique ne lit encore cette
 table : la machine l'écrit, les tests la lisent. Seuls les événements d'une
-séance y arrivent : ceux que la console note hors séance (son journal de
-bord) ne sont pas envoyés.
+séance y arrivent, ceux de son enregistrement : rien de ce que la console
+noterait hors séance n'est envoyé.
 
 ### Deux horloges
 
@@ -949,7 +949,9 @@ Détails du contrat :
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
   pas la sienne ; il termine le lancement par `/training/end` avec la raison
   `refusee par la machine : serveur incompatible (contrat X vs Y)`.
-- **Arrêt demandé** : si `status` répond `stopRequested: true` ou
+- **Arrêt demandé** : le Pi pose la question `status` toutes les 3 s par une
+  tâche à part, qui n'attend derrière aucun envoi. Si `status` répond
+  `stopRequested: true` ou
   `active: false`, le Pi fait un arrêt ordinaire sur la rampe réglée, attribué
   à l'opérateur « tableau de bord », **quelle que soit la version** annoncée
   par la réponse (même majeure, autre majeure, absente ou illisible). Ces deux
@@ -961,8 +963,14 @@ Détails du contrat :
   `refusee par la machine : `, sans `endedAt` : le serveur date ce refus. Un
   lancement ni démarré ni refusé en 60 s est terminé avec « la boucle n'a ni
   demarre ni refuse ».
-- **Annulé entre-temps** : si `/training/start` est refusé (séance annulée sur le
-  site entre le poll et l'armement), le Pi arrête la séance qu'il vient d'armer.
+- **Départ non pris** : si `/training/start` reçoit autre chose qu'un oui, le
+  Pi arrête la séance qu'il vient d'armer, tout de suite et une fois. Cela
+  vaut pour un refus (séance annulée sur le site entre le poll et
+  l'armement) comme pour une réponse retenue (426, 401, 403, 5xx) : une
+  séance lancée du site ne tourne pas là où le site ne pourrait pas
+  l'arrêter. Retenue, la confirmation reste due et est refaite. Seule
+  l'absence de toute réponse (réseau coupé) laisse tourner la séance, sous le
+  superviseur local.
 - **Fin** : `failed` vaut `false` pour `programme_complete` et `operator_stop`,
   `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`,
   et pour `interrupted` : la raison d'une séance dont la console a été tuée

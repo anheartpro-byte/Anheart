@@ -130,6 +130,7 @@ async def one_second(rig: Rig, journal: Journal) -> None:
     for _ in range(5):
         await rig.tick(float(TICK))
         journal.drain()
+        await rig.panel.cloud_stop_step()
     await rig.panel.cloud_step()
 
 

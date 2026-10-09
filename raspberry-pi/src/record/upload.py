@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import os
 import re
@@ -48,12 +49,25 @@ from pathlib import Path
 from typing import Final, Literal, cast
 
 from src.record.codec import IDENTIFIER
-from src.record.cursor import Cursor, CursorRead, NoCursor, load, sweep
+from src.record.cursor import (
+    BASELINE_NAME,
+    Baseline,
+    Cursor,
+    CursorRead,
+    NoCursor,
+    UnreadableCursor,
+    load,
+    load_baseline,
+    store_baseline,
+    sweep,
+)
 from src.record.retention import records
 from src.record.rows import JsonValue
 from src.record.schema import Profile, RecordError
 from src.record.writer import MANIFEST, TICK_COLUMNS, describe_failure, describe_os_error
 from src.result import Err, Ok, Result
+
+_logger: Final[logging.Logger] = logging.getLogger(__name__)
 
 MAX_POINTS: Final[int] = 300
 """Telemetry points read, and sent, at a time: five minutes of a session."""
@@ -75,6 +89,9 @@ INTERRUPTED: Final[str] = "interrupted"
 
 MISALIGNED: Final[str] = "cursor_misaligned"
 """A cursor that does not point at the start of a line of the stream it is about."""
+
+OTHER_RECORD: Final[str] = "of another record"
+"""A cursor that names another record than the one it sits next to."""
 
 _EVENT_KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ACTOR_MAX: Final[int] = 64
@@ -186,28 +203,52 @@ class _Lines:
     full: bool
     """Whether the chunk was read to its limit: the stream may hold more."""
 
+    mid: bool = False
+    """``end`` is inside a line too long to be one of the format, which is being passed over."""
 
-def _lines(path: Path, offset: int, chunk: int) -> _Lines:
+    overlong: int = 0
+    """1 when such a line began in this reading: it is counted once, where it begins."""
+
+
+def _lines(path: Path, offset: int, chunk: int, *, mid: bool = False) -> _Lines:
     """Read at most ``chunk`` bytes of ``path`` from ``offset``. Raises ``OSError``, ``ValueError``.
 
-    ``ValueError``: the offset is not the start of a line of this file (it is
-    past its end, or in the middle of a line), so it was not written about it.
+    A whole chunk without an end of line is no line of this format (zeroes
+    left by a power cut, for instance). It is passed over: this reading and
+    those that follow, each from where the one before stopped (``mid``), go
+    on to its end, and the lines after it are read as any other.
+
+    ``ValueError``: the offset is not one a reading of this file can have
+    given (past its end, or in the middle of a line that is not being passed
+    over), so it was not written about it.
     """
     with path.open("rb") as handle:
-        if offset > 0:
+        if mid:
+            if offset > os.fstat(handle.fileno()).st_size:
+                raise ValueError(MISALIGNED)
+            handle.seek(offset)
+        elif offset > 0:
             handle.seek(offset - 1)
             if handle.read(1) != b"\n":
                 raise ValueError(MISALIGNED)
         data = handle.read(chunk)
     full = len(data) == chunk
+    start = 0
+    if mid:
+        ends = data.find(b"\n")
+        if ends < 0:
+            return _Lines((), offset + len(data), full, mid=True)
+        start = ends + 1
+    base = offset + start
     cut = data.rfind(b"\n") + 1
-    if cut == 0:
-        # No complete line: a last line still being written, or, when the chunk
-        # is full, bytes that are no line at all and are passed over.
-        return _Lines((), offset + len(data) if full else offset, full)
+    if cut <= start:
+        if full and start == 0:
+            return _Lines((), offset + len(data), full, mid=True, overlong=1)
+        # A last line still being written, or one the next reading will judge whole.
+        return _Lines((), base, full)
     lines: list[tuple[bytes, int]] = []
-    position = offset
-    for raw in data[:cut].split(b"\n")[:-1]:
+    position = base
+    for raw in data[start:cut].split(b"\n")[:-1]:
         position += len(raw) + 1
         lines.append((raw, position))
     return _Lines(tuple(lines), position, full)
@@ -233,7 +274,10 @@ class Points:
     """Whether the stream may already hold more than was read."""
 
     skipped: int
-    """Complete lines that are not ticks of this format: passed over."""
+    """Lines that are not ticks of this format: passed over."""
+
+    mid_line: bool = False
+    """``offset`` is inside a line too long to be a tick, which is being passed over."""
 
 
 def _fields(raw: bytes) -> Sequence[str] | None:
@@ -289,6 +333,7 @@ def read_points(
     start_ms: int,
     offset: int,
     after_t: int | None,
+    mid_line: bool = False,
     limit: int = MAX_POINTS,
     chunk: int = READ_CHUNK,
 ) -> Result[Points, RecordError]:
@@ -299,13 +344,13 @@ def read_points(
     other tick of a second already sent is sent.
     """
     try:
-        found = _lines(record / "ticks.csv", offset, chunk)
+        found = _lines(record / "ticks.csv", offset, chunk, mid=mid_line)
     except OSError as error:
         return Err(RecordError("read", describe_os_error(error)))
     except ValueError:
         return Err(RecordError("read", MISALIGNED))
     lines = found.lines
-    skipped = 0
+    skipped = found.overlong
     if offset == 0 and lines:
         header = _fields(lines[0][0])
         if header is None or tuple(header) != TICK_COLUMNS:
@@ -338,6 +383,7 @@ def read_points(
             last_t=last_t,
             more=found.full,
             skipped=skipped,
+            mid_line=found.mid,
         )
     )
 
@@ -381,7 +427,10 @@ class Events:
 
     more: bool
     skipped: int
-    """Complete lines that are not events of this format. Each still has its rank."""
+    """Lines that are not events of this format. Each still has its rank."""
+
+    mid_line: bool = False
+    """``offset`` is inside a line too long to be an event, which is being passed over."""
 
 
 def _event(raw: bytes, seq: int, start_ms: int) -> Wire | None:
@@ -424,6 +473,7 @@ def read_events(
     start_ms: int,
     offset: int,
     last_seq: int,
+    mid_line: bool = False,
     limit: int = MAX_EVENTS,
     chunk: int = READ_CHUNK,
 ) -> Result[Events, RecordError]:
@@ -434,14 +484,15 @@ def read_events(
     event keeps its rank and is passed over.
     """
     try:
-        found = _lines(record / "events.jsonl", offset, chunk)
+        found = _lines(record / "events.jsonl", offset, chunk, mid=mid_line)
     except OSError as error:
         return Err(RecordError("read", describe_os_error(error)))
     except ValueError:
         return Err(RecordError("read", MISALIGNED))
     events: list[Wire] = []
-    skipped = 0
-    seq = last_seq
+    # A line too long to be an event takes its rank where it begins, like any other.
+    skipped = found.overlong
+    seq = last_seq + found.overlong
     for raw, end in found.lines:
         seq += 1
         event = _event(raw, seq, start_ms)
@@ -460,6 +511,7 @@ def read_events(
             last_seq=seq,
             more=found.full,
             skipped=skipped,
+            mid_line=found.mid,
         )
     )
 
@@ -492,12 +544,20 @@ def read_batch(
     if isinstance(head, Err):
         return Err(head.error)
     points = read_points(
-        record, start_ms=start_ms, offset=cursor.ticks_offset, after_t=cursor.last_t
+        record,
+        start_ms=start_ms,
+        offset=cursor.ticks_offset,
+        after_t=cursor.last_t,
+        mid_line=cursor.ticks_mid_line,
     )
     if isinstance(points, Err):
         return Err(points.error)
     events = read_events(
-        record, start_ms=start_ms, offset=cursor.events_offset, last_seq=cursor.last_seq
+        record,
+        start_ms=start_ms,
+        offset=cursor.events_offset,
+        last_seq=cursor.last_seq,
+        mid_line=cursor.events_mid_line,
     )
     if isinstance(events, Err):
         return Err(events.error)
@@ -537,28 +597,73 @@ def open_record(root: Path, name: str) -> Result[Opened, RecordError]:
     last_tick = read_last_tick_ms(record)
     if isinstance(last_tick, Err):
         return Err(last_tick.error)
-    return Ok(Opened(record, head.value, load(record), last_tick.value))
+    cursor = load(record)
+    if isinstance(cursor, Cursor) and cursor.local_ref != head.value.local_ref:
+        cursor = UnreadableCursor(OTHER_RECORD)
+    return Ok(Opened(record, head.value, cursor, last_tick.value))
 
 
-def owed_records(root: Path) -> Result[tuple[str, ...], RecordError]:
+def owed_records(root: Path, current: str | None = None) -> Result[tuple[str, ...], RecordError]:
     """The records under ``root`` the dashboard is still owed, oldest first.
 
-    A record is owed when it has a cursor that does not say ``complete``; an
-    unreadable cursor counts. A record with no cursor is not: the
-    synchronisation never opened it (:mod:`src.record.cursor`). What no record
-    owns any more is swept away on the way. Blocking; never raises.
+    Owed: a record whose cursor does not say ``complete``, or cannot be read,
+    or names another record; and a record made since the synchronisation
+    first listed this directory that has no cursor at all (it was never tied
+    to one: :mod:`src.record.cursor`). Not owed: a record that was already
+    there, cursor-less, at that first listing, and ``current``, the record the
+    console has open, which the running session sends itself.
+
+    What no record owns any more is swept away on the way. Blocking; never
+    raises.
     """
     try:
         sweep(root)
         found = records(root)
     except OSError as error:
         return Err(RecordError("read", describe_os_error(error)))
+    left_alone = _left_alone(root, found, current)
     owed: list[str] = []
     for record in found:
+        if record.name == current:
+            continue
         cursor = load(record)
         if isinstance(cursor, NoCursor):
+            if record.name not in left_alone:
+                owed.append(record.name)
             continue
-        if isinstance(cursor, Cursor) and cursor.state == "complete":
+        if isinstance(cursor, Cursor) and cursor.state == "complete" and _is_about(cursor, record):
             continue
         owed.append(record.name)
     return Ok(tuple(owed))
+
+
+def _left_alone(root: Path, found: Sequence[Path], current: str | None) -> frozenset[str]:
+    """The records made before the synchronisation existed here: listed once, then kept."""
+    baseline = load_baseline(root)
+    if baseline is None:
+        if (root / BASELINE_NAME).exists():
+            _logger.warning(
+                "dashboard: the list of the records made before the synchronisation cannot "
+                "be read: it is made again from the records that have no cursor now"
+            )
+        baseline = Baseline(
+            left_alone=tuple(
+                record.name
+                for record in found
+                if record.name != current and isinstance(load(record), NoCursor)
+            )
+        )
+        wrote = store_baseline(root, baseline)
+        if isinstance(wrote, Err):
+            _logger.warning(
+                "dashboard: the list of the records made before the synchronisation could "
+                "not be written (%s): it is made again at the next start",
+                wrote.error.detail,
+            )
+    return frozenset(baseline.left_alone)
+
+
+def _is_about(cursor: Cursor, record: Path) -> bool:
+    """Whether ``cursor`` names ``record``; a record whose manifest cannot be read is left be."""
+    head = read_head(record)
+    return isinstance(head, Err) or head.value.local_ref == cursor.local_ref

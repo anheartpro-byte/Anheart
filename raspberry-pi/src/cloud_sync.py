@@ -27,7 +27,12 @@ Down, from the dashboard to this machine, exactly two things:
   the panel's own checks (programmes enabled, occupied ceiling, the preset
   re-validated against this rider). Any refusal goes back as a failed session
   with the reason;
-* a stop request, forwarded as an ordinary end on the commissioned ramp.
+* a stop request, forwarded as an ordinary end on the commissioned ramp. It
+  is looked for by :meth:`CloudSync.watch_stop`, from a task of its own: the
+  question keeps its cadence whatever the sending waits for. And a launch
+  whose start the dashboard does not take, for any reason it gives, is
+  stopped at once: a session that came from the dashboard never runs on
+  where the dashboard could not stop it.
 
 **Nothing else.** In particular a MANUAL session can never be started from
 the dashboard: nothing here can build one. Manual control needs somebody at
@@ -469,7 +474,7 @@ def answer_of(result: Result[Document, CloudError]) -> Answer:
             return Held(error.detail)
         case Refused():
             if error.status in HELD_STATUSES or error.status >= SERVER_ERROR:
-                return Held(describe_refusal(error))
+                return Held(describe_refusal(error), refused=True)
             if error.status == httpx.codes.NOT_FOUND and error.code is None:
                 return RouteMissing()
             return Refusal(describe_refusal(error), final=error.code in FINAL_CODES)
@@ -502,7 +507,6 @@ class CloudSync:
         "_runtime",
         "_said_at",
         "_software_version",
-        "_stop_forwarded",
         "_store",
         "_surface",
         "_tiers",
@@ -547,9 +551,12 @@ class CloudSync:
         # What every session owes the dashboard is sent from its record. This
         # object keeps the state of the session that is running, and no queue.
         self._uplink: RecordUplink = RecordUplink(
-            clock=clock, sender=self, source=records, start_refused=self._start_cancelled
+            clock=clock,
+            sender=self,
+            source=records,
+            start_refused=self._start_cancelled,
+            said=surface.note_remote_refusal,
         )
-        self._stop_forwarded: bool = False
         self._awaiting: _Awaiting | None = None
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
@@ -580,7 +587,6 @@ class CloudSync:
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
         remote = started.cloud_session_id
-        self._stop_forwarded = False
         self._uplink.begin(
             ArmedSession(
                 declaration=declaration_of(started),
@@ -600,7 +606,12 @@ class CloudSync:
     # --- the step ----------------------------------------------------------
 
     async def step(self) -> None:
-        """One pass: detect an end, then whatever network work is due."""
+        """One pass: detect an end, then whatever network work is due.
+
+        Everything but the stop asked for from the dashboard, which
+        :meth:`watch_stop` looks for from a task of its own: this pass may wait
+        on a slow disk or a slow upload, and a stop must never wait behind it.
+        """
         now = self._clock.monotonic()
         snapshot = self._runtime.snapshot()
         self._observe()
@@ -609,15 +620,8 @@ class CloudSync:
         if not self._uplink.running and self._awaiting is None and not self._uplink.refusal_owed:
             await self._poll(now)
         self._check_launch_timeout(now)
-        # A stop asked for is looked for BEFORE anything is sent: sending may
-        # take seconds on a poor link, and a stop must not wait behind it.
-        await self._follow_stop(now)
         # The sending last, so a refusal found above goes out in this same step.
         await self._uplink.step()
-        # And once more, for the step in which the sending has just had the
-        # start confirmed: the first question is asked at once. It asks
-        # nothing when the question above was asked (the period is not over).
-        await self._follow_stop(now)
 
     def _observe(self) -> None:
         """Tell the sending that the runtime has finished the running session."""
@@ -754,16 +758,25 @@ class CloudSync:
 
     # --- a stop from the dashboard ------------------------------------------
 
-    async def _follow_stop(self, now: Monotonic) -> None:
+    async def watch_stop(self) -> None:
+        """Ask, when it is due, whether the dashboard wants the running session stopped.
+
+        Stepped from a task of its own, never from :meth:`step`: the question
+        keeps its cadence (:data:`STATUS_PERIOD`) whatever the sending is
+        waiting for, a slow disk, a slow upload or a backlog to catch up.
+        """
+        now = self._clock.monotonic()
         session_id = self._uplink.following
-        if session_id is None or self._stop_forwarded:
-            return
-        if not _due(self._last_status, now, STATUS_PERIOD):
+        if session_id is None or not _due(self._last_status, now, STATUS_PERIOD):
             return
         self._last_status = now
         sent = await self._transport.get("/api/machine/training/status", {"sessionId": session_id})
         self._note(sent)
         if isinstance(sent, Err):
+            return
+        if self._uplink.following != session_id:
+            # That session ended, or was stopped, while the dashboard answered:
+            # what it says of it stops no other.
             return
         document = sent.value
         # Deliberately not gated on the answer's contract version: a stop asked
@@ -774,12 +787,19 @@ class CloudSync:
             self._forward_stop("arret demande depuis le tableau de bord")
 
     def _start_cancelled(self, detail: str) -> None:
-        """The dashboard refused the start of the running session: nobody wants it. End it."""
+        """The dashboard did not take the start of the running session. End it.
+
+        Cancelled there between the poll and the arm, or refused for the
+        link's own reasons (contract, key, an error of the server): either
+        way the machine is armed for a session the dashboard does not hold
+        started, and nobody there could stop it.
+        """
         _logger.warning("dashboard refused the start (%s): stopping", detail)
         self._forward_stop(f"annulee au tableau de bord ({detail})")
 
     def _forward_stop(self, reason: str) -> None:
-        self._stop_forwarded = True
+        # Kept with the session it is about: asked once, and for that one only.
+        self._uplink.stop_forwarded()
         ended = self._surface.submit_end(operator=DASHBOARD_OPERATOR, reason=reason)
         if isinstance(ended, Err):
             _logger.warning("dashboard stop not accepted by the console: %s", ended.error)

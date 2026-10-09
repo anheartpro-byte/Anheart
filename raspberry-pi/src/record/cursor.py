@@ -25,10 +25,16 @@ What it guarantees, and what it does not
   dashboard stores once (it knows a point by ``(session, t)`` and an event by
   ``(session, seq)``). Nothing is ever lost or doubled by it.
 
-A record with NO cursor at all is one the synchronisation never opened: a
-record made by an earlier version of this software, or made while no dashboard
-was configured. It is left alone. The cursor of a record is created when the
-console that records it binds the two, within the first seconds of the session.
+A cursor names its record (``local_ref``, the reference the manifest carries):
+one that names another record, a file copied or renamed by hand, is not used.
+
+A record with NO cursor at all is one of two things, told apart by the list
+this module keeps next to the records (:data:`BASELINE_NAME`): the records
+that were already there, cursor-less, the first time the synchronisation
+listed the directory. Those were made before it existed here, and are left
+alone. Any other record without a cursor was made since and never tied to one
+(the console was killed in its first second, or the disk refused the cursor):
+it is sent, from its beginning, at the next start of the console.
 
 Everything here touches the disk: it is called from the record I/O threads
 (:class:`~src.record.export.RecordIo`), never from the event loop.
@@ -58,6 +64,9 @@ TEMP_PREFIX: Final[str] = ".sync-"
 TEMP_SUFFIX: Final[str] = ".tmp"
 """A cursor being written. One left behind by a console that was killed is swept away."""
 
+BASELINE_NAME: Final[str] = ".sync-baseline.json"
+"""Next to the records: which of them were there before the synchronisation first looked."""
+
 BOOT_ID_PATH: Final[Path] = Path("/proc/sys/kernel/random/boot_id")
 """Linux names each start of the system here. Absent elsewhere."""
 
@@ -69,6 +78,11 @@ class Cursor:
     """What the dashboard has acknowledged of one record. Replaced whole, never mutated."""
 
     schema_version: Literal[1] = 1
+
+    local_ref: str | None = None
+    """The reference the record's manifest carries: which record this cursor is about.
+
+    A cursor is used only for the record that carries the same one."""
 
     session_id: str | None = None
     """The dashboard's identifier of the session, once it is known."""
@@ -86,11 +100,17 @@ class Cursor:
     ticks_offset: int = 0
     """Bytes of ``ticks.csv`` behind which every 1 Hz point was acknowledged."""
 
+    ticks_mid_line: bool = False
+    """``ticks_offset`` is inside a line too long to be a tick, which is being passed over."""
+
     last_t: int | None = None
     """``t`` (unix ms, the machine's clock) of the last point acknowledged."""
 
     events_offset: int = 0
     """Bytes of ``events.jsonl`` behind which every event was acknowledged."""
+
+    events_mid_line: bool = False
+    """``events_offset`` is inside a line too long to be an event, which is being passed over."""
 
     last_seq: int = -1
     """Rank of the last event acknowledged; ``-1`` before the first."""
@@ -123,6 +143,22 @@ class Cursor:
 
 
 _CURSOR: Final[TypeAdapter[Cursor]] = TypeAdapter(Cursor)
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=ConfigDict(extra="forbid"))
+class Baseline:
+    """The records that had no cursor when the synchronisation first listed the directory.
+
+    Made before it existed here (an earlier version of this software, or no
+    dashboard configured then): they are not sent. Written once; a record
+    that appears later without a cursor is not in it, and is sent.
+    """
+
+    schema_version: Literal[1] = 1
+    left_alone: tuple[str, ...] = ()
+
+
+_BASELINE: Final[TypeAdapter[Baseline]] = TypeAdapter(Baseline)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +208,24 @@ def store(record: Path, cursor: Cursor) -> Result[None, CursorError]:
     ``mkstemp`` creates the temporary file for this user alone (mode 600), and
     the rename keeps that mode.
     """
-    target = cursor_of(record)
+    return _write(cursor_of(record), _CURSOR.dump_json(cursor))
+
+
+def load_baseline(root: Path) -> Baseline | None:
+    """The baseline of ``root``; ``None`` when there is none yet, or none that can be used."""
+    try:
+        return _BASELINE.validate_json((root / BASELINE_NAME).read_bytes())
+    except (OSError, ValueError):
+        return None
+
+
+def store_baseline(root: Path, baseline: Baseline) -> Result[None, CursorError]:
+    """Write the baseline of ``root``, as a cursor is written. Blocking; never raises."""
+    return _write(root / BASELINE_NAME, _BASELINE.dump_json(baseline))
+
+
+def _write(target: Path, document: bytes) -> Result[None, CursorError]:
+    """Replace ``target`` by ``document``: a private temporary file, flushed, then renamed."""
     try:
         descriptor, name = tempfile.mkstemp(
             prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX, dir=target.parent
@@ -182,7 +235,7 @@ def store(record: Path, cursor: Cursor) -> Result[None, CursorError]:
     temporary = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(_CURSOR.dump_json(cursor) + b"\n")
+            handle.write(document + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
         temporary.replace(target)

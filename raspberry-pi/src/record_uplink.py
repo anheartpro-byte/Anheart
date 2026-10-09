@@ -12,7 +12,9 @@ One session, in order
 1. **declared** (a session started at the machine), under the reference its
    record carries, so that declaring it again, even after a restart, gives the
    same session; or **confirmed** (a launch from the dashboard). Nothing is
-   sent before that;
+   sent before that. A confirmation the dashboard answers with anything but a
+   yes has the running session stopped at once: the machine does not run on
+   for a session the dashboard does not hold started;
 2. **telemetry** then **events**, read from the cursor, one bounded batch at a
    time. The cursor moves when the dashboard acknowledges a batch, and is then
    written to disk;
@@ -26,8 +28,12 @@ The session that is running. While it has anything ready to send, nothing
 else is sent. Then the session that has just ended, which the dashboard still
 shows as running. Then every other, oldest first: those a previous run of the
 console left unfinished (found once, when nothing else is being sent), and
-those that ended in this run while the link was down. Everything that is
-behind is paced: one batch of at most 300 points every :data:`CATCH_UP_PERIOD`.
+those that ended in this run while the link was down.
+
+One pace for all of it: never two batches of telemetry less than
+:data:`CATCH_UP_PERIOD` apart, whichever sessions they are of, each of at
+most 300 points. A running session that is up to date sends every
+:data:`TELEMETRY_PERIOD`.
 
 What the link answers
 ---------------------
@@ -100,7 +106,7 @@ TELEMETRY_PERIOD: Final[Seconds] = Seconds(5.0)
 """How often a running session that is up to date sends what it has measured since."""
 
 CATCH_UP_PERIOD: Final[Seconds] = Seconds(2.0)
-"""The pace of everything that is behind: at most one batch of 300 points this often."""
+"""The least time between two batches of telemetry, whichever sessions they are of."""
 
 RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
 """After the link held a request, or refused one it may accept later: the wait."""
@@ -145,6 +151,20 @@ never read as current: they are a minute old at the very least."""
 SUCCESSFUL_ENDS: Final[frozenset[str]] = frozenset({"programme_complete", "operator_stop"})
 """The end reasons of a record the dashboard shows as completed; every other is a failure."""
 
+DECLARED_WITHOUT_RECORD: Final[str] = (
+    "seance declaree sans son enregistrement : le tableau de bord n'en recevra les mesures "
+    "que si l'enregistrement apparait"
+)
+CURSOR_UNWRITTEN: Final[str] = (
+    "curseur de synchronisation non ecrit : apres un redemarrage, la seance serait renvoyee "
+    "au tableau de bord depuis son debut"
+)
+"""What the operator reads on the console when a session will not reach the dashboard as
+it should. Said once per session for the first, once per failure of the disk for the second."""
+
+START_UNKNOWN: Final[str] = "route de confirmation inconnue du tableau de bord"
+"""Why a start was not taken by a dashboard that does not know the route at all."""
+
 
 # =========================================================================
 # What the link answers
@@ -163,6 +183,9 @@ class Held:
     """Not received, and not about this request: the same one is made again later."""
 
     detail: str
+    refused: bool = False
+    """Whether the dashboard answered at all: ``True`` for a refusal that is about the
+    link (its key, its contract, an error of its own), ``False`` when nothing came back."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,7 +318,11 @@ class _Owed:
     """A launch from the dashboard that was refused here: only its end is owed."""
 
     unrecorded: bool = False
-    """Declared without a record: it is never bound to one afterwards."""
+    """Declared without a record: none had appeared when it had to be declared."""
+
+    stopped: bool = False
+    """The console was asked to stop it on the dashboard's account (a stop asked for
+    there, or a start it did not take). It is asked once, and no stop is looked for after."""
 
     left: Path | None = None
     """For a session that ended before it was bound: the record the console had open then."""
@@ -411,8 +438,9 @@ class RecordUplink:
         "_clock",
         "_held_until",
         "_io",
-        "_last_catch_up",
+        "_last_batch",
         "_live",
+        "_said",
         "_scan_at",
         "_scanned",
         "_sender",
@@ -428,16 +456,20 @@ class RecordUplink:
         sender: Sender,
         source: RecordSource | None,
         start_refused: Callable[[str], None],
+        said: Callable[[str], None],
     ) -> None:
         """``source``: ``None`` on a console that records nothing; it then only declares
         and ends its sessions. ``start_refused``: called with the dashboard's words when
-        it refuses the start of the session that is running."""
+        it does not take the start of the session that is running. ``said``: called with
+        a sentence for the operator when something of a session will not reach the
+        dashboard as it should."""
         self._clock: Clock = clock
         self._born: Monotonic = clock.monotonic()
         self._sender: Sender = sender
         self._source: RecordSource | None = source
         self._io: RecordIo = RecordIo(1) if source is None else source.io
         self._start_refused: Callable[[str], None] = start_refused
+        self._said: Callable[[str], None] = said
         # Delivery state, mutated only by this object's own step and by the
         # three calls of the link below, all on the event loop.
         self._live: _Owed | None = None
@@ -446,7 +478,7 @@ class RecordUplink:
         self._scanned: bool = False
         self._scan_at: Monotonic | None = None
         self._held_until: Monotonic | None = None
-        self._last_catch_up: Monotonic | None = None
+        self._last_batch: Monotonic | None = None
         self._unwritten: bool = False
 
     # --- read access -----------------------------------------------------
@@ -467,10 +499,16 @@ class RecordUplink:
 
         Only then may its stop be asked for: before, the dashboard does not
         know it runs; after, the dashboard would answer that it no longer
-        holds it active, which reads as a request to stop.
+        holds it active, which reads as a request to stop. And not once a stop
+        was forwarded for it: it is asked for once.
         """
         live = self._live
-        if live is None or not live.cursor.start_confirmed or live.cursor.end == "sent":
+        if (
+            live is None
+            or live.stopped
+            or not live.cursor.start_confirmed
+            or live.cursor.end == "sent"
+        ):
             return None
         return live.cursor.session_id
 
@@ -492,6 +530,15 @@ class RecordUplink:
         return running + (0 if self._catching is None else 1) + len(self._backlog)
 
     # --- what the link tells it ------------------------------------------
+
+    def stop_forwarded(self) -> None:
+        """The console was asked to stop the running session on the dashboard's account.
+
+        Kept with that session, and gone with it: it neither hides a stop asked
+        for in the next one nor stands for one.
+        """
+        if self._live is not None:
+            self._live.stopped = True
 
     def begin(self, session: ArmedSession) -> None:
         """A session was armed: it is the one that goes first from now on."""
@@ -596,12 +643,6 @@ class RecordUplink:
             self._catching = owed
         # A session that ended before the link had tied it to its record.
         await self._bind(owed, owed.left)
-        if owed.record is not None:
-            # What is read from a record is paced. An end that has no record is
-            # one small request, and is not made to wait.
-            if not _due(self._last_catch_up, now, CATCH_UP_PERIOD):
-                return
-            self._last_catch_up = now
         outcome = await self._serve(now, owed, live=False)
         # `is owed`: a session that ended during the request may have taken the place.
         if (outcome is _Step.DONE or outcome is _Step.DROPPED) and self._catching is owed:
@@ -634,7 +675,13 @@ class RecordUplink:
             return True
         if self._scan_at is not None and now < self._scan_at:
             return False
-        listed = await self._disk(functools.partial(owed_records, source.root), SCAN_TIMEOUT)
+        open_now = source.current()
+        listed = await self._disk(
+            functools.partial(
+                owed_records, source.root, None if open_now is None else open_now.name
+            ),
+            SCAN_TIMEOUT,
+        )
         if isinstance(listed, Err):
             self._scan_at = Monotonic(now + RETRY_PERIOD)
             return False
@@ -665,8 +712,17 @@ class RecordUplink:
                     opened.record.name,
                     read.detail,
                 )
+            else:
+                _logger.warning(
+                    "dashboard: record %s was never tied to a cursor: sent from its start",
+                    opened.record.name,
+                )
             # From the beginning: the dashboard stores once what it already has.
-            cursor = Cursor(session_id=head.remote_id, start_confirmed=head.remote_id is None)
+            cursor = Cursor(
+                local_ref=head.local_ref,
+                session_id=head.remote_id,
+                start_confirmed=head.remote_id is None,
+            )
         return _Owed(
             declaration=declaration_from(head),
             start_ms=head.start_ms,
@@ -710,8 +766,13 @@ class RecordUplink:
         return outcome
 
     async def _bind(self, owed: _Owed, path: Path | None) -> None:
-        """Tie a session of this run to ``path``, the record the console opened for it."""
-        if owed.record is not None or owed.unrecorded or path is None:
+        """Tie a session of this run to ``path``, the record the console opened for it.
+
+        Whenever that record appears, even after the session had to be
+        declared without it: what the dashboard was told stands, and the
+        measurements follow.
+        """
+        if owed.record is not None or path is None:
             return
         read = await self._disk(functools.partial(read_head, path), READ_TIMEOUT)
         if isinstance(read, Err):
@@ -720,8 +781,10 @@ class RecordUplink:
         owed.record = path
         owed.start_ms = head.start_ms
         owed.local_ref = head.local_ref
-        # Written at once, before any answer: a record that has a cursor is one
-        # the console will take up again after a restart.
+        owed.cursor = replace(owed.cursor, local_ref=head.local_ref)
+        # Written at once, before any answer and whatever the link says: the
+        # cursor on disk is what lets the console take the record up again
+        # where the dashboard stopped, with the age of its session.
         await self._persist(owed)
 
     async def _persist(self, owed: _Owed) -> None:
@@ -736,11 +799,13 @@ class RecordUplink:
         elif not self._unwritten:
             self._unwritten = True
             _logger.warning(
-                "dashboard: the cursor of %s could not be written (%s); what was sent "
-                "may be sent again after a restart",
+                "dashboard: the cursor of %s could not be written (%s): after a restart "
+                "the record is sent again from where its cursor on disk stands, from its "
+                "start if it has none",
                 record.name,
                 wrote.error.detail,
             )
+            self._said(CURSOR_UNWRITTEN)
 
     async def _deliver(self, now: Monotonic, owed: _Owed, *, live: bool) -> _Step:
         """Declare or confirm, then send what follows the cursor, then the end."""
@@ -772,6 +837,12 @@ class RecordUplink:
             if owed.ended is None and self._source is not None and waited < BIND_GRACE:
                 return _Step.BUSY  # its record is being created: it carries the reference
             owed.unrecorded = True
+            if self._source is not None:
+                _logger.warning(
+                    "dashboard: a session is declared without its record: its measurements "
+                    "are sent only if the record appears"
+                )
+                self._said(DECLARED_WITHOUT_RECORD)
         declaration = owed.declaration
         body: dict[str, JsonValue] = {
             "localRef": owed.local_ref,
@@ -813,20 +884,45 @@ class RecordUplink:
     async def _confirm(
         self, now: Monotonic, owed: _Owed, session_id: str, *, live: bool
     ) -> _Step | None:
-        """Confirm the start of a launch from the dashboard. ``None`` once it is settled."""
+        """Confirm the start of a launch from the dashboard. ``None`` once it is settled.
+
+        Anything but a yes or a silence has the running session stopped: the
+        machine is armed for a session the dashboard does not hold started
+        (cancelled there between the poll and the arm, or not taken for a
+        reason of the link's own), and whoever launched it could not stop it.
+        A refusal that is about the link leaves the confirmation owed: it is
+        made again, and the record sent, once the dashboard takes it.
+        """
         body: dict[str, JsonValue] = {"sessionId": session_id, "startedAt": owed.start_ms}
         age = self._age_ms(now, owed)
         if age is not None:
             body["sessionAgeMs"] = age
-        answer = await self._post(now, owed, START_PATH, body, patient=False)
-        if isinstance(answer, _Wait):
-            return _Step.HELD
-        owed.cursor = replace(owed.cursor, start_confirmed=True)
-        if isinstance(answer, Refusal) and live:
-            # Cancelled on the dashboard between the poll and the arm: the
-            # machine is armed for a session nobody wants.
-            self._start_refused(answer.detail)
-        return None
+        answer = await self._sender.send(START_PATH, body)
+        match answer:
+            case Acked():
+                owed.cursor = replace(owed.cursor, start_confirmed=True)
+                return None
+            case Held():
+                self._held_until = Monotonic(now + RETRY_PERIOD)
+                if answer.refused:
+                    self._not_taken(owed, answer.detail, live=live)
+                return _Step.HELD
+            case RouteMissing():
+                self._held_until = Monotonic(now + RETRY_PERIOD)
+                self._not_taken(owed, START_UNKNOWN, live=live)
+                return _Step.HELD
+            case Refusal():
+                # Cancelled on the dashboard between the poll and the arm.
+                owed.cursor = replace(owed.cursor, start_confirmed=True)
+                self._not_taken(owed, answer.detail, live=live)
+                return None
+        raise assert_never(answer)
+
+    def _not_taken(self, owed: _Owed, detail: str, *, live: bool) -> None:
+        """The dashboard did not take the start of ``owed``: stop it if it runs, once."""
+        if live and not owed.stopped:
+            owed.stopped = True
+            self._start_refused(detail)
 
     async def _end_from_memory(self, now: Monotonic, owed: _Owed, session_id: str) -> _Step:
         """Send the end the runtime gave, for a session that has no record to say it."""
@@ -843,12 +939,18 @@ class RecordUplink:
     async def _transfer(
         self, now: Monotonic, owed: _Owed, record: Path, session_id: str, *, live: bool
     ) -> _Step:
-        """Send what the record holds after the cursor: telemetry, events, then the end."""
-        if live:
-            period = TELEMETRY_PERIOD if owed.caught_up else CATCH_UP_PERIOD
-            if not _due(owed.last_transfer, now, period):
-                return _Step.IDLE if owed.caught_up else _Step.BUSY
-        owed.last_transfer = now
+        """Send what the record holds after the cursor: telemetry, events, then the end.
+
+        Never two batches of telemetry less than :data:`CATCH_UP_PERIOD` apart,
+        whichever sessions they are of. A session that is behind is not even
+        read before its turn. One that is up to date is read: its end, which
+        carries no telemetry, does not wait; a few points left do.
+        """
+        if live and owed.caught_up and not _due(owed.last_transfer, now, TELEMETRY_PERIOD):
+            return _Step.IDLE
+        too_soon = not _due(self._last_batch, now, CATCH_UP_PERIOD)
+        if too_soon and not owed.caught_up:
+            return _Step.BUSY
         over = owed.ended is not None or not live
         read = await self._disk(
             functools.partial(
@@ -863,6 +965,22 @@ class RecordUplink:
         if isinstance(read, Err):
             return await self._unreadable(now, owed, session_id, read.error, live=live)
         batch = read.value
+        if too_soon and batch.points.points:
+            return _Step.BUSY
+        owed.last_transfer = now
+        return await self._send(now, owed, record, session_id, batch, live=live)
+
+    async def _send(
+        self,
+        now: Monotonic,
+        owed: _Owed,
+        record: Path,
+        session_id: str,
+        batch: Batch,
+        *,
+        live: bool,
+    ) -> _Step:
+        """Send one reading of a record: its points, its events, and its end if it is over."""
         waiting = await self._send_points(now, owed, session_id, batch.points)
         if waiting is None:
             waiting = await self._send_events(now, owed, session_id, batch.events)
@@ -878,8 +996,9 @@ class RecordUplink:
         self, now: Monotonic, owed: _Owed, session_id: str, points: Points
     ) -> _Step | None:
         """Send one batch of telemetry and move the cursor past it. ``None``: acknowledged."""
-        cursor = replace(owed.cursor, ticks_offset=points.offset)
+        cursor = replace(owed.cursor, ticks_offset=points.offset, ticks_mid_line=points.mid_line)
         if points.points:
+            self._last_batch = now
             answer = await self._post(
                 now, owed, TELEMETRY_PATH, {"sessionId": session_id, "points": points.points}
             )
@@ -905,7 +1024,12 @@ class RecordUplink:
         """
         if owed.events_retry is not None and now < owed.events_retry:
             return None
-        cursor = replace(owed.cursor, events_offset=events.offset, last_seq=events.last_seq)
+        cursor = replace(
+            owed.cursor,
+            events_offset=events.offset,
+            events_mid_line=events.mid_line,
+            last_seq=events.last_seq,
+        )
         if not events.events:
             owed.events_retry = None
             owed.cursor = cursor
@@ -1014,7 +1138,13 @@ class RecordUplink:
                 session_id,
             )
             owed.cursor = replace(
-                owed.cursor, ticks_offset=0, last_t=None, events_offset=0, last_seq=-1
+                owed.cursor,
+                ticks_offset=0,
+                ticks_mid_line=False,
+                last_t=None,
+                events_offset=0,
+                events_mid_line=False,
+                last_seq=-1,
             )
             return _Step.BUSY
         ended = owed.ended
@@ -1040,7 +1170,6 @@ class RecordUplink:
         path: str,
         body: Mapping[str, JsonValue],
         *,
-        patient: bool = True,
         optional: bool = False,
     ) -> Acked | Refusal | _Wait:
         """Make one request. A :class:`Refusal` comes back only once it is final."""
@@ -1059,7 +1188,7 @@ class RecordUplink:
                 self._held_until = Monotonic(now + RETRY_PERIOD)
                 return _Wait.HOLD
             case Refusal():
-                if patient and not answer.final and owed.refusals + 1 < MAX_REFUSALS:
+                if not answer.final and owed.refusals + 1 < MAX_REFUSALS:
                     owed.refusals += 1
                     owed.next_try = Monotonic(now + RETRY_PERIOD)
                     return _Wait.RETRY

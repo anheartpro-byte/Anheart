@@ -12,19 +12,37 @@ What is established here:
   cannot be understood is passed over and counted;
 * an offset that is not the start of a line of the file is refused, never
   read from;
-* which records the dashboard is still owed.
+* a run of bytes too long to be a line (zeroes left by a power cut) is passed
+  over, across as many readings as it takes, counted once, and what follows
+  it is read;
+* a cursor is used only for the record it names;
+* which records the dashboard is still owed: those whose cursor is not
+  complete, and those made since the synchronisation first listed the
+  directory that were never tied to a cursor.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
 from src.clock import ManualClock
-from src.record.cursor import Cursor, NoCursor, UnreadableCursor, cursor_of, store
+from src.record.cursor import (
+    BASELINE_NAME,
+    Baseline,
+    Cursor,
+    CursorError,
+    NoCursor,
+    UnreadableCursor,
+    cursor_of,
+    load_baseline,
+    store,
+    store_baseline,
+)
 from src.record.reader import read
 from src.record.schema import EndObservation, Event, EventKind
 from src.record.upload import (
@@ -33,6 +51,7 @@ from src.record.upload import (
     MAX_EVENTS,
     MAX_POINTS,
     MISALIGNED,
+    OTHER_RECORD,
     Ended,
     open_record,
     owed_records,
@@ -43,7 +62,7 @@ from src.record.upload import (
     read_points,
 )
 from src.record.writer import TICK_COLUMNS, Writer
-from src.result import Err, Ok
+from src.result import Err, Ok, Result
 from src.units import Monotonic, UnixMillis
 from tests.record_support import manifest, row, writer
 from tests.record_uplink_support import PROGRAMME, launched_programme
@@ -424,17 +443,138 @@ def test_a_reading_is_bounded_in_bytes_and_goes_on_from_where_it_stopped(tmp_pat
     assert readings > 3
 
 
-def test_bytes_that_are_no_line_at_all_are_passed_over_a_chunk_at_a_time(tmp_path: Path) -> None:
+def ticking_on(made: Writer, first: int, seconds: int) -> None:
+    """Write ``seconds`` more of ticks at 5 Hz, the first at ``t = first``."""
+    for index in range(seconds * 5):
+        tick = dataclasses.replace(row(), t=first + index / 5, hr_live=73)
+        assert isinstance(made.tick(tick), Ok)
+
+
+@dataclasses.dataclass
+class Followed:
+    """What a reader that follows its own cursor got out of ``ticks.csv``, reading after reading."""
+
+    seconds: list[object] = dataclasses.field(default_factory=list[object])
+    skipped: int = 0
+    readings: int = 0
+    inside: int = 0
+    """Readings that stopped inside a line being passed over."""
+
+    offset: int = 0
+    mid_line: bool = False
+    after: int | None = None
+
+    def read(self, record: Path, *, chunk: int) -> None:
+        """Read until the stream gives no more, each reading from where the last stopped."""
+        while True:
+            found = read_points(
+                record,
+                start_ms=START_MS,
+                offset=self.offset,
+                after_t=self.after,
+                mid_line=self.mid_line,
+                chunk=chunk,
+            )
+            assert isinstance(found, Ok), found
+            self.readings += 1
+            self.seconds.extend(point["elapsedS"] for point in found.value.points)
+            self.skipped += found.value.skipped
+            self.inside += found.value.mid_line
+            self.offset = found.value.offset
+            self.mid_line = found.value.mid_line
+            self.after = found.value.last_t if found.value.last_t is not None else self.after
+            if not found.value.more:
+                return
+
+
+@pytest.mark.parametrize("zeroes", [2500, 2990, 3000])
+def test_a_line_too_long_to_be_one_is_passed_over_across_several_readings(
+    tmp_path: Path, zeroes: int
+) -> None:
+    """Zeroes a power cut left in the file, longer than one reading and with no end of line.
+
+    They are counted once, where they begin; every reading goes on from where
+    the one before stopped; and the ticks after them are read like any other.
+    Never is an offset given that the next reading refuses.
+    """
     made = writer(tmp_path)
+    ticking_on(made, 0, 2)
     path = made.path / "ticks.csv"
-    start = path.stat().st_size
     with path.open("ab") as handle:
-        handle.write(b"x" * 250)
+        handle.write(b"\x00" * zeroes + b"\n")
+    ticking_on(made, 2, 2)
 
-    found = read_points(made.path, start_ms=START_MS, offset=start, after_t=None, chunk=100)
+    follower = Followed()
+    follower.read(made.path, chunk=1000)
 
-    assert isinstance(found, Ok)
-    assert (found.value.points, found.value.offset, found.value.more) == ((), start + 100, True)
+    assert follower.seconds == [0.0, 1.0, 2.0, 3.0]
+    assert follower.skipped == 1
+    assert follower.inside >= 2, "the zeroes took more than one reading"
+    assert (follower.offset, follower.mid_line) == (path.stat().st_size, False)
+
+
+def test_a_line_too_long_that_reaches_the_end_of_the_file_is_waited_for(tmp_path: Path) -> None:
+    """Nothing after the zeroes yet: the reading stands inside them, and goes on when more comes."""
+    made = writer(tmp_path)
+    ticking_on(made, 0, 1)
+    path = made.path / "ticks.csv"
+    with path.open("ab") as handle:
+        handle.write(b"\x00" * 2300)
+
+    follower = Followed()
+    follower.read(made.path, chunk=1000)
+    assert (follower.seconds, follower.skipped) == ([0.0], 1)
+    assert (follower.offset, follower.mid_line) == (path.stat().st_size, True)
+    follower.read(made.path, chunk=1000)
+    assert (follower.offset, follower.mid_line) == (path.stat().st_size, True), "it waits there"
+
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    ticking_on(made, 1, 1)
+    follower.read(made.path, chunk=1000)
+
+    assert (follower.seconds, follower.skipped) == ([0.0, 1.0], 1)
+    assert (follower.offset, follower.mid_line) == (path.stat().st_size, False)
+
+
+def test_a_place_inside_a_long_line_that_the_file_does_not_reach_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A cursor that stands inside a line being passed over, past the end of the file."""
+    made = writer(tmp_path)
+    ticking_on(made, 0, 1)
+    size = (made.path / "ticks.csv").stat().st_size
+
+    found = read_points(made.path, start_ms=START_MS, offset=size + 1, after_t=None, mid_line=True)
+
+    assert isinstance(found, Err)
+    assert found.error.detail == MISALIGNED
+
+
+def test_an_event_line_too_long_to_be_one_takes_its_rank_and_is_passed_over(
+    tmp_path: Path,
+) -> None:
+    made = writer(tmp_path)
+    events_of(made, 2)
+    path = made.path / "events.jsonl"
+    with path.open("ab") as handle:
+        handle.write(b"\x00" * 700 + b"\n")
+    assert isinstance(made.event(Event(t=9.0, kind=EventKind.PHASE, detail="after")), Ok)
+
+    ranks: list[object] = []
+    skipped, offset, seq, mid = 0, 0, -1, False
+    for _ in range(12):
+        found = read_events(
+            made.path, start_ms=START_MS, offset=offset, last_seq=seq, mid_line=mid, chunk=300
+        )
+        assert isinstance(found, Ok), found
+        ranks.extend(event["seq"] for event in found.value.events)
+        skipped += found.value.skipped
+        offset, seq, mid = found.value.offset, found.value.last_seq, found.value.mid_line
+
+    # The zeroes are the third line of the file: rank 2, like any line that is no event.
+    assert (ranks, skipped, seq) == ([0, 1, 3], 1, 3)
+    assert (offset, mid) == (path.stat().st_size, False)
 
 
 def test_the_last_tick_dates_a_record_that_was_cut_short(tmp_path: Path) -> None:
@@ -706,12 +846,28 @@ def test_a_record_is_opened_with_its_manifest_and_what_its_cursor_says(tmp_path:
     assert isinstance(open_record(tmp_path, name), Err)
     (made.path / "ticks.away").rename(made.path / "ticks.csv")
 
-    assert isinstance(store(made.path, Cursor(session_id="cloud-1", ticks_offset=44)), Ok)
+    mine = Cursor(local_ref="local-4", session_id="cloud-1", ticks_offset=44)
+    assert isinstance(store(made.path, mine), Ok)
     known = open_record(tmp_path, name)
     assert isinstance(known, Ok)
-    assert known.value.cursor == Cursor(session_id="cloud-1", ticks_offset=44)
+    assert known.value.cursor == mine
 
     assert isinstance(open_record(tmp_path, "2026-01-01T000000Z_gone"), Err)
+
+
+@pytest.mark.parametrize("named", ["local-9", None])
+def test_a_cursor_that_names_another_record_is_not_used(tmp_path: Path, named: str | None) -> None:
+    """A cursor file copied or renamed by hand: well formed, and about another record."""
+    made = writer(tmp_path)
+    other = Cursor(local_ref=named, session_id="cloud-7", ticks_offset=44, state="complete")
+    assert isinstance(store(made.path, other), Ok)
+
+    opened = open_record(tmp_path, made.path.name)
+
+    assert isinstance(opened, Ok)
+    assert opened.value.cursor == UnreadableCursor(OTHER_RECORD)
+    # And the record is owed, though that cursor says nothing of it is.
+    assert owed_records(tmp_path) == Ok((made.path.name,))
 
 
 def record_named(root: Path, stamp: str, ref: str) -> Path:
@@ -730,26 +886,102 @@ def record_named(root: Path, stamp: str, ref: str) -> Path:
 def test_the_records_still_owed_are_those_with_a_cursor_that_is_not_complete(
     tmp_path: Path,
 ) -> None:
-    """Oldest first. A record with no cursor was never opened by the synchronisation."""
+    """Oldest first. A record that was there, cursor-less, at the first listing is left alone."""
     sent = record_named(tmp_path, "2026-10-01T080000Z", "sent")
-    never_opened = record_named(tmp_path, "2026-10-02T080000Z", "older-software")
+    older_software = record_named(tmp_path, "2026-10-02T080000Z", "older-software")
     half = record_named(tmp_path, "2026-10-03T080000Z", "half")
     torn = record_named(tmp_path, "2026-10-04T080000Z", "torn")
     untouched = record_named(tmp_path, "2026-10-05T080000Z", "untouched")
-    assert isinstance(store(sent, Cursor(state="complete", end="sent")), Ok)
-    assert isinstance(store(half, Cursor(session_id="cloud-3", ticks_offset=900)), Ok)
+    assert isinstance(store(sent, Cursor(local_ref="sent", state="complete", end="sent")), Ok)
+    assert isinstance(store(half, Cursor(local_ref="half", session_id="c3", ticks_offset=900)), Ok)
     cursor_of(torn).write_bytes(b'{"schema_version":1,"ticks_of')
-    assert isinstance(store(untouched, Cursor()), Ok)
+    assert isinstance(store(untouched, Cursor(local_ref="untouched")), Ok)
     orphan = tmp_path / "2026-09-01T080000Z_purged.sync.json"
     orphan.write_text("{}", encoding="utf-8")
 
     owed = owed_records(tmp_path)
 
     assert owed == Ok((half.name, torn.name, untouched.name))
-    assert never_opened.is_dir()
+    assert older_software.is_dir()
     assert not orphan.exists()
     # A record the synchronisation left alone still reads as its writer left it.
-    assert isinstance(read(never_opened), Ok)
+    assert isinstance(read(older_software), Ok)
+    # What was there without a cursor is listed once, privately, next to the records.
+    assert load_baseline(tmp_path) == Baseline(left_alone=(older_software.name,))
+    assert (tmp_path / BASELINE_NAME).stat().st_mode & 0o777 == 0o600
+
+
+def test_a_record_made_since_the_first_listing_and_never_tied_to_a_cursor_is_owed(
+    tmp_path: Path,
+) -> None:
+    """Killed in its first second, or the disk refused its cursor: it is not lost for that."""
+    before = record_named(tmp_path, "2026-10-01T080000Z", "before")
+    assert owed_records(tmp_path) == Ok(())
+
+    since = record_named(tmp_path, "2026-10-02T080000Z", "since")
+    open_now = record_named(tmp_path, "2026-10-03T080000Z", "open-now")
+
+    # The record the console has open is the running session's own to send.
+    assert owed_records(tmp_path, open_now.name) == Ok((since.name,))
+    assert owed_records(tmp_path) == Ok((since.name, open_now.name))
+    assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
+
+
+def test_the_record_open_at_the_first_listing_is_not_taken_for_an_older_one(
+    tmp_path: Path,
+) -> None:
+    before = record_named(tmp_path, "2026-10-01T080000Z", "before")
+    open_now = record_named(tmp_path, "2026-10-02T080000Z", "open-now")
+
+    assert owed_records(tmp_path, open_now.name) == Ok(())
+
+    assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
+    # Never tied to its cursor in the end: it is found at the next start.
+    assert owed_records(tmp_path) == Ok((open_now.name,))
+
+
+def test_a_list_of_older_records_that_cannot_be_read_is_made_again_and_said(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Nothing is sent that might be older than the synchronisation: what has no cursor now."""
+    before = record_named(tmp_path, "2026-10-01T080000Z", "before")
+    (tmp_path / BASELINE_NAME).write_bytes(b'{"schema_version":1,"left_al')
+
+    with caplog.at_level(logging.WARNING, logger="src.record.upload"):
+        owed = owed_records(tmp_path)
+
+    assert owed == Ok(())
+    assert "cannot be read: it is made again" in caplog.text
+    assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
+
+
+def test_a_list_of_older_records_that_cannot_be_written_is_made_again_at_the_next_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    before = record_named(tmp_path, "2026-10-01T080000Z", "before")
+
+    def refused(_root: Path, _baseline: Baseline) -> Result[None, CursorError]:
+        return Err(CursorError("OSError:ENOSPC"))
+
+    with monkeypatch.context() as patched:
+        patched.setattr("src.record.upload.store_baseline", refused)
+        with caplog.at_level(logging.WARNING, logger="src.record.upload"):
+            owed = owed_records(tmp_path)
+
+    assert owed == Ok(())
+    assert "could not be written (OSError:ENOSPC)" in caplog.text
+    assert load_baseline(tmp_path) is None
+    assert owed_records(tmp_path) == Ok(())
+    assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
+    assert isinstance(store_baseline(tmp_path, Baseline()), Ok)
+
+
+def test_a_complete_cursor_next_to_a_record_that_cannot_be_read_is_left_be(tmp_path: Path) -> None:
+    sent = record_named(tmp_path, "2026-10-01T080000Z", "sent")
+    assert isinstance(store(sent, Cursor(local_ref="sent", state="complete", end="sent")), Ok)
+    (sent / "manifest.json").write_bytes(b"{")
+
+    assert owed_records(tmp_path) == Ok(())
 
 
 def test_an_unusable_cursor_is_told_from_no_cursor_when_a_record_is_opened(tmp_path: Path) -> None:

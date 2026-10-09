@@ -114,6 +114,9 @@ class Console:
         seen: list[TelemetrySnapshot] = []
         for tick in range(round(seconds / TICK)):
             seen.append(await self.rig.tick(TICK))
+            # The stop watch is a task of its own on the console: it looks at
+            # each tick here, the sending once a second.
+            await self.rig.panel.cloud_stop_step()
             if tick % 5 == 4:
                 await self.rig.panel.cloud_step()
         return seen

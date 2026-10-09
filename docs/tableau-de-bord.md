@@ -461,13 +461,16 @@ Une machine qui se tait n'envoie plus rien : aucune donnée ne change, donc
 aucune query Convex ne se relance. Le site ne peut pas attendre un changement de
 donnée pour dire qu'un état est périmé. Il le recalcule lui-même **chaque
 seconde**, sur l'**horloge du serveur**. L'heure du poste ne date rien. Celle
-du Pi non plus, pour la console de ce dépôt : elle dit au serveur depuis
-combien de temps sa séance a commencé, compté sur son horloge monotone, et le
-serveur place lui-même sur son horloge le début, la fin et la mesure de
-chaque point ([convex.md, Deux horloges](convex.md#deux-horloges)). Une
-console d'une version antérieure ne le dit pas : pour elle, et pour elle
-seule, l'heure du Pi date encore la mesure du point affiché sur le panneau
-d'entraînement.
+du Pi ne date pas non plus une séance **en cours** de la console de ce dépôt
+face à un serveur au contrat 1.1 : la console dit au serveur depuis combien
+de temps sa séance a commencé, compté sur son horloge monotone, et le serveur
+place lui-même sur son horloge le début, la fin et la mesure de chaque point
+([convex.md, Deux horloges](convex.md#deux-horloges)). L'heure du Pi date
+encore la mesure du point affiché sur le panneau d'entraînement dans trois
+cas, détaillés sous « Horloge du Pi » plus bas : une console d'une version
+antérieure, qui ne dit pas cet âge ; un serveur resté au contrat 1.0, qui ne
+le lit pas ; et un enregistrement que la console de ce dépôt envoie après un
+redémarrage du système, dont elle ne sait plus compter l'âge.
 
 - **Le serveur date ce qu'il reçoit.** L'état d'une machine
   (`live.updatedAt`) et son dernier signal (`lastHeartbeat`) sont datés par
@@ -478,10 +481,10 @@ d'entraînement.
   par le serveur (pour une séance démarrée à la console : son enregistrement
   par le serveur, pas le `startedAt` envoyé par le Pi). Avec lui vient
   `lastMeasuredAt` : la date de mesure de ce même point (voir « Panneau
-  d'entraînement » plus bas). Pour une séance dont la machine dit l'âge, ce
-  que fait la console de ce dépôt, c'est son `t` placé par le serveur sur sa
-  propre horloge ; pour une console antérieure, c'est le `t` tel que le Pi
-  l'a écrit.
+  d'entraînement » plus bas). Pour une séance dont la machine a dit l'âge,
+  ce que fait la console de ce dépôt pour toute séance en cours, c'est son
+  `t` placé par le serveur sur sa propre horloge ; sinon, c'est le `t` tel
+  que le Pi l'a écrit.
 - **Chaque réponse porte l'horloge du serveur.** `getMachineLive`,
   `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`
   et `getMachinesForGestionnaire` renvoient `serverNow` : l'heure du serveur au
@@ -555,17 +558,33 @@ Limites :
   et affiche « Hors ligne » ou « Données périmées » à tort, jusqu'à la réponse
   suivante (10 s au plus pour une machine qui envoie).
 - **Horloge du Pi.** Elle ne date ni l'état d'une machine, ni son statut, ni
-  la réception d'un point. Pour la console de ce dépôt elle ne date plus la
-  mesure non plus : le serveur la place sur sa propre horloge à partir de
-  l'âge de la séance, exact au délai d'acheminement de la déclaration près
-  (toute mesure de la séance est lue plus récente de ce délai : d'ordinaire
-  une fraction de seconde, sans borne côté serveur,
+  la réception d'un point. Quand la console dit l'âge de sa séance et que le
+  serveur le lit, elle ne date pas la mesure non plus : le serveur la place
+  sur sa propre horloge à partir de cet âge, exact au délai d'acheminement de
+  la déclaration près (toute mesure de la séance est lue plus récente de ce
+  délai : d'ordinaire une fraction de seconde, sans borne côté serveur,
   [convex.md](convex.md#ce-quun-âge-faux-peut-faire-et-ce-qui-le-borne)), et
   une horloge du Pi fausse, ou corrigée en cours de séance, ne change rien à
-  ce qui est affiché. Pour une console d'une version
-  antérieure, qui ne dit pas l'âge de sa séance, elle date la **mesure** du
-  point affiché sur le panneau d'entraînement (voir plus bas), avec ces
-  conséquences :
+  ce qui est affiché. C'est le cas de toute séance **en cours** de la console
+  de ce dépôt, et de ce qu'elle envoie après coup tant que le système du Pi
+  n'a pas redémarré, face à un serveur au contrat 1.1.
+
+  L'horloge du Pi date encore la **mesure** du point affiché sur le panneau
+  d'entraînement (voir plus bas) dans trois cas :
+
+  - une console d'une version antérieure, qui ne dit pas l'âge de sa séance ;
+  - un serveur resté au contrat 1.0, qui ne lit pas cet âge, quelle que soit
+    la console ;
+  - un enregistrement que la console de ce dépôt envoie **après un
+    redémarrage du système** et dont la date est en 2024 ou après : elle ne
+    sait plus compter son âge, n'en dit aucun, et la date écrite par la
+    machine reste ([raspberry-pi.md §8.5](raspberry-pi.md#85-les-dates)).
+    Un cas a été mesuré en revue : si l'horloge de la machine avançait alors
+    d'exactement le retard de cet envoi, ses points sont lus comme mesurés à
+    l'instant, et la séance s'affiche en direct jusqu'à l'arrivée de sa fin,
+    soit le temps de l'envoyer (un lot de 300 points toutes les 2 s).
+
+  Dans ces trois cas, les conséquences sont :
   - en retard de plus de 15 s environ : le bandeau « mesures pas datées de
     maintenant » apparaît par intermittence alors que la machine envoie ; en
     retard de 20 s ou plus, en permanence. Sens sûr ;
@@ -771,7 +790,7 @@ Pièges :
 | Rendu dans un navigateur | **Jamais testé.** |
 | Déploiement Convex / Clerk | **Pas fait.** |
 | Tests du site | Unitaires seulement, sans navigateur : `npm run test:lib` (règles de `lib/` extraites des fenêtres, horloge du serveur, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur, statut et dernier signal : hook et composants, avec l'horloge du poste et celle du Pi décalées ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses ; chaque composant : panneau de séance et arrêt, fenêtre de lancement, droits de lancement, formulaires machine et patient, menu par rôle ; chaque page de `app/` montée dans un DOM simulé, Convex remplacé : ce qu'elle montre à chaque rôle, ce que ses actions envoient, ce qu'elle affiche quand le serveur refuse, voir [framework-de-test.md](framework-de-test.md#tests-des-pages-du-site-anh-204)). La CI exige 80 % de lignes et de branches couvertes sur `lib/`, `hooks/`, `components/` et `app/` réunis. **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni une suppression refusée par un vrai serveur ne sont rejouées de bout en bout (ANH-83). |
-| Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : l'horloge du poste ne date rien. Pire cas chiffré sur une page qui vient de s'ouvrir : 107 s pour une machine, 37 s pour le panneau (cache de Convex, 17 s d'après son code source), plus le transit de la réponse et un onglet suspendu, **non mesurés**. Panneau, pour une console d'une version antérieure qui ne dit pas l'âge de sa séance : une horloge du Pi en retard de plus de 15 s environ, ou en avance de plus de 5 s environ, affiche le bandeau alors que la machine envoie (sens sûr) ; en avance de X, un point renvoyé en retard peut passer pour actuel jusqu'à 20 s + X après sa mesure (ANH-163). Pour la console de ce dépôt, l'horloge du Pi ne date plus la mesure. |
+| Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : l'horloge du poste ne date rien. Pire cas chiffré sur une page qui vient de s'ouvrir : 107 s pour une machine, 37 s pour le panneau (cache de Convex, 17 s d'après son code source), plus le transit de la réponse et un onglet suspendu, **non mesurés**. Panneau, quand l'horloge du Pi date la mesure (console d'une version antérieure, serveur au contrat 1.0, ou enregistrement envoyé après un redémarrage du système) : en retard de plus de 15 s environ, ou en avance de plus de 5 s environ, elle affiche le bandeau alors que la machine envoie (sens sûr) ; en avance de X, un point renvoyé en retard peut passer pour actuel jusqu'à 20 s + X après sa mesure (ANH-163). Pour une séance en cours de la console de ce dépôt face à un serveur 1.1, l'horloge du Pi ne date pas la mesure. |
 | Statut « En ligne » et « Dernier signal » | Recalculés chaque seconde par le site (§6). Convex n'écrit `offline` qu'au passage de sa tâche (jusqu'à 2,5 min) : le refus d'un lancement par le serveur et la fenêtre de lancement lisent encore ce statut écrit (ANH-144). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
 | Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |

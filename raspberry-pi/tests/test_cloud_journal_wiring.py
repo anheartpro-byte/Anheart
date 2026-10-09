@@ -11,6 +11,11 @@ Three things only the whole console can show:
   every dashboard step is when the console exits, returns at once;
 * once the dashboard holds the end of a session, its stop is no longer asked
   for, even while the machine is still winding the session down;
+* the stop asked for from the dashboard is looked for by a task of its own:
+  the question keeps its cadence while record reads and uploads are slow, and
+  while a long backlog is caught up;
+* a launch from the dashboard whose start it does not take, whatever it
+  answers, leaves RUNNING at once;
 * the link keeps no queue (EX-7).
 """
 
@@ -21,13 +26,18 @@ import inspect
 import re
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from itertools import pairwise
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import pytest
 
 from src import cloud_sync, record_uplink
+from src.clock import ManualClock
+from src.cloud_sync import STATUS_PERIOD, CloudSync, Refused
+from src.contract import ErrorCode
+from src.local_panel import CLOUD_PERIOD, STOP_WATCH_PERIOD, LocalPanel
 from src.record.cursor import Cursor, load
 from src.record.export import RecordIo
 from src.record.journal import Journal
@@ -36,22 +46,32 @@ from src.record.retention import records
 from src.record.schema import RecordError
 from src.record.upload import Head, read_head
 from src.record_uplink import RETRY_PERIOD, TELEMETRY_PERIOD, RecordSource
-from src.result import Ok, Result
+from src.result import Err, Ok, Result
+from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import OutputRpm, Seconds
-from tests.record_uplink_support import BOOT, Disk, armed, bench, recording
+from tests.record_uplink_support import BOOT, Disk, armed, bench, recording, tie
 from tests.test_cloud_contract import refuse_everything_but_the_status
 from tests.test_cloud_sync import (
+    LAUNCH,
     OPERATOR,
+    POLL_PATH,
+    START,
     TICK,
     Dashboard,
     Linked,
+    Reply,
+    StubRuntime,
+    config_of,
+    launch_answer,
     manual,
     ok,
     rig,
     status_answer,
 )
+from tests.test_failure_rig import make_rig
+from tests.test_local_panel import FakeWeb
 from tests.test_record_wiring import recording_linked
 
 LOCAL = "/api/machine/training/local"
@@ -286,6 +306,290 @@ async def test_no_stop_is_asked_once_the_dashboard_holds_the_end_of_a_session_wi
     assert len(r.dashboard.to(STATUS)) == asked
     assert r.sync.current_session_id == "remote-1", "the runtime has not finished"
     await r.panel.close()
+
+
+# =========================================================================
+# The stop asked for from the dashboard never waits behind the sending
+# =========================================================================
+
+
+class Waits:
+    """Waits counted on the test's clock: one ends when the clock has been moved past it."""
+
+    def __init__(self, clock: ManualClock) -> None:
+        self.clock: ManualClock = clock
+        self.pending: list[tuple[float, asyncio.Future[None]]] = []
+
+    async def sleep(self, seconds: float) -> None:
+        if seconds <= 0:
+            await asyncio.sleep(0)
+            return
+        over: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.pending.append((float(self.clock.monotonic()) + seconds, over))
+        await asyncio.gather(over)
+
+    async def advance(self, seconds: float) -> None:
+        """Move the clock, end the waits that are over, and let every task run to its next one."""
+        self.clock.advance(Seconds(seconds))
+        now = float(self.clock.monotonic()) + 1e-9
+        over = [wait for until, wait in self.pending if until <= now]
+        self.pending = [(until, wait) for until, wait in self.pending if until > now]
+        for wait in over:
+            wait.set_result(None)
+        for _ in range(12):
+            await asyncio.sleep(0)
+
+
+class SlowDashboard(Dashboard):
+    """Every request takes ``delay`` seconds to be answered. When each was made is kept."""
+
+    def __init__(self, waits: Waits, delay: float) -> None:
+        super().__init__()
+        self.waits: Waits = waits
+        self.delay: float = delay
+        self.made: list[tuple[float, str]] = []
+
+    @override
+    async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
+        self.made.append((float(self.waits.clock.monotonic()), path))
+        await self.waits.sleep(self.delay)
+        return await super().get(path, params)
+
+    @override
+    async def post(self, path: str, body: Mapping[str, JsonValue]) -> Reply:
+        self.made.append((float(self.waits.clock.monotonic()), path))
+        await self.waits.sleep(self.delay)
+        return await super().post(path, body)
+
+
+class SlowIo(RecordIo):
+    """Every read of a record and every cursor write takes ``delay`` seconds."""
+
+    def __init__(self, waits: Waits, delay: float) -> None:
+        super().__init__(1)
+        self.waits: Waits = waits
+        self.delay: float = delay
+
+    @override
+    async def run[T](
+        self,
+        work: Callable[[], T],
+        timeout: Seconds,
+        late: Callable[[T], None] | None = None,
+    ) -> Result[T, RecordError]:
+        await self.waits.sleep(self.delay)
+        return Ok(work())
+
+
+async def stop_questions(
+    tmp_path: Path,
+    *,
+    request_s: float,
+    read_s: float,
+    backlog_points: int,
+    one_task: bool,
+    session_s: int = 80,
+) -> tuple[list[float], float]:
+    """``session_s`` seconds of a launched session; when each stop question was asked, and
+    the longest sending step.
+
+    The link's work is run as the console runs it: the sending once a second
+    and the stop watch four times a second, each a task of its own. With
+    ``one_task`` the watch is instead called from the sending task, before
+    and after the step, as it was before it had its own.
+    """
+    clock = ManualClock()
+    waits = Waits(clock)
+    dashboard = SlowDashboard(waits, request_s)
+    dashboard.answer(STATUS, status_answer())
+    root = tmp_path / "records"
+    root.mkdir()
+    disk = Disk(root)
+    if backlog_points:
+        left = recording(root, clock, "ref-old")
+        left.tick(float(backlog_points), hertz=1)
+        left.close()
+        tie(left.path, Cursor(session_id="cloud-old"))
+        clock.advance(Seconds(3600.0))
+    panel = rig(tmp_path).panel
+    runtime = StubRuntime(source=panel.runtime.snapshot, state=RuntimeState.RUNNING)
+    sync = CloudSync(
+        clock=clock,
+        transport=dashboard,
+        runtime=runtime,
+        surface=panel.surface,
+        store=panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+        records=RecordSource(
+            root=root, current=disk.in_progress, io=SlowIo(waits, read_s), boot_id=BOOT
+        ),
+    )
+    sync.session_started(manual(clock, remote="remote-1"))
+    live = recording(root, clock, "ref-now", remote="remote-1")
+    disk.current = live.path
+    steps: list[float] = []
+
+    async def sending() -> None:
+        began = float(clock.monotonic())
+        if one_task:
+            await sync.watch_stop()
+        await sync.step()
+        if one_task:
+            await sync.watch_stop()
+        steps.append(float(clock.monotonic()) - began)
+
+    async def every(period: float, step: Callable[[], Awaitable[None]]) -> None:
+        """As ``LocalPanel._every`` does, on the test's clock."""
+        while True:
+            began = float(clock.monotonic())
+            await step()
+            await waits.sleep(max(0.0, period - (float(clock.monotonic()) - began)))
+
+    tasks = [asyncio.create_task(every(float(CLOUD_PERIOD), sending))]
+    if not one_task:
+        tasks.append(asyncio.create_task(every(float(STOP_WATCH_PERIOD), sync.watch_stop)))
+    try:
+        for tick in range(session_s * 20):
+            if tick % 20 == 0:
+                live.tick(1.0)
+            await waits.advance(0.05)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    asked = [at for at, path in dashboard.made if path == STATUS]
+    return asked, max(steps)
+
+
+@pytest.mark.parametrize(
+    ("request_s", "read_s", "backlog_points"),
+    [
+        pytest.param(0.01, 0.0, 0, id="healthy"),
+        pytest.param(0.01, 1.8, 0, id="reads at 1.8 s"),
+        pytest.param(2.5, 0.0, 6000, id="requests at 2.5 s, a backlog"),
+        pytest.param(2.5, 1.8, 6000, id="reads at 1.8 s, requests at 2.5 s, a backlog"),
+    ],
+)
+async def test_the_stop_question_keeps_its_cadence_while_reads_and_uploads_are_slow(
+    tmp_path: Path, request_s: float, read_s: float, backlog_points: int
+) -> None:
+    """Asked every three seconds whatever the sending waits for: a task of its own."""
+    asked, _slowest = await stop_questions(
+        tmp_path,
+        request_s=request_s,
+        read_s=read_s,
+        backlog_points=backlog_points,
+        one_task=False,
+        session_s=45,
+    )
+
+    gaps = [later - earlier for earlier, later in pairwise(asked)]
+    assert len(asked) >= 12
+    # Never later than the watch's own look, a quarter of a second, after it is due.
+    assert max(gaps) <= float(STATUS_PERIOD) + float(STOP_WATCH_PERIOD) + 0.06, sorted(gaps)[-3:]
+
+
+async def test_asked_from_the_sending_task_the_stop_question_would_wait_behind_it(
+    tmp_path: Path,
+) -> None:
+    """What the task of its own is for: the same slow world, measured the other way.
+
+    Called from the task that sends, before and after its step, the question
+    waits for the reads and the uploads of that step.
+    """
+    asked, slowest = await stop_questions(
+        tmp_path, request_s=2.5, read_s=1.8, backlog_points=6000, one_task=True, session_s=45
+    )
+
+    gaps = [later - earlier for earlier, later in pairwise(asked)]
+    assert slowest > 2 * float(STATUS_PERIOD), "the sending step really is slow in this world"
+    assert max(gaps) > 2 * float(STATUS_PERIOD)
+
+
+async def test_the_console_runs_the_stop_watch_as_a_task_of_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sending step never returns here: the watch goes on looking all the same."""
+    rig_, _ = make_rig(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    looks: list[float] = []
+
+    async def stuck(_panel: LocalPanel) -> None:
+        entered.set()
+        await release.wait()
+
+    async def look(_panel: LocalPanel) -> None:
+        looks.append(time.perf_counter())
+
+    monkeypatch.setattr(LocalPanel, "cloud_step", stuck)
+    monkeypatch.setattr(LocalPanel, "cloud_stop_step", look)
+    stop = asyncio.Event()
+    web = FakeWeb()
+    runner = asyncio.create_task(rig_.panel.run(stop, web))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(6 * float(STOP_WATCH_PERIOD))
+        assert len(looks) >= 3
+    finally:
+        stop.set()
+        web.request_exit()
+        release.set()
+        await asyncio.gather(runner, return_exceptions=True)
+        await rig_.panel.close()
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(
+            Refused(426, "Unsupported machine contract", ErrorCode("contract_unsupported")),
+            id="426",
+        ),
+        pytest.param(Refused(401, "Invalid API key", ErrorCode("unauthorized")), id="401"),
+        pytest.param(Refused(503, "HTTP 503"), id="503"),
+    ],
+)
+async def test_on_the_console_a_launch_whose_start_is_not_taken_leaves_running_at_once(
+    tmp_path: Path, refusal: Refused
+) -> None:
+    """Whatever the dashboard answers to the confirmation, the machine does not run on."""
+    rig_, dashboard, journal = recording_linked(tmp_path)
+    dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    dashboard.answer(START, Err(refusal))
+    dashboard.answer(STATUS, status_answer(stop=True))
+
+    await seconds(rig_, journal, 3)
+
+    assert state_of(rig_) is not RuntimeState.RUNNING
+    reason = rig_.panel.runtime.stop_reason
+    assert reason is not None
+    assert reason.startswith("annulee au tableau de bord (")
+    await rig_.panel.close()
+
+
+async def test_the_end_of_a_session_stopped_from_the_dashboard_says_so_in_the_dashboard_s_words(
+    tmp_path: Path,
+) -> None:
+    """The record keeps those words whole: the dashboard's own label is nobody's name."""
+    rig_, dashboard, journal = recording_linked(tmp_path)
+    dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
+    surface = rig_.panel.surface
+    assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
+    await seconds(rig_, journal, 3)
+    assert state_of(rig_) is RuntimeState.RUNNING
+
+    dashboard.answer(STATUS, status_answer(stop=True))
+    for _ in range(40):
+        await seconds(rig_, journal, 1)
+        if dashboard.to(END):
+            break
+
+    assert rig_.panel.runtime.stop_reason == "arret demande depuis le tableau de bord"
+    (end,) = dashboard.to(END)
+    assert (end["sessionId"], end["failed"]) == ("cloud-1", False)
+    assert end["reason"] == "operator_stop: arret demande depuis le tableau de bord"
+    await rig_.panel.close()
 
 
 def test_ex7_the_link_keeps_no_queue() -> None:
