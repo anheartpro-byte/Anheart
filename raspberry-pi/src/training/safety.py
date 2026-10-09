@@ -445,7 +445,19 @@ class SafetyLimits:
     """
 
     hr_stale_freeze_after: Seconds = Seconds(10.0)
-    """No fresh trustworthy heart rate for this long: hold the speed (FREEZE)."""
+    """No fresh trustworthy heart rate for this long: hold the speed (FREEZE).
+
+    Also the age up to which the level rules (``hr_hard_max``, ``hr_critical``)
+    go on judging the last usable rate once the readings that follow it carry
+    none (:meth:`SafetySupervisor._level_rate`): one definition of "stale".
+    ``hr_stale`` counts from the last usable reading the supervisor was shown
+    on a tick, which is never later than the one those rules judge, so it has
+    begun by the time they give that rate up. One case is outside that: a
+    supervisor that was never shown a usable reading on a tick counts from the
+    session's start, so a rate kept from before that start is given up before
+    ``hr_stale`` begins, and for those seconds neither rule speaks - exactly
+    as when no rate was kept at all. Must exceed :attr:`hr_hard_max_dwell`.
+    """
 
     hr_stale_reduce_after: Seconds = Seconds(30.0)
     """Still none: back the speed off (REDUCE)."""
@@ -637,6 +649,12 @@ class SafetyLimits:
             ("hr_stale_freeze_after", self.hr_stale_freeze_after),
             ("hr_stale_reduce_after", self.hr_stale_reduce_after),
             ("hr_stale_ramp_after", self.hr_stale_ramp_after),
+        )
+        _require_increasing(
+            "the level rules judge the last usable heart rate until it is stale, so a dwell "
+            "that outlasts that could never elapse on a signal that was lost",
+            ("hr_hard_max_dwell", self.hr_hard_max_dwell),
+            ("hr_stale_freeze_after", self.hr_stale_freeze_after),
         )
         _require_increasing(
             "a current floor at or above the warning level would fire both rules at once",
@@ -837,6 +855,26 @@ class SafetyObservation:
     Carries its own ``seq``, which is the only defence against the ECG
     pipeline's re-emitted metrics dict. See
     :meth:`SafetySupervisor._ingest` for how the two are separated.
+    """
+
+    last_usable_heart_rate: HeartRateSample | None = None
+    """The latest sample that carried a usable rate, or ``None`` if none ever has.
+
+    A MEASUREMENT, kept by the runtime where every reading arrives
+    (``TrainingRuntime.observe_ecg``): this record shows one sample a tick and
+    several readings can arrive between two ticks, so a usable reading counts
+    here even when a fresh one with no rate has followed it before the tick.
+    The same sample as :attr:`heart_rate` whenever that one is usable.
+
+    Read by the level rules only (``hr_hard_max``, ``hr_critical``), and only
+    when :attr:`heart_rate` carries no usable rate: they then judge this one
+    until it is stale (:meth:`SafetySupervisor._level_rate`), so that a reading
+    with no rate neither restarts a dwell nor erases an excess that was
+    measured. It can only ADD a verdict: no rule is quieter for it being set.
+    ``hr_stale`` and the trend rules never read it; their clock and their
+    history are fed by :attr:`heart_rate` alone. Defaults to ``None``: an
+    observation that states no such sample is judged on :attr:`heart_rate`
+    alone.
     """
 
     drive_state: DriveState
@@ -1209,6 +1247,31 @@ class _HrPoint:
     commanded_rpm: MotorRpm
     load: GLoad | None
     """The commanded centripetal load at that instant, or ``None`` if it was not stated."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LevelRate:
+    """The heart rate a level rule judges this tick, and where it comes from."""
+
+    bpm: Bpm
+
+    retained_for: Seconds | None
+    """``None`` when the latest reading carries this rate itself. Otherwise the age
+    of the last usable reading: every reading since has carried no rate."""
+
+    @property
+    def origin(self) -> str:
+        """What a verdict says after the rate, so its sentence never shows a retained rate as live.
+
+        Empty for the latest reading's own rate: that verdict reads exactly as
+        it always has.
+        """
+        if self.retained_for is None:
+            return ""
+        return (
+            f" (the last usable reading, taken {self.retained_for:.1f} s ago; "
+            "no reading since has carried a rate)"
+        )
 
 
 def _running_medians(values: tuple[int, ...], width: int) -> tuple[float, ...]:
@@ -1743,6 +1806,11 @@ class SafetySupervisor:
         merely stopped being able to confirm is not evidence of recovery, so
         the conservative direction there is to keep acting on it - and
         ``hr_stale`` is what escalates the fact that it is no longer fresh.
+        That holds for both ways a rate stops being confirmed: a pipeline that
+        re-emits (the reading stays the latest one) and a pipeline that goes on
+        producing fresh readings with no rate in them (:meth:`_level_rate`).
+        Nothing here is changed by the second: this method's clock and history
+        are fed by :attr:`SafetyObservation.heart_rate` alone.
         """
         self._prune(observation.now)
         sample = observation.heart_rate
@@ -1885,20 +1953,58 @@ class SafetySupervisor:
         """
         return observation.heart_rate_supervised and observation.phase is not Phase.DONE
 
-    def _usable_bpm(self, observation: SafetyObservation) -> Bpm | None:
-        """The heart rate the level rules may act on, or ``None``.
+    def _level_rate(self, observation: SafetyObservation) -> _LevelRate | None:
+        """The heart rate the level rules judge, or ``None`` when there is none to judge.
 
-        Three conditions, all of which must hold: the phase is supervised, a
-        sample exists, and its own :attr:`~src.training.types.HeartRateSample.usable_bpm`
-        allows it - a rate was measured and its quality grade is trustworthy.
-        Freshness is deliberately not among them; see :meth:`_ingest`.
+        **The latest reading's own rate, when it carries one**: a rate was
+        measured and its grade is trustworthy
+        (:attr:`~src.training.types.HeartRateSample.usable_bpm`). Freshness is
+        deliberately not asked of it; see :meth:`_ingest`.
+
+        **Otherwise the last usable rate, until it is stale.** A fresh reading
+        with no rate in it - a noisy window, a flat lead, an electrode coming
+        off, a window the grader could not grade or the independent
+        confirmation would not pass - says that nothing could be measured. It does not say the heart
+        came back down. So it neither restarts the hard-maximum dwell nor takes
+        back an excess that was measured: the rules go on judging
+        :attr:`SafetyObservation.last_usable_heart_rate`, through a signal
+        noisy enough to yield a rate one reading in five and through an
+        electrode lost during the dwell, and only a usable rate under the
+        level releases them.
+
+        Until it is stale, and "stale" is the word ``hr_stale`` already
+        defines: older than ``hr_stale_freeze_after``. Past that age the rate
+        is given up - a rate from another minute, or from the previous
+        session's occupant, is not this heart's - and the lost signal is
+        ``hr_stale``'s to answer. Its clock starts at the last usable reading
+        this supervisor was shown on a tick, never later than the one judged
+        here, so it has already begun; only a supervisor that was shown none
+        counts from the session's start, and may then begin after a rate kept
+        from before that start has been given up. Nothing in this method
+        touches that clock. Inside the bound the rate is judged whatever
+        session it was read in: a session started a few seconds after a
+        reading above a level, with nothing measured since, is judged on it.
+        :class:`SafetyLimits` refuses a hard-maximum dwell that is not shorter
+        than that age; with the shipped values, 5 s against 10 s, a dwell begun
+        on a rate that is then lost elapses with seconds to spare.
+
+        ``None`` as well when the phase is not supervised, and when the sample
+        offered as the last usable one carries no usable rate after all.
         """
         if not self._heart_rate_supervised(observation):
             return None
-        sample = observation.heart_rate
-        if sample is None:
+        latest = observation.heart_rate
+        bpm = None if latest is None else latest.usable_bpm
+        if bpm is not None:
+            return _LevelRate(bpm=bpm, retained_for=None)
+        retained = observation.last_usable_heart_rate
+        bpm = None if retained is None else retained.usable_bpm
+        if retained is None or bpm is None:
             return None
-        return sample.usable_bpm
+        age = retained.age(observation.now)
+        if age > self._limits.hr_stale_freeze_after:
+            return None
+        return _LevelRate(bpm=bpm, retained_for=age)
 
     # =====================================================================
     # The rules
@@ -2112,12 +2218,19 @@ class SafetySupervisor:
         dangerous direction, silently, on exactly the signal that most needs
         it. With the band, the dwell accumulates once the rate has crossed the
         limit and only releases when it has genuinely come back down.
+
+        "Genuinely" is a usable rate under the release level. A reading with no
+        rate in it is not one: the last usable rate is judged in its place
+        until it is stale (:meth:`_level_rate`), so the dwell runs on through a
+        noisy stretch and through a signal that is lost, and the session ends
+        when it elapses.
         """
         tracker = self._trackers[RULE_HR_HARD_MAX]
-        bpm = self._usable_bpm(observation)
-        if bpm is None:
+        rate = self._level_rate(observation)
+        if rate is None:
             tracker.release()
             return None
+        bpm = rate.bpm
         limits = self._limits
         above = bpm > limits.hard_max_bpm or (tracker.held and bpm > limits.hr_hard_max_release_bpm)
         firing = tracker.update(
@@ -2131,7 +2244,7 @@ class SafetySupervisor:
             action=SafetyAction.RAMP_DOWN,
             rule=RULE_HR_HARD_MAX,
             detail=(
-                f"heart rate {bpm} bpm has been above the hard maximum of "
+                f"heart rate {bpm} bpm{rate.origin} has been above the hard maximum of "
                 f"{limits.hard_max_bpm} bpm for {firing.held:.1f} s"
             ),
             latched=True,
@@ -2151,12 +2264,19 @@ class SafetySupervisor:
         commissioned ramp. Removing the run command from a turning machine is
         CiA402 transition 8, which drops the output stage and freewheels a
         loaded centrifuge for minutes.
+
+        Judged on the same rate as ``hr_hard_max`` (:meth:`_level_rate`): a
+        reading at this level that a reading with no rate has already followed
+        is still the last rate known, and still stops the machine - on the
+        first tick that sees it, and again after an acknowledgement for as long
+        as it is not stale.
         """
         tracker = self._trackers[RULE_HR_CRITICAL]
-        bpm = self._usable_bpm(observation)
-        if bpm is None:
+        rate = self._level_rate(observation)
+        if rate is None:
             tracker.release()
             return None
+        bpm = rate.bpm
         limit = self._limits.critical_bpm
         firing = tracker.update(condition=bpm >= limit, now=observation.now, dwell=NO_DWELL)
         if firing is None:
@@ -2165,7 +2285,8 @@ class SafetySupervisor:
             action=SafetyAction.QUICK_STOP,
             rule=RULE_HR_CRITICAL,
             detail=(
-                f"heart rate {bpm} bpm is at or above the critical limit of {limit} bpm: "
+                f"heart rate {bpm} bpm{rate.origin} is at or above the critical limit of "
+                f"{limit} bpm: "
                 "the speed reference is zeroed immediately and the drive stops on its "
                 "own ramp"
             ),

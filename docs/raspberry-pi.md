@@ -449,7 +449,8 @@ scénarios de simulation. La console copie les profils livrés dans
 
 * **Il ne voit pas la demande de la loi de commande.** `SafetyObservation` ne
   contient ni vitesse désirée ni décision ; seulement des mesures (dont
-  `commanded_rpm`, ce qui a été écrit au variateur) et quelques constats du
+  `commanded_rpm`, ce qui a été écrit au variateur, et la dernière lecture de
+  FC utilisable, `last_usable_heart_rate`) et quelques constats du
   runtime sur ce qu'il a lui-même écrit ou décidé (la consigne est en rampe ;
   la consigne est revenue à 0 sans que personne l'ait demandé, champ
   `stopped_by` ; la séance est finie, champ `session_over` ; une fin de
@@ -521,8 +522,8 @@ n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` 
 | `drive_fault` | l'état CiA402 lu est FAULT | aucun délai | RAMP_DOWN (le variateur a déjà appliqué sa propre réaction) | oui ; se redéclenche tant que le défaut est affiché |
 | `comms_lost` | échanges ratés d'affilée ≥ seuil | 3 échanges | GO_SILENT | oui, définitif |
 | `hr_drop` | chute confirmée de FC que la baisse de charge n'explique pas (détail ci-dessous) | fenêtre 30 s ; 25 bpm ; médianes de 5 (niveau) et 9 (pic) ; 4 lectures consécutives ; marge repos 15 bpm ; fenêtre de charge 120 s | RAMP_DOWN | oui |
-| `hr_hard_max` | FC > palier dur pendant 5 s continues (bande de relâche 5 bpm) | 148 bpm, 5 s | RAMP_DOWN | oui |
-| `hr_critical` | FC ≥ palier critique | 158 bpm, aucun délai | QUICK_STOP | oui |
+| `hr_hard_max` | FC > palier dur pendant 5 s continues (bande de relâche 5 bpm). La FC jugée est la dernière FC utilisable : une lecture sans FC ne relance pas le délai (détail ci-dessous) | 148 bpm, 5 s ; dernière FC utilisable jugée jusqu'à 10 s d'âge | RAMP_DOWN | oui |
+| `hr_critical` | FC ≥ palier critique, sur la même FC jugée que `hr_hard_max` | 158 bpm, aucun délai ; dernière FC utilisable jugée jusqu'à 10 s d'âge | QUICK_STOP | oui |
 | `hr_rate` | pente (moindres carrés) des médianes glissantes de 5 lectures sur 60 s, étendue ≥ 20 s, > limite | 25 bpm/min ; relâche sous 15 bpm/min | REDUCE | non |
 | `hr_stale` | aucune FC fraîche et fiable depuis… | > 10 s FREEZE ; > 30 s REDUCE ; > 60 s RAMP_DOWN | FREEZE → REDUCE → RAMP_DOWN | seulement le niveau RAMP_DOWN |
 | `hr_unresponsive` | sur 300 s (étendue ≥ 240 s, ≥ 10 points par moitié) la charge moyenne monte d'au moins 0,08 g, la seconde moitié est à ≥ 0,15 g, et la FC moyenne monte de moins de 3 bpm | 300 s, 0,08 g, 0,15 g, 3 bpm | REDUCE | non |
@@ -640,6 +641,80 @@ redémarrer la console.
 Mesures avant et après, et ce que les correctifs ne couvrent pas :
 [securite.md, section 8](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)
 et [8.6](securite.md#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185).
+
+**`hr_hard_max` et `hr_critical` en détail : la dernière fréquence utilisable.**
+Une lecture fraîche sans FC (fenêtre bruitée, dérivation plate, électrode
+décollée, fenêtre que le traitement ne peut pas noter, FC retenue par la
+confirmation indépendante) dit qu'on n'a rien pu mesurer. Elle ne dit pas que le cœur est redescendu. Les deux règles de niveau
+jugent donc
+([ANH-213](https://linear.app/anheart/issue/ANH-213)) :
+
+* la FC de la dernière lecture quand elle en porte une utilisable (qualité
+  `good`), sans limite d'âge, comme avant : une lecture réémise par le
+  traitement reste jugée tant qu'elle est la dernière ;
+* sinon la **dernière FC utilisable**, tant qu'elle a 10 s au plus. C'est
+  `hr_stale_freeze_after`, l'âge à partir duquel `hr_stale` déclare la FC
+  périmée : une seule définition de « périmé ». Au-delà, la FC est abandonnée
+  (une FC d'il y a une minute, ou du passager précédent, n'est celle de
+  personne) et la perte du signal revient à `hr_stale`. Cette règle compte
+  depuis la dernière FC utilisable que le superviseur a vue à un tic, jamais
+  plus récente que celle jugée ici : elle a donc déjà commencé. Un seul cas y
+  échappe : un superviseur qui n'a jamais vu de FC utilisable à un tic compte
+  depuis le départ de la séance, et une FC gardée d'avant ce départ est alors
+  abandonnée avant que `hr_stale` ne commence. Pendant ces secondes aucune
+  des deux règles ne parle, exactement comme quand aucune FC n'était gardée.
+
+Conséquences :
+
+* **le délai de 5 s du palier dur court à travers les lectures sans FC.** Seule
+  une FC utilisable sous le niveau de relâche (palier dur − 5 bpm) le relance.
+  Sur un signal qui ne donne une FC qu'une lecture sur cinq, ou quand
+  l'électrode se décolle pendant le délai, le verdict tombe 5 s après la
+  première lecture au-dessus du palier ;
+* **un dépassement mesuré n'est pas effacé par une lecture sans FC.**
+  `hr_critical` se déclenche au premier tic sur une lecture critique même si
+  une lecture sans FC l'a suivie avant ce tic, et se redéclenche après un
+  acquittement tant que cette FC a 10 s au plus ;
+* **l'ordre des verdicts quand le signal se perd au-dessus du palier dur** :
+  RAMP_DOWN `hr_hard_max` à l'échéance des 5 s, verrouillé ; `hr_stale` suit sa
+  propre horloge, FREEZE 10 s, REDUCE 30 s et RAMP_DOWN 60 s après la dernière
+  FC utilisable, sans être remise à zéro ni par les lectures sans FC ni par la
+  règle de niveau. Le verdict en vigueur reste le premier des deux à avoir
+  terminé la séance ;
+* **la phrase du verdict le dit** : `heart rate 152 bpm (the last usable
+  reading, taken 2.0 s ago; no reading since has carried a rate) has been
+  above the hard maximum…`. Sur une FC portée par la dernière lecture, la
+  phrase est celle d'avant ;
+* **voulu : une seule lecture au-dessus du palier dur, suivie de 5 s sans
+  aucune FC, termine la séance.** « Inconnu après un dépassement » est traité
+  comme le dépassement. La même lecture suivie d'une FC utilisable sous le
+  niveau de relâche ne déclenche rien, comme avant ;
+* **voulu : une séance démarrée moins de 10 s après une dernière FC utilisable
+  au-dessus d'un palier est jugée sur cette FC**, si rien n'a été mesuré
+  depuis. La borne de 10 s ne regarde pas dans quelle séance la FC a été lue.
+  Une FC critique vieille de 3 s arrête la nouvelle séance à son premier tic.
+  Une FC au-dessus du palier dur vieille de 2 s la termine 5 s après ce
+  premier tic : le délai est compté dans la séance, pas depuis la lecture.
+  Vieille de 6 s, elle est périmée avant l'échéance et ne déclenche rien ;
+  `hr_stale` prend la suite.
+
+Le runtime garde cette dernière lecture utilisable là où arrivent toutes les
+lectures (`TrainingRuntime.observe_ecg`) et la donne au superviseur dans le
+champ `last_usable_heart_rate` de l'observation. L'observation ne montre
+qu'une lecture par tic alors que plusieurs peuvent arriver entre deux tics (le
+pont ECG tourne dans sa propre tâche et vide un retard en une fois) : ainsi
+toute lecture utilisable compte pour les règles de niveau, y compris celle
+qu'une lecture sans FC a suivie avant le tic. Ce champ est une mesure, il ne
+peut qu'ajouter un verdict, et seules les deux règles de niveau le lisent :
+l'horloge de `hr_stale` et l'historique des règles de tendance restent
+alimentés par la dernière lecture de chaque tic, comme avant.
+
+`SafetyLimits` refuse un délai du palier dur qui ne serait pas plus court que
+`hr_stale_freeze_after` : un tel délai ne pourrait pas s'écouler sur un signal
+perdu. Ce que la règle ne couvre pas est dans
+[securite.md](securite.md#5-le-résiduel-connu) : une FC qui franchit un palier
+pendant que le signal est perdu, et la consigne qui peut encore monter quelques
+secondes après la dernière FC utilisable.
 
 **`hr_drop` en détail** (la règle vasovagale). Seules les lectures dont le
 numéro de séquence a avancé et dont la qualité est `good` comptent.
