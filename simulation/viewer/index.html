@@ -9,7 +9,7 @@
      base address, no form. Change the style or the script below and its hash
      must follow: simulation/tests/test_viewer_page.py gives the value to
      write here. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-qGg2l0sFBTmOyrpXIhYlZRuBXjAZG6wHtr0W8PxbNvQ='; style-src 'sha256-pgXEJqXqJommJWAIfLhnjo349pfpbY/rmc1lzNfMX4o='; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-mnh0bMzTKc1QSMfRP3Sznpx/fE3a11T7jOoNeHzdxWA='; style-src 'sha256-pgXEJqXqJommJWAIfLhnjo349pfpbY/rmc1lzNfMX4o='; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Anheart 2D Simulator</title>
 <style>
@@ -162,7 +162,7 @@ function loadText(text, label) {
       else ingest(value);
     }
   }
-  $("source").textContent = label + (warnings.length ? " — " + warnings.join(", ") : "");
+  $("source").textContent = label + (warnings.length ? ": " + warnings.join(", ") : "");
   afterLoad();
 }
 function afterLoad() {

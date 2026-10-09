@@ -76,12 +76,12 @@ Les jalons disent *quand* une chose est due. Un agent travaille par *fil* : une 
 
 ## 5. Comment suivre le projet
 
-- **Linear** : projet *Roadmap Software*, vue par jalon (A → G) et par fil (étiquette « Fil »). Chaque ticket suit le gabarit : Objectif, Contexte, Exigences `EX-n`, Hors périmètre, Critères d'acceptation, Dépendances, Risque pour la personne à bord, Étiquettes. Un ticket n'est Done que si sa PR est fusionnée avec deux approbations, la CI verte et le commentaire de clôture.
+- **Linear** : projet *Roadmap Software*, vue par jalon (A → G) et par fil (étiquette « Fil »). Chaque ticket suit le gabarit : Objectif, Contexte, Exigences `EX-n`, Hors périmètre, Critères d'acceptation, Dépendances, Risque pour la personne à bord, Étiquettes. Un ticket n'est Done que si sa PR est fusionnée avec l'avis indépendant sur son commit de tête (statut de commit `agent-review/R1`), la CI verte et le commentaire de clôture.
 - **Étiquettes** : domaine (`Raspberry Pi`, `Convex`, `Tableau de bord`, `Sécurité`, `Simulation & tests`, `Validation banc`, `Médical & réglementaire`, `Déploiement & exploitation`, `Documentation`), **Fil** (T1 à T10), **Taille** (S, M, L, XL), **Qui** (agent, humain), **Matériel** (aucun, banc). Filtre pour un agent : `agent` + `aucun`.
 - **Priorités** : Urgent = chemin critique ou risque pour une personne ; Haute = nécessaire au jalon ; Moyenne = amélioration du jalon.
 - **Documents Linear** : *Processus de développement*, *File d'exécution pour les agents*, *Roadmap logicielle : guide de suivi*, *Architecture fonctionnelle cible*, *Architecture DB*, *Stack technique*, *Documentation Anheart : sommaire*.
 - **Règles d'équipe** :
-  - toute PR passe la CI (gates Pi, simulation, Convex, site, audit) et reçoit deux approbations ;
+  - toute PR passe la CI (gates Pi, simulation, Convex, site, audit) et reçoit un avis indépendant, enregistré comme statut de commit `agent-review/R1` sur son commit de tête ;
   - toute PR qui change un comportement met à jour `docs/` ;
   - une release suit [release.md](release.md), et une machine ne reçoit qu'une version du Pi validée pour son état ;
   - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que les deux reviewers écrivent quels invariants ils ont vérifiés ;

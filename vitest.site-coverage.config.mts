@@ -19,7 +19,7 @@ assertMeasured(import.meta.dirname, measure);
 // The coverage of the site, measured and held to its threshold:
 // `npm run coverage:site`, which the `web` job of the CI runs.
 //
-// One run of every test of the site (those of `npm run test:ecg` and those of
+// One run of every test of the site (those of `npm run test:lib` and those of
 // `npm run test:site` together), so that the figure the threshold judges is
 // the one a developer reads at the end of the same command. Every source file
 // of the measured folders counts, loaded by a test or not; only the test

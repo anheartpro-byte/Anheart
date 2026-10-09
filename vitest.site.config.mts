@@ -6,7 +6,7 @@ import { SITE, testsOf } from "./scripts/ci/coverage-thresholds.mjs";
 // minimal document of test-support/, or are rendered to static markup. The
 // pages under app/ are rendered in jsdom, which each of their test files asks
 // for by itself (`// @vitest-environment jsdom`): the suite stays on node for
-// everything else. The tests of lib/ run with `npm run test:ecg`; the
+// everything else. The tests of lib/ run with `npm run test:lib`; the
 // end-to-end browser suite is a separate matter (ANH-83).
 //
 // Which folders this suite runs is written in

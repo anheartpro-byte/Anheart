@@ -106,7 +106,8 @@ servent exactement le fichier du visualiseur, le catalogue de 60 scenarios,
 300 lignes de simulation jusqu'a `final/end`, et un scenario inconnu `error/end`.
 Le detecteur du SDK Vercel resout `simulation_app:app`. Le site passe de nouveau
 `tsc --noEmit` et son build Next.js (28 pages). Ces controles ne remplacent pas
-le resultat de la prochaine preversion distante ni les deux approbations requises.
+le resultat de la prochaine preversion distante ni la revue independante requise
+(statut de commit `agent-review/R1`).
 
 La preversion de `518f146` trouve maintenant le point d'entree, mais son
 installation par defaut echoue : `uv lock` requiert la table `[project]`
