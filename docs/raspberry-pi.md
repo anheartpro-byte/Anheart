@@ -1642,7 +1642,11 @@ Ce que fait la console :
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les
   majeures que le serveur dit servir. Elle continue de fonctionner comme sans
-  tableau de bord.
+  tableau de bord. La phrase reste courte quoi que le serveur envoie : chaque
+  majeure n'est retenue qu'une fois, les quatre premières sont nommées et les
+  autres comptées (`... vs 2, 3, 4, 5 et 596 autres`), 100 caractères au plus.
+  C'est cette phrase qui va dans la liste d'événements, dans `events.jsonl`,
+  dans le journal de la console et sous la pastille **Serveur**.
 * **Un serveur d'une autre majeure** : chaque réponse de
   `/api/machine/training/poll` annonce `server_contract_version`. Si sa majeure
   n'est pas celle de la console, ou si la réponse n'annonce aucune version

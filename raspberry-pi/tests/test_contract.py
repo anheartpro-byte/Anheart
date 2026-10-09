@@ -28,6 +28,8 @@ from src.contract import (
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    MAJORS_SHOWN,
+    MAX_REFUSAL_SENTENCE,
     SERVER_VERSION_FIELD,
     UNKNOWN_SOFTWARE_VERSION,
     VERSION_PATH,
@@ -143,6 +145,8 @@ def test_a_sentence_is_not_a_stable_code(value: object) -> None:
         (["1"], ("1",)),
         (["1", "2"], ("1", "2")),
         (["1", 2, None, "x", "02", "3"], ("1", "3")),
+        # Each major once, in the order first listed.
+        (["2", "1", "2", "2", "1", "3"], ("2", "1", "3")),
         ([], ()),
         (None, ()),
         ("1", ()),
@@ -225,6 +229,73 @@ def test_ex3_a_refused_contract_is_worded_with_what_the_server_serves(
         unsupported_refusal(supported)
         == f"serveur incompatible (contrat {CONTRACT_VERSION} vs {theirs})"
     )
+
+
+def test_what_is_kept_of_a_list_of_majors_is_bounded_whatever_its_length() -> None:
+    """A major is at most four digits: ten thousand of them exist, however long the list."""
+    listed = [str(major) for major in range(10_000)] * 30 + ["10000", "99999", "x"] * 1000
+    kept = majors_of(listed)
+    assert len(listed) == 303_000
+    assert kept == tuple(str(major) for major in range(10_000))
+
+
+@pytest.mark.parametrize(
+    ("count", "theirs"),
+    [
+        (1, "2"),
+        (4, "2, 3, 4, 5"),
+        (5, "2, 3, 4, 5 et 1 autre"),
+        (6, "2, 3, 4, 5 et 2 autres"),
+        (600, "2, 3, 4, 5 et 596 autres"),
+        (9998, "2, 3, 4, 5 et 9994 autres"),
+    ],
+)
+def test_a_426_that_lists_many_majors_names_the_first_few_and_counts_the_others(
+    count: int, theirs: str
+) -> None:
+    """The sentence goes to the operator, the record and the log: it stays a sentence."""
+    assert MAJORS_SHOWN == 4
+    supported = tuple(str(major) for major in range(2, 2 + count))
+    sentence = unsupported_refusal(supported)
+    assert sentence == f"serveur incompatible (contrat {CONTRACT_VERSION} vs {theirs})"
+    assert len(sentence) <= MAX_REFUSAL_SENTENCE
+
+
+@given(
+    st.one_of(
+        st.lists(st.one_of(st.integers(0, 12_000).map(str), st.text(max_size=6), st.none())),
+        # Long lists of majors that are all well formed: what the bound is for.
+        st.lists(st.integers(0, 9999).map(str), min_size=20, max_size=300),
+    )
+)
+def test_no_list_a_server_sends_makes_the_sentence_longer_than_its_bound(
+    listed: list[str | None],
+) -> None:
+    sentence = unsupported_refusal(majors_of(listed))
+    assert len(sentence) <= MAX_REFUSAL_SENTENCE
+    # The part every reader of the sentence relies on is as it always was.
+    assert sentence.startswith(f"serveur incompatible (contrat {CONTRACT_VERSION} vs ")
+    assert sentence.endswith(")")
+    assert sentence.isprintable()
+
+
+@given(st.one_of(st.none(), st.integers(), st.text(max_size=40)))
+def test_no_version_a_server_announces_makes_the_sentence_longer_than_its_bound(
+    announced: object,
+) -> None:
+    sentence = server_refusal(announced)
+    assert sentence is None or len(sentence) <= MAX_REFUSAL_SENTENCE
+
+
+def test_the_bound_holds_for_the_longest_contract_version_this_console_could_speak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract, "CONTRACT_VERSION", ContractVersion("9999.9999"))
+    worst = unsupported_refusal(tuple(str(major) for major in range(9999, -1, -1)))
+    assert (
+        worst == "serveur incompatible (contrat 9999.9999 vs 9999, 9998, 9997, 9996 et 9996 autres)"
+    )
+    assert len(worst) <= MAX_REFUSAL_SENTENCE
 
 
 # =========================================================================

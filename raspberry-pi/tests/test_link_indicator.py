@@ -28,14 +28,24 @@ import pytest
 
 from src import local_panel
 from src.clock import ManualClock
-from src.cloud_sync import HEARTBEAT_PERIOD, CloudError, Document, Refused
+from src.cloud_sync import (
+    HEARTBEAT_PERIOD,
+    STATUS_PERIOD,
+    CloudError,
+    Document,
+    HttpxTransport,
+    Refused,
+)
 from src.contract import (
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    MAX_REFUSAL_SENTENCE,
+    SERVER_VERSION_FIELD,
     VERSION_PATH,
     ErrorCode,
     read_software_version,
 )
+from src.control_surface import EventKind as SurfaceEvent
 from src.link_state import MAX_DETAIL, UNREACHABLE_AFTER, LinkHealth, LinkState, LinkStatus
 from src.local_config import RETIRED_KEYS, CloudConfig, load_local_config, retired_keys
 from src.local_panel import EXIT_CONFIG, main
@@ -47,25 +57,30 @@ from src.record.schema import EventKind
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
+from src.training.types import Occupancy
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.schemas import PanelRow
 from tests.fake_dashboard import END, LOCAL, TELEMETRY, FakeDashboard
 from tests.test_cloud_contract import HEARTBEAT, OTHER_MAJOR, STATUS, unsupported
 from tests.test_cloud_sync import (
     DOWN,
+    LAUNCH,
     NO,
     POLL_PATH,
     Dashboard,
     Reply,
     Rig,
     launch_answer,
+    linked,
     manual,
     ok,
     rig,
     status_answer,
+    transport_answering,
 )
 from tests.test_failure_rig import BENCH_ENV, OPERATOR, TICK, attest, make_rig
 from tests.test_failure_rig import Rig as Console
+from tests.test_record_wiring import recording_linked
 from tests.test_web_api import parse
 
 SENTENCE: Final[str] = f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2)"
@@ -251,6 +266,42 @@ async def test_a_refused_contract_stays_incompatible_while_the_stop_question_is_
     assert read_link(r) == LinkStatus(LinkState.REACHABLE, "", Seconds(0.0))
 
 
+async def test_the_stop_question_keeps_the_last_answer_fresh_and_proves_nothing_of_the_contract(
+    tmp_path: Path,
+) -> None:
+    """The stop watch asks every 3 s, from its own task: an answer, never a proof.
+
+    After a 426, everything but the stop question goes silent. Its answers
+    alone keep the link from reading unreachable, and its last answer is
+    never more than a few seconds old; they do not make it read reachable.
+    """
+    r = rig(tmp_path)
+    r.dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
+    r.sync.session_started(manual(r.clock))
+    r.runtime.state = RuntimeState.RUNNING
+    await r.step()
+    await r.step()
+    every_route(r.dashboard, unsupported("2"), status=status_answer())
+    await r.step(float(HEARTBEAT_PERIOD))
+    assert read_link(r).state is LinkState.INCOMPATIBLE
+
+    every_route(r.dashboard, DOWN, status=status_answer())
+    asked = len(r.dashboard.to(STATUS))
+    for _ in range(90):
+        await r.step()
+        status = read_link(r)
+        assert status.state is LinkState.INCOMPATIBLE
+        assert status.last_answer_age is not None
+        assert status.last_answer_age <= STATUS_PERIOD
+    assert len(r.dashboard.to(STATUS)) >= asked + 25
+
+    # The stop question falls silent too: now nothing answers, and that is what is read.
+    every_route(r.dashboard, DOWN)
+    for _ in range(int(UNREACHABLE_AFTER) + int(STATUS_PERIOD) + 1):
+        await r.step()
+    assert read_link(r).state is LinkState.UNREACHABLE
+
+
 async def test_a_poll_answer_of_another_major_reads_incompatible_until_a_poll_agrees(
     tmp_path: Path,
 ) -> None:
@@ -304,18 +355,19 @@ async def test_a_refusal_of_what_was_sent_is_a_dashboard_that_works(tmp_path: Pa
         assert read_link(r).state is LinkState.REACHABLE
 
 
-async def test_what_the_dashboard_sends_reaches_the_indicator_bounded_and_on_one_line(
+async def test_a_426_listing_hundreds_of_majors_reaches_the_indicator_as_a_short_sentence(
     tmp_path: Path,
 ) -> None:
     r = rig(tmp_path)
     majors = tuple(str(major) for major in range(2, 600))
     every_route(r.dashboard, unsupported(*majors))
     await r.step()
-    detail = read_link(r).detail
-    assert read_link(r).state is LinkState.INCOMPATIBLE
-    assert len(detail) == MAX_DETAIL
-    assert detail.startswith(f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2, 3, 4")
-    assert detail.isprintable()
+    status = read_link(r)
+    assert status.state is LinkState.INCOMPATIBLE
+    assert status.detail == (
+        f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2, 3, 4, 5 et 594 autres)"
+    )
+    assert len(status.detail) <= MAX_REFUSAL_SENTENCE <= MAX_DETAIL
 
 
 async def test_reading_the_indicator_asks_the_dashboard_nothing(tmp_path: Path) -> None:
@@ -630,6 +682,108 @@ def the_record_the_page_and_the_heartbeat_carry_the_version_of_the_build(
     assert announced_versions(s.dashboard) == [BUILT]
 
 
+MANY: Final[int] = 5000
+"""How many majors the dashboard of the next test lists in its 426."""
+
+EVENT_LINE_MAX: Final[int] = 200
+"""The most characters the line of ``events.jsonl`` that holds the notice may take."""
+
+
+def refusing_with_thousands_of_majors(request: httpx.Request) -> httpx.Response:
+    """A dashboard whose 426 lists :data:`MANY` majors, each twice, and things that are none."""
+    if request.url.path == STATUS:
+        return httpx.Response(
+            200, json={"active": True, "stopRequested": False, SERVER_VERSION_FIELD: "2.0"}
+        )
+    majors = [str(major) for major in range(2, 2 + MANY)]
+    supported: list[str | int | None] = [*majors, *majors]
+    supported.extend(["x" * 5000, 7, None, "<script>alert(1)</script>"])
+    return httpx.Response(
+        426,
+        json={
+            "error": "contract_unsupported",
+            "message": "Unsupported machine contract " + "!" * 20_000,
+            "supported": supported,
+        },
+    )
+
+
+async def test_a_426_listing_thousands_of_majors_stays_a_short_line_on_the_page_and_in_the_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Text that comes from the link reaches the operator bounded: the event and the record.
+
+    The whole path, from the bytes of the answer: the real HTTP transport
+    reads the 426, the link words it, the console shows it and the session
+    record keeps it. The dashboard lists five thousand majors, twice.
+    """
+    caplog.set_level(logging.WARNING, logger="src.cloud_sync")
+    sentence = (
+        f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2, 3, 4, 5 et {MANY - 4} autres)"
+    )
+    clock = ManualClock(Monotonic(10.0), UnixMillis(TRUE_EPOCH_MS))
+    journal = Journal(tmp_path / "records", clock)
+    transport = transport_answering(refusing_with_thousands_of_majors)
+
+    def to_the_dashboard(_config: CloudConfig) -> HttpxTransport:
+        return transport
+
+    console, _ = make_rig(
+        tmp_path, env=LINKED_ENV, clock=clock, transport=to_the_dashboard, journal=journal
+    )
+    async with console.http() as browser:
+        await attest(browser)
+        started = await browser.post(
+            "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+        )
+        assert started.status_code == 202, started.text
+        for _ in range(int(HEARTBEAT_PERIOD) + 3):
+            for _tick in range(round(1.0 / TICK)):
+                await console.tick(float(TICK))
+                journal.drain()
+                await console.panel.cloud_stop_step()
+            await console.panel.cloud_step()
+        row = parse(PanelRow, await browser.get("/api/panel"))
+        assert console.panel.runtime.state is RuntimeState.RUNNING, "the session goes on"
+        stopped = await browser.post(
+            "/api/session/stop", json={"operator": OPERATOR, "reason": "fini"}
+        )
+        assert stopped.status_code == 202, stopped.text
+        for _ in range(200):
+            await console.tick(float(TICK))
+            journal.drain()
+    await console.panel.close()
+    await transport.close()
+
+    # What the operator was shown: the event of the list, and the standing chip.
+    shown = [event.detail for event in console.events if event.kind is SurfaceEvent.DASHBOARD]
+    assert shown, "the notice reached the operator's event list"
+    assert set(shown) == {sentence}
+    assert len(sentence) <= MAX_REFUSAL_SENTENCE
+    assert (row.dashboard.state, row.dashboard.detail) == ("incompatible", sentence)
+
+    # What the record keeps: one short line, whole, and a record that still reads back clean.
+    record, recording = recording_of(journal)
+    assert recording.warnings == ()
+    kept = [event.detail for event in recording.events if "incompatible" in event.detail]
+    assert set(kept) == {f"dashboard: {sentence}"}
+    lines = [
+        line
+        for line in (record / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if "serveur incompatible" in line
+    ]
+    assert len(lines) == len(kept) >= 1
+    assert max(len(line) for line in lines) <= EVENT_LINE_MAX
+    on_disk = b"".join(p.read_bytes() for p in journal.root.rglob("*") if p.is_file())
+    assert b"<script>" not in on_disk
+    assert b"!!!!" not in on_disk, "the dashboard's own sentence is not in the record"
+
+    # The log names the sentence too, and what it keeps of the answer is the code, not the list.
+    said = [record_.getMessage() for record_ in caplog.records if sentence in record_.getMessage()]
+    assert said == [f"dashboard: {sentence}"]
+    assert all("2, 3, 4, 5, 6" not in record_.getMessage() for record_ in caplog.records)
+
+
 async def test_ex2_a_console_without_a_machine_key_shows_its_version_and_a_link_not_configured(
     tmp_path: Path,
 ) -> None:
@@ -722,10 +876,13 @@ class Counted(LinkHealth):
     """A :class:`LinkHealth` that says which of its entries were called, and does the same."""
 
     calls: ClassVar[list[str]] = []
+    proofs: ClassVar[list[bool]] = []
+    """For each ``answered``, in order: whether it was taken as proof of the contract."""
 
     @override
     def answered(self, now: Monotonic, *, contract: bool) -> None:
         Counted.calls.append("answered")
+        Counted.proofs.append(contract)
         super().answered(now, contract=contract)
 
     @override
@@ -759,6 +916,90 @@ class Counted(LinkHealth):
         return super().status(now)
 
 
+FEEDS: Final[frozenset[str]] = frozenset(
+    {"answered", "key_refused", "contract_refused", "silent", "errored"}
+)
+"""The entries of :class:`LinkHealth` an exchange is told through, one per exchange."""
+
+
+def heard_one_for_one(dashboard: Dashboard) -> list[str]:
+    """Check the indicator was told of every exchange ``dashboard`` saw, in order.
+
+    One entry per request, and for a success whether it was taken as proof of
+    the contract: every route but the stop question's. The paths asked, each
+    once, in the order first met.
+    """
+    feeds = [name for name in Counted.calls if name in FEEDS]
+    assert len(feeds) == len(dashboard.calls), "an exchange the indicator never heard of"
+    assert set(feeds) == {"answered"}, "this dashboard answers everything"
+    assert len(Counted.proofs) == len(dashboard.calls)
+    for (_method, path, _body), proof in zip(dashboard.calls, Counted.proofs, strict=True):
+        assert proof == (path != STATUS), path
+    return list(dict.fromkeys(path for _method, path, _body in dashboard.calls))
+
+
+async def test_the_indicator_hears_every_exchange_of_a_session_started_at_the_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The greeting (the declaration), the sending, the stop question, the end: all of them.
+
+    The real console with its record and its two link tasks. Every request the
+    dashboard received was told to the indicator once, and only the stop
+    question's answers were not taken as proof of the contract.
+    """
+    monkeypatch.setattr(local_panel, "LinkHealth", Counted)
+    Counted.calls.clear()
+    Counted.proofs.clear()
+    linked_console, dashboard, journal = recording_linked(tmp_path)
+    dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
+    surface = linked_console.panel.surface
+    started = surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(started, Ok)
+    for _ in range(12):
+        await linked_console.run(1.0)
+        journal.drain()
+    ended = surface.submit_end(operator=OPERATOR, reason="fini")
+    assert isinstance(ended, Ok)
+    for _ in range(14):
+        await linked_console.run(1.0)
+        journal.drain()
+    await linked_console.panel.close()
+
+    asked = heard_one_for_one(dashboard)
+    assert set(asked) >= {
+        HEARTBEAT,
+        "/api/machine/profiles",
+        LOCAL,
+        TELEMETRY,
+        "/api/machine/training/events",
+        STATUS,
+        END,
+        POLL_PATH,
+    }
+    assert len(dashboard.to(STATUS)) >= 3, "the stop watch asked all along"
+
+
+async def test_the_indicator_hears_the_greeting_of_a_session_launched_from_the_dashboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch: its start is confirmed by the stop watch's task, then its stop is asked."""
+    monkeypatch.setattr(local_panel, "LinkHealth", Counted)
+    Counted.calls.clear()
+    Counted.proofs.clear()
+    linked_console = linked(tmp_path)
+    dashboard = linked_console.dashboard
+    dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await linked_console.run(6.0)
+    assert linked_console.panel.runtime.state is RuntimeState.RUNNING
+    dashboard.answer(STATUS, status_answer(stop=True))
+    await linked_console.run(4.0)
+    assert linked_console.panel.runtime.stop_reason == "arret demande depuis le tableau de bord"
+    await linked_console.panel.close()
+
+    asked = heard_one_for_one(dashboard)
+    assert set(asked) >= {POLL_PATH, "/api/machine/training/start", STATUS, HEARTBEAT}
+
+
 async def test_the_control_tick_neither_feeds_nor_reads_the_indicator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -771,6 +1012,7 @@ async def test_the_control_tick_neither_feeds_nor_reads_the_indicator(
     monkeypatch.setattr(local_panel, "LinkHealth", Counted)
     calls = Counted.calls
     calls.clear()
+    Counted.proofs.clear()
     s = scene(tmp_path)
     async with s.browser as browser:
         await attest(browser)

@@ -271,8 +271,9 @@ La ligne sous les pastilles donne le motif, puis l'âge de la dernière réponse
 (en minutes au-delà de 100 s : `il y a 3 min`). Sans clé elle dit
 `aucune cle de machine (MACHINE_API_KEY) : rien n'est echange`. Le motif tient sur une
 ligne de 160 caractères au plus, écrite comme du texte. De ce que le tableau de bord
-envoie, seuls y entrent le code HTTP, son code stable et les majeures qu'il dit servir ;
-sa phrase reste dans le journal de la console.
+envoie, seuls y entrent le code HTTP, son code stable et les majeures qu'il dit servir
+(les quatre premières, puis le nombre des autres) ; sa phrase reste dans le journal de
+la console.
 
 Ce qu'il faut savoir pour la lire :
 
@@ -1189,7 +1190,7 @@ d'opérateur, et n'est jamais écrit dans la note de la carte Mode MANUEL.
 
 | Message | Sens |
 |---|---|
-| `serveur incompatible (contrat <X> vs <Y>)` | le tableau de bord ne parle pas la même majeure de contrat que cette console (X : la version de la console ; Y : celle du serveur, les majeures qu'il dit servir, ou `inconnu` s'il n'en annonce aucune). Aucun lancement distant n'est armé tant que cela dure ; la console fonctionne comme sans tableau de bord. Mettre à jour le côté en retard. |
+| `serveur incompatible (contrat <X> vs <Y>)` | le tableau de bord ne parle pas la même majeure de contrat que cette console (X : la version de la console ; Y : celle du serveur, les majeures qu'il dit servir, ou `inconnu` s'il n'en annonce aucune ; au-delà de quatre majeures, les quatre premières puis le nombre des autres, par exemple `2, 3, 4, 5 et 596 autres`). La phrase fait 100 caractères au plus, quoi que le serveur envoie. Aucun lancement distant n'est armé tant que cela dure ; la console fonctionne comme sans tableau de bord. Mettre à jour le côté en retard. |
 
 Le message est émis pour chaque lancement refusé, quand il change, et sinon
 rappelé toutes les 60 s tant que l'incompatibilité dure. Entre deux rappels, l'état se

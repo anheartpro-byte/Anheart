@@ -77,6 +77,18 @@ VERSION_PATH: Final[Path] = Path(__file__).resolve().parent.parent / "VERSION"
 UNKNOWN_THEIRS: Final[str] = "inconnu"
 """What the console shows for a server version it could not read."""
 
+MAJORS_SHOWN: Final[int] = 4
+"""How many of the majors a 426 lists the console's sentence names; the others are counted.
+
+A dashboard serves one major, two while a migration lasts. The list is the
+dashboard's to send all the same, and the sentence goes to the operator's
+event list, to the session record and to the log: it names the first few and
+says how many more there were, whatever was sent.
+"""
+
+MAX_REFUSAL_SENTENCE: Final[int] = 100
+"""The most characters :func:`server_refusal` and :func:`unsupported_refusal` ever give."""
+
 # ``[0-9]`` and never ``\d``: in a ``str`` pattern ``\d`` also matches the digits
 # of every other script, and a version is ASCII.
 _VERSION: Final[re.Pattern[str]] = re.compile(r"(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})")
@@ -105,13 +117,20 @@ def error_code_of(value: object) -> ErrorCode | None:
 
 
 def majors_of(value: object) -> tuple[str, ...]:
-    """The contract majors a 426 says the server serves; anything unreadable is left out."""
+    """The contract majors a 426 says the server serves; anything unreadable is left out.
+
+    Each major once, in the order first listed. A major is at most four
+    digits, so what is kept of the list is bounded whatever its length was:
+    ten thousand entries at the very most, and one or two in practice.
+    """
     if not isinstance(value, list):
         return ()
     # A JSON array: its items are untrusted, so each is narrowed before use.
     items = cast("Sequence[object]", value)
     return tuple(
-        item for item in items if isinstance(item, str) and _MAJOR.fullmatch(item) is not None
+        dict.fromkeys(
+            item for item in items if isinstance(item, str) and _MAJOR.fullmatch(item) is not None
+        )
     )
 
 
@@ -136,8 +155,19 @@ def server_refusal(announced: object) -> str | None:
 
 
 def unsupported_refusal(supported: Sequence[str]) -> str:
-    """The sentence for a 426: this console's version against the majors the server serves."""
-    return incompatible_server(", ".join(supported) if supported else UNKNOWN_THEIRS)
+    """The sentence for a 426: this console's version against the majors the server serves.
+
+    The first :data:`MAJORS_SHOWN` are named and the others counted
+    (``2, 3, 4, 5 et 596 autres``): the sentence stays a sentence, under
+    :data:`MAX_REFUSAL_SENTENCE` characters, however many majors were listed.
+    """
+    if not supported:
+        return incompatible_server(UNKNOWN_THEIRS)
+    named = ", ".join(supported[:MAJORS_SHOWN])
+    more = len(supported) - MAJORS_SHOWN
+    if more <= 0:
+        return incompatible_server(named)
+    return incompatible_server(f"{named} et {more} {'autre' if more == 1 else 'autres'}")
 
 
 def read_software_version(path: Path = VERSION_PATH) -> SoftwareVersion:

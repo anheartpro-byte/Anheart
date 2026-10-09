@@ -99,7 +99,7 @@ gros (nombre de tests collectés) :
 | `test_cloud_sync.py` | 113 | le lien avec Convex (lancement, arrêt, réseau mort, ce que chaque réponse du serveur veut dire) |
 | `test_record_cursor.py`, `test_record_upload.py`, `test_record_uplink.py` | 33 + 64 + 139 | l'envoi des séances relues sur le disque : curseur, relecture à 1 Hz, ordre, reprise, réponses ([détail](#synchronisation-par-relecture-du-journal-local-anh-129)) |
 | `test_cloud_journal_e2e.py`, `test_cloud_journal_wiring.py` | 2 + 39 | le test d'acceptation de la synchronisation (coupure, console tuée, reprise) et son câblage dans la vraie console |
-| `test_link_state.py`, `test_link_indicator.py` | 26 + 20 | l'état du lien avec le tableau de bord que la page affiche (pastille **Serveur**) : chaque état, le délai de 25 s avant « injoignable », l'absence de clignotement sur une requête perdue, le lien réel face à un tableau de bord scripté ; et le test d'acceptation d'un tableau de bord qui répond 426 au milieu d'une séance, sur la console en simulation |
+| `test_link_state.py`, `test_link_indicator.py` | 26 + 24 | l'état du lien avec le tableau de bord que la page affiche (pastille **Serveur**) : chaque état, le délai de 25 s avant « injoignable », l'absence de clignotement sur une requête perdue, le lien réel face à un tableau de bord scripté ; et le test d'acceptation d'un tableau de bord qui répond 426 au milieu d'une séance, sur la console en simulation |
 | `test_sensor_*.py` | 35 à 57 chacun | un fichier par capteur (ECG, EDA, SpO2, RESP, EMG, LUX) |
 | `test_presence_*.py`, `test_panel_presence.py` | 147 au total | la caméra / présence opérateur |
 | `test_local_panel.py`, `test_local_panel_e2e.py` | 60 + 6 | la console assemblée |
