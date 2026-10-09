@@ -604,8 +604,12 @@ donc, dans sa propre configuration, `gc.auto = 0`, `maintenance.auto = false`,
 `receive.autogc = false` et les deux `autoDetach` à `false`. Dans la
 configuration du dépôt, et non par l'environnement : ce que disent
 `GIT_CONFIG_COUNT` et ses pareils n'atteint pas le dépôt qui reçoit un push
-local. La suppression du dossier, elle, réessaie quelques fois si une entrée y
-apparaît pendant qu'elle le vide. Deux tests tiennent ce support : la trace de
+local. La suppression du dossier, elle, recommence en entier, un peu plus tard
+à chaque fois, si une entrée y apparaît pendant qu'elle le vide. Elle ne s'en
+remet pas à l'option `maxRetries` de `rmSync` : selon la version de Node, cette
+option ne répète que le dernier `rmdir`, qu'une entrée arrivée tard fait
+échouer à chaque essai (constaté sur la CI et reproduit avec Node 22 :
+`ENOTEMPTY` après ses dix essais, là où Node 26 y arrive). Deux tests tiennent ce support : la trace de
 git ne montre plus aucune maintenance lancée, d'un côté ou de l'autre d'un
 push, ni par `release.sh` ; un dossier où un processus écrit encore pendant un
 tiers de seconde est supprimé quand même. Aucune assertion des tests de release

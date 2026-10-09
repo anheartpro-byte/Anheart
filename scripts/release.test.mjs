@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -92,14 +93,33 @@ function quiet(gitDir) {
   appendFileSync(join(gitDir, "config"), QUIET);
 }
 
+/** What the removal of a directory answers while something still writes in it. */
+const STILL_WRITTEN = new Set(["ENOTEMPTY", "EBUSY", "EPERM", "EEXIST"]);
+
+/** How many times a throwaway directory is emptied before its removal is given up: 3.3 s in all. */
+const REMOVALS = 12;
+
 /**
  * Remove a throwaway directory, whatever is left in it. Nothing should still
  * be writing there (see QUIET). Should something be, a directory that gains an
- * entry while it is being emptied is tried again, a little later each time,
+ * entry while it is being emptied is emptied again, a little later each time,
  * instead of failing the test that used it.
+ *
+ * The whole removal is done again at each try, here, and not by the
+ * `maxRetries` of `rmSync`: depending on the version of Node, that option only
+ * repeats the last `rmdir`, which an entry that came late fails every time
+ * (seen on the CI: ENOTEMPTY after its ten tries).
  */
-function remove(dir) {
-  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+async function remove(dir) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= REMOVALS || !STILL_WRITTEN.has(error?.code)) throw error;
+      await pause(attempt * 50);
+    }
+  }
 }
 
 function write(repo, path, content) {
@@ -431,7 +451,7 @@ test("a throwaway directory is removed even when an entry appears while it is be
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   assert.ok(existsSync(join(objects, "late-0")), "the writer never wrote");
-  remove(dir);
+  await remove(dir);
   await over;
   assert.ok(!existsSync(dir), "the directory is still there");
 });
