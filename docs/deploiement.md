@@ -382,7 +382,12 @@ dossiers d'enregistrement sont les curseurs de la synchronisation
 ([raspberry-pi.md §8.1](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) :
 supprimer ou abîmer un curseur fait seulement **renvoyer** l'enregistrement
 depuis son début, au démarrage suivant ; le serveur ne stocke qu'une fois ce
-qu'il a déjà.
+qu'il a déjà. Ne pas supprimer `.sync-baseline.json` sans le vouloir : la
+liste serait refaite de tout ce qui n'a pas de curseur, et un enregistrement
+qui attendait d'être envoyé ne le serait plus (la console le dit, avec le
+nombre). Un enregistrement fait plus tard sans clé configurée est envoyé dès
+qu'une clé l'est de nouveau
+([raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)).
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.

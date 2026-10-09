@@ -93,6 +93,9 @@ MISALIGNED: Final[str] = "cursor_misaligned"
 OTHER_RECORD: Final[str] = "of another record"
 """A cursor that names another record than the one it sits next to."""
 
+_NAMED: Final[re.Pattern[str]] = re.compile(r"\d{4}-\d{2}-\d{2}T\d{6}Z_([A-Za-z0-9_-]+)")
+"""A record directory as the writer names it: the stamp of its start, then its identifier."""
+
 _EVENT_KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ACTOR_MAX: Final[int] = 64
 
@@ -150,6 +153,19 @@ class Head:
 
     closed: Ended | None
     """``None`` while the manifest is open: the session runs, or was cut short."""
+
+
+def reference_in(name: str) -> str | None:
+    """The reference a session started at the machine carries, from its record's name alone.
+
+    The writer names a record directory after the stamp of its start and the
+    identifier of its session: the dashboard's for a launch from there, the
+    record's own ``local_ref`` for a session started at the machine. Known
+    without reading the disk, it lets such a session be declared before any
+    file of its record is read. ``None`` for a name that is not a record's.
+    """
+    match = _NAMED.fullmatch(name)
+    return None if match is None else match.group(1)
 
 
 def read_head(record: Path) -> Result[Head, RecordError]:
@@ -603,7 +619,20 @@ def open_record(root: Path, name: str) -> Result[Opened, RecordError]:
     return Ok(Opened(record, head.value, cursor, last_tick.value))
 
 
-def owed_records(root: Path, current: str | None = None) -> Result[tuple[str, ...], RecordError]:
+@dataclass(frozen=True, slots=True)
+class Listed:
+    """What one listing of the records directory found."""
+
+    names: tuple[str, ...]
+    """The records the dashboard is still owed, oldest first."""
+
+    set_aside: int = 0
+    """Records without a cursor that were put on a list of older records made AGAIN: the
+    list was lost or unreadable, though the synchronisation had been here before. One of
+    them may have been waiting to be sent; it will not be."""
+
+
+def owed_records(root: Path, current: str | None = None) -> Result[Listed, RecordError]:
     """The records under ``root`` the dashboard is still owed, oldest first.
 
     Owed: a record whose cursor does not say ``complete``, or cannot be read,
@@ -621,7 +650,7 @@ def owed_records(root: Path, current: str | None = None) -> Result[tuple[str, ..
         found = records(root)
     except OSError as error:
         return Err(RecordError("read", describe_os_error(error)))
-    left_alone = _left_alone(root, found, current)
+    left_alone, set_aside = _left_alone(root, found, current)
     owed: list[str] = []
     for record in found:
         if record.name == current:
@@ -634,33 +663,41 @@ def owed_records(root: Path, current: str | None = None) -> Result[tuple[str, ..
         if isinstance(cursor, Cursor) and cursor.state == "complete" and _is_about(cursor, record):
             continue
         owed.append(record.name)
-    return Ok(tuple(owed))
+    return Ok(Listed(tuple(owed), set_aside))
 
 
-def _left_alone(root: Path, found: Sequence[Path], current: str | None) -> frozenset[str]:
-    """The records made before the synchronisation existed here: listed once, then kept."""
+def _left_alone(
+    root: Path, found: Sequence[Path], current: str | None
+) -> tuple[frozenset[str], int]:
+    """The records made before the synchronisation existed here: listed once, then kept.
+
+    With them, how many records were set aside by a list that had to be made
+    again (see :class:`Listed`): 0 for a list that was read, and for the
+    first one ever made here.
+    """
     baseline = load_baseline(root)
-    if baseline is None:
-        if (root / BASELINE_NAME).exists():
-            _logger.warning(
-                "dashboard: the list of the records made before the synchronisation cannot "
-                "be read: it is made again from the records that have no cursor now"
-            )
-        baseline = Baseline(
-            left_alone=tuple(
-                record.name
-                for record in found
-                if record.name != current and isinstance(load(record), NoCursor)
-            )
+    if baseline is not None:
+        return frozenset(baseline.left_alone), 0
+    others = [(record.name, load(record)) for record in found if record.name != current]
+    names = tuple(name for name, cursor in others if isinstance(cursor, NoCursor))
+    # A cursor next to another record, or the remains of a list: this is not the first time.
+    been_here = (root / BASELINE_NAME).exists() or len(names) < len(others)
+    set_aside = len(names) if been_here else 0
+    if set_aside:
+        _logger.warning(
+            "dashboard: the list of the records made before the synchronisation is missing "
+            "or cannot be read: it is made again, and the %d records that have no cursor now "
+            "are set aside (one made since and never tied to a cursor is not sent)",
+            set_aside,
         )
-        wrote = store_baseline(root, baseline)
-        if isinstance(wrote, Err):
-            _logger.warning(
-                "dashboard: the list of the records made before the synchronisation could "
-                "not be written (%s): it is made again at the next start",
-                wrote.error.detail,
-            )
-    return frozenset(baseline.left_alone)
+    wrote = store_baseline(root, Baseline(left_alone=names))
+    if isinstance(wrote, Err):
+        _logger.warning(
+            "dashboard: the list of the records made before the synchronisation could "
+            "not be written (%s): it is made again at the next start",
+            wrote.error.detail,
+        )
+    return frozenset(names), set_aside
 
 
 def _is_about(cursor: Cursor, record: Path) -> bool:

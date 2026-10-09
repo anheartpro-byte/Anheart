@@ -59,6 +59,17 @@ fichier (`create_private` et `write_file`, `src/record/writer.py`), y compris
 pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côté
 d'un dossier (un marqueur de dépôt) le crée de la même façon.
 
+**Ce qui part au tableau de bord.** De tout enregistrement fait depuis le
+premier démarrage de la console avec un tableau de bord configuré sur ce
+répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
+(ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`). Cela vaut
+aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
+configuré**, s'il est postérieur à ce premier démarrage : il part au premier
+démarrage où une clé est de nouveau en place. Les enregistrements antérieurs
+à ce premier démarrage ne partent jamais. Le détail, et le seul moyen de
+garder locaux les seconds, sont dans
+[raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console).
+
 ## Manifeste
 
 Tous les champs suivants sont présents, y compris ceux dont la valeur est

@@ -14,7 +14,11 @@ One session, in order
    same session; or **confirmed** (a launch from the dashboard). Nothing is
    sent before that. A confirmation the dashboard answers with anything but a
    yes has the running session stopped at once: the machine does not run on
-   for a session the dashboard does not hold started;
+   for a session the dashboard does not hold started. For the session that is
+   RUNNING this is :meth:`RecordUplink.greet`, called from the stop watch's
+   task and not from the sending: it is the first thing the dashboard hears
+   of a session and what lets its stop be asked for, so it waits behind no
+   reading of a record and no catching up, and reads nothing from the disk;
 2. **telemetry** then **events**, read from the cursor, one bounded batch at a
    time. The cursor moves when the dashboard acknowledges a batch, and is then
    written to disk;
@@ -96,6 +100,7 @@ from src.record.upload import (
     owed_records,
     read_batch,
     read_head,
+    reference_in,
 )
 from src.result import Err, Ok, Result
 from src.units import Monotonic, Seconds, UnixMillis, elapsed
@@ -156,11 +161,16 @@ DECLARED_WITHOUT_RECORD: Final[str] = (
     "que si l'enregistrement apparait"
 )
 CURSOR_UNWRITTEN: Final[str] = (
-    "curseur de synchronisation non ecrit : apres un redemarrage, la seance serait renvoyee "
-    "au tableau de bord depuis son debut"
+    "curseur de synchronisation non ecrit : si la console redemarre, la suite de cette "
+    "seance pourrait ne pas arriver au tableau de bord"
+)
+LIST_LOST: Final[str] = (
+    "liste des enregistrements anterieurs a la synchronisation perdue et refaite : "
+    "{count} enregistrement(s) sans curseur mis de cote, non envoyes au tableau de bord"
 )
 """What the operator reads on the console when a session will not reach the dashboard as
-it should. Said once per session for the first, once per failure of the disk for the second."""
+it should. Said once per session for the first, once per failure of the disk for the
+second, once per start of the console for the third."""
 
 START_UNKNOWN: Final[str] = "route de confirmation inconnue du tableau de bord"
 """Why a start was not taken by a dashboard that does not know the route at all."""
@@ -310,6 +320,12 @@ class _Owed:
 
     local_ref: str
     cursor: Cursor
+    named: bool = False
+    """``local_ref`` is the reference the record carries, not one made up while waiting."""
+
+    greeting: bool = False
+    """The stop watch's task is declaring it or confirming its start right now."""
+
     record: Path | None = None
     stored: Cursor | None = None
     """The cursor as the disk holds it; written again whenever ``cursor`` differs."""
@@ -389,6 +405,28 @@ def _write(record: Path, cursor: Cursor) -> Result[None, RecordError]:
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:
     return last is None or elapsed(last, now) >= period
+
+
+def _waiting(until: Monotonic | None, now: Monotonic) -> bool:
+    return until is not None and now < until
+
+
+def _greeted(cursor: Cursor) -> bool:
+    """Whether the dashboard holds the session started: declared, or its start confirmed."""
+    return cursor.session_id is not None and cursor.start_confirmed
+
+
+def _last_instant(owed: _Owed, batch: Batch) -> int:
+    """The last instant a record is known to have run, on the session's axis (unix ms).
+
+    Its last tick. When the end of the file holds none (a write cut by the
+    kill, then bytes that are no line), the last point the record gave, which
+    is the first tick of its last second: less than a second earlier. With no
+    point at all, its start.
+    """
+    if batch.last_tick_ms is not None:
+        return owed.start_ms + batch.last_tick_ms
+    return owed.start_ms if owed.cursor.last_t is None else owed.cursor.last_t
 
 
 def _halted(wait: _Wait) -> _Step:
@@ -530,6 +568,45 @@ class RecordUplink:
         return running + (0 if self._catching is None else 1) + len(self._backlog)
 
     # --- what the link tells it ------------------------------------------
+
+    async def greet(self) -> None:
+        """Tell the dashboard of the running session: declare it, or confirm its start.
+
+        Called from the stop watch's task, never from :meth:`step`: no reading
+        of a record and no catching up comes before it, and it reads nothing
+        from the disk itself. A session started at the machine is declared as
+        soon as its record's directory exists, under the reference its name
+        carries; a launch from the dashboard is confirmed as soon as it is
+        armed. Until then nothing of the session is sent, and its stop cannot
+        be asked for.
+        """
+        now = self._clock.monotonic()
+        live = self._live
+        if live is None or live.cursor.state == "complete" or _greeted(live.cursor):
+            return
+        if _waiting(self._held_until, now) or _waiting(live.next_try, now):
+            return
+        live.greeting = True
+        try:
+            session_id = live.cursor.session_id
+            if session_id is None:
+                self._name(live)
+                await self._declare(now, live)
+            else:
+                await self._confirm(now, live, session_id)
+        finally:
+            live.greeting = False
+
+    def _name(self, owed: _Owed) -> None:
+        """Take the reference of the running session's record from its name, reading nothing."""
+        source = self._source
+        if owed.named or source is None:
+            return
+        path = source.current()
+        reference = None if path is None else reference_in(path.name)
+        if reference is not None:
+            owed.local_ref = reference
+            owed.named = True
 
     def stop_forwarded(self) -> None:
         """The console was asked to stop the running session on the dashboard's account.
@@ -686,12 +763,19 @@ class RecordUplink:
             self._scan_at = Monotonic(now + RETRY_PERIOD)
             return False
         self._scanned = True
+        if listed.value.set_aside:
+            _logger.warning(
+                "dashboard: %d records without a cursor were set aside with a list of older "
+                "records that had to be made again: they are not sent",
+                listed.value.set_aside,
+            )
+            self._said(LIST_LOST.format(count=listed.value.set_aside))
         known = {
             owed.record.name
             for owed in (self._live, self._catching)
             if owed is not None and owed.record is not None
         }
-        self._queue(*(name for name in listed.value if name not in known))
+        self._queue(*(name for name in listed.value.names if name not in known))
         return True
 
     def _forget(self, name: str) -> None:
@@ -729,6 +813,7 @@ class RecordUplink:
             origin=self._origin(opened, cursor, source),
             local_ref=head.local_ref,
             cursor=cursor,
+            named=True,
             record=opened.record,
             stored=read if isinstance(read, Cursor) else None,
         )
@@ -781,6 +866,7 @@ class RecordUplink:
         owed.record = path
         owed.start_ms = head.start_ms
         owed.local_ref = head.local_ref
+        owed.named = True
         owed.cursor = replace(owed.cursor, local_ref=head.local_ref)
         # Written at once, before any answer and whatever the link says: the
         # cursor on disk is what lets the console take the record up again
@@ -808,7 +894,14 @@ class RecordUplink:
             self._said(CURSOR_UNWRITTEN)
 
     async def _deliver(self, now: Monotonic, owed: _Owed, *, live: bool) -> _Step:
-        """Declare or confirm, then send what follows the cursor, then the end."""
+        """Send what follows the cursor, then the end, once the dashboard holds the session.
+
+        The running session is told to the dashboard by :meth:`greet`, from
+        the stop watch's task: here it only waits for that. A session of
+        before is declared or confirmed here, in its turn.
+        """
+        if owed.greeting or (live and not _greeted(owed.cursor)):
+            return _Step.BUSY
         session_id = owed.cursor.session_id
         if session_id is None:
             declared = await self._declare(now, owed)
@@ -816,7 +909,7 @@ class RecordUplink:
                 return declared
             session_id = declared
         if not owed.cursor.start_confirmed:
-            waiting = await self._confirm(now, owed, session_id, live=live)
+            waiting = await self._confirm(now, owed, session_id)
             if waiting is not None:
                 return waiting
         record = owed.record
@@ -831,7 +924,7 @@ class RecordUplink:
 
     async def _declare(self, now: Monotonic, owed: _Owed) -> str | _Step:
         """Declare a session started at the machine. Its dashboard identifier, or why not yet."""
-        if owed.record is None and not owed.unrecorded:
+        if not owed.named and not owed.unrecorded:
             origin = owed.origin
             waited = BIND_GRACE if origin is None else elapsed(origin, now)
             if owed.ended is None and self._source is not None and waited < BIND_GRACE:
@@ -881,9 +974,7 @@ class RecordUplink:
         owed.cursor = replace(owed.cursor, session_id=found)
         return found
 
-    async def _confirm(
-        self, now: Monotonic, owed: _Owed, session_id: str, *, live: bool
-    ) -> _Step | None:
+    async def _confirm(self, now: Monotonic, owed: _Owed, session_id: str) -> _Step | None:
         """Confirm the start of a launch from the dashboard. ``None`` once it is settled.
 
         Anything but a yes or a silence has the running session stopped: the
@@ -892,6 +983,9 @@ class RecordUplink:
         reason of the link's own), and whoever launched it could not stop it.
         A refusal that is about the link leaves the confirmation owed: it is
         made again, and the record sent, once the dashboard takes it.
+
+        "The running session" is read AFTER the answer: one that arrives when
+        its session has ended is about that session alone, and stops no other.
         """
         body: dict[str, JsonValue] = {"sessionId": session_id, "startedAt": owed.start_ms}
         age = self._age_ms(now, owed)
@@ -905,22 +999,22 @@ class RecordUplink:
             case Held():
                 self._held_until = Monotonic(now + RETRY_PERIOD)
                 if answer.refused:
-                    self._not_taken(owed, answer.detail, live=live)
+                    self._not_taken(owed, answer.detail)
                 return _Step.HELD
             case RouteMissing():
                 self._held_until = Monotonic(now + RETRY_PERIOD)
-                self._not_taken(owed, START_UNKNOWN, live=live)
+                self._not_taken(owed, START_UNKNOWN)
                 return _Step.HELD
             case Refusal():
                 # Cancelled on the dashboard between the poll and the arm.
                 owed.cursor = replace(owed.cursor, start_confirmed=True)
-                self._not_taken(owed, answer.detail, live=live)
+                self._not_taken(owed, answer.detail)
                 return None
         raise assert_never(answer)
 
-    def _not_taken(self, owed: _Owed, detail: str, *, live: bool) -> None:
-        """The dashboard did not take the start of ``owed``: stop it if it runs, once."""
-        if live and not owed.stopped:
+    def _not_taken(self, owed: _Owed, detail: str) -> None:
+        """The dashboard did not take the start of ``owed``: stop it if it still runs, once."""
+        if self._live is owed and not owed.stopped:
             owed.stopped = True
             self._start_refused(detail)
 
@@ -1109,7 +1203,7 @@ class RecordUplink:
     ) -> _End | None:
         """How the session ended, once that is known; ``None`` while it is not."""
         closed = batch.closed
-        last_tick = owed.start_ms + (batch.last_tick_ms or 0)
+        last_tick = _last_instant(owed, batch)
         if closed is not None:
             reason = closed.reason
             words = reason if closed.stop_reason is None else f"{reason}: {closed.stop_reason}"

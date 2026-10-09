@@ -119,7 +119,10 @@ class Bench:
     """What the operator was told on the console, in order."""
 
     async def step(self, seconds: float = 1.0) -> None:
+        """One second of the link's two tasks: the running session is told to the
+        dashboard by the stop watch's task, then the sending task takes its step."""
         self.clock.advance(Seconds(seconds))
+        await self.uplink.greet()
         await self.uplink.step()
 
     async def run(self, seconds: int) -> None:

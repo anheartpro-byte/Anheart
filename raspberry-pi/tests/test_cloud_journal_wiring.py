@@ -27,6 +27,7 @@ import re
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import cast, override
@@ -51,7 +52,7 @@ from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import OutputRpm, Seconds
-from tests.record_uplink_support import BOOT, Disk, armed, bench, recording, tie
+from tests.record_uplink_support import BOOT, Disk, Recorded, armed, bench, recording, tie
 from tests.test_cloud_contract import refuse_everything_but_the_status
 from tests.test_cloud_sync import (
     LAUNCH,
@@ -205,18 +206,20 @@ async def test_a_disk_that_does_not_answer_holds_the_sending_and_no_step_piles_u
     # and returns at once. Forty steps on a dead disk cost one bound (a fifth
     # of a second), not forty (eight seconds).
     assert waited < 4.0
-    assert b.link.sent == []
+    # The session is declared all the same, under the reference of its record:
+    # that needs no file. Its measurements wait for the disk.
+    assert b.link.paths() == ["local"]
+    assert b.link.sent[0][1]["localRef"] == "ref-1"
     assert threading.active_count() < 12, "one thread waits on the disk, not one per step"
 
     stuck.set()
     for _ in range(100):
         await asyncio.sleep(0.01)
         await b.step(0.01)
-        if b.link.sent:
+        if len(b.link.sent) > 1:
             break
-    # Bound to its record once the disk answers, and declared under its reference.
+    # Tied to its record once the disk answers.
     assert b.link.paths()[:2] == ["local", "telemetry"]
-    assert b.link.sent[0][1]["localRef"] == "ref-1"
 
 
 async def test_a_step_waiting_on_the_disk_returns_at_once_when_it_is_cancelled(
@@ -381,7 +384,25 @@ class SlowIo(RecordIo):
         return Ok(work())
 
 
-async def stop_questions(
+@dataclass(frozen=True)
+class Watched:
+    """What a session's link did in a slow world, on the test's clock."""
+
+    armed_at: float
+    """When the runtime armed the session."""
+
+    made: tuple[tuple[float, str], ...]
+    """Every request, when it was made."""
+
+    slowest_step: float
+    """The longest sending step."""
+
+    def at(self, path: str) -> list[float]:
+        """When each request to ``path`` was made, counted from the arming of the session."""
+        return [round(at - self.armed_at, 3) for at, called in self.made if called == path]
+
+
+async def watched(
     tmp_path: Path,
     *,
     request_s: float,
@@ -389,14 +410,16 @@ async def stop_questions(
     backlog_points: int,
     one_task: bool,
     session_s: int = 80,
-) -> tuple[list[float], float]:
-    """``session_s`` seconds of a launched session; when each stop question was asked, and
-    the longest sending step.
+    armed_after_s: float = 0.0,
+    launched: bool = True,
+) -> Watched:
+    """``session_s`` seconds of a link, a session being armed ``armed_after_s`` into them.
 
     The link's work is run as the console runs it: the sending once a second
-    and the stop watch four times a second, each a task of its own. With
+    and the stop watch twenty times a second, each a task of its own. With
     ``one_task`` the watch is instead called from the sending task, before
-    and after the step, as it was before it had its own.
+    and after the step, as it was before it had its own. ``launched``: the
+    session comes from the dashboard; else it is started at the machine.
     """
     clock = ManualClock()
     waits = Waits(clock)
@@ -425,9 +448,10 @@ async def stop_questions(
             root=root, current=disk.in_progress, io=SlowIo(waits, read_s), boot_id=BOOT
         ),
     )
-    sync.session_started(manual(clock, remote="remote-1"))
-    live = recording(root, clock, "ref-now", remote="remote-1")
-    disk.current = live.path
+    dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
+    remote = "remote-1" if launched else None
+    live: Recorded | None = None
+    armed_at = 0.0
     steps: list[float] = []
 
     async def sending() -> None:
@@ -451,15 +475,20 @@ async def stop_questions(
         tasks.append(asyncio.create_task(every(float(STOP_WATCH_PERIOD), sync.watch_stop)))
     try:
         for tick in range(session_s * 20):
-            if tick % 20 == 0:
+            if live is None and tick >= round(armed_after_s * 20):
+                # The runtime arms the session, and the journal opens its record.
+                armed_at = float(clock.monotonic())
+                sync.session_started(manual(clock, remote=remote))
+                live = recording(root, clock, "ref-now", remote=remote)
+                disk.current = live.path
+            if live is not None and tick % 20 == 0:
                 live.tick(1.0)
             await waits.advance(0.05)
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    asked = [at for at, path in dashboard.made if path == STATUS]
-    return asked, max(steps)
+    return Watched(armed_at, tuple(dashboard.made), max(steps))
 
 
 @pytest.mark.parametrize(
@@ -475,7 +504,7 @@ async def test_the_stop_question_keeps_its_cadence_while_reads_and_uploads_are_s
     tmp_path: Path, request_s: float, read_s: float, backlog_points: int
 ) -> None:
     """Asked every three seconds whatever the sending waits for: a task of its own."""
-    asked, _slowest = await stop_questions(
+    seen = await watched(
         tmp_path,
         request_s=request_s,
         read_s=read_s,
@@ -484,6 +513,7 @@ async def test_the_stop_question_keeps_its_cadence_while_reads_and_uploads_are_s
         session_s=45,
     )
 
+    asked = seen.at(STATUS)
     gaps = [later - earlier for earlier, later in pairwise(asked)]
     assert len(asked) >= 12
     # Never later than the watch's own look, a quarter of a second, after it is due.
@@ -498,13 +528,98 @@ async def test_asked_from_the_sending_task_the_stop_question_would_wait_behind_i
     Called from the task that sends, before and after its step, the question
     waits for the reads and the uploads of that step.
     """
-    asked, slowest = await stop_questions(
+    seen = await watched(
         tmp_path, request_s=2.5, read_s=1.8, backlog_points=6000, one_task=True, session_s=45
     )
 
-    gaps = [later - earlier for earlier, later in pairwise(asked)]
-    assert slowest > 2 * float(STATUS_PERIOD), "the sending step really is slow in this world"
+    gaps = [later - earlier for earlier, later in pairwise(seen.at(STATUS))]
+    assert seen.slowest_step > 2 * float(STATUS_PERIOD), "the sending step really is slow here"
     assert max(gaps) > 2 * float(STATUS_PERIOD)
+
+
+LOOK: float = float(STOP_WATCH_PERIOD) + 0.011
+"""How long after it may, at the latest, the watch does a thing: its next look."""
+
+
+@pytest.mark.parametrize(
+    ("request_s", "read_s", "backlog_points"),
+    [
+        pytest.param(0.01, 0.0, 0, id="healthy"),
+        pytest.param(0.01, 1.8, 6000, id="a backlog, reads at 1.8 s"),
+        pytest.param(2.5, 1.8, 6000, id="a backlog, reads at 1.8 s, requests at 2.5 s"),
+    ],
+)
+async def test_a_launch_is_confirmed_and_its_stop_asked_for_before_any_reading_or_catching_up(
+    tmp_path: Path, request_s: float, read_s: float, backlog_points: int
+) -> None:
+    """Armed in the middle of a catch-up on a slow disk, as early as on a healthy link.
+
+    The confirmation leaves at the watch's next look after the arming, and the
+    first stop question at its next look after the confirmation is answered:
+    neither waits for the sending step, a record read or a batch of an older
+    session.
+    """
+    seen = await watched(
+        tmp_path,
+        request_s=request_s,
+        read_s=read_s,
+        backlog_points=backlog_points,
+        one_task=False,
+        session_s=22,
+        armed_after_s=10.3,
+    )
+
+    confirmed, asked = seen.at(START)[0], seen.at(STATUS)[0]
+    assert confirmed <= LOOK
+    assert asked <= confirmed + request_s + LOOK
+    if backlog_points:
+        assert seen.slowest_step > 3.0, "the sending really was busy catching up"
+
+
+@pytest.mark.parametrize(
+    ("request_s", "read_s", "backlog_points"),
+    [
+        pytest.param(0.01, 0.0, 0, id="healthy"),
+        pytest.param(2.5, 1.8, 6000, id="a backlog, reads at 1.8 s, requests at 2.5 s"),
+    ],
+)
+async def test_a_session_started_at_the_machine_is_declared_before_any_reading_or_catching_up(
+    tmp_path: Path, request_s: float, read_s: float, backlog_points: int
+) -> None:
+    """Declared at the watch's next look after its record's directory exists, whatever
+    the sending is waiting for; its stop is asked for as soon as the dashboard names it."""
+    seen = await watched(
+        tmp_path,
+        request_s=request_s,
+        read_s=read_s,
+        backlog_points=backlog_points,
+        one_task=False,
+        session_s=22,
+        armed_after_s=10.3,
+        launched=False,
+    )
+
+    declared, asked = seen.at(LOCAL)[0], seen.at(STATUS)[0]
+    assert declared <= LOOK
+    assert asked <= declared + request_s + LOOK
+
+
+async def test_told_from_the_sending_task_a_launch_would_wait_behind_the_catching_up(
+    tmp_path: Path,
+) -> None:
+    """What the task of its own is for, measured the other way in the same slow world."""
+    seen = await watched(
+        tmp_path,
+        request_s=2.5,
+        read_s=1.8,
+        backlog_points=6000,
+        one_task=True,
+        session_s=30,
+        armed_after_s=10.3,
+    )
+
+    assert seen.at(START)[0] > 2.0
+    assert seen.at(STATUS)[0] > 5.0
 
 
 async def test_the_console_runs_the_stop_watch_as_a_task_of_its_own(

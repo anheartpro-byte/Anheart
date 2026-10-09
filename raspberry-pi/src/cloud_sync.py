@@ -587,6 +587,9 @@ class CloudSync:
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
         remote = started.cloud_session_id
+        # The first question about its stop is asked as soon as it may be,
+        # whenever the last one about the session before was.
+        self._last_status = None
         self._uplink.begin(
             ArmedSession(
                 declaration=declaration_of(started),
@@ -759,12 +762,15 @@ class CloudSync:
     # --- a stop from the dashboard ------------------------------------------
 
     async def watch_stop(self) -> None:
-        """Ask, when it is due, whether the dashboard wants the running session stopped.
+        """Tell the dashboard of the running session, then ask whether it wants it stopped.
 
-        Stepped from a task of its own, never from :meth:`step`: the question
-        keeps its cadence (:data:`STATUS_PERIOD`) whatever the sending is
-        waiting for, a slow disk, a slow upload or a backlog to catch up.
+        Stepped from a task of its own, never from :meth:`step`: whatever the
+        sending is waiting for (a slow disk, a slow upload, a backlog to catch
+        up), a session is declared or its start confirmed as soon as it is
+        armed, the first question about its stop follows at once, and the
+        question then keeps its cadence (:data:`STATUS_PERIOD`).
         """
+        await self._uplink.greet()
         now = self._clock.monotonic()
         session_id = self._uplink.following
         if session_id is None or not _due(self._last_status, now, STATUS_PERIOD):

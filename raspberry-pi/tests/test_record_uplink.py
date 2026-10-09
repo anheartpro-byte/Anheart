@@ -20,11 +20,12 @@ does not answer costs (the sending, nothing else).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from itertools import pairwise
 from pathlib import Path
 from typing import cast, override
@@ -32,10 +33,11 @@ from typing import cast, override
 import pytest
 
 from src.clock import ManualClock
-from src.record.cursor import Cursor, NoCursor, cursor_of, load, store
+from src.record.cursor import BASELINE_NAME, Cursor, NoCursor, cursor_of, load, store
 from src.record.export import BUSY, TIMEOUT, RecordIo
+from src.record.rows import JsonValue
 from src.record.schema import RecordError
-from src.record.upload import MAX_POINTS, READ_CHUNK, Batch, read_batch, read_head
+from src.record.upload import MAX_POINTS, READ_CHUNK, TAIL_CHUNK, Batch, read_batch, read_head
 from src.record_uplink import (
     BIND_GRACE,
     CATCH_UP_PERIOD,
@@ -45,6 +47,7 @@ from src.record_uplink import (
     END_PATH,
     EVENTS_PATH,
     EVENTS_RETRY_PERIOD,
+    LIST_LOST,
     LOCAL_PATH,
     MAX_REFUSALS,
     RETRY_PERIOD,
@@ -54,7 +57,9 @@ from src.record_uplink import (
     TELEMETRY_PERIOD,
     UNOBSERVED_END,
     Acked,
+    Answer,
     Held,
+    RecordUplink,
     Refusal,
     RouteMissing,
     RuntimeEnd,
@@ -66,6 +71,7 @@ from tests.record_uplink_support import (
     BOOT,
     EPOCH_MS,
     Bench,
+    Link,
     armed,
     bench,
     cursor_of_record,
@@ -458,6 +464,200 @@ async def test_a_record_taken_up_after_a_restart_whose_start_is_not_taken_stops_
 
     assert b.link.paths() == ["start"]
     assert b.cancelled == []
+
+
+# =========================================================================
+# The running session is told to the dashboard before anything is read
+# =========================================================================
+
+
+async def test_a_session_started_at_the_machine_is_declared_without_reading_any_file(
+    tmp_path: Path,
+) -> None:
+    """Its reference is in the name of its record's directory: the disk is not asked."""
+    io = Scripted()
+    b = bench(tmp_path, io=io)
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock, "ref-early")
+    b.disk.current = record.path
+
+    await b.uplink.greet()
+
+    assert b.link.paths() == ["local"]
+    assert b.link.to(LOCAL_PATH)[0]["localRef"] == "ref-early"
+    assert b.following() == "cloud-1", "its stop can be asked for from now on"
+    assert io.calls == 0
+    # Said once: greeted, there is nothing more to say.
+    await b.uplink.greet()
+    assert b.link.paths() == ["local"]
+
+
+async def test_a_launch_from_the_dashboard_is_confirmed_without_reading_any_file(
+    tmp_path: Path,
+) -> None:
+    io = Scripted()
+    b = bench(tmp_path, io=io)
+    b.uplink.begin(armed(b.clock, remote="k17remote"))
+
+    await b.uplink.greet()
+
+    assert b.link.paths() == ["start"]
+    assert b.following() == "k17remote"
+    assert io.calls == 0
+
+
+@pytest.mark.parametrize("remote", [None, "k17remote"])
+async def test_the_sending_step_neither_declares_nor_confirms_the_running_session(
+    tmp_path: Path, remote: str | None
+) -> None:
+    """That is the greeting's, from the stop watch's task: the step only waits for it."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock, remote=remote))
+    record = recording(tmp_path, b.clock, remote=remote)
+    b.disk.current = record.path
+    record.tick(3.0)
+
+    for _ in range(4):
+        b.clock.advance(Seconds(1.0))
+        await b.uplink.step()
+
+    assert b.link.sent == []
+    await b.uplink.greet()
+    await b.uplink.step()
+    assert b.link.paths() == ["local" if remote is None else "start", "telemetry"]
+
+
+async def test_nothing_is_greeted_when_nothing_runs_or_while_the_link_is_held(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    await b.uplink.greet()
+    assert b.link.sent == []
+
+    b.link.answer(LOCAL_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    for _ in range(int(RETRY_PERIOD)):
+        b.clock.advance(Seconds(1.0))
+        await b.uplink.greet()
+    assert b.link.paths() == ["local"], "held: the same declaration is made again later"
+
+    del b.link.answers[LOCAL_PATH]
+    b.clock.advance(Seconds(1.0))
+    await b.uplink.greet()
+    assert b.link.paths() == ["local", "local"]
+    assert b.uplink.session_id == "cloud-1"
+
+
+async def test_a_declaration_the_dashboard_may_take_later_is_not_made_again_before_its_time(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(LOCAL_PATH, Refusal("request_failed (HTTP 400): try again", final=False))
+    b.uplink.begin(armed(b.clock))
+
+    for _ in range(int(RETRY_PERIOD)):
+        await b.uplink.greet()
+        b.clock.advance(Seconds(1.0))
+    assert len(b.link.to(LOCAL_PATH)) == 1
+
+    await b.uplink.greet()
+    assert len(b.link.to(LOCAL_PATH)) == 2
+
+
+async def test_a_session_whose_declaration_was_refused_for_good_is_not_greeted_again(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(LOCAL_PATH, Refusal("invalid_request (HTTP 400): no", final=True))
+    b.uplink.begin(armed(b.clock))
+
+    for _ in range(3):
+        await b.step()
+
+    assert len(b.link.to(LOCAL_PATH)) == 1
+
+
+class Late:
+    """A link whose answer to the first request to one path waits until the test lets it go."""
+
+    def __init__(self, inner: Link, path: str, answer: Answer) -> None:
+        self.inner: Link = inner
+        self.path: str = path
+        self.answer: Answer = answer
+        self.asked: asyncio.Event = asyncio.Event()
+        self.release: asyncio.Event = asyncio.Event()
+
+    async def send(self, path: str, body: Mapping[str, JsonValue]) -> Answer:
+        if path == self.path and not self.asked.is_set():
+            self.inner.sent.append((path, body))
+            self.asked.set()
+            await self.release.wait()
+            return self.answer
+        return await self.inner.send(path, body)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        Refusal("session_not_pending (HTTP 400): cancelled", final=True),
+        Held("sans code (HTTP 503): later", refused=True),
+        RouteMissing(),
+    ],
+)
+async def test_an_answer_to_a_confirmation_that_arrives_after_its_session_ended_stops_no_other(
+    answer: Answer,
+) -> None:
+    """The first launch ends and a second is armed while the dashboard answers the first.
+
+    The answer is about the session it was sent for: the second is neither
+    stopped nor marked as stopped, and its own stop goes on being looked for.
+    """
+    clock = ManualClock(Monotonic(100.0), UnixMillis(EPOCH_MS))
+    link = Link()
+    late = Late(link, START_PATH, answer)
+    cancelled: list[str] = []
+    uplink = RecordUplink(
+        clock=clock, sender=late, source=None, start_refused=cancelled.append, said=cancelled.append
+    )
+    uplink.begin(armed(clock, remote="first"))
+    greeting = asyncio.create_task(uplink.greet())
+    await late.asked.wait()
+
+    uplink.finished(ENDED)
+    uplink.begin(armed(clock, remote="second"))
+    late.release.set()
+    await asyncio.gather(greeting)
+
+    assert cancelled == [], "nothing is stopped: the session that answer is about is over"
+    clock.advance(RETRY_PERIOD)
+    await uplink.greet()
+    assert uplink.following == "second", "the second session's stop is looked for"
+
+
+async def test_a_session_that_ends_while_it_is_being_declared_is_not_declared_twice() -> None:
+    """The sending takes it over once the greeting has its answer, not while it waits for it."""
+    clock = ManualClock(Monotonic(100.0), UnixMillis(EPOCH_MS))
+    link = Link()
+    late = Late(link, LOCAL_PATH, Acked({"sessionId": "cloud-1"}))
+    said: list[str] = []
+    uplink = RecordUplink(
+        clock=clock, sender=late, source=None, start_refused=said.append, said=said.append
+    )
+    uplink.begin(armed(clock))
+    greeting = asyncio.create_task(uplink.greet())
+    await late.asked.wait()
+
+    uplink.finished(ENDED)
+    clock.advance(Seconds(1.0))
+    await uplink.step()
+    assert link.paths() == ["local"], "one declaration is on its way: no second one"
+
+    late.release.set()
+    await asyncio.gather(greeting)
+    clock.advance(Seconds(1.0))
+    await uplink.step()
+    assert link.paths() == ["local", "end"]
+    assert uplink.owed == 0
 
 
 async def test_a_stop_forwarded_is_kept_with_its_session_and_gone_with_it(tmp_path: Path) -> None:
@@ -1445,8 +1645,10 @@ async def test_the_record_open_now_is_not_listed_with_those_of_before(
     record.tick(2.0)
     (record.path / "manifest.json").rename(record.path / "manifest.away")
     with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
-        await b.run(int(BIND_GRACE) + 2)
-    assert b.said == [DECLARED_WITHOUT_RECORD]
+        await b.run(4)
+    # Declared all the same, under the reference its directory is named after.
+    assert [body["localRef"] for body in b.link.to(LOCAL_PATH)] == ["ref-now"]
+    assert b.said == []
     assert "left until the next start" not in caplog.text
     assert b.uplink.owed == 1, "the running session, and nothing taken for an older record"
 
@@ -1520,6 +1722,134 @@ async def test_a_record_with_a_line_too_long_is_sent_whole_and_does_not_hold_bac
     assert b.link.seconds("cloud-behind") == [0.0, 1.0]
     assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-torn", "cloud-behind"]
     assert b.uplink.owed == 0
+
+
+async def test_a_record_with_an_event_line_too_long_is_sent_whole_with_the_ranks_that_follow(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """As for the ticks: passed over across several readings, its rank kept, and on."""
+    old = bench(tmp_path)
+    torn = recording(tmp_path, old.clock, "ref-torn")
+    torn.tick(2.0)
+    torn.event(2)
+    with (torn.path / "events.jsonl").open("ab") as handle:
+        handle.write(b"\x00" * (READ_CHUNK * 2 + 77) + b"\n")
+    torn.events += 1  # the zeroes are a line of the file: they take a rank
+    torn.event()
+    torn.close()
+    tie(torn.path, Cursor(session_id="cloud-torn"))
+
+    b = old.restarted()
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(8)
+
+    assert b.link.ranks() == [0, 1, 3]
+    assert "1 lines of events of the record of session cloud-torn cannot be read" in caplog.text
+    assert "does not match its record" not in caplog.text
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-torn"]
+    assert cursor_of_record(torn.path).state == "complete"
+
+
+async def test_a_record_the_console_still_has_open_is_not_ended_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    """Taken up again from disk in this run while the journal has not closed it yet.
+
+    The runtime ended the session, the link then had a refused launch to
+    report, and the record went back among those waiting. Read again, it is
+    not closed and nothing in memory says how it ended: it is still the
+    record the console has open, so its end is waited for, not made up.
+    """
+    b = bench(tmp_path)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock)
+    b.disk.current = record.path
+    record.tick(2.0)
+    await b.step()
+    b.uplink.finished(ENDED)  # the journal has not closed the record yet
+    b.uplink.owe_refusal("k17pending", "refusee par la machine : console occupee")
+    await b.step()
+    del b.link.answers[END_PATH]
+
+    b.clock.advance(RETRY_PERIOD)
+    await b.run(int(CLOSE_GRACE) + 5)
+    assert [body["sessionId"] for body in b.link.to(END_PATH)][1:] == ["k17pending"]
+
+    record.close()
+    await b.run(3)
+    ends = b.link.to(END_PATH)[2:]
+    assert [(body["sessionId"], body["reason"]) for body in ends] == [
+        ("cloud-1", "operator_stop: fini")
+    ]
+    assert b.uplink.owed == 0
+
+
+async def test_a_record_cut_short_whose_last_bytes_are_no_line_ends_at_its_last_point(
+    tmp_path: Path,
+) -> None:
+    """Killed, then zeroes where the last ticks were: the tail of the file dates nothing.
+
+    The end is dated at the last point the record gave, the first tick of its
+    last second, and not at the start of the session.
+    """
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-cut")
+    left.tick(4.0)
+    with (left.path / "ticks.csv").open("ab") as handle:
+        handle.write(b"\x00" * (TAIL_CHUNK + 4096))
+    tie(left.path, Cursor(session_id="cloud-cut"))
+
+    b = old.restarted()
+    await b.run(3)
+
+    assert b.link.seconds("cloud-cut") == [0.0, 1.0, 2.0, 3.0]
+    assert b.link.to(END_PATH) == [
+        {"sessionId": "cloud-cut", "failed": True, "reason": "interrupted", "endedAt": START + 3000}
+    ]
+
+
+async def test_a_record_cut_short_with_no_point_at_all_ends_at_its_start(tmp_path: Path) -> None:
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-empty")
+    with (left.path / "ticks.csv").open("ab") as handle:
+        handle.write(b"\x00" * (TAIL_CHUNK + 4096))
+    tie(left.path, Cursor(session_id="cloud-empty"))
+
+    b = old.restarted()
+    await b.run(3)
+
+    assert b.link.to(END_PATH) == [
+        {"sessionId": "cloud-empty", "failed": True, "reason": "interrupted", "endedAt": START}
+    ]
+
+
+async def test_a_lost_list_of_older_records_is_said_with_what_it_set_aside(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Deleted by hand, say: a record that was waiting, cursor-less, is not sent, and it is said."""
+    first = bench(tmp_path)
+    done = recording(tmp_path, first.clock, "ref-done")
+    done.tick(1.0)
+    done.close()
+    tie(done.path, Cursor(session_id="cloud-done", state="complete", end="sent"))
+    await first.step()
+    first.clock.advance(Seconds(60.0))
+    waiting = recording(tmp_path, first.clock, "ref-waiting")
+    waiting.tick(2.0)
+    (tmp_path / BASELINE_NAME).unlink()
+
+    b = first.restarted()
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(3)
+
+    assert b.link.sent == []
+    assert b.said == [LIST_LOST.format(count=1)]
+    assert "1 records without a cursor were set aside" in caplog.text
+    # Once: the list is there again.
+    again = b.restarted()
+    await again.run(3)
+    assert again.said == []
 
 
 async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beginning(
@@ -1630,6 +1960,41 @@ async def test_ex5_the_session_that_just_ended_goes_before_the_older_ones(tmp_pa
     assert ends == ["cloud-1", "cloud-old"]
     assert b.uplink.owed == 0
     assert b.link.seconds("cloud-old") == [float(s) for s in range(2 * MAX_POINTS + 5)]
+
+
+async def test_ex5_a_running_session_that_waits_to_send_again_holds_back_the_older_ones(
+    tmp_path: Path,
+) -> None:
+    """The running session first, even while it only waits for its next try.
+
+    Its batch was refused in a way the dashboard may lift: until it has gone,
+    nothing of an older session is sent, not even its declaration or its end.
+    """
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(3.0)
+    left.close()
+    tie(left.path, Cursor(boot_id="an-earlier-boot"))
+    old.clock.advance(Seconds(3600.0))
+
+    b = old.restarted()
+    b.link.answer(TELEMETRY_PATH, Refusal("request_failed (HTTP 400): try again", final=False))
+    b.uplink.begin(armed(b.clock))
+    live = recording(tmp_path, b.clock, "ref-now")
+    b.disk.current = live.path
+    for _ in range(int(RETRY_PERIOD) - 1):
+        live.tick(1.0)
+        await b.step()
+
+    assert b.link.paths() == ["local", "telemetry"]
+    assert [body["localRef"] for body in b.link.to(LOCAL_PATH)] == ["ref-now"]
+
+    del b.link.answers[TELEMETRY_PATH]
+    for _ in range(6):
+        live.tick(1.0)
+        await b.step()
+    assert [body["localRef"] for body in b.link.to(LOCAL_PATH)] == ["ref-now", "ref-old"]
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-2"]
 
 
 async def test_ex5_sessions_that_ended_while_the_link_was_down_wait_oldest_first(
@@ -1790,9 +2155,10 @@ class Scripted(RecordIo):
 
 
 @pytest.mark.parametrize("failure", [BUSY, TIMEOUT])
-async def test_a_slow_disk_makes_the_running_session_wait_and_is_asked_again(
+async def test_a_slow_disk_delays_the_measurements_of_the_running_session_not_its_declaration(
     tmp_path: Path, failure: str
 ) -> None:
+    """Declared from the name of its record's directory: no file is read for that."""
     io = Scripted()
     b = bench(tmp_path, io=io)
     b.uplink.begin(armed(b.clock))
@@ -1802,7 +2168,9 @@ async def test_a_slow_disk_makes_the_running_session_wait_and_is_asked_again(
     io.fail = failure
 
     await b.run(3)
-    assert b.link.sent == []
+    assert b.link.paths() == ["local"]
+    assert b.link.to(LOCAL_PATH)[0]["localRef"] == "ref-1"
+    assert b.following() == "cloud-1", "its stop can be asked for at once"
 
     io.fail = None
     await b.step()

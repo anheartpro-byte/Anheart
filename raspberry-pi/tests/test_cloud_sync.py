@@ -914,6 +914,28 @@ async def test_a_launch_whose_start_gets_no_answer_runs_on_under_the_local_super
     assert len(r.dashboard.to(START)) == 2
 
 
+async def test_the_first_stop_question_of_a_session_is_asked_as_soon_as_it_is_confirmed(
+    tmp_path: Path,
+) -> None:
+    """In the same look of the watch as the confirmation, and whenever the last question
+    about the session before was asked: a second ago does not make this one wait."""
+    r = rig(tmp_path)
+    r.dashboard.answer(STATUS, status_answer())
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    await r.sync.watch_stop()
+    assert [call[1] for call in r.dashboard.calls] == [START, STATUS]
+    r.runtime.state = RuntimeState.FINISHED
+    r.clock.advance(Seconds(1.0))
+    await r.sync.step()
+
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock, remote="remote-2"))
+    await r.sync.watch_stop()
+
+    asked = [call["sessionId"] for call in r.dashboard.to(STATUS)]
+    assert asked == ["remote-1", "remote-2"]
+
+
 async def test_a_stop_forwarded_in_one_session_does_not_hide_a_stop_asked_for_in_the_next(
     tmp_path: Path, stops: list[tuple[str, str]]
 ) -> None:

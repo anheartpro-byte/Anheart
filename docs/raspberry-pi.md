@@ -147,7 +147,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `sensor_step` | 1 s | retraite la fenêtre de chaque capteur |
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
 | `cloud_step` | 1 s | une étape d'envoi du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
-| `cloud_stop_step` | 50 ms | regarde si la question de l'arrêt demandé du tableau de bord est due (toutes les 3 s en séance) et la pose. Une tâche à elle : elle n'attend ni l'envoi ni le disque |
+| `cloud_stop_step` | 50 ms | dit la séance en cours au tableau de bord (déclaration ou confirmation du départ), puis pose la question de l'arrêt demandé (toutes les 3 s en séance). Une tâche à elle : elle n'attend ni l'envoi ni le disque, et ne lit aucun fichier |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -982,13 +982,13 @@ exactement pareil, sans tableau de bord.
 |---|---|---|---|
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
-| Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance | `POST /api/machine/training/local` | avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
-| Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | au départ |
+| Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
+| Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | dès que la séance est armée, par la tâche de veille (8.6) ; refaite tant qu'elle est retenue |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 2 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
-| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | toutes les 3 s tant que le tableau de bord tient la séance pour démarrée et non finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
+| Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
 Règles :
 
@@ -1015,8 +1015,9 @@ Règles :
   son départ par autre chose qu'un oui (séance annulée entre-temps, mais aussi
   426, 401, 403, 5xx, route inconnue), la console arrête la séance tout de
   suite, une fois : personne ne pourrait l'arrêter depuis le site. Sans
-  réponse du tout (réseau coupé), la séance continue sous le seul superviseur
-  local, comme toute séance sans tableau de bord.
+  réponse exploitable (réseau coupé, délai de 3 s dépassé, ou réponse 2xx qui
+  n'est pas un objet JSON), la séance continue sous le seul superviseur local,
+  comme toute séance sans tableau de bord, et la confirmation est refaite.
 * Un lancement venu d'un serveur d'une autre majeure de contrat, ou qui
   n'annonce pas sa version, n'est **jamais armé** : voir
   [Versions et compatibilité](#14-versions-et-compatibilité).
@@ -1052,7 +1053,7 @@ mesure.
 | Privé | mode 600, comme le dossier racine est en 700 |
 | Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
 | Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture |
-| Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait par une version antérieure de ce logiciel, ou sans tableau de bord configuré. Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur) |
+| Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait avant que cette console tourne pour la première fois avec un tableau de bord configuré (version antérieure de ce logiciel, ou pas de clé). Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur) |
 | Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, ou disque qui a refusé le curseur). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
 
 **La télémétrie à 1 Hz.** `ticks.csv` est écrit à 5 Hz. Le point d'une seconde
@@ -1084,7 +1085,8 @@ liste d'événements de la page, sous la même forme que
 | Phrase | Quand |
 |---|---|
 | `seance declaree sans son enregistrement : le tableau de bord n'en recevra les mesures que si l'enregistrement apparait` | l'enregistrement n'est pas apparu dans les 10 s qui suivent le départ. S'il apparaît plus tard, il est lié à la séance à ce moment-là et ses mesures partent |
-| `curseur de synchronisation non ecrit : apres un redemarrage, la seance serait renvoyee au tableau de bord depuis son debut` | le disque refuse le curseur. L'envoi continue ; dit une fois par panne |
+| `curseur de synchronisation non ecrit : si la console redemarre, la suite de cette seance pourrait ne pas arriver au tableau de bord` | le disque refuse le curseur. L'envoi continue ; dit une fois par panne. Après un redémarrage, l'enregistrement est renvoyé depuis son début s'il n'a aucun curseur et que la liste des enregistrements antérieurs existe ; si le disque a refusé cette liste aussi, il ne l'est pas |
+| `liste des enregistrements anterieurs a la synchronisation perdue et refaite : N enregistrement(s) sans curseur mis de cote, non envoyes au tableau de bord` | `.sync-baseline.json` a été supprimé ou est illisible alors que la synchronisation est déjà passée par ce dossier (un curseur existe). La liste est refaite de tout ce qui n'a pas de curseur : un enregistrement qui attendait d'être envoyé en fait partie et ne le sera pas. Dit au démarrage, avec le nombre |
 
 ### 8.2 Dans quel ordre
 
@@ -1129,8 +1131,11 @@ réponse autre qu'un oui fait arrêter la séance en cours, tout de suite et une
 seule fois. Refusée (séance annulée sur le site entre le poll et l'armement),
 elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
 reste due et est refaite toutes les 15 s, puis l'enregistrement est envoyé,
-quand le serveur l'accepte. Seule l'absence de toute réponse laisse tourner
-la séance. Une **déclaration** refusée pour de bon clôt l'enregistrement sans
+quand le serveur l'accepte. Seule l'absence de réponse exploitable (réseau
+coupé, délai dépassé, réponse 2xx qui n'est pas un objet JSON) laisse tourner
+la séance. Une réponse qui arrive après la fin de la séance qu'elle concerne
+n'arrête pas celle qui a été armée entre-temps. Une **déclaration** refusée
+pour de bon clôt l'enregistrement sans
 rien en envoyer : sans séance côté tableau de bord, rien ne peut être reçu.
 
 ### 8.4 Après un redémarrage de la console
@@ -1151,7 +1156,12 @@ est repris où le tableau de bord s'était arrêté :
   qui refusait le curseur) : il est envoyé depuis son début ; le tableau de
   bord ne stocke qu'une fois ce qu'il aurait déjà ;
 - **jamais fermé** (la console a été tuée pendant la séance) : il se termine
-  par `interrupted`, séance échouée, datée de son dernier tic ;
+  par `interrupted`, séance échouée, datée de son dernier tic. Si la fin du
+  fichier ne contient aucun tic lisible (64 kio ou plus sans fin de ligne
+  après la coupure), elle est datée du dernier point que l'enregistrement a
+  donné, le premier tic de sa dernière seconde : moins d'une seconde plus tôt.
+  La queue du fichier n'est lue qu'une fois, sur 64 kio : la console ne
+  remonte pas plus loin chercher le tic exact ;
 - **fermé** : il se termine par la raison de son manifeste
   (`operator_stop: <texte de l'arrêt>`, `shutdown`, …), comme si la console
   n'avait pas redémarré.
@@ -1159,6 +1169,23 @@ est repris où le tableau de bord s'était arrêté :
 Une sortie ordinaire de la console (SIGTERM) en cours de séance ferme
 l'enregistrement avec `shutdown`, après l'arrêt du variateur ; la fin part au
 démarrage suivant.
+
+**Ce qui est envoyé, et depuis quand.** La limite est le premier démarrage de
+cette console avec un tableau de bord configuré (`MACHINE_API_KEY`) sur ce
+dossier d'enregistrements : c'est à ce moment-là que la liste des
+enregistrements antérieurs est écrite.
+
+| Enregistrement | Envoyé au tableau de bord |
+|---|---|
+| fait avant ce premier démarrage | **non**, jamais |
+| fait depuis, tableau de bord configuré | oui, pendant la séance, et au démarrage suivant pour ce qui restait |
+| fait depuis, **sans** tableau de bord configuré (clé retirée entre-temps) | **oui**, au premier démarrage où une clé est de nouveau configurée : il n'a pas de curseur et n'est pas sur la liste. La séance apparaît alors sur le tableau de bord de la machine que désigne cette clé, sous l'alias de l'opérateur |
+
+Aucun réglage ne permet de garder locaux les enregistrements de la troisième
+ligne. Le seul moyen, console arrêtée et avant de la relancer avec une clé,
+est de supprimer `.sync-baseline.json` : la liste est refaite de tout ce qui
+n'a pas de curseur, ces enregistrements y entrent, et la console dit combien
+elle en a mis de côté.
 
 ### 8.5 Les dates
 
@@ -1210,16 +1237,37 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   pas en 10 s est déclarée quand même, sans enregistrement, et la console le
   dit (8.1) : le tableau de bord apprend son départ et sa fin, et ses mesures
   seulement si l'enregistrement finit par apparaître.
-- **L'arrêt demandé du tableau de bord n'attend derrière rien.** La question
-  (`GET training/status`, toutes les 3 s) est posée par une tâche à elle,
-  `cloud_stop_step`, qui regarde toutes les 50 ms si elle est due et ne fait
-  rien d'autre. L'étape d'envoi (`cloud_step`) peut attendre une lecture, une
-  écriture de curseur, un envoi ou tout un rattrapage : la question garde sa
-  cadence. Mesuré en temps simulé sur une séance de 80 s, intervalle entre
-  deux questions (médiane / maximum) : 3,05 / 3,05 s lien et disque sains ;
-  3,05 / 3,05 s avec des lectures à 1,8 s ; 3,00 / 3,00 s avec chaque requête
-  à 2,5 s et un rattrapage en cours, pendant que l'étape d'envoi, elle, dure
-  jusqu'à 20 s.
+- **L'arrêt demandé du tableau de bord n'attend derrière aucune lecture ni
+  aucun envoi de séance.** Une tâche à elle, `cloud_stop_step`, regarde toutes
+  les 50 ms ce qu'elle a à faire, et ne lit rien sur le disque :
+  1. **dire la séance au tableau de bord** : confirmer le départ d'un
+     lancement dès que la séance est armée, ou déclarer une séance démarrée à
+     la machine dès que le dossier de son enregistrement existe, sous la
+     référence que porte le nom de ce dossier (`RecordUplink.greet`). C'est la
+     première chose que le tableau de bord apprend d'une séance, et ce qui
+     permet de lui demander si un arrêt est voulu ;
+  2. **poser la question de l'arrêt** (`GET training/status`) : une première
+     fois dès que le tableau de bord tient la séance pour démarrée, puis
+     toutes les 3 s.
+
+  L'étape d'envoi (`cloud_step`) peut attendre une lecture, une écriture de
+  curseur, un envoi ou tout un rattrapage : rien de cela ne retarde ni l'un ni
+  l'autre. Mesuré en temps simulé, séance armée au milieu d'un rattrapage,
+  temps comptés depuis l'armement (confirmation ou déclaration envoyée /
+  première question) : 0,05 / 0,10 s lien et disque sains ; 0,05 / 0,10 s
+  avec un rattrapage et des lectures à 1,8 s ; 0,05 / 2,55 s si chaque requête
+  prend en plus 2,5 s (la question attend la réponse à la confirmation, rien
+  d'autre). Ensuite, intervalle entre deux questions (médiane / maximum) :
+  3,00 / 3,05 s dans ces trois cas, pendant que l'étape d'envoi dure jusqu'à
+  7,4 s dans le deuxième et 14,7 s dans le troisième.
+
+  Ce qui reste devant la première question : la réponse du tableau de bord à
+  la confirmation ou à la déclaration (une requête, 3 s au plus), et, pour une
+  séance démarrée à la machine, la création du dossier de son enregistrement
+  par le fil du journal (10 s au plus : au-delà elle est déclarée sans). Tant
+  que le tableau de bord ne tient pas la séance pour démarrée, sa réponse à la
+  question se lirait comme une demande d'arrêt : elle n'est donc pas posée
+  avant.
 - **La sortie n'attend pas.** À la sortie de la console, la tâche du lien est
   annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
   réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas
@@ -1241,11 +1289,13 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
 - Une étape d'envoi enchaîne quelques lectures et quelques requêtes, chacune
   bornée (2 s par lecture, 10 s pour la liste du démarrage, 3 s par requête).
   Sur un disque ou un réseau lents sans être morts, elle peut donc durer
-  plusieurs secondes, et une vingtaine dans le cas mesuré plus haut. Le
-  battement de cœur, les programmes et le poll, qui sont dans cette étape,
-  attendent d'autant (le seuil hors ligne du tableau de bord est à 90 s). La
-  demande d'arrêt du tableau de bord n'y est pas : elle a sa tâche (8.6). Le
-  tic, l'arrêt à la console et le superviseur n'en dépendent pas non plus.
+  plusieurs secondes : 10 s mesurées avec chaque requête à 2,5 s, une
+  vingtaine avec en plus des lectures à 1,8 s. Le battement de cœur, les
+  programmes et le poll, qui sont dans cette étape, attendent d'autant (le
+  seuil hors ligne du tableau de bord est à 90 s). Ni la déclaration ou la
+  confirmation de la séance en cours, ni la demande d'arrêt du tableau de
+  bord n'y sont : elles ont leur tâche (8.6). Le tic, l'arrêt à la console et
+  le superviseur n'en dépendent pas non plus.
 - Une séance déclarée sans son enregistrement, dont l'enregistrement
   n'apparaît qu'après la fin de la séance, est envoyée au démarrage suivant
   sous la référence de son manifeste : le tableau de bord en garde alors deux

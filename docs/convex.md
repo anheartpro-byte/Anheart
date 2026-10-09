@@ -969,8 +969,10 @@ Détails du contrat :
   l'armement) comme pour une réponse retenue (426, 401, 403, 5xx) : une
   séance lancée du site ne tourne pas là où le site ne pourrait pas
   l'arrêter. Retenue, la confirmation reste due et est refaite. Seule
-  l'absence de toute réponse (réseau coupé) laisse tourner la séance, sous le
-  superviseur local.
+  l'absence de réponse exploitable (réseau coupé, délai dépassé, réponse 2xx
+  qui n'est pas un objet JSON) laisse tourner la séance, sous le superviseur
+  local. La confirmation part dès que la séance est armée, par la même tâche
+  que la question d'arrêt : elle n'attend aucune lecture d'enregistrement.
 - **Fin** : `failed` vaut `false` pour `programme_complete` et `operator_stop`,
   `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`,
   et pour `interrupted` : la raison d'une séance dont la console a été tuée

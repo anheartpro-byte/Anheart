@@ -6,11 +6,11 @@
       "reason": "interrupted",
       "status": "failed"
     },
-    "ended_at": 1790000309999,
+    "ended_at": 1790000310000,
     "events": 4,
     "machine_started_at": 610200,
     "points": 300,
-    "started_at": 1790000010199
+    "started_at": 1790000010200
   },
   "scenario": {
     "back_s": 480,
@@ -18,7 +18,7 @@
     "kill_s": 300
   },
   "exchanges": [
-    {"answer":{"sessionId":"SESSION-1"},"at":1790000010999,"body":{"kind":"manual","localRef":"LOCAL-REF","occupancy":"bench","operatorName":"dr. attending","sessionAgeMs":800,"startedAt":610200},"path":"/api/machine/training/local","status":200},
+    {"answer":{"sessionId":"SESSION-1"},"at":1790000010200,"body":{"kind":"manual","localRef":"LOCAL-REF","occupancy":"bench","operatorName":"dr. attending","sessionAgeMs":0,"startedAt":610200},"path":"/api/machine/training/local","status":200},
     {"answer":{"duplicates":0,"rejected":0,"stored":1},"at":1790000010999,"body":{"points":[{"elapsedS":0.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":0,"t":610200}],"sessionId":"SESSION-1"},"path":"/api/machine/training/telemetry","status":200},
     {"answer":{"duplicates":0,"rejected":0,"stored":2},"at":1790000010999,"body":{"events":[{"actor":"op-0d396cf7b8a2a452","detail":"manual session started","kind":"operator_action","seq":0,"t":610200},{"actor":"system","detail":"hold","kind":"phase","seq":1,"t":610200}],"sessionId":"SESSION-1"},"path":"/api/machine/training/events","status":200},
     {"answer":{"duplicates":0,"rejected":0,"stored":6},"at":1790000016999,"body":{"points":[{"elapsedS":1.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":0,"t":611200},{"elapsedS":2.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":0,"t":612200},{"elapsedS":3.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":0,"t":613200},{"elapsedS":4.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":0,"t":614200},{"elapsedS":5.0,"gLoad":0.0,"motorRpm":0,"outputRpm":0.0,"phase":"hold","safetyAction":"none","setpointMotorRpm":55,"t":615200},{"elapsedS":6.0,"gLoad":0.0028,"motorRpm":64,"outputRpm":1.285,"phase":"hold","safetyAction":"none","setpointMotorRpm":67,"t":616200}],"sessionId":"SESSION-1"},"path":"/api/machine/training/telemetry","status":200},
