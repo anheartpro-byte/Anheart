@@ -1466,7 +1466,9 @@ d'environnement choisissent l'étape, comme pour la simulation :
   les mesures réunies des huit parts. Sur un seul job, le run 37710526918
   jugeait 13 184 lignes et 2 934 branches ; le même code réparti en deux jobs
   donne les mêmes totaux (run 37711318184), et le journal de `pi-gate` les
-  affiche à chaque exécution.
+  affiche à chaque exécution. Ces deux runs précèdent ANH-207, qui a mis
+  `src/signal_processing.py` sous le seuil : le total jugé a grandi d'autant
+  depuis, la liste `include` restant la seule chose qui le fixe.
 * Les contrôles statiques sont ceux d'avant, lancés par chacun des deux jobs
   de tests ; le rapport de qualité les compte une fois.
 
@@ -1546,7 +1548,11 @@ l'exécution suivante de la PR donne les mêmes ordres de grandeur (run
 (2882 s de pytest cumulés, 717 à 724 s par part), 7 min 59 s pour
 `pi (tests 2)` sur un Xeon 6973P-C (1699 s, 416 à 437 s par part), et le
 verdict 14 min 21 s après le début des tests, sur les mêmes 4304 tests,
-13 184 lignes et 2 934 branches.
+13 184 lignes et 2 934 branches. Et quand les deux runners sont lents (run
+37715002510, EPYC 7763 et Xeon Platinum 8370C) : 12 min 50 s et 13 min 51 s,
+pour 2873 s et 3045 s de pytest cumulés, soit deux jobs chargés à 6 % près,
+et le verdict 16 min 15 s après le début des tests, dont 51 s d'attente d'un
+runner pour `pi-gate`.
 
 Limites, les mêmes que pour la table de la simulation :
 
