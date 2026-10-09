@@ -126,12 +126,12 @@ class Console:
         verdict = self.rig.panel.runtime.standing
         return None if verdict is None else verdict.rule
 
-    def offer(self, session_id: str) -> None:
+    def offer(self, session_id: str, profile_id: str = SHORT_PROFILE) -> None:
         """Put ONE launch on the dashboard: the next poll gets it, later polls get nothing."""
         launch: dict[str, JsonValue] = {
             **LAUNCH,
             "sessionId": session_id,
-            "profileId": SHORT_PROFILE,
+            "profileId": profile_id,
         }
         pending = [launch]
 
@@ -144,8 +144,16 @@ class Console:
         return [body for body in self.dashboard.to(END) if body["sessionId"] == session_id]
 
 
-def console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Console:
-    """The linked console on the short programme, the heart rate read from the subject."""
+def console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str] = LINKED_ENV
+) -> Console:
+    """The linked console on the short programme, the heart rate read from the subject.
+
+    ``env`` is the console's configuration when a test needs another one than
+    the linked programme console (a lower bench ceiling, say). A profile store
+    written at ``tmp_path / "profiles.json"`` before this call is the one the
+    console loads, in place of the failure rig's.
+    """
     electrodes = Electrodes()
     original_advance = Physiology.advance
 
@@ -156,9 +164,7 @@ def console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Console:
 
     monkeypatch.setattr(Physiology, "advance", advance)
     dashboard = Dashboard()
-    rig, _ = make_rig(
-        tmp_path, env=LINKED_ENV, treat=electrodes, transport=lambda _config: dashboard
-    )
+    rig, _ = make_rig(tmp_path, env=env, treat=electrodes, transport=lambda _config: dashboard)
     return Console(rig=rig, electrodes=electrodes, dashboard=dashboard)
 
 

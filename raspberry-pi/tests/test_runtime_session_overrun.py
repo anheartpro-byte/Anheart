@@ -20,17 +20,21 @@ and the rule is judged only while it is not.
 Three groups, and the split matters when reading a failure:
 
 * **at rest, the session over**: these fail on ``develop`` and pass here;
-* **a session in progress, unchanged on purpose**: a recovery pushed past the
-  deadline by a late STOP, a silent runtime that cannot take its setpoint
-  back. The verdict comes at the same instant as before; these pass on
-  ``develop`` too. A third case stood here, a session a latched FREEZE held
-  at speed past its end. It no longer happens: under a FREEZE the setpoint
-  follows the programme's own descent, and that session ends on time
-  (``tests/test_runtime_cooldown_freeze.py``). The rule is now a second
-  barrier behind that guard, and one test here takes the guard away to show
-  that it still brings a turning arm down;
+* **a session in progress, unchanged on purpose**: a silent runtime that
+  cannot take its setpoint back. The verdict comes at the same instant as
+  before; this passes on ``develop`` too. Two other cases stood here. A
+  session a latched FREEZE held at speed past its end no longer happens:
+  under a FREEZE the setpoint follows the programme's own descent, and that
+  session ends on time (``tests/test_runtime_cooldown_freeze.py``). The rule
+  is now a second barrier behind that guard, and one test here takes the
+  guard away to show that it still brings a turning arm down. And a recovery
+  pushed past the deadline by a late STOP is no longer judged while it goes
+  as it should: that verdict said nothing true (ANH-185,
+  ``tests/test_runtime_ending_alerts.py``);
 * **a verdict raised during the session, once it is over**: it can be
-  acknowledged and stays acknowledged; fails on ``develop``.
+  acknowledged and stays acknowledged; fails on ``develop``. The overrun is
+  raised the only way one still can be, by an arm held past the end with the
+  guard taken away.
 
 The fake drive and the manual clock of ``tests/test_runtime.py``. The short
 programmes are the rig's own (130 s, the same phases as the shipped one); the
@@ -377,14 +381,16 @@ async def test_a_session_ended_at_a_standstill_keeps_that_verdict_and_gains_no_o
 async def test_a_verdict_arriving_at_rest_after_the_end_does_not_wake_the_rule(
     arrives: str,
 ) -> None:
-    """The phase is RECOVERY again, and the session is still over.
+    """Something latches at rest, and the session is still over.
 
     The programme has finished by itself. A minute and a half later
     something latches at rest: the rider is getting out and somebody hits the
-    e-stop, or the drive is switched off and reports a fault. The runtime
-    opens an ending for it (ARRET, a monitored recovery), so the phase leaves
-    DONE over a session that ended long ago. The rule must not take that for
-    a session in progress. On ``develop`` it had latched 30 s after the end.
+    e-stop, or the drive is switched off and reports a fault. On ``develop``
+    the rule had latched 30 s after the end. After ANH-181 the runtime still
+    opened an ending for that verdict (ARRET, a monitored recovery), and the
+    rule had to tell that recovery from a session in progress. It no longer
+    opens one (ANH-185, ``tests/test_runtime_ending_alerts.py``): the phase
+    stays DONE, and the rule has nothing to mistake.
     """
     rig = await _programme()
     await _run_to_its_end(rig)
@@ -396,15 +402,13 @@ async def test_a_verdict_arriving_at_rest_after_the_end_does_not_wake_the_rule(
     else:
         rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
         expected = RULE_DRIVE_FAULT
-    reopened: set[Phase] = set()
+    phases: set[Phase] = set()
     for _ in range(round(120.0 / TICK)):
         await rig.step()
-        reopened.add(rig.phase())
-        assert _overrun(rig) is None, "the rule took a recovery opened at rest for a session"
+        phases.add(rig.phase())
+        assert _overrun(rig) is None, "the rule judged a session that is over"
     assert _standing_rule(rig) == expected
-    assert Phase.RECOVERY in reopened, (
-        "nothing re-opened a recovery: this is not the case under test"
-    )
+    assert phases == {Phase.DONE}, "a verdict at rest re-opened a finished session"
 
     if arrives == "a drive fault at rest":
         assert is_ok(await rig.runtime.fault_reset())
@@ -460,23 +464,25 @@ class _Ending:
 _ENDINGS: Final = st.builds(
     _Ending,
     how=st.sampled_from(["its own end", "a STOP", "an e-stop", "a drive fault"]),
-    at=st.integers(min_value=1, max_value=95),
+    at=st.integers(min_value=1, max_value=129),
     rest=st.integers(min_value=1, max_value=400),
 )
-"""Any ending before 95 s leaves the 60 s recovery done before the deadline (160 s)."""
+"""Any ending at any second of the programme. The latest ones, from 96 s on,
+leave a recovery that is still running at the programme's deadline (160 s):
+those latched ``session_overrun`` until ANH-185."""
 
 
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ending=_ENDINGS)
-async def test_whatever_ends_a_session_before_its_deadline_the_rest_latches_nothing_more(
+async def test_whatever_ends_a_session_and_whenever_the_rest_latches_nothing_more(
     ending: _Ending,
 ) -> None:
-    """The requirement as a property: a session that is over never triggers the rule.
+    """The requirement as a property: neither an ending nor a rest triggers the rule.
 
-    Any ending, at any second, then any rest: the rule never fires, what
-    stands at the end is only what ended the session (nothing, for an ending
-    of its own or a STOP), one named acknowledgement clears it, and a new
-    start is accepted.
+    Any ending, at any second, then any rest: the rule never fires, not
+    during the ending and not after it; what stands at the end is only what
+    ended the session (nothing, for an ending of its own or a STOP), one
+    named acknowledgement clears it, and a new start is accepted.
     """
     rig = await _programme()
     stands: str | None = None
@@ -494,7 +500,8 @@ async def test_whatever_ends_a_session_before_its_deadline_the_rest_latches_noth
             await rig.run(float(ending.at))
             rig.drive.inject_fault(DriveFault.MOTOR_OVERLOAD)
             stands = RULE_DRIVE_FAULT
-    while _since_start(rig) < DEADLINE + float(ending.rest):
+    over_by = max(DEADLINE, float(ending.at) + 75.0)
+    while _since_start(rig) < over_by + float(ending.rest):
         await rig.step()
         assert _overrun(rig) is None, f"session_overrun fired {_since_start(rig):.1f} s in"
     assert rig.phase() is Phase.DONE
@@ -573,25 +580,26 @@ async def test_an_arm_still_turning_past_the_deadline_is_brought_to_zero_by_the_
     assert abs(rig.drive.shaft_rpm) < 1.0
 
 
-async def test_a_recovery_pushed_past_the_deadline_by_a_late_stop_is_still_judged() -> None:
+async def test_a_recovery_pushed_past_the_deadline_by_a_late_stop_is_no_longer_judged() -> None:
     """STOP five seconds before the end: the monitored recovery outlives the programme.
 
     Nothing turns, and the session is not over: the rider is being watched
-    for a minute more. The rule fires at the deadline as it always has. What
-    is new is in the next group: it can then be cleared.
+    for a minute more. Until ANH-185 the rule fired at the deadline, over an
+    ending that was going exactly as it should. That ending is now given its
+    own recovery: nothing fires while it lasts, the console is back at REPOS
+    with nothing standing, and a new start is taken.
     """
     rig = await _stopped_late()
-    await rig.run(DEADLINE - (TOTAL - 5.0) - 0.2)
-    assert rig.phase() is Phase.RECOVERY
+    while rig.state() is not RuntimeState.FINISHED:
+        await rig.step()
+        assert _overrun(rig) is None, f"judged a recovery in progress, {_since_start(rig):.1f} s in"
+        assert _since_start(rig) < TOTAL + 70.0, "the recovery did not end: not this case"
+    assert _since_start(rig) > DEADLINE, "over before the deadline: not this case"
     assert _applied(rig) == 0
-    assert _overrun(rig) is None
+    assert rig.runtime.end_reason is EndReason.OPERATOR_STOP
 
-    await rig.step()
-    await rig.step()
-    verdict = _overrun(rig)
-    assert verdict is not None, "the rule no longer judges a session in its recovery"
-    assert (verdict.action, verdict.latched) == (SafetyAction.RAMP_DOWN, True)
-    assert rig.state() is RuntimeState.ENDING
+    await _at_rest(rig, 3 * TOTAL)
+    await _a_new_programme_is_accepted(rig)
 
 
 async def test_a_silent_runtime_that_cannot_take_its_setpoint_back_is_still_judged() -> None:
@@ -620,21 +628,29 @@ async def test_a_silent_runtime_that_cannot_take_its_setpoint_back_is_still_judg
 async def test_a_new_session_is_judged_again_from_its_own_start() -> None:
     """Over, then started again: the statement belongs to the session, not to the console.
 
-    The first programme runs to its end. The second is stopped five seconds
-    before its own end, so its recovery outlives it at a setpoint of zero:
-    the rule fires at the second session's deadline, which a statement left
-    over from the first would have silenced.
+    The first programme runs to its end. Through the whole of the second, at
+    a setpoint of zero as at speed, the runtime never says that it is over
+    before its own phase machine does. And a STOP typed five seconds before
+    its end is honoured: it opens an ending and a whole recovery, which a
+    statement left over from the first session would have refused, taking
+    the session for one that has nothing left to end.
     """
     rig = await _programme()
     await _run_to_its_end(rig)
     await _at_rest(rig, DEADLINE + 20.0)
 
-    assert is_ok(await rig.start())
-    await rig.run(TOTAL - 5.0)
-    rig.runtime.request_stop("operator pressed STOP")
-    await rig.run(DEADLINE - (TOTAL - 5.0) + 1.0)
-    assert rig.phase() is Phase.RECOVERY
-    assert _overrun(rig) is not None, "the second session was judged as already over"
+    with _observations() as seen:
+        started = await rig.start()
+        assert is_ok(started), started
+        await rig.run(TOTAL - 5.0)
+        rig.runtime.request_stop("operator pressed STOP")
+        await rig.run(10.0)
+        told = [o for o in seen if o.session_over]
+    assert not told, f"the second session was said to be over {told[0].elapsed:.1f} s in"
+    assert _since_start(rig) > TOTAL
+    assert rig.phase() is Phase.RECOVERY, "the STOP of the second session opened no ending"
+    assert rig.runtime.end_reason is EndReason.OPERATOR_STOP
+    assert rig.state() is RuntimeState.ENDING
 
 
 def _held_at_arming(
@@ -659,9 +675,11 @@ async def test_a_tick_that_falls_while_a_start_is_arming_does_not_end_the_new_se
 
     No console ticks while a start is arming, but nothing in the runtime
     forbids it, and the phase is DONE in that window. A tick there must state
-    nothing about the session that is about to begin: the session is then
-    stopped late, and the rule fires at its deadline over a setpoint of zero,
-    which a statement made during the arming would have silenced.
+    nothing about the session that is about to begin. So the session it
+    starts is never said to be over before its own phase machine says so,
+    and a STOP typed in its BASELINE, at a setpoint of zero, ends it: a
+    statement made during the arming would have refused that ending, taking
+    the session for one that has nothing left to end.
     """
     reached, release = asyncio.Event(), asyncio.Event()
     rig = _rig()
@@ -676,12 +694,16 @@ async def test_a_tick_that_falls_while_a_start_is_arming_does_not_end_the_new_se
     assert is_ok(await starting)
     assert rig.state() is RuntimeState.RUNNING
 
-    await rig.run(TOTAL - 5.0)
-    rig.runtime.request_stop("operator pressed STOP")
-    await rig.run(DEADLINE - (TOTAL - 5.0) + 1.0)
+    with _observations() as seen:
+        await rig.run(5.0)
+        assert rig.phase() is Phase.BASELINE
+        assert _applied(rig) == 0
+        rig.runtime.request_stop("operator pressed STOP")
+        await rig.run(5.0)
+        told = [o for o in seen if o.session_over]
+    assert not told, "a tick during the arming marked the new session as over"
+    assert rig.runtime.end_reason is EndReason.OPERATOR_STOP, "the STOP opened no ending"
     assert rig.phase() is Phase.RECOVERY
-    assert _applied(rig) == 0
-    assert _overrun(rig) is not None, "a tick during the arming marked the new session as over"
 
 
 # =========================================================================
@@ -689,11 +711,31 @@ async def test_a_tick_that_falls_while_a_start_is_arming_does_not_end_the_new_se
 # =========================================================================
 
 
-async def test_an_overrun_acknowledged_before_its_session_is_over_is_taken_back() -> None:
-    """Unchanged: while the session is on its way out the condition is still true."""
-    rig = await _stopped_late()
-    await rig.run(DEADLINE - (TOTAL - 5.0) + 10.0)
+async def _held_past_the_end(monkeypatch: pytest.MonkeyPatch) -> Rig:
+    """A real overrun: an arm held at speed past the end, ten seconds after the rule fired.
+
+    The one way left to raise one. The guard that follows the programme's
+    descent under a FREEZE is forced off (see
+    :func:`test_an_arm_still_turning_past_the_deadline_is_brought_to_zero_by_the_rule`),
+    a FREEZE latched at 40 s holds the arm past the deadline, and the rule
+    fires. Its RAMP_DOWN has brought the arm down, and the session is in the
+    recovery that follows.
+    """
+    monkeypatch.setattr(TrainingRuntime, "_stop_asked", _nothing_asks_for_the_descent)
+    rig = await _programme()
+    await rig.run(40.0)
+    rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
+    await rig.run(DEADLINE - 40.0 + 10.0)
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN
+    assert _applied(rig) == 0
+    return rig
+
+
+async def test_an_overrun_acknowledged_before_its_session_is_over_is_taken_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unchanged: while the session is on its way out the condition is still true."""
+    rig = await _held_past_the_end(monkeypatch)
     assert rig.phase() is Phase.RECOVERY
 
     assert isinstance(rig.runtime.acknowledge(OPERATOR), Ok)
@@ -701,16 +743,19 @@ async def test_an_overrun_acknowledged_before_its_session_is_over_is_taken_back(
     assert _standing_rule(rig) == RULE_SESSION_OVERRUN, "cleared while the session was not over"
 
 
-async def test_an_overrun_raised_during_a_session_is_cleared_for_good_once_it_is_over() -> None:
+async def test_an_overrun_raised_during_a_session_is_cleared_for_good_once_it_is_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """EX-3. On ``develop`` the acknowledgement was accepted and taken back, every time.
 
-    A real overrun, raised while the session ran (a STOP typed late). The
-    session ends, its recovery runs out, the console is back to REPOS with the
-    verdict latched and the rule no longer firing. A start is refused in the
-    verdict's name, as for any latch. One named acknowledgement clears it, it
-    stays cleared for as long as anybody waits, and a new start is accepted.
+    A real overrun, raised while the session ran (an arm held past the end).
+    The session ends, its recovery runs out, the console is back to REPOS
+    with the verdict latched and the rule no longer firing. A start is
+    refused in the verdict's name, as for any latch. One named acknowledgement
+    clears it, it stays cleared for as long as anybody waits, and a new start
+    is accepted.
     """
-    rig = await _stopped_late()
+    rig = await _held_past_the_end(monkeypatch)
     await rig.run(100.0)
     assert rig.state() is RuntimeState.FINISHED
     assert _mode(rig) is RunMode.REPOS

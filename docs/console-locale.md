@@ -24,9 +24,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > la console en simulation ; ils n'ont pas été rejoués dans un navigateur, à
 > l'exception de ce que dit le dernier alinéa de cet encadré.
 > Les passages sur la règle `session_overrun` (sections 4, 5 et 11, ajoutés le
-> 6 octobre 2026 avec ANH-181) viennent du code, des tests automatiques sur la console
-> en simulation et de mesures sur le banc d'essai logiciel ; ils n'ont pas été rejoués
-> dans un navigateur.
+> 6 octobre 2026 avec ANH-181, réécrits le 8 octobre 2026 avec ANH-185 pour les fins
+> de séance ouvertes tard et les verdicts qui arrivent au repos) viennent du code, des
+> tests automatiques sur la console en simulation et de mesures sur le banc d'essai
+> logiciel ; ils n'ont pas été rejoués dans un navigateur.
 > L'enregistrement de séance (section 16, la carte de la section 10, les messages et
 > les routes qui s'y rapportent, ajoutés le 7 octobre 2026) vient du code et des tests
 > automatiques sur la console en simulation ; rien n'a été rejoué dans un navigateur ni
@@ -217,7 +218,7 @@ Les modes :
 
 | Mode | Signification |
 |---|---|
-| `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. Une séance finie n'y déclenche aucun verdict, aussi longtemps que la console y reste : le départ suivant ne demande pas de redémarrer la console (section 11, `session_overrun`). |
+| `REPOS` | rien n'est commandé. Le variateur est **lu** (2 Hz), jamais écrit. Une séance finie n'y déclenche aucun verdict, aussi longtemps que la console y reste : le départ suivant ne demande pas de redémarrer la console (section 11, `session_overrun`). Un arrêt d'urgence ou un défaut variateur qui arrive là, séance finie, ne fait pas quitter ce mode : la pastille **Securite** affiche le verdict, verrouillé et à acquitter (section 11). |
 | `MANUEL` | séance manuelle : l'opérateur fixe une cible, la machine y va aux limites de mouvement |
 | `SEANCE` | une séance programmée (AUTO) déroule son programme. Son retour au calme (phase `cooldown`) se fait dans ce mode, y compris quand la pastille **Securite** dit `freeze` : la consigne descend alors comme sans avertissement (section 11) |
 | `ARRET` | une séance se termine. Le mode dure jusqu'à la fin de la séance, c'est-à-dire phase `done` et étage de sortie retiré : en séance manuelle de banc, dès l'arrêt mesuré ; pour un programme, après la phase `recovery` (environ 5 minutes avec le profil standard). **Pas** « arrêté » : lire la vitesse mesurée. Après un STOP ou une règle d'arrêt, la consigne descend encore vers zéro, y compris quand la pastille **Securite** dit `freeze` (section 5). Après la règle `session_standstill` (section 11), la consigne vaut déjà 0 quand `ARRET` s'affiche et la vitesse mesurée suit : dans la fraction de seconde qui suit en simulation, non mesuré sur la vraie machine. C'est la pastille **Rotation** qui dit que le bras est arrêté |
@@ -274,18 +275,21 @@ s'arrête au mode : `liaison ouverte · repos`.
   l'étage de sortie coupé à l'arrêt mesuré, le mode revient à `REPOS` ; pour un
   programme, `REPOS` ne revient qu'après la phase `recovery`. Repartir demande un
   nouveau démarrage.
-- **Un STOP donné tard dans un programme se termine par un verdict à acquitter.** Un
+- **Un STOP donné tard dans un programme ne laisse plus de verdict à acquitter.** Un
   STOP rouvre une récupération complète (5 minutes avec le profil standard), même si le
-  programme était déjà dans sa propre phase `recovery`, bras arrêté. Si elle dépasse la
-  durée prévue de plus de 30 s, la règle `session_overrun` se verrouille pendant cette
-  récupération : avec le profil standard de 30 minutes, c'est le cas de tout STOP donné
-  dans les quatre dernières minutes et demie, et le verdict apparaît à 1830 s. Rien ne
-  bouge. Acquitter une fois `REPOS` affiché (section 11). Mesuré sur le banc d'essai
-  logiciel avec le profil standard, et vérifié par l'API sur la console en simulation
-  avec un programme court (`raspberry-pi/tests/test_session_overrun_console.py`) ; pas
-  rejoué dans un navigateur. Un arrêt demandé depuis le site passe par ce même STOP. Un
-  E-STOP ou un verdict d'arrêt donnés aussi tard rouvrent la même récupération et mènent
-  au même verdict (section 11).
+  programme était déjà dans sa propre phase `recovery`, bras arrêté : `REPOS` revient
+  donc 5 minutes après le STOP, et plus tard que la durée prévue pour un STOP donné
+  dans les cinq dernières minutes. Jusqu'au 8 octobre 2026, la règle `session_overrun`
+  se verrouillait pendant cette récupération dès qu'elle dépassait la durée prévue de
+  plus de 30 s (tout STOP des quatre dernières minutes et demie du profil standard,
+  verdict à 1830 s), sans que rien se soit mal passé. Elle juge maintenant cette fin de
+  séance sur sa propre échéance (section 11) : aucun verdict, rien à acquitter. Mesuré
+  sur le banc d'essai logiciel avec le profil standard (STOP à 1531 s, 1600 s et
+  1799 s), et vérifié par l'API sur la console en simulation avec un programme court
+  (`raspberry-pi/tests/test_session_overrun_console.py`) ; pas rejoué dans un
+  navigateur. Un arrêt demandé depuis le site passe par ce même STOP. Un E-STOP ou un
+  verdict d'arrêt donnés aussi tard rouvrent la même récupération : il reste à
+  acquitter l'arrêt d'urgence ou le verdict qui a terminé la séance, et lui seul.
 - Refus : une boîte d'alerte `STOP refuse : …` (par exemple
   `the machine is already stopping` si un arrêt est déjà en cours, ou
   `there is no session to end (the machine is idle)`).
@@ -822,24 +826,58 @@ redémarrer la console. Avant le correctif du 6 octobre 2026 (ANH-181), ce verdi
 apparaissait seul au repos (30 s après la fin d'un programme allé à son terme, 1830,2 s
 après le départ du profil standard même arrêté tôt, 3630,2 s après le départ d'une
 séance manuelle), l'acquittement ne tenait pas et il fallait redémarrer la console.
-Le verdict peut encore apparaître **pendant** une séance : quand
-une fin de séance est ouverte tard dans un programme (STOP, E-STOP ou verdict d'arrêt),
-parce que toute fin de séance rouvre une récupération complète, qui dépasse alors
-l'échéance, bras déjà arrêté (section 5) ; quand une séance manuelle atteint ses 3600 s
-à grande vitesse et descend encore 30 s plus tard. Un `freeze` verrouillé que personne
-n'acquitte n'est plus un de ces cas : il ne tient plus le bras en vitesse au-delà de la
-fin du programme (alinéa suivant). Dans tous ces cas : attendre que
-**Mode** affiche `REPOS`, acquitter par son nom, puis demander un nouveau départ.
-L'acquittement tient alors. Avant `REPOS`, il répond 200 et le verdict est de nouveau
-là au cycle suivant. Après un E-STOP donné tard, `session_overrun` se verrouille
-derrière l'arrêt d'urgence : un seul acquittement à `REPOS` lève les deux ; si l'E-STOP
-est acquitté avant `REPOS`, `session_overrun` reste ou apparaît ensuite comme verdict
-retenu (pastille **Securite** `ramp_down`), à acquitter de nouveau à `REPOS`. Après un
-verdict d'arrêt donné tard (par exemple `hr_stale` à son niveau `ramp_down`), le
-plancher verrouillé garde ce premier verdict : `session_overrun` n'apparaît que dans
-la liste des règles actives pendant `ARRET`, et un seul acquittement à `REPOS` suffit.
+**Une fin de séance qui se déroule normalement ne déclenche plus ce verdict**
+(8 octobre 2026, ANH-185). Jusque-là il apparaissait pendant deux fins de séance où
+rien ne s'était mal passé : une fin ouverte tard dans un programme (STOP, E-STOP ou
+verdict d'arrêt), parce que toute fin de séance rouvre une récupération complète, qui
+dépassait alors l'échéance, bras déjà arrêté (section 5) ; et une séance manuelle qui
+atteignait ses 3600 s à grande vitesse et descendait encore 30 s plus tard. La règle
+juge maintenant une fin de séance déjà ouverte sur sa propre échéance : l'instant où
+elle a été ouverte, plus la descente attendue depuis la vitesse commandée à cet
+instant (4 s bras à l'arrêt ; 30 s depuis 193 tr/min moteur dans un programme ; en
+séance manuelle la descente aux limites de mouvement et 4 s de rampe du variateur,
+soit 24 s depuis 300 tr/min moteur et 108 s depuis 1344), plus la récupération une
+fois la consigne à 0 (300 s avec le profil standard ; 60 s en séance manuelle avec
+une personne à bord, aucune capsule vide), plus 30 s. Jamais plus tôt que l'échéance
+du programme. Ces fins de séance se terminent donc sans `session_overrun` : après un
+STOP il n'y a rien à acquitter, et après un E-STOP ou un verdict d'arrêt il reste
+celui-là seul.
+
+Le verdict apparaît encore quand une fin de séance ne se déroule pas comme prévu :
+une descente qui n'a pas ramené la consigne à 0 dans le temps qu'une descente prend
+depuis cette vitesse, ou une récupération qui ne finit pas. Le détail nomme alors la
+fin de séance :
+`the session has run 1859 s against an ending opened at 1799 s with 30 s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track`
+(ou `… with 304 s to finish its descent and its monitored recovery plus 30 s of grace …`
+pour une récupération). Demander STOP sur un bras qui ne descend pas ne retarde ce
+verdict que du temps de cette descente : mesuré sur le banc d'essai logiciel, bras
+tenu à 193 tr/min moteur, STOP à 1799 s, verdict à 1859 s au lieu de 1830 s sans
+STOP. Un `freeze` verrouillé que personne n'acquitte n'est pas un de
+ces cas : il ne tient plus le bras en vitesse au-delà de la fin du programme (alinéa
+suivant). Quand le verdict apparaît : attendre que **Mode** affiche `REPOS`,
+acquitter par son nom, puis demander un nouveau départ. L'acquittement tient alors.
+Avant `REPOS`, il répond 200 et le verdict est de nouveau là au cycle suivant.
+
+**Un arrêt d'urgence ou un défaut variateur qui arrive au repos, séance finie, ne
+rouvre plus de fin de séance** (8 octobre 2026, ANH-185). Après un programme allé à
+son terme, ils remettaient **Mode** à `ARRET` et la phase à `recovery` pour toute la
+récupération du profil (5 minutes avec le profil standard), et les règles de fréquence
+cardiaque jugeaient de nouveau : électrodes retirées, `hr_stale` allait jusqu'à un
+`ramp_down` verrouillé de plus. Maintenant **Mode** reste `REPOS`, aucune phase
+n'est affichée (`-`, comme toujours au repos ; le champ `phase` de `/api/snapshot`
+reste `done`), et la pastille **Securite** affiche le verdict, verrouillé :
+`quick_stop` pour un E-STOP, `ramp_down` pour un défaut variateur. Aucune règle de
+fréquence cardiaque ni de présence ne se déclenche. Tout départ est refusé (409) avec
+le nom du verdict jusqu'à son acquittement par son nom, case « coup de poing » cochée
+pour un E-STOP. Le réarmement d'un défaut variateur, qui n'est accepté qu'en phase
+`done`, l'est tout de suite : il n'y a plus 5 minutes à attendre. C'est ce que la
+console faisait déjà après une séance terminée par un STOP. Vérifié par l'API sur la
+console en simulation (`raspberry-pi/tests/test_session_overrun_console.py`) ; pas
+rejoué dans un navigateur.
+
 Mesures et limites :
-[securite.md](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181).
+[securite.md, section 8](securite.md#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)
+et [8.6](securite.md#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185).
 
 **Sous un `freeze`, le retour au calme d'un programme se fait quand même.** Un
 `freeze` tient la vitesse d'un programme pendant `warmup` et `hold`. À partir de la

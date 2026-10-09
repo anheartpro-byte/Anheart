@@ -266,7 +266,7 @@ usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT]
 | Option | Effet |
 |---|---|
 | `scenario` | nom (`manual_27_rpm`) ou chemin d'un fichier `.json` |
-| `--list` | liste les scénarios (65 aujourd'hui) |
+| `--list` | liste les scénarios (66 aujourd'hui) |
 | `--all` | lance tous les scénarios et écrit `simulation/out/summary.md` |
 | `--csv` | écrit aussi un CSV des lignes de la trace |
 | `--out DIR` | dossier de sortie (défaut `simulation/out/`, ignoré par git) |
@@ -385,7 +385,7 @@ thèmes clair et sombre). Ouvrez-le dans un navigateur.
 ## 7. Le visualiseur 2D : `simulation.live`
 
 > Le même visualiseur est aussi **en ligne**, sans rien installer :
-> <https://anheart-simulation.vercel.app> (61 scénarios sur 65, vitesse de 10x
+> <https://anheart-simulation.vercel.app> (62 scénarios sur 66, vitesse de 10x
 > à 200x). Ses limites et son déploiement sont décrits dans
 > [deploiement.md](deploiement.md#6-le-moteur-de-simulation-hébergé).
 
