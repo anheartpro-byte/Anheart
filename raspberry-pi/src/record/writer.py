@@ -3,6 +3,7 @@ import errno
 import hashlib
 import io
 import os
+from collections.abc import Callable
 from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +30,15 @@ CADENCE_EPSILON: Final = 1e-9
 DIRECTORY_SYNC: Final = os.name == "posix"
 """Whether a directory can be opened and fsynced here (not on Windows)."""
 
+PRIVATE_DIRECTORY: Final[int] = 0o700
+PRIVATE_FILE: Final[int] = 0o600
+"""What a record is created with: its directories and files belong to the service user alone.
+
+Given to the system call that creates each one, so there is no instant at which
+a directory or a file of a record is readable by anybody else. The process's
+umask can only narrow these, never widen them.
+"""
+
 
 def describe_os_error(error: OSError) -> str:
     """``OSError:ENOSPC``: the class and the errno's name, never the path or the message."""
@@ -43,8 +53,26 @@ def describe_failure(error: OSError | ValueError) -> str:
 
 
 def write_file(path: Path, content: bytes, mode: Literal["ab", "xb"]) -> None:
-    """Append to a stream, or create a block that must not exist yet. Raises ``OSError``."""
-    with path.open(mode) as handle:
+    """Append to a stream, or create a block that must not exist yet. Raises ``OSError``.
+
+    A file this call creates is private (:data:`PRIVATE_FILE`).
+    """
+    kind = os.O_APPEND if mode == "ab" else os.O_EXCL
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | kind, PRIVATE_FILE)
+    # The descriptor carries the mode's meaning (append, or exclusive creation):
+    # wrapping it neither truncates nor reopens anything.
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+
+
+def create_private(path: Path, content: bytes) -> None:
+    """Create ``path``, private, with ``content``; refused when it exists. Raises ``OSError``.
+
+    For every file that is added to a record or next to it: the manifest, the
+    stream headers, the checksums, a deposit marker.
+    """
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE)
+    with os.fdopen(descriptor, "wb") as handle:
         handle.write(content)
 
 
@@ -113,11 +141,11 @@ class Writer:
                 "events.jsonl": b"",
                 "drive_frames.jsonl": b"",
             }
-            path.mkdir(parents=True, exist_ok=False)
-            (path / "ecg_raw").mkdir()
-            (path / "manifest.json").write_text(encoded + "\n", encoding="utf-8")
+            path.mkdir(mode=PRIVATE_DIRECTORY, parents=True, exist_ok=False)
+            (path / "ecg_raw").mkdir(mode=PRIVATE_DIRECTORY)
+            create_private(path / "manifest.json", (encoded + "\n").encode("utf-8"))
             for name, header in headers.items():
-                (path / name).write_bytes(header)
+                create_private(path / name, header)
         except (OSError, ValueError) as error:
             return Err(RecordError("create", describe_failure(error)))
         writer = cls(path, manifest, privacy)
@@ -237,8 +265,20 @@ class Writer:
         return result
 
     def close(
-        self, clock: Clock, end_reason: str, observation: EndObservation | None = None
+        self,
+        clock: Clock,
+        end_reason: str,
+        observation: EndObservation | None = None,
+        *,
+        pulse: Callable[[], None] | None = None,
     ) -> Result[None, RecordError]:
+        """Finalise the manifest, then index every file of the record by its SHA-256.
+
+        The index reads the whole record back: thousands of small files after a
+        long session. ``pulse`` is called after each one, so an owner with
+        periodic work of its own (the console's journal thread measures the
+        disk) is not kept from it for the length of a close.
+        """
         if self.closed:
             return Err(RecordError("close", "closed"))
         try:
@@ -256,16 +296,15 @@ class Writer:
             encoded = encode(document(MANIFEST, manifest), self.privacy)
             with TemporaryDirectory(prefix=".record-", dir=self.path.parent) as temporary:
                 final_manifest = Path(temporary) / "manifest.json"
-                final_manifest.write_text(encoded + "\n", encoding="utf-8")
+                create_private(final_manifest, (encoded + "\n").encode("utf-8"))
                 final_manifest.replace(self.path / "manifest.json")
-            paths = sorted(path for path in self.path.rglob("*") if path.is_file())
-            checksums = "".join(
-                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
-                f"{path.relative_to(self.path).as_posix()}\n"
-                for path in paths
-            )
-            with (self.path / "checksums.sha256").open("x", encoding="utf-8") as handle:
-                handle.write(checksums)
+            lines: list[str] = []
+            for path in sorted(path for path in self.path.rglob("*") if path.is_file()):
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                lines.append(f"{digest}  {path.relative_to(self.path).as_posix()}\n")
+                if pulse is not None:
+                    pulse()
+            create_private(self.path / "checksums.sha256", "".join(lines).encode("utf-8"))
         except (OSError, ValueError) as error:
             return Err(RecordError("close", describe_failure(error)))
         self.manifest = manifest

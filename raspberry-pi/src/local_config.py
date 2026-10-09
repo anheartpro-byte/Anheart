@@ -42,7 +42,9 @@ The session record (the local black box) has its own keys, all optional:
 ``RECORD_LOCAL_RETENTION_DAYS`` (default 30: how long a record already
 deposited AND confirmed is kept; one that was not is never purged),
 ``RECORD_MACHINE_ID`` / ``RECORD_ORGANIZATION_ID`` (opaque identifiers written
-in the manifest, ``unassigned`` when unset) and ``ANHEART_SOFTWARE_VERSION``.
+in the manifest, ``unassigned`` when unset), ``ANHEART_SOFTWARE_VERSION``, and
+``RECORD_DRIVE_SDK_FRAMES`` (default ``false``: a bench diagnostic that also
+records the Modbus SDK's transport calls, at about four times the lines).
 
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
 module is testable with a dict.
@@ -114,6 +116,7 @@ KEY_RECORD_RETENTION_DAYS: Final[str] = "RECORD_LOCAL_RETENTION_DAYS"
 KEY_RECORD_MACHINE_ID: Final[str] = "RECORD_MACHINE_ID"
 KEY_RECORD_ORGANIZATION_ID: Final[str] = "RECORD_ORGANIZATION_ID"
 KEY_SOFTWARE_VERSION: Final[str] = "ANHEART_SOFTWARE_VERSION"
+KEY_RECORD_DRIVE_SDK_FRAMES: Final[str] = "RECORD_DRIVE_SDK_FRAMES"
 
 # --- Defaults and bounds -------------------------------------------------
 DEFAULT_MOTOR_MAX_RPM: Final[MotorRpm] = MotorRpm(300)
@@ -262,6 +265,12 @@ class RecordConfig:
     machine_id: str = UNASSIGNED
     organization_id: str = UNASSIGNED
     software_version: str = UNVERSIONED
+
+    drive_sdk_frames: bool = False
+    """Also record the Modbus SDK's own transport calls (each request sent, each
+    chunk of an answer received, with their bytes), on top of the register
+    transactions. A bench diagnostic for the link itself: about four times the
+    lines. Only the native driver has such calls; the simulator is unaffected."""
 
 
 DEFAULT_RECORD_CONFIG: Final[RecordConfig] = RecordConfig()
@@ -674,16 +683,18 @@ def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem,
         env, KEY_RECORD_ORGANIZATION_ID, RECORD_IDENTIFIER, UNASSIGNED
     )
     version = _record_identifier(env, KEY_SOFTWARE_VERSION, RECORD_VERSION, UNVERSIONED)
+    sdk_frames = _flag(env, KEY_RECORD_DRIVE_SDK_FRAMES)
     if (
         isinstance(retention, Err)
         or isinstance(machine, Err)
         or isinstance(organization, Err)
         or isinstance(version, Err)
+        or isinstance(sdk_frames, Err)
     ):
         return Err(
             tuple(
                 result.error
-                for result in (retention, machine, organization, version)
+                for result in (retention, machine, organization, version, sdk_frames)
                 if isinstance(result, Err)
             )
         )
@@ -694,6 +705,7 @@ def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem,
             machine_id=machine.value,
             organization_id=organization.value,
             software_version=version.value,
+            drive_sdk_frames=sdk_frames.value,
         )
     )
 

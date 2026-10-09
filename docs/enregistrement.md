@@ -42,7 +42,18 @@ Une séance interrompue peut donc n'avoir que six entrées, sans checksums.
 Rien d'autre n'entre dans le dossier. Sur le Pi, la confirmation d'un dépôt
 hors de la machine est un fichier **à côté** du dossier
 (`<nom du dossier>.deposit.json`), pas dedans : le dossier reste exactement
-ces sept entrées et se relit sans avertissement, déposé ou non.
+ces sept entrées et se relit sans avertissement, déposé ou non. Un fichier
+ajouté dans un dossier fermé serait signalé à la lecture
+(`checksum_mismatch`) : ce qui arrive à la console après la fermeture va dans
+le journal hors séance, un dossier `logbook/` à côté des enregistrements
+([raspberry-pi.md](raspberry-pi.md#159-le-journal-hors-séance)), jamais dans
+un enregistrement.
+
+Le writer crée chaque dossier en mode 700 et chaque fichier en mode 600, pour
+le Pi comme pour la simulation : le mode est donné à l'appel qui crée le
+fichier (`create_private` et `write_file`, `src/record/writer.py`), y compris
+pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côté
+d'un dossier (un marqueur de dépôt) le crée de la même façon.
 
 ## Manifeste
 
@@ -253,6 +264,16 @@ autres kinds (pertes du BITalino, nouvelles du lien avec le tableau de bord
 préfixées `dashboard:`, refus, défauts) : le rejeu ne lit comme commandes que
 les trois kinds d'entrée, et jamais un autre événement, quel que soit son texte.
 
+Le format n'a qu'un kind `warning` ; ce dont il parle se lit au préfixe de
+son `detail` :
+
+| Préfixe | Qui l'écrit, et ce qu'il dit |
+| --- | --- |
+| `bitalino_loss:` | la console : la liaison d'acquisition a perdu ou comblé des échantillons (compteurs de la liaison) |
+| `dashboard:` | la console : une nouvelle du lien avec le tableau de bord montrée à l'opérateur, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` |
+| `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur, puis `last=<opération>:<erreur>` |
+| `simulation:` | la simulation : ce qu'elle a fait au modèle |
+
 ## Observations du variateur
 
 Chaque ligne de `drive_frames.jsonl` contient
@@ -289,11 +310,30 @@ des échanges SDK n'est activée. Les clients système et FTDI activent aussi ce
 point d'observation quand le pilote reçoit le journal. Le journal peut être
 fourni directement au pilote par `observe_exchanges(log)` : aucune importation de simulation
 n'est nécessaire. Le consommateur remet les champs des `Exchange` au writer
-partagé. **La console du Pi ne le fait pas encore** : son `drive_frames.jsonl`
-existe et reste vide. Le journal des échanges n'a ni borne ni vidage, et le
-brancher tel quel ferait grossir la mémoire de la console pendant toute une
-séance (ticket de suite proposé avec ANH-128). Ce journal en mémoire n'est pas
-une garantie de capture physique ni une preuve du comportement d'un câble réel.
+partagé. Ce journal en mémoire n'est pas une garantie de capture physique ni
+une preuve du comportement d'un câble réel.
+
+**La console du Pi le fait depuis ANH-191**, hors de la boucle de contrôle.
+Le journal des échanges accepte une borne (`ExchangeLog(clock, capacity)`) :
+au-delà, l'échange le plus récent est refusé et compté, et `drain()` rend ce
+qui attend avec ce compte. Sans borne (l'usage de la simulation), rien ne
+change. Sur le pilote natif, la console lui donne un journal borné et le fil
+du journal de séance le vide à chaque cycle. Elle n'y garde par défaut que les
+transactions de registre (`modbus_read`, `modbus_write`) : les appels du SDK
+(`modbus_send`, `modbus_receive_chunk`) ne sont écrits que si
+`RECORD_DRIVE_SDK_FRAMES=true`, un diagnostic de banc qui multiplie les lignes
+par quatre (`ExchangeLog(clock, capacity, transport=False)` les écarte à
+l'entrée, sans qu'elles prennent de place sous la borne). Sur un variateur qui ne rapporte
+rien (le simulateur), elle l'enveloppe d'une prise qui note chaque appel, avec
+le vocabulaire et les registres des observations d'appel décrites ci-dessous
+(`src/record/drive_tap.py`,
+[raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Les
+trames perdues parce que personne ne venait les prendre sont comptées dans
+l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Les lignes
+commencent avec l'enregistrement : la scrutation d'une console au repos n'y
+est pas, et les échanges qui précèdent l'ouverture n'y sont que s'ils
+attendaient encore quand le fil du journal a ouvert l'enregistrement, moins
+d'un cycle en temps normal (leur `t` est alors négatif).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel
@@ -438,14 +478,18 @@ Il faut aussi la géométrie du manifeste (`geometry`) : le runtime rejoué est
 construit avec elle. Quand il manque plusieurs de ces choses, le refus les
 donne ensemble, séparées par « ; ».
 
-**L'enregistrement que la console du Pi écrit aujourd'hui (ANH-128) est
-refusé**, pour trois raisons que le rejeu énonce : ses événements d'entrée
-sont du texte (`manual session started`, `end_requested: done`) et non des
-commandes du tableau ci-dessus ; son `drive_frames.jsonl` est vide ; son
-manifeste n'a pas de géométrie. Il n'a pas non plus les tics du repos (son
-premier tic est à `t = 0`) ni `t_received` sur ses blocs. Même structure ne
-veut donc pas encore dire rejouable : `test_record_console_parity.py` vérifie
-les deux.
+**L'enregistrement que la console du Pi écrit aujourd'hui est refusé**, pour
+deux raisons que le rejeu énonce : ses événements d'entrée sont du texte
+(`manual session started`, `end_requested: done`) et non des commandes du
+tableau ci-dessus ; son manifeste n'a pas de géométrie. Son
+`drive_frames.jsonl` n'est plus vide (ANH-191) : en simulation il porte les
+observations d'appel, depuis l'ouverture de l'enregistrement. Il n'a pas les
+tics du repos (son premier tic est à `t = 0`), donc pas non plus les réponses
+du variateur à ces tics, ni `t_received` sur ses blocs ; et sur le pilote
+natif ses trames sont des échanges Modbus, que le rejeu ne sait pas encore
+redonner. Même structure ne veut donc pas encore dire rejouable :
+`test_record_console_parity.py` vérifie les deux, et que la console et la
+simulation écrivent les mêmes observations d'appel.
 
 À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'au
 départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les

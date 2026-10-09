@@ -1061,6 +1061,9 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
+| `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | il reste des octets, mais plus assez d'inodes libres pour les fichiers d'une séance ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
+| `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` | aucune mesure du disque depuis plus de 15 s, sans rien d'annoncé |
+| `demarrage refuse : enregistrement de seance impossible pour l'instant : la fermeture d'un enregistrement est en cours sous <dossier>, derniere mesure de l'espace libre il y a <n> s. Reessayer dans un instant` | la console finit de fermer l'enregistrement précédent (ou `la purge des enregistrements deposes est en cours`) et une étape a duré plus de 15 s |
 | `demarrage refuse : age du passager requis pour une seance programmee` | âge vide |
 | `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
@@ -1308,7 +1311,9 @@ tant qu'il se passe bien.
 |---|---|---|
 | le disque est trop plein pour démarrer | liste **Evenements**, événement `refused` | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` |
 | le dossier d'enregistrement est inutilisable | événement `refused` au départ, et événement `recording` dès le lancement de la console | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` |
+| le disque n'a plus assez d'inodes libres pour les fichiers d'une séance | événement `refused` au départ | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` |
 | le disque ne répond plus depuis plus de 15 s | événement `refused` au départ | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` |
+| la console finit de fermer un long enregistrement, ou purge des enregistrements déposés, et une étape dure plus de 15 s | événement `refused` au départ | `demarrage refuse : enregistrement de seance impossible pour l'instant : la fermeture d'un enregistrement est en cours sous <dossier>, derniere mesure de l'espace libre il y a <n> s. Reessayer dans un instant` (ou `la purge des enregistrements deposes est en cours`) |
 | l'enregistrement se dégrade pendant une séance | événement `recording` | `enregistrement de seance degrade : …` (disque plein, droits, erreur d'écriture, file pleine, disque qui ne répond plus), toujours suivi de `La seance et la securite continuent.` |
 | l'enregistrement redevient normal | événement `recording` | `enregistrement de seance retabli` |
 
@@ -1317,15 +1322,26 @@ fonctionnent, toutes les règles de sécurité restent actives. Ce qui est perdu
 c'est une partie de la trace : le noter, finir ou arrêter la séance selon le
 protocole du site, et s'occuper du disque avant la suivante. Le tableau de bord
 reçoit le même signal (`recordDegraded` dans le battement de cœur), mais ne
-l'affiche pas encore.
+l'affiche pas encore. Ce signal parle du dernier enregistrement : il redevient
+faux quand la séance suivante s'enregistre normalement, sans redémarrer la
+console.
 
 **Le disque se remplit.** Aucun enregistrement n'est supprimé automatiquement
 tant qu'il n'a pas été déposé hors de la machine et que ce dépôt n'a pas été
 confirmé, et ce dépôt n'existe pas encore. Compter environ 40 Mo par séance de
-30 minutes. Sous 500 Mo libres, la console refuse de démarrer une séance : il
-faut alors exporter les enregistrements utiles, puis supprimer leurs dossiers à
-la main sur le Pi. Quand le dépôt existera, un enregistrement déposé et confirmé
-sera gardé `RECORD_LOCAL_RETENTION_DAYS` jours (30 par défaut) puis supprimé.
+30 minutes, et près de 9 000 petits fichiers. Sous 500 Mo libres, ou sous
+36 016 inodes libres (la place des fichiers de deux séances d'une heure), la
+console refuse de démarrer une séance : il faut alors exporter les
+enregistrements utiles, puis supprimer leurs dossiers à la main sur le Pi.
+Quand le dépôt existera, un enregistrement déposé et confirmé sera gardé
+`RECORD_LOCAL_RETENTION_DAYS` jours (30 par défaut) puis supprimé.
+
+**Hors séance.** Ce qui est demandé à la console quand aucune séance n'est
+enregistrée (un départ refusé, un acquittement, un réarmement après la fin
+d'une séance) est écrit dans un journal à part, `logbook/events.jsonl` sous le
+dossier des enregistrements, borné à deux fichiers de 1 Mo
+([raspberry-pi.md](raspberry-pi.md#159-le-journal-hors-séance)). Il n'a pas de
+bouton d'export.
 
 **Exporter.** Page Configuration, carte « Enregistrements de seance », bouton
 `Exporter l'enregistrement` : la console prépare l'archive `.tar.gz` du
@@ -1340,7 +1356,13 @@ ralentie). Les autres enregistrements s'exportent par l'API
 (`GET /api/records`, puis `GET /api/records/{nom}/archive`).
 
 **Qui peut lire.** Le dossier est réservé au compte qui lance la console
-(mode 700). Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
+(mode 700), et chaque dossier et fichier que la console y crée l'est aussi
+(700 et 600) ; les enregistrements écrits avant ce changement gardent leurs
+modes, sous ce même dossier. Sur un Pi installé, la console tourne sous
+`root` : les dossiers de séance n'y sont lisibles que par `root`, plus par le
+compte `anheart`. Un technicien les lit par l'export ci-dessus, ou sur le Pi
+avec `sudo` ([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
+Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
 elle contient l'ECG brut de la séance et doit être traitée comme une donnée de
 santé. Le nom de l'opérateur n'y figure pas (un alias le remplace), mais un
 motif tapé à la main y est recopié : ne pas y écrire le nom d'un passager.

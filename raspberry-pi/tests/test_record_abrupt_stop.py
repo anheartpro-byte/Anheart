@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Final
 
 from src.record.reader import read
+from src.record.retention import records
 from src.record.schema import EventKind
 from src.result import Ok
 
@@ -69,16 +70,16 @@ def test_acceptance_a_sigkill_mid_session_leaves_a_record_readable_to_within_two
         process.wait(10.0)
         assert process.returncode == -signal.SIGKILL
 
-    records = [path for path in root.iterdir() if not path.name.startswith(".")]
-    assert len(records) == 1
-    loaded = read(records[0])
+    found = records(root)
+    assert len(found) == 1
+    loaded = read(found[0])
     assert isinstance(loaded, Ok), loaded
     recording = loaded.value
 
     # Nothing was finalised: the manifest is the opening one and there are no checksums.
     assert recording.manifest.ended_at is None
     assert recording.manifest.end_reason is None
-    assert not (records[0] / "checksums.sha256").exists()
+    assert not (found[0] / "checksums.sha256").exists()
     assert "missing_checksums" in {warning.code for warning in recording.warnings}
     # At most the last line of a stream, or the last block, was cut by the kill.
     assert {w.code for w in recording.warnings} <= {"missing_checksums", "truncated"}
