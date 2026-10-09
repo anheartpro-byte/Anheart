@@ -1584,6 +1584,12 @@ Que faire :
 6. Redémarrez la séance voulue. Rien ne reprend tout seul : une séance interrompue
    n'est jamais relancée automatiquement.
 
+Si la console est reliée au tableau de bord distant, elle lui envoie après son
+redémarrage ce que la séance interrompue avait enregistré et qu'il n'avait pas
+encore reçu. La séance y apparaît terminée : échouée, raison `interrupted`, si
+la console a été coupée brutalement ; `shutdown` si elle a été arrêtée
+proprement. Cela ne relance rien sur la machine.
+
 Une inspection initiale en cours reste prise en charge si la console est
 interrompue pendant sa réponse. Un échec d'ouverture du lien ne permet aucune
 écriture vers un variateur non vérifié. Si le lien a été acquis mais que l'état

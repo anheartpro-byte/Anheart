@@ -79,6 +79,12 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     "tests/test_cloud_contract.py": {
         "test_nothing_else_from_a_dashboard_of_another_major_touches_a_running_session": 16,
     },
+    "tests/test_cloud_journal_e2e.py": {
+        "test_acceptance_a_session_cut_at_3_min_and_killed_at_5_is_whole_on_the_dashboard": 21,
+    },
+    "tests/test_cloud_journal_wiring.py": {
+        "test_a_session_under_a_refused_contract_is_sent_whole_and_closed_once_it_is_served": 22,
+    },
     "tests/test_cooldown_freeze_console.py": {
         "test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 41,
     },
@@ -204,7 +210,10 @@ with measured ones at the next refresh.
 
 The 52 lines measured then named 119 of the 4267 tests and two thirds of their
 time; three of them named tests that were rewritten since (ANH-185) and are
-gone from the table. Dealt
+gone from the table. Two lines came with the tests of the dashboard
+synchronisation (ANH-129), measured on that work's own runs (37714034956 on
+the faster kind of runner; 37913952194 and 37924778410 on the slower, 1.7 to
+1.9 times those seconds). Dealt
 by their position alone, the long cases of several tests met in the same
 shares, and shares 4 to 7 had a third more work than shares 0 to 3 (1568 s
 against 1166 s, on one runner). The numbers only steer the dealing. A name

@@ -684,6 +684,7 @@ def refuse_everything_but_the_status(dashboard: Dashboard) -> None:
         END,
         "/api/machine/profiles",
         "/api/machine/training/telemetry",
+        "/api/machine/training/events",
         "/api/machine/training/local",
         "/api/machine/training/start",
     ):

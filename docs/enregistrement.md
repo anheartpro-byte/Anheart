@@ -41,8 +41,12 @@ Une séance interrompue peut donc n'avoir que six entrées, sans checksums.
 
 Rien d'autre n'entre dans le dossier. Sur le Pi, la confirmation d'un dépôt
 hors de la machine est un fichier **à côté** du dossier
-(`<nom du dossier>.deposit.json`), pas dedans : le dossier reste exactement
-ces sept entrées et se relit sans avertissement, déposé ou non. Un fichier
+(`<nom du dossier>.deposit.json`), pas dedans, et le curseur de la
+synchronisation avec le tableau de bord aussi (`<nom du dossier>.sync.json`,
+avec, une fois pour tout le répertoire, `.sync-baseline.json` ;
+[raspberry-pi.md](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) : le
+dossier reste exactement ces sept entrées et se relit sans avertissement,
+déposé ou non, synchronisé ou non. Un fichier
 ajouté dans un dossier fermé serait signalé à la lecture
 (`checksum_mismatch`) : ce qui arrive à la console après la fermeture va dans
 le journal hors séance, un dossier `logbook/` à côté des enregistrements
@@ -53,7 +57,20 @@ Le writer crée chaque dossier en mode 700 et chaque fichier en mode 600, pour
 le Pi comme pour la simulation : le mode est donné à l'appel qui crée le
 fichier (`create_private` et `write_file`, `src/record/writer.py`), y compris
 pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côté
-d'un dossier (un marqueur de dépôt) le crée de la même façon.
+d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
+`.sync-baseline.json`) le crée de la même façon.
+
+**Ce qui part au tableau de bord.** De tout enregistrement fait depuis le
+premier démarrage de la console avec un tableau de bord configuré sur ce
+répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
+(ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
+journal hors séance `logbook/`). Cela vaut
+aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
+configuré**, s'il est postérieur à ce premier démarrage : il part au premier
+démarrage où une clé est de nouveau en place. Les enregistrements antérieurs
+à ce premier démarrage ne partent jamais. Le détail, et le seul moyen de
+garder locaux les seconds, sont dans
+[raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console).
 
 ## Manifeste
 

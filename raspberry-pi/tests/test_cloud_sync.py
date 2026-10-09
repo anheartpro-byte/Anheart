@@ -7,7 +7,10 @@ Three layers, tested separately:
 * :class:`~src.cloud_sync.CloudSync` against a scripted dashboard
   (:class:`Dashboard`) and a runtime whose state the test sets
   (:class:`StubRuntime`), with the REAL control surface and profile store of a
-  simulated panel - so a launch really goes through the surface's gates;
+  simulated panel - so a launch really goes through the surface's gates. This
+  link records nothing: it declares and ends its sessions, and sends no
+  telemetry. What a recording console sends from its records is in
+  ``test_record_uplink.py`` and ``test_cloud_journal_e2e.py``;
 * the panel itself, in simulation, for the programme path it now runs: every
   gate between a dashboard launch and a turning shaft, and a refusal at each.
 
@@ -16,12 +19,14 @@ No test here reaches a network: every transport is a fake or a mock.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, cast, override
 
 import httpx
 import pytest
@@ -29,12 +34,12 @@ import pytest
 from src.clock import ManualClock
 from src.cloud_sync import (
     DASHBOARD_OPERATOR,
+    FINAL_CODES,
     HEARTBEAT_PERIOD,
     LAUNCH_TIMEOUT,
-    MAX_BATCH,
-    MAX_FINISHED,
+    POLL_PERIOD,
     RETRY_PERIOD,
-    TELEMETRY_PERIOD,
+    STATUS_PERIOD,
     CloudError,
     CloudSync,
     CloudTransport,
@@ -44,21 +49,40 @@ from src.cloud_sync import (
     SessionKind,
     StartedSession,
     Unreachable,
+    answer_of,
+    declaration_of,
+    describe_refusal,
     describe_surface_refusal,
     end_is_failure,
     live_row,
     runnable_profiles,
-    telemetry_point,
 )
-from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
-from src.control_surface import LOCAL_SUBJECT, StartRefusal, StartSession
+from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD, ErrorCode
+from src.control_surface import (
+    LOCAL_SUBJECT,
+    ControlSurface,
+    EndRefusal,
+    EndSession,
+    StartRefusal,
+    StartSession,
+)
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
 from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.record_uplink import (
+    MAX_REFUSALS,
+    SUCCESSFUL_ENDS,
+    Acked,
+    Held,
+    RecordSource,
+    Refusal,
+    RouteMissing,
+)
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds, UnixMillis
+from tests.test_contract import shared
 
 TICK: Final[Seconds] = Seconds(0.2)
 OPERATOR: Final[str] = "dr. attending"
@@ -131,6 +155,8 @@ class Dashboard:
 
 DOWN: Final[Reply] = Err(Unreachable("no route to host"))
 POLL_PATH: Final[str] = "/api/machine/training/poll"
+START: Final[str] = "/api/machine/training/start"
+STATUS: Final[str] = "/api/machine/training/status"
 
 
 def ok(document: Document | None = None) -> Reply:
@@ -183,11 +209,21 @@ class Rig:
     sync: CloudSync
 
     async def step(self, seconds: float = 1.0) -> None:
+        """One second of the link's two tasks: the stop watch looks before and after
+        the sending, as it does on the console, where it looks four times a second."""
         self.clock.advance(Seconds(seconds))
+        await self.sync.watch_stop()
         await self.sync.step()
+        await self.sync.watch_stop()
 
 
-def rig(tmp_path: Path, *, programs: bool = True, tiers: CardiacTiers | None = None) -> Rig:
+def rig(
+    tmp_path: Path,
+    *,
+    programs: bool = True,
+    tiers: CardiacTiers | None = None,
+    records: RecordSource | None = None,
+) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     config = config_of()
@@ -204,6 +240,7 @@ def rig(tmp_path: Path, *, programs: bool = True, tiers: CardiacTiers | None = N
         store=panel.services.store,
         tiers=config.tiers if tiers is None else tiers,
         programs_enabled=programs,
+        records=records,
     )
     return Rig(clock=clock, panel=panel, dashboard=dashboard, runtime=runtime, sync=sync)
 
@@ -316,6 +353,84 @@ def test_only_a_completed_or_operator_ended_session_is_not_a_failure(
     assert end_is_failure(reason) is failed
 
 
+@pytest.mark.parametrize("reason", list(EndReason))
+def test_a_record_s_end_is_a_failure_exactly_when_the_runtime_s_is(reason: EndReason) -> None:
+    """The end read back from a record is judged on its word; the two must agree."""
+    assert (reason.value not in SUCCESSFUL_ENDS) is end_is_failure(reason)
+
+
+@pytest.mark.parametrize(
+    ("reply", "answer"),
+    [
+        (Ok({"stored": 3}), Acked({"stored": 3})),
+        (Err(Unreachable("no route to host")), Held("no route to host")),
+        (
+            Err(Refused(426, "Unsupported machine contract", ErrorCode("contract_unsupported"))),
+            Held("contract_unsupported (HTTP 426): Unsupported machine contract", refused=True),
+        ),
+        (
+            Err(Refused(401, "Invalid API key", ErrorCode("unauthorized"))),
+            Held("unauthorized (HTTP 401): Invalid API key", refused=True),
+        ),
+        (Err(Refused(403, "HTTP 403")), Held("sans code (HTTP 403): HTTP 403", refused=True)),
+        (Err(Refused(408, "HTTP 408")), Held("sans code (HTTP 408): HTTP 408", refused=True)),
+        (Err(Refused(429, "HTTP 429")), Held("sans code (HTTP 429): HTTP 429", refused=True)),
+        (Err(Refused(500, "HTTP 500")), Held("sans code (HTTP 500): HTTP 500", refused=True)),
+        (Err(Refused(503, "HTTP 503")), Held("sans code (HTTP 503): HTTP 503", refused=True)),
+        (Err(Refused(404, "HTTP 404")), RouteMissing()),
+        (
+            Err(Refused(404, "Session not found", ErrorCode("session_not_found"))),
+            Refusal("session_not_found (HTTP 404): Session not found", final=True),
+        ),
+        (
+            Err(Refused(400, "Malformed event", ErrorCode("invalid_request"))),
+            Refusal("invalid_request (HTTP 400): Malformed event", final=True),
+        ),
+        (
+            Err(Refused(400, "Try again", ErrorCode("request_failed"))),
+            Refusal("request_failed (HTTP 400): Try again", final=False),
+        ),
+        (Err(Refused(400, "no")), Refusal("sans code (HTTP 400): no", final=False)),
+    ],
+)
+def test_what_an_exchange_means_for_what_was_sent(reply: Reply, answer: object) -> None:
+    """Held: nothing received, nothing dropped. Refused: about the request itself."""
+    assert answer_of(reply) == answer
+
+
+def test_the_codes_that_end_a_request_for_good_are_codes_of_the_shared_contract() -> None:
+    codes = shared()["error_codes"]
+    assert isinstance(codes, dict)
+    assert set(cast("dict[str, object]", codes)) >= FINAL_CODES
+    assert "request_failed" not in FINAL_CODES
+    assert "contract_unsupported" not in FINAL_CODES
+
+
+def test_a_session_is_declared_with_its_programme_and_its_occupancy(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    profile = r.panel.services.store.list_profiles()[0]
+    auto = declaration_of(
+        StartedSession(
+            kind=SessionKind.AUTO,
+            operator=OPERATOR,
+            started_at=r.clock.unix_millis(),
+            subject_id=LOCAL_SUBJECT,
+            cloud_session_id=None,
+            profile=profile,
+        )
+    )
+    assert (auto.kind, auto.operator, auto.occupancy) == ("auto", OPERATOR, None)
+    assert (auto.profile_id, auto.profile_name) == (profile.profile_id, profile.name)
+    assert (auto.zone_low_bpm, auto.zone_high_bpm) == (
+        int(profile.zone_low_bpm),
+        int(profile.zone_high_bpm),
+    )
+    assert auto.total_duration_s == float(profile.total_duration_s)
+    assert auto.subject_hr_max == int(profile.subject_hr_max)
+    bench = declaration_of(manual(r.clock))
+    assert (bench.kind, bench.occupancy, bench.profile_id) == ("manual", "bench", None)
+
+
 def test_only_presets_on_this_machine_s_tiers_are_offered(tmp_path: Path) -> None:
     r = rig(tmp_path)
     profiles = r.panel.services.store.list_profiles()
@@ -328,7 +443,6 @@ async def test_a_heart_rate_is_sent_only_when_it_may_be_shown(tmp_path: Path) ->
     cold = r.panel.runtime.snapshot()
     assert cold.live_bpm is None
     assert "bpm" not in live_row(cold, None)
-    assert "bpm" not in telemetry_point(cold)
     assert "sessionId" not in live_row(cold, None)
     for _ in range(round(15.0 / TICK)):
         r.clock.advance(TICK)
@@ -338,7 +452,6 @@ async def test_a_heart_rate_is_sent_only_when_it_may_be_shown(tmp_path: Path) ->
     assert warm.live_bpm is not None
     assert live_row(warm, "s")["bpm"] == int(warm.live_bpm)
     assert live_row(warm, "s")["sessionId"] == "s"
-    assert telemetry_point(warm)["bpm"] == int(warm.live_bpm)
 
 
 def test_every_surface_refusal_has_words(tmp_path: Path) -> None:
@@ -472,7 +585,10 @@ async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> No
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
+    # A refusal for another launch does not end the wait for this one.
     r.sync.start_refused("someone-else", "not this one")
+    await r.step()
+    assert len(r.dashboard.to("/api/machine/training/poll")) == 1
     r.sync.start_refused("remote-1", "variateur en defaut")
     await r.step()
     reasons = [body["reason"] for body in r.dashboard.to("/api/machine/training/end")]
@@ -559,12 +675,13 @@ async def test_polls_are_spaced(tmp_path: Path) -> None:
 # =========================================================================
 
 
-async def test_a_local_session_is_registered_then_reported_then_ended(tmp_path: Path) -> None:
+async def test_a_local_session_is_registered_then_ended(tmp_path: Path) -> None:
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
     r.dashboard.answer("/api/machine/training/status", status_answer())
     r.runtime.state = RuntimeState.RUNNING
-    r.sync.session_started(manual(r.clock))
+    started = manual(r.clock)
+    r.sync.session_started(started)
     assert r.sync.owed == 1
     for _ in range(12):
         await r.step()
@@ -572,9 +689,14 @@ async def test_a_local_session_is_registered_then_reported_then_ended(tmp_path: 
     assert len(registered) == 1
     assert registered[0]["kind"] == "manual"
     assert registered[0]["occupancy"] == "bench"
+    # The start as this console dated it, and how long ago that was when it said so.
+    assert registered[0]["startedAt"] == int(started.started_at)
+    assert registered[0]["sessionAgeMs"] == 1000
     assert r.sync.current_session_id == "cloud-1"
     assert r.dashboard.to("/api/machine/training/start") == []  # local: nothing to confirm
-    assert r.dashboard.to("/api/machine/training/telemetry")
+    # This console records nothing: no measurement is sent from memory.
+    assert r.dashboard.to("/api/machine/training/telemetry") == []
+    assert r.dashboard.to("/api/machine/training/events") == []
     assert r.panel.surface.pending is None  # still active: nothing forwarded
 
     r.runtime.state = RuntimeState.FINISHED
@@ -631,12 +753,18 @@ async def test_a_failed_registration_is_retried_later(tmp_path: Path, answer: Re
 async def test_a_remote_start_is_confirmed_and_retried_while_down(tmp_path: Path) -> None:
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/start", DOWN)
-    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    started = manual(r.clock, remote="remote-1")
+    r.sync.session_started(started)
     await r.step()
     r.dashboard.answer("/api/machine/training/start", ok({"success": True}))
     await r.step(RETRY_PERIOD)
     await r.step(RETRY_PERIOD)
-    assert len(r.dashboard.to("/api/machine/training/start")) == 2
+    starts = r.dashboard.to("/api/machine/training/start")
+    # Each says when the machine dated the start, and how long ago that was by then.
+    assert starts == [
+        {"sessionId": "remote-1", "startedAt": int(started.started_at), "sessionAgeMs": 1000},
+        {"sessionId": "remote-1", "startedAt": int(started.started_at), "sessionAgeMs": 16000},
+    ]
 
 
 async def test_a_start_the_dashboard_refuses_stops_the_machine(tmp_path: Path) -> None:
@@ -675,60 +803,265 @@ async def test_no_stop_is_forwarded_without_a_request(tmp_path: Path, status: Re
     assert len(r.dashboard.to("/api/machine/training/status")) == 2
 
 
-async def test_telemetry_is_kept_while_the_link_is_down(tmp_path: Path) -> None:
+@pytest.fixture
+def stops(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Every end the link asked the console for: who it is attributed to, and in what words."""
+    asked: list[tuple[str, str]] = []
+    real = ControlSurface.submit_end
+
+    def spy(
+        surface: ControlSurface, *, operator: str, reason: str
+    ) -> Result[EndSession, EndRefusal]:
+        asked.append((operator, reason))
+        return real(surface, operator=operator, reason=reason)
+
+    monkeypatch.setattr(ControlSurface, "submit_end", spy)
+    return asked
+
+
+async def test_the_stop_is_looked_for_by_the_watch_never_by_the_sending_step(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """Two tasks on the console: the sending may wait on a disk or an upload, the watch not."""
     r = rig(tmp_path)
-    r.dashboard.answer("/api/machine/training/telemetry", DOWN)
+    r.dashboard.answer(STATUS, status_answer(stop=True))
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    for _ in range(8):
+        r.clock.advance(Seconds(1.0))
+        await r.sync.step()
+    assert r.dashboard.to(STATUS) == []
+    assert stops == []
+
+    await r.sync.watch_stop()
+
+    assert len(r.dashboard.to(STATUS)) == 1
+    assert stops == [(DASHBOARD_OPERATOR, "arret demande depuis le tableau de bord")]
+
+
+async def test_the_watch_asks_every_three_seconds_however_often_it_looks(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(STATUS, status_answer())
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     await r.step()
-    await r.step(TELEMETRY_PERIOD)
-    r.dashboard.answer("/api/machine/training/telemetry", ok({"stored": 1}))
+    asked_at: list[float] = []
+    for _ in range(40):
+        r.clock.advance(Seconds(0.25))
+        before = len(r.dashboard.to(STATUS))
+        await r.sync.watch_stop()
+        if len(r.dashboard.to(STATUS)) > before:
+            asked_at.append(float(r.clock.monotonic()))
+
+    assert [later - earlier for earlier, later in pairwise(asked_at)] == [float(STATUS_PERIOD)] * 2
+
+
+async def launch_whose_start_is_answered(
+    tmp_path: Path, stops: list[tuple[str, str]], refusal: Refused
+) -> Rig:
+    """A launch from the dashboard is armed, and its confirmation gets ``refusal``."""
+    r = rig(tmp_path)
+    r.dashboard.answer(START, Err(refusal))
+    r.dashboard.answer(STATUS, status_answer(stop=True))
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+
+    await r.step()
+
+    words = describe_refusal(refusal)
+    assert stops == [(DASHBOARD_OPERATOR, f"annulee au tableau de bord ({words})")]
+    # Asked once, however long the dashboard goes on refusing; and the
+    # confirmation is still owed: it is made again when the dashboard takes it.
+    for _ in range(3):
+        await r.step(RETRY_PERIOD)
+    assert len(stops) == 1
+    assert len(r.dashboard.to(START)) == 4
+    return r
+
+
+async def test_a_launch_whose_start_is_answered_426_is_stopped_at_once(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """A dashboard of another contract: nobody there could stop what it does not hold started."""
+    refusal = Refused(426, "Unsupported machine contract", ErrorCode("contract_unsupported"))
+    await launch_whose_start_is_answered(tmp_path, stops, refusal)
+
+
+async def test_a_launch_whose_start_is_answered_401_is_stopped_at_once(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """A key the dashboard no longer accepts."""
+    refusal = Refused(401, "Invalid API key", ErrorCode("unauthorized"))
+    await launch_whose_start_is_answered(tmp_path, stops, refusal)
+
+
+async def test_a_launch_whose_start_is_answered_503_is_stopped_at_once(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """An error of the server's own."""
+    await launch_whose_start_is_answered(tmp_path, stops, Refused(503, "HTTP 503"))
+
+
+async def test_a_launch_whose_start_gets_no_answer_runs_on_under_the_local_supervisor(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """No network: nothing was refused, and no stop can be asked for from there either."""
+    r = rig(tmp_path)
+    r.dashboard.answer(START, DOWN)
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+
+    await r.step()
     await r.step(RETRY_PERIOD)
-    sent = r.dashboard.to("/api/machine/training/telemetry")
-    assert count(sent[-1]["points"]) == 3
+
+    assert stops == []
+    assert len(r.dashboard.to(START)) == 2
 
 
-async def test_a_refused_batch_is_dropped_not_retried_forever(tmp_path: Path) -> None:
+async def test_the_first_stop_question_of_a_session_is_asked_as_soon_as_it_is_confirmed(
+    tmp_path: Path,
+) -> None:
+    """In the same look of the watch as the confirmation, and whenever the last question
+    about the session before was asked: a second ago does not make this one wait."""
     r = rig(tmp_path)
-    r.dashboard.answer("/api/machine/training/telemetry", NO)
+    r.dashboard.answer(STATUS, status_answer())
     r.sync.session_started(manual(r.clock, remote="remote-1"))
-    await r.step()
-    await r.step(TELEMETRY_PERIOD)
+    await r.sync.watch_stop()
+    assert [call[1] for call in r.dashboard.calls] == [START, STATUS]
     r.runtime.state = RuntimeState.FINISHED
-    await r.step()
-    ends = r.dashboard.to("/api/machine/training/end")
-    assert len(ends) == 1  # the refused points did not hold the end back
-    assert ends[0]["reason"] == "fin"
-    assert ends[0]["failed"] is True
+    r.clock.advance(Seconds(1.0))
+    await r.sync.step()
+
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock, remote="remote-2"))
+    await r.sync.watch_stop()
+
+    asked = [call["sessionId"] for call in r.dashboard.to(STATUS)]
+    assert asked == ["remote-1", "remote-2"]
 
 
-async def test_a_long_backlog_goes_in_batches_before_the_end(tmp_path: Path) -> None:
-    r = rig(tmp_path)
-    r.dashboard.answer("/api/machine/training/telemetry", DOWN)
-    r.dashboard.answer("/api/machine/training/status", DOWN)
-    r.sync.session_started(manual(r.clock, remote="remote-1"))
-    for _ in range(MAX_BATCH + 10):
-        await r.step()
-    r.dashboard.answer("/api/machine/training/telemetry", ok())
-    r.runtime.state = RuntimeState.FINISHED
-    await r.step(RETRY_PERIOD)
-    assert r.dashboard.to("/api/machine/training/end") == []  # backlog first
-    await r.step()
-    batches = r.dashboard.to("/api/machine/training/telemetry")
-    sizes = [count(b["points"]) for b in batches]
-    assert sizes[-2] == MAX_BATCH
-    assert len(r.dashboard.to("/api/machine/training/end")) == 1
-
-
-@pytest.mark.parametrize(("answer", "owed"), [(DOWN, 1), (NO, 0)])
-async def test_an_end_is_retried_while_down_and_dropped_when_refused(
-    tmp_path: Path, answer: Reply, owed: int
+async def test_a_stop_forwarded_in_one_session_does_not_hide_a_stop_asked_for_in_the_next(
+    tmp_path: Path, stops: list[tuple[str, str]]
 ) -> None:
     r = rig(tmp_path)
-    r.dashboard.answer("/api/machine/training/end", answer)
+    r.dashboard.answer(STATUS, status_answer(stop=True))
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    await r.step()
+    await r.step(STATUS_PERIOD)
+    assert len(stops) == 1
+    r.runtime.state = RuntimeState.FINISHED
+    await r.step()
+
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock, remote="remote-2"))
+    await r.step(STATUS_PERIOD)
+    await r.step(STATUS_PERIOD)
+
+    asked = [call["sessionId"] for call in r.dashboard.to(STATUS)]
+    assert asked == ["remote-1", "remote-2"]
+    assert len(stops) == 2, "the second session's stop is forwarded too, once"
+
+
+async def test_a_stop_answered_after_its_session_ended_does_not_stop_the_next_one(
+    tmp_path: Path, stops: list[tuple[str, str]]
+) -> None:
+    """The answer was on its way when the session ended and another began: it is about neither."""
+    r = rig(tmp_path)
+    answering, release = asyncio.Event(), asyncio.Event()
+
+    class Late(Dashboard):
+        @override
+        async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
+            if path == STATUS and not release.is_set():
+                answering.set()
+                await release.wait()
+                return status_answer(stop=True)
+            return await super().get(path, params)
+
+    late = Late()
+    sync = CloudSync(
+        clock=r.clock,
+        transport=late,
+        runtime=r.runtime,
+        surface=r.panel.surface,
+        store=r.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+    )
+    sync.session_started(manual(r.clock, remote="remote-1"))
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+    watching = asyncio.create_task(sync.watch_stop())
+    await answering.wait()
+
+    # The first session ends and a second starts while the dashboard answers.
+    r.runtime.state = RuntimeState.FINISHED
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+    r.runtime.state = RuntimeState.RUNNING
+    sync.session_started(manual(r.clock, remote="remote-2"))
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+    release.set()
+    await asyncio.gather(watching)
+
+    assert stops == [], "a stop asked for the first session does not end the second"
+    # And the second is still watched for a stop of its own.
+    late.answer(STATUS, status_answer(stop=True))
+    r.clock.advance(STATUS_PERIOD)
+    await sync.watch_stop()
+    assert [operator for operator, _reason in stops] == [DASHBOARD_OPERATOR]
+    assert late.to(STATUS)[-1] == {"sessionId": "remote-2"}
+
+
+async def test_no_stop_is_asked_before_the_dashboard_holds_the_session_started(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/training/start", DOWN)
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    await r.step()
+    await r.step(5.0)
+    assert r.dashboard.to("/api/machine/training/status") == []
+
+
+async def test_an_end_is_retried_while_the_link_is_down(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/training/end", DOWN)
     r.sync.session_started(manual(r.clock, remote="remote-1"))
     r.runtime.state = RuntimeState.FINISHED
     await r.step()
-    assert r.sync.owed == owed
+    assert r.sync.owed == 1
+    r.dashboard.answer("/api/machine/training/end", ok())
+    await r.step(RETRY_PERIOD)
+    assert r.sync.owed == 0
+    assert len(r.dashboard.to("/api/machine/training/end")) == 2
+
+
+async def test_an_end_refused_without_a_final_code_is_tried_three_times_then_given_up(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/training/end", NO)
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    r.runtime.state = RuntimeState.FINISHED
+    await r.step()
+    assert r.sync.owed == 1
+    for _ in range(MAX_REFUSALS - 1):
+        await r.step(RETRY_PERIOD)
+    assert len(r.dashboard.to("/api/machine/training/end")) == MAX_REFUSALS
+    assert r.sync.owed == 0
+    await r.step(RETRY_PERIOD)
+    assert len(r.dashboard.to("/api/machine/training/end")) == MAX_REFUSALS
+
+
+async def test_an_end_refused_for_good_is_given_up_at_once(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(
+        "/api/machine/training/end",
+        Err(Refused(400, "Session not found", ErrorCode("session_not_found"))),
+    )
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    r.runtime.state = RuntimeState.FINISHED
+    await r.step()
+    assert len(r.dashboard.to("/api/machine/training/end")) == 1
+    assert r.sync.owed == 0
 
 
 async def test_an_unobserved_end_is_closed_when_the_next_session_starts(tmp_path: Path) -> None:
@@ -743,14 +1076,35 @@ async def test_an_unobserved_end_is_closed_when_the_next_session_starts(tmp_path
     assert r.sync.current_session_id == "second"
 
 
-async def test_the_backlog_of_ended_sessions_is_bounded(
+async def test_only_one_end_without_a_record_waits_and_no_launch_is_asked_meanwhile(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """No queue: an end that has no record to be taken up from waits alone.
+
+    A refused launch is still ``pending`` on the dashboard: until it is told,
+    the dashboard is not asked for a launch, which would hand the same one back.
+    """
     r = rig(tmp_path)
-    for n in range(MAX_FINISHED + 1):
-        r.sync.start_refused(f"s{n}", "offline")
-    assert r.sync.owed == MAX_FINISHED
-    assert "dropping undelivered session" in caplog.text
+    r.dashboard.answer("/api/machine/training/end", DOWN)
+    r.sync.start_refused("s0", "offline")
+    await r.step()
+    assert r.sync.owed == 1
+    assert r.dashboard.to(POLL_PATH) == []
+    r.sync.start_refused("s1", "offline")
+    assert r.sync.owed == 1
+    assert "the end of s0 could not be delivered and is given up" in caplog.text
+    r.dashboard.answer("/api/machine/training/end", ok())
+    await r.step(RETRY_PERIOD)
+    ends = r.dashboard.to("/api/machine/training/end")
+    # A launch that never started is dated by the dashboard, not by this console.
+    assert ends[-1] == {
+        "sessionId": "s1",
+        "failed": True,
+        "reason": "refusee par la machine : offline",
+    }
+    assert r.sync.owed == 0
+    await r.step(POLL_PERIOD)
+    assert len(r.dashboard.to(POLL_PATH)) == 1
 
 
 async def test_losing_and_regaining_the_link_is_logged_once(
@@ -786,6 +1140,9 @@ class Linked:
             self.panel.surface.note_presence(OPERATOR)
             await self.panel.ecg_step()
             await self.panel.control_step()
+            # The link's two tasks: the stop watch four times a second (here at
+            # each tick), the sending once a second.
+            await self.panel.cloud_stop_step()
             if n % 5 == 0:
                 await self.panel.cloud_step()
 
@@ -813,7 +1170,10 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Pa
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await rig_.run(2.0)
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
-    assert rig_.dashboard.to("/api/machine/training/start") == [{"sessionId": "remote-1"}]
+    starts = rig_.dashboard.to("/api/machine/training/start")
+    assert [start["sessionId"] for start in starts] == ["remote-1"]
+    assert isinstance(starts[0]["startedAt"], int)
+    assert starts[0]["sessionAgeMs"] in range(2000)
     assert rig_.panel.cloud is not None
     assert rig_.panel.cloud.current_session_id == "remote-1"
 
@@ -925,12 +1285,27 @@ async def test_a_link_failure_never_reaches_the_console(
     await rig_.panel.close()
 
 
+async def test_a_failure_of_the_stop_watch_never_reaches_the_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig_ = linked(tmp_path)
+
+    async def broken(_self: CloudSync) -> None:
+        raise RuntimeError("bug in the watch")
+
+    monkeypatch.setattr(CloudSync, "watch_stop", broken)
+    await rig_.panel.cloud_stop_step()
+    assert "dashboard stop watch failed" in caplog.text
+    await rig_.panel.close()
+
+
 async def test_an_unlinked_console_has_no_link_step(tmp_path: Path) -> None:
     clock = ManualClock()
     config = config_of(MACHINE_API_KEY="")
     panel = build_panel(config, clock=clock, profiles_path=tmp_path / "p.json")
     assert panel.cloud is None
     await panel.cloud_step()
+    await panel.cloud_stop_step()
     await panel.close()
 
 
@@ -961,17 +1336,6 @@ async def test_an_unlinked_console_still_runs_a_programme(tmp_path: Path) -> Non
     await panel.close()
 
 
-async def test_an_ended_session_waits_for_its_telemetry_to_go(tmp_path: Path) -> None:
-    r = rig(tmp_path)
-    r.dashboard.answer("/api/machine/training/telemetry", DOWN)
-    r.sync.session_started(manual(r.clock, remote="remote-1"))
-    await r.step()
-    r.runtime.state = RuntimeState.FINISHED
-    await r.step(RETRY_PERIOD)
-    assert r.dashboard.to("/api/machine/training/end") == []
-    assert r.sync.owed == 1
-
-
 # =========================================================================
 # Exhaustiveness guards: a new variant must be handled, not fall through
 # =========================================================================
@@ -998,6 +1362,8 @@ async def test_an_unknown_transport_error_fails_loudly(tmp_path: Path) -> None:
     r.dashboard.answer("/api/machine/heartbeat", alien)
     with pytest.raises(AssertionError):
         await r.step()
+    with pytest.raises(AssertionError):
+        answer_of(alien)
 
 
 async def test_a_launch_without_the_rider_s_age_is_refused(tmp_path: Path) -> None:

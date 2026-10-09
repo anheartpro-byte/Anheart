@@ -149,11 +149,16 @@ def names_of(operator: str) -> tuple[str, ...]:
     """Every spelling of ``operator`` to keep out of the record's text.
 
     A launch from the dashboard is attributed to ``<name> (tableau de bord)``:
-    the name alone is one of them too.
+    the name alone is one of them too. The dashboard's own label is nobody's
+    name: a stop it asks for is attributed to it and said in words that
+    contain it (``arret demande depuis le tableau de bord``), and those words
+    are what the dashboard shows as the reason of the end.
     """
     whole = " ".join(operator.split())
     alone = whole.removesuffix(f"({DASHBOARD_OPERATOR})").strip()
-    return tuple(dict.fromkeys(name for name in (whole, alone) if name))
+    return tuple(
+        dict.fromkeys(name for name in (whole, alone) if name and name != DASHBOARD_OPERATOR)
+    )
 
 
 def redact(text: str, names: tuple[str, ...]) -> str:
