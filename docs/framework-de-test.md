@@ -1491,8 +1491,10 @@ que soit la règle.
 
 * les deux tests de `SAME_PROCESS` vont à la part 0 ;
 * les tests d'au moins dix secondes sont nommés dans `PI_SLOW_SECONDS`, avec
-  leur durée mesurée en CI : 52 lignes, qui désignent 119 des 4267 tests et
-  les deux tiers de leur temps. Ils sont distribués du plus lent au moins
+  leur durée mesurée en CI : 52 lignes à la mesure, qui désignaient 119 des
+  4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a réécrit
+  trois de ces tests : leurs remplaçants sont distribués par leur rang
+  jusqu'à la prochaine mise à jour de la table). Ils sont distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
   paramètre vaut pour chaque cas du test : les 67 cas de
   `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
@@ -1552,7 +1554,10 @@ verdict 14 min 21 s après le début des tests, sur les mêmes 4304 tests,
 37715002510, EPYC 7763 et Xeon Platinum 8370C) : 12 min 50 s et 13 min 51 s,
 pour 2873 s et 3045 s de pytest cumulés, soit deux jobs chargés à 6 % près,
 et le verdict 16 min 15 s après le début des tests, dont 51 s d'attente d'un
-runner pour `pi-gate`.
+runner pour `pi-gate`. Après la remise à jour sur `develop` du 9 octobre
+(4404 tests, `src/signal_processing.py` sous le seuil : 13 383 lignes et
+2 998 branches), run 37914849627 : 9 min 13 s sur un Xeon 6973P-C (1959 s
+cumulés) et 13 min 03 s sur un EPYC 7763 (2881 s), verdict après 14 min 05 s.
 
 Limites, les mêmes que pour la table de la simulation :
 

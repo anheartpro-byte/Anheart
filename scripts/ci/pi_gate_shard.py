@@ -143,7 +143,6 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     },
     "tests/test_runtime_session_overrun.py": {
         "test_the_shipped_programme_then_twice_its_length_at_rest_and_a_new_start": 26,
-        "test_whatever_ends_a_session_before_its_deadline_the_rest_latches_nothing_more": 19,
     },
     "tests/test_runtime_standstill.py": {
         "test_a_heart_rate_drifting_above_the_zone_until_standstill_ends_the_session": 12,
@@ -163,8 +162,6 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     },
     "tests/test_session_overrun_console.py": {
         "test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_takes_a_start": 60,
-        "test_a_programme_started_at_the_console_and_left_at_rest_takes_a_launch_from_the_site": 50,
-        "test_an_overrun_raised_by_a_late_stop_is_acknowledged_for_good_once_at_rest": 28,
     },
     "tests/test_standstill_console.py": {
         "test_after_a_standstill_the_console_restarts_nothing_and_refuses_every_start": 18,
@@ -180,7 +177,9 @@ a name with one is that case alone, for the tests whose cases differ: a
 programme cut short at its last phase runs for six times as long as one cut
 at its first.
 
-These 52 lines name 119 of the 4267 tests and two thirds of their time. Dealt
+The 52 lines measured then named 119 of the 4267 tests and two thirds of their
+time; three of them named tests that were rewritten since (ANH-185) and are
+gone from the table. Dealt
 by their position alone, the long cases of several tests met in the same
 shares, and shares 4 to 7 had a third more work than shares 0 to 3 (1568 s
 against 1166 s, on one runner). The numbers only steer the dealing. A name
