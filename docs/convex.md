@@ -972,7 +972,8 @@ Détails du contrat :
   l'absence de réponse exploitable (réseau coupé, délai dépassé, réponse 2xx
   qui n'est pas un objet JSON) laisse tourner la séance, sous le superviseur
   local. La confirmation part dès que la séance est armée, par la même tâche
-  que la question d'arrêt : elle n'attend aucune lecture d'enregistrement.
+  que la question d'arrêt : elle n'attend aucune lecture d'enregistrement, ni
+  la retenue de 15 s posée par une autre requête restée sans réponse.
 - **Fin** : `failed` vaut `false` pour `programme_complete` et `operator_stop`,
   `true` pour `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown`,
   et pour `interrupted` : la raison d'une séance dont la console a été tuée
@@ -1371,7 +1372,7 @@ régressions locales exécutables.
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
 | 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
-| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end`, et ne le rattrape pas au redémarrage. Trouvé à l'essai du 1er octobre 2026. | La séance reste `active` dans Convex indéfiniment. La machine repasse `online` au redémarrage. |
+| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |
 
 Fait le 1er octobre 2026 : déploiement sur l'environnement de développement,
 essai de bout en bout avec un Pi en simulation complète. Reste à faire, dans

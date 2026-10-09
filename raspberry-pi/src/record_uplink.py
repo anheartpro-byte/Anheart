@@ -165,12 +165,17 @@ CURSOR_UNWRITTEN: Final[str] = (
     "seance pourrait ne pas arriver au tableau de bord"
 )
 LIST_LOST: Final[str] = (
-    "liste des enregistrements anterieurs a la synchronisation perdue et refaite : "
+    "liste des enregistrements anterieurs a la synchronisation etablie : "
     "{count} enregistrement(s) sans curseur mis de cote, non envoyes au tableau de bord"
 )
+RECORD_UNREADABLE: Final[str] = (
+    "enregistrement de la seance en cours introuvable ou illisible : le tableau de bord n'en "
+    "recoit pas les mesures, et n'en apprendra pas la fin si la console s'arrete avant elle"
+)
 """What the operator reads on the console when a session will not reach the dashboard as
-it should. Said once per session for the first, once per failure of the disk for the
-second, once per start of the console for the third."""
+it should. Said once per session for the first and the last (one or the other, never
+both), once per failure of the disk for the second, and for the third whenever the list is
+made: the first listing of the directory, or after the list was lost."""
 
 START_UNKNOWN: Final[str] = "route de confirmation inconnue du tableau de bord"
 """Why a start was not taken by a dashboard that does not know the route at all."""
@@ -325,6 +330,13 @@ class _Owed:
 
     greeting: bool = False
     """The stop watch's task is declaring it or confirming its start right now."""
+
+    greet_at: Monotonic | None = None
+    """When its first words may be said again, after they failed. Their own wait: no
+    request of the sending sets it."""
+
+    unreadable_said: bool = False
+    """The operator was told that its record cannot be read."""
 
     record: Path | None = None
     stored: Cursor | None = None
@@ -579,12 +591,17 @@ class RecordUplink:
         carries; a launch from the dashboard is confirmed as soon as it is
         armed. Until then nothing of the session is sent, and its stop cannot
         be asked for.
+
+        It waits on its own failures only (``greet_at``): a hold the sending
+        set for a batch of telemetry or of an older session that got no
+        answer does not delay it, whatever that answer was. Tried at once, it
+        costs one request; what it is told then is about itself.
         """
         now = self._clock.monotonic()
         live = self._live
         if live is None or live.cursor.state == "complete" or _greeted(live.cursor):
             return
-        if _waiting(self._held_until, now) or _waiting(live.next_try, now):
+        if _waiting(live.greet_at, now):
             return
         live.greeting = True
         try:
@@ -703,6 +720,7 @@ class RecordUplink:
             # Whatever the link says: a record that has its cursor is one the
             # console takes up again after a restart.
             await self._bind(live, source.current())
+            self._say_unreadable(now, live)
         if self._held_until is not None and now < self._held_until:
             return
         if live is not None:
@@ -765,8 +783,8 @@ class RecordUplink:
         self._scanned = True
         if listed.value.set_aside:
             _logger.warning(
-                "dashboard: %d records without a cursor were set aside with a list of older "
-                "records that had to be made again: they are not sent",
+                "dashboard: %d records without a cursor were set aside with the list of "
+                "older records, which had to be made at this start: they are not sent",
                 listed.value.set_aside,
             )
             self._said(LIST_LOST.format(count=listed.value.set_aside))
@@ -873,6 +891,32 @@ class RecordUplink:
         # where the dashboard stopped, with the age of its session.
         await self._persist(owed)
 
+    def _say_unreadable(self, now: Monotonic, live: _Owed) -> None:
+        """Tell the operator, once, of a running session whose record cannot be tied to it.
+
+        :data:`BIND_GRACE` after its start, its manifest has still not been
+        read: it cannot be, the reads do not come back, or there is no
+        directory at all. Nothing of the session is sent meanwhile, and no
+        cursor is on disk: its end goes from memory when the console sees it,
+        and a console that stops first leaves the dashboard without it.
+
+        A session started at the machine whose directory gives no reference
+        is not said here: its declaration says it goes without its record.
+        """
+        if live.record is not None or live.unrecorded or live.unreadable_said:
+            return
+        if live.cursor.session_id is None and not live.named:
+            return
+        origin = live.origin
+        if origin is not None and elapsed(origin, now) < BIND_GRACE:
+            return
+        live.unreadable_said = True
+        _logger.warning(
+            "dashboard: the record of the running session cannot be read: its measurements "
+            "are not sent, and its end is sent only if the console sees it end"
+        )
+        self._said(RECORD_UNREADABLE)
+
     async def _persist(self, owed: _Owed) -> None:
         record = owed.record
         cursor = owed.cursor
@@ -969,7 +1013,7 @@ class RecordUplink:
             # again later. The running session, the one that has just ended and
             # a refused launch do not wait for it.
             _logger.warning("dashboard: registration answered without a session id")
-            owed.next_try = Monotonic(now + RETRY_PERIOD)
+            self._later(now, owed)
             return _Step.BUSY
         owed.cursor = replace(owed.cursor, session_id=found)
         return found
@@ -997,12 +1041,12 @@ class RecordUplink:
                 owed.cursor = replace(owed.cursor, start_confirmed=True)
                 return None
             case Held():
-                self._held_until = Monotonic(now + RETRY_PERIOD)
+                self._hold(now, owed)
                 if answer.refused:
                     self._not_taken(owed, answer.detail)
                 return _Step.HELD
             case RouteMissing():
-                self._held_until = Monotonic(now + RETRY_PERIOD)
+                self._hold(now, owed)
                 self._not_taken(owed, START_UNKNOWN)
                 return _Step.HELD
             case Refusal():
@@ -1274,17 +1318,17 @@ class RecordUplink:
                 owed.next_try = None
                 return answer
             case Held():
-                self._held_until = Monotonic(now + RETRY_PERIOD)
+                self._hold(now, owed)
                 return _Wait.HOLD
             case RouteMissing():
                 if optional:
                     return _Wait.MISSING
-                self._held_until = Monotonic(now + RETRY_PERIOD)
+                self._hold(now, owed)
                 return _Wait.HOLD
             case Refusal():
                 if not answer.final and owed.refusals + 1 < MAX_REFUSALS:
                     owed.refusals += 1
-                    owed.next_try = Monotonic(now + RETRY_PERIOD)
+                    self._later(now, owed)
                     return _Wait.RETRY
                 owed.refusals = 0
                 owed.next_try = None
@@ -1293,6 +1337,31 @@ class RecordUplink:
                 )
                 return answer
         raise assert_never(answer)
+
+    def _hold(self, now: Monotonic, owed: _Owed) -> None:
+        """A request got no answer that can be used: the same is made again later.
+
+        The sending waits, whoever asked: with no answer there is no point in
+        asking for more. The first words of the running session, said by the
+        stop watch's task, wait too when THEY got no answer, on a wait of
+        their own (``greet_at``); a hold set by a request of the sending never
+        delays them.
+        """
+        until = Monotonic(now + RETRY_PERIOD)
+        self._held_until = until
+        if owed.greeting:
+            owed.greet_at = until
+
+    def _later(self, now: Monotonic, owed: _Owed) -> None:
+        """A request the dashboard may take another time: this session asks again later.
+
+        As for :meth:`_hold`: the session's sending waits whoever asked, and
+        its first words, when they are what was not taken, wait on their own.
+        """
+        until = Monotonic(now + RETRY_PERIOD)
+        owed.next_try = until
+        if owed.greeting:
+            owed.greet_at = until
 
     async def _disk[T](
         self, work: Callable[[], Result[T, RecordError]], limit: Seconds

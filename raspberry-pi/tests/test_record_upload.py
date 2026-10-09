@@ -890,7 +890,7 @@ def test_the_records_still_owed_are_those_with_a_cursor_that_is_not_complete(
 ) -> None:
     """Oldest first. A record that was there, cursor-less, at the first listing is left alone."""
     older_software = record_named(tmp_path, "2026-10-02T080000Z", "older-software")
-    assert owed_records(tmp_path) == Ok(Listed(()))
+    assert owed_records(tmp_path) == Ok(Listed((), set_aside=1))
     sent = record_named(tmp_path, "2026-10-01T080000Z", "sent")
     half = record_named(tmp_path, "2026-10-03T080000Z", "half")
     torn = record_named(tmp_path, "2026-10-04T080000Z", "torn")
@@ -919,7 +919,7 @@ def test_a_record_made_since_the_first_listing_and_never_tied_to_a_cursor_is_owe
 ) -> None:
     """Killed in its first second, or the disk refused its cursor: it is not lost for that."""
     before = record_named(tmp_path, "2026-10-01T080000Z", "before")
-    assert owed_records(tmp_path) == Ok(Listed(()))
+    assert owed_records(tmp_path) == Ok(Listed((), set_aside=1))
 
     since = record_named(tmp_path, "2026-10-02T080000Z", "since")
     open_now = record_named(tmp_path, "2026-10-03T080000Z", "open-now")
@@ -936,7 +936,7 @@ def test_the_record_open_at_the_first_listing_is_not_taken_for_an_older_one(
     before = record_named(tmp_path, "2026-10-01T080000Z", "before")
     open_now = record_named(tmp_path, "2026-10-02T080000Z", "open-now")
 
-    assert owed_records(tmp_path, open_now.name) == Ok(Listed(()))
+    assert owed_records(tmp_path, open_now.name) == Ok(Listed((), set_aside=1))
 
     assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
     # Never tied to its cursor in the end: it is found at the next start.
@@ -953,7 +953,7 @@ def test_a_list_of_older_records_that_is_lost_is_made_again_and_what_it_sets_asi
     is set aside with the others, and counted, so that it can be said.
     """
     before = record_named(tmp_path, "2026-10-01T080000Z", "before")
-    assert owed_records(tmp_path) == Ok(Listed(()))
+    assert owed_records(tmp_path) == Ok(Listed((), set_aside=1))
     sent = record_named(tmp_path, "2026-10-02T080000Z", "sent")
     assert isinstance(store(sent, Cursor(local_ref="sent", state="complete", end="sent")), Ok)
     waiting = record_named(tmp_path, "2026-10-03T080000Z", "waiting")
@@ -967,24 +967,38 @@ def test_a_list_of_older_records_that_is_lost_is_made_again_and_what_it_sets_asi
         owed = owed_records(tmp_path)
 
     assert owed == Ok(Listed((), set_aside=2))
-    assert "is missing or cannot be read: it is made again, and the 2 records" in caplog.text
+    assert "it is made now, and the 2 records that have no cursor are set aside" in caplog.text
     assert load_baseline(tmp_path) == Baseline(left_alone=(before.name, waiting.name))
     # Said once: the list is there again.
     assert owed_records(tmp_path) == Ok(Listed(()))
 
 
-def test_the_first_list_of_older_records_sets_nothing_aside_that_was_waiting(
+def test_whenever_the_list_of_older_records_is_made_what_it_sets_aside_is_counted(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """No cursor anywhere: the synchronisation was never here, nothing can have been waiting."""
+    """The first time too, and with no cursor anywhere: nothing tells a list never made
+    from one that was deleted, so the count is always given, to be said."""
     record_named(tmp_path, "2026-10-01T080000Z", "before")
     record_named(tmp_path, "2026-10-02T080000Z", "before-too")
 
     with caplog.at_level(logging.WARNING, logger="src.record.upload"):
         owed = owed_records(tmp_path)
 
+    assert owed == Ok(Listed((), set_aside=2))
+    assert "the 2 records that have no cursor are set aside and not sent" in caplog.text
+    (tmp_path / BASELINE_NAME).unlink()
+    assert owed_records(tmp_path) == Ok(Listed((), set_aside=2))
+
+
+def test_a_list_of_older_records_made_of_nothing_says_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="src.record.upload"):
+        owed = owed_records(tmp_path)
+
     assert owed == Ok(Listed(()))
     assert caplog.text == ""
+    assert load_baseline(tmp_path) == Baseline()
 
 
 def test_a_list_of_older_records_that_cannot_be_written_is_made_again_at_the_next_start(
@@ -1000,10 +1014,10 @@ def test_a_list_of_older_records_that_cannot_be_written_is_made_again_at_the_nex
         with caplog.at_level(logging.WARNING, logger="src.record.upload"):
             owed = owed_records(tmp_path)
 
-    assert owed == Ok(Listed(()))
+    assert owed == Ok(Listed((), set_aside=1))
     assert "could not be written (OSError:ENOSPC)" in caplog.text
     assert load_baseline(tmp_path) is None
-    assert owed_records(tmp_path) == Ok(Listed(()))
+    assert owed_records(tmp_path) == Ok(Listed((), set_aside=1))
     assert load_baseline(tmp_path) == Baseline(left_alone=(before.name,))
     assert isinstance(store_baseline(tmp_path, Baseline()), Ok)
 

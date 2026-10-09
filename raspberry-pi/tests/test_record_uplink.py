@@ -50,6 +50,7 @@ from src.record_uplink import (
     LIST_LOST,
     LOCAL_PATH,
     MAX_REFUSALS,
+    RECORD_UNREADABLE,
     RETRY_PERIOD,
     START_PATH,
     START_UNKNOWN,
@@ -575,6 +576,179 @@ async def test_a_session_whose_declaration_was_refused_for_good_is_not_greeted_a
         await b.step()
 
     assert len(b.link.to(LOCAL_PATH)) == 1
+
+
+@pytest.mark.parametrize(
+    "held",
+    [Held("sans code (HTTP 503): later", refused=True), Held("no route to host")],
+    ids=["a 503", "no answer"],
+)
+@pytest.mark.parametrize("remote", [None, "k17remote"], ids=["at the machine", "launched"])
+async def test_the_first_words_of_a_session_do_not_wait_for_a_hold_the_sending_set(
+    tmp_path: Path, held: Held, remote: str | None
+) -> None:
+    """A batch of an older session got no answer that can be used: the sending waits
+    fifteen seconds. A session armed meanwhile is confirmed or declared at once."""
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(3.0)
+    left.close()
+    tie(left.path, Cursor(session_id="cloud-old"))
+    old.clock.advance(Seconds(3600.0))
+    b = old.restarted()
+    b.link.answer(TELEMETRY_PATH, held)
+    await b.step()
+    assert b.link.paths() == ["telemetry"], "the catching up is held from now on"
+
+    b.clock.advance(Seconds(1.0))
+    b.uplink.begin(armed(b.clock, remote=remote))
+    record = recording(tmp_path, b.clock, "ref-now", remote=remote)
+    b.disk.current = record.path
+    await b.uplink.greet()
+
+    assert b.link.paths() == ["telemetry", "local" if remote is None else "start"]
+    assert b.following() == ("cloud-1" if remote is None else "k17remote")
+    # The sending is still held: nothing else goes before its fifteen seconds.
+    await b.step()
+    assert len(b.link.sent) == 2
+
+
+async def test_first_words_that_get_no_answer_wait_on_their_own_and_hold_the_sending_too(
+    tmp_path: Path,
+) -> None:
+    """No answer at all: the watch's task asks again fifteen seconds later, not at its
+    every look, and the sending does not ask for more meanwhile."""
+    b = bench(tmp_path)
+    b.link.answer(START_PATH, DOWN)
+    b.uplink.begin(armed(b.clock, remote="k17remote"))
+
+    await b.uplink.greet()
+    for _ in range(40):
+        b.clock.advance(Seconds(0.05))
+        await b.uplink.greet()
+    assert b.link.paths() == ["start"], "its own wait: not asked at every look"
+
+    # The session ends unconfirmed: the sending, which takes it over, waits as long.
+    b.uplink.finished(ENDED)
+    await b.run(int(RETRY_PERIOD) - 4)
+    assert b.link.paths() == ["start"]
+    await b.run(3)
+    assert b.link.paths() == ["start", "start"]
+
+
+async def test_a_declaration_answered_without_a_name_is_made_again_after_its_own_wait(
+    tmp_path: Path,
+) -> None:
+    """An answer, and no session in it: asked again fifteen seconds later, by the watch's
+    task while the session runs, by the sending once it has ended."""
+    b = bench(tmp_path)
+    b.link.answer(LOCAL_PATH, Acked({}))
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock, "ref-now")
+    b.disk.current = record.path
+
+    await b.uplink.greet()
+    for _ in range(40):
+        b.clock.advance(Seconds(0.05))
+        await b.uplink.greet()
+    assert b.link.paths() == ["local"], "its own wait: not asked at every look"
+
+    record.close()
+    b.uplink.finished(ENDED)
+    await b.run(int(RETRY_PERIOD) - 4)
+    assert b.link.paths() == ["local"]
+    await b.run(3)
+    assert b.link.paths() == ["local", "local"]
+
+
+@pytest.mark.parametrize("remote", [None, "k17remote"], ids=["at the machine", "launched"])
+async def test_a_running_session_whose_record_cannot_be_read_is_said_to_the_operator(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, remote: str | None
+) -> None:
+    """Its directory is there and its manifest never reads: told to the dashboard,
+    followed for a stop, nothing of it sent, and no cursor on disk for a restart to take
+    it up from. The operator reads it once, ten seconds into the session."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock, remote=remote))
+    record = recording(tmp_path, b.clock, "ref-now", remote=remote)
+    b.disk.current = record.path
+    record.tick(2.0)
+    (record.path / "manifest.json").rename(record.path / "manifest.away")
+    session = "cloud-1" if remote is None else remote
+
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(int(BIND_GRACE) - 1)
+        assert b.said == []
+        await b.run(3)
+
+    assert b.said == [RECORD_UNREADABLE], "once"
+    assert caplog.text.count("the record of the running session cannot be read") == 1
+    assert b.link.paths() == ["local" if remote is None else "start"]
+    assert b.following() == session
+    assert load(record.path) == NoCursor()
+
+    # Readable in the end: tied then, and its measurements follow.
+    (record.path / "manifest.away").rename(record.path / "manifest.json")
+    await b.run(3)
+    assert b.link.seconds(session) == [0.0, 1.0]
+    assert b.said == [RECORD_UNREADABLE]
+
+
+async def test_a_launch_that_gets_no_record_at_all_is_said_to_the_operator(
+    tmp_path: Path,
+) -> None:
+    """No directory was ever opened for it: the same words, at the same time."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock, remote="k17remote"))
+
+    await b.run(int(BIND_GRACE) - 1)
+    assert b.said == []
+    await b.run(2)
+
+    assert b.said == [RECORD_UNREADABLE]
+    assert b.link.paths() == ["start"]
+
+
+async def test_a_session_declared_without_its_record_is_said_in_those_words_only(
+    tmp_path: Path,
+) -> None:
+    """Started at the machine with no directory to name it: its declaration says that it
+    goes without its record, whichever of the two tasks looks first, and nothing is added."""
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock))
+    await b.run(int(BIND_GRACE) - 1)
+
+    b.clock.advance(Seconds(1.0))
+    await b.uplink.step()
+    assert b.said == [], "left to the declaration"
+    await b.uplink.greet()
+    await b.run(3)
+
+    assert b.said == [DECLARED_WITHOUT_RECORD]
+
+
+@pytest.mark.parametrize("remote", [None, "k17remote"], ids=["at the machine", "launched"])
+async def test_a_running_session_tied_to_its_record_says_nothing_of_it(
+    tmp_path: Path, remote: str | None
+) -> None:
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock, remote=remote))
+    record = recording(tmp_path, b.clock, "ref-now", remote=remote)
+    b.disk.current = record.path
+
+    await b.run(int(BIND_GRACE) + 2)
+
+    assert b.said == []
+    assert isinstance(load(record.path), Cursor)
+
+
+async def test_a_console_that_records_nothing_says_nothing_of_a_record(tmp_path: Path) -> None:
+    b = bench(tmp_path, recording=False)
+    b.uplink.begin(armed(b.clock, remote="k17remote"))
+
+    await b.run(int(BIND_GRACE) + 2)
+
+    assert b.said == []
 
 
 class Late:
@@ -1602,8 +1776,9 @@ async def test_a_session_tied_to_its_record_while_the_link_is_held_has_its_curso
 
     await b.step()
 
-    assert b.link.paths() == ["end"], "held: the session was not even declared"
-    assert load(record.path) == Cursor(local_ref="ref-held", boot_id=BOOT)
+    # Declared all the same, by the watch's task; the sending itself is held.
+    assert b.link.paths() == ["end", "local"]
+    assert load(record.path) == Cursor(local_ref="ref-held", session_id="cloud-1", boot_id=BOOT)
 
 
 async def test_ex4_a_record_never_tied_to_a_cursor_is_sent_whole_at_the_next_start(
@@ -1845,11 +2020,30 @@ async def test_a_lost_list_of_older_records_is_said_with_what_it_set_aside(
 
     assert b.link.sent == []
     assert b.said == [LIST_LOST.format(count=1)]
-    assert "1 records without a cursor were set aside" in caplog.text
+    assert "1 records without a cursor were set aside with the list of older records" in caplog.text
     # Once: the list is there again.
     again = b.restarted()
     await again.run(3)
     assert again.said == []
+
+
+async def test_the_first_list_of_older_records_says_how_many_it_sets_aside(
+    tmp_path: Path,
+) -> None:
+    """The first start of this version on a directory that holds records, with no cursor
+    anywhere: they are not sent, and the operator is told how many."""
+    old = bench(tmp_path)
+    for index in range(3):
+        older = recording(tmp_path, old.clock, f"ref-older-{index}")
+        older.tick(1.0)
+        older.close()
+        old.clock.advance(Seconds(60.0))
+
+    b = old.restarted()
+    await b.run(2)
+
+    assert b.link.sent == []
+    assert b.said == [LIST_LOST.format(count=3)]
 
 
 async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beginning(

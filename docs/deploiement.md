@@ -376,7 +376,10 @@ qui vaut pour un changement de majeure, et les deux ordres sont sans danger.
 avant cette version n'ont pas de curseur : ils ne sont **pas** envoyés, ni au
 premier démarrage ni plus tard, et restent sur le disque tels quels. À son
 premier démarrage, la console en écrit la liste une fois, dans
-`.sync-baseline.json` à côté des enregistrements. Aucun geste n'est demandé.
+`.sync-baseline.json` à côté des enregistrements, et dit dans sa liste
+d'événements combien elle en met de côté (`liste des enregistrements
+anterieurs a la synchronisation etablie : N enregistrement(s) ...`) : c'est
+attendu. Aucun geste n'est demandé.
 Les fichiers `<nom du dossier>.sync.json` qui apparaissent ensuite à côté des
 dossiers d'enregistrement sont les curseurs de la synchronisation
 ([raspberry-pi.md §8.1](raspberry-pi.md#81-ce-qui-est-envoyé-vient-du-disque)) :

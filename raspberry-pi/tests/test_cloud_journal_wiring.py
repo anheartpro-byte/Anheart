@@ -30,13 +30,13 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import cast, override
+from typing import Final, cast, override
 
 import pytest
 
 from src import cloud_sync, record_uplink
 from src.clock import ManualClock
-from src.cloud_sync import STATUS_PERIOD, CloudSync, Refused
+from src.cloud_sync import STATUS_PERIOD, CloudSync, Refused, Unreachable
 from src.contract import ErrorCode
 from src.local_panel import CLOUD_PERIOD, STOP_WATCH_PERIOD, LocalPanel
 from src.record.cursor import Cursor, load
@@ -344,24 +344,26 @@ class Waits:
 
 
 class SlowDashboard(Dashboard):
-    """Every request takes ``delay`` seconds to be answered. When each was made is kept."""
+    """Every request takes ``delay`` seconds to be answered, or what ``slow`` says for its
+    route. When each was made is kept."""
 
     def __init__(self, waits: Waits, delay: float) -> None:
         super().__init__()
         self.waits: Waits = waits
         self.delay: float = delay
+        self.slow: dict[str, float] = {}
         self.made: list[tuple[float, str]] = []
 
     @override
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         self.made.append((float(self.waits.clock.monotonic()), path))
-        await self.waits.sleep(self.delay)
+        await self.waits.sleep(self.slow.get(path, self.delay))
         return await super().get(path, params)
 
     @override
     async def post(self, path: str, body: Mapping[str, JsonValue]) -> Reply:
         self.made.append((float(self.waits.clock.monotonic()), path))
-        await self.waits.sleep(self.delay)
+        await self.waits.sleep(self.slow.get(path, self.delay))
         return await super().post(path, body)
 
 
@@ -412,6 +414,7 @@ async def watched(
     session_s: int = 80,
     armed_after_s: float = 0.0,
     launched: bool = True,
+    batches: tuple[float, Reply] | None = None,
 ) -> Watched:
     """``session_s`` seconds of a link, a session being armed ``armed_after_s`` into them.
 
@@ -420,11 +423,16 @@ async def watched(
     ``one_task`` the watch is instead called from the sending task, before
     and after the step, as it was before it had its own. ``launched``: the
     session comes from the dashboard; else it is started at the machine.
+    ``batches``: what every batch of telemetry is answered and after how
+    long, while the other routes answer as ``request_s`` says.
     """
     clock = ManualClock()
     waits = Waits(clock)
     dashboard = SlowDashboard(waits, request_s)
     dashboard.answer(STATUS, status_answer())
+    if batches is not None:
+        dashboard.slow[TELEMETRY], reply = batches
+        dashboard.answer(TELEMETRY, reply)
     root = tmp_path / "records"
     root.mkdir()
     disk = Disk(root)
@@ -602,6 +610,74 @@ async def test_a_session_started_at_the_machine_is_declared_before_any_reading_o
     declared, asked = seen.at(LOCAL)[0], seen.at(STATUS)[0]
     assert declared <= LOOK
     assert asked <= declared + request_s + LOOK
+
+
+HELD_BATCHES: Final[Mapping[str, tuple[float, Reply]]] = {
+    "answered 503": (0.01, Err(Refused(503, "HTTP 503"))),
+    "left unanswered": (3.0, Err(Unreachable("ReadTimeout"))),
+}
+"""A dashboard that takes no batch of telemetry and answers every other route at once:
+what each batch gets, and after how long (the transport gives up after three seconds)."""
+
+ARMINGS: Final[tuple[float, ...]] = (0.3, 5.3, 10.3, 14.3)
+"""When a session is armed, in seconds after the first batch was tried: across the fifteen
+seconds the sending then waits."""
+
+
+@pytest.mark.parametrize("held", HELD_BATCHES)
+@pytest.mark.parametrize("armed_after_s", ARMINGS)
+async def test_a_launch_is_confirmed_and_its_stop_asked_for_while_the_catching_up_is_held(
+    tmp_path: Path, held: str, armed_after_s: float
+) -> None:
+    """A hundred minutes to catch up and no batch taken: the sending waits fifteen
+    seconds after each. A launch armed anywhere in that wait is confirmed, and its stop
+    asked for, as early as on a healthy link: its first words wait on their own failures
+    only, never on what another request was answered.
+    """
+    seen = await watched(
+        tmp_path,
+        request_s=0.01,
+        read_s=0.0,
+        backlog_points=6000,
+        one_task=False,
+        session_s=round(armed_after_s) + 18,
+        armed_after_s=armed_after_s,
+        batches=HELD_BATCHES[held],
+    )
+
+    confirmed, asked = seen.at(START)[0], seen.at(STATUS)[0]
+    assert confirmed <= LOOK
+    assert asked <= confirmed + 0.01 + LOOK
+    assert len(seen.at(START)) == 1, "said once"
+    # The catching up really was held all along: a batch every fifteen seconds, no more.
+    tried = [at + seen.armed_at for at in seen.at(TELEMETRY)]
+    assert len(tried) >= 2
+    assert min(later - earlier for earlier, later in pairwise(tried)) >= float(RETRY_PERIOD)
+
+
+@pytest.mark.parametrize("held", HELD_BATCHES)
+@pytest.mark.parametrize("armed_after_s", ARMINGS)
+async def test_a_session_started_at_the_machine_is_declared_while_the_catching_up_is_held(
+    tmp_path: Path, held: str, armed_after_s: float
+) -> None:
+    """The same wait of the sending, and a session started at the machine: declared at the
+    watch's next look after its record's directory exists, its stop asked for at once."""
+    seen = await watched(
+        tmp_path,
+        request_s=0.01,
+        read_s=0.0,
+        backlog_points=6000,
+        one_task=False,
+        session_s=round(armed_after_s) + 18,
+        armed_after_s=armed_after_s,
+        launched=False,
+        batches=HELD_BATCHES[held],
+    )
+
+    declared, asked = seen.at(LOCAL)[0], seen.at(STATUS)[0]
+    assert declared <= LOOK
+    assert asked <= declared + 0.01 + LOOK
+    assert len(seen.at(LOCAL)) == 1, "said once"
 
 
 async def test_told_from_the_sending_task_a_launch_would_wait_behind_the_catching_up(
