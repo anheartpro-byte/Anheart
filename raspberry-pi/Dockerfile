@@ -59,7 +59,8 @@ RUN python -c "from biosppy.signals import ecg; from scipy import signal; print(
 # loads at startup (config/ sits next to src/, see src/training/plan.py).
 COPY src/ ./src/
 COPY config/ ./config/
-# The build's version, announced in the heartbeat (src/contract.py).
+# The build's version (src/contract.py): shown on the console's page, announced
+# in the heartbeat and written in the manifest of every session record.
 COPY VERSION ./VERSION
 COPY docker/entrypoint.sh /usr/local/bin/anheart-entrypoint
 RUN chmod +x /usr/local/bin/anheart-entrypoint

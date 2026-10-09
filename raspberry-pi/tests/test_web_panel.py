@@ -15,8 +15,10 @@ import httpx
 import pytest
 
 from src.bitalino_client import LinkStats
+from src.contract import UNKNOWN_SOFTWARE_VERSION, SoftwareVersion
 from src.ecg_pipeline import EcgBridgeStats, EcgMetrics
 from src.geometry import MachineGeometry
+from src.link_state import MAX_DETAIL, NOT_CONFIGURED, LinkState, LinkStatus, label_of
 from src.local_config import EcgSource, MotorBackend
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.result import Err, Ok, Result
@@ -77,6 +79,8 @@ def _status(*, link: LinkStats | None, metrics: EcgMetrics | None) -> PanelStatu
         radius=Metres(1.5),
         ratio=GearRatio(49.79),
         motor_max_rpm=MotorRpm(300),
+        software_version=SoftwareVersion("pi-1.4.2"),
+        dashboard=LinkStatus(LinkState.REACHABLE, "", Seconds(4.5)),
     )
 
 
@@ -174,6 +178,77 @@ async def test_the_panel_reports_both_links_and_the_geometry(console: httpx.Asyn
     assert row.radius_m == pytest.approx(1.5)
     assert row.gear_ratio == pytest.approx(49.79)
     assert row.motor_max_rpm == 300
+    assert row.software_version == "pi-1.4.2"
+    assert (row.dashboard.state, row.dashboard.label, row.dashboard.detail) == (
+        "reachable",
+        "joignable",
+        "",
+    )
+    assert row.dashboard.last_answer_age_s == pytest.approx(4.5)
+
+
+EVERY_STATE: dict[LinkState, tuple[str, str]] = {
+    LinkState.NOT_CONFIGURED: ("not_configured", "non configure"),
+    LinkState.WAITING: ("waiting", "en attente"),
+    LinkState.REACHABLE: ("reachable", "joignable"),
+    LinkState.UNREACHABLE: ("unreachable", "injoignable"),
+    LinkState.INCOMPATIBLE: ("incompatible", "incompatible"),
+    LinkState.KEY_REFUSED: ("key_refused", "cle refusee"),
+    LinkState.SERVER_ERROR: ("server_error", "en erreur"),
+}
+"""Every state of the link, its wire value and the word the operator reads. The page's
+own table (``tests/web/panel_dashboard_link.test.mjs``) and the docs quote these."""
+
+
+def test_every_state_of_the_link_has_its_word() -> None:
+    assert set(EVERY_STATE) == set(LinkState)
+    spoken = {state: (state.value, label_of(state)) for state in LinkState}
+    assert spoken == EVERY_STATE
+    words = [label for _wire, label in EVERY_STATE.values()]
+    assert len(set(words)) == len(words), "two states must never read the same"
+
+
+@pytest.mark.parametrize("state", list(LinkState))
+async def test_ex2_the_panel_serves_the_state_of_the_dashboard_link_and_the_version(
+    rig: Rig, state: LinkState
+) -> None:
+    """EX-2: one standing state, with its word, on the route the page already polls."""
+    status = replace(
+        _status(link=None, metrics=None),
+        dashboard=LinkStatus(state, "serveur incompatible (contrat 1.1 vs 2)", Seconds(12.0)),
+    )
+    async with _console_app(rig, status) as session:
+        answered = await session.get("/api/panel", headers=auth())
+    row = parse(PanelRow, answered)
+    wire, label = EVERY_STATE[state]
+    assert (row.dashboard.state, row.dashboard.label) == (wire, label)
+    assert row.dashboard.detail == "serveur incompatible (contrat 1.1 vs 2)"
+    assert row.dashboard.last_answer_age_s == pytest.approx(12.0)
+    assert row.software_version == "pi-1.4.2"
+
+
+async def test_ex2_a_console_without_a_key_and_without_a_version_file_says_so(rig: Rig) -> None:
+    status = replace(
+        _status(link=None, metrics=None),
+        software_version=UNKNOWN_SOFTWARE_VERSION,
+        dashboard=NOT_CONFIGURED,
+    )
+    async with _console_app(rig, status) as session:
+        row = parse(PanelRow, await session.get("/api/panel", headers=auth()))
+    assert row.software_version == "pi-unknown"
+    assert (row.dashboard.state, row.dashboard.label) == ("not_configured", "non configure")
+    assert "MACHINE_API_KEY" in row.dashboard.detail
+    assert row.dashboard.last_answer_age_s is None
+    assert len(row.dashboard.detail) <= MAX_DETAIL
+
+
+async def test_the_state_of_the_link_is_not_served_without_the_token(rig: Rig) -> None:
+    """It names the dashboard's refusals: nothing of it for a caller with no token."""
+    async with _console_app(rig, _status(link=None, metrics=None)) as session:
+        refused = await session.get("/api/panel")
+    assert refused.status_code == HTTPStatus.UNAUTHORIZED
+    assert "joignable" not in refused.text
+    assert "pi-1.4.2" not in refused.text
 
 
 async def test_the_panel_renders_a_simulator_and_a_link_never_measured(rig: Rig) -> None:

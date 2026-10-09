@@ -243,6 +243,9 @@ include = [
     # The dashboard link: it can submit a start and forward a stop, so every
     # branch that decides either is tested, like the rest of the console.
     "src/cloud_sync.py",
+    # What that link has last heard of itself, as the state the operator reads
+    # on the console: it must never say reachable of a dashboard that is not.
+    "src/link_state.py",
     # What that link sends of a session, read back from its record on disk:
     # which session goes first, what a refusal does to the cursor, and when an
     # end is sent. It can also have a running session stopped (a start the
@@ -303,6 +306,7 @@ safety_chain = [
     "src/web/profile_writer.py",
     "src/panel_status.py",
     "src/cloud_sync.py",
+    "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",
     "src/dsp.py",

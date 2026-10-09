@@ -42,6 +42,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > pastilles barrées sous `NO LIVE DATA`, `perime` en orange) a été rejoué dans un
 > navigateur sans interface, sur la console en simulation, avec une personne à bord
 > déclarée par l'API pour ce qui dépend de la fréquence cardiaque.
+> Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
+> 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
+> réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
+> été rejouées ni dans un navigateur, ni face à un déploiement Convex réel.
 
 ---
 
@@ -129,12 +133,13 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 | Zone | Contenu |
 |---|---|
 | Bandeaux en haut | Trois rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
-| Barre latérale (à gauche) | la marque, six pastilles d'état de la machine, la navigation |
+| Barre latérale (à gauche) | la marque, huit pastilles (six sur l'état de la machine, puis **Serveur** et **Version** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
 
 Sur un écran étroit, la barre latérale se replie derrière un bouton `☰ Menu`. Une barre
-mobile affiche alors le mode et l'état de rotation.
+mobile affiche alors le mode, l'état de rotation et l'état du lien avec le tableau de
+bord (`serveur joignable`, `serveur incompatible`…, section 4).
 
 La page reçoit ses données par un WebSocket (`/ws/telemetry`, environ 5 images par
 seconde) et par des interrogations périodiques :
@@ -142,7 +147,7 @@ seconde) et par des interrogations périodiques :
 | Source | Période | Sert à |
 |---|---|---|
 | `/ws/telemetry` | continu | instantanés, événements, tracé ECG |
-| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle |
+| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle, version du logiciel, état du lien avec le tableau de bord |
 | `/api/sensors` | 1 s | pages Capteurs |
 | `/api/camera` | 1 s | carte caméra de la page Securite |
 | `/api/status` | 5 s | état, verdicts, attestation, système |
@@ -174,7 +179,8 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
    - la pastille **Liaison** passe à `donnees figees` ou `hors ligne`.
 
    La même règle vaut pour les deux autres sources. Sans réponse de `/api/panel`
-   depuis 3,5 s, les pastilles **Console** et BITalino (`acquisition`) sont barrées ;
+   depuis 3,5 s, les pastilles **Console**, **Serveur** et BITalino (`acquisition`)
+   sont barrées, comme celle de la barre mobile (`serveur …`) ;
    sans réponse de `/api/status` depuis 12 s, **Etat** et la pastille de
    l'attestation. Le WebSocket peut tomber alors que ces deux sources répondent
    encore : leurs pastilles restent alors lisibles, à juste titre.
@@ -213,6 +219,8 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 | **Rotation** | `a l'arret`, `EN ROTATION`, `VITESSE INCONNUE` | vitesse mesurée |
 | **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11). `freeze` ne veut pas dire que la consigne ne bouge plus : elle descend sous un `freeze` après un STOP (section 5) et, pour un programme, à partir de sa phase `cooldown` (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
+| **Serveur** | `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure` : le lien de la console avec le tableau de bord ([détail plus bas](#pastille-serveur--le-lien-avec-le-tableau-de-bord)) | `/api/panel` (`dashboard`) |
+| **Version** | la version du logiciel de la console, par exemple `pi-0.0.0-dev` ; `pi-unknown` si le fichier `VERSION` manque ou est mal formé | `/api/panel` (`software_version`) |
 
 Les modes :
 
@@ -232,8 +240,100 @@ Les états `run_state` (vue « intention » de la surface de commande) :
 | `running` | la boucle a confirmé une séance, et personne n'a demandé sa fin ni un E-STOP depuis la page. L'état reste `running` pendant tout le mode `ARRET` d'une fin de séance que la console décide elle-même (un verdict d'arrêt, un arrêt posé par la caméra, la règle `session_standstill`) : il ne dit donc pas que la séance avance encore. Lire **Mode** |
 | `stopping` | une fin ou un E-STOP est accepté ; un E-STOP garde cet état jusqu'à l'acquittement |
 
-Sous les pastilles, une ligne indique l'adresse d'écoute, par exemple
-`127.0.0.1:8090 boucle locale · sans jeton`, ou `… RESEAU · jeton` hors boucle locale.
+Sous les pastilles, une première ligne donne le motif de l'état du lien avec le
+tableau de bord et l'âge de sa dernière réponse (voir ci-dessous). Une seconde indique
+l'adresse d'écoute, par exemple `127.0.0.1:8090 boucle locale · sans jeton`, ou
+`… RESEAU · jeton` hors boucle locale.
+
+### Pastille Serveur : le lien avec le tableau de bord
+
+La pastille **Serveur** dit, en permanence et sur toutes les pages, où en est le lien
+entre **cette console** et le tableau de bord (Convex). Ce n'est pas la pastille
+**Liaison**, qui parle du lien entre la page et la console. C'est un état, pas un
+événement : un événement `dashboard` défile et n'est envoyé qu'aux écrans connectés à
+ce moment-là, alors qu'une page ouverte une heure après le début d'une incompatibilité
+lit `incompatible` tout de suite.
+
+| Valeur | Couleur | Quand | Que faire |
+|---|---|---|---|
+| `non configure` | sans couleur | la console n'a pas de clé de machine (`MACHINE_API_KEY` vide) : elle n'échange rien avec le tableau de bord | rien si c'est voulu ; sinon régler `MACHINE_API_KEY` et `CONVEX_URL` ([raspberry-pi.md](raspberry-pi.md#121-clés-lues-par-la-console-srclocal_configpy)) et redémarrer la console |
+| `en attente` | orange | une clé est réglée, la console vient de démarrer et rien n'est encore revenu du tableau de bord. 25 s au plus | attendre |
+| `joignable` | vert | il y a moins de 25 s, le tableau de bord a pris quelque chose que la console lui a envoyé (son heartbeat, un lancement demandé, un envoi de séance) : il a répondu dans sa propre forme, par un succès ou par le refus d'une demande sous l'un de ses codes stables. Rien d'autre ne donne `joignable` | rien |
+| `injoignable` | rouge | depuis 25 s, rien de reconnaissable n'est revenu : pas de réseau, délai dépassé, ou une réponse qui n'est pas celle du tableau de bord (un 404 ou un 400 sans code stable, une page HTML) | vérifier le réseau du Pi, puis `CONVEX_URL` si le motif dit `pas une reponse du tableau de bord`. La machine fonctionne comme sans tableau de bord ; ce qu'une séance lui doit reste sur le disque et part au retour du lien |
+| `incompatible` | rouge | le tableau de bord n'est pas de la même majeure de contrat : il l'a répondu (426), ou la console l'a lu dans la version qu'il annonce. Affiché dès la première réponse qui le dit | mettre à jour le côté en retard. Aucun lancement distant n'est armé tant que cela dure ; un arrêt demandé du tableau de bord, lui, passe toujours |
+| `cle refusee` | rouge | le tableau de bord refuse la clé de la machine (401 ou 403). Affiché dès la première réponse qui le dit | vérifier `MACHINE_API_KEY` : la machine a pu être supprimée ou désactivée sur le tableau de bord, ou sa clé remplacée |
+| `en erreur` | rouge | le tableau de bord est là, et depuis 25 s il ne prend rien de ce que la console envoie : il ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429), ou bien il répond encore à la question d'arrêt d'une séance alors que le heartbeat et les envois échouent | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau. Pendant ce temps le tableau de bord ne reçoit rien de la machine |
+
+La ligne sous les pastilles donne le motif, puis l'âge de la dernière réponse :
+`serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`,
+`HTTP 401 (unauthorized) · derniere reponse il y a 4 s`,
+`HTTP 500 · derniere reponse il y a 2 s`,
+`HTTP 404 : pas une reponse du tableau de bord`,
+`POST /api/machine/heartbeat: ConnectTimeout('') · derniere reponse il y a 31 s`
+(en minutes au-delà de 100 s : `il y a 3 min`). Sans clé elle dit
+`aucune cle de machine (MACHINE_API_KEY) : rien n'est echange`. Le motif tient sur une
+ligne de 160 caractères au plus, écrite comme du texte. De ce que le tableau de bord
+envoie, seuls y entrent le code HTTP, son code stable et les majeures qu'il dit servir
+(les quatre premières, puis le nombre des autres) ; sa phrase reste dans le journal de
+la console. L'âge est celui de la dernière réponse reconnue comme venant du tableau de
+bord, question d'arrêt comprise.
+
+Deux règles suffisent pour la lire :
+
+- **L'état est ce qu'ont dit en dernier les routes qui portent le heartbeat et la
+  séance**, tant qu'elles le redisent. Ce sont elles que le tableau de bord ne sert qu'à
+  une console dont il accepte la clé et sert le contrat. La dernière chose dite
+  l'emporte : un 426 après un 401 se lit `incompatible`, puisque le tableau de bord
+  vérifie la clé avant le contrat.
+- **Ce qui n'est pas la réponse du tableau de bord ne prouve rien.** Un silence, une
+  erreur du serveur, un 404 ou un 400 sans code stable, une page HTML : rien de cela ne
+  donne `joignable` ni n'efface un refus. Cela ne change la pastille que lorsque ces
+  routes n'ont plus rien dit de reconnaissable depuis 25 s.
+
+Ce qui en découle :
+
+- **Elle ne clignote pas sur une requête lente.** 25 s valent deux heartbeats et demi
+  (un toutes les 10 s) : un heartbeat perdu ne se voit pas, deux de suite si. Pendant
+  ces 25 s la pastille garde son état et c'est l'âge de la dernière réponse, sur la
+  ligne du dessous, qui grandit. Le retour, lui, est immédiat : la première réponse qui
+  prend ce que la console envoie la remet à `joignable`.
+- **La question d'arrêt ne prouve rien et ne maintient rien.** Le tableau de bord y
+  répond sous n'importe quel contrat, toutes les 3 s pendant une séance, pour qu'un
+  arrêt passe toujours (`/api/machine/training/status`). Ses réponses gardent fraîche
+  l'âge de la dernière réponse, et c'est tout : elles ne donnent pas `joignable`,
+  n'effacent pas `incompatible`, et ne remettent pas le délai de 25 s à zéro. Une séance
+  dont le heartbeat et les envois échouent se lit donc `en erreur` au bout de 25 s, avec
+  le motif, même si la question d'arrêt reçoit toujours sa réponse.
+- **Une incompatibilité lue dans une annonce ne se lève qu'à l'annonce suivante.**
+  Quand c'est la console qui a refusé la version annoncée par le tableau de bord
+  (`/api/machine/training/poll`), seule une annonce de sa propre majeure lève l'état.
+  La console ne pose cette question qu'au repos et avec `PROGRAMS_ENABLED=true` :
+  pendant une séance, la pastille garde donc ce que la dernière annonce a dit.
+- **Un refus qui n'est plus redit ne dure pas.** 25 s après le dernier 426 ou le dernier
+  401, si ces routes ne disent plus rien, la pastille passe à `injoignable`, ou à
+  `en erreur` si quelque chose du tableau de bord répond encore.
+- **`joignable` ne dit pas que tout est arrivé.** Il dit que le tableau de bord prend
+  ce que la console envoie en ce moment. Ce qu'il reste à lui envoyer d'une séance n'est
+  pas montré sur la page.
+- **Aucune requête n'est faite pour elle.** L'état vient des échanges que le lien fait
+  de toute façon (heartbeat, lancements, envoi des séances, question d'arrêt). Rien
+  n'en est lu ni écrit dans le tic de commande.
+- Comme **Console**, elle est barrée quand `/api/panel` ne répond plus depuis 3,5 s :
+  la page ne sait alors plus ce que la console dirait.
+
+**Version** affiche la version du logiciel de la console : le contenu de
+`raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker), lu une fois au démarrage,
+par exemple `pi-0.0.0-dev`. C'est la même valeur que celle du heartbeat et du
+manifeste de chaque enregistrement de séance (`software_version`). Fichier absent,
+illisible ou mal formé : `pi-unknown`.
+
+Vérifié par `raspberry-pi/tests/test_link_state.py` (chaque état, les 25 s, l'absence
+de clignotement), `raspberry-pi/tests/test_link_indicator.py` (le lien réel face à un
+tableau de bord scripté, puis la console en simulation à travers son transport HTTP :
+un tableau de bord qui répond 426 au milieu d'une séance, une adresse qui n'est pas le
+tableau de bord, une séance dont rien n'arrive alors que la question d'arrêt est
+servie) et `raspberry-pi/tests/web/panel_dashboard_link.test.mjs` (la page). Pas
+rejoué dans un navigateur, ni face à un déploiement Convex réel.
 
 ### Navigation
 
@@ -1113,10 +1213,11 @@ d'opérateur, et n'est jamais écrit dans la note de la carte Mode MANUEL.
 
 | Message | Sens |
 |---|---|
-| `serveur incompatible (contrat <X> vs <Y>)` | le tableau de bord ne parle pas la même majeure de contrat que cette console (X : la version de la console ; Y : celle du serveur, les majeures qu'il dit servir, ou `inconnu` s'il n'en annonce aucune). Aucun lancement distant n'est armé tant que cela dure ; la console fonctionne comme sans tableau de bord. Mettre à jour le côté en retard. |
+| `serveur incompatible (contrat <X> vs <Y>)` | le tableau de bord ne parle pas la même majeure de contrat que cette console (X : la version de la console ; Y : celle du serveur, les majeures qu'il dit servir, ou `inconnu` s'il n'en annonce aucune ; au-delà de quatre majeures, les quatre premières puis le nombre des autres, par exemple `2, 3, 4, 5 et 596 autres`). La phrase fait 100 caractères au plus, quoi que le serveur envoie. Aucun lancement distant n'est armé tant que cela dure ; la console fonctionne comme sans tableau de bord. Mettre à jour le côté en retard. |
 
 Le message est émis pour chaque lancement refusé, quand il change, et sinon
-rappelé toutes les 60 s tant que l'incompatibilité dure. Vérifié par
+rappelé toutes les 60 s tant que l'incompatibilité dure. Entre deux rappels, l'état se
+lit en permanence sur la pastille **Serveur**, qui dit `incompatible` (section 4). Vérifié par
 `raspberry-pi/tests/test_cloud_contract.py` et, pour la page,
 `raspberry-pi/tests/web/panel_display.test.mjs` ; pas rejoué dans un navigateur.
 
@@ -1178,7 +1279,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | GET | `/api/status` | tout ce que la mise en route demande : `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
 | GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
-| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm` ; `null` sans console | 200 |
+| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console | 200 |
 | GET | `/api/camera` | `configured`, `camera`, `state`, `detail`, `latched_rule` | 200 |
 | GET | `/api/sensors` | chaque canal acquis : fenêtre, qualité, mesures (surveillance seulement) | 200 |
 

@@ -17,12 +17,15 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from simulation.recording import FrameKind
 from simulation.replay import replay
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import document, load, obj, run
 from src.bitalino_client import SampleBatch
 from src.clock import ManualClock
+from src.contract import UNKNOWN_SOFTWARE_VERSION, read_software_version
 from src.ecg_pipeline import EcgFrame, Treatment, treat_ecg
 from src.local_config import load_local_config
 from src.local_panel import LocalPanel, build_panel
@@ -258,6 +261,22 @@ def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simul
     assert _manifest(console)["profile"] is None
     assert _manifest(simulation)["profile"] is None
     assert (_manifest(console)["kind"], _manifest(simulation)["kind"]) == ("manual", "manual")
+
+
+def test_anh210_a_scenario_record_is_stamped_with_the_version_of_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``software_version`` is ``raspberry-pi/VERSION``, as on the console, in any environment.
+
+    The harness used to read ``ANHEART_SOFTWARE_VERSION`` and to write
+    ``unversioned`` without it. A value set for it now changes nothing. (The
+    console's side of this is ``raspberry-pi/tests/test_link_indicator.py``.)
+    """
+    monkeypatch.setenv("ANHEART_SOFTWARE_VERSION", "set-by-hand")
+    built = read_software_version()
+    assert built != UNKNOWN_SOFTWARE_VERSION
+    simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 5.0)
+    assert _manifest(simulation)["software_version"] == built
 
 
 def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_path: Path) -> None:

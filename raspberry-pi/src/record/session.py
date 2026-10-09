@@ -61,6 +61,7 @@ from pydantic import TypeAdapter
 from src.bitalino_client import LinkStats, SampleBatch
 from src.clock import Clock
 from src.cloud_sync import DASHBOARD_OPERATOR
+from src.contract import SoftwareVersion
 from src.control_surface import LOCAL_SUBJECT, SessionEvent
 from src.control_surface import EventKind as SurfaceEvent
 from src.local_config import LocalConfig
@@ -193,9 +194,18 @@ def _digest(document: JsonValue) -> str:
 
 
 def stamp_for(
-    config: LocalConfig, limits: RuntimeLimits, safety: SafetyLimits, motion: MotionLimits
+    config: LocalConfig,
+    limits: RuntimeLimits,
+    safety: SafetyLimits,
+    motion: MotionLimits,
+    software_version: SoftwareVersion,
 ) -> Stamp:
     """Hash the configuration actually applied. No secret enters either hash.
+
+    ``software_version`` is what this build calls itself
+    (:func:`~src.contract.read_software_version`, from ``raspberry-pi/VERSION``):
+    the one value the manifest, the console's page and the heartbeat all carry.
+    It is a fact about the build, not a setting, and is in neither hash.
 
     ``medical_parameters_version`` covers what a medical decision set: the
     cardiac tiers and every other safety limit, the minimum rider age and the
@@ -232,7 +242,7 @@ def stamp_for(
     return Stamp(
         machine_id=record.machine_id,
         organization_id=record.organization_id,
-        software_version=record.software_version,
+        software_version=software_version,
         config_hash=_digest(applied),
         medical_parameters_version=_digest(medical),
     )

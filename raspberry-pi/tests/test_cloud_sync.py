@@ -296,8 +296,8 @@ async def test_get_and_post_speak_json_with_the_machine_key() -> None:
         ),
         (httpx.Response(401, text="nope"), Refused(401, "HTTP 401")),
         (httpx.Response(500, json={"error": 3}), Refused(500, "HTTP 500")),
-        (httpx.Response(200, text="<html>"), Unreachable("HTTP 200: not a JSON object")),
-        (httpx.Response(200, json=[1, 2]), Unreachable("HTTP 200: not a JSON object")),
+        (httpx.Response(200, text="<html>"), Unreachable("HTTP 200: not a JSON object", 200)),
+        (httpx.Response(200, json=[1, 2]), Unreachable("HTTP 200: not a JSON object", 200)),
     ],
 )
 async def test_answers_that_are_refusals_or_not_json(

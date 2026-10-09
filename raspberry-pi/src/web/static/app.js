@@ -345,7 +345,7 @@ var FRAME_FED = [
   "safety-action", "run-safety-action", "phase", "manual-state",
   "console-ecg-state", "ecg-state",
 ];
-var PANEL_FED = ["console-mode", "console-ecg-link"];
+var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard"];
 var STATUS_FED = ["run-state", "attest-state"];
 
 function markStale(ids, stale) {
@@ -862,6 +862,44 @@ function renderDriveGrid() {
   grid(el("console-drive-grid"), rows);
 }
 
+/*
+  The console's link with the dashboard (the Convex site), which is not this
+  page's link with the console (the "Liaison" chip). The console says the state
+  and its word (`dashboard.state`, `dashboard.label`); the page only chooses
+  the colour. A state this page has no colour for is shown by its word, in
+  no colour, rather than hidden.
+
+  The reason under the chips may carry words the dashboard sent: it is written
+  with textContent, as everything on this page, never as markup.
+*/
+var DASHBOARD_KINDS = {
+  reachable: "good",
+  unreachable: "bad",
+  incompatible: "bad",
+  key_refused: "bad",
+  server_error: "bad",
+  waiting: "warn",
+  not_configured: "",
+};
+
+function answerAge(seconds) {
+  return seconds < 100 ? Math.round(seconds) + " s" : Math.round(seconds / 60) + " min";
+}
+
+function renderDashboardLink(link) {
+  var kind = DASHBOARD_KINDS[link.state] || "";
+  pill(el("dashboard-link"), link.label, kind);
+  pill(el("mobile-dashboard"), "serveur " + link.label, kind);
+  var said = [];
+  if (link.detail) {
+    said.push(link.detail);
+  }
+  if (link.last_answer_age_s !== null) {
+    said.push("derniere reponse il y a " + answerAge(link.last_answer_age_s));
+  }
+  text(el("dashboard-link-detail"), said.join(" · "));
+}
+
 function renderPanel(panel) {
   state.panel = panel;
   state.panelAt = performance.now();
@@ -870,6 +908,8 @@ function renderPanel(panel) {
     pill(el("console-mode"), "pas de console", "");
     return;
   }
+  pill(el("software-version"), panel.software_version, "");
+  renderDashboardLink(panel.dashboard);
   state.motionEnabled = panel.motion_enabled;
   state.programsEnabled = panel.programs_enabled;
   pill(el("console-mode"), panel.motion_enabled ? "mouvement actif" : "LECTURE SEULE", panel.motion_enabled ? "warn" : "good");

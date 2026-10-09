@@ -169,6 +169,7 @@ body {
   position: sticky;
   top: var(--banners-h);
   z-index: 36;
+  flex-wrap: wrap;
   gap: 0.6rem;
   align-items: center;
   padding: 0.5rem 0.8rem;
