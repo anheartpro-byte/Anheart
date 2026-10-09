@@ -33,17 +33,21 @@ import pytest
 from src.clock import ManualClock
 from src.record.cursor import (
     BASELINE_NAME,
+    CURSOR_SUFFIX,
     Baseline,
     Cursor,
     CursorError,
     NoCursor,
     UnreadableCursor,
     cursor_of,
+    load,
     load_baseline,
     store,
     store_baseline,
 )
+from src.record.logbook import ACTIVE, DIRECTORY, PREVIOUS
 from src.record.reader import read
+from src.record.retention import PurgeReport, confirm_deposit, purge
 from src.record.schema import EndObservation, Event, EventKind
 from src.record.upload import (
     INTERRUPTED,
@@ -872,7 +876,7 @@ def test_a_cursor_that_names_another_record_is_not_used(tmp_path: Path, named: s
     assert owed_records(tmp_path) == Ok(Listed((made.path.name,)))
 
 
-def record_named(root: Path, stamp: str, ref: str) -> Path:
+def record_made(root: Path, stamp: str, ref: str) -> Writer:
     started = f"{stamp[:10]}T{stamp[11:13]}:{stamp[13:15]}:{stamp[15:17]}Z"
     described = dataclasses.replace(
         manifest(),
@@ -882,7 +886,11 @@ def record_named(root: Path, stamp: str, ref: str) -> Path:
     )
     created = Writer.create(root, described)
     assert isinstance(created, Ok)
-    return created.value.path
+    return created.value
+
+
+def record_named(root: Path, stamp: str, ref: str) -> Path:
+    return record_made(root, stamp, ref).path
 
 
 def test_the_records_still_owed_are_those_with_a_cursor_that_is_not_complete(
@@ -978,16 +986,96 @@ def test_whenever_the_list_of_older_records_is_made_what_it_sets_aside_is_counte
 ) -> None:
     """The first time too, and with no cursor anywhere: nothing tells a list never made
     from one that was deleted, so the count is always given, to be said."""
-    record_named(tmp_path, "2026-10-01T080000Z", "before")
-    record_named(tmp_path, "2026-10-02T080000Z", "before-too")
+    before = record_named(tmp_path, "2026-10-01T080000Z", "before")
+    too = record_named(tmp_path, "2026-10-02T080000Z", "before-too")
+    in_the_logbook(tmp_path)
 
     with caplog.at_level(logging.WARNING, logger="src.record.upload"):
         owed = owed_records(tmp_path)
 
     assert owed == Ok(Listed((), set_aside=2))
     assert "the 2 records that have no cursor are set aside and not sent" in caplog.text
+    # The logbook is no record: neither counted nor put on the list.
+    assert load_baseline(tmp_path) == Baseline(left_alone=(before.name, too.name))
     (tmp_path / BASELINE_NAME).unlink()
     assert owed_records(tmp_path) == Ok(Listed((), set_aside=2))
+
+
+def in_the_logbook(root: Path) -> Path:
+    """What the console writes of itself while no session is recorded, next to the records."""
+    logbook = root / DIRECTORY
+    logbook.mkdir()
+    for name in (ACTIVE, PREVIOUS):
+        (logbook / name).write_text('{"kind":"refusal","detail":"refused"}\n', encoding="utf-8")
+    return logbook
+
+
+def test_the_logbook_next_to_the_records_is_never_listed_as_owed(tmp_path: Path) -> None:
+    """Out-of-session events are not a session's: with or without a list of older records,
+    and whatever else stands next to the records (a marker of deposit, a record closing)."""
+    logbook = in_the_logbook(tmp_path)
+    assert owed_records(tmp_path) == Ok(Listed(()))
+    assert load_baseline(tmp_path) == Baseline()
+
+    since = record_named(tmp_path, "2026-10-02T080000Z", "since")
+    (tmp_path / f"{since.name}.deposit.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".record-k3j2h1").mkdir()
+
+    assert owed_records(tmp_path) == Ok(Listed((since.name,)))
+    assert sorted(path.name for path in logbook.iterdir()) == [PREVIOUS, ACTIVE]
+    assert not (tmp_path / f"{DIRECTORY}{CURSOR_SUFFIX}").exists()
+
+
+def deposited(root: Path, stamp: str, ref: str, cursor: Cursor) -> Path:
+    """A record closed, synchronised as ``cursor`` says, and confirmed deposited off the machine."""
+    made = record_made(root, stamp, ref)
+    assert isinstance(made.tick(row()), Ok)
+    closed = made.close(ManualClock(), "operator_stop")
+    assert isinstance(closed, Ok)
+    assert isinstance(store(made.path, dataclasses.replace(cursor, local_ref=ref)), Ok)
+    assert isinstance(confirm_deposit(made.path, "kg2storage", UnixMillis(START_MS)), Ok)
+    return made.path
+
+
+def test_a_purge_between_two_starts_and_the_sweep_of_cursors_do_not_touch_each_other_s_files(
+    tmp_path: Path,
+) -> None:
+    """The retention removes a deposited record with its marker, and nothing of the
+    synchronisation; at the next start the synchronisation removes the cursor of the record
+    that is gone, and nothing of the retention. What is still owed is still listed."""
+    whole = deposited(tmp_path, "2026-10-01T080000Z", "whole", Cursor(state="complete", end="sent"))
+    half = deposited(tmp_path, "2026-10-02T080000Z", "half", Cursor(ticks_offset=10))
+    kept = record_named(tmp_path, "2026-10-03T080000Z", "kept")
+    assert isinstance(store(kept, Cursor(local_ref="kept", ticks_offset=5)), Ok)
+    logbook = in_the_logbook(tmp_path)
+    assert owed_records(tmp_path) == Ok(Listed((half.name, kept.name)))
+    listed = load_baseline(tmp_path)
+
+    report = purge(tmp_path, UnixMillis(START_MS), 0)
+
+    assert report == PurgeReport(removed=(whole.name, half.name), kept=1, failed=())
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+        [
+            cursor_of(whole).name,
+            cursor_of(half).name,
+            kept.name,
+            cursor_of(kept).name,
+            BASELINE_NAME,
+            DIRECTORY,
+        ]
+    ), "the record and its marker are gone; the cursors and the list are not the retention's"
+
+    assert owed_records(tmp_path) == Ok(Listed((kept.name,)))
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+        [kept.name, cursor_of(kept).name, BASELINE_NAME, DIRECTORY]
+    )
+    assert load(kept) == Cursor(local_ref="kept", ticks_offset=5)
+    assert load_baseline(tmp_path) == listed
+    assert sorted(path.name for path in logbook.iterdir()) == [PREVIOUS, ACTIVE]
+    # And the other way round: a purge after that start finds nothing more to do.
+    assert purge(tmp_path, UnixMillis(START_MS), 0) == PurgeReport(removed=(), kept=1, failed=())
+    assert owed_records(tmp_path) == Ok(Listed((kept.name,)))
 
 
 def test_a_list_of_older_records_made_of_nothing_says_nothing(

@@ -1050,9 +1050,9 @@ mesure.
 | Créé dès que la console relie la séance à son enregistrement, dans la seconde qui suit le départ, avant toute réponse du tableau de bord et même quand le lien est retenu | avec son curseur, un enregistrement est repris où le tableau de bord s'était arrêté, et la console peut encore dire l'âge de la séance |
 | Lié à son enregistrement | il porte la référence du manifeste (`local_ref`) : un curseur qui en nomme un autre (un fichier copié ou renommé à la main) n'est pas utilisé, même s'il dit `complete`, et l'enregistrement est renvoyé depuis son début |
 | Écrit après chaque acquittement | fichier temporaire privé dans le même dossier, `fsync`, puis renommage : un lecteur voit l'ancien curseur ou le nouveau, jamais la moitié d'un |
-| Privé | mode 600, comme le dossier racine est en 700 |
+| Privé | mode 600, donné à l'appel qui crée le fichier : le curseur et la liste `.sync-baseline.json` sont créés par `create_private` (`src/record/writer.py`), comme tout fichier d'un enregistrement ou posé à côté ([15.7](#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)). Le curseur est remplacé à chaque acquittement, ce qu'un fichier écrit une fois ne demande pas : il est donc créé sous un nom à lui, `fsync`, puis renommé sur l'ancien |
 | Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
-| Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture |
+| Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture. Rien d'autre n'est retiré à cet endroit : ni le journal hors séance (`logbook/`), ni un marqueur de dépôt, même resté seul (la purge le retire elle-même, [15.5](#155-rétention--rien-nest-purgé-sans-dépôt-confirmé)) |
 | Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait avant que cette console tourne pour la première fois avec un tableau de bord configuré (version antérieure de ce logiciel, ou pas de clé). Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur), et la console dit alors combien elle en met de côté (plus bas) |
 | Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, ou disque qui a refusé le curseur). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
 
@@ -1075,8 +1075,10 @@ ce qui la suit est lu. Le curseur retient qu'il est au milieu d'elle
 **Ce qui n'est pas envoyé.** Les trames du variateur (`drive_frames.jsonl`),
 les blocs ECG bruts (`ecg_raw/`) et `sensors.csv` ne sont ni lus ni envoyés :
 ils voyageront avec le dépôt des enregistrements complets (ANH-130). Seuls les
-événements d'une séance, ceux de son `events.jsonl`, sont envoyés : rien de
-ce que la console noterait hors séance ne l'est.
+événements d'une séance, ceux de son `events.jsonl`, sont envoyés. Le journal
+hors séance (`logbook/`, à côté des enregistrements,
+[15.9](#159-le-journal-hors-séance)) n'est pas un enregistrement : il n'est ni
+listé, ni lu, ni envoyé, et n'a pas de curseur.
 
 **Ce que la console dit quand une séance n'arrivera pas comme prévu.** Dans la
 liste d'événements de la page, sous la même forme que
@@ -2000,7 +2002,12 @@ Le curseur de synchronisation d'un enregistrement
 (`<nom du dossier>.sync.json`, [8.1](#81-ce-qui-est-envoyé-vient-du-disque))
 est lui aussi à côté du dossier. La purge ne le retire pas : c'est la
 synchronisation qui retire, à chaque démarrage de la console, tout curseur
-dont le dossier n'existe plus. Elle tient au même endroit un fichier
+dont le dossier n'existe plus. Les deux ne se gênent pas : la purge retire un
+dossier et son marqueur de dépôt, jamais un curseur ; la synchronisation
+retire un curseur resté seul, jamais un marqueur. Entre une purge et le
+démarrage suivant, le curseur d'un dossier purgé reste seul et ne sert à
+personne ; un enregistrement purgé pendant qu'il attendait d'être envoyé est
+laissé, le journal le dit, et le suivant est envoyé. Elle tient au même endroit un fichier
 `.sync-baseline.json` : la liste, faite une fois, des enregistrements qui
 étaient là sans curseur avant elle. La purge ne le touche pas ; le supprimer
 ne fait rien envoyer d'ancien (la liste est refaite de ce qui n'a pas de
@@ -2084,7 +2091,8 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 - **Au repos** : le dossier racine est en mode 700, et tout ce que la console
   y crée est privé dès sa création : chaque dossier en 700 (le dossier d'une
   séance, `ecg_raw/`, `logbook/`), chaque fichier en 600 (manifeste, flux,
-  blocs bruts, sommes de contrôle, marqueur de dépôt posé à côté, journal hors
+  blocs bruts, sommes de contrôle, marqueur de dépôt, curseur de
+  synchronisation et liste `.sync-baseline.json` posés à côté, journal hors
   séance, archive temporaire d'un export). Le mode est donné à l'appel qui
   crée le fichier : il n'y a pas d'instant où il est lisible par d'autres, et
   le `umask` du processus ne peut que restreindre. Lancée à la main, la
@@ -2197,5 +2205,9 @@ de la séance, et pas ici.
   touche pas.
 - **Pas un enregistrement** : le nom `logbook` n'a ni la forme d'un dossier
   d'enregistrement, ni celle d'un marqueur posé à côté d'un dossier
-  (`<dossier>.deposit.json`). La liste, l'export et la purge ne le voient pas.
+  (`<dossier>.deposit.json`), ni celle d'un curseur de synchronisation
+  (`<dossier>.sync.json`). La liste, l'export et la purge ne le voient pas, et
+  la synchronisation avec le tableau de bord non plus : elle ne le liste pas,
+  ne l'ouvre pas et n'en envoie rien
+  ([8.1](#81-ce-qui-est-envoyé-vient-du-disque)).
   Il n'a pas de route d'export : il se lit sur le disque.

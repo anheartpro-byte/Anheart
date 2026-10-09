@@ -19,7 +19,9 @@ What it guarantees, and what it does not
   directory, flushed to the device, then renamed over the cursor. A reader
   sees the old cursor or the new one, never half of one.
 * It is **private** to the service user (mode 600): it names a session of the
-  dashboard.
+  dashboard. The file is created by the record writer's own call
+  (:func:`~src.record.writer.create_private`), which gives the mode to the
+  system call that creates it, as for every file of a record or next to one.
 * It is **not the truth**, only a saving. A cursor that is lost, truncated or
   unreadable costs a second sending from the beginning of the record, which the
   dashboard stores once (it knows a point by ``(session, t)`` and an event by
@@ -45,16 +47,16 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
+from uuid import uuid4
 
 from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as validated
 
 from src.record.retention import RECORD_NAME
-from src.record.writer import describe_os_error
+from src.record.writer import create_private, describe_os_error
 from src.result import Err, Ok, Result
 
 CURSOR_SUFFIX: Final[str] = ".sync.json"
@@ -203,11 +205,7 @@ def load(record: Path) -> CursorRead:
 
 
 def store(record: Path, cursor: Cursor) -> Result[None, CursorError]:
-    """Write the cursor of ``record``, atomically and privately. Blocking; never raises.
-
-    ``mkstemp`` creates the temporary file for this user alone (mode 600), and
-    the rename keeps that mode.
-    """
+    """Write the cursor of ``record``, atomically and privately. Blocking; never raises."""
     return _write(cursor_of(record), _CURSOR.dump_json(cursor))
 
 
@@ -225,24 +223,35 @@ def store_baseline(root: Path, baseline: Baseline) -> Result[None, CursorError]:
 
 
 def _write(target: Path, document: bytes) -> Result[None, CursorError]:
-    """Replace ``target`` by ``document``: a private temporary file, flushed, then renamed."""
+    """Replace ``target`` by ``document``: a private temporary file, flushed, then renamed.
+
+    The file is created by :func:`~src.record.writer.create_private`, as every
+    file next to a record is: mode 600 from the call that creates it, and
+    refused if the name exists. Two things are kept around that call, which a
+    cursor needs and a file written once does not. It REPLACES the cursor of
+    before, after each acknowledgement: so it is created under a name of its
+    own and renamed over the other, and a reader sees one or the other. And
+    it is flushed to the device before the rename: a power cut leaves the
+    old cursor or the new one, not an empty file under the cursor's name.
+    """
+    temporary = target.with_name(f"{TEMP_PREFIX}{uuid4().hex}{TEMP_SUFFIX}")
     try:
-        descriptor, name = tempfile.mkstemp(
-            prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX, dir=target.parent
-        )
-    except OSError as error:
-        return Err(CursorError(describe_os_error(error)))
-    temporary = Path(name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(document + b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        create_private(temporary, document + b"\n")
+        _flush(temporary)
         temporary.replace(target)
     except OSError as error:
         _discard(temporary)
         return Err(CursorError(describe_os_error(error)))
     return Ok(None)
+
+
+def _flush(path: Path) -> None:
+    """Have the device hold what ``path`` was given. Raises ``OSError``."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _discard(path: Path) -> None:

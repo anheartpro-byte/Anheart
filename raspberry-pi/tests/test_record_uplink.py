@@ -35,6 +35,9 @@ import pytest
 from src.clock import ManualClock
 from src.record.cursor import BASELINE_NAME, Cursor, NoCursor, cursor_of, load, store
 from src.record.export import BUSY, TIMEOUT, RecordIo
+from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
+from src.record.logbook import DIRECTORY as LOGBOOK
+from src.record.logbook import PREVIOUS as LOGBOOK_PREVIOUS
 from src.record.rows import JsonValue
 from src.record.schema import RecordError
 from src.record.upload import MAX_POINTS, READ_CHUNK, TAIL_CHUNK, Batch, read_batch, read_head
@@ -1588,7 +1591,9 @@ async def test_nothing_of_a_record_is_opened_but_its_manifest_its_ticks_and_its_
     """The drive's frames, the sensors and the ECG blocks travel with the whole record, not here.
 
     Each is replaced by a pipe nobody writes to: opening one would never
-    return, and the record would never be delivered.
+    return, and the record would never be delivered. So are the two files of
+    the logbook, next to the records: what the console writes of itself while
+    no session is recorded is no session's, and is neither read nor sent.
     """
     killed, record = await left_by_a_killed_console(tmp_path)
     for path in (TELEMETRY_PATH, EVENTS_PATH, END_PATH):
@@ -1602,6 +1607,10 @@ async def test_nothing_of_a_record_is_opened_but_its_manifest_its_ticks_and_its_
         else:
             entry.unlink()
         os.mkfifo(entry)
+    logbook = tmp_path / LOGBOOK
+    logbook.mkdir()
+    for name in (LOGBOOK_ACTIVE, LOGBOOK_PREVIOUS):
+        os.mkfifo(logbook / name)
 
     restarted = killed.restarted()
     restarted.clock.advance(Seconds(60.0))
@@ -1611,6 +1620,48 @@ async def test_nothing_of_a_record_is_opened_but_its_manifest_its_ticks_and_its_
     assert restarted.link.paths()[-1] == "end"
     assert cursor_of_record(record).state == "complete"
     assert restarted.uplink.owed == 0
+    assert sorted(entry.name for entry in logbook.iterdir()) == [LOGBOOK_PREVIOUS, LOGBOOK_ACTIVE]
+
+
+async def test_a_record_the_retention_removes_while_it_is_owed_holds_nothing_back(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A purge runs on the journal's thread whatever the sending is doing. The record that
+    is gone is left, and said in the log; the next one is sent; the cursor of the first,
+    which the retention does not remove, goes at the next start."""
+    old = bench(tmp_path)
+    purged = recording(tmp_path, old.clock, "ref-purged")
+    purged.tick(400.0, hertz=1)
+    purged.close()
+    tie(purged.path, Cursor(session_id="cloud-purged"))
+    old.clock.advance(Seconds(3600.0))
+    kept = recording(tmp_path, old.clock, "ref-kept")
+    kept.tick(3.0)
+    kept.close()
+    tie(kept.path, Cursor(session_id="cloud-kept"))
+    old.clock.advance(Seconds(3600.0))
+    b = old.restarted()
+    await b.step()
+    assert len(b.link.seconds("cloud-purged")) == MAX_POINTS, "its first batch has gone"
+
+    shutil.rmtree(purged.path)
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(6)
+
+    assert "the record of session cloud-purged cannot be read" in caplog.text
+    assert len(b.link.seconds("cloud-purged")) == MAX_POINTS
+    assert b.link.seconds("cloud-kept") == [0.0, 1.0, 2.0]
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["cloud-kept"]
+    assert b.said == []
+    assert cursor_of(purged.path).exists(), "not the retention's to remove, nor this run's"
+
+    again = b.restarted()
+    await again.run(3)
+
+    assert not cursor_of(purged.path).exists()
+    assert again.uplink.owed == 0
+    assert len(again.link.sent) == len(b.link.sent), "nothing is sent of a record that is gone"
+    assert cursor_of_record(kept.path).state == "complete"
 
 
 async def test_ex4_what_earlier_runs_left_is_taken_up_oldest_first_after_the_running_session(

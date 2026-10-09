@@ -57,12 +57,14 @@ Le writer crée chaque dossier en mode 700 et chaque fichier en mode 600, pour
 le Pi comme pour la simulation : le mode est donné à l'appel qui crée le
 fichier (`create_private` et `write_file`, `src/record/writer.py`), y compris
 pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côté
-d'un dossier (un marqueur de dépôt) le crée de la même façon.
+d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
+`.sync-baseline.json`) le crée de la même façon.
 
 **Ce qui part au tableau de bord.** De tout enregistrement fait depuis le
 premier démarrage de la console avec un tableau de bord configuré sur ce
 répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
-(ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`). Cela vaut
+(ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
+journal hors séance `logbook/`). Cela vaut
 aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
 configuré**, s'il est postérieur à ce premier démarrage : il part au premier
 démarrage où une clé est de nouveau en place. Les enregistrements antérieurs

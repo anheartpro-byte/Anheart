@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+import os
 import re
 import threading
 import time
@@ -39,13 +41,15 @@ from src.clock import ManualClock
 from src.cloud_sync import STATUS_PERIOD, CloudSync, Refused, Unreachable
 from src.contract import ErrorCode
 from src.local_panel import CLOUD_PERIOD, STOP_WATCH_PERIOD, LocalPanel
-from src.record.cursor import Cursor, load
+from src.record.cursor import BASELINE_NAME, Cursor, cursor_of, load
 from src.record.export import RecordIo
 from src.record.journal import Journal
+from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
+from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.reader import read
 from src.record.retention import records
 from src.record.schema import RecordError
-from src.record.upload import Head, read_head
+from src.record.upload import Head, Listed, owed_records, read_head
 from src.record_uplink import RETRY_PERIOD, TELEMETRY_PERIOD, RecordSource
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
@@ -73,6 +77,7 @@ from tests.test_cloud_sync import (
 )
 from tests.test_failure_rig import make_rig
 from tests.test_local_panel import FakeWeb
+from tests.test_record_permissions import wider_than_private
 from tests.test_record_wiring import recording_linked
 
 LOCAL = "/api/machine/training/local"
@@ -167,6 +172,63 @@ async def test_a_session_under_a_refused_contract_is_sent_whole_and_closed_once_
     assert isinstance(closed, Cursor)
     assert closed.state == "complete"
     await rig.panel.close()
+
+
+async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_never_sent(
+    tmp_path: Path,
+) -> None:
+    """What stands next to a record on a console tied to the dashboard: its cursor, the
+    list of older records, and the logbook, each private from the call that creates it.
+    The logbook is written while no session is recorded: it is no record, and nothing of
+    it is listed, given a cursor or sent."""
+    usual = os.umask(0)
+    try:
+        rig, dashboard, journal = recording_linked(tmp_path)
+        dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))
+        dashboard.answer(STATUS, status_answer())
+        surface = rig.panel.surface
+        assert isinstance(
+            surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+        )
+        await seconds(rig, journal, 4)
+        assert isinstance(surface.submit_end(operator=OPERATOR, reason="fini"), Ok)
+        for _ in range(40):
+            await seconds(rig, journal, 1)
+            if state_of(rig) is not RuntimeState.ENDING:
+                break
+        await seconds(rig, journal, 8)
+        await rig.panel.close()
+    finally:
+        os.umask(usual)
+
+    root = journal.root
+    (record,) = records(root)
+    assert sorted(entry.name for entry in root.iterdir()) == sorted(
+        [record.name, cursor_of(record).name, BASELINE_NAME, LOGBOOK]
+    )
+    assert wider_than_private(root) == {}
+    closed = load(record)
+    assert isinstance(closed, Cursor)
+    assert closed.state == "complete"
+    # Asked while no session was recorded: lines of the logbook, not events of the session.
+    noted = [
+        cast("dict[str, object]", json.loads(line))
+        for line in (root / LOGBOOK / LOGBOOK_ACTIVE).read_text(encoding="utf-8").splitlines()
+    ]
+    assert "start_requested" in [line["detail"] for line in noted]
+    recording_ = read(record)
+    assert isinstance(recording_, Ok)
+    sent = [
+        event
+        for body in dashboard.to(EVENTS)
+        for event in cast("list[dict[str, object]]", body["events"])
+    ]
+    assert [event["seq"] for event in sent] == list(range(len(recording_.value.events)))
+    assert "start_requested" not in [event["detail"] for event in sent]
+    # The next start lists nothing: the session is whole on the dashboard, and the logbook
+    # is no record.
+    assert owed_records(root) == Ok(Listed(()))
+    assert not (root / f"{LOGBOOK}.sync.json").exists()
 
 
 @pytest.fixture

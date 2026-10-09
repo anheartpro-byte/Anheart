@@ -26,19 +26,25 @@ import pytest
 from src.clock import ManualClock
 from src.record import cursor as cursor_module
 from src.record.cursor import (
+    BASELINE_NAME,
     CURSOR_SUFFIX,
     TEMP_PREFIX,
     TEMP_SUFFIX,
+    Baseline,
     Cursor,
     NoCursor,
     UnreadableCursor,
     boot_identity,
     cursor_of,
     load,
+    load_baseline,
     store,
+    store_baseline,
     sweep,
 )
+from src.record.logbook import ACTIVE, DIRECTORY, PREVIOUS
 from src.record.reader import read
+from src.record.writer import PRIVATE_FILE, create_private
 from src.result import Err, Ok
 from tests.record_support import row, writer
 
@@ -90,6 +96,38 @@ def test_the_cursor_is_private_to_the_service_user(tmp_path: Path) -> None:
 
     mode = stat.S_IMODE(cursor_of(record).stat().st_mode)
     assert mode == 0o600
+
+
+def test_the_cursor_and_the_list_of_older_records_are_created_by_the_writer_s_private_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As every file of a record or next to one: mode 600 from the call that creates it,
+    whatever the umask, the first time and each time the cursor is replaced."""
+    record = record_in(tmp_path)
+    created: list[tuple[bool, int]] = []
+
+    def watched(path: Path, content: bytes) -> None:
+        create_private(path, content)
+        temporary = path.name.startswith(TEMP_PREFIX) and path.name.endswith(TEMP_SUFFIX)
+        created.append((temporary, stat.S_IMODE(path.stat().st_mode)))
+
+    monkeypatch.setattr(cursor_module, "create_private", watched)
+    usual = os.umask(0)
+    try:
+        assert isinstance(store(record, Cursor()), Ok)
+        assert isinstance(store(record, Cursor(ticks_offset=10)), Ok)
+        assert isinstance(store_baseline(tmp_path, Baseline(left_alone=("older",))), Ok)
+    finally:
+        os.umask(usual)
+
+    assert created == [(True, PRIVATE_FILE)] * 3
+    assert stat.S_IMODE(cursor_of(record).stat().st_mode) == PRIVATE_FILE
+    assert stat.S_IMODE((tmp_path / BASELINE_NAME).stat().st_mode) == PRIVATE_FILE
+    assert load(record) == Cursor(ticks_offset=10)
+    assert load_baseline(tmp_path) == Baseline(left_alone=("older",))
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+        [RECORD, f"{RECORD}{CURSOR_SUFFIX}", BASELINE_NAME]
+    )
 
 
 def test_what_was_stored_is_what_is_loaded(tmp_path: Path) -> None:
@@ -251,13 +289,36 @@ def test_a_cursor_whose_record_is_gone_is_swept_away(tmp_path: Path) -> None:
     marker.write_text("{}", encoding="utf-8")
     stranger = tmp_path / f"notes{CURSOR_SUFFIX}"
     stranger.write_text("{}", encoding="utf-8")
+    # The marker of a record that is gone is the retention's to remove, not the sweep's.
+    widow = tmp_path / "2026-10-01T080000Z_purged.deposit.json"
+    widow.write_text("{}", encoding="utf-8")
+    # The logbook, both its files, and the directory a record being closed leaves a moment.
+    logbook = tmp_path / DIRECTORY
+    logbook.mkdir()
+    (logbook / ACTIVE).write_text('{"kind":"refusal"}\n', encoding="utf-8")
+    (logbook / PREVIOUS).write_text('{"kind":"refusal"}\n', encoding="utf-8")
+    closing = tmp_path / ".record-k3j2h1"
+    closing.mkdir()
+    (closing / "manifest.json").write_text("{}", encoding="utf-8")
+    assert isinstance(store_baseline(tmp_path, Baseline()), Ok)
 
     removed = sweep(tmp_path)
 
     assert removed == (leftover.name, orphan.name)
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
-        [RECORD, f"{RECORD}{CURSOR_SUFFIX}", marker.name, stranger.name]
+        [
+            RECORD,
+            f"{RECORD}{CURSOR_SUFFIX}",
+            marker.name,
+            stranger.name,
+            widow.name,
+            DIRECTORY,
+            closing.name,
+            BASELINE_NAME,
+        ]
     )
+    assert sorted(path.name for path in logbook.iterdir()) == [PREVIOUS, ACTIVE]
+    assert (closing / "manifest.json").is_file()
     assert load(kept) == Cursor(ticks_offset=1)
 
 
