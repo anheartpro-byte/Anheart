@@ -182,8 +182,9 @@ freine plus vite que la rampe réglée : le bus n'absorbe qu'environ 11 J sur le
 
 **Palier hard max / palier critique** (`HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`)\
 Deux seuils de fréquence cardiaque du superviseur (défaut 148 et 158 bpm).
-Au-dessus du hard max : REDUCE (`hr_hard_max`). Au-dessus du critique :
-QUICK_STOP (`hr_critical`). Chaque profil doit porter exactement les mêmes
+Au-dessus du hard max pendant 5 s : RAMP_DOWN (`hr_hard_max`). Au palier
+critique ou au-dessus : QUICK_STOP (`hr_critical`). Les deux règles jugent la
+dernière FC utilisable, tant qu'elle a 10 s au plus. Chaque profil doit porter exactement les mêmes
 valeurs, sinon il est refusé.
 
 **Présence (caméra)** (`src/presence/`)\

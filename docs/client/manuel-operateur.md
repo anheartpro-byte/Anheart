@@ -842,7 +842,7 @@ Les règles que vous verrez le plus souvent sur la ligne « regle » :
 | « session_standstill » | La console a ramené elle-même la vitesse commandée à zéro en cours de séance, en dehors de la fin prévue d'un programme. Ou, en séance manuelle, votre cible de 0 l'y a ramenée pendant qu'une alerte était affichée. | Fin de séance verrouillée. Le bras peut encore tourner quand l'alerte apparaît : lisez **Rotation**. Il ne repart pas. |
 | « attendant_absent » | Plus aucune page de la console n'est ouverte. | « freeze » après 60 secondes, fin de séance après 120 secondes. Si une page est rouverte avant, la séance reprend seule. |
 | « hr_stale » | Plus de fréquence cardiaque fiable (séance avec passager). | « freeze » après 10 secondes, « reduce » après 30 secondes. Fin de séance dès que la vitesse commandée est revenue à zéro, et au plus tard après 60 secondes. Si la fréquence revient avant cette fin de séance, donc tant que la console n'a pas ramené la vitesse commandée à zéro, la séance reprend seule. |
-| « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». | Fin de séance en douceur. |
+| « hr_hard_max » | La fréquence cardiaque reste au-dessus du seuil « max absolu ». Si elle n'est plus mesurée à ce moment-là, la console garde la dernière fréquence fiable, tant qu'elle date de 10 secondes au plus. | Fin de séance en douceur. |
 | « hr_critical » | La fréquence cardiaque atteint le seuil « critique ». | Arrêt d'urgence logiciel. |
 | « hr_drop » | La fréquence cardiaque chute brutalement. | Fin de séance en douceur. |
 | « hr_rate » | La fréquence cardiaque monte trop vite. | « reduce ». Quand la montée cesse, la séance reprend seule, sauf si la vitesse commandée est revenue à zéro entre-temps : la séance est alors terminée. |
@@ -958,7 +958,11 @@ Ce que fait la console :
   revenue à zéro, et au plus tard après 60 secondes : **Securite** affiche
   « ramp_down », et l'arrêt est verrouillé. Le bras peut encore tourner à cet
   instant. Ce sont les règles « hr_stale » et « session_standstill » de la
-  [section 9.2](#92-la-console-agit-seule).
+  [section 9.2](#92-la-console-agit-seule). Une exception : si la dernière
+  fréquence cardiaque fiable était au-dessus du seuil « max absolu », la
+  console n'attend pas. Elle termine la séance en douceur 5 secondes après la
+  première mesure au-dessus du seuil, et l'arrêt est verrouillé (règle
+  « hr_hard_max »).
 - **Séance manuelle, capsule vide.** La console ne s'arrête pas pour cela.
 
 Quatre choses à savoir avant d'agir :

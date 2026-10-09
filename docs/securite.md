@@ -29,7 +29,7 @@ indépendante** du logiciel et du variateur.
 
 « Garanti » veut dire ici : écrit dans le code, couvert par des tests (100 % des
 branches sur la chaîne de sécurité, tests de propriétés `hypothesis`) et vérifié
-dans la simulation (66 scénarios, 199 pannes injectées, cohorte de 30
+dans la simulation (67 scénarios, 199 pannes injectées, cohorte de 30
 personnes). Pas sur la vraie machine avec une personne à bord.
 
 | Garantie | Où |
@@ -45,6 +45,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Le keepalive part en premier à chaque cycle.** Si la boucle cale, le variateur ne reçoit plus rien et son propre ttO l'arrête. | `drive.service()` en tête de tic |
 | **Les écritures sont vérifiées.** LFRD est relu ; une écriture qui n'atterrit pas donne `setpoint_unconfirmed`, puis GO_SILENT si l'arbre ne suit pas non plus. | `safety.py`, `tracking.py` |
 | **Une FC n'est utilisée que si elle est fiable.** Deux traitements ECG indépendants doivent être d'accord à 5 bpm près sur la même fenêtre continue. Le premier n'extrait une FC que d'une fenêtre qu'il a notée `good` ; une fenêtre qu'il ne peut pas noter (valeur non finie, test du secteur impossible ou refusé par le filtre) vaut `no_signal`, jamais `good`. Sinon la FC est « périmée » : FREEZE à 10 s, REDUCE à 30 s, RAMP_DOWN à 60 s. | `signal_processing.py`, `ecg_pipeline.py`, règle `hr_stale` |
+| **Une FC mesurée au-dessus d'un palier reste jugée tant qu'aucune FC utilisable n'est venue dire le contraire.** Une lecture sans FC (fenêtre bruitée, dérivation plate, électrode décollée, fenêtre que le traitement ne peut pas noter, FC retenue par la confirmation) ne relance pas le délai de 5 s du palier dur et n'efface pas un dépassement mesuré : `hr_hard_max` et `hr_critical` jugent la dernière FC utilisable tant qu'elle a 10 s au plus, l'âge où `hr_stale` commence. Seule une FC utilisable sous le niveau de relâche relance le délai. Quand le signal se perd au-dessus du palier dur, la séance se termine à l'échéance des 5 s, avant le premier niveau de `hr_stale`, qui garde sa propre horloge. Toute lecture compte, y compris celle qu'une lecture sans FC a suivie avant le tic. Détail dans [raspberry-pi.md](raspberry-pi.md#52-les-18-règles-du-superviseur) ; ce que la règle ne couvre pas en [section 5](#5-le-résiduel-connu). | `safety.py` (`_level_rate`), `runtime.py` (`observe_ecg`) |
 | **Les 66 défauts du variateur** (plus un code inconnu) mènent tous à un arrêt contrôlé, avec le code affiché. Le réarmement est refusé pour les 40 défauts non réarmables et pour un code inconnu. | `motor/drive.py`, table LFT |
 | **Jamais d'arrêt plus rapide que la rampe.** QUICK_STOP met la consigne à 0 mais garde l'ordre de marche : le variateur freine sur sa rampe réglée, ce qui évite ObF et la roue libre. | `motor/atv320.py` |
 | **Limites anti-nausée** (0,25 tr/min/s au bras, 0,03 g/s) appliquées à toute variation non urgente, manuelle comme programmée, avec la variation de g jugée au bout des pieds (`LEG_TIP_RADIUS_M`). | `training/motion.py` |
@@ -111,6 +112,46 @@ que mesure la batterie aujourd'hui.
 - **Personne à bord en manuel** : la FC monte assez pour déclencher `hr_rate`
   (REDUCE) avant 19 tr/min, à la rampe anti-nausée (`manual_occupied_ceiling`).
   C'est un comportement voulu, mais il limite l'usage manuel avec passager.
+- **Une FC qui franchit un palier pendant que le signal est perdu n'est pas
+  vue.** Les règles de niveau jugent la dernière FC mesurée, pas celle qu'elle
+  est devenue depuis. Mesuré sur le banc logiciel, chaîne ECG réelle : dernière
+  FC lue à 79 bpm avec un palier dur à 79 (la règle est stricte : au-dessus) et
+  un palier critique à 80, puis électrode décollée 70 s. Aucune FC utilisable
+  n'est au-dessus d'un palier, donc aucun verdict de niveau : `hr_stale` gèle
+  la vitesse 10,6 s après la perte, la réduit à 30,6 s et termine la séance à
+  60,6 s. Traiter une FC inconnue près d'un palier comme un dépassement serait
+  une décision de seuil, donc médicale.
+- **Une lecture isolée au-dessus du palier dur, suivie de 5 s sans aucune FC,
+  termine la séance.** C'est voulu : rien n'est venu dire que le cœur était
+  sous le palier. Une lecture n'est utilisable que si les deux traitements ECG
+  sont d'accord sur la même fenêtre, et la même lecture suivie d'une FC
+  utilisable sous le niveau de relâche ne déclenche rien. Le coût est une fin
+  de séance à acquitter.
+- **Une séance démarrée moins de 10 s après une dernière FC utilisable
+  au-dessus d'un palier est jugée sur cette FC**, si rien n'a été mesuré
+  depuis. C'est voulu aussi : rien n'est venu dire que le cœur était sous le
+  palier, et 10 s ne suffisent pas pour que ce soit le cœur de quelqu'un
+  d'autre. Une FC critique vieille de 3 s arrête la nouvelle séance à son
+  premier tic ; une FC au-dessus du palier dur vieille de 2 s la termine 5 s
+  après ce premier tic ; vieille de 6 s, elle est périmée avant l'échéance et
+  ne déclenche rien. Le coût est le même : une fin de séance à acquitter.
+- **La consigne peut encore monter quelques secondes après la dernière FC
+  utilisable**, avant le premier verdict. La régulation tient une FC pour
+  fraîche pendant 4 s, puis la consigne finit le pas déjà décidé. Mesuré sur le
+  banc logiciel, sur 1 640 instants de perte dans cinq scénarios programmés
+  (lectures fraîches sans FC, une par seconde), en comptant depuis la première
+  lecture sans FC : dernière hausse au plus 5,2 s après elle, soit 6,2 s après
+  la dernière FC utilisable ; au plus +44 tr/min moteur (0,9 tr/min au bras)
+  sur un bras qui tourne ; et un bras à l'arrêt dont le programme allait faire
+  son premier pas part encore, de 0 à 72 ou 77 tr/min moteur (1,4 à 1,5 tr/min
+  au bras), quand le signal est perdu dans les 4 s qui précèdent ce pas. En
+  séance manuelle avec une personne à bord : au plus +40 tr/min moteur, la
+  dernière hausse 3 s après la première lecture sans FC. Le FREEZE de
+  `hr_stale` tient ensuite la vitesse atteinte, 10 s après la dernière FC
+  utilisable. Aucune hausse n'a lieu dès qu'un verdict tient. Ce changement ne
+  touche pas à la loi de régulation ; il raccourcit seulement cette fenêtre
+  quand la dernière FC connue est au-dessus d'un palier, puisque le verdict de
+  niveau tombe alors à l'échéance de son délai.
 - **Le simulateur modélise une fermeture minimale du variateur** : après chaque
   sortie de console, le variateur simulé verrouille SLF via ttO, alors que le
   vrai `ATV320Drive.close` envoie la séquence d'arrêt. C'est une différence de
