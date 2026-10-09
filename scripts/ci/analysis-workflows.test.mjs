@@ -1,7 +1,7 @@
 // What must stay true of .github/workflows/codeql.yml, the static analysis
 // workflow, and of the file that sets its scope.
 //
-// Run by the `changes` job of ci.yml with the two other CI test files, on
+// Run by the `docs` job of ci.yml with the other CI test files, on
 // every run and without any install: the workflow is read as text, like
 // ci.yml is by ci-workflow.test.mjs. CodeQL itself cannot be run here: these
 // tests hold what a later edit could break without any job turning red, and

@@ -85,21 +85,28 @@ def visit(
     query: str,
     *,
     served: Path | None = None,
+    listed: Path | None = None,
     chosen: Path | None = None,
     streamed: Path | None = None,
     click: int | None = None,
 ) -> Visit:
     """Open the page at ``origin`` with ``query``; return what it requested and shows.
 
-    ``served`` is what the server answers a trace or a record with, ``chosen``
-    the file picked with the file button, ``streamed`` what the live stream
-    plays; ``click`` then clicks that line of the event list.
+    ``served`` is what the server answers a trace or a record with, ``listed``
+    what it answers the scenario list with (an empty list without it),
+    ``chosen`` the file picked with the file button, ``streamed`` what the live
+    stream plays; ``click`` then clicks that line of the event list.
     """
     node = shutil.which("node")
     # Not a skip: without Node nothing here would be checked.
     assert node is not None, "Node is needed to run the viewer page"
     options: list[str] = []
-    for name, path in (("served", served), ("chosen", chosen), ("streamed", streamed)):
+    for name, path in (
+        ("served", served),
+        ("listed", listed),
+        ("chosen", chosen),
+        ("streamed", streamed),
+    ):
         if path is not None:
             options += [f"--{name}", str(path)]
     if click is not None:
@@ -225,7 +232,7 @@ MARKED: Final[tuple[Line, ...]] = (
 )
 """A trace whose every field holds markup: one line of each kind the page reads."""
 
-MARKED_WARNINGS: Final[str] = f" \N{EM DASH} {marked('file')}: {marked('code')}"
+MARKED_WARNINGS: Final[str] = f": {marked('file')}: {marked('code')}"
 """What the page writes after the name of ``MARKED``: its one warning, as it was read."""
 
 MARKED_EVENT: Final[Element] = {
@@ -332,6 +339,26 @@ def test_ex1_the_tiles_show_a_row_and_the_end_as_text(way: str, tmp_path: Path) 
     # The class of a tile is one the page chose, never a value of the trace.
     classes = {seen["shown"][name]["classes"] for name in tiles}
     assert classes == {"v", "v warn"}
+
+
+def test_ex1_the_scenario_list_shows_each_served_name_as_the_text_of_an_option(
+    tmp_path: Path,
+) -> None:
+    """ANH-183 EX-16: the list the server answers fills the menu, name by name, as text."""
+    names = ["manual_27_rpm", marked("scenario")]
+    listed = tmp_path / "scenarios.json"
+    listed.write_text(json.dumps(names), encoding="utf-8")
+    seen = visit(LOCAL, "", listed=listed)
+    assert paths(seen, LOCAL) == [SCENARIOS]
+    # One option per name, in the order served, each holding the name as its only text:
+    # the one written like markup is not an element, and nothing was handed over as markup.
+    menu = seen["shown"]["scenario"]
+    assert menu["children"] == [
+        {"tag": "option", "classes": "", "children": [name]} for name in names
+    ]
+    assert seen["markup"] == []
+    # Without a list from the server the menu gains nothing.
+    assert visit(LOCAL, "")["shown"]["scenario"]["children"] == []
 
 
 def test_ex1_the_source_line_shows_a_served_name_and_the_warnings_as_text(

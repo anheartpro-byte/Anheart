@@ -48,7 +48,7 @@ test("what the unit tests of the site are run with belongs to the site", () => {
 test("a Vitest configuration at the root belongs to the site, whatever its suite", () => {
   for (const path of [
     "vitest.convex.config.mts",
-    "vitest.ecg.config.mts",
+    "vitest.lib.config.mts",
     "vitest.site.config.mts",
     "vitest.site-coverage.config.mts",
   ]) {

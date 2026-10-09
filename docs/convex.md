@@ -1404,6 +1404,13 @@ Les résultats :
 Une cellule marquée `knownDefect` est un **défaut inoffensif connu** : le test
 affirme la politique **voulue** et tourne avec `it.fails`, donc il passe tant
 que le défaut existe et échoue bruyamment le jour où le comportement est corrigé.
+Une seule cellule l'est encore : `sessions.listSessions` applique la limite
+avant le filtre par droits, ce qui peut cacher à un patient sa propre séance
+sans rien montrer d'autrui (la liste est refaite par ANH-158). Celles de
+`sessionSummaries.getSummaryWithEcg` ne le sont plus depuis ANH-183 : la
+requête renvoyait le document stocké, que son validateur de retour refusait,
+et échouait pour tout lecteur autorisé ; elle renvoie maintenant les champs
+déclarés.
 
 Chaque cellule agit sous l'identité de son acteur (sujet = acteur). Une fonction
 dont la règle lit une revendication du jeton (par exemple l'e-mail vérifié de

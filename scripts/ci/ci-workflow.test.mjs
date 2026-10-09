@@ -1,17 +1,26 @@
 // What must stay true of .github/workflows/ci.yml for the path rule to be safe.
 //
-// Run by the `changes` job before it decides anything, without any install:
-// the workflow is read as text, job by job. These are the properties a later
-// edit of the workflow could break without any gate turning red.
+// Run by the `docs` job, a required check that runs on every event, without
+// any install: the workflow is read as text, job by job. These are the
+// properties a later edit of the workflow could break without any gate
+// turning red.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CONVEX, SITE, siteFolders, sourcesOf, testsOf, vitestThresholds } from "./coverage-thresholds.mjs";
+import {
+  CONVEX,
+  SITE,
+  globToRegExp,
+  siteFolders,
+  sourcesOf,
+  testsOf,
+  vitestThresholds,
+} from "./coverage-thresholds.mjs";
 import { COVERAGES, GATES, SUITES } from "./quality-report.mjs";
 
 const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -55,10 +64,11 @@ const condition = (/** @type {string} */ output, started = "!cancelled()") =>
   `\${{ ${started} && (github.event_name != 'pull_request' || needs.changes.outputs.${output} != 'false') }}`;
 /** Each job the path rule may skip, with the exact condition it must carry. */
 const GATED = new Map([
-  ["pi-gate", condition("python")],
+  ["pi-tests", condition("python")],
+  // The jobs that wait for others: see the test of a cancelled run below.
+  ["pi-gate", condition("python", "always()")],
   ["simulation-battery", condition("python")],
   ["simulation-report", condition("python")],
-  // The job that waits for the others: see the test of a cancelled run below.
   ["simulation-gate", condition("python", "always()")],
   ["convex-tests", condition("node")],
   ["web", condition("node")],
@@ -125,57 +135,94 @@ test("the committed bindings of Convex are checked by `convex-tests`, before its
   assert.doesNotMatch(workflow, /\bconvex (dev|deploy|codegen|run)\b|CONVEX_DEPLOY/);
 });
 
-test("the parts of the simulation battery name every share exactly once", () => {
-  const count = Number(/^ {2}SIMULATION_SHARES: '(\d+)'$/m.exec(workflow)?.[1]);
-  assert.ok(Number.isInteger(count) && count > 0);
-  const spans = [...(jobs.get("simulation-battery") ?? "").matchAll(/^ {12}shares: (\d+)-(\d+)$/gm)];
-  const named = spans.flatMap(([, first, last]) => {
-    const shares = [];
-    for (let share = Number(first); share <= Number(last); share += 1) shares.push(share);
-    return shares;
-  });
-  assert.deepEqual(
-    named.sort((a, b) => a - b),
-    Array.from({ length: count }, (_, share) => share),
-  );
+/**
+ * The two suites cut into shares that several jobs run: the variable of the workflow that says into
+ * how many, the matrix job that runs them, the required check that judges them, and what that check
+ * waits for besides the path rule, each under the name its first step reads it by.
+ */
+const SHARED = [
+  { count: "PI_SHARES", runs: "pi-tests", gate: "pi-gate", combine: "PI_GATE_COMBINE", waits: { TESTS: "pi-tests" } },
+  {
+    count: "SIMULATION_SHARES",
+    runs: "simulation-battery",
+    gate: "simulation-gate",
+    combine: "SIMULATION_GATE_COMBINE",
+    waits: { BATTERY: "simulation-battery", REPORT: "simulation-report" },
+  },
+];
+
+test("the parts of each suite cut into shares name every share exactly once", () => {
+  for (const { count: variable, runs, combine } of SHARED) {
+    const count = Number(new RegExp(`^ {2}${variable}: '(\\d+)'$`, "m").exec(workflow)?.[1]);
+    assert.ok(Number.isInteger(count) && count > 0, variable);
+    const spans = [...(jobs.get(runs) ?? "").matchAll(/^ {12}shares: (\d+)-(\d+)$/gm)];
+    const named = spans.flatMap(([, first, last]) => {
+      const shares = [];
+      for (let share = Number(first); share <= Number(last); share += 1) shares.push(share);
+      return shares;
+    });
+    assert.deepEqual(
+      named.sort((a, b) => a - b),
+      Array.from({ length: count }, (_, share) => share),
+      runs,
+    );
+    // Each part is told its own span, out of the count the gate will combine.
+    const told = `${combine.replace("COMBINE", "SHARES")}: \${{ matrix.shares }}/\${{ env.${variable} }}`;
+    assert.ok((jobs.get(runs) ?? "").includes(`\n          ${told}\n`), `${runs}: ${told}`);
+  }
 });
 
 const PARTS = "Every part of the gate succeeded";
 
-/** How the first step of `simulation-gate` ends, given how the jobs it waited for ended. */
-const partsVerdict = (/** @type {string} */ battery, /** @type {string} */ report) =>
-  spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script("simulation-gate", PARTS)], {
-    env: { PATH: process.env.PATH ?? "", BATTERY: battery, REPORT: report },
+/**
+ * How the first step of a gate that judges shares ends, given how the jobs it waited for ended.
+ * @param {string} gate @param {Readonly<Record<string, string>>} results by the name the step reads each by
+ */
+const partsVerdict = (gate, results) =>
+  spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script(gate, PARTS)], {
+    env: { PATH: process.env.PATH ?? "", ...results },
     encoding: "utf8",
   }).status;
 
-test("the simulation gate asks how every part ended before it judges their records", () => {
-  const gate = jobs.get("simulation-gate") ?? "";
-  assert.equal(own("simulation-gate", "needs"), "[changes, simulation-battery, simulation-report]");
-  assert.match(gate, /BATTERY: \$\{\{ needs\.simulation-battery\.result \}\}/);
-  assert.match(gate, /REPORT: \$\{\{ needs\.simulation-report\.result \}\}/);
-  assert.match(gate, /SIMULATION_GATE_COMBINE: \$\{\{ env\.SIMULATION_SHARES \}\}/);
-  assert.ok(gate.indexOf(`- name: ${PARTS}\n`) < gate.indexOf("- uses: "), "it must be the first step");
-  assert.equal(partsVerdict("success", "success"), 0);
+/** @param {Readonly<Record<string, string>>} waits @param {string} result @returns {Record<string, string>} */
+const all = (waits, result) => Object.fromEntries(Object.keys(waits).map((name) => [name, result]));
+
+test("a gate that judges shares asks how every part ended before it judges their records", () => {
+  for (const { count, gate, combine, waits } of SHARED) {
+    const lines = jobs.get(gate) ?? "";
+    assert.equal(own(gate, "needs"), `[changes, ${Object.values(waits).join(", ")}]`);
+    for (const [name, job] of Object.entries(waits)) {
+      assert.ok(lines.includes(`\n          ${name}: \${{ needs.${job}.result }}\n`), `${gate}: ${name}`);
+    }
+    assert.ok(lines.includes(`\n          ${combine}: \${{ env.${count} }}\n`), `${gate}: ${combine}`);
+    assert.ok(lines.indexOf(`- name: ${PARTS}\n`) < lines.indexOf("- uses: "), `${gate}: it must be the first step`);
+    assert.equal(partsVerdict(gate, all(waits, "success")), 0, gate);
+  }
 });
 
-test("a cancelled run leaves the simulation gate failed, never skipped", () => {
-  // A job whose condition is false is skipped, and a skipped job passes a
-  // required check. `!cancelled()` is false once the run is cancelled, so the
-  // job that waits for the battery must not carry it: it starts, and its
-  // first step, which runs whatever happened, fails on what the parts report.
-  assert.match(own("simulation-gate", "if") ?? "", /^\$\{\{ always\(\) && /);
-  assert.equal(stepCondition("simulation-gate", PARTS), "${{ always() }}");
-  // What GitHub gives as `needs.<job>.result`: a part that ran out of time is a failure.
-  for (const other of ["cancelled", "failure", "skipped", ""]) {
-    assert.notEqual(partsVerdict(other, "success"), 0, `battery ${other || "unknown"}`);
-    assert.notEqual(partsVerdict("success", other), 0, `report ${other || "unknown"}`);
-    assert.notEqual(partsVerdict(other, other), 0, `both ${other || "unknown"}`);
+test("a cancelled run leaves a gate that judges shares failed, never skipped", () => {
+  for (const { gate, waits } of SHARED) {
+    // A job whose condition is false is skipped, and a skipped job passes a
+    // required check. `!cancelled()` is false once the run is cancelled, so the
+    // job that waits for the parts must not carry it: it starts, and its
+    // first step, which runs whatever happened, fails on what the parts report.
+    assert.match(own(gate, "if") ?? "", /^\$\{\{ always\(\) && /, gate);
+    assert.equal(stepCondition(gate, PARTS), "${{ always() }}", gate);
+    // What GitHub gives as `needs.<job>.result`: a part that ran out of time is a failure.
+    for (const other of ["cancelled", "failure", "skipped", ""]) {
+      for (const name of Object.keys(waits)) {
+        const one = { ...all(waits, "success"), [name]: other };
+        assert.notEqual(partsVerdict(gate, one), 0, `${gate}: ${name} ${other || "unknown"}`);
+      }
+      assert.notEqual(partsVerdict(gate, all(waits, other)), 0, `${gate}: all ${other || "unknown"}`);
+    }
+    // A result that was never handed over is not a success either.
+    assert.notEqual(partsVerdict(gate, {}), 0, `${gate}: nothing known`);
+    // No other step of that job may run on a cancelled run, nor be what decides.
+    const later = (jobs.get(gate) ?? "").split(/^ {6}- /m).slice(2);
+    assert.ok(later.length >= 5, gate);
+    for (const step of later) assert.match(step, /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m, step.split("\n")[0]);
   }
-  // No other step of that job may run on a cancelled run, nor be what decides.
-  const later = (jobs.get("simulation-gate") ?? "").split(/^ {6}- /m).slice(2);
-  assert.ok(later.length >= 5);
-  for (const step of later) assert.match(step, /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m, step.split("\n")[0]);
 });
 
 // --- The quality report (ANH-199; docs/framework-de-test.md, "Rapport de qualité") ---
@@ -268,7 +315,7 @@ test("what the report adds to a gate cannot change the verdict of that gate", ()
       }
     }
   }
-  assert.ok(added >= 11, `${added} steps of the report were read`);
+  assert.ok(added >= 10, `${added} steps of the report were read`);
 });
 
 // --- The thresholds of Convex and of the site (ANH-203; docs/framework-de-test.md,
@@ -359,9 +406,9 @@ test("the coverage of Convex and of the site decides their gates: under the thre
     );
   }
   // The measured run of the site is the two plain suites together: each takes its folders from the same list.
-  assert.match(atRoot("vitest.ecg.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.ecg\),$/m);
+  assert.match(atRoot("vitest.lib.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.lib\),$/m);
   assert.match(atRoot("vitest.site.config.mts"), /^ {4}include: testsOf\(SITE\.suites\.site\),$/m);
-  assert.deepEqual(siteFolders(), [...SITE.suites.ecg, ...SITE.suites.site]);
+  assert.deepEqual(siteFolders(), [...SITE.suites.lib, ...SITE.suites.site]);
   assert.deepEqual(testsOf(siteFolders()).length, sourcesOf(siteFolders()).length);
   // 80 % of lines and of branches, on the whole and on each Convex file of the safety chain taken alone.
   const required = { lines: 80, branches: 80 };
@@ -376,11 +423,11 @@ test("the coverage of Convex and of the site decides their gates: under the thre
 
 test("the commands a developer runs to test measure nothing, in the CI as on a desk", () => {
   const scripts = JSON.parse(atRoot("package.json")).scripts;
-  for (const name of ["test:convex", "test:ecg", "test:site"]) {
+  for (const name of ["test:convex", "test:lib", "test:site"]) {
     assert.doesNotMatch(scripts[name], /coverage/, `npm run ${name} measures the coverage`);
   }
   // The two suites of the site hold no measure of their own: one run measures the site.
-  for (const config of ["vitest.ecg.config.mts", "vitest.site.config.mts"]) {
+  for (const config of ["vitest.lib.config.mts", "vitest.site.config.mts"]) {
     assert.doesNotMatch(atRoot(config), /^ *(coverage|thresholds):/m, config);
   }
   // The runs that decide the tests of `convex-tests` and `web` carry no coverage flag either.
@@ -402,6 +449,100 @@ test("the commands a developer runs to test measure nothing, in the CI as on a d
   );
 });
 
+test("every npm script the documentation or a workflow names is a script of package.json", () => {
+  // A script that is renamed (`test:ecg` became `test:lib`, ANH-183) leaves its old name in pages and
+  // in steps written meanwhile on other branches: the command they give would not start.
+  const scripts = Object.keys(JSON.parse(atRoot("package.json")).scripts);
+  const root = new URL("../../", import.meta.url);
+  const pages = readdirSync(new URL("docs/", root), { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => `docs/${name.split("\\").join("/")}`);
+  const workflows = readdirSync(new URL(".github/workflows/", root)).map((name) => `.github/workflows/${name}`);
+  assert.ok(pages.length >= 10 && workflows.length >= 5, "the documentation and the workflows were not read");
+  let named = 0;
+  for (const file of ["README.md", "raspberry-pi/README.md", ...pages, ...workflows]) {
+    // `npm run test:*` names a family of scripts: one of them at least must exist.
+    for (const [, name = "", family] of atRoot(file).matchAll(/\bnpm run ([a-z][\w:-]*)(\*)?/g)) {
+      named += 1;
+      const defined = family ? scripts.some((script) => script.startsWith(name)) : scripts.includes(name);
+      assert.ok(defined, `${file} names \`npm run ${name}${family ?? ""}\`, which package.json does not define`);
+    }
+  }
+  assert.ok(named >= 30, `${named} mentions of a script were read`);
+  assert.ok(scripts.includes("test:lib") && !scripts.includes("test:ecg"));
+});
+
+test("the Pi gate still judges every test once and the whole coverage, from what its two parts left", () => {
+  const tests = jobs.get("pi-tests") ?? "";
+  const gate = jobs.get("pi-gate") ?? "";
+  // The matrix job reports as `pi (tests 1)` and `pi (tests 2)`: the required name stays the gate's alone.
+  assert.equal(own("pi-tests", "name"), "pi (${{ matrix.part }})");
+  assert.match(tests, /^ {6}fail-fast: false$/m, "a part that fails must not cancel the other");
+  // Both run the one definition of the gate, and so does the job that judges them.
+  for (const [id, name] of [
+    ["pi-tests", "Pi gate, shares ${{ matrix.shares }} of the tests"],
+    ["pi-gate", "Pi gate, every test once and combined coverage"],
+  ]) {
+    const step = stepsOf(id ?? "").find((text) => text.startsWith(`name: ${name}\n`)) ?? "";
+    assert.match(step, /^ *(run: )?bash raspberry-pi\/scripts\/check\.sh$/m, `${id}: ${name}`);
+    assert.doesNotMatch(step, /continue-on-error|PI_GATE_PROCESSES|--cov|fail-under/, `${id}: ${name}`);
+  }
+  // What a part recorded and measured reaches the gate: hidden files too, the measure is named `.coverage`.
+  assert.match(tests, /^ {10}PI_GATE_EVIDENCE: \$\{\{ runner\.temp \}\}\/pi-evidence$/m);
+  const KEPT = "Keep what these shares recorded and measured";
+  const kept = stepsOf("pi-tests").find((text) => text.startsWith(`name: ${KEPT}\n`)) ?? "";
+  for (const setting of [
+    "name: pi-evidence-${{ matrix.shares }}",
+    "path: ${{ runner.temp }}/pi-evidence",
+    "if-no-files-found: error",
+    "overwrite: true",
+    "include-hidden-files: true",
+  ]) {
+    assert.ok(kept.includes(`\n          ${setting}\n`), setting);
+  }
+  assert.equal(stepCondition("pi-tests", KEPT), "${{ !cancelled() }}");
+  const gathered = stepsOf("pi-gate").find((text) => text.startsWith("name: Gather what every share")) ?? "";
+  for (const setting of ["pattern: pi-evidence-*", "merge-multiple: true", "path: ${{ runner.temp }}/pi-evidence"]) {
+    assert.ok(gathered.includes(`\n          ${setting}\n`), setting);
+  }
+  assert.match(gate, /^ {10}PI_GATE_EVIDENCE: \$\{\{ runner\.temp \}\}\/pi-evidence$/m);
+  // The threshold is the gate script's, applied where every share is gathered: 100 % of branches.
+  const check = atRoot("raspberry-pi/scripts/check.sh");
+  assert.ok(check.includes(' --combine "$COMBINE" --evidence "$EVIDENCE" --fail-under 100 '));
+  assert.ok(check.includes(' --shares "$SHARES" --evidence "$EVIDENCE" ${REPORT:+'), "a part applies no threshold");
+  // The nightly endurance of the session record: in one part only, and its failure fails that part.
+  const endurance = stepsOf("pi-tests").filter((text) => /^ {8}run: .*test_record_endurance\.py/m.test(text));
+  assert.equal(endurance.length, 1);
+  assert.match(endurance[0] ?? "", /^ {8}if: \$\{\{ github\.event_name == 'schedule' && matrix\.endurance \}\}$/m);
+  assert.doesNotMatch(endurance[0] ?? "", /continue-on-error/);
+  assert.equal(tests.match(/^ {12}endurance: true$/gm)?.length, 1, "one part runs the endurance");
+  assert.doesNotMatch(gate, /pytest tests\//, "the job that judges runs no test of the console");
+});
+
+test("the Pi gate script refuses two ways of running the tests at once, before it runs anything", () => {
+  const gateScript = new URL("../../raspberry-pi/scripts/check.sh", import.meta.url).pathname;
+  const run = (/** @type {Record<string, string>} */ settings) =>
+    spawnSync("bash", ["--noprofile", "--norc", gateScript], {
+      env: { PATH: process.env.PATH ?? "", ...settings },
+      encoding: "utf8",
+    });
+  const kept = { PI_GATE_EVIDENCE: "kept" };
+  for (const [settings, said] of /** @type {[Record<string, string>, RegExp][]} */ ([
+    [{ PI_GATE_SHARES: "0-3/8", PI_GATE_COMBINE: "8", ...kept }, /three ways to run the tests: set one/],
+    [{ PI_GATE_PROCESSES: "4", PI_GATE_SHARES: "0-3/8", ...kept }, /three ways to run the tests: set one/],
+    [{ PI_GATE_PROCESSES: "4", PI_GATE_COMBINE: "8", ...kept }, /three ways to run the tests: set one/],
+    [{ PI_GATE_SHARES: "0-3/8" }, /PI_GATE_EVIDENCE must name the directory/],
+    [{ PI_GATE_COMBINE: "8" }, /PI_GATE_EVIDENCE must name the directory/],
+    [kept, /PI_GATE_EVIDENCE goes with PI_GATE_SHARES or PI_GATE_COMBINE/],
+    [{ PI_GATE_PROCESSES: "4", ...kept }, /PI_GATE_EVIDENCE goes with PI_GATE_SHARES or PI_GATE_COMBINE/],
+  ])) {
+    const ran = run(settings);
+    assert.equal(ran.status, 1, JSON.stringify(settings));
+    assert.match(ran.stderr, said, JSON.stringify(settings));
+    assert.equal(ran.stdout, "", `a stage ran: ${JSON.stringify(settings)}`);
+  }
+});
+
 test("each suite and each measure of the report is left by the job the report expects it from", () => {
   for (const { id, job, part, runner } of SUITES) {
     const lines = jobs.get(job) ?? "";
@@ -415,25 +556,29 @@ test("each suite and each measure of the report is left by the job the report ex
       `${id}: ${job} publishes no quality-${part}`,
     );
   }
-  // The gate scripts are told where to leave what the report reads: next to the
-  // evidence of each job of the simulation battery, so that it reaches the gate with it.
-  assert.match(jobs.get("pi-gate") ?? "", /^ {10}QUALITY_REPORT_DIR: \$\{\{ runner\.temp \}\}\/quality$/m);
-  assert.match(jobs.get("simulation-gate") ?? "", /^ {10}QUALITY_REPORT_DIR: \$\{\{ runner\.temp \}\}\/quality$/m);
-  assert.match(
-    jobs.get("simulation-battery") ?? "",
-    /^ {10}QUALITY_REPORT_DIR: \$\{\{ runner\.temp \}\}\/simulation-evidence\/quality-\$\{\{ matrix\.shares \}\}$/m,
+  // The gate scripts are told where to leave what the report reads: next to the evidence
+  // of each job that runs shares of a suite, so that it reaches the gate with it.
+  for (const [runs, gate, evidence, count] of [
+    ["pi-tests", "pi-gate", "pi-evidence", "PI_SHARES"],
+    ["simulation-battery", "simulation-gate", "simulation-evidence", "SIMULATION_SHARES"],
+  ]) {
+    const judging = jobs.get(gate ?? "") ?? "";
+    assert.match(judging, /^ {10}QUALITY_REPORT_DIR: \$\{\{ runner\.temp \}\}\/quality$/m, gate);
+    assert.ok(
+      (jobs.get(runs ?? "") ?? "").includes(
+        `\n          QUALITY_REPORT_DIR: \${{ runner.temp }}/${evidence}/quality-\${{ matrix.shares }}\n`,
+      ),
+      runs,
+    );
+    // As many JUnit files as shares: the count each gate gives is the one its suite was cut into.
+    assert.ok(judging.includes(` --parts "$RUNNER_TEMP/${evidence}" `), gate);
+    assert.ok(judging.includes(` --shares "$${count}"\n`), gate);
+  }
+  assert.ok(
+    (jobs.get("pi-gate") ?? "").includes(
+      'quality-report.mjs job pi --dir "$RUNNER_TEMP/quality" --parts "$RUNNER_TEMP/pi-evidence" --shares "$PI_SHARES"\n',
+    ),
   );
-  assert.match(jobs.get("simulation-gate") ?? "", / --parts "\$RUNNER_TEMP\/simulation-evidence" /);
-  // As many JUnit files as processes: the count each job gives is the one its gate ran with.
-  assert.match(
-    script("pi-gate", "Pi gate"),
-    /^PI_GATE_PROCESSES="\$\(nproc\)" bash raspberry-pi\/scripts\/check\.sh$/m,
-  );
-  assert.match(
-    jobs.get("pi-gate") ?? "",
-    /quality-report\.mjs job pi --dir "\$RUNNER_TEMP\/quality" --shares "\$\(nproc\)"$/m,
-  );
-  assert.match(jobs.get("simulation-gate") ?? "", / --shares "\$SIMULATION_SHARES"$/m);
   // The checks of Convex and of the site are steps: their outcome is handed over as GitHub gives it.
   assert.match(jobs.get("convex-tests") ?? "", /^ {8}id: types\n {8}run: npx tsc -p convex\/tsconfig\.json --noEmit$/m);
   assert.match(jobs.get("convex-tests") ?? "", /^ {10}TYPES_OUTCOME: \$\{\{ steps\.types\.outcome \}\}$/m);
@@ -449,14 +594,16 @@ test("the audit hands the report the JUnit files of its two test files, and noth
   const kept = (/** @type {string} */ text) =>
     [...text.matchAll(/\$RUNNER_TEMP\/quality\/([\w.-]+)/g)].map(([, name]) => name).sort();
   assert.deepEqual(kept(jobs.get("audit") ?? ""), ["scripts-dependency-guard.xml", "scripts-gitleaks-fixture.xml"]);
-  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-men.xml", "scripts-release.xml"]);
-  assert.deepEqual(kept(jobs.get("changes") ?? ""), ["scripts-ci.xml"]);
+  assert.deepEqual(kept(jobs.get("docs") ?? ""), ["scripts-ci.xml", "scripts-men.xml", "scripts-release.xml"]);
+  // The job that decides which gates run runs no test and hands the report nothing.
+  assert.deepEqual(kept(jobs.get("changes") ?? ""), []);
   // Each of those files is written by `node --test` itself, for the test file named on the same line.
   for (const [id, file] of [
     ["audit", "scripts/ci/braces-depth-guard.test.mjs"],
     ["audit", "scripts/ci/gitleaks-fixture.test.mjs"],
     ["docs", "scripts/ci/check-men.test.mjs"],
     ["docs", "scripts/release.test.mjs"],
+    ["docs", "scripts/ci/convex-generated-api.test.mjs"],
   ]) {
     const line = (jobs.get(id ?? "") ?? "").split("\n").find((text) => text.trimEnd().endsWith(` ${file}`)) ?? "";
     assert.match(
@@ -493,8 +640,87 @@ test("the release tooling is tested by `docs`, the required job no path rule can
   assert.equal(JSON.parse(atRoot("package.json")).scripts["test:release"], "node --test scripts/release.test.mjs");
   assert.deepEqual(
     SUITES.filter(({ job }) => job === "docs").map(({ id }) => id),
-    ["scripts-men", "scripts-release"],
+    ["scripts-ci", "scripts-men", "scripts-release"],
   );
+});
+
+// --- What tests the gates is itself a gate (ANH-183) ---
+//
+// The tests of the path rule and of the workflows once ran in `changes`, which
+// branch protection does not require: one of them failing blocked no merge. And
+// the path rule lets `web` be skipped on a pull request that changes no file of
+// the site, though one test of the site reads every file of the repository.
+// Both now run in `docs`: a required check, on every event, whatever changed.
+
+/** The steps of a job that can let it pass though a command of theirs failed. @param {string} step */
+const softened = (step) => /continue-on-error|\|\| *(true|:)\b|set \+e\b/.test(step);
+
+test("every test file of scripts/ci runs in a required job that no path rule can skip", () => {
+  const always = REQUIRED.filter((id) => ALWAYS.includes(id));
+  assert.deepEqual(always, ["audit", "docs"]);
+  const files = readdirSync(new URL("./", import.meta.url)).filter((name) => name.endsWith(".test.mjs"));
+  assert.ok(files.length >= 9 && files.includes("ci-workflow.test.mjs"), "the test files of scripts/ci were not read");
+  for (const file of files) {
+    const running = always.flatMap((id) =>
+      stepsOf(id)
+        .filter((step) =>
+          new RegExp(`^ +(run: )?.*\\bnode --test .* scripts/ci/${file.replaceAll(".", "\\.")}\\b`, "m").test(step),
+        )
+        .map((step) => ({ id, step })),
+    );
+    assert.equal(running.length, 1, `${file} is run by ${running.length} steps of ${always.join(" and ")}`);
+    const [{ id, step }] = /** @type {[{id: string, step: string}]} */ (running);
+    assert.ok(!softened(step), `${id}: the step that runs ${file} can pass though it failed`);
+    // Never skipped because an earlier check of the job failed; never run on a cancelled run.
+    const condition = /^ {8}if:[ \t]*(.*)$/m.exec(step)?.[1];
+    assert.equal(condition, "${{ !cancelled() }}", `${id}: ${file}`);
+  }
+  // The job that decides which gates run is not required: it runs no test, so none can fail unseen.
+  assert.ok(!REQUIRED.includes("changes"));
+  assert.doesNotMatch(jobs.get("changes") ?? "", /node --test|\.test\.mjs/);
+  assert.deepEqual(
+    SUITES.filter(({ id }) => id === "scripts-ci").map(({ job, part }) => [job, part]),
+    [["docs", "scripts-docs"]],
+  );
+});
+
+test("the test that reads every file of the repository runs in `docs`, whatever the pull request changes", () => {
+  const WHOLE = "lib/legacyModeReferences.test.ts";
+  const name = "Test what is read across the whole repository";
+  const steps = stepsOf("docs");
+  const at = steps.findIndex((text) => text.startsWith(`name: ${name}\n`));
+  assert.ok(at > 0, `docs: no step "${name}"`);
+  const step = steps[at] ?? "";
+  assert.match(step, new RegExp(`^ {8}run: npm run test:lib -- ${WHOLE.replaceAll(".", "\\.")}$`, "m"));
+  assert.ok(!softened(step), "the step can pass though the test failed");
+  assert.equal(stepCondition("docs", name), "${{ !cancelled() }}");
+  // The command exists, runs the file, and the file is the one that reads the repository.
+  assert.equal(JSON.parse(atRoot("package.json")).scripts["test:lib"], "vitest run --config vitest.lib.config.mts");
+  assert.match(atRoot(WHOLE), /execFileSync\("git", \["ls-files", "-z"\]/);
+  assert.ok(
+    testsOf(SITE.suites.lib).some((glob) => globToRegExp(glob).test(WHOLE)),
+    "the suite does not run it",
+  );
+  // What it runs with is installed just before, from the lockfile, and nothing softens that either.
+  const before = steps.slice(0, at);
+  const install = before.findIndex((text) => /^ {8}run: npm ci$/m.test(text));
+  const node = before.findIndex((text) => text.startsWith("uses: actions/setup-node@"));
+  assert.ok(node >= 0 && install > node, "docs: `npm ci` must follow the installation of Node");
+  for (const index of [node, install]) {
+    assert.ok(!softened(before[index] ?? ""));
+    assert.match(before[index] ?? "", /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m);
+  }
+  // The checks that install nothing stay first: none of them waits for, nor depends on, the install.
+  const cheap = before.slice(0, node).map((text) => titleOf(text));
+  for (const title of [
+    "Check local Markdown links and anchors",
+    "Resolve threat identifiers",
+    "Test the release tooling",
+  ]) {
+    assert.ok(cheap.includes(`name: ${title}`), `${title} must come before the install`);
+  }
+  // `web` still runs the whole suite of lib/, this file included, when the site changes.
+  assert.match(jobs.get("web") ?? "", /^ {6}- run: npm run test:lib -- \$VITEST_REPORT /m);
 });
 
 test("the workflow gives no token more than read access, and each action is pinned to one full commit", () => {

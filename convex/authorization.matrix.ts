@@ -1458,7 +1458,8 @@ export const MATRIX: Entry[] = [
         note: "limit applied before access filter hides the caller's own session",
         knownDefect: {
           intended: filtered,
-          ticket: "harmless: under-returns, never exposes another user's data",
+          ticket:
+            "ANH-158 (the listing is rebuilt there, filter before limit); harmless: under-returns, never exposes another user's data",
         },
       },
       { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
@@ -2274,15 +2275,25 @@ export const MATRIX: Entry[] = [
     ref: api.sessionSummaries.getSummaryWithEcg,
     kind: "query",
     build: summaryBuild,
+    // ANH-183: the handler once returned the stored document, system field
+    // `_creationTime` included, which its `returns` validator does not declare:
+    // the read threw for every authorised reader. An authorised reader now
+    // gets the summary with its downsampled ECG, and the declared fields only.
     onSuccess: (res) => {
       if (res === null) throw new Error("Expected a summary");
+      const summary = res as Record<string, unknown>;
+      expectExactly(
+        Object.keys(summary).filter((key) => summary[key] !== undefined),
+        ["_id", "createdAt", "downsampledEcg", "duration", "metrics", "sessionId"],
+        "Fields of the summary with its ECG",
+      );
+      const ecg = JSON.stringify(summary.downsampledEcg);
+      if (ecg !== JSON.stringify([{ timestamp: NOW, value: 1 }]))
+        throw new Error("Expected the downsampled ECG of the summary");
+      if (summary.duration !== 600)
+        throw new Error("Expected the duration of the summary");
     },
-    // KNOWN HARMLESS DEFECT: the handler returns the raw document (including the
-    // system field `_creationTime`), which its `returns` validator does not
-    // declare, so Convex return validation throws for EVERY authorised reader
-    // whenever a summary exists. It exposes nothing (the read simply errors).
-    // The success cells assert the intended behaviour and run with `it.fails`.
-    cases: summaryCases(true),
+    cases: summaryCases(),
   },
 ];
 
@@ -2307,24 +2318,15 @@ function summaryBuild(w: World) {
   })();
 }
 
-function summaryCases(brokenReturn = false): Case[] {
-  const defect = brokenReturn
-    ? {
-        knownDefect: {
-          intended: ok,
-          ticket:
-            "harmless: getSummaryWithEcg returns the raw doc; its returns validator omits _creationTime, so the read throws for everyone",
-        },
-      }
-    : {};
+function summaryCases(): Case[] {
   return [
     { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
-    { actor: "patient", scope: "own", expect: ok, note: "the rider", ...defect },
+    { actor: "patient", scope: "own", expect: ok, note: "the rider" },
     { actor: "stranger", scope: "other", expect: empty, note: "null for an unrelated user" },
-    { actor: "manager", scope: "own", expect: ok, note: "manages this machine", ...defect },
+    { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
     { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
-    { actor: "admin", expect: ok, note: "admin reads", ...defect },
-    { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation", ...defect },
+    { actor: "admin", expect: ok, note: "admin reads" },
+    { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
     { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
     { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
     { actor: "orgBPatient", scope: "foreign", expect: empty, note: "null for a session of another organisation" },

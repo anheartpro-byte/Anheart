@@ -32,6 +32,7 @@ import ast
 import asyncio
 import math
 import re
+import socket
 from collections.abc import AsyncIterator, Callable, MutableMapping
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -125,14 +126,24 @@ TOKEN: Final[str] = "a-token-of-at-least-sixteen-characters"  # noqa: S105  # a 
 ORIGIN: Final[str] = "http://127.0.0.1:8080"
 FOREIGN_ORIGIN: Final[str] = "http://clinic-wifi-printer.local"
 
-SERVE_TEST_PORT: Final[int] = 8099
-"""Port for the one test that really binds a socket.
 
-A fixed port rather than 0: ``WebConfig`` refuses port 0, and rightly - an
-operator cannot type a URL for a port nobody knows. If this one is busy the test
-fails loudly, which is the correct outcome for a test whose whole point is that
-the bind really happened.
-"""
+def free_port() -> int:
+    """A port the system says is free, for the tests that really bind a socket.
+
+    Asked of the system each time (bind to port 0, read the number, let go),
+    never a fixed number: a fixed port is shared by every test that binds, in
+    this process and in the others of a gate run as several processes, and two
+    of them at the same moment fail each other (ANH-183 EX-3). The number has
+    to be known before the server is built: ``WebConfig`` refuses port 0, and
+    rightly - an operator cannot type a URL for a port nobody knows. If the
+    bind then fails, the test fails loudly, which is the correct outcome for a
+    test whose whole point is that the bind really happened.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]  # pyright: ignore[reportAny]
+    return port
+
 
 PROFILE_ID: Final[str] = "standard_30_min"
 OPERATOR: Final[str] = "dr. attending"
@@ -2138,13 +2149,32 @@ async def test_the_server_serves_and_stops_without_touching_the_signal_handlers(
     """
     import signal  # noqa: PLC0415
 
-    config = WebConfig(host="127.0.0.1", port=SERVE_TEST_PORT, token=TOKEN)
+    config = WebConfig(host="127.0.0.1", port=free_port(), token=TOKEN)
     server = build_server(rig.app, config)
     before = signal.getsignal(signal.SIGINT)
     server.should_exit = True
     await serve(server)
     assert signal.getsignal(signal.SIGINT) is before
     assert server.started is False or server.should_exit
+
+
+async def test_a_server_binds_while_a_neighbour_still_holds_its_own_port(rig: Rig) -> None:
+    """ANH-183 EX-3: two tests that bind at the same moment are given two ports.
+
+    The neighbour stands for the other bind test, running in another process
+    of the gate. When both used one fixed port, the second bind failed.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as neighbour:
+        neighbour.bind(("127.0.0.1", free_port()))
+        neighbour.listen()
+        taken: int = neighbour.getsockname()[1]  # pyright: ignore[reportAny]
+        port = free_port()
+        assert port != taken
+        server = build_server(rig.app, WebConfig(host="127.0.0.1", port=port, token=TOKEN))
+        server.should_exit = True
+        await serve(server)
+        # The neighbour was never disturbed: it still holds what it bound.
+        assert neighbour.getsockname()[1] == taken
 
 
 def test_the_server_does_not_replace_the_applications_logging(rig: Rig) -> None:

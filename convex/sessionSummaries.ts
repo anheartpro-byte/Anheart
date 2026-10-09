@@ -109,6 +109,18 @@ export const getSummaryWithEcg = query({
       .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
       .unique();
 
-    return summary;
+    if (!summary) return null;
+
+    // The fields the `returns` validator declares, and no other: the stored
+    // document also carries `_creationTime`, which the validator refuses.
+    return {
+      _id: summary._id,
+      sessionId: summary.sessionId,
+      duration: summary.duration,
+      metrics: summary.metrics,
+      downsampledEcg: summary.downsampledEcg,
+      reportFileId: summary.reportFileId,
+      createdAt: summary.createdAt,
+    };
   },
 });

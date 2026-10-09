@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:convex": "vitest run --config vitest.convex.config.mts",
-    "test:ecg": "vitest run --config vitest.ecg.config.mts",
+    "test:lib": "vitest run --config vitest.lib.config.mts",
     "test:site": "vitest run --config vitest.site.config.mts",
     "coverage:convex": "vitest run --config vitest.convex.config.mts --coverage",
     "coverage:site": "vitest run --config vitest.site-coverage.config.mts --coverage",

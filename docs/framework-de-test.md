@@ -468,7 +468,8 @@ Tout ce que la page lit d'une trace, d'un enregistrement ou d'un flux en direct
 est inséré comme du **texte**, dans des éléments qu'elle construit elle-même
 (`createElement`, `textContent`, `createTextNode`) : nom de la trace et
 avertissements du lecteur, libellés et note de géométrie, tuiles, horloge,
-liste d'événements. Son script ne confie aucun texte à l'analyseur HTML
+liste d'événements, et les noms de scénarios reçus de `/api/scenarios`, qui
+remplissent le menu « live ». Son script ne confie aucun texte à l'analyseur HTML
 (`innerHTML` et équivalents) : un champ qui contient du balisage s'affiche tel
 qu'il est écrit.
 
@@ -505,7 +506,17 @@ qu'il est livré, sous Node (`viewer_requests.mjs`), dans un document de
 substitution qui garde ce que le script construit et met à part ce qu'il
 confierait à l'analyseur HTML. Il lit aussi les adresses demandées et la
 politique de la page. Node doit donc être présent là où tourne la batterie de
-la simulation.
+la simulation. Depuis ANH-183, le serveur de substitution peut répondre une
+liste de scénarios : un test en sert deux, dont un nom écrit comme du
+balisage, et vérifie que chacun devient le texte d'une option du menu.
+
+La démonstration hébergée sert une copie de cette page, assemblée par
+`deploy/simulation-vercel/build.sh`. Les empreintes de la politique n'ont de
+sens que si cette copie est le fichier source : `scripts/ci/deploy-workflows.test.mjs`
+lance le vrai `build.sh` dans une arborescence jetable et compare les deux
+copies qu'il produit (`dist/public/viewer/` et `dist/simulation/viewer/`) au
+fichier source, octet pour octet. Rien n'est écrit dans le dépôt ni envoyé à
+Vercel.
 
 ## 8. Écrire un nouveau scénario JSON
 
@@ -1083,15 +1094,16 @@ par un commit de fusion
 
 | Job | Contrôles et artefacts |
 |---|---|
-| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)) ; lance d'abord les tests de cette règle, ceux du workflow, ceux du workflow CodeQL, ceux des deux workflows de déploiement, ceux du rapport de qualité et ceux du script qui tient `convex/_generated/api.d.ts` |
-| `pi-gate` | gate Pi complète, tests répartis sur un processus pytest indépendant par CPU du runner (voir [Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)), couverture de branches à 100 % sur la chaîne de sécurité, combinée avant le seuil ; `coverage.xml`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus après la gate : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
+| `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)). Ne lance plus aucun test depuis ANH-183 : ce job n'est pas une vérification obligatoire, ses tests sont dans `docs` |
+| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
+| `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
-| `docs` | liens locaux et ancres Markdown, résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; puis les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub. Ils sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés, et qu'ils lisent des pages de `docs/` ([release.md](release.md#7-tests)) |
+| `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
@@ -1160,6 +1172,11 @@ cas, à confirmer sur la première PR de chaque sorte fusionnée après celle-ci
 Une PR qui touche le Pi ou la simulation attend `pi-gate` et
 `simulation-gate`.
 
+Depuis ANH-183, les tests de `pi-gate` sont répartis sur deux jobs : sur un
+runner lent, le verdict tombe en 14 min 23 s au lieu de 25 min 31 s. Les
+durées avant et après, par job, sont dans
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183).
+
 Les actions de checkout, d'installation de Node, de publication et de
 récupération des artefacts utilisent le runtime Node.js 24, avec des commits
 complets épinglés dans le workflow. Elles demandent un runner GitHub Actions au
@@ -1170,10 +1187,10 @@ pour l'audit et cache npm explicite. Les artefacts publiés (`pi-gate-N` et
 `simulation-gate-N`, N étant le numéro de tentative) gardent leurs chemins,
 leur rétention de 14 jours et l'échec si aucun fichier attendu n'est produit ;
 les fichiers cachés en restent exclus. Les artefacts intermédiaires
-`simulation-evidence-*` font exception : ils portent la mesure de couverture de
-chaque part, un fichier nommé `.coverage`, et sont donc publiés avec leurs
-fichiers cachés. Ils ne contiennent que le dossier d'enregistrements créé par
-le lanceur.
+`pi-evidence-*` et `simulation-evidence-*` font exception : ils portent la
+mesure de couverture de chaque part, un fichier nommé `.coverage`, et sont donc
+publiés avec leurs fichiers cachés. Ils ne contiennent que le dossier
+d'enregistrements créé par le lanceur.
 
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
 artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
@@ -1181,8 +1198,9 @@ rapport synthétique. Les séances enregistrées de `simulation/scenarios/real/`
 n'ont pas d'étape nocturne à part : `test_real_records.py` les rejoue dans la
 batterie, à chaque exécution (voir [16.5](#165-la-bibliothèque-simulationscenariosreal)).
 
-Budgets d'exécution : 60 minutes pour `pi-gate` (dont, la nuit, 35 minutes au
-plus pour l'étape d'endurance de l'enregistrement), 45 minutes pour chaque job de
+Budgets d'exécution : 60 minutes pour chacun des deux jobs `pi (tests …)` (dont,
+la nuit, 35 minutes au plus pour l'étape d'endurance de l'enregistrement, dans
+`pi (tests 1)`), 15 minutes pour `pi-gate`, 45 minutes pour chaque job de
 la batterie de simulation, 90 minutes pour `simulation (report)` (le budget de
 l'ancien job unique, gardé pour le rapport nocturne avec `--dsp`) et 15 minutes
 pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
@@ -1218,18 +1236,26 @@ trois. Un seul test paramétré,
 `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic` (67 cas
 d'environ 10 s chacun), représente 39 % de ce temps.
 
-Le job lance toujours `bash raspberry-pi/scripts/check.sh`, qui reste la seule
-définition de la gate. Il lui passe `PI_GATE_PROCESSES`, égal au nombre de CPU
-du runner : quatre sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux
-fils chacun). Avec cette variable, l'étape de tests de `check.sh` n'est plus un
-seul pytest : `scripts/ci/pi_gate_parallel.py` lance autant de processus
-`python -m pytest` indépendants, sans aucune dépendance supplémentaire. Sans
-la variable, `check.sh` se comporte exactement comme avant.
+Depuis ANH-183, la CI répartit en plus ces processus sur deux jobs : voir
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183), plus
+bas. Ce qui suit décrit le lanceur et ses trois vérifications, qui sont les
+mêmes sur une machine ou sur deux.
+
+`bash raspberry-pi/scripts/check.sh` reste la seule définition de la gate. Avec
+`PI_GATE_PROCESSES=N`, son étape de tests n'est plus un seul pytest :
+`scripts/ci/pi_gate_parallel.py` lance N processus `python -m pytest`
+indépendants, sans aucune dépendance supplémentaire. C'est le mode d'une seule
+machine ; le job de la CI l'utilisait avec le nombre de CPU du runner, quatre
+sur les runners hébergés `ubuntu-24.04` (deux cœurs, deux fils chacun). Sans
+aucune variable, `check.sh` se comporte exactement comme avant.
 
 Chaque processus collecte toute la suite, comme en série, puis ne garde que
 les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
 avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 67 cas lourds, qui
 se suivent, sont ainsi distribués à tour de rôle entre tous les processus.
+Depuis ANH-183, les tests d'au moins dix secondes font exception : ils sont
+distribués selon leur durée mesurée (voir « La règle de partage du Pi », dans
+[Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)).
 Chaque processus mesure sa propre couverture.
 
 La gate ne passe que si ces trois vérifications réussissent :
@@ -1297,8 +1323,11 @@ démarre, et peut en changer le comportement. La première version exportait
 `print("OPEN", flush=True)` écrit `OPEN` puis le saut de ligne en deux appels
 système au lieu d'un : les tests de verrou du variateur (ANH-74), qui lisent
 la ligne `OPEN` de leur processus auxiliaire en une seule lecture, ont échoué
-6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis,
-le lanceur transmet ses réglages au greffon par des options de ligne de
+6 fois sur 18 en CI (`assert b'OPEN' == b'OPEN\n'`, run 37384448146). Depuis
+ANH-183, ces tests lisent la ligne jusqu'à sa fin, en autant de lectures qu'il
+faut, et l'un d'eux fixe lui-même la variable dans un sens puis dans l'autre :
+la gate est verte avec ou sans elle (run 37711318184, avec). Depuis ce premier
+échec, le lanceur transmet ses réglages au greffon par des options de ligne de
 commande (`--pi-gate-share`, `--pi-gate-evidence`). Il ne peut pas démarrer
 pytest sans deux variables : `PYTHONPATH`, pour que le greffon soit trouvé, et
 `COVERAGE_FILE`, lu une fois par pytest-cov au démarrage de la mesure. Le
@@ -1319,11 +1348,12 @@ Deux limites à connaître :
   de la même façon (un `-k` ou un `-m` dans `PYTEST_ADDOPTS`, un test marqué
   `hardware`) passe inaperçu, exactement comme en série : rien ne fixe le
   nombre de tests, seul le seuil de couverture rattrape un test manquant ;
-* **le voisinage des tests dépend du nombre de CPU.** Avec N processus,
+* **le voisinage des tests dépend du nombre de parts.** Avec N processus,
   chacun exécute un test sur N. Un test qui n'échoue qu'à côté de certains
-  voisins peut échouer avec quatre processus et passer avec deux ou en série.
-  Pour reproduire un échec de CI, reprendre le nombre affiché par la ligne
-  `Runner:` du journal.
+  voisins peut échouer avec huit parts et passer avec quatre ou en série.
+  En CI ce nombre est écrit dans le workflow (`PI_SHARES`, huit), il ne
+  dépend plus du runner : pour reproduire un échec, reprendre ce nombre et la
+  part du processus en échec (`[p5]` est la part 5).
 
 La durée se lit dans chaque journal : la ligne `Runner:` donne le nombre de
 CPU et le modèle du processeur, chaque processus affiche son résumé
@@ -1343,20 +1373,23 @@ détecte pas, d'où la deuxième règle.
   échoue (`did not collect the same tests`) ;
 * **isolement.** Fichiers sous `tmp_path`, aucun chemin ni port fixe partagé
   entre deux tests, aucun état laissé au test suivant : l'ordre et le
-  voisinage des tests ne sont plus ceux de la série. Exception connue : deux
-  tests ouvrent réellement le port fixe 8099,
+  voisinage des tests ne sont plus ceux de la série. Deux tests ouvrent
+  réellement un port,
   `tests/test_web_api.py::test_the_server_serves_and_stops_without_touching_the_signal_handlers`
   et `tests/test_local_panel.py::test_the_production_web_runner_binds_and_exits`.
-  Ils sont nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`) et vont
-  toujours dans le même processus, qui les exécute l'un après l'autre. Si
-  l'un d'eux est renommé, la gate échoue jusqu'à la mise à jour de cette
-  liste. Deux gates lancées en même temps sur une même machine peuvent
-  toujours se disputer ce port ;
+  Depuis ANH-183, chacun demande un port libre au système (`free_port`, dans
+  `tests/test_web_api.py`) au lieu du port fixe 8099 qu'ils partageaient :
+  deux gates lancées en même temps sur une même machine ne se le disputent
+  plus. Ils restent nommés dans `SAME_PROCESS` (`scripts/ci/pi_gate_shard.py`)
+  et vont toujours dans le même processus, qui les exécute l'un après
+  l'autre : entre la réponse du système et l'ouverture du port, un autre
+  processus pourrait recevoir le même numéro. Si l'un d'eux est renommé, la
+  gate échoue jusqu'à la mise à jour de cette liste ;
 * **temps réel.** Une borne mesurée en temps réel garde une marge large : tous
   les CPU du runner sont occupés pendant toute la durée des tests.
 
-En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ce
-mode. Pour reproduire le job avec ses quatre processus :
+En local, `check.sh` reste en série par défaut, et `check.ps1` n'a pas ces
+modes. Pour lancer toute la gate sur une machine, en quatre processus :
 
 ```sh
 PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
@@ -1365,6 +1398,198 @@ PI_GATE_PROCESSES=4 bash raspberry-pi/scripts/check.sh
 Hors CI, Hypothesis garde son profil par défaut et sa limite de 200 ms par
 exemple : sous cette charge, un test par propriétés sans `deadline=None` peut
 échouer. La CI utilise le profil `ci`, sans limite de temps.
+
+### Gate Pi répartie sur deux jobs (ANH-183)
+
+Sur un seul runner, le job `pi-gate` a pris de 13 min 34 s à 27 min 04 s le
+7 octobre 2026 : treize exécutions, neuf push sur `develop` et quatre PR (runs
+37620748521 à 37698782634), médiane 19 min 26 s. L'écart vient du processeur
+attribué au runner et du nombre d'exécutions lancées en même temps. C'était la
+vérification obligatoire la plus longue, celle que chaque fusion attendait.
+Détail du run 37696963792 (19 min 26 s) : 24 s de ruff, basedpyright et mypy,
+55 s pour les tests du lanceur, 30 s de collecte dans chaque processus, puis
+**17 min 47 s de tests** sur quatre processus : 4258 tests, 4030 s de pytest
+cumulés.
+
+Les tests sont maintenant coupés en huit parts, exécutées par deux jobs. Le
+mécanisme est celui de la gate de simulation (section suivante) : le même
+lanceur, le même greffon, la même preuve. La règle de partage est celle du
+Pi, décrite plus bas : par durée mesurée pour les tests lents, par rang dans
+l'ordre de collecte pour tous les autres.
+
+| Job | Parts | Ce qu'il exécute |
+|---|---|---|
+| `pi (tests 1)` | 0 à 3 | ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis ses quatre parts, un processus pytest chacune ; la nuit, l'endurance de l'enregistrement de séance |
+| `pi (tests 2)` | 4 à 7 | les mêmes contrôles, puis ses quatre parts |
+| `pi-gate` | aucune | les tests du lanceur, puis le verdict sur les huit parts |
+
+`raspberry-pi/scripts/check.sh` reste la définition de la gate. Deux variables
+d'environnement choisissent l'étape, comme pour la simulation :
+
+* `PI_GATE_SHARES=0-3/8` avec `PI_GATE_EVIDENCE=<dossier>` : les contrôles
+  statiques comme d'habitude, puis seulement les parts 0 à 3 d'une suite coupée
+  en 8 (`pi_gate_parallel.py --shares 0-3/8 --evidence <dossier>`). L'étape
+  échoue si un processus plante, même à l'arrêt de l'interpréteur, s'il ne
+  s'arrête pas 300 s après son dernier test, si un test échoue, si un test a
+  tourné deux fois parmi ces parts, ou si un enregistrement ou une mesure de
+  couverture manque. Elle ne dit rien des autres parts et n'applique aucun
+  seuil : la couverture d'une moitié des tests ne peut pas être jugée ;
+* `PI_GATE_COMBINE=8` avec le même dossier, que le job `pi-gate` remplit avec
+  les artefacts `pi-evidence-*` des deux jobs : aucun test de la console n'est
+  relancé. `check.sh` exécute les tests du lanceur lui-même, puis
+  `pi_gate_parallel.py --combine 8` : la preuve de partition sur les 8 parts
+  (collectes identiques, chaque test exécuté par une part et une seule), la
+  fusion des 8 mesures (une mesure absente, illisible ou vide est une erreur)
+  et `coverage report --fail-under=100`, une seule fois, sur le total.
+
+`check.sh` refuse, avant de lancer quoi que ce soit, deux des trois variables
+`PI_GATE_PROCESSES`, `PI_GATE_SHARES` et `PI_GATE_COMBINE` à la fois, et
+`PI_GATE_EVIDENCE` sans l'une des deux dernières.
+
+**Ce qui ne change pas.**
+
+* Le nom exigé par la protection de branche reste `pi-gate`, et c'est toujours
+  un job simple, pas une matrice. Les deux jobs de tests s'affichent sous
+  d'autres noms (`pi (tests 1)`, `pi (tests 2)`), qui ne sont pas exigés.
+* `pi-gate` exige d'abord que les deux jobs de tests aient réussi, puis juge
+  leurs enregistrements. Cette première étape tourne quoi qu'il soit arrivé au
+  run, annulation comprise (`always()` sur le job et sur l'étape) : un job de
+  tests annulé, en échec, arrêté par sa limite de temps ou sauté alors qu'il
+  ne devait pas l'être laisse `pi-gate` en échec. Une part dont l'artefact
+  manque fait échouer la preuve de partition.
+* Sur une PR que la règle de chemins dispense des gates Python, les trois jobs
+  sont sautés ensemble et `pi-gate` est rapporté « Skipped » sous son nom,
+  comme avant (voir
+  [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)).
+* Le seuil est le même et s'applique au même total : 100 % des branches des
+  fichiers de la liste `include` de `raspberry-pi/pyproject.toml`, une fois, sur
+  les mesures réunies des huit parts. Sur un seul job, le run 37710526918
+  jugeait 13 184 lignes et 2 934 branches ; le même code réparti en deux jobs
+  donne les mêmes totaux (run 37711318184), et le journal de `pi-gate` les
+  affiche à chaque exécution. Ces deux runs précèdent ANH-207, qui a mis
+  `src/signal_processing.py` sous le seuil : le total jugé a grandi d'autant
+  depuis, la liste `include` restant la seule chose qui le fixe.
+* Les contrôles statiques sont ceux d'avant, lancés par chacun des deux jobs
+  de tests ; le rapport de qualité les compte une fois.
+
+**Ce qui change.**
+
+* Le voisinage des tests : huit parts au lieu de quatre, et un nombre écrit
+  dans le workflow (`PI_SHARES`) au lieu du nombre de CPU du runner.
+* Les tests du lanceur tournent dans `pi-gate`, avant le verdict, et plus
+  avant les tests de la console.
+* L'étape nocturne d'endurance tourne dans `pi (tests 1)`. Son échec fait
+  échouer ce job, donc `pi-gate`, comme avant.
+* Relancer un job de tests (« Re-run failed jobs ») remplace son artefact :
+  `pi-gate` juge la dernière exécution de chaque job. Relancer `pi-gate` seul
+  après l'expiration des artefacts (14 jours) échoue : il faut alors tout
+  relancer.
+
+**La règle de partage du Pi** (`pi_owners`, dans `pi_gate_shard.py`) ne sert
+qu'à gagner du temps : la preuve de partition ne la connaît pas et vaut quelle
+que soit la règle.
+
+* les deux tests de `SAME_PROCESS` vont à la part 0 ;
+* les tests d'au moins dix secondes sont nommés dans `PI_SLOW_SECONDS`, avec
+  leur durée mesurée en CI : 52 lignes à la mesure, qui désignaient 119 des
+  4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a réécrit
+  trois de ces tests : leurs remplaçants sont distribués par leur rang
+  jusqu'à la prochaine mise à jour de la table). Ils sont distribués du plus lent au moins
+  lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
+  paramètre vaut pour chaque cas du test : les 67 cas de
+  `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
+  secondes chacun. Une ligne avec paramètre ne désigne que ce cas, pour les
+  tests dont les cas diffèrent : un programme interrompu dans sa dernière
+  phase tourne six fois plus longtemps qu'interrompu dans la première ;
+* tous les autres tests sont distribués par leur rang dans l'ordre de
+  collecte, à tour de rôle, comme tous l'étaient avant.
+
+Sans cette table, la première exécution en deux jobs (run 37706142121) n'avait
+rien fait gagner : 6 min 18 s pour `pi (tests 1)` et 16 min 33 s pour
+`pi (tests 2)`, soit 1262 s et 3424 s de pytest cumulés. Deux causes. Le
+runner du second job était 2,07 fois plus lent (mesuré sur les 67 cas de la
+famille ci-dessus, que les deux jobs se partageaient). Et, ramenées au même
+runner, ses quatre parts portaient encore un tiers de travail de plus (1568 s
+contre 1166 s) : distribués par leur seul rang, les cas longs de plusieurs
+tests paramétrés (phases `hold`, `cooldown`, `recovery`) tombaient dans les
+mêmes parts. Rejouée sur les durées de ce run, la règle donne 1384 s et 1349 s
+aux deux jobs, et la part la plus lourde passe de 433 s à 359 s, pour 342 s en
+moyenne.
+
+**Durées mesurées avec cette règle** (run 37711318184 du 8 octobre 2026, lancé
+à la main sur une branche jetable qui portait ce code ; toutes les gates y ont
+tourné et réussi) :
+
+| Job | Durée | Processeur du runner | pytest cumulé de ses quatre parts |
+|---|---|---|---|
+| `pi (tests 1)` | 12 min 51 s | AMD EPYC 7763 | 2849 s (706 à 718 s par part) |
+| `pi (tests 2)` | 7 min 11 s | AMD EPYC 9V45 | 1518 s (370 à 393 s par part) |
+| `pi-gate` (le verdict seul) | 1 min 29 s | non affiché par ce job | sans objet |
+| du début du premier job de tests au verdict | 14 min 23 s | | |
+
+Les deux jobs portent maintenant le même travail. Dans chacun, les quatre
+parts finissent à moins de 25 s les unes des autres, et le rapport des deux
+cumuls (1,88) est celui des deux processeurs : la même famille de tests y
+prend 17,9 s par cas sur l'un et 9,9 s sur l'autre (1,80). L'écart qui reste
+entre les deux jobs est donc celui des runners, pas celui de la règle.
+
+À comparer, sur le même modèle de processeur lent (EPYC 7763) et le même
+jour : en un seul job, `pi-gate` a pris 25 min 31 s sur `develop` (run
+37710526918 : 4294 tests, 13 184 lignes et 2 934 branches jugées). Réparti,
+le verdict tombe 14 min 23 s après le début des tests, pour 4304 tests (les
+dix qu'ANH-183 ajoute), chacun exécuté une fois et une seule, et les mêmes
+13 184 lignes et 2 934 branches. Quand les deux runners sont rapides, l'ordre
+de grandeur est celui du job le plus court de ce run : 7 min 11 s, plus le
+verdict.
+
+Ce run exportait aussi `PYTHONUNBUFFERED=1` dans les trois jobs du Pi : la gate
+y est verte avec la variable, comme elle l'est sans (voir « Le lanceur ne
+laisse rien dans l'environnement des tests », plus haut). Sans la variable,
+l'exécution suivante de la PR donne les mêmes ordres de grandeur (run
+37713577185) : 12 min 50 s pour `pi (tests 1)`, de nouveau sur un EPYC 7763
+(2882 s de pytest cumulés, 717 à 724 s par part), 7 min 59 s pour
+`pi (tests 2)` sur un Xeon 6973P-C (1699 s, 416 à 437 s par part), et le
+verdict 14 min 21 s après le début des tests, sur les mêmes 4304 tests,
+13 184 lignes et 2 934 branches. Et quand les deux runners sont lents (run
+37715002510, EPYC 7763 et Xeon Platinum 8370C) : 12 min 50 s et 13 min 51 s,
+pour 2873 s et 3045 s de pytest cumulés, soit deux jobs chargés à 6 % près,
+et le verdict 16 min 15 s après le début des tests, dont 51 s d'attente d'un
+runner pour `pi-gate`. Après la remise à jour sur `develop` du 9 octobre
+(4404 tests, `src/signal_processing.py` sous le seuil : 13 383 lignes et
+2 998 branches), run 37914849627 : 9 min 13 s sur un Xeon 6973P-C (1959 s
+cumulés) et 13 min 03 s sur un EPYC 7763 (2881 s), verdict après 14 min 05 s.
+
+Limites, les mêmes que pour la table de la simulation :
+
+* `PI_SLOW_SECONDS` ne sert qu'à équilibrer. Un nom qui n'est plus collecté
+  est ignoré ; un nouveau test lent qui n'y figure pas est distribué par son
+  rang. Dans les deux cas la gate reste juste et devient moins équilibrée. Le
+  signe se lit dans le journal de chaque job : chaque processus affiche sa
+  durée et ses 25 tests les plus lents (`--durations=25`). Pour rafraîchir la
+  table, lire les durées de chaque test dans les fichiers
+  `quality-<parts>/junit-<part>.xml` des artefacts `pi-evidence-*` d'un run ;
+* la règle ne peut rien au processeur attribué à chaque runner, qui change
+  d'un job à l'autre : un job tombé sur un runner deux fois plus lent prend
+  deux fois plus de temps, et c'est lui que `pi-gate` attend.
+
+Pour reproduire la CI sur une seule machine, avec le même découpage :
+
+```sh
+PI_GATE_SHARES=0-7/8 PI_GATE_EVIDENCE=/tmp/pi-parts bash raspberry-pi/scripts/check.sh
+PI_GATE_COMBINE=8 PI_GATE_EVIDENCE=/tmp/pi-parts bash raspberry-pi/scripts/check.sh
+```
+
+Pour une seule part en échec, la 5 par exemple : `PI_GATE_SHARES=5-5/8`.
+
+Les tests du workflow (`scripts/ci/ci-workflow.test.mjs`) tiennent ce montage :
+chaque part nommée une fois et une seule, la condition et la première étape de
+`pi-gate`, ce que les jobs de tests publient et ce que `pi-gate` récupère, le
+refus par `check.sh` de deux modes à la fois. Les tests du lanceur
+(`scripts/ci/test_pi_gate_parallel.py`) couvrent les parts exécutées par des
+appels séparés (voir la section suivante) et la règle de partage du Pi : un
+test lent reconnu par son nom ou par un de ses cas, les tests lents distribués
+selon leur durée et tous les autres par leur rang, chaque test choisi par une
+part et une seule.
 
 ### Gate de simulation répartie (ANH-184)
 
@@ -1379,11 +1604,12 @@ des durées, au début de cette section 15).
 
 La batterie est maintenant coupée en 13 parts. Le lanceur et le greffon sont
 ceux de la gate Pi (`scripts/ci/pi_gate_parallel.py` et
-`scripts/ci/pi_gate_shard.py`, voir la section précédente) : chaque part est un
+`scripts/ci/pi_gate_shard.py`, voir
+[Gate Pi en parallèle](#gate-pi-en-parallèle-anh-72)) : chaque part est un
 processus pytest indépendant qui collecte toute la suite, n'exécute que ses
 tests, écrit ce qu'il a collecté et exécuté, et mesure sa propre couverture.
-Deux choses changent par rapport à la gate Pi : les parts sont exécutées par
-plusieurs jobs, et la règle de partage est celle de la simulation.
+Les parts sont exécutées par plusieurs jobs, ce que la gate Pi fait aussi
+depuis ANH-183, et la règle de partage est celle de la simulation.
 
 | Job | Parts | Ce qu'il exécute |
 |---|---|---|
@@ -1605,6 +1831,40 @@ Le journal du job `changes` donne la raison, par exemple `path rule: python
 gates run: raspberry-pi/src/units.py (python)` ou `path rule: python gates
 skipped: none of the 3 changed files can affect them`.
 
+### Ce que le job docs lance à chaque exécution (ANH-183)
+
+`docs` est une vérification obligatoire, et la règle de chemins ne la saute
+jamais. Deux sortes de tests y tournent pour cette raison, en plus des
+contrôles de la documentation :
+
+* **les tests de ce qui décide les gates** : `gates-for-changes.test.mjs`,
+  `ci-workflow.test.mjs`, `analysis-workflows.test.mjs`,
+  `deploy-workflows.test.mjs`, `quality-report.test.mjs` et
+  `convex-generated-api.test.mjs`, tous dans
+  `scripts/ci`. Ils tournaient dans `changes`, que la protection de branche
+  n'exige pas : un test de workflow en échec n'empêchait aucune fusion. Ils
+  n'installent rien et lisent les fichiers comme du texte. `changes` ne
+  lance plus aucun test : il ne fait que répondre. La règle qu'il applique
+  reste celle de la PR elle-même ; si la PR la casse, `docs` rougit ;
+* **le test qui lit tout le dépôt**, `lib/legacyModeReferences.test.ts` : il
+  cherche les noms de l'ancien mode d'enregistrement ECG dans chaque fichier
+  texte, Python et documentation compris. `web` le lance avec les tests de
+  `lib/`, mais la règle saute `web` sur une PR qui ne change que de la
+  documentation ou du Python : un nom retiré pouvait y revenir sans être vu
+  avant le push sur `develop`. `docs` installe donc Node 24 et les
+  dépendances (`npm ci`) à la fin, après ses contrôles qui n'installent
+  rien, puis lance ce seul fichier
+  (`npm run test:lib -- lib/legacyModeReferences.test.ts`). C'est le seul
+  test de cette sorte relevé le 8 octobre 2026 : les autres tests du site et
+  de Convex ne lisent que leurs propres dossiers, ou `contracts/`, dont tout
+  changement lance toutes les gates ; côté Python, `test_pi_install.py` lit
+  `docs/pi-image.md` et `.github/`, qui les lancent toutes aussi.
+
+`scripts/ci/ci-workflow.test.mjs` tient les deux : chaque fichier de test de
+`scripts/ci` est lancé par une étape, et une seule, d'un job obligatoire sans
+condition (`docs` ou `audit`), que rien n'adoucit ; `docs` lance le test du
+dépôt entier après avoir installé ce qu'il lui faut.
+
 ### Analyse statique externe : CodeQL (ANH-196)
 
 Un workflow séparé de `ci.yml`, `.github/workflows/codeql.yml`, fait analyser
@@ -1627,9 +1887,10 @@ l'audit des dépendances.
 analyse par SonarQube Cloud. Le chef de projet a décidé le 7 octobre 2026 de
 ne garder que CodeQL : avec l'offre gratuite pour dépôt public, le tableau de
 bord de SonarQube Cloud est public, constats de sécurité compris, alors que les
-résultats de CodeQL ne sont lisibles que par les personnes qui ont accès au
-dépôt. Le dépôt ne contient donc ni workflow, ni configuration, ni secret pour
-SonarQube Cloud.
+résultats de CodeQL ne sont lisibles que par les personnes qui ont un droit
+d'écriture sur le dépôt : le dépôt est public, y avoir accès ne suffit pas. Le
+dépôt ne contient donc ni workflow, ni configuration, ni secret pour SonarQube
+Cloud.
 
 **Périmètre.** CodeQL laisse de côté ce qui est généré, installé, ou n'est pas
 du code : `convex/_generated`, `node_modules`, les environnements virtuels
@@ -1759,7 +2020,7 @@ la tête de `main` par le passage hebdomadaire. Conséquences :
   le script la lit aussi. Rouge, elle fait refuser `prepare` et `pr`.
 
 **Tests.** `scripts/ci/analysis-workflows.test.mjs` est lancé par le job
-`changes` de `ci.yml` à chaque exécution, avec les autres fichiers de test
+`docs` de `ci.yml` à chaque exécution, avec les autres fichiers de test
 de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
 pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
 complet (celle de checkout sur le même commit que `ci.yml`), une seule
@@ -1855,7 +2116,7 @@ de Node n'est utilisée. Aucun cache n'est restauré dans un déploiement. Les
 actions sont celles de `ci.yml`, épinglées sur les mêmes commits, avec pour
 seules entrées celles que le test connaît.
 
-**Tests.** `scripts/ci/deploy-workflows.test.mjs` est lancé par le job `changes`
+**Tests.** `scripts/ci/deploy-workflows.test.mjs` est lancé par le job `docs`
 à chaque exécution, avec les autres fichiers de test de la CI. Il lit les deux
 workflows comme du texte et **exécute les scripts de leurs étapes comme le
 ferait le runner**, avec un double à la place de la CLI Vercel : aucun test
@@ -1936,11 +2197,11 @@ tableau tel qu'il est affiché.
 
 | Ligne | Ce qui y est compté | Gate affichée |
 |---|---|---|
-| Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, job `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
+| Console du Pi (tout `src/`) | les tests Python de `raspberry-pi/tests` (pytest, ses huit parts réunies par `pi-gate`) et les tests JavaScript du panneau local, `raspberry-pi/tests/web` (`node --test`, job `web`). La couverture affichée est celle de tout `raspberry-pi/src/`, pas celle de la chaîne de sécurité, donnée à part | `pi-gate` |
 | Simulation | la batterie de `simulation/tests` (pytest, ses 13 parts réunies) | `simulation-gate` |
 | Convex | `convex/**/*.test.ts` (vitest) | `convex-tests` |
 | Site | les tests de `lib/`, puis ceux de `hooks/`, de `components/` et des pages de `app/` (vitest, deux suites) | `web` |
-| Scripts | les tests de `scripts/ci` lancés par `changes`, `audit` et `docs` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
+| Scripts | les tests de `scripts/ci` lancés par `docs` et `audit` (`node --test`), et ceux du lanceur des gates Python lancés par `pi-gate` (pytest) | `changes`, `audit`, `docs` |
 
 Sous le tableau, une ligne donne l'état d'`audit` et de `docs`, sans rien de ce
 qu'ils ont trouvé, puis trois parties : « Seuils de couverture, chaîne de
@@ -1955,7 +2216,7 @@ avec le job qui la lance) et « Lire ce rapport ».
 | Réussis | ceux qui ont réussi | idem |
 | Échoués | ceux qui ont échoué, en gras dès qu'il y en a un ; leurs noms sont dans le détail du job | idem |
 | Ignorés | les tests sautés par un marqueur (`skip`) et les défauts connus déclarés (`xfail`), qui ne sont ni des réussites ni des échecs | idem |
-| Durée cumulée | la somme des durées de chaque test, tous processus confondus. Ce n'est pas le temps d'attente : `pi-gate` répartit ses tests sur quatre processus, la simulation sur quatre jobs | idem |
+| Durée cumulée | la somme des durées de chaque test, tous processus confondus. Ce n'est pas le temps d'attente : le Pi répartit ses tests sur huit processus et deux jobs, la simulation sur quatre jobs | idem |
 | Lignes couvertes | la part des lignes exécutées par les tests, sur tous les fichiers source du projet, y compris ceux qu'aucun test ne charge | `coverage json` de coverage.py pour le Pi et la simulation, `coverage-final.json` de vitest pour Convex et le site |
 | Branches couvertes | la part des branches prises (chaque issue d'un `if`, d'un `match`, d'un opérateur ternaire) | idem |
 | Lint | l'état des contrôles de style : ruff (`check` et `format`) pour le Pi, la simulation et les fichiers Python des scripts, ESLint pour Convex, le site et les scripts | les étapes enregistrées par `check.sh`, et le résultat de l'étape `npm run lint` du job `web` |
@@ -2140,12 +2401,18 @@ pourcentage se calcule, il n'est pas stocké.
   gate. Sans la variable, les deux scripts se comportent comme avant.
 - `scripts/ci/quality-report.mjs job <projet>` lit ces fichiers dans le job,
   écrit le détail du job et `part.json` ; l'artefact `quality-<projet>` les
-  porte jusqu'au dernier job. Pour le Pi, il lit aussi la liste
+  porte jusqu'au dernier job. Pour le Pi comme pour la simulation, les tests
+  tournent dans d'autres jobs que celui qui juge : chacun laisse ses fichiers
+  JUnit et l'état de ses contrôles dans un dossier `quality-<parts>` de son
+  artefact `pi-evidence-*` ou `simulation-evidence-*`, que la gate lit avec
+  `--parts`. Un contrôle lancé par plusieurs jobs compte une fois, en échec
+  s'il a échoué dans l'un d'eux. Pour le Pi, il lit aussi la liste
   `coverage_pending` de `raspberry-pi/pyproject.toml`, comme du texte (rien
   n'est installé pour lire du TOML) : une liste de chaînes simples, sur une ou
   plusieurs lignes, commentaires admis. Écrite autrement, elle est dite
-  « indisponible ». `changes`, `audit` et `docs` publient seulement le fichier
-  JUnit de leurs tests de scripts.
+  « indisponible ». `audit` et `docs` publient seulement les fichiers JUnit
+  de leurs tests de scripts ; `changes` ne lance plus de test et ne publie
+  rien.
 - `scripts/ci/quality-report.mjs report`, dans `quality-report`, réunit le tout
   avec l'état de chaque job.
 
@@ -2172,7 +2439,7 @@ une espace ou quelques signes sans effet est écrit comme une référence de
 caractère. Un nom ne peut donc ni fermer une cellule, ni produire un lien, une
 image, une mention ou une balise.
 
-**Tests.** `scripts/ci/quality-report.test.mjs` (job `changes`, sans
+**Tests.** `scripts/ci/quality-report.test.mjs` (job `docs`, sans
 installation) nourrit l'outil avec des fichiers écrits comme les outils les
 écrivent : toutes les gates vertes, une gate sautée par la règle de chemins,
 une gate en échec, un artefact absent, une exécution dont on ne sait rien. Il
@@ -2279,7 +2546,7 @@ du site sous le seuil, c'est ajouter son nom à la suite qui lance ses tests
 libellé du rapport suivent.
 
 **Comment c'est appliqué.** Dans chaque job, les tests tournent d'abord sans
-mesure (`npm run test:convex` ; `npm run test:ecg` puis `npm run test:site`).
+mesure (`npm run test:convex` ; `npm run test:lib` puis `npm run test:site`).
 Ce sont les commandes des développeurs : elles ne mesurent rien et restent
 aussi rapides qu'avant. Une étape « Enforce the coverage … » relance ensuite
 les mêmes tests avec la mesure. Vitest compare lui-même le résultat au seuil
@@ -2316,8 +2583,8 @@ Error: Coverage threshold without an object (scripts/ci/coverage-thresholds.mjs)
 ```
 
 Le contrôle est donc dans l'étape qui applique le seuil, dans les jobs
-obligatoires `convex-tests` et `web`, et non dans le seul job `changes`, qui
-n'est pas une vérification obligatoire. Pour Convex, `npm run test:convex`
+obligatoires `convex-tests` et `web`, et pas seulement dans les tests du
+workflow. Pour Convex, `npm run test:convex`
 lit la même configuration : il s'arrête lui aussi, avec le même message.
 Observé en local le 7 octobre 2026 avec un nom changé dans la liste : avant
 ce contrôle, `npm run coverage:convex` rendait 0 sans rien dire ; avec lui,
@@ -2414,7 +2681,7 @@ sur `develop` qui les précède (37637092583) :
 | `convex-tests` | `npm run test:convex` | 6 s (954 tests) | 6 s | 6 s (1 044 tests) |
 | `convex-tests` | mesure de la couverture | 7 s, sans seuil | 6 s | 7 s, avec le seuil |
 | `convex-tests` | le job entier | 49 s | 45 s | 47 s |
-| `web` | `npm run test:ecg` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
+| `web` | `npm run test:lib` | 1 s (102 tests) | 1 s | 2 s (172 tests) |
 | `web` | `npm run test:site` | 9 s (227 tests) | 10 s | 17 s (1 132 tests) |
 | `web` | mesure de la couverture | 14 s, deux exécutions sans seuil | 13 s | 22 s, une exécution avec le seuil |
 | `web` | le job entier | 105 s | 77 s | 127 s |
@@ -2447,8 +2714,8 @@ dossier vide ou ne contenant que des tests), et `ci-workflow.test.mjs`
 vérifie que les deux configurations l'appellent, avant de se définir et sans
 l'adoucir.
 
-Ces tests lisent des fichiers : ils ne lancent pas Vitest (le job `changes`
-n'installe rien). Que la commande échoue réellement sous le seuil a été
+Ces tests lisent des fichiers : ils ne lancent pas Vitest (l'étape de `docs`
+qui les lance n'installe rien). Que la commande échoue réellement sous le seuil a été
 vérifié à la main le 7 octobre 2026, avec les commandes ci-dessus et l'option
 `--exclude` de Vitest pour retirer des tests : le site sans les tests de
 `components/modals/` ni de `components/ui/` (41,0 % de lignes, 47,4 % de
@@ -2531,16 +2798,19 @@ branche a avancé (voir
 
 ### Tests unitaires du site
 
-`npm run test:ecg` lance les tests de `lib/` (configuration
-`vitest.ecg.config.mts`, environnement Node), `npm run test:site` ceux de
+`npm run test:lib` lance les tests de `lib/` (configuration
+`vitest.lib.config.mts`, environnement Node), `npm run test:site` ceux de
 `hooks/`, de `components/` et des pages de `app/` (`vitest.site.config.mts`).
 Aucune des deux ne
 mesure la couverture : `npm run coverage:site` lance les deux ensemble avec la
 mesure et son seuil (voir
-[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le nom du script date de la
-bibliothèque ECG du navigateur que ces tests couvraient ; elle a été retirée
-avec l'ancien mode d'enregistrement ECG, et la CI appelle toujours le script
-sous ce nom.
+[Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)). Le premier
+script s'appelait `test:ecg` jusqu'à ANH-183, et sa configuration
+`vitest.ecg.config.mts` : le nom datait de la bibliothèque ECG du navigateur
+que ces tests couvraient, retirée avec l'ancien mode d'enregistrement ECG.
+Un test du workflow (`scripts/ci/ci-workflow.test.mjs`) vérifie que chaque
+`npm run <script>` cité dans la documentation ou dans un workflow existe dans
+`package.json` : un ancien nom recopié fait échouer `docs`.
 
 Les règles des fenêtres du site et les bornes de fraîcheur ont leurs fichiers,
 décrits dans les deux sections suivantes. Deux autres gardent le retrait de
@@ -2587,7 +2857,7 @@ retrait : `raspberry-pi/tests/test_legacy_recorder_retired.py` (gate du Pi) et
 
 ### Règles des fenêtres du site, sans navigateur
 
-`npm run test:ecg` exécute tous les fichiers `lib/**/*.test.ts`. En plus du
+`npm run test:lib` exécute tous les fichiers `lib/**/*.test.ts`. En plus du
 test du retrait de l'ancien mode ECG, il couvre donc les règles qu'une fenêtre
 du site applique avant d'appeler Convex, extraites en fonctions pures dans
 `lib/` pour être testées sans navigateur. Ces tests ne montent aucun composant : le parcours à l'écran
@@ -2605,11 +2875,11 @@ L'horloge du Pi est décalée elle aussi : de 4 s, sans effet ; de 12 s, 25 s
 ou 10 min, le panneau affiche le bandeau des mesures qui ne sont pas datées
 de maintenant, et aucune valeur :
 
-- `lib/server-clock.test.ts` (`npm run test:ecg`, comme tous les tests de
+- `lib/server-clock.test.ts` (`npm run test:lib`, comme tous les tests de
   `lib/`) : l'heure du serveur reconstituée à partir de `serverNow` et du temps
   compté, horloge du poste décalée, reculée, avancée, poste en veille, réponse
   déjà vue par un autre composant ;
-- `lib/training.test.ts` (`npm run test:ecg`) fixe les bornes de `isFresh`
+- `lib/training.test.ts` (`npm run test:lib`) fixe les bornes de `isFresh`
   (dont le refus d'une date du futur au-delà de la tolérance), celles de
   `datedAfterReception` (un point daté après sa propre réception), les deux
   seuils et le statut affiché ;
@@ -2697,7 +2967,7 @@ retour des mutations, chacun une seule fois :
   dans un fichier qui appelle une mutation un `catch` vide ou réduit à des
   appels `console`. C'est une lecture de texte, pas une analyse du programme :
   elle ne suit pas une erreur avalée dans un autre fichier ;
-- `lib/machineForm.test.ts` (`npm run test:ecg`, comme tous les tests de
+- `lib/machineForm.test.ts` (`npm run test:lib`, comme tous les tests de
   `lib/`) vérifie que l'étape « liste des gestionnaires » de la fenêtre machine
   rend la réponse de la mutation, donc un refus que le hook rapporte sans lever
   d'exception.
@@ -2715,7 +2985,7 @@ d'ANH-83.
 
 Pour tenir le seuil de 80 %, chaque composant de `components/`, chaque hook et
 chaque règle de `lib/` a ses tests. Ils tournent avec `npm run test:site`
-(`hooks/`, `components/`) et `npm run test:ecg` (`lib/`), sans navigateur. Ils
+(`hooks/`, `components/`) et `npm run test:lib` (`lib/`), sans navigateur. Ils
 n'utilisent aucune bibliothèque de DOM et n'ajoutent aucune dépendance.
 
 **Quel test va sur quel document.** Le dépôt a deux documents de test, et un
@@ -3011,7 +3281,7 @@ local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
 sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
 [convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
 acquisition comprise, reste ANH-164 : aucun job vide ne la simule. L'étape
-nocturne de `pi-gate` ne juge que l'enregistrement de séance (ANH-128) : une
+nocturne de `pi (tests 1)` ne juge que l'enregistrement de séance (ANH-128) : une
 journée simulée de séances avec l'écrivain actif, sans le calcul de
 l'acquisition. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
 Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni

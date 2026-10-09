@@ -57,6 +57,7 @@ from pi_gate_parallel import (
 from pi_gate_shard import (
     ALONE_IN_PROCESS_ZERO,
     OTHER_SECONDS,
+    PI_SLOW_SECONDS,
     SAME_PROCESS,
     SLOW_SECONDS,
     Share,
@@ -64,6 +65,8 @@ from pi_gate_shard import (
     given,
     parse_share,
     parse_suite,
+    pi_owners,
+    pi_seconds,
     restore_environment,
     restore_import_path,
     shared_run,
@@ -289,6 +292,117 @@ def test_pinned_tests_all_go_to_process_zero_whatever_their_position(tmp_path: P
     for position in range(8):
         for nodeid in SAME_PROCESS:
             assert [share.index for share in shares if share.owns(position, nodeid)] == [0]
+
+
+SLOW_PI: Final[Mapping[str, Mapping[str, int]]] = {
+    "tests/test_long.py": {"test_whole_session": 60, "test_every_fault": 10},
+    "tests/test_phases.py": {"test_cut_short[recovery]": 37, "test_cut_short[hold]": 22},
+}
+"""A table shaped like the real one: a test alone, every case of one, two cases of another."""
+
+LONG: Final[str] = "tests/test_long.py::test_whole_session"
+FAULTS: Final[tuple[str, ...]] = tuple(
+    f"tests/test_long.py::test_every_fault[F{number}]" for number in range(12)
+)
+PHASES: Final[tuple[str, ...]] = tuple(
+    f"tests/test_phases.py::test_cut_short[{phase}]"
+    for phase in ("baseline", "warmup", "hold", "cooldown", "recovery")
+)
+
+
+def pi_suite() -> Sequence[str]:
+    """A collection of the Pi in which the slow tests follow one another, as they do for real."""
+    light = [f"tests/test_units.py::test_u{number}" for number in range(40)]
+    return [*light[:7], *FAULTS, LONG, *light[7:21], *PHASES, *sorted(SAME_PROCESS), *light[21:]]
+
+
+def test_a_slow_pi_test_is_known_by_its_name_or_by_one_of_its_cases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
+    assert pi_seconds(LONG) == 60
+    # A name without a parameter is every case of that test.
+    assert {pi_seconds(case) for case in FAULTS} == {10}
+    # A name with one is that case alone: the short cases of the same test are not listed.
+    assert [pi_seconds(case) for case in PHASES] == [0, 0, 22, 0, 37]
+    # The same name in another file, or another test of a listed file, is not listed.
+    assert pi_seconds("tests/test_other.py::test_whole_session") == 0
+    assert pi_seconds("tests/test_long.py::test_something_else") == 0
+    assert pi_seconds("tests/test_long.py::test_whole_session_twice[a]") == 0
+
+
+@pytest.mark.parametrize("count", [2, 4, 8])
+def test_the_slow_pi_tests_are_dealt_by_their_cost_and_every_other_by_its_position(
+    count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
+    nodeids = pi_suite()
+    owners = dict(zip(nodeids, pi_owners(nodeids, count), strict=True))
+
+    # Slowest first, each to the process with the least of them so far: 60, 37, 22, then the tens.
+    slowest = [LONG, PHASES[4], PHASES[2], *FAULTS]
+    assert [owners[nodeid] for nodeid in slowest[:count]] == list(range(count))
+    work = dict.fromkeys(range(count), 0)
+    for nodeid in slowest:
+        work[owners[nodeid]] += pi_seconds(nodeid)
+    assert sum(work.values()) == 60 + 37 + 22 + 12 * 10
+    # No process could give its heaviest slow test to the least loaded one and even them out.
+    assert max(work.values()) - min(work.values()) <= 60
+    if count == 2:
+        assert sorted(work.values()) == [119, 120]
+    # Dealt by their position, eight shares would have met the twelve tens two by two.
+    for position, nodeid in enumerate(nodeids):
+        if nodeid in SAME_PROCESS:
+            assert owners[nodeid] == 0
+        elif nodeid not in slowest:
+            assert owners[nodeid] == position % count, nodeid
+
+
+def test_without_a_slow_test_the_pi_is_dealt_by_position_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What the throwaway projects of this file rely on: none of their tests is listed."""
+    nodeids = [f"tests/test_lib.py::test_{number}" for number in range(9)] + sorted(SAME_PROCESS)
+    by_position = [0 if nodeid in SAME_PROCESS else n % 4 for n, nodeid in enumerate(nodeids)]
+    assert list(pi_owners(nodeids, 4)) == by_position
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", {})
+    assert list(pi_owners(pi_suite(), 4))[:7] == [0, 1, 2, 3, 0, 1, 2]
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4, 8])
+def test_every_pi_test_is_selected_by_exactly_one_share_the_slow_ones_included(
+    count: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("pi_gate_shard.PI_SLOW_SECONDS", SLOW_PI)
+    nodeids = pi_suite()
+    owners = pi_owners(nodeids, count)
+    assert len(owners) == len(nodeids)
+    assert set(owners) <= set(range(count))
+    shares = [Share(index=index, count=count, evidence=tmp_path) for index in range(count)]
+    chosen = [share.selects(nodeids) for share in shares]
+    for position, owner in enumerate(owners):
+        assert [share.index for share in shares if chosen[share.index][position]] == [owner]
+
+
+def test_the_table_of_slow_pi_tests_is_one_the_dealing_reads() -> None:
+    """The real table: its shape, and that its tests alone leave eight shares even."""
+    assert PI_SLOW_SECONDS, "the table is empty: every test would be dealt by position again"
+    nodeids: list[str] = []
+    for file, tests in PI_SLOW_SECONDS.items():
+        assert re.fullmatch(r"tests/test_\w+\.py", file), file
+        for test, seconds in tests.items():
+            assert re.fullmatch(r"test_\w+(\[.+\])?", test), test
+            assert seconds >= 10, (
+                f"{file}::{test}: the table holds the tests of ten seconds or more"
+            )
+            assert pi_seconds(f"{file}::{test}") == seconds
+            nodeids.append(f"{file}::{test}")
+    assert len(nodeids) == len(set(nodeids))
+    work = dict.fromkeys(range(8), 0)
+    for nodeid, owner in zip(nodeids, pi_owners(nodeids, 8), strict=True):
+        work[owner] += pi_seconds(nodeid)
+    heaviest = max(pi_seconds(nodeid) for nodeid in nodeids)
+    assert max(work.values()) - min(work.values()) <= heaviest, work
 
 
 @pytest.mark.parametrize("text", ["", "4", "a/b", "4/4", "5/4", "0/0", "-1/4", "1/4/2"])
