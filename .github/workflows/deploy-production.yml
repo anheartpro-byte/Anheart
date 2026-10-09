@@ -9,8 +9,11 @@ run-name: 'Production (${{ inputs.project }}) : avec Convex, hors séance ; gate
 #
 # This one deploys the head of `main` to production: the site (Vercel project
 # `anheart`), the hosted simulation (project `anheart-simulation`), or both.
-# It starts from Actions, "Run workflow", and from nothing else. GitHub shows
-# that button only for a workflow file present on the default branch.
+# It starts from Actions, "Run workflow", and from one other place: the
+# release pipeline (release.yml), itself a button on `main`, calls it once for
+# the site and once for the simulation, after Convex, so that production is
+# deployed to Vercel by these jobs and by no copy of them. GitHub shows a
+# button only for a workflow file present on the default branch.
 #
 # What this button does NOT check, and says where it is pressed: that the
 # backend (Convex) is deployed in the same window, that no session is running,
@@ -40,6 +43,19 @@ on:
           - site et simulation
       confirmation:
         description: 'Le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance. Ce bouton ne vérifie pas que les gates du commit sont vertes. Pour confirmer, écrire le mot : production'
+        required: true
+        type: string
+  # The same two inputs, for the release pipeline. A called workflow sees the
+  # ref and the commit of its caller, and every guard below applies as it does
+  # behind the button: the branch, the confirmation word, the environment and
+  # its approval, the commit that must still be the head of `main`. No secret
+  # is declared here: each deployment job reads its own from its environment.
+  workflow_call:
+    inputs:
+      project:
+        required: true
+        type: string
+      confirmation:
         required: true
         type: string
 

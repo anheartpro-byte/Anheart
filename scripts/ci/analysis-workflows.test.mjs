@@ -113,6 +113,9 @@ test("CodeQL starts on pull requests, on pushes to develop and main and once a w
   // Once a week: the queries change even when the code does not.
   assert.match(HEAD, /^ {2}schedule:\n {4}- cron: '\d+ \d+ \* \* [0-6]'$/m);
   assert.match(HEAD, /^ {2}workflow_dispatch:$/m);
+  // And when the release pipeline calls it, on the commit of main it is about to publish: nothing is asked of the caller.
+  assert.match(HEAD, /^ {2}workflow_call:$/m);
+  assert.doesNotMatch(HEAD, /^ {2}workflow_call:\n {4}/m);
   assert.doesNotMatch(HEAD, /paths(-ignore)?:/, "a filtered workflow would leave a required check pending");
   // The events that hand a write token to a run started by a fork.
   assert.doesNotMatch(HEAD, /pull_request_target|workflow_run/);
@@ -121,12 +124,22 @@ test("CodeQL starts on pull requests, on pushes to develop and main and once a w
 test("the token of each run can only read, except to publish the CodeQL results", () => {
   assert.deepEqual(block(CODEQL, "permissions"), ["contents: read"]);
   assert.deepEqual(block(ANALYZE, "    permissions"), ["contents: read", "security-events: write"]);
-  // Counted over every workflow of the repository: one job writes, and only security events.
+  // Counted over every workflow of the repository. The results of CodeQL are published by the job
+  // above, and by the one job of release.yml that calls this workflow: a called workflow holds no
+  // more than its caller, which must grant what the analysis publishes with. The only other thing
+  // a job may write is the release tags (release.yml, scripts/ci/release-workflow.test.mjs).
   const all = readdirSync(join(root, WORKFLOWS)).filter((file) => /\.ya?ml$/.test(file));
-  assert.ok(all.includes("ci.yml") && all.includes("codeql.yml"), "the workflows were not listed");
+  assert.ok(all.includes("ci.yml") && all.includes("codeql.yml") && all.includes("release.yml"), "the workflows were not listed");
   const everywhere = all.map(workflow).join("\n");
-  assert.equal(everywhere.split(": write").length - 1, 1);
-  assert.equal(everywhere.split("security-events").length - 1, 1);
+  /** Every line of the workflows that grants a permission of this kind, as "file: what". @param {RegExp} granting */
+  const grants = (granting) =>
+    all.flatMap((file) => [...workflow(file).matchAll(granting)].map((match) => `${file}: ${match[1]}`)).sort();
+  assert.deepEqual(grants(/^ +([a-z-]+): write$/gm), ["codeql.yml: security-events", "release.yml: contents", "release.yml: security-events"]);
+  // The alerts are read by one job: the one of release.yml that stops a release while one is open.
+  assert.deepEqual(grants(/^ +security-events: ([a-z]+)$/gm), ["codeql.yml: write", "release.yml: read", "release.yml: write"]);
+  const caller = jobsOf(workflow("release.yml")).get("codeql") ?? "";
+  assert.equal(own(caller, "uses"), "./.github/workflows/codeql.yml");
+  assert.deepEqual(block(caller, "    permissions"), ["contents: read", "security-events: write"]);
   assert.doesNotMatch(everywhere, /write-all/);
   // No secret is read, and the checkout leaves no token in the Git configuration.
   assert.doesNotMatch(CODEQL, /secrets\./);

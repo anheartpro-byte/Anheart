@@ -25,6 +25,17 @@ machine a le droit de recevoir.
 > [deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
 > La fusion elle-même n'a encore été faite que dans les tests du script et en
 > simulation.
+>
+> **Pipeline de release (10 octobre 2026, ANH-219).** Après la fusion dans
+> `main`, un bouton fait le reste dans l'ordre : il teste tout, exige CodeQL
+> sans alerte ouverte, pose les tags, déploie Convex, puis le site et la
+> simulation, et dit comment mettre une machine à jour
+> ([La pipeline de release](#la-pipeline-de-release)). **Elle n'a jamais
+> tourné**, pas même à blanc : son bouton n'existe qu'une fois son fichier sur
+> `main`. Ce qui en est prouvé l'est par des tests qui lisent le workflow et
+> exécutent les scripts de ses étapes avec des doubles
+> ([section 7](#7-tests)) : ni un déploiement de Convex, ni un déploiement
+> Vercel, ni un tag poussé depuis GitHub Actions n'ont été essayés.
 
 Sommaire :
 
@@ -179,29 +190,31 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
    et le script calcule le changelog suivant sans que `develop` contienne ce
    commit ([section 4](#comment-le-changelog-est-construit)). `develop` garde
    son historique linéaire et ne reçoit aucun commit de fusion.
-7. **Poser les tags** dès que la CI de `main` est verte :
-   ```bash
-   scripts/release.sh tag
-   ```
-   Le script refuse si le commit de `develop` que `main` vient de recevoir ne
-   porte pas `agent-review/R1` réussi. Les tags sont poussés ensemble : `origin`
-   les prend tous, ou n'en prend aucun.
-8. **Déployer, dans la fenêtre fixée par la check-list.** Ni la fusion dans
-   `main` ni ce script ne déploient (pour la toute première fusion dans `main`,
-   voir la précaution de
-   [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)). Dans une
-   même fenêtre, **à un moment où aucune séance n'est en cours** : Convex
-   d'abord, à la main
-   ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), puis
-   **aussitôt** le site, par le bouton « Déployer en production (main) » de
-   l'onglet Actions
-   ([section 5.1](deploiement.md#51-comment-il-se-déploie)). La simulation
-   hébergée part du même bouton si elle a changé. Le bouton vient après les
-   tags de l'étape 7 : lancé avant, il peut les faire refuser
-   ([section 4](#les-boutons-de-déploiement-et-le-script)). Un bouton pour
-   Convex reste prévu par ANH-126.
-9. **Enregistrer les versions dans Convex** avec les lignes que `tag` a
-   affichées à l'étape 7 ([section 6](#6-enregistrer-la-version-dans-convex)).
+7. **Lancer la pipeline de release, à blanc d'abord**, dès que la CI de `main`
+   est verte : onglet **Actions**, « Release en production (main) »,
+   **Run workflow** sur `main`, la case « à blanc » cochée (elle l'est par
+   défaut). Elle teste tout sur le commit de `main`, exige CodeQL sans alerte
+   ouverte, puis dit quels tags seraient posés et ce qui serait déployé, sans
+   rien écrire nulle part ([La pipeline de release](#la-pipeline-de-release)).
+   Ni la fusion dans `main` ni un push ne déploient (pour la toute première
+   fusion dans `main`, voir la précaution de
+   [deploiement.md](deploiement.md#avant-et-après-larrivée-sur-main)).
+8. **La relancer pour de bon, dans la fenêtre fixée par la check-list**, à un
+   moment où **aucune séance n'est en cours** : **Run workflow**, case
+   décochée, le mot `production` dans le champ de confirmation. Après les deux
+   mêmes premières étapes, elle pose les tags par `scripts/release.sh tag`
+   (qui refuse si le commit de `develop` que `main` vient de recevoir ne porte
+   pas `agent-review/R1` réussi, et pousse les tags ensemble : `origin` les
+   prend tous, ou n'en prend aucun), déploie Convex, puis le site, puis la
+   simulation hébergée, et termine en disant comment mettre une machine à
+   jour. **Chacune de ces quatre écritures attend une approbation** : rester
+   devant la page, et approuver le site aussitôt Convex déployé. Pour un
+   premier déploiement en production, ce qui reste à faire à la main avant et
+   juste après Convex est dans
+   [deploiement.md, section 3.3](deploiement.md#33-vers-la-production).
+9. **Enregistrer les versions dans Convex** avec les lignes que l'étape 4 de
+   la pipeline écrit dans le résumé de l'exécution
+   ([section 6](#6-enregistrer-la-version-dans-convex)).
    Après le déploiement de Convex, pas avant : le registre est une table et
    une mutation de ce code, qui n'existent sur un déploiement qu'une fois ce
    code déployé.
@@ -209,6 +222,145 @@ seulement, par `git fetch`, ce que le clone sait de `origin`).
 Si `pr` ou `tag` échoue, rien n'est à défaire : `pr` ne crée que la PR, et
 `tag` ne garde aucun tag, ni dans le clone ni sur `origin`, quand il ne peut pas
 tous les poser. Corriger la cause et relancer. Pour `prepare`, voir ci-dessous.
+Pour la pipeline, voir [Échec et reprise](#échec-et-reprise).
+
+**À la main, sans la pipeline.** Les étapes 7 et 8 restent faisables depuis un
+poste, dans le même ordre : `scripts/release.sh tag`, puis Convex
+([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), puis
+aussitôt le site et la simulation par le bouton « Déployer en production
+(main) » ([section 5.1](deploiement.md#51-comment-il-se-déploie)). Le bouton
+vient après les tags : lancé avant, il peut les faire refuser
+([section 4](#les-boutons-de-déploiement-et-le-script)). C'est la voie de
+secours ; rien n'y vérifie que tout a été testé, ni que CodeQL est sans alerte.
+
+### La pipeline de release
+
+`.github/workflows/release.yml`, affichée « Release en production (main) »
+dans l'onglet Actions. Elle ne part que de son bouton, et refuse toute autre
+branche que `main`. Chaque étape attend la réussite de la précédente.
+
+| Étape | Jobs | Ce qu'ils font | Ce qu'ils peuvent écrire |
+|---|---|---|---|
+| 0. La demande | `request` | refuse une autre branche que `main` ; lit le mode (à blanc, ou réel si la case est décochée **et** le mot `production` saisi) ; refuse une release réelle si l'environnement GitHub `production` n'exige personne pour approuver ou n'est restreint à aucune branche | rien. Lit les réglages de l'environnement |
+| 1. Tout tester | `gates`, `install` | `gates` appelle `ci.yml` et `install` appelle `pi-install.yml`, tels quels, sur le commit de `main` | rien. Lisent le dépôt |
+| 2. CodeQL | `codeql`, `alerts` | `codeql` appelle `codeql.yml` (trois langages) ; `alerts` exige que chaque langage ait publié l'analyse de ce commit, puis refuse s'il reste une seule alerte ouverte pour `main` | `codeql` publie les résultats de l'analyse. `alerts` lit les alertes |
+| 3 à 6, à blanc | `dry-run` | à blanc seulement : dit quels tags seraient posés (par `scripts/release.sh tag --dry-run`, qui juge le commit comme le ferait l'étape 3), où Convex et les deux projets Vercel seraient déployés, et ce qui serait dit des machines | rien. Ni secret, ni environnement ; lit le dépôt et les vérifications du commit |
+| 3. Tags | `tags` | release réelle seulement, comme toutes les étapes qui suivent : pose les tags par `scripts/release.sh tag`, sur le commit testé | les tags : c'est le seul job du dépôt qui peut y écrire. Environnement `production` |
+| 4. Convex | `convex` | vérifie que la clé vise le déploiement de production, lance `npx convex deploy`, vérifie la version servie et le refus de l'API machine, puis écrit les lignes à enregistrer ([section 6](#6-enregistrer-la-version-dans-convex)) | le déploiement de production de Convex. Environnement `production` |
+| 5. Vercel | `vercel-site`, `site-answers`, `vercel-simulation`, `simulation-answers` | le site, puis la simulation, par les jobs de `deploy-production.yml` appelés une fois chacun ; après chacun, une vérification à l'adresse de production : le site sert la version du commit, la simulation sert la page du visualiseur du commit, octet pour octet, et sa liste de scénarios | les deux projets Vercel, par les jobs du bouton et leur environnement `production`. Les deux vérifications n'écrivent rien |
+| 6. Machines | `machines` | aucune action sur aucune machine : dit quelle version du Pi vient d'être taguée et comment mettre une console à jour à la main ([deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour)). La mise à jour à distance (ANH-116, ANH-168 à ANH-171) remplacera le contenu de ce job, pas sa place | rien. Lit le dépôt |
+
+**Ce que « tout tester » contient (étape 1).** Les jobs de `ci.yml` et de
+`pi-install.yml` eux-mêmes, pas une copie. Appelé depuis un lancement manuel,
+`ci.yml` ne saute aucune gate : la règle de chemins ne joue que sur une PR
+([framework-de-test.md](framework-de-test.md#15-ci)).
+
+| Job | Ce qu'il vérifie |
+|---|---|
+| `pi (tests 1)`, `pi (tests 2)`, puis `pi-gate` | lint et types de la console, ses tests en deux parts, puis leur combinaison : chaque test une fois, 100 % de branches sur la chaîne de sécurité |
+| `simulation (cohort)`, `simulation (battery 1)` à `(battery 3)`, `simulation (report)`, puis `simulation-gate` | l'extraction CAO, la cohorte, la batterie de scénarios, le rapport synthétique avec ses scénarios `dsp` (comme tout lancement manuel), puis leur combinaison : chaque test une fois, 100 % de branches |
+| `convex-tests` | les liaisons générées, les types, les tests des fonctions Convex et leur couverture (80 %, et 80 % sur chacun des trois fichiers de la chaîne de sécurité) |
+| `web` | types, lint, tests du panneau de la console, tests du site, construction du site, couverture (80 %) |
+| `audit` | dépendances npm et Python, secrets dans tout l'historique Git |
+| `docs` | liens et ancres, tests des workflows (dont ceux de cette pipeline), identifiants de menaces, tests de l'outillage de release, test qui lit tout le dépôt |
+| `pi-install` | l'installation du Pi de bout en bout dans une machine de remplacement, sur un runner arm64 ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) |
+
+Laissé de côté, exprès :
+
+- **l'endurance nocturne** de l'enregistrement de séance (une journée simulée,
+  jusqu'à 35 minutes) : elle ne tourne que sur le déclenchement nocturne de
+  `ci.yml`, qui la lance chaque nuit sur la tête de `main`. La même boucle
+  tourne quelques minutes simulées dans les tests du Pi de chaque exécution,
+  donc ici aussi ;
+- les tests marqués `hardware` : ils demandent le variateur et le BITalino
+  réels, et aucun runner n'en a ;
+- les tests du site dans un navigateur : ils n'existent pas encore (ANH-83) ;
+- le rejeu des séances réelles et la revue des menaces de la
+  [check-list](#5-la-check-list-de-release) : ce sont des preuves que la
+  personne joint à la PR de release, avant la fusion.
+
+`scripts/release.sh tag` exige en plus, à l'étape 3, que les six gates aient
+réussi **dans une autre exécution** que celle de la pipeline : celle du push sur
+`main` ([section 4](#la-pipeline-de-release-et-le-script)). La pipeline ne se
+porte pas garante d'elle-même.
+
+**CodeQL sans alerte (étape 2).** L'étape lit, par l'API de GitHub, les alertes
+de la référence `refs/heads/main`. Une alerte **ouverte** arrête la release.
+Une alerte **classée** (« Dismiss alert ») ne l'arrête pas : la règle du projet
+est qu'un constat ne se classe qu'après relecture, avec sa raison écrite
+([framework-de-test.md](framework-de-test.md#analyse-statique-externe--codeql-anh-196)).
+Leur nombre est écrit dans le résumé de l'exécution, pour que la personne qui
+approuve le voie. Rien de ce que dit une alerte n'est écrit dans le journal ni
+dans le résumé, qui sont publics : seulement des nombres. L'étape refuse aussi
+si l'un des trois langages n'a pas publié l'analyse du commit exact.
+
+**À blanc.** La case est cochée par défaut. Les étapes 1 et 2 tournent pour de
+bon ; aucun job des étapes 3 à 6 ne démarre ; le job `dry-run` parle pour eux.
+Il n'a ni secret ni environnement, et ne peut que lire. Il échoue là où une
+release réelle serait refusée par `scripts/release.sh tag` (avis indépendant
+absent, gate de `main` pas verte, changelog incomplet).
+
+**Une release réelle demande trois choses** : la case décochée, le mot
+`production`, et l'approbation de l'environnement `production`. GitHub demande
+cette approbation à chaque job qui passe par l'environnement, au moment où il
+doit démarrer : quatre fois dans une release (tags, Convex, site, simulation).
+Une approbation en attente n'expire qu'au bout de trente jours : ne pas laisser
+une release entre Convex et le site.
+
+**Un commit qui n'est pas une release est refusé.** Si aucune version du commit
+n'attend son tag et qu'aucun tag de release ne le désigne (un correctif fusionné
+dans `main` sans nouvelle version), l'étape 3 s'arrête (« Rien à publier ») et
+rien n'est déployé. Pour redéployer un projet Vercel sans release, le bouton
+« Déployer en production (main) » reste là.
+
+### Échec et reprise
+
+Tout échec arrête la chaîne : aucun job ne démarre après un job qui a échoué.
+**« Re-run failed jobs »** reprend à l'étape en échec : les étapes réussies ne
+sont pas refaites, et les tags ne sont pas posés deux fois. « Re-run all jobs »
+refait tout depuis l'étape 1, déploiements compris, sans retaguer non plus :
+l'étape 3 trouve les tags sur le commit et n'en pose aucun. Une reprise
+redemande les approbations des jobs qu'elle relance, et redéployer le même
+commit sur Convex ou sur Vercel ne change pas ce qui est servi.
+
+| Où la chaîne s'arrête | Ce qui est en place | Quoi faire |
+|---|---|---|
+| Étape 0, 1 ou 2 (demande refusée, test en échec, alerte ouverte) | Rien n'a été écrit | Corriger. Une panne passagère (runner, réseau) : « Re-run failed jobs ». Un défaut du code ou une alerte : une PR, donc un nouveau commit de `main` et une nouvelle exécution |
+| Étape 3, `scripts/release.sh tag` refuse | Aucun tag : il les pose tous ou aucun | Lire son message. Avis indépendant absent : le faire poser sur le candidat. Une vérification d'une **autre** exécution du même commit en échec ou en cours : voir [section 4](#la-pipeline-de-release-et-le-script). Puis « Re-run failed jobs » |
+| Les tags sont posés, Convex n'est pas déployé | Les tags sont sur `origin`, la production est inchangée | Rien n'est cassé : l'ancien site tourne contre l'ancien Convex. Corriger la cause (secret absent, « Mauvaise clé », schéma refusé par les données : `convex deploy` ne modifie alors rien), puis « Re-run failed jobs » : l'étape 4 repart, les tags ne sont pas retouchés |
+| Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si la reprise ne passe pas : déployer le site par le bouton « Déployer en production (main) », qui ne dépend pas de la pipeline |
+| Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs », ou le bouton de production avec `simulation` |
+| « Exécution périmée » | `main` a avancé depuis le lancement : la pipeline n'agit que sur la tête de `main` | Ne pas relancer cette exécution. Si les tags étaient déjà posés et qu'un déploiement manque : le faire à la main depuis le commit tagué ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), ou publier une nouvelle version |
+
+Deux releases ne tournent jamais en même temps : une seconde exécution, à blanc
+ou réelle, attend la fin de la première.
+
+### Retour arrière
+
+Aucun de ces gestes n'a été essayé sur ce dépôt.
+
+- **Site et simulation.** Dans Vercel, projet concerné, **Deployments** :
+  choisir le déploiement de production précédent et le promouvoir (« Promote
+  to Production », ou « Instant Rollback »). Rien n'est reconstruit : l'adresse
+  de production sert de nouveau l'ancien déploiement. L'ancien site tourne
+  alors contre le nouveau Convex : c'est pour cela que la règle suivante
+  existe.
+- **Convex.** Il n'y a pas de bouton de retour. **Entre deux releases, le
+  schéma n'évolue que par ajout** : des tables, des champs facultatifs, des
+  index. Le site de la release précédente continue alors de fonctionner contre
+  le nouveau Convex, et l'on peut revenir au code précédent en redéployant à la
+  main le commit du tag `cloud-X.Y.Z` précédent
+  ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)) :
+  `convex deploy` refuse le tout, sans rien modifier, si une donnée écrite
+  entre-temps ne respecte pas l'ancien schéma. Retirer une table ou un champ,
+  ou en durcir un, se fait dans une release ultérieure, une fois que plus rien
+  de déployé ne s'en sert. Une release qui ne peut pas tenir cette règle (une
+  migration de données) le dit dans sa check-list, et sa fenêtre prévoit le
+  retour.
+- **Tags.** Un tag poussé ne se déplace pas et ne se supprime pas : une release
+  défectueuse est suivie d'une nouvelle version.
+- **Machines.** Réinstaller à la main la version précédente, depuis son tag
+  ([deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour)).
 
 ### Si `prepare` échoue
 
@@ -324,7 +476,7 @@ ignoré, comme tout commit sans titre de ticket.
 | `prepare` | `origin/develop` et sa CI | une branche `release/…` (fichiers de version, `CHANGELOG.md`), une PR vers `develop` | `develop` n'est pas vert ; une version n'est pas `X.Y.Z` ou n'est pas supérieure à la version courante ; son tag existe déjà ; la version courante n'a pas son tag ; `--pi` sans `--pi-validation` ; l'arbre de travail a des modifications ; la branche `release/…` existe déjà avec un autre contenu ; un revert sans titre de ticket |
 | `prepare`, relancé avec des versions déjà écrites dans `develop` et sans tag | `origin/develop` et sa CI | une branche `release/…-changelog-<sha>` (`CHANGELOG.md` seul), une PR vers `develop` | `develop` n'est pas vert ; les sections citent déjà chaque PR de ticket (rien à changer) ; un revert sans titre de ticket |
 | `pr` | `origin/develop` et sa CI | la PR `develop` vers `main` | `develop` n'est pas vert ; aucune version de `develop` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; **`develop` contient une PR de ticket d'un composant que la section de sa version ne cite pas** ; un revert sans titre de ticket |
-| `tag` | `origin/main` et sa CI, et les statuts du commit de `develop` que `main` contient | les tags annotés, poussés tous ensemble | `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le dernier commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash, ou changelog complété pas encore dans `main`) ; **`main` contient une PR de ticket d'un composant que la section de sa version ne cite pas** ; un revert sans titre de ticket ; le commit de `develop` que `main` contient n'a pas `agent-review/R1` réussi |
+| `tag` | `origin/main` et sa CI, et les statuts du commit de `develop` que `main` contient | les tags annotés, poussés tous ensemble | `main` n'est plus au commit attendu (`--expect-commit`, passé par la pipeline) ; `main` n'est pas vert ; aucune version de `main` n'attend son tag ; une version n'a pas sa section dans `CHANGELOG.md` ; `main` ne contient pas le dernier commit de `develop` qui a écrit `CHANGELOG.md` (PR de release fusionnée en squash, ou changelog complété pas encore dans `main`) ; **`main` contient une PR de ticket d'un composant que la section de sa version ne cite pas** ; un revert sans titre de ticket ; le commit de `develop` que `main` contient n'a pas `agent-review/R1` réussi |
 
 Quand la reprise de `prepare` reçoit un autre `--pi-validation` que celui de
 la section, elle l'accepte : c'est ainsi qu'un niveau se corrige avant le tag.
@@ -435,6 +587,34 @@ attendre `tag`, ou le fait refuser s'il échoue. De même, entre `prepare` et la
 fusion de la release, ne pas lancer le bouton de préversion sur la tête de
 `develop`, ou attendre qu'il ait réussi.
 
+### La pipeline de release et le script
+
+La [pipeline de release](#la-pipeline-de-release) lance `tag` depuis un job de
+GitHub Actions, avec deux options qu'elle est seule à passer :
+
+| Option | Effet |
+|---|---|
+| `--expect-commit <SHA>` | `tag` refuse si `origin/main` n'est plus à ce commit, celui que la pipeline a testé : aucun tag ne va sur un commit qu'elle n'a pas testé. |
+| `--pipeline-run <numéro>` | Les vérifications de cette exécution de GitHub Actions ne sont pas jugées. Le job qui lance `tag` est lui-même une vérification du commit, en cours tant que le script tourne : sans cette option, `tag` se refuserait lui-même. Rien n'est perdu : les étapes précédentes de cette exécution ont dû réussir pour que ce job démarre. |
+
+Le reste ne change pas, et deux conséquences sont à connaître :
+
+- **Les six gates doivent avoir réussi dans une autre exécution**, celle que
+  le push sur `main` a lancée. Celles que la pipeline fait tourner à son étape 1
+  portent un autre nom (elles sont préfixées par celui de l'étape) et ne sont
+  pas comptées : si la CI du push sur `main` a échoué ou tourne encore, `tag`
+  refuse, même après une étape 1 réussie. Relancer les jobs en échec de cette
+  CI, puis « Re-run failed jobs » sur la pipeline.
+- **Une autre exécution de la pipeline sur le même commit est jugée comme tout
+  le reste.** Une exécution à blanc réussie ne gêne pas : ses jobs des étapes 3
+  à 6 sont ignorés (`skipped`). Une exécution en échec, annulée ou encore en
+  cours fait refuser `tag`. Avant une release réelle, faire réussir
+  l'exécution à blanc précédente (« Re-run failed jobs ») ou la supprimer
+  (« Delete workflow run »).
+
+Une exécution se reconnaît à l'adresse de ses vérifications
+(`.../actions/runs/<numéro>/job/...`).
+
 ### Comment le changelog est construit
 
 Le script lit les titres des commits de `develop` (premier parent) depuis le tag
@@ -495,11 +675,11 @@ la PR n'est pas fusionnée tant qu'une case est ouverte.
 - [ ] **Niveau de validation du Pi justifié.** Le niveau annoncé ci-dessus est
   celui que les revues enregistrées permettent ; au-dessus de `bench`, le
   compte rendu de la revue M5 ou M6 est joint.
-- [ ] **Fenêtre de déploiement fixée.** Le site ne se déploie plus à la
-  fusion. La date et l'heure du déploiement de Convex, puis du site par le
-  bouton « Déployer en production (main) », sont écrites ici : une même
-  fenêtre, à un moment où aucune séance n'est en cours, avec le nom de la
-  personne qui approuve.
+- [ ] **Fenêtre de déploiement fixée.** Rien ne se déploie à la fusion. La
+  date et l'heure de la release réelle par la pipeline « Release en production
+  (main) », qui pose les tags puis déploie Convex, le site et la simulation,
+  sont écrites ici : une même fenêtre, à un moment où aucune séance n'est en
+  cours, avec le nom de la personne qui approuve.
 
 ### Comment prouver chaque ligne
 
@@ -517,7 +697,7 @@ pour une première release.
 | Valeurs `[MED]` | `git grep -l '\[MED\]' origin/develop -- raspberry-pi/src convex` liste les fichiers concernés ; `git diff <base>..origin/develop -- <ces fichiers>` montre ce qui a changé. |
 | Verrous | `git diff <base>..origin/develop -- raspberry-pi/src/local_config.py raspberry-pi/.env.example raspberry-pi/.env.pi.example` ne change aucun des deux défauts, et les deux fichiers d'exemple portent `=false`. |
 | Niveau de validation | `bench` : cette check-list. Au-dessus : le compte rendu de revue. |
-| Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance et de celle qui approuve. Qu'aucune séance ne soit en cours se vérifie au moment de déployer, pas ici ([étape 8 du déroulé](#3-le-déroulé)). |
+| Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance la pipeline et de celle qui approuve ses quatre écritures. Qu'aucune séance ne soit en cours se vérifie au moment d'approuver le déploiement de Convex, pas ici ([étape 8 du déroulé](#3-le-déroulé)). |
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -557,6 +737,17 @@ exemple :
 {"component":"pi","version":"pi-0.1.0","validationLevel":"bench","releasedAt":1791331200000}
 ```
 
+L'étape 4 de la [pipeline de release](#la-pipeline-de-release) écrit les mêmes
+lignes dans le résumé de son exécution, une fois Convex déployé. Elle les lit
+sur les tags posés sur le commit : le composant et la version dans le nom du
+tag, le niveau du Pi dans son message, la date dans celle du tag. **La pipeline
+n'appelle pas la mutation** : elle est réservée au rôle `admin` et écrit qui a
+enregistré la ligne (`recordedBy`). L'appeler depuis la pipeline voudrait dire
+agir au nom d'un compte de personne, ou ajouter une fonction qui écrit ce
+registre sans compte : ni l'un ni l'autre n'est décidé
+([section 8](#8-limites-et-reste-à-faire)). L'enregistrement reste un geste
+d'admin.
+
 Aucune page du site n'appelle encore cette mutation, et elle n'a été appelée sur
 aucun déploiement : elle n'est prouvée que par les tests en mémoire. Elle
 n'existe sur un déploiement qu'une fois ce code déployé : d'où sa place dans le
@@ -582,6 +773,14 @@ npm run test:convex     # le registre, sa matrice d'autorisation, la règle, la 
 son `origin`, et remplace `gh` par un double : aucun test ne touche GitHub ni le
 dépôt réel. Il vérifie aussi les fichiers de version du dépôt, le pied de page
 du site, et que la check-list du modèle de PR est celle de ce document.
+
+La pipeline de release a son propre fichier,
+`scripts/ci/release-workflow.test.mjs`, lancé par le job `docs` avec les autres
+tests de workflow : il lit `release.yml` et exécute les scripts de ses étapes
+avec des doubles, dans des dépôts jetables
+([framework-de-test.md](framework-de-test.md#pipeline-de-release-anh-219)).
+**La pipeline elle-même n'est testée par rien** : elle n'existe comme bouton
+qu'une fois sur `main`, et la lancer pour de bon, c'est faire une release.
 
 La CI lance les deux. `npm run test:convex` est le job `convex-tests`. Le
 fichier de `npm run test:release` est une étape du job `docs`, choisi parce
@@ -628,7 +827,11 @@ n'a changé.
 | Refuser à la fusion, et non à la release, une PR de revert au titre par défaut | non outillé : le titre d'une PR peut changer après la CI ; le refus est fait par `scripts/release.sh` ([section 3](#un-revert-porte-un-titre-de-ticket)) |
 | Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
-| Déployer Convex par un bouton, comme le site et la simulation (ANH-198) | ANH-126 |
+| Lancer la pipeline de release une première fois, à blanc puis pour de bon : aucun de ses déploiements, ni son push de tags depuis GitHub Actions, n'a été essayé | le chef de projet, une fois la première release fusionnée dans `main` et les réglages de [deploiement.md, section 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main) faits |
+| Enregistrer les versions dans Convex depuis la pipeline, au lieu des lignes qu'elle écrit pour un admin ([section 6](#6-enregistrer-la-version-dans-convex)) | à décider : au nom de quel compte, ou par quelle fonction sans compte |
+| Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release : le garder, ou regrouper Convex et le site sous une seule approbation |
+| Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171 |
+| Déployer une préversion de Convex par PR, publier les rapports de test | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 
 [Sommaire](README.md) · [Déploiement](deploiement.md) · [Menaces](menaces.md) · [Roadmap](roadmap.md)

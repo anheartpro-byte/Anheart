@@ -1,0 +1,738 @@
+name: Release en production (main)
+
+# Shown in the list of runs and on the page where a stage is approved.
+run-name: "Release ${{ inputs.dry_run && 'à blanc' || 'RÉELLE' }} : tests, CodeQL, tags, Convex, Vercel, machines"
+
+# The release pipeline (docs/release.md, section 3; docs/deploiement.md,
+# section 5.5). One button, on `main`, that runs a whole release to production
+# in the order the product owner asked for, each stage blocking the next:
+#
+#   1. everything is tested on the exact commit of `main`: every gate of
+#      ci.yml, none skipped by the path rule, and the install of the Pi;
+#   2. CodeQL analyses that commit, then the run stops if one alert is open
+#      for `main`;
+#   3. the release tags are put by `scripts/release.sh tag`;
+#   4. Convex is deployed to production, then checked;
+#   5. the site, then the hosted simulation, are deployed to Vercel by the
+#      jobs of deploy-production.yml, each then checked;
+#   6. the machines: nothing is done to any of them yet (no over-the-air
+#      update exists), the stage says how one is updated by hand.
+#
+# Nothing here starts on a push: the only event is the button. GitHub shows
+# that button only for a workflow file present on the default branch, and the
+# first job refuses every ref but `main`.
+#
+# "À blanc" (dry run) is ticked by default. Stages 1 and 2 then run for real,
+# and one job, `dry-run`, says what stages 3 to 6 would do: it holds no
+# secret, goes through no environment and can only read. A real run needs the
+# box unticked AND the confirmation word AND the approval of the GitHub
+# environment `production`, asked again before each of its four writes (tags,
+# Convex, site, simulation). The jobs of stages 3 to 6 carry one condition,
+# the mode the first job worked out: nothing else starts them.
+#
+# A failure stops everything after it. "Re-run failed jobs" starts again at
+# the stage that failed: the stages before it are not run again, and the tags
+# are never put twice (docs/release.md, "Échec et reprise").
+#
+# What the repository settings must hold, set by hand (docs/deploiement.md,
+# section 5.5): the GitHub environment `production`, restricted to `main`,
+# with its approval rule, the four secrets of deploy-production.yml and the
+# deploy key of the production deployment of Convex.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "À blanc : les étapes 1 et 2 tournent pour de bon, les étapes 3 à 6 disent seulement ce qu'elles feraient. Décocher pour une release réelle."
+        required: true
+        type: boolean
+        default: true
+      confirmation:
+        description: "Release réelle seulement : elle pose les tags, puis déploie Convex, le site et la simulation en production. Hors de toute séance, dans la fenêtre fixée. Pour confirmer, écrire le mot : production"
+        required: false
+        type: string
+
+# Nothing by default: each job below is given what it needs, and no more.
+permissions: {}
+
+# One release at a time, dry or real: a second run waits for the first.
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DEPLOY_BRANCH: main
+  CONFIRMATION_WORD: production
+  # Where production is. The same names as the table of docs/deploiement.md,
+  # section 1 (scripts/ci/release-workflow.test.mjs compares them): changing
+  # what this pipeline takes for production is a reviewed change of this file.
+  CONVEX_PRODUCTION_DEPLOYMENT: clean-giraffe-153
+  SITE_URL: https://www.gauratechnologies.com
+  SIMULATION_URL: https://anheart-simulation.vercel.app
+  # The languages codeql.yml analyses: each must have published its analysis
+  # of the commit before the alerts are counted.
+  CODEQL_LANGUAGES: python javascript-typescript actions
+
+# No expression is written inside a script: what a script needs comes through
+# `env:`. A secret or the token of the run is handed to the steps that use it
+# and to no other: neither a checkout, nor an install of npm packages, nor a
+# step that only reads public addresses can read one. Nothing is cached. What
+# the logs and the summaries of a run say is public, like the repository: no
+# value of a secret, and nothing of what an alert of CodeQL says.
+
+jobs:
+  # Runs first and without the environment: a request that cannot be served
+  # is refused before anything is tested and before anyone is asked to
+  # approve. It works out the mode every later job is started by.
+  request:
+    name: 0. Vérifier la demande (release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      - name: Refuser toute autre branche
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" != "refs/heads/$DEPLOY_BRANCH" ]]; then
+            echo "Référence reçue : $REF"
+            echo "::error title=Mauvaise branche::Rien n'a été tagué ni déployé. Cette pipeline ne s'exécute que sur la branche $DEPLOY_BRANCH : relancer « Run workflow » en choisissant $DEPLOY_BRANCH dans « Use workflow from »."
+            exit 1
+          fi
+          echo "Branche acceptée : $DEPLOY_BRANCH"
+      # `real` is written in one place, below, and only for a box that reads
+      # exactly `false` with the word typed. Anything this step does not know
+      # stops the run here.
+      - name: Lire le mode demandé
+        id: mode
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          case "$DRY_RUN" in
+            true)
+              if [[ -n "$CONFIRMATION" ]]; then
+                echo "::notice title=À blanc::La case « à blanc » est cochée : le mot de confirmation est ignoré, rien ne sera tagué ni déployé."
+              fi
+              mode=dry
+              ;;
+            false)
+              if [[ "$CONFIRMATION" != "$CONFIRMATION_WORD" ]]; then
+                echo "::error title=Confirmation refusée::Rien n'a été tagué ni déployé. Pour une release réelle, décocher « à blanc » et écrire exactement le mot $CONFIRMATION_WORD dans le champ de confirmation."
+                exit 1
+              fi
+              mode=real
+              ;;
+            *)
+              echo "::error title=Mode illisible::Rien n'a été tagué ni déployé. La case « à blanc » ne vaut ni true ni false."
+              exit 1
+              ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Mode : $mode"
+      # The approval is a setting of the repository, not a line of this file:
+      # an environment without its rule would let every stage through. A real
+      # run is refused while the rule is not there; a dry run says so.
+      - name: Exiger la règle d'approbation de l'environnement production
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          missing=""
+          if ! rules="$(gh api "repos/$GITHUB_REPOSITORY/environments/production" --jq '[([.protection_rules[]? | select(.type == "required_reviewers") | (.reviewers // []) | length] | add // 0), (if .deployment_branch_policy == null then 0 else 1 end)] | @tsv')"; then
+            missing="il est introuvable ou illisible"
+          else
+            read -r reviewers restricted <<< "$rules"
+            if [[ ! "$reviewers" =~ ^[1-9][0-9]*$ ]]; then
+              missing="personne n'y est exigé pour approuver (« Required reviewers »)"
+            elif [[ "$restricted" != 1 ]]; then
+              missing="il n'est restreint à aucune branche (« Deployment branches and tags »)"
+            fi
+          fi
+          if [[ -z "$missing" ]]; then
+            echo "L'environnement production exige une approbation et est restreint à des branches choisies."
+          elif [[ "$MODE" == dry ]]; then
+            echo "::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, $missing. Voir docs/deploiement.md (section 5.5, étape 1)."
+          else
+            echo "::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : $missing. Voir docs/deploiement.md (section 5.5, étape 1)."
+            exit 1
+          fi
+      - name: Rappeler ce que fait cette exécution
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          {
+            if [[ "$MODE" == real ]]; then
+              echo "### Release RÉELLE : à lire avant d'approuver"
+              echo
+              echo "- Branche \`$DEPLOY_BRANCH\`, commit \`$GITHUB_SHA\`."
+              echo "- Après les tests (étape 1) et CodeQL (étape 2), cette exécution pose les tags, déploie Convex, puis le site, puis la simulation, en production. Chacune de ces quatre écritures attend une approbation."
+              echo "- Jamais pendant une séance : le vérifier avant d'approuver le déploiement de Convex, et approuver celui du site aussitôt après."
+              echo "- Convex est déployé avant toute console. C'est le bon ordre tant que la release garde la majeure du contrat machine ; si elle la change, mettre les consoles à jour d'abord, avant d'approuver le déploiement de Convex (docs/deploiement.md, section 3.4)."
+            else
+              echo "### Release à blanc"
+              echo
+              echo "- Branche \`$DEPLOY_BRANCH\`, commit \`$GITHUB_SHA\`."
+              echo "- Les étapes 1 (tests) et 2 (CodeQL) tournent pour de bon. Les étapes 3 à 6 disent seulement ce qu'elles feraient : rien n'est tagué, rien n'est déployé, aucune machine n'est touchée."
+              echo "- Pour une release réelle : relancer « Run workflow », décocher « à blanc » et écrire le mot \`$CONFIRMATION_WORD\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stage 1. The jobs of ci.yml and of pi-install.yml themselves, not copies
+  # of them. Called from a manual run, ci.yml skips no gate.
+  gates:
+    name: 1. Tout tester (gates de la CI)
+    needs: request
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  install:
+    name: 1. Tout tester (installation du Pi)
+    needs: request
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pi-install.yml
+
+  # Stage 2. The job that calls codeql.yml must itself hold what the analysis
+  # publishes with; the job after it can only read.
+  codeql:
+    name: 2. CodeQL (analyse de ce commit)
+    needs: [gates, install]
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  # An alert that was dismissed is not open: the rule of the project is that
+  # an alert is only dismissed after a review, with its reason written
+  # (docs/framework-de-test.md, "Traiter un constat"). They are counted and
+  # shown, never listed: what an alert says is not public.
+  alerts:
+    name: 2. CodeQL (aucune alerte ouverte)
+    needs: codeql
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      security-events: read
+    steps:
+      - name: Exiger l'analyse de ce commit et aucune alerte ouverte
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/$GITHUB_REPOSITORY/code-scanning"
+          ref="refs/heads/$DEPLOY_BRANCH"
+          refuse() {
+            echo "::error title=$1::Aucun tag n'est posé et rien n'est déployé. $2"
+            exit 1
+          }
+          if ! analysed="$(gh api "$api/analyses?ref=$ref&per_page=100" --jq 'if type == "array" then .[] else error("une liste était attendue") end | select(.tool.name == "CodeQL") | [.commit_sha, .category] | @tsv')"; then
+            refuse "Analyses illisibles" "La liste des analyses CodeQL de $DEPLOY_BRANCH n'a pas pu être lue."
+          fi
+          absent=()
+          for language in $CODEQL_LANGUAGES; do
+            grep -Fxq -- "$GITHUB_SHA"$'\t'"/language:$language" <<< "$analysed" || absent+=("$language")
+          done
+          if (( ${#absent[@]} > 0 )); then
+            refuse "Analyse absente" "CodeQL n'a pas publié l'analyse du commit $GITHUB_SHA pour : ${absent[*]}."
+          fi
+          count() {
+            local pages
+            pages="$(gh api --paginate "$api/alerts?ref=$ref&state=$1&per_page=100" --jq 'if type == "array" then length else error("une liste était attendue") end')" || return 1
+            awk '!/^[0-9]+$/ { bad = 1 } { total += $1 } END { if (bad || NR == 0) exit 1; print total }' <<< "$pages"
+          }
+          if ! open="$(count open)" || ! dismissed="$(count dismissed)"; then
+            refuse "Alertes illisibles" "Les alertes CodeQL de $DEPLOY_BRANCH n'ont pas pu être comptées."
+          fi
+          if (( open > 0 )); then
+            refuse "Alertes ouvertes" "CodeQL a $open alerte(s) ouverte(s) sur $DEPLOY_BRANCH. Les lire dans l'onglet Security, « Code scanning », branche $DEPLOY_BRANCH : leur contenu n'est pas écrit ici, ce journal est public."
+          fi
+          {
+            echo "### 2. CodeQL : aucune alerte ouverte sur \`$DEPLOY_BRANCH\`"
+            echo
+            echo "- Commit analysé : \`$GITHUB_SHA\` ($CODEQL_LANGUAGES)."
+            echo "- Alertes ouvertes : 0."
+            echo "- Alertes classées après relecture, qui ne bloquent pas : $dismissed. Elles se lisent dans l'onglet Security, pas ici."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Alertes ouvertes : 0. Alertes classées : $dismissed."
+
+  # Stages 3 to 6 of a dry run, in one job that can write nothing: it reads
+  # the repository, the checks and the statuses of the commit, holds no secret
+  # and goes through no environment. `scripts/release.sh tag --dry-run` judges
+  # the commit exactly as the real stage 3 would, and refuses as it would.
+  dry-run:
+    name: 3 à 6. À blanc (rien n'est écrit)
+    needs: [request, alerts]
+    if: ${{ needs.request.outputs.mode == 'dry' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+    env:
+      NOT_DEPLOYED: Rien ne serait tagué ni déployé
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          ref: refs/heads/main
+          fetch-depth: 0
+      - name: Refuser un commit qui n'est plus la tête de la branche
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error title=Exécution périmée::$NOT_DEPLOYED. Cette exécution a été lancée sur le commit $GITHUB_SHA, et la tête de $DEPLOY_BRANCH est maintenant $head. Ne pas la relancer : lancer une nouvelle exécution par « Run workflow »."
+            exit 1
+          fi
+          echo "Le commit $head est encore la tête de $DEPLOY_BRANCH."
+      - name: Lire les versions et les tags de ce commit
+        id: state
+        env:
+          HEADING: '3. Tags : ce qu''une release réelle ferait'
+        run: |
+          git fetch --quiet --tags origin
+          semver='^(pi|cloud|web)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          pending=0
+          here=0
+          lines=()
+          for tag in "$(< raspberry-pi/VERSION)" "$(< convex/VERSION)" "web-$(sed -n 's/^  "version": "\([^"]*\)",\{0,1\}$/\1/p' package.json | head -n 1)"; do
+            if [[ ! "$tag" =~ ^(pi|cloud|web)-[0-9A-Za-z.-]+$ ]]; then
+              echo "::error title=Version illisible::$NOT_DEPLOYED. Un des trois fichiers de version de ce commit ne porte pas une version (raspberry-pi/VERSION, convex/VERSION, package.json)."
+              exit 1
+            elif [[ ! "$tag" =~ $semver ]]; then
+              lines+=("- \`$tag\` : version de développement, sans tag.")
+            elif ! at="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+              pending=$((pending + 1))
+              lines+=("- \`$tag\` : attend son tag, à poser sur ce commit.")
+            elif [[ "$at" == "$GITHUB_SHA" ]]; then
+              here=$((here + 1))
+              lines+=("- \`$tag\` : tag déjà posé sur ce commit.")
+            else
+              lines+=("- \`$tag\` : tag d'une release précédente, sur le commit \`$at\`.")
+            fi
+          done
+          {
+            echo "### $HEADING"
+            echo
+            echo "Commit \`$GITHUB_SHA\`."
+            echo
+            printf '%s\n' "${lines[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if (( pending > 0 )); then
+            state=pending
+          elif (( here > 0 )); then
+            state=tagged
+            echo "Aucun tag à poser : ceux de cette release sont déjà sur ce commit."
+          else
+            echo "::error title=Rien à publier::$NOT_DEPLOYED. Aucune version de ce commit n'attend son tag, et aucun tag de release ne le désigne : ce commit de $DEPLOY_BRANCH n'est pas une release. Pour redéployer un projet Vercel sans release, utiliser le bouton « Déployer en production (main) »."
+            exit 1
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Dire quels tags scripts/release.sh poserait
+        if: ${{ steps.state.outputs.state == 'pending' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export GH_REPO="$GITHUB_REPOSITORY"
+          scripts/release.sh tag --dry-run --expect-commit "$GITHUB_SHA" --pipeline-run "$GITHUB_RUN_ID"
+      - name: Dire ce qui serait déployé, et ce qui serait dit des machines
+        run: |
+          {
+            echo "### 4 à 6. Ce qu'une release réelle ferait ensuite"
+            echo
+            echo "Rien de ce qui suit n'a été fait."
+            echo
+            echo "- **4. Convex** : \`npx convex deploy\` vers le déploiement de production \`$CONVEX_PRODUCTION_DEPLOYMENT\`, avec la clé de l'environnement GitHub \`production\`. Version attendue ensuite : \`$(< convex/VERSION)\`."
+            echo "- **5. Vercel** : le site (projet \`anheart\`), vérifié à $SITE_URL, puis la simulation hébergée (projet \`anheart-simulation\`), vérifiée à $SIMULATION_URL."
+            echo "- **6. Machines** : aucune action. La version du Pi de ce commit est \`$(< raspberry-pi/VERSION)\` ; une console se met à jour à la main (docs/deploiement.md, section 7.6)."
+            echo "- Une release réelle demande une approbation avant chacune de ses quatre écritures : les tags, Convex, le site, la simulation."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stage 3. The only job of the repository that may write to it, and what it
+  # writes is tags: `scripts/release.sh tag` puts them all on origin, or none.
+  # Run again once they are there, it finds them on this commit and puts
+  # nothing.
+  tags:
+    name: 3. Tags de release
+    needs: [request, alerts]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: production
+    permissions:
+      contents: write
+      checks: read
+      statuses: read
+    env:
+      NOT_DEPLOYED: Aucun tag n'a été posé
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          ref: refs/heads/main
+          fetch-depth: 0
+      - name: Refuser un commit qui n'est plus la tête de la branche
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error title=Exécution périmée::$NOT_DEPLOYED. Cette exécution a été lancée sur le commit $GITHUB_SHA, et la tête de $DEPLOY_BRANCH est maintenant $head. Ne pas la relancer : lancer une nouvelle exécution par « Run workflow »."
+            exit 1
+          fi
+          echo "Le commit $head est encore la tête de $DEPLOY_BRANCH."
+      - name: Lire les versions et les tags de ce commit
+        id: state
+        env:
+          HEADING: '3. Tags de release'
+        run: |
+          git fetch --quiet --tags origin
+          semver='^(pi|cloud|web)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          pending=0
+          here=0
+          lines=()
+          for tag in "$(< raspberry-pi/VERSION)" "$(< convex/VERSION)" "web-$(sed -n 's/^  "version": "\([^"]*\)",\{0,1\}$/\1/p' package.json | head -n 1)"; do
+            if [[ ! "$tag" =~ ^(pi|cloud|web)-[0-9A-Za-z.-]+$ ]]; then
+              echo "::error title=Version illisible::$NOT_DEPLOYED. Un des trois fichiers de version de ce commit ne porte pas une version (raspberry-pi/VERSION, convex/VERSION, package.json)."
+              exit 1
+            elif [[ ! "$tag" =~ $semver ]]; then
+              lines+=("- \`$tag\` : version de développement, sans tag.")
+            elif ! at="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+              pending=$((pending + 1))
+              lines+=("- \`$tag\` : attend son tag, à poser sur ce commit.")
+            elif [[ "$at" == "$GITHUB_SHA" ]]; then
+              here=$((here + 1))
+              lines+=("- \`$tag\` : tag déjà posé sur ce commit.")
+            else
+              lines+=("- \`$tag\` : tag d'une release précédente, sur le commit \`$at\`.")
+            fi
+          done
+          {
+            echo "### $HEADING"
+            echo
+            echo "Commit \`$GITHUB_SHA\`."
+            echo
+            printf '%s\n' "${lines[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if (( pending > 0 )); then
+            state=pending
+          elif (( here > 0 )); then
+            state=tagged
+            echo "Aucun tag à poser : ceux de cette release sont déjà sur ce commit."
+          else
+            echo "::error title=Rien à publier::$NOT_DEPLOYED. Aucune version de ce commit n'attend son tag, et aucun tag de release ne le désigne : ce commit de $DEPLOY_BRANCH n'est pas une release. Pour redéployer un projet Vercel sans release, utiliser le bouton « Déployer en production (main) »."
+            exit 1
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      # The token of the run reaches git through the environment of this one
+      # step: it is written neither in the configuration of the clone nor
+      # anywhere on the runner. The script refuses if `main` moved, and does
+      # not judge the checks of the run it is part of.
+      - name: Poser les tags par scripts/release.sh
+        if: ${{ steps.state.outputs.state == 'pending' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$basic"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
+          export GH_REPO="$GITHUB_REPOSITORY"
+          scripts/release.sh tag --expect-commit "$GITHUB_SHA" --pipeline-run "$GITHUB_RUN_ID"
+      - name: Exiger un tag de release sur ce commit
+        run: |
+          git fetch --quiet --tags origin
+          found="$(git for-each-ref --points-at "$GITHUB_SHA" --format='%(refname:short)' 'refs/tags/pi-*' 'refs/tags/cloud-*' 'refs/tags/web-*' | sort | tr '\n' ' ')"
+          if [[ -z "$found" ]]; then
+            echo "::error title=Tags absents::Aucun tag de release ne désigne le commit $GITHUB_SHA sur origin. Rien n'est déployé."
+            exit 1
+          fi
+          {
+            echo
+            echo "Tags de release sur ce commit, sur \`origin\` : $found"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags de release sur ce commit : $found"
+
+  # Stage 4. The deploy key is read from the environment `production`, by the
+  # three steps that need it. `npm ci` runs the install scripts of npm
+  # packages: it is not one of them.
+  convex:
+    name: 4. Convex en production
+    needs: [request, tags]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: production
+    permissions:
+      contents: read
+    env:
+      NOT_DEPLOYED: Convex n'a pas été déployé
+    steps:
+      # Before anything is installed. A deploy key says which deployment it
+      # opens (`prod:<name>|...`): that prefix is compared with the name this
+      # file takes for production. Nothing of the key is ever printed, not
+      # even what precedes its separator: a value that is not a key has none.
+      - name: Exiger une clé qui vise le déploiement de production attendu
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          if [[ -z "$CONVEX_DEPLOY_KEY" ]]; then
+            echo "::error title=Secret manquant::$NOT_DEPLOYED. Secret absent ou vide dans l'environnement GitHub de ce job : CONVEX_DEPLOY_KEY. Voir docs/deploiement.md (section 5.5)."
+            exit 1
+          fi
+          case "$CONVEX_DEPLOY_KEY" in
+            "prod:$CONVEX_PRODUCTION_DEPLOYMENT|"?*)
+              echo "La clé vise le déploiement de production attendu : $CONVEX_PRODUCTION_DEPLOYMENT."
+              exit 0
+              ;;
+            "prod:$CONVEX_PRODUCTION_DEPLOYMENT|") held="une clé coupée avant sa partie secrète" ;;
+            prod:*\|*) held="la clé de production d'un autre déploiement" ;;
+            dev:*\|*) held="une clé de développement" ;;
+            preview:*\|*) held="une clé de préversion" ;;
+            project:*\|*) held="une clé de projet" ;;
+            *) held="une valeur qui n'a pas la forme d'une clé de déploiement" ;;
+          esac
+          echo "::error title=Mauvaise clé::$NOT_DEPLOYED. Le secret CONVEX_DEPLOY_KEY de l'environnement GitHub de ce job ne vise pas le déploiement de production attendu ($CONVEX_PRODUCTION_DEPLOYMENT) : il contient $held. Voir docs/deploiement.md (section 5.5)."
+          exit 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          ref: refs/heads/main
+          fetch-depth: 0
+      - name: Refuser un commit qui n'est plus la tête de la branche
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error title=Exécution périmée::$NOT_DEPLOYED. Cette exécution a été lancée sur le commit $GITHUB_SHA, et la tête de $DEPLOY_BRANCH est maintenant $head. Ne pas la relancer : lancer une nouvelle exécution par « Run workflow »."
+            exit 1
+          fi
+          echo "Le commit $head est encore la tête de $DEPLOY_BRANCH."
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+      # The Convex command line comes from here, at the version the lockfile
+      # holds.
+      - name: Installer les dépendances du dépôt
+        run: npm ci
+      - name: Déployer Convex en production
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex deploy
+      # From here on Convex is deployed: a failure below says so, because the
+      # site is not deployed yet (docs/release.md, "Échec et reprise").
+      - name: Vérifier la version que sert le déploiement
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          expected="$(< convex/VERSION)"
+          if ! answered="$(npx convex run softwareReleases:deployedCloudVersion)" || [[ "$answered" != *"\"$expected\""* ]]; then
+            echo "::error title=Version inattendue::Convex a été déployé, mais le déploiement $CONVEX_PRODUCTION_DEPLOYMENT ne répond pas la version de ce commit ($expected). Le site n'est pas déployé : voir docs/release.md (« Échec et reprise »)."
+            exit 1
+          fi
+          echo "Le déploiement $CONVEX_PRODUCTION_DEPLOYMENT sert $expected."
+      # Without a key and without a browser: the machine API must refuse the
+      # way the contract of this commit says it refuses (401 and the stable
+      # code `unauthorized`). The backend that came before answers otherwise.
+      - name: Vérifier que l'API machine répond, sans clé
+        run: |
+          header="$(sed -n 's/^  "header": "\([^"]*\)",\{0,1\}$/\1/p' contracts/machine-api.json | head -n 1)"
+          contract="$(sed -n 's/^  "contract_version": "\([^"]*\)",\{0,1\}$/\1/p' contracts/machine-api.json | head -n 1)"
+          url="https://$CONVEX_PRODUCTION_DEPLOYMENT.convex.site/api/machine/training/poll"
+          status=none
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl --silent --show-error --max-time 30 --output "$RUNNER_TEMP/refusal.json" --write-out '%{http_code}' --header "$header: $contract" "$url" || true)"
+            if [[ "$status" == 401 ]] && grep -Eq '"error" *: *"unauthorized"' "$RUNNER_TEMP/refusal.json"; then
+              echo "L'API machine refuse une requête sans clé comme le contrat $contract le dit (401, unauthorized)."
+              exit 0
+            fi
+            echo "Essai $attempt : réponse $status."
+            sleep 10
+          done
+          echo "::error title=API machine muette::Convex a été déployé, mais $url ne refuse pas une requête sans clé comme le contrat $contract le dit (dernière réponse : $status). Le site n'est pas déployé : voir docs/release.md (« Échec et reprise »)."
+          exit 1
+      # The register of releases is a table of this code: a version is
+      # recorded once Convex is deployed, by an admin, by hand. The pipeline
+      # does not do it: the mutation acts in the name of a person.
+      - name: Dire ce qui est déployé, et ce qui reste à enregistrer à la main
+        run: |
+          semver='^(pi|cloud|web)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          records=()
+          while read -r tag at; do
+            [[ "$tag" =~ $semver ]] || continue
+            if [[ "$tag" == pi-* ]]; then
+              level="$(git for-each-ref --format='%(contents)' "refs/tags/$tag" | sed -n 's/^Niveau de validation : `\([a-z_]*\)`\.$/\1/p' | head -n 1)"
+              records+=("{\"component\":\"pi\",\"version\":\"$tag\",\"validationLevel\":\"${level:-à lire dans CHANGELOG.md}\",\"releasedAt\":${at}000}")
+            else
+              records+=("{\"component\":\"${tag%%-*}\",\"version\":\"$tag\",\"releasedAt\":${at}000}")
+            fi
+          done < <(git for-each-ref --points-at "$GITHUB_SHA" --format='%(refname:short) %(taggerdate:unix)' 'refs/tags/pi-*' 'refs/tags/cloud-*' 'refs/tags/web-*')
+          {
+            echo "### 4. Convex : déployé en production"
+            echo
+            echo "- Déploiement \`$CONVEX_PRODUCTION_DEPLOYMENT\`, version \`$(< convex/VERSION)\`, commit \`$GITHUB_SHA\`."
+            echo "- Le site n'est pas encore déployé : approuver l'étape 5 aussitôt."
+            echo "- **Reste à faire à la main** : enregistrer chaque version de cette release dans Convex, par un admin (mutation \`softwareReleases:recordRelease\`, docs/release.md, section 6). Un argument par version :"
+            echo
+            echo '```json'
+            printf '%s\n' "${records[@]}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stage 5. The site first, then the hosted simulation: the jobs of
+  # deploy-production.yml, called once each, so that there is one way to
+  # deploy production to Vercel. `secrets: inherit` hands that workflow, the
+  # same file at the same commit, no more than its own jobs read: each takes
+  # its four secrets from its environment, after its approval. The job that
+  # calls goes through no environment and reads none.
+  vercel-site:
+    name: 5. Vercel (site)
+    needs: [request, convex]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      project: site
+      confirmation: ${{ inputs.confirmation }}
+    secrets: inherit
+
+  # The address of a deployment is behind the login of Vercel: what is
+  # checked is the address production is served at. The page must carry the
+  # version of this commit, which the footer of the site shows.
+  site-answers:
+    name: 5. Vercel (le site répond)
+    needs: [request, vercel-site]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Vérifier que le site sert la version de ce commit
+        run: |
+          version="web-$(sed -n 's/^  "version": "\([^"]*\)",\{0,1\}$/\1/p' package.json | head -n 1)"
+          status=none
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl --silent --show-error --location --max-time 30 --output "$RUNNER_TEMP/site.html" --write-out '%{http_code}' "$SITE_URL/" || true)"
+            if [[ "$status" == 200 ]] && grep -Fq -- "$version" "$RUNNER_TEMP/site.html"; then
+              {
+                echo "### 5. Site : il répond"
+                echo
+                echo "- $SITE_URL sert \`$version\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "$SITE_URL sert $version."
+              exit 0
+            fi
+            echo "Essai $attempt : réponse $status, version $version absente de la page."
+            sleep 20
+          done
+          echo "::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais $SITE_URL ne sert pas $version (dernière réponse : $status). La simulation n'est pas déployée : voir docs/release.md (« Échec et reprise »)."
+          exit 1
+
+  vercel-simulation:
+    name: 5. Vercel (simulation)
+    needs: [request, site-answers]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      project: simulation
+      confirmation: ${{ inputs.confirmation }}
+    secrets: inherit
+
+  # The viewer page names its own script and its own style by their hash: a
+  # page that differs by one byte from the one of this commit is not the page
+  # of this commit. The list of scenarios is what the hosted engine answers.
+  simulation-answers:
+    name: 5. Vercel (la simulation répond)
+    needs: [request, vercel-simulation]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Vérifier que la simulation sert la page de ce commit
+        run: |
+          page="$SIMULATION_URL/viewer/index.html"
+          list="$SIMULATION_URL/api/scenarios"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --location --max-time 30 --output "$RUNNER_TEMP/viewer.html" "$page" &&
+              cmp -s "$RUNNER_TEMP/viewer.html" simulation/viewer/index.html &&
+              curl --silent --show-error --fail --location --max-time 60 --output "$RUNNER_TEMP/scenarios.json" "$list" &&
+              [[ "$(head -c 2 "$RUNNER_TEMP/scenarios.json")" == '["' ]]; then
+              {
+                echo "### 5. Simulation : elle répond"
+                echo
+                echo "- $page est la page du visualiseur de ce commit, octet pour octet."
+                echo "- $list rend la liste des scénarios."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "La simulation hébergée sert la page de ce commit et sa liste de scénarios."
+              exit 0
+            fi
+            echo "Essai $attempt : la page servie n'est pas celle de ce commit, ou la liste des scénarios ne répond pas."
+            sleep 20
+          done
+          echo "::error title=Simulation inattendue::Le déploiement Vercel de la simulation a réussi, mais $page n'est pas la page de ce commit, ou $list ne rend pas de liste. Voir docs/release.md (« Échec et reprise »)."
+          exit 1
+
+  # Stage 6. No machine is reached: this job reads the repository and writes
+  # the summary of the run, nothing else. The over-the-air update (ANH-116,
+  # ANH-168 to ANH-171) will replace the steps of this job: its place in the
+  # chain, what it waits for and its condition stay.
+  machines:
+    name: 6. Machines (aucune mise à jour à distance)
+    needs: [request, simulation-answers]
+    if: ${{ needs.request.outputs.mode == 'real' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Dire la version du Pi et comment mettre une machine à jour à la main
+        run: |
+          version="$(< raspberry-pi/VERSION)"
+          contract="$(sed -n 's/^  "contract_version": "\([^"]*\)",\{0,1\}$/\1/p' contracts/machine-api.json | head -n 1)"
+          if ! at="$(git rev-parse -q --verify "refs/tags/$version^{commit}")"; then
+            tagged="elle n'a pas de tag"
+          elif [[ "$at" == "$GITHUB_SHA" ]]; then
+            tagged="tag posé sur ce commit par cette release"
+          else
+            tagged="tag d'une release précédente, sur le commit \`$at\` : une console déjà à cette version n'a rien à recevoir"
+          fi
+          {
+            echo "### 6. Machines : aucune n'a été mise à jour"
+            echo
+            echo "Cette étape n'a rien changé, sur aucune machine : la mise à jour à distance n'existe pas encore."
+            echo
+            echo "- Version du Pi de cette release : \`$version\` ($tagged)."
+            echo "- Avant d'installer : lire le niveau de validation de cette version dans \`CHANGELOG.md\`. Une machine ne reçoit qu'une version validée pour son état (docs/release.md, section 2)."
+            echo "- Mettre une console à jour, à la main, console en marche et au repos (docs/deploiement.md, section 7.6) :"
+            echo "  1. depuis un poste, dans \`raspberry-pi/\` de ce commit : \`bash scripts/pi/deploy.sh pi@<adresse du Pi>\` ;"
+            echo "  2. sur le Pi : \`sudo bash scripts/install.sh\`, qui refuse d'agir si la console n'est pas au repos ;"
+            echo "  3. \`systemctl status anheart\` montre la version installée."
+            echo "- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console. C'est le bon ordre tant qu'elle garde la majeure du contrat machine (contrat de ce commit : \`$contract\`). Une release qui change cette majeure demande l'inverse : les consoles d'abord, à la main, avant d'approuver le déploiement de Convex."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Version du Pi de cette release : $version ($tagged). Aucune machine n'a été touchée."

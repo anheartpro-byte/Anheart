@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: '37 4 * * 1'
   workflow_dispatch:
+  # Called by the release pipeline (release.yml), which then refuses to go on
+  # while an alert is open for `main`. The job that calls this workflow must
+  # grant `security-events: write` itself: a called workflow never holds more
+  # than its caller.
+  workflow_call:
 
 permissions:
   contents: read
@@ -33,7 +38,8 @@ concurrency:
 # What is analysed is decided in .github/codeql/codeql-config.yml. Nothing is
 # installed and nothing of the repository is run: every language is read as
 # it is (build mode "none"). `security-events: write`, which publishes the
-# results, is given to this job and to no other job of the repository.
+# results, is given to this job, and to the one job of release.yml that calls
+# this workflow and hands it on: to no other job of the repository.
 
 jobs:
   analyze:

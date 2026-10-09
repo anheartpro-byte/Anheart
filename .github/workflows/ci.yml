@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: '17 1 * * *'
   workflow_dispatch:
+  # Called by the release pipeline (release.yml), on the commit of `main` it
+  # is about to publish. A called workflow sees the event of its caller, a
+  # manual run: no gate is skipped by the path rule, and the synthetic report
+  # runs with its `--dsp` scenarios, as on any manual run.
+  workflow_call:
 
 permissions:
   contents: read
@@ -697,14 +702,14 @@ jobs:
           jobSummary: false
       # Part of the gate: the tests of what decides the gates themselves (the
       # path rule, this workflow, the analysis and deployment workflows, the
-      # quality report). In this job because it is a required check that runs
+      # release pipeline, the quality report). In this job because it is a required check that runs
       # on every event, whatever the files changed: a workflow test that fails
       # blocks the merge. They install nothing and read the files as text.
       - name: Test the path rule, the workflows and the quality report
         if: ${{ !cancelled() }}
         run: |
           mkdir -p "$RUNNER_TEMP/quality"
-          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/release-workflow.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
       - name: Resolve threat identifiers
         if: ${{ !cancelled() }}
         run: |

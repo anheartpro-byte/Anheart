@@ -447,6 +447,10 @@ simulé, clé de machine vide.
 `scripts/anheart.service`, le script de test, `.env.pi.example`, `VERSION`,
 `docker/`, le workflow), et à chaque push sur `develop`, où une modification
 des sources de la console qui casserait son démarrage dans l'image est vue.
+La pipeline de release l'appelle aussi, sur le commit de `main` qu'elle
+s'apprête à publier : un push sur `main` ne le lance pas, et aucun tag n'est
+posé si l'installation y échoue
+([release.md](release.md#la-pipeline-de-release)).
 
 **Ce n'est pas une gate.** Le job `pi-install` n'est pas une vérification
 obligatoire de la branche `develop` : un workflow filtré par chemins qui ne se

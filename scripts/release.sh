@@ -48,6 +48,10 @@ TMP=""
 CI_SUMMARY=""
 # Les statuts du dernier commit jugé par require_green.
 COMMIT_STATUSES=""
+# Ce que la pipeline de release (.github/workflows/release.yml) dit à tag, et
+# elle seule : le commit qu'elle a testé, et le numéro de sa propre exécution.
+EXPECT_COMMIT=""
+PIPELINE_RUN=""
 # Ce que prepare doit défaire s'il échoue après avoir changé de branche.
 PREP_BRANCH=""
 PREP_BACK=""
@@ -60,7 +64,7 @@ Usage :
                              [--pi-validation bench|auto_validated|occupied_validated]
                              [--date AAAA-MM-JJ] [--dry-run]
   scripts/release.sh pr  [--dry-run]
-  scripts/release.sh tag [--dry-run]
+  scripts/release.sh tag [--dry-run] [--expect-commit SHA] [--pipeline-run ID]
 
 prepare  depuis origin/develop vert : fichiers de version, CHANGELOG.md, PR vers develop.
          Relancé avec les mêmes versions quand develop a bougé, il complète les sections.
@@ -72,6 +76,12 @@ composant que la section de sa version ne cite pas. Les trois étapes refusent
 un revert fusionné sans titre de ticket (Revert "..."), et un commit dont un
 check run ou un statut n'est pas réussi. tag exige en plus l'avis indépendant
 (statut agent-review/R1) sur le commit de develop que main a reçu.
+
+--expect-commit et --pipeline-run servent à la pipeline de release, qui lance
+tag depuis GitHub Actions. Avec le premier, tag refuse si main n'est plus au
+commit donné. Avec le second, les vérifications de l'exécution donnée, celle
+qui lance tag, ne sont pas jugées : ses étapes précédentes ont réussi avant
+que tag démarre, et son propre job est en cours. Toutes les autres le restent.
 
 prepare qui échoue après avoir changé de branche rend le clone tel qu'il
 était ; relancé après un push réussi sans PR, il crée seulement la PR.
@@ -198,12 +208,30 @@ is_level() {
 # attente) fait refuser, comme un check run. Un commit qui ne porte aucun
 # statut n'est pas refusé ici : l'avis indépendant, lui, est exigé par
 # require_review, sur le commit qui a été relu.
+#
+# Lancé par la pipeline de release (--pipeline-run), tag tourne dans un job de
+# GitHub Actions, qui est lui-même un check run du commit, en cours tant que le
+# script tourne. Les check runs de cette exécution-là ne sont donc pas jugés :
+# ses étapes précédentes ont dû réussir pour que ce job démarre, et les
+# suivantes n'ont pas commencé. Ils ne comptent pas non plus pour une gate : la
+# pipeline ne se porte pas garante d'elle-même, et chaque gate doit avoir
+# réussi dans une autre exécution, celle du push sur main. Une exécution se
+# reconnaît à l'adresse de ses check runs (.../actions/runs/<numéro>/job/...).
 require_green() { # sha branche
-  local runs statuses bad missing name total
+  local runs statuses bad missing name total all own=""
   runs="$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" --paginate \
-    --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')" ||
+    --jq '.check_runs[] | [.name, .status, (.conclusion // ""), (.details_url // "")] | @tsv')" ||
     die "lecture des vérifications CI impossible pour $2 ($1)"
   [ -n "$runs" ] || die "aucune vérification CI pour $2 ($1) : attendre la CI"
+  if [ -n "$PIPELINE_RUN" ]; then
+    all="$(printf '%s\n' "$runs" | wc -l | tr -d ' ')"
+    runs="$(printf '%s\n' "$runs" |
+      awk -F '\t' -v own="/actions/runs/$PIPELINE_RUN/job/" 'index($4, own) == 0')"
+    [ -n "$runs" ] ||
+      die "$2 ($1) n'a pas d'autre vérification que celles de l'exécution $PIPELINE_RUN : chaque gate doit avoir réussi dans une autre exécution, celle du push sur $2"
+    total="$(printf '%s\n' "$runs" | wc -l | tr -d ' ')"
+    own=", sans juger les $((all - total)) vérifications de l'exécution $PIPELINE_RUN qui lance cette étape"
+  fi
   statuses="$(commit_statuses "$1")" ||
     die "lecture des statuts de commit impossible pour $2 ($1)"
   COMMIT_STATUSES="$statuses"
@@ -226,7 +254,7 @@ $bad"
   [ -z "$missing" ] ||
     die "$2 n'est pas vert ($1) : gates absentes ou non réussies :$missing"
   total="$(printf '%s\n' "$runs" | wc -l | tr -d ' ')"
-  CI_SUMMARY="verte ($total vérifications terminées, toutes les gates réussies)"
+  CI_SUMMARY="verte ($total vérifications terminées, toutes les gates réussies$own)"
 }
 
 # Les statuts d'un commit, le dernier de chaque nom : lignes "nom<TAB>état"
@@ -938,6 +966,10 @@ cmd_tag() {
   start tag
   ref="$REMOTE/$MAIN"
   sha="$(sha_of "$ref")"
+  # La pipeline de release a testé un commit précis : si main a bougé depuis,
+  # les tags iraient sur un commit qu'elle n'a pas testé.
+  [ -z "$EXPECT_COMMIT" ] || [ "$sha" = "$EXPECT_COMMIT" ] ||
+    die "$ref est au commit $sha, pas au commit attendu ($EXPECT_COMMIT) : $MAIN a bougé depuis le lancement. Aucun tag n'est posé."
   collect_pending "$ref"
   # Une fusion en squash couperait main de l'historique de develop : le
   # changelog suivant, calculé depuis ces tags, reprendrait tout depuis le début.
@@ -1009,6 +1041,23 @@ while [ $# -gt 0 ]; do
         --web) NEW_web="$2" ;;
         --pi-validation) PI_LEVEL="$2" ;;
         --date) RELEASE_DATE="$2" ;;
+      esac
+      shift
+      ;;
+    --expect-commit | --pipeline-run)
+      [ $# -ge 2 ] || die "valeur manquante après $1"
+      [ "$STEP" = tag ] || die "$1 ne s'applique qu'à tag"
+      case "$1" in
+        --expect-commit)
+          matches "$2" '^[0-9a-f]{40}$' ||
+            die "commit invalide après $1 : '$2' (attendu : un SHA complet)"
+          EXPECT_COMMIT="$2"
+          ;;
+        --pipeline-run)
+          matches "$2" '^[1-9][0-9]*$' ||
+            die "numéro d'exécution invalide après $1 : '$2'"
+          PIPELINE_RUN="$2"
+          ;;
       esac
       shift
       ;;

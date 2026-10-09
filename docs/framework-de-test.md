@@ -1106,7 +1106,7 @@ par un commit de fusion
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
-| `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
+| `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, la pipeline de release, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
 Un autre workflow, `codeql.yml`, fait analyser le dépôt par CodeQL sans être
@@ -1125,6 +1125,12 @@ implique pour `scripts/release.sh` sont dans
 Deux autres, `deploy-production.yml` et `deploy-preview.yml`, déploient sur
 Vercel quand une personne le demande, et jamais autrement : voir
 [Déploiement Vercel par bouton](#déploiement-vercel-par-bouton-anh-198).
+
+Un dernier, `release.yml`, est la pipeline de release : un bouton sur `main`
+qui appelle `ci.yml`, `pi-install.yml` et `codeql.yml` tels quels, puis pose
+les tags et déploie. Appelé par elle, `ci.yml` voit un lancement manuel : toutes
+les gates tournent, aucune n'est sautée. Voir
+[Pipeline de release](#pipeline-de-release-anh-219).
 
 Chaque gate garde aussi, pour le rapport de qualité, ce que ses outils ont
 mesuré (artefacts `quality-*`). Rien de ce que le rapport ajoute ne change le
@@ -1849,7 +1855,8 @@ contrôles de la documentation :
 
 * **les tests de ce qui décide les gates** : `gates-for-changes.test.mjs`,
   `ci-workflow.test.mjs`, `analysis-workflows.test.mjs`,
-  `deploy-workflows.test.mjs`, `quality-report.test.mjs` et
+  `deploy-workflows.test.mjs`, `release-workflow.test.mjs`,
+  `quality-report.test.mjs` et
   `convex-generated-api.test.mjs`, tous dans
   `scripts/ci`. Ils tournaient dans `changes`, que la protection de branche
   n'exige pas : un test de workflow en échec n'empêchait aucune fusion. Ils
@@ -1910,9 +1917,12 @@ déclaré. Le workflow n'installe aucune dépendance et n'exécute aucun code du
 dépôt.
 
 **Jobs et permissions.** Un job par langage, sans compilation
-(`build-mode: none`). Seul ce job reçoit la permission
-`security-events: write`, qui sert à publier les résultats ; aucun autre job du
-dépôt n'a de permission d'écriture, et le workflow ne lit aucun secret. Les
+(`build-mode: none`). Ce job reçoit la permission `security-events: write`, qui
+sert à publier les résultats, et le workflow ne lit aucun secret. Deux autres
+jobs du dépôt ont une permission d'écriture, tous deux dans la
+[pipeline de release](#pipeline-de-release-anh-219) : celui qui appelle ce
+workflow, parce qu'un workflow appelé ne reçoit jamais plus que ce que son
+appelant accorde, et celui qui pose les tags d'une release. Les
 actions sont épinglées par commit complet, celle de checkout sur le même commit
 que dans `ci.yml`. Durées mesurées sur la PR #35 (run 37594242883) :
 1 min 10 s pour `codeql (javascript-typescript)`, 1 min 49 s pour
@@ -2002,7 +2012,12 @@ retire, donc ce qui se remet comme faux positif avec sa raison : l'instruction
 `await` sur une tâche est lu comme une instruction sans effet ; une constante
 publique qui n'est lue que par un autre module peut être dite inutilisée.
 
-**Ce que cette analyse bloque.** Rien dans une PR : les jobs `codeql (...)` ne
+**Ce que cette analyse bloque.** Une release : la
+[pipeline de release](#pipeline-de-release-anh-219) rappelle ce workflow sur le
+commit de `main`, puis s'arrête s'il reste une seule alerte ouverte pour `main`.
+Une alerte classée après relecture, comme le veut la règle ci-dessus, n'est
+pas ouverte : elle est comptée et montrée, et n'arrête pas la release. Rien
+dans une PR, en revanche : les jobs `codeql (...)` ne
 sont pas dans la protection de branche de `develop`. Les rendre obligatoires
 est un réglage du dépôt, décidé par le chef de projet. Un job CodeQL n'échoue
 pas parce qu'il trouve quelque chose : il n'échoue que si l'analyse elle-même
@@ -2033,8 +2048,10 @@ la tête de `main` par le passage hebdomadaire. Conséquences :
 `docs` de `ci.yml` à chaque exécution, avec les autres fichiers de test
 de la CI (`node --test`, sans installation). Il vérifie ce qu'une modification
 pourrait casser sans qu'aucun job ne rougisse : actions épinglées par commit
-complet (celle de checkout sur le même commit que `ci.yml`), une seule
-permission d'écriture dans tous les workflows du dépôt, déclencheurs, langages,
+complet (celle de checkout sur le même commit que `ci.yml`), les permissions
+d'écriture de tous les workflows du dépôt, une à une (les résultats de CodeQL
+ici et dans le job de la pipeline de release qui appelle ce workflow, les tags
+dans celui qui les pose, rien d'autre), déclencheurs, langages,
 noms des jobs, la suite de requêtes (`security-and-quality`, sans filtre de
 règle), et le périmètre confronté aux fichiers suivis par Git (seuls le
 code Convex généré et le fichier de CAO sont laissés de côté).
@@ -2066,7 +2083,7 @@ deux n'a encore tourné : ils ne peuvent être lancés qu'une fois sur `main`.
 | | `deploy-production.yml` | `deploy-preview.yml` |
 |---|---|---|
 | Nom affiché dans Actions | « Déployer en production (main) » | « Déployer la préversion (develop) » |
-| Déclencheur | `workflow_dispatch`, et aucun autre | `workflow_dispatch`, et aucun autre |
+| Déclencheur | `workflow_dispatch`, et l'appel de la pipeline de release (`workflow_call`), qui lance ces mêmes jobs après Convex | `workflow_dispatch`, et aucun autre |
 | Branche acceptée | `main` | `develop` |
 | Ce qui est demandé | quoi déployer (`site`, `simulation`, `site et simulation`) ; le mot `production`, à saisir | quoi déployer ; si le site est choisi, les mots `données de production`, à saisir |
 | Ce que le formulaire, le nom de l'exécution et le haut de sa page rappellent | le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance ; les gates du commit ne sont pas vérifiées | une préversion du site lit et écrit les données de production tant que les variables Preview de Vercel ne sont pas séparées |
@@ -2108,8 +2125,8 @@ Le site est construit sur le runner puis envoyé (`vercel pull`, `vercel build`,
 Actions. La simulation garde la procédure de son script `deploy.sh` : `build.sh`
 assemble `dist/`, que la CLI envoie et que Vercel construit.
 
-**Permissions et secrets.** `contents: read`, rien d'autre : la règle « une
-seule permission d'écriture dans tous les workflows du dépôt » tient toujours.
+**Permissions et secrets.** `contents: read`, rien d'autre : aucun de ces jobs
+ne peut écrire dans le dépôt.
 Quatre secrets sont lus par leur nom et passés aux scripts par `env`, jamais
 écrits dans un script : `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
 `VERCEL_PROJECT_ID_SITE` et `VERCEL_PROJECT_ID_SIMULATION`. Le jeton n'est remis
@@ -2134,7 +2151,10 @@ n'appelle Vercel. Il vérifie :
 
 * que `vercel.json` coupe les déploiements Git pour toutes les branches et ne
   contient rien d'autre (les deux projets Vercel lisent ce même fichier) ;
-* que chaque workflow n'a qu'un déclencheur, le bouton ;
+* que chaque workflow n'a qu'un déclencheur, le bouton, à une exception près :
+  le bouton de production peut aussi être appelé, par la pipeline de release
+  et par elle seule, avec les deux saisies qu'une personne lui donne et sans
+  qu'aucun secret lui soit passé ;
 * que la garde de branche est la première étape, qu'elle accepte la branche du
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
 * que la production exige le mot `production` exact, et que son formulaire, le
@@ -2172,6 +2192,95 @@ ceux de CodeQL : une exécution en échec, annulée, en cours ou en attente
 d'approbation fait refuser `prepare` et `pr` (tête de `develop`) ou `tag` (tête
 de `main`). Voir
 [release.md](release.md#les-boutons-de-déploiement-et-le-script).
+
+### Pipeline de release (ANH-219)
+
+`.github/workflows/release.yml` enchaîne une release en production : tout
+tester, CodeQL sans alerte ouverte, les tags, Convex, le site puis la
+simulation, les machines. Son déroulé, ce qu'un échec laisse et le retour
+arrière sont dans [release.md](release.md#la-pipeline-de-release) ; les
+réglages à faire à la main dans
+[deploiement.md, section 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
+**Ce n'est pas une gate, et elle n'a jamais tourné** : son bouton n'existe
+qu'une fois le fichier sur `main`.
+
+Elle ne recopie aucun job. `ci.yml`, `pi-install.yml`, `codeql.yml` et
+`deploy-production.yml` déclarent `workflow_call` et sont appelés tels quels.
+Un workflow appelé voit l'événement de son appelant, ici un lancement manuel :
+dans `ci.yml`, aucune gate n'est sautée par la règle de chemins, le rapport
+synthétique tourne avec ses scénarios `dsp`, et l'endurance nocturne, réservée
+au déclenchement nocturne, ne tourne pas.
+
+**Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
+chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de
+ses étapes comme le ferait le runner**, avec des doubles de `gh`, `curl`, `npx`
+et `scripts/release.sh`, dans des dépôts git jetables : rien n'atteint GitHub,
+Convex ni Vercel, et aucun tag n'est posé. Le double de `gh` fait passer des
+réponses écrites à la main par le vrai `jq`, avec le filtre que le script lui
+donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
+
+* que la pipeline n'a qu'un déclencheur, le bouton, qu'aucun autre workflow ne
+  l'appelle, et que la case « à blanc » est cochée par défaut ;
+* que la garde de branche est la première étape du premier job, dont tous les
+  autres dépendent, et qu'elle refuse toute référence autre que `main` ;
+* qu'une release réelle demande la case décochée **et** le mot `production`
+  exact, que tout le reste donne une exécution à blanc ou un refus, et qu'une
+  valeur de la case qui n'est ni `true` ni `false` arrête tout ;
+* qu'une release réelle est refusée tant que l'environnement `production`
+  n'exige personne pour approuver ou n'est restreint à aucune branche, sur
+  plusieurs réponses de l'API, dont celle d'un environnement créé sans aucune
+  règle ;
+* **l'ordre des étapes**, par leurs `needs` : chaque étape ne peut démarrer
+  qu'après la précédente, aucune fonction d'état (`always()`, `!cancelled()`…)
+  ni `continue-on-error` ne lève cette règle, et deux releases ne tournent
+  jamais ensemble ;
+* que l'étape 1 appelle `ci.yml` et `pi-install.yml` sans rien leur passer, et
+  qu'aucune gate de `ci.yml` ne peut être sautée sur un lancement manuel ;
+* que l'étape 2 exige l'analyse du commit exact dans les trois langages de
+  `codeql.yml`, s'arrête à la première alerte ouverte (une seule, ou la cent
+  unième d'une liste paginée), compte les alertes classées sans s'arrêter, ne
+  prend pas une réponse illisible pour une liste vide, et **n'écrit jamais ce
+  que dit une alerte** ;
+* **qu'à blanc rien ne peut écrire** : chaque job des étapes 3 à 6 porte la
+  même condition, le mode réel ; le job qui parle à leur place n'a ni secret,
+  ni environnement, ni permission d'écriture, et n'appelle `scripts/release.sh`
+  qu'avec `--dry-run` ;
+* qu'une exécution dont le commit n'est plus la tête de `main` est refusée, par
+  le même script que derrière les boutons de déploiement ;
+* que les tags sont posés quand une version attend le sien, trouvés quand ils
+  sont déjà sur ce commit (la reprise n'en pose aucun), et qu'un commit qui
+  n'est pas une release est refusé ; que le jeton qui peut écrire n'est remis
+  qu'à l'étape qui lance `scripts/release.sh`, sans être écrit dans le clone ;
+* que la clé de Convex n'est lue que par les trois étapes qui s'en servent,
+  jamais par l'installation des paquets npm ; qu'une clé de développement, de
+  préversion, de projet, d'un autre déploiement ou mal formée est refusée, et
+  qu'aucune partie de la clé n'est jamais affichée ;
+* qu'après le déploiement de Convex la version servie et le refus de l'API
+  machine sont exigés, la réponse de l'ancien backend étant refusée ;
+* que le site et la simulation sont déployés par les jobs de
+  `deploy-production.yml` et par aucune copie, le site d'abord, et que chacun
+  est ensuite vérifié à son adresse de production ;
+* que l'étape des machines n'appelle rien qui puisse en atteindre une, et
+  redonne les commandes de [deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour) ;
+* **les permissions de chaque job**, une à une : un seul peut écrire dans le
+  dépôt (les tags), un seul lit les alertes ; que le seul secret nommé est la
+  clé de Convex, que le jeton de l'exécution n'est remis qu'à quatre étapes,
+  qu'aucun script ne contient d'expression, et que les actions sont épinglées
+  comme dans `ci.yml` ;
+* que ce que la pipeline tient pour la production est ce que dit la
+  [section 1 de deploiement.md](deploiement.md#1-les-environnements), et que
+  les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre.
+
+`scripts/release.test.mjs` tient les deux options que la pipeline passe à
+`scripts/release.sh tag` ([release.md](release.md#la-pipeline-de-release-et-le-script)).
+
+**Ce que ces tests ne prouvent pas.** Que la pipeline tourne : ni l'appel d'un
+workflow par un autre, ni l'arrivée des secrets d'environnement dans les jobs
+appelés, ni le push de tags avec le jeton d'une exécution, ni `npx convex
+deploy`, ni un déploiement Vercel ne sont exécutés par un test. La forme exacte
+des réponses de GitHub (alertes, analyses, environnement) est reprise de sa
+documentation et de réponses réelles de son API, lues le 9 octobre 2026. Le
+premier lancement à blanc est la première vraie preuve.
 
 ### Rapport de qualité (ANH-199)
 

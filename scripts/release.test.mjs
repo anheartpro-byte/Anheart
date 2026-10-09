@@ -847,6 +847,97 @@ test("ANH-198 a deployment button run on the head commit is read like any check"
   assert.match(done.stdout, /^CI : verte \(9 vérifications terminées, toutes les gates réussies\)$/m);
 });
 
+// ---------------------------------------------------------------------------
+// ANH-219: tag run by the release pipeline (.github/workflows/release.yml)
+// ---------------------------------------------------------------------------
+
+/** The address GitHub gives the check run of a job: it names the run the job belongs to. */
+const jobOf = (run, job) => `https://github.invalid/anheart/actions/runs/${run}/job/${job}`;
+/** The six gates, passed by the push to main: another run than the pipeline's. */
+const PUSHED = GATES.map((gate, index) => `${gate}\tcompleted\tsuccess\t${jobOf(500, index + 1)}\n`).join("");
+/** What run 77 of the pipeline leaves on the commit while its job of the tags runs. */
+const PIPELINE = [
+  `1. Tout tester (gates de la CI) / pi-gate\tcompleted\tsuccess\t${jobOf(77, 1)}`,
+  `3 à 6. À blanc (rien n'est écrit)\tcompleted\tskipped\t${jobOf(77, 2)}`,
+  `3. Tags de release\tin_progress\t\t${jobOf(77, 3)}`,
+  `4. Convex en production\tqueued\t\t${jobOf(77, 4)}`,
+  "",
+].join("\n");
+
+/** A repository where the release is merged into `main` and waits for its tags. */
+function merged(t) {
+  const fx = fixture(t);
+  assert.equal(fx.run(["prepare", ...ALL]).status, 0);
+  fx.squashIntoDevelop("release/pi-0.1.0_cloud-0.1.0_web-0.1.0", "Release : pi-0.1.0, cloud-0.1.0, web-0.1.0 (#5)");
+  fx.mergeIntoMain();
+  return fx;
+}
+
+test("ANH-219 tag run by the pipeline does not judge the checks of its own run, and judges every other", (t) => {
+  const fx = merged(t);
+  // Without the option, the job that runs the script is a check in progress like any other.
+  refuses(fx.run(["tag"], { checks: PUSHED + PIPELINE }), /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/);
+  // The number of another run sets nothing aside: neither run 78, nor run 7, nor run 771.
+  for (const other of ["78", "7", "771"]) {
+    refuses(fx.run(["tag", "--pipeline-run", other], { checks: PUSHED + PIPELINE }), /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/);
+  }
+  // A check of another run still decides: a deployment button that waits, a gate of the push that failed.
+  const button = `Déployer le site (production)\twaiting\t\t${jobOf(90, 1)}\n`;
+  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE + button }), /main n'est pas vert[\s\S]*Déployer le site \(production\) : waiting/);
+  const red = PUSHED.replace("web\tcompleted\tsuccess", "web\tcompleted\tfailure");
+  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: red + PIPELINE }), /main n'est pas vert[\s\S]*web : completed failure/);
+  // The pipeline does not vouch for itself: a gate that passed in its own run only is a gate that is missing.
+  const inside = GATES.map((gate, index) => `${gate}\tcompleted\tsuccess\t${jobOf(77, index + 10)}\n`).join("");
+  refuses(
+    fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE + VERCEL }),
+    /main n'est pas vert[\s\S]*gates absentes ou non réussies : pi-gate simulation-gate convex-tests web audit docs/,
+  );
+  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE }), /n'a pas d'autre vérification que celles de l'exécution 77/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+
+  const before = fx.state();
+  const dry = fx.run(["tag", "--dry-run", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(fx.state(), before);
+  const done = fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE });
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(
+    done.stdout,
+    /^CI : verte \(6 vérifications terminées, toutes les gates réussies, sans juger les 4 vérifications de l'exécution 77 qui lance cette étape\)$/m,
+  );
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+});
+
+test("ANH-219 tag refuses a main that is no longer at the commit the pipeline tested", (t) => {
+  const fx = merged(t);
+  const main = git(fx.origin, "rev-parse", "refs/heads/main");
+  const develop = git(fx.origin, "rev-parse", "refs/heads/develop");
+  // The pipeline tested another commit than the one main is at now.
+  const moved = fx.run(["tag", "--expect-commit", develop]);
+  refuses(moved, /origin\/main est au commit [0-9a-f]{40}, pas au commit attendu \([0-9a-f]{40}\) : main a bougé depuis le lancement\. Aucun tag n'est posé\./);
+  assert.ok(moved.stderr.includes(main) && moved.stderr.includes(develop));
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  assert.equal(git(fx.work, "tag", "-l"), "");
+  // Only a whole commit and a run number are read, and only by tag.
+  refuses(fx.run(["tag", "--expect-commit", main.slice(0, 12)]), /commit invalide après --expect-commit/);
+  refuses(fx.run(["tag", "--expect-commit", "main"]), /commit invalide après --expect-commit/);
+  refuses(fx.run(["tag", "--pipeline-run", "77/job"]), /numéro d'exécution invalide après --pipeline-run/);
+  refuses(fx.run(["tag", "--pipeline-run", ""]), /numéro d'exécution invalide après --pipeline-run/);
+  refuses(fx.run(["tag", "--pipeline-run"]), /valeur manquante après --pipeline-run/);
+  for (const step of ["prepare", "pr"]) {
+    refuses(fx.run([step, "--expect-commit", main]), /--expect-commit ne s'applique qu'à tag/);
+    refuses(fx.run([step, "--pipeline-run", "77"]), /--pipeline-run ne s'applique qu'à tag/);
+  }
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+  // At the commit that was tested, with what a runner has for an identity: a tagger, and no author.
+  const done = fx.run(["tag", "--expect-commit", main], { env: { GIT_AUTHOR_NAME: "", GIT_AUTHOR_EMAIL: "" } });
+  assert.equal(done.status, 0, done.stderr);
+  for (const tag of ["pi-0.1.0", "cloud-0.1.0", "web-0.1.0"]) {
+    assert.equal(git(fx.origin, "rev-parse", `refs/tags/${tag}^{commit}`), main);
+  }
+  assert.equal(git(fx.origin, "tag", "-l", "--format=%(taggername)", "pi-0.1.0"), "Synthetic Releaser");
+});
+
 test("EX-2 pr opens develop -> main with the release template filled", (t) => {
   const fx = fixture(t);
   assert.equal(fx.run(["prepare", ...ALL]).status, 0);
@@ -1614,7 +1705,8 @@ test("EX-3 the release PR template carries the check-list of docs/release.md, wo
     "OCCUPANCY_OCCUPIED_ENABLED",
     "Niveau de validation du Pi",
     // ANH-198: merging the release deploys nothing any more, the deployment is a step with its window.
-    "Déployer en production (main)",
+    // ANH-219: that step is the release pipeline, which tags then deploys Convex, the site and the simulation.
+    "Release en production (main)",
     "aucune séance n'est en cours",
   ]) {
     assert.ok(template.some((item) => item.includes(required)), `no check-list item about ${required}`);

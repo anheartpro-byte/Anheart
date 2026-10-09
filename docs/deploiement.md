@@ -33,6 +33,15 @@ réellement vérifié**. Il complète [convex.md](convex.md),
 > réglages de la [section 5.5](#55-réglages-à-faire-une-fois-à-la-main) ne
 > sont pas faits.
 
+> **Pipeline de release, 10 octobre 2026 (ANH-219).** Le dépôt contient un
+> troisième bouton, « Release en production (main) », qui enchaîne toute une
+> release : tests, CodeQL, tags, Convex, site et simulation, puis les machines
+> ([release.md](release.md#la-pipeline-de-release)). **Il n'a jamais été
+> lancé**, pas même à blanc : il n'apparaît dans GitHub qu'une fois son fichier
+> arrivé sur `main`, et il refuse toute release réelle tant que les réglages de
+> la [section 5.5](#55-réglages-à-faire-une-fois-à-la-main) ne sont pas faits.
+> Convex en production est inchangé.
+
 ## Sommaire
 
 1. [Les environnements](#1-les-environnements)
@@ -93,6 +102,12 @@ environnements GitHub `production` et `preview` du dépôt, jamais dans un
 fichier ni parmi les secrets du dépôt : `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
 `VERCEL_PROJECT_ID_SITE` et `VERCEL_PROJECT_ID_SIMULATION`
 ([section 5.5](#55-réglages-à-faire-une-fois-à-la-main)).
+
+La pipeline de release lit un cinquième secret, rangé dans l'environnement
+GitHub `production` seulement : `CONVEX_DEPLOY_KEY`, la clé du déploiement de
+**production** de Convex. C'est la clé que `.env.local` garde sous le nom
+`CONVEX_DEPLOY_KEY_PROD`, enregistrée là sous le nom que lit la CLI
+([section 5.5, étape 2](#55-réglages-à-faire-une-fois-à-la-main)).
 
 Une clé de déploiement Convex se génère dans le tableau de bord Convex : choisir
 le déploiement (Development ou Production) dans le sélecteur du haut, puis
@@ -172,11 +187,36 @@ déploiement : ce n'est pas un contournement de l'authentification du site.
 **Pas encore fait.** La production est en service : le déploiement se décide,
 il ne se lance pas par habitude.
 
+**La voie normale est l'étape 4 de la pipeline de release**
+([release.md](release.md#la-pipeline-de-release)). Elle lance la même commande,
+`npx convex deploy`, avec la clé de l'environnement GitHub `production`, sur le
+commit de `main` qu'elle vient de tester et de taguer. Avant, elle refuse une
+clé qui ne vise pas `clean-giraffe-153` (elle compare ce que la clé dit de sa
+cible, sans jamais afficher la clé). Après, elle vérifie sans navigateur que le
+nouveau backend répond : le déploiement doit répondre la version du commit
+(`softwareReleases:deployedCloudVersion`), et la route
+`/api/machine/training/poll`, appelée sans clé, doit refuser comme le contrat
+le dit (401, code `unauthorized`), ce que l'ancien backend ne fait pas. Elle
+déploie ensuite le site, par les jobs du bouton de production
+([§5.1](#51-comment-il-se-déploie)).
+
+La commande à la main reste la voie de secours :
+
 ```sh
 CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" npx convex deploy
 ```
 
-Avant de le lancer :
+**Ce que la pipeline ne fait pas.** Elle déploie le code, et rien d'autre. Pour
+le premier déploiement en production, tout ce qui suit reste à faire à la main,
+par la personne qui en répond (ANH-82) :
+
+| Quand | Quoi |
+|---|---|
+| Avant de lancer la pipeline pour de bon | Le modèle de jeton Clerk de production émet `email` et `email_verified` ([convex.md](convex.md#activer-le-multi-organisation), partie B) : sans eux, la liaison d'une fiche patient est refusée pour tout le monde. Les contrôles de données des points 1 et 7 ci-dessous. Les consoles en service, si la release change la majeure du contrat ([§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). |
+| Juste après l'étape 4, pendant que la pipeline attend l'approbation du site | Les migrations des points 4 et 6, puis le premier admin (point 5). La migration multi-organisation d'abord : tant qu'elle n'a pas tourné, le tableau de bord refuse tout. |
+| Après la pipeline | L'enregistrement des versions dans Convex ([release.md, section 6](release.md#6-enregistrer-la-version-dans-convex)), et la régénération des clés des machines ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)). |
+
+Avant de le lancer, par la pipeline ou à la main :
 
 1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, et rend
    `sessions.userId` et `machines.config` facultatifs. Dans sa version d'avant
@@ -199,11 +239,14 @@ Avant de le lancer :
    l'envoi, comme dit plus haut). Les autres fonctions gardent leur nom et
    leurs arguments ; `sessions.listSessions` renvoie deux champs de plus
    (`kind`, `origin`).
-3. Fusionner dans `main` ne déploie plus le site : il se déploie par le bouton
-   « Déployer en production (main) » ([§5.1](#51-comment-il-se-déploie)).
+3. Fusionner dans `main` ne déploie plus le site : il se déploie par la
+   pipeline de release, ou seul par le bouton « Déployer en production (main) »
+   ([§5.1](#51-comment-il-se-déploie)).
    Ordre : fusionner dans `main` ; puis, dans une même fenêtre et quand aucune
-   séance n'est en cours, Convex d'abord et le site **aussitôt après** par le
-   bouton, à cause du point 2. Dans l'autre ordre, le nouveau site ne trouve
+   séance n'est en cours, Convex d'abord et le site **aussitôt après**, à cause
+   du point 2. La pipeline tient cet ordre elle-même (étape 4, puis étape 5),
+   mais elle attend une approbation entre les deux : approuver le site
+   aussitôt. Dans l'autre ordre, le nouveau site ne trouve
    pas l'heure du serveur (`serverNow`) dans les réponses de l'ancien Convex :
    il affiche toutes les machines « Hors ligne » et toutes les données périmées
    jusqu'au déploiement de Convex
@@ -228,19 +271,42 @@ Avant de le lancer :
    schéma accepte tout nombre, `convex deploy` ne signale donc pas une FC max
    ou une année de naissance qui ne serait pas un entier.
 
-### 3.4 Ordre de mise à jour : les consoles d'abord, Convex ensuite
+### 3.4 Ordre de mise à jour entre Convex et les consoles
 
-Le contrat entre une console et Convex est versionné
-([convex.md](convex.md#11-versions-et-compatibilité)) : deux côtés qui ne sont
-pas au même niveau se refusent. Les deux sens échouent du bon côté (aucun
-lancement distant n'est armé), mais pas au même prix.
+Le contrat entre une console et Convex est versionné, en `majeure.mineure`
+([convex.md](convex.md#11-versions-et-compatibilité)). **C'est la majeure qui
+décide de l'ordre.** Il n'y a qu'une règle, et la
+[section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)
+l'applique à sa mineure :
+
+| Ce que la release change, par rapport à ce qui est en service | Ordre | Pourquoi |
+|---|---|---|
+| La **majeure** du contrat machine. Le premier déploiement d'un Convex qui exige le contrat en fait partie : ce qui est en service avant lui n'en annonce aucun | **Les consoles d'abord, Convex ensuite.** | Deux côtés qui n'ont pas la même majeure se refusent, et pas au même prix (tableau suivant) : une console à jour fonctionne avec l'ancien Convex, au lancement distant près ; une console en retard est refusée par le nouveau. |
+| Une **mineure** du contrat, ou rien du contrat | **Convex d'abord, les consoles ensuite.** | Dans une même majeure les deux ordres sont sans danger : chaque côté ne s'appuie que sur ce que toutes ses mineures fournissent. Convex d'abord est l'ordre qui ne laisse rien derrière lui : une console plus récente que son serveur garde sur son disque ce qu'il ne sait pas encore recevoir ([section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)). |
+
+Dans les deux cas, **jamais pendant une séance**.
+
+**Ce que fait la pipeline de release.** La pipeline de release
+([release.md](release.md#la-pipeline-de-release)) déploie Convex (étape 4) avant
+toute console, et ne met aucune console à jour : son étape 6 dit seulement
+comment le faire à la main ([section 7.6](#76-arrêter-mettre-à-jour)). C'est
+l'ordre du second cas. Elle ne sait pas dans quel cas se trouve une release :
+elle rappelle la règle en haut de son exécution, avant toute approbation, et
+la personne qui approuve le déploiement de Convex en répond. Pour une release
+du premier cas, la pipeline s'arrête d'elle-même au bon endroit : une fois les
+tags posés (étape 3), elle attend l'approbation de l'étape 4. Mettre alors les
+consoles à jour à la main, depuis le commit qui vient d'être tagué, et
+n'approuver le déploiement de Convex qu'ensuite.
+
+**Quand les deux côtés n'ont pas la même majeure.** Les deux sens échouent du
+bon côté (aucun lancement distant n'est armé), mais pas au même prix.
 
 | Situation | Effet |
 |---|---|
 | Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et fins de séance fonctionnent. Un arrêt venu du tableau de bord aussi : demande d'arrêt, ou séance que le serveur ne tient plus pour active. Le **lancement distant** est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. La fiche machine n'affiche pas les versions, que cet ancien Convex ne stocke pas. |
 | Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, ses programmes ne sont plus synchronisés, sa télémétrie et ses fins de séance sont **refusées**, et aucun lancement distant ne lui parvient. Un arrêt venu du tableau de bord lui parvient encore. |
 
-D'où l'ordre :
+D'où l'ordre du premier cas :
 
 1. **Les consoles d'abord.** Une console à jour fonctionne avec l'ancien Convex,
    au lancement distant près.
@@ -361,10 +427,11 @@ un document non conforme.
   multi-organisation (`MACHINE_TABLES`) : des événements reçus avant cette
   migration suivent l'organisation de leur machine quand elle tourne.
 
-**Ordre : pour cette mineure, Convex d'abord.** Ce changement ne demande pas
-l'ordre de la
-[section 3.4](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite),
-qui vaut pour un changement de majeure, et les deux ordres sont sans danger.
+**Ordre : Convex d'abord, comme pour toute mineure**
+([section 3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). Le
+contrat passe de `1.0` à `1.1` : la majeure ne change pas, les deux ordres sont
+sans danger, et le tableau dit ce que chacun laisse. C'est l'ordre que tient la
+pipeline de release, qui déploie Convex avant toute console.
 
 | Situation | Effet |
 |---|---|
@@ -477,6 +544,15 @@ Le site et la simulation se déploient par deux boutons de GitHub, dans l'onglet
 |---|---|---|---|
 | « Déployer en production (main) » | `main` | la production ([section 1](#1-les-environnements)) | le mot `production` saisi dans le champ de confirmation ; l'environnement GitHub `production` et son approbation |
 | « Déployer la préversion (develop) » | `develop` | une préversion Vercel, à une adresse nouvelle à chaque déploiement | l'environnement GitHub `preview` ; si le site est choisi, les mots `données de production` saisis dans le champ prévu ([section 5.2](#52-les-préversions-pointent-sur-la-production)) |
+
+Un troisième bouton, « Release en production (main) », est la pipeline de
+release. **Pour une release, c'est elle qui déploie** le site et la simulation
+en production, après avoir tout testé, tagué et déployé Convex : elle appelle
+pour cela les jobs du bouton de production, une fois pour le site, puis une
+fois pour la simulation, de sorte qu'il n'existe qu'une façon de déployer la
+production sur Vercel ([release.md](release.md#la-pipeline-de-release)). Le
+bouton « Déployer en production (main) » sert à redéployer un projet sans
+release. Ce qui suit vaut pour les deux boutons du tableau.
 
 **Avant de lancer : ce que les boutons ne vérifient pas.** C'est à la personne
 qui clique de s'en assurer, et pour la production à celle qui approuve. Le
@@ -677,7 +753,16 @@ branche : celle de la release (voie A) et celles de la voie B (son point 5).
 | `preview` | « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `develop`. Sans approbation par défaut : lire ce que cela veut dire à l'étape 2. |
 
 Le faire **avant** le premier lancement : GitHub crée tout seul, sans aucune
-règle, un environnement qui n'existe pas encore.
+règle, un environnement qui n'existe pas encore. GitHub ne distingue pas les
+majuscules dans le nom d'un environnement : si la liste en montre déjà un
+nommé `Production` ou `Preview`, créé sans règle par un outil relié au dépôt,
+c'est lui que les workflows utilisent, et c'est lui qu'il faut régler.
+
+Les deux boutons de déploiement s'en remettent à ces règles. **La pipeline de
+release, elle, les lit** avant toute chose : elle refuse une release réelle tant que l'environnement
+`production` n'exige personne pour approuver, ou n'est restreint à aucune
+branche (message « Environnement non protégé »), et une exécution à blanc le
+signale par un avertissement.
 
 **2. Créer le jeton Vercel et enregistrer les quatre secrets, dans les deux
 environnements et nulle part ailleurs.**
@@ -714,6 +799,31 @@ manquant » et le nom du secret ; aucune valeur n'est jamais affichée. À
 l'expiration du jeton, les boutons échouent à la première étape qui appelle
 Vercel : créer un nouveau jeton et remplacer la valeur de `VERCEL_TOKEN` dans
 les deux environnements.
+
+**Pipeline de release : un cinquième secret, dans `production` seulement.** La
+pipeline déploie le site et la simulation par les jobs du bouton de
+production : elle lit donc les quatre secrets ci-dessus, là où ils sont déjà.
+Pour Convex, elle en lit un de plus :
+
+| Secret | Valeur | Où la trouver |
+|---|---|---|
+| `CONVEX_DEPLOY_KEY` | la clé de déploiement de la **production** de Convex. Elle commence par `prod:`, suivi du nom du déploiement de production ([section 1](#1-les-environnements)) et d'une barre verticale | tableau de bord Convex, projet `anheart`, déploiement **Production** choisi dans le sélecteur du haut, **Settings**, « URL & Deploy Key » ([section 2](#2-les-clés-et-où-elles-sont-rangées)) |
+
+L'enregistrer comme **secret de l'environnement `production`**, comme les
+quatre autres, et **ne pas l'enregistrer dans `preview`** ni parmi les secrets
+du dépôt : avec cette clé on déploie le backend de production. Avant de s'en
+servir, la pipeline compare ce que la clé dit de sa cible avec le nom du
+déploiement de production : une clé de développement, de préversion, de projet,
+ou celle d'un autre déploiement est refusée (« Mauvaise clé »), sans que rien
+de la clé soit affiché.
+
+**Aucune variable n'est à créer.** Ce que la pipeline tient pour la production
+(le nom du déploiement Convex, l'adresse du site et celle de la simulation
+qu'elle vérifie après chaque déploiement) est écrit en tête de
+`.github/workflows/release.yml`, avec les valeurs de la
+[section 1](#1-les-environnements), et un test compare les deux
+(`scripts/ci/release-workflow.test.mjs`). Changer la cible de la production
+passe donc par une PR relue, pas par un réglage.
 
 **3. Dans Vercel, avant le premier clic sur `site` : rendre secrètes les
 variables de serveur.** Pour construire le site, le bouton lit les variables du
@@ -898,8 +1008,27 @@ les données de production », la phrase du nom de l'exécution et celle du
 résumé, avec leurs tests. D'ici là le bouton continue de demander l'accord, à
 tort mais sans danger.
 
+**7. Avant la première release réelle par la pipeline.** La pipeline et les
+workflows qu'elle appelle arrivent sur `main` avec la première release (étape
+5, voie A) : son bouton n'existe qu'ensuite, et il sert dès cette première
+release pour ses tags et ses déploiements
+([release.md](release.md#3-le-déroulé)). Ce que le dépôt ne fait pas, et que
+la pipeline ne vérifie pas :
+
+| Quoi | Où c'est décrit |
+|---|---|
+| Les étapes 1 et 2 ci-dessus : l'environnement `production` et ses règles, les quatre secrets Vercel, `CONVEX_DEPLOY_KEY` | ci-dessus |
+| L'étape 3 : les variables de serveur du projet Vercel en type « Secret » | ci-dessus |
+| Le modèle de jeton Clerk de production, qui doit émettre `email` et `email_verified` | [convex.md](convex.md#activer-le-multi-organisation), partie B |
+| Les contrôles de données de la section 3 : le schéma contre les données de production, la physiologie déjà enregistrée | [§3.3](#33-vers-la-production), points 1 et 7 ; [§3.5](#35-vérifier-la-physiologie-déjà-enregistrée) |
+| L'ordre avec les consoles en service | [§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles) |
+| Les migrations et le premier admin, juste après le déploiement de Convex | [§3.3](#33-vers-la-production), points 4 à 6 |
+| L'avis indépendant `agent-review/R1` sur le candidat, sans lequel aucun tag n'est posé | [release.md](release.md#lavis-indépendant-sur-une-release) |
+
 Premier essai conseillé, une fois les étapes 1 à 5 faites : le bouton de
-préversion avec `simulation`, qui ne touche à aucune donnée.
+préversion avec `simulation`, qui ne touche à aucune donnée. Puis la pipeline
+de release **à blanc**, qui ne tague et ne déploie rien : elle dit ce qu'une
+release réelle ferait, et ce qui lui manque encore.
 
 ---
 
@@ -1163,7 +1292,7 @@ affiche jamais la réponse. Ce qu'il en dit :
 | 401 | `FAIL` : clé refusée. |
 | pas de réponse | `FAIL` : tableau de bord injoignable. |
 
-Voir [l'ordre de mise à jour](#34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite)
+Voir [l'ordre de mise à jour](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)
 et [Versions et compatibilité](convex.md#11-versions-et-compatibilité).
 
 La première ligne des journaux résume ce que la console a compris de sa
@@ -1200,6 +1329,15 @@ sudo bash scripts/install.sh                    # sur le Pi : nouvelle image, se
 remplace pas le logiciel d'une machine qui tourne. `systemctl status anheart`
 montre la version installée.
 
+C'est ce geste que rappelle l'étape 6 de la pipeline de release, avec la
+version du Pi qu'elle vient de taguer
+([release.md](release.md#la-pipeline-de-release)). Cette étape ne touche
+elle-même à aucune machine : la mise à jour à distance n'existe pas encore
+(ANH-116). Avant d'installer, lire le niveau de validation de la version
+([release.md, section 2](release.md#2-le-niveau-de-validation-dune-version-du-pi))
+et l'ordre avec Convex
+([section 3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)).
+
 Un redémarrage (du conteneur, du Pi) **ne relance jamais un mouvement** : la
 console revient au repos, en lecture seule. Si elle trouve le variateur activé
 au démarrage, elle commande zéro, verrouille, et attend un acquittement de
@@ -1224,8 +1362,10 @@ est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
 | Relire [guides/guide-tableau-de-bord.md](guides/guide-tableau-de-bord.md) ligne à ligne contre les vrais écrans, et corriger les défauts du §9.4 (textes en anglais…) | Rien. |
 | Soumettre les formulaires depuis le navigateur, dans les trois rôles ; en faire des tests automatiques (ANH-83) | Rien. |
 | Comprendre pourquoi l'ECG simulé de la console perd la confirmation quand le bras tourne (section 4) | Rien. |
-| Déployer Convex en production, puis le site par son bouton | Une décision (section 3.3). |
-| Rendre les deux boutons de déploiement utilisables : environnements GitHub, secrets, variables de serveur en type « Secret », fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 3 et 5 ; l'étape 4, la protection de `main`, est faite depuis le 7 octobre 2026). |
+| Faire la première release réelle par la pipeline : tags, Convex en production, puis le site et la simulation | Une décision (section 3.3), et ce qui reste à la main avant elle (section 5.5, étape 7). |
+| Lancer une première fois la pipeline de release, à blanc | Sa présence sur `main` : la première release fusionnée (section 5.5, étape 5). |
+| Rendre les boutons et la pipeline utilisables : environnements GitHub, secrets (dont `CONVEX_DEPLOY_KEY`), variables de serveur en type « Secret », fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 3 et 5 ; l'étape 4, la protection de `main`, est faite depuis le 7 octobre 2026). |
+| Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait aujourd'hui que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171. |
 | Donner aux préversions Vercel les valeurs de développement, puis retirer du bouton de préversion le champ d'accord | Un réglage dans Vercel, puis une PR (section 5.5, étape 6). |
 | Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |

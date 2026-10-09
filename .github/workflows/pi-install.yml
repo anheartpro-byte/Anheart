@@ -17,6 +17,9 @@ on:
   push:
     branches: [develop]
   workflow_dispatch:
+  # Called by the release pipeline (release.yml), on the commit of `main` it
+  # is about to publish: a push to `main` does not start this workflow.
+  workflow_call:
 
 permissions:
   contents: read
