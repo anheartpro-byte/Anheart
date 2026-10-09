@@ -1169,9 +1169,11 @@ test("EX-6 the site must serve the version of this commit, and the simulation th
   assert.equal(current.status, 0, current.said);
   assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/index\.html est la page du visualiseur de ce commit, octet pour octet\.$/m);
   for (const [answers, statuses] of /** @type {[Record<string, string>, Record<string, string>][]} */ ([
-    // The page of the deployment before: one byte of difference is another page.
+    // The page of the deployment before: one byte more, at its end or in its middle, is another page.
     [{ [page]: `${viewer} `, [list]: '["manual_27_rpm"]' }, {}],
-    [{ [page]: viewer.replace("<", " <"), [list]: '["manual_27_rpm"]' }, {}],
+    [{ [page]: `${viewer.slice(0, 200)} ${viewer.slice(200)}`, [list]: '["manual_27_rpm"]' }, {}],
+    // And so is one byte less.
+    [{ [page]: viewer.slice(0, -1), [list]: '["manual_27_rpm"]' }, {}],
     [{ [page]: viewer, [list]: "[]" }, {}],
     [{ [page]: viewer, [list]: '{"detail":"Not Found"}' }, {}],
     [{ [page]: viewer, [list]: '["manual_27_rpm"]' }, { [list]: "500" }],
