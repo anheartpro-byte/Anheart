@@ -532,6 +532,25 @@ def test_ex3_a_console_without_a_certificate_has_no_tls_problem() -> None:
     )
 
 
+def test_ex3_a_certificate_that_can_be_served_is_no_problem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The entry point asks one thing of the certificate: can it be served.
+
+    With a stand-in for the answer, so that this branch of the entry point is
+    exercised on a machine that has no ``openssl`` to make a certificate with.
+    ``test_ex3_main_starts_a_console_whose_certificate_can_be_served`` does it
+    with real files.
+    """
+
+    def servable(_files: TlsFiles) -> Ok[ssl.SSLContext]:
+        return Ok(client_context())
+
+    monkeypatch.setattr(local_panel, "server_context", servable)
+    none = tls_problem(_config({**SIM_ENV, "UI_TLS_CERT": "/c", "UI_TLS_KEY": "/k"}))
+    assert none is None
+
+
 # =========================================================================
 # The server: built with the certificate in hand, or not built
 # =========================================================================
@@ -761,6 +780,15 @@ def speak_clear(port: int) -> bytes:
     return answer
 
 
+async def opens_in_clear(port: int) -> bool:
+    """Whether a WebSocket handshake in clear, token included, gets through to that port."""
+    try:
+        async with connect(f"ws://127.0.0.1:{port}{TELEMETRY_PATH}?token={TOKEN}", proxy=None):
+            return True
+    except (InvalidMessage, OSError):
+        return False
+
+
 TLS_ALERT: Final[int] = 0x15
 """First byte of a TLS alert record: the one thing a TLS library may say to a
 peer that did not speak TLS, in seven bytes that carry nothing of the console."""
@@ -781,10 +809,8 @@ async def test_ex3_clear_http_gets_no_answer_from_the_console_and_no_redirect(
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{served.port}") as client:
         with pytest.raises(httpx.TransportError):
             await client.get("/healthz")
-    clear_socket = f"ws://127.0.0.1:{served.port}{TELEMETRY_PATH}?token={TOKEN}"
-    with pytest.raises((InvalidMessage, OSError)):
-        async with connect(clear_socket, proxy=None):
-            raise AssertionError("a clear socket was opened on the TLS port")
+    opened = await opens_in_clear(served.port)
+    assert not opened, "a clear socket was opened on the TLS port"
     # The console goes on serving, and wrote nothing for a peer it never heard as one.
     assert served.rig.hub.client_count == 0
     said = [

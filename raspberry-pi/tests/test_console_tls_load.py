@@ -218,8 +218,7 @@ async def running(tmp_path: Path, material: Material) -> AsyncGenerator[Console]
         console.leaving.code = await asyncio.wait_for(run, 60.0)
         console.leaving.took = time.monotonic() - asked
         watching.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watching
+        await asyncio.gather(watching, return_exceptions=True)
 
 
 def page_of(console: Console, client: ssl.SSLContext) -> httpx.AsyncClient:
@@ -462,8 +461,7 @@ async def test_ex3_stalled_tls_clients_move_neither_the_tick_nor_either_stop_of_
     finally:
         if dripping is not None:
             dripping.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await dripping
+            await asyncio.gather(dripping, return_exceptions=True)
         if stalled is not None:
             stalled.close()
 
