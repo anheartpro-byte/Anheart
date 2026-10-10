@@ -1519,7 +1519,7 @@ que soit la règle.
   refusé, 22 s). Neuf autres lignes avaient été écrites avant toute mesure,
   d'après un poste de développement : sept par ANH-191 et deux par ANH-210.
   Elles ont été mesurées le 10 octobre 2026 (ANH-215), voir « Remise à jour de
-  la table » plus bas : la table compte maintenant 61 lignes. Ils sont
+  la table » plus bas : la table compte maintenant 62 lignes. Ils sont
   distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
   paramètre vaut pour chaque cas du test : les 61 cas de
@@ -1630,9 +1630,22 @@ Le cumul des deux jobs bouge peu (5 % d'écart avant comme après sur le
 premier run, 10 % puis 7 % sur le second) : c'est la part la plus lourde, celle
 qu'un job attend, qui baisse de 6 à 7 %, et l'écart entre les huit parts qui
 passe de 115 s à 48 s et de 105 s à 45 s. Ces chiffres sont un calcul sur des
-durées mesurées avant ce changement, pas la mesure d'un run qui le porte.
-L'écart observé entre les deux jobs de ces runs (2 min 20 s et 3 min) vient
-d'abord du processeur de leur runner, auquel la table ne peut rien.
+durées mesurées avant ce changement. L'écart observé entre les deux jobs de
+ces runs (2 min 20 s et 3 min) vient d'abord du processeur de leur runner,
+auquel la table ne peut rien.
+
+**Mesuré avec cette table** (run 38069458014, le premier de la PR d'ANH-215 :
+4991 tests, 15 186 lignes et 3 398 branches jugées, chaque test exécuté une
+fois) : `pi (tests 1)` 14 min 24 s sur un EPYC 7763 (2916 s de pytest
+cumulés), `pi (tests 2)` 7 min 34 s sur un EPYC 9V45 (1523 s). Le premier
+runner était 1,92 fois plus lent, sur les 108 cas paramétrés que les deux jobs
+se partageaient : ramenés au second, les deux jobs portent 1528 s et 1523 s,
+et les huit parts vont de 362 s à 398 s. Ce run a aussi mesuré le test qui
+arrête le fil du journal avant chacune de ses instructions, auquel ANH-215
+fait armer une séance à chaque arrêt (un enregistrement par arrêt, plus de
+2 000) : 16,9 s sur le runner rapide, soit 18 s dans les secondes de la table,
+là où il en prenait 2. Il a reçu sa ligne après ce run, qui ne l'avait donc
+pas.
 
 Limites, les mêmes que pour la table de la simulation :
 

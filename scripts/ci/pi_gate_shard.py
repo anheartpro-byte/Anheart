@@ -143,6 +143,7 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     "tests/test_record_tick_isolation.py": {
         "test_ex2_the_tick_takes_the_same_time_with_the_writer_active": 44,
         "test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupied_session": 27,
+        "test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stands": 18,
         "test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loop": 15,
     },
     "tests/test_link_indicator.py": {
@@ -231,7 +232,11 @@ and one each of ``test_runtime_session_overrun.py``,
 added. Every other line was left as it was. Most agree with both runs within a
 tenth; five measure 2 to 7 seconds less in both (the ``nan_values`` signal,
 the disk that never answers, the regulation of a turning arm, the isolated
-outliers, the clean EMG generator), too little to move the dealing.
+outliers, the clean EMG generator), too little to move the dealing. One line
+came with that work itself: the test that holds the journal thread before each
+of its instructions now arms a session at every stop, and takes 18 of these
+seconds where it took 2 (measured on the first run that carried it,
+38069458014, whose faster runner took 0.95 times the seconds written here).
 
 The 52 lines measured then named 119 of the 4267 tests and two thirds of their
 time; three of them named tests that were rewritten since (ANH-185) and are
