@@ -307,25 +307,41 @@ class FaultSpec:
 class DriveFault(Enum):
     """A fault the drive latched, one member per LFT code of the ATV320.
 
-    COMPLETE: every code of the Schneider enumeration of LFT (parameter 7121,
-    "Altivar fault code", ``ATV32_communication_parameters`` A1.2IE03,
-    Enumerations sheet; the ATV320 inherits the ATV32 fault set), plus
-    :attr:`NO_FAULT_STORED` for LFT = 0 and :attr:`UNKNOWN` for any code this
-    table does not list (a newer firmware). Values are ``auto()``: the numbers
-    live in :data:`LFT_FAULT_CODES`, overridable at commissioning.
+    ALIGNED ON THE ATV320'S OWN DOCUMENTS: every value of the LFT list of
+    Schneider Electric NVE41316, "ATV320 - Communication Parameters", V3.5 of
+    3 January 2022 (sheet "Enumerations", list LFT: 60 faults and the value 0;
+    sheet "Parameters": LFT, "Last fault occurred", logic address
+    16#1BD1 = 7121), plus :attr:`NO_FAULT_STORED` for LFT = 0 and
+    :attr:`UNKNOWN` for any code this table does not list (another firmware).
+    Those 60 mnemonics are exactly the 60 error codes of the chapter
+    "Diagnostics and Troubleshooting" of the programming manual, NVE41295.06 of
+    04/2025 (drive software V3.5IE46), which is where each
+    :attr:`resettable` was checked against "How To Clear the Error Codes?".
+    Neither file is in this repository (they are Schneider's): both were
+    downloaded on 10 October 2026 from
+    ``https://www.se.com/uk/en/download/document/NVE41316/`` and
+    ``https://www.se.com/uk/en/download/document/NVE41295/``. Values are
+    ``auto()``: the numbers live in :data:`LFT_FAULT_CODES`, overridable at
+    commissioning.
 
     **Every member stops the machine.** The drive has already applied its own
     fault reaction when this is read; the ``drive_fault`` safety rule latches on
     the FAULT state whatever the code, and nothing here ever resets a fault by
     itself. What the member decides is only what the operator is told and
     whether the console may later reset it (:attr:`resettable`).
+
+    ``resettable`` is this machine's policy, never looser than the manual: a
+    code the manual clears only by a power reset (or, for OCF, SCF1 and SCF3,
+    only with the extended reset the factory leaves off) is ``False`` here, and
+    several the manual lets a reset clear are ``False`` too, because their cause
+    needs an inspection first. A test holds both documents' lists against this
+    table.
     """
 
     NO_FAULT_STORED = auto()
     # LFT read back as 0. Not a fault: the register holds the LAST fault and is
     # empty when none has occurred.
 
-    INTERNAL = auto()
     CONTROL_EEPROM = auto()
     INCORRECT_CONFIG = auto()
     INVALID_CONFIG = auto()
@@ -336,6 +352,7 @@ class DriveFault(Enum):
     OVERCURRENT = auto()
     PRECHARGE = auto()
     SPEED_FEEDBACK_LOSS = auto()
+    LOAD_SLIPPING = auto()
     DRIVE_OVERHEAT = auto()
     MOTOR_OVERLOAD = auto()
     DC_BUS_OVERVOLTAGE = auto()
@@ -351,7 +368,6 @@ class DriveFault(Enum):
     INTERNAL_SERIAL_LINK = auto()
     INTERNAL_MFG_AREA = auto()
     POWER_EEPROM = auto()
-    IMPEDANT_SHORT_CIRCUIT = auto()
     GROUND_SHORT_CIRCUIT = auto()
     THREE_PHASE_LOSS = auto()
     CANOPEN_COMM_LOSS = auto()
@@ -359,10 +375,8 @@ class DriveFault(Enum):
     EXTERNAL_FAULT_COM = auto()
     BRAKE_FEEDBACK = auto()
     PC_COMM_LOSS = auto()
-    ENCODER_COUPLING = auto()
     TORQUE_CURRENT_LIMIT = auto()
     HMI_COMM_LOSS = auto()
-    POWER_REMOVAL = auto()
     PTC_PROBE = auto()
     PTC_OVERHEAT = auto()
     INTERNAL_CURRENT_MEASURE = auto()
@@ -371,12 +385,9 @@ class DriveFault(Enum):
     IGBT_OVERHEAT = auto()
     IGBT_SHORT_CIRCUIT = auto()
     MOTOR_SHORT_CIRCUIT_2 = auto()
-    TORQUE_TIMEOUT = auto()
     OUTPUT_CONTACTOR_STUCK = auto()
     OUTPUT_CONTACTOR_OPEN = auto()
-    AI2_INPUT = auto()
     INPUT_CONTACTOR = auto()
-    DIFFERENTIAL_CURRENT = auto()
     IGBT_DESATURATION = auto()
     INTERNAL_OPTION = auto()
     INTERNAL_CPU = auto()
@@ -389,8 +400,8 @@ class DriveFault(Enum):
     PROCESS_OVERLOAD = auto()
     ANGLE_ERROR = auto()
     SAFETY_FUNCTION = auto()
-    FIELDBUS = auto()
-    FIELDBUS_STOP = auto()
+    FUNCTION_BLOCK = auto()
+    FUNCTION_BLOCK_STOP = auto()
 
     UNKNOWN = auto()
     # A code absent from the table: always paired with the raw number, never
@@ -431,15 +442,6 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
             meaning=(
                 "aucun defaut memorise (LFT = 0). Si le mot d'etat indique un defaut en meme "
                 "temps, les deux sont en desaccord : le mot d'etat fait foi."
-            ),
-        ),
-        DriveFault.INTERNAL: FaultSpec(
-            mnemonic="InF",
-            category=FaultCategory.DRIVE_HARDWARE,
-            resettable=False,
-            meaning=(
-                "erreur de calibration interne du variateur : couper l'alimentation ; si le "
-                "defaut revient, le variateur est defaillant."
             ),
         ),
         DriveFault.CONTROL_EEPROM: FaultSpec(
@@ -515,7 +517,7 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
             ),
         ),
         DriveFault.PRECHARGE: FaultSpec(
-            mnemonic="CrF",
+            mnemonic="CrF1",
             category=FaultCategory.DRIVE_HARDWARE,
             resettable=False,
             meaning=(
@@ -530,6 +532,17 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
             meaning=(
                 "perte du retour vitesse : la vitesse mesuree n'est plus fiable. Verifier le "
                 "capteur et son cablage avant tout redemarrage."
+            ),
+        ),
+        DriveFault.LOAD_SLIPPING: FaultSpec(
+            mnemonic="AnF",
+            category=FaultCategory.LOAD,
+            # NVE41295.06: "requires a power reset of the device".
+            resettable=False,
+            meaning=(
+                "glissement de charge : la vitesse mesuree ne suit plus la frequence de sortie. "
+                "Ne pas rearmer : couper l'alimentation, inspecter la mecanique entrainee et le "
+                "retour vitesse."
             ),
         ),
         DriveFault.DRIVE_OVERHEAT: FaultSpec(
@@ -663,15 +676,6 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
                 "variateur si le defaut persiste."
             ),
         ),
-        DriveFault.IMPEDANT_SHORT_CIRCUIT: FaultSpec(
-            mnemonic="SCF2",
-            category=FaultCategory.MOTOR,
-            resettable=False,
-            meaning=(
-                "court-circuit impedant en sortie : ne pas rearmer, inspecter le cable et le "
-                "moteur."
-            ),
-        ),
         DriveFault.GROUND_SHORT_CIRCUIT: FaultSpec(
             mnemonic="SCF3",
             category=FaultCategory.MOTOR,
@@ -730,12 +734,6 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
                 "perte de communication avec le logiciel PC : verifier la liaison, puis acquitter."
             ),
         ),
-        DriveFault.ENCODER_COUPLING: FaultSpec(
-            mnemonic="ECF",
-            category=FaultCategory.FEEDBACK,
-            resettable=False,
-            meaning=("defaut d'accouplement du codeur : inspecter la mecanique du codeur."),
-        ),
         DriveFault.TORQUE_CURRENT_LIMIT: FaultSpec(
             mnemonic="SSF",
             category=FaultCategory.LOAD,
@@ -751,15 +749,6 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
             resettable=True,
             meaning=(
                 "perte de communication avec le terminal : verifier le terminal, puis acquitter."
-            ),
-        ),
-        DriveFault.POWER_REMOVAL: FaultSpec(
-            mnemonic="PrF",
-            category=FaultCategory.SAFETY,
-            resettable=False,
-            meaning=(
-                "defaut de la fonction de securite STO (suppression de puissance) : ne pas "
-                "rearmer, faire controler la chaine de securite."
             ),
         ),
         DriveFault.PTC_PROBE: FaultSpec(
@@ -819,15 +808,9 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
             category=FaultCategory.MOTOR,
             resettable=False,
             meaning=(
-                "court-circuit moteur (detection a la mise sous tension) : ne pas rearmer, "
-                "inspecter."
+                "court-circuit en sortie du variateur : ne pas rearmer, inspecter le cable et "
+                "l'isolement du moteur."
             ),
-        ),
-        DriveFault.TORQUE_TIMEOUT: FaultSpec(
-            mnemonic="SrF",
-            category=FaultCategory.LOAD,
-            resettable=True,
-            meaning=("delai de couple depasse : verifier la charge mecanique avant d'acquitter."),
         ),
         DriveFault.OUTPUT_CONTACTOR_STUCK: FaultSpec(
             mnemonic="FCF1",
@@ -845,27 +828,12 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
                 "contacteur de sortie reste ouvert : verifier le contacteur avant tout redemarrage."
             ),
         ),
-        DriveFault.AI2_INPUT: FaultSpec(
-            mnemonic="AI2F",
-            category=FaultCategory.INPUT,
-            resettable=True,
-            meaning=("defaut de l'entree analogique AI2 : verifier le signal et son cablage."),
-        ),
         DriveFault.INPUT_CONTACTOR: FaultSpec(
             mnemonic="LCF",
             category=FaultCategory.SUPPLY,
             resettable=False,
             meaning=(
                 "defaut du contacteur de ligne : verifier le contacteur avant tout redemarrage."
-            ),
-        ),
-        DriveFault.DIFFERENTIAL_CURRENT: FaultSpec(
-            mnemonic="dCF",
-            category=FaultCategory.MOTOR,
-            resettable=False,
-            meaning=(
-                "courant differentiel (fuite) detecte : danger electrique, ne pas rearmer, "
-                "inspecter l'isolement."
             ),
         ),
         DriveFault.IGBT_DESATURATION: FaultSpec(
@@ -960,17 +928,29 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
                 "la chaine de securite."
             ),
         ),
-        DriveFault.FIELDBUS: FaultSpec(
+        # FbE and FbES are the drive's FUNCTION BLOCKS (its embedded program),
+        # not a fieldbus: NVE41295.06 names them "Function block error" and
+        # "Function block stop error". The manual lets FbE clear with its cause
+        # and FbES be reset; neither is reset from this console, chosen on the
+        # conservative side: a program inside the drive that failed or stopped
+        # puts its configuration in doubt, like CFF and CFI.
+        DriveFault.FUNCTION_BLOCK: FaultSpec(
             mnemonic="FbE",
-            category=FaultCategory.COMMUNICATION,
-            resettable=True,
-            meaning=("defaut du module de bus de terrain : verifier le module, puis acquitter."),
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "erreur des blocs fonction (programme embarque du variateur) : ne pas relancer, "
+                "verifier la configuration mise en service."
+            ),
         ),
-        DriveFault.FIELDBUS_STOP: FaultSpec(
+        DriveFault.FUNCTION_BLOCK_STOP: FaultSpec(
             mnemonic="FbES",
-            category=FaultCategory.COMMUNICATION,
-            resettable=True,
-            meaning=("arret sur defaut du bus de terrain : verifier le reseau, puis acquitter."),
+            category=FaultCategory.CONFIGURATION,
+            resettable=False,
+            meaning=(
+                "blocs fonction (programme embarque du variateur) arretes alors que le moteur "
+                "tournait : ne pas relancer, verifier la configuration mise en service."
+            ),
         ),
         DriveFault.UNKNOWN: FaultSpec(
             mnemonic="?",
@@ -989,7 +969,6 @@ _FAULT_SPECS: Final[Mapping[DriveFault, FaultSpec]] = MappingProxyType(
 LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
     {
         RawRegister(0): DriveFault.NO_FAULT_STORED,
-        RawRegister(1): DriveFault.INTERNAL,
         RawRegister(2): DriveFault.CONTROL_EEPROM,
         RawRegister(3): DriveFault.INCORRECT_CONFIG,
         RawRegister(4): DriveFault.INVALID_CONFIG,
@@ -1000,6 +979,7 @@ LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
         RawRegister(9): DriveFault.OVERCURRENT,
         RawRegister(10): DriveFault.PRECHARGE,
         RawRegister(11): DriveFault.SPEED_FEEDBACK_LOSS,
+        RawRegister(12): DriveFault.LOAD_SLIPPING,
         RawRegister(16): DriveFault.DRIVE_OVERHEAT,
         RawRegister(17): DriveFault.MOTOR_OVERLOAD,
         RawRegister(18): DriveFault.DC_BUS_OVERVOLTAGE,
@@ -1015,7 +995,6 @@ LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
         RawRegister(28): DriveFault.INTERNAL_SERIAL_LINK,
         RawRegister(29): DriveFault.INTERNAL_MFG_AREA,
         RawRegister(30): DriveFault.POWER_EEPROM,
-        RawRegister(31): DriveFault.IMPEDANT_SHORT_CIRCUIT,
         RawRegister(32): DriveFault.GROUND_SHORT_CIRCUIT,
         RawRegister(33): DriveFault.THREE_PHASE_LOSS,
         RawRegister(34): DriveFault.CANOPEN_COMM_LOSS,
@@ -1023,10 +1002,8 @@ LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
         RawRegister(38): DriveFault.EXTERNAL_FAULT_COM,
         RawRegister(41): DriveFault.BRAKE_FEEDBACK,
         RawRegister(42): DriveFault.PC_COMM_LOSS,
-        RawRegister(43): DriveFault.ENCODER_COUPLING,
         RawRegister(44): DriveFault.TORQUE_CURRENT_LIMIT,
         RawRegister(45): DriveFault.HMI_COMM_LOSS,
-        RawRegister(46): DriveFault.POWER_REMOVAL,
         RawRegister(49): DriveFault.PTC_PROBE,
         RawRegister(50): DriveFault.PTC_OVERHEAT,
         RawRegister(51): DriveFault.INTERNAL_CURRENT_MEASURE,
@@ -1035,12 +1012,9 @@ LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
         RawRegister(54): DriveFault.IGBT_OVERHEAT,
         RawRegister(55): DriveFault.IGBT_SHORT_CIRCUIT,
         RawRegister(56): DriveFault.MOTOR_SHORT_CIRCUIT_2,
-        RawRegister(57): DriveFault.TORQUE_TIMEOUT,
         RawRegister(58): DriveFault.OUTPUT_CONTACTOR_STUCK,
         RawRegister(59): DriveFault.OUTPUT_CONTACTOR_OPEN,
-        RawRegister(61): DriveFault.AI2_INPUT,
         RawRegister(64): DriveFault.INPUT_CONTACTOR,
-        RawRegister(66): DriveFault.DIFFERENTIAL_CURRENT,
         RawRegister(67): DriveFault.IGBT_DESATURATION,
         RawRegister(68): DriveFault.INTERNAL_OPTION,
         RawRegister(69): DriveFault.INTERNAL_CPU,
@@ -1053,15 +1027,23 @@ LFT_FAULT_CODES: Final[Mapping[RawRegister, DriveFault]] = MappingProxyType(
         RawRegister(101): DriveFault.PROCESS_OVERLOAD,
         RawRegister(105): DriveFault.ANGLE_ERROR,
         RawRegister(107): DriveFault.SAFETY_FUNCTION,
-        RawRegister(108): DriveFault.FIELDBUS,
-        RawRegister(109): DriveFault.FIELDBUS_STOP,
+        RawRegister(108): DriveFault.FUNCTION_BLOCK,
+        RawRegister(109): DriveFault.FUNCTION_BLOCK_STOP,
     }
 )
-"""LFT register value -> fault: the complete Schneider enumeration (see :class:`DriveFault`).
+"""LFT register value -> fault: the ATV320's own enumeration (see :class:`DriveFault`).
 
-Taken from the manufacturer's parameter file, not from memory; the bench
-observation "LFT = 5 after a Modbus loss" agrees with it (SLF1 = 5), where the
-provisional table this replaced had SLF at 19 (really OSF, mains overvoltage).
+Taken from the manufacturer's parameter file for THIS drive (NVE41316 V3.5),
+not from memory and no longer from the ATV32's; the bench observation
+"LFT = 5 after a Modbus loss" agrees with it (SLF1 = 5), where the provisional
+table this replaced had SLF at 19 (really OSF, mains overvoltage).
+
+The table names only what the ATV320's own documents list. A value they do not
+list reads as any code this table does not know: the same stop, the same latch,
+:data:`DriveFault.UNKNOWN` with the number, and no reset from the console. That
+holds for the seven values the ATV32 enumeration has and the ATV320 documents
+have not: 1 (InF), 31 (SCF2), 43 (ECF), 46 (PrF), 57 (SrF), 61 (AI2F) and
+66 (dCF).
 """
 
 

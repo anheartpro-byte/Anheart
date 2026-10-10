@@ -285,7 +285,7 @@ def test_code_zero_means_no_fault_stored_not_a_fault() -> None:
     assert describe_fault(RawRegister(0)).fault == DriveFault.NO_FAULT_STORED
 
 
-@pytest.mark.parametrize("code", [12, 110, 200, 0xFFFF])
+@pytest.mark.parametrize("code", [13, 110, 200, 0xFFFF])
 def test_unknown_codes_degrade_to_unknown_carrying_the_raw_number(code: int) -> None:
     """The module never claims a fault it cannot identify.
 

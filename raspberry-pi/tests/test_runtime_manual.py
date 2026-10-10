@@ -741,7 +741,7 @@ async def test_a_runtime_state_that_is_not_one_fails_loudly_in_the_mode(
 
 
 @pytest.mark.parametrize(
-    "fault", [DriveFault.OVERCURRENT, DriveFault.MOTOR_SHORT_CIRCUIT, DriveFault.POWER_REMOVAL]
+    "fault", [DriveFault.OVERCURRENT, DriveFault.MOTOR_SHORT_CIRCUIT, DriveFault.SAFETY_FUNCTION]
 )
 async def test_a_fault_that_is_not_resettable_is_never_reset_from_the_console(
     fault: DriveFault,

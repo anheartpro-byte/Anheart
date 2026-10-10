@@ -614,7 +614,8 @@ En cas de défaut, un encadré rouge :
 `DEFAUT <mnémonique> (LFT brut <code>) : <signification>`.
 Pour un code absent de la table, l'encadré reprend le message du pilote tel quel :
 `DEFAUT code de defaut inconnu <code> (0x<code en hexadécimal>) : <signification>`.
-La table des 66 codes LFT est dans [raspberry-pi.md](raspberry-pi.md).
+La table des 60 codes LFT est dans
+[raspberry-pi.md](raspberry-pi.md#6-les-défauts-du-variateur-table-lft).
 
 Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
 `POST /api/drive/fault-reset`. Nommé, explicite, jamais automatique. La boucle le refuse
