@@ -74,6 +74,8 @@ var state = {
   estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
   estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
   estopFrame: null,      // what the frames say about it, and since when: {says, since, at, boot, asked}
+  stream: 0,             // telemetry sockets opened so far: the frames of one socket come from one console
+  estopLatch: null,      // the latched stop the frames last showed, until they show it released (see noteConsoleRun)
   estopAsked: null,      // this page's E-STOP with no proof of a latch yet: a doubt (see openDoubt)
   stopAsked: null,       // this page's STOP with no answer and no proof it was taken: a doubt as well
   view: "console",
@@ -460,6 +462,67 @@ function noteEstopFrame(snapshot) {
   if (state.estopReceipt && says !== "silent" && snapshot.at >= state.estopReceipt.at) {
     state.estopReceipt = null;
   }
+  var latch = state.estopLatch;
+  if (says === "latched" && !(latch && latch.rule === snapshot.safety.rule && latch.stream === state.stream)) {
+    // Which stop it is, and which console showed it: the one at the other end of this socket.
+    state.estopLatch = {
+      rule: snapshot.safety.rule,
+      boot: state.machineBoot,
+      stream: state.stream,
+      sent: state.statusSent,
+      count: null,
+      restarted: false,
+    };
+  } else if (says === "clear") {
+    // The frames themselves have shown it released.
+    state.estopLatch = null;
+  }
+}
+
+/*
+  The latched stop the frames last showed, when they then turn to go_silent
+  without having shown it released: may the status speak for it?
+
+  For the emergency stop itself, yes. The status carries that latch
+  (statusOpinion), go_silent or not, so it says whether the stop is still
+  held.
+
+  For any other latched quick stop, a rule's or the runtime's own, no. When
+  go_silent replaces such a verdict the console holds it nowhere any more, and
+  its status shows go_silent and nothing behind it. Nobody acknowledged
+  anything, and nothing can be acknowledged from then on: a banner that went
+  at that moment would read as an acknowledgement, on a machine that has just
+  reached its most severe state. So that banner stays for as long as it is the
+  same console that showed the latch. It goes with a console that restarted,
+  which holds nothing of what the previous one held, and only when the
+  restart is proven. The latch is remembered with the socket that delivered
+  it (one socket, one console), and the proof is one of:
+
+  - the machine's clock restarted after those frames (machineBoot); or
+  - the count of snapshots the console has published, which only ever rises
+    while it runs (`counters` of the status), went down between two status
+    answers that were both asked after that socket first showed the latch:
+    asked then, the first comes from the console that showed it or a later
+    one, and the second from a later one still.
+
+  A frame stream that broke and came back proves no restart: the link can drop
+  under a console that keeps running. And a latch shown again over a new
+  socket is that socket's console's own: the proof starts again from there.
+  Unproven, the banner stays, until the frames show no verdict or the page is
+  reloaded.
+*/
+function noteConsoleRun(status, sent) {
+  var latch = state.estopLatch;
+  if (latch && sent > latch.sent) {
+    var published = status.counters[2];
+    latch.restarted = latch.restarted || (latch.count !== null && published < latch.count);
+    latch.count = published;
+  }
+}
+
+function statusSpeaksForLatch() {
+  var latch = state.estopLatch;
+  return !latch || latch.rule === "operator_estop" || latch.restarted || state.machineBoot > latch.boot;
 }
 
 /*
@@ -497,11 +560,14 @@ function statusCoversFrames(frame) {
     last, those frames or the status. A status answer that says "latched" and
     is older than the frame on screen does not bring the banner back: it was
     asked before an acknowledgement and arrived after it.
-  - Frames under go_silent cannot say. The status can, and decides alone once
-    it was written after the frames turned to go_silent: it raises the banner
-    for a stop latched behind go_silent, and it takes down a banner nothing
-    holds any more (a console that was restarted, a rule's quick stop that
-    go_silent replaced). An older answer may raise it, never lower it.
+  - Frames under go_silent cannot say. The status can say whether an
+    emergency stop is held behind go_silent, and once it was written after the
+    frames turned to go_silent it raises the banner for one that is. It takes
+    the banner down only where it can speak for what the frames last showed
+    (statusSpeaksForLatch): the emergency stop itself, or a latch shown by a
+    console that has since restarted. The latched quick stop of a rule that
+    go_silent replaced, in the console that showed it, keeps its banner. An
+    older answer may raise the banner, never lower it.
   - No frame yet: the status alone. No status yet: the frames alone.
   - In every other case it KEEPS what it shows; unknown is never read as
     released. So does a socket that goes quiet on a frame showing a latched
@@ -530,7 +596,7 @@ function renderEstopBanner() {
     state.estopShown = polled === "latched" && !frameOutdatesStatus(frame);
   } else if (polled === "latched") {
     state.estopShown = true;
-  } else if (statusCoversFrames(frame)) {
+  } else if (statusCoversFrames(frame) && statusSpeaksForLatch()) {
     state.estopShown = false;
   }
   showBanner(el("estop-banner"), state.estopShown);
@@ -764,6 +830,8 @@ function connect() {
   }
   var socket = new WebSocket(socketUrl());
   state.socket = socket;
+  // A new socket may be another console's: what the frames of this one show is its own.
+  state.stream += 1;
 
   socket.onopen = function () {
     state.connected = true;
@@ -2210,9 +2278,13 @@ function loadStatus() {
     if (state.estopAsked && sent > state.estopAsked.sent) {
       estopSeenLatched(statusOpinion(status));
     }
-    if (state.stopAsked && sent > state.stopAsked.sent && (status.run_state === "stopping" || status.run_state === "idle")) {
+    // "idle" with a request still in the mailbox is not a machine at rest: a start accepted during
+    // a tick waits there for the next one, and the session it starts is the one a STOP was meant for.
+    var atRest = status.run_state === "idle" && !status.pending;
+    if (state.stopAsked && sent > state.stopAsked.sent && (status.run_state === "stopping" || atRest)) {
       stopSettled();
     }
+    noteConsoleRun(status, sent);
     renderEstopBanner();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
