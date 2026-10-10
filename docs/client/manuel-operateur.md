@@ -381,7 +381,9 @@ l'écran.*
   sous les boutons veut seulement dire que la demande est reçue. La machine
   vérifie ensuite, et la même ligne change. Elle dit alors l'une de ces choses :
   - « demarrage pris par la machine » ou « cible prise par la machine » :
-    l'écran a vu la machine prendre cette demande.
+    après cette demande, l'écran a vu la séance démarrer, ou la machine
+    tenir cette cible. Pour un démarrage, il n'a vu entre les deux ni refus
+    ni autre demande de démarrage.
   - En rouge, « refus de la machine » suivi de la raison. Le refus apparaît
     aussi dans la liste **Evenements** de la page **Seance**, sur une ligne
     « refused ».
@@ -393,6 +395,14 @@ l'écran.*
     demarrage », suivi de « sa liaison a ete coupee » : la liaison de l'écran
     avec la console a été coupée entre votre clic et la réponse. La ligne ne
     dit alors pas si la séance en cours vient de votre demande.
+  - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande »,
+    suivi de « une autre demande de demarrage est aussi arrivee a la
+    machine » : deux demandes de démarrage sont arrivées à la machine en même
+    temps, la vôtre et une autre. Une séance est en cours ; la ligne ne dit
+    pas laquelle des deux demandes la machine a prise. La même phrase peut se
+    terminer par « il n'a pas recu l'evenement de sa propre demande » :
+    l'écran n'a pas vu passer votre demande, et ne dit pas non plus si la
+    séance en cours est la vôtre.
   - En rouge, « demande refusee par la console : une autre demande attend
     encore la machine », ou « seconde demande refusee par la console » : un
     clic précédent, de cet écran ou d'un autre, n'est pas encore traité, et
