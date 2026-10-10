@@ -89,10 +89,11 @@ var state = {
   manualTaken: null,     // the target the note says the machine took, and that note: {rpm, detail, text}
   riseHeld: false,       // whether the heart rate holds a manual rise, or may: the console says so, or no longer answers
   manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
-  loopAsked: {},         // a start or a reset this page sent, until the machine has answered: kind -> {at, said, refused, late}
-  loopDone: {},          // the note saying one of them happened, for as long as the frames show it: kind -> text
+  loopAsked: {},         // a start or a reset this page sent, until the machine has answered: kind -> {at, said, refused, late, stream}
+  loopDone: {},          // the note saying one of them happened, for as long as the frames show it: kind -> {said, text}
   lastRefusal: null,     // the last `refused` event: one can reach the screen before the 202 of what it answers
   ackGiven: null,        // the acknowledgement this page gave, until frames show whether it held: {at, cleared, text}
+  ackTaken: null,        // the note saying the machine took one back, for as long as the frames show that latch: {rule, waits}
   latchSeen: {},         // the latched rule each source last reported: a rule new to all of them is a new latch
   verdictShown: "",      // the frames' verdict as the status lines last showed it
   dirty: {},             // canvas id -> true when it needs a redraw
@@ -1563,13 +1564,35 @@ function stepGr(direction) {
     the fault is still reported, and is corrected when it goes.
 
   A note saying it happened is true only for as long as the frames show it,
-  and is wiped when they stop: the session ended, a fault is back.
+  and is wiped when they stop: the session ended, a fault is back. What it
+  adds from the frames follows them the same way: "(cible 0)" after a manual
+  start is said while the applied target is 0, and goes when another screen
+  has applied one.
 
   One case the frames cannot settle. A refusal dated after a start may answer
   another screen's request taken in the same tick, and the session may then
   start: the page cannot tell whose it is, so the note says neither and is
-  wiped. The card shows the session, the list of events the refusal.
+  wiped. The card shows the session, the list of events the refusal. A
+  refusal counts as the answer only within that second of the request: a
+  reset left watching its fault does not take a later one for its own.
+
+  "Pris" is said of THIS start only when the page can stand behind it. A
+  refusal carries no mark of the request it answers, and the events a socket
+  missed are not sent again. A start the loop refused while this screen's
+  socket was down, followed by another screen's start, shows this screen a
+  session and no refusal. So the words of the request are written next to
+  "pris" only on an unbroken stream: the socket that was open when the
+  request left is still the one delivering the frame that shows the session
+  (state.stream). Over one socket every event published in between has
+  arrived, in order, before that frame, a refusal among them. On any other
+  stream the page says what the frames show and no more: a session is
+  running, or after a second none is, and what the machine made of this
+  screen's request did not reach it. The words of the request are not
+  repeated there: they would read as those of the session on screen. A reset
+  never says more than the frames show, on any stream.
 */
+var LINK_CUT = "sa liaison a ete coupee.";
+var START_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : " + LINK_CUT;
 var LOOP_ASKS = {
   manual: {
     note: function () {
@@ -1578,10 +1601,13 @@ var LOOP_ASKS = {
     shows: function (snapshot) {
       return snapshot.mode === "manuel";
     },
-    done: function (said) {
-      return "demarrage pris par la machine : " + said + " (cible 0)";
+    done: function (said, snapshot) {
+      var atZero = Boolean(snapshot.manual) && snapshot.manual.target.motor_rpm === 0;
+      return "demarrage pris par la machine : " + said + (atZero ? " (cible 0)" : "");
     },
     missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
+    unknown: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : " + LINK_CUT,
+    lost: START_LOST,
   },
   programme: {
     note: function () {
@@ -1594,6 +1620,8 @@ var LOOP_ASKS = {
       return "demarrage pris par la machine : " + said;
     },
     missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
+    unknown: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : " + LINK_CUT,
+    lost: START_LOST,
   },
   reset: {
     note: function () {
@@ -1613,13 +1641,17 @@ function refusalWords(event) {
   return "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail;
 }
 
-/** The 202 of a start or a reset: sent, not taken yet. */
-function askLoop(kind, command) {
+/** The socket delivering frames and events as a request leaves, or null when none is open. */
+function liveStream() {
+  return state.connected ? state.stream : null;
+}
+
+/** The 202 of a start or a reset: sent, not taken yet. `stream` is liveStream() at the click. */
+function askLoop(kind, command, stream) {
   var said = (command.kind + " " + command.detail).trim();
   var early = state.lastRefusal;
   var refused = Boolean(early) && early.at >= command.at;
-  state.loopAsked[kind] = { at: command.at, said: said, refused: refused, late: null };
-  delete state.loopDone[kind];
+  state.loopAsked[kind] = { at: command.at, said: said, refused: refused, late: null, stream: stream };
   if (refused) {
     problem(LOOP_ASKS[kind].note(), refusalWords(early));
   } else {
@@ -1627,11 +1659,12 @@ function askLoop(kind, command) {
   }
 }
 
-/** A `refused` event, for whichever start or reset of this page it is dated after. */
+/** A `refused` event, for whichever start or reset of this page it is dated just after. */
 function refuseLoopAsks(event) {
   Object.keys(state.loopAsked).forEach(function (kind) {
     var asked = state.loopAsked[kind];
-    if (event.at >= asked.at && !asked.refused) {
+    var since = event.at - asked.at;
+    if (since >= 0 && since <= LOOP_ANSWER_S && !asked.refused) {
       asked.refused = true;
       asked.late = null;
       problem(LOOP_ASKS[kind].note(), refusalWords(event));
@@ -1645,12 +1678,19 @@ function settleLoopAsks(snapshot) {
     var ask = LOOP_ASKS[kind];
     var note = ask.note();
     var done = state.loopDone[kind];
-    if (done !== undefined && note.textContent !== done) {
+    if (done && note.textContent !== done.text) {
       // Something else has been written there since: the note is no longer this one's to keep.
       delete state.loopDone[kind];
-    } else if (done !== undefined && !ask.shows(snapshot)) {
+    } else if (done && !ask.shows(snapshot)) {
       delete state.loopDone[kind];
       ok(note, "");
+    } else if (done && done.said !== null) {
+      // Still shown. What the note adds from the frames is said for as long as they show it.
+      var current = ask.done(done.said, snapshot);
+      if (current !== done.text) {
+        ok(note, current);
+        done.text = current;
+      }
     }
     var asked = state.loopAsked[kind];
     if (!asked || snapshot.at <= asked.at) {
@@ -1660,24 +1700,32 @@ function settleLoopAsks(snapshot) {
       delete state.loopAsked[kind];
       return;
     }
+    // Whether this frame came over the socket that was open when the request left (none was, when
+    // `stream` is null): only then has every event since reached this screen. A reset says what
+    // the frames show on any stream.
+    var unbroken = !ask.unknown || asked.stream === state.stream;
     if (ask.shows(snapshot)) {
       delete state.loopAsked[kind];
-      if (asked.refused && kind !== "reset") {
+      if (asked.refused && ask.unknown) {
         // A refusal and the session both: whose is whose cannot be told from here.
         ok(note, "");
+      } else if (!asked.refused && unbroken) {
+        state.loopDone[kind] = { said: asked.said, text: ask.done(asked.said, snapshot) };
+        ok(note, state.loopDone[kind].text);
       } else if (!asked.refused) {
-        state.loopDone[kind] = ask.done(asked.said);
-        ok(note, state.loopDone[kind]);
+        // A session, and no way to tell whose: said as that, without the words of the request.
+        state.loopDone[kind] = { said: null, text: ask.unknown };
+        problem(note, ask.unknown);
       }
     } else if (snapshot.at - asked.at > LOOP_ANSWER_S && asked.late === null) {
       if (asked.refused) {
         delete state.loopAsked[kind];
-      } else if (kind === "reset") {
+      } else if (!ask.unknown) {
         asked.late = ask.missed;
         problem(note, ask.missed);
       } else {
         delete state.loopAsked[kind];
-        problem(note, ask.missed);
+        problem(note, unbroken ? ask.missed : ask.lost);
       }
     }
   });
@@ -1689,18 +1737,35 @@ function doManualStart() {
     problem(note, "cochez la declaration BANC (personne a bord : NON) avant de demarrer");
     return;
   }
+  var stream = liveStream();
   api("/api/manual/start", {
     method: "POST",
     body: { occupancy: "bench", operator: rememberOperator(el("manual-operator").value) },
   })
     .then(function (command) {
       state.manualDraft = null;
-      askLoop("manual", command);
+      askLoop("manual", command, stream);
       loadStatus();
     })
     .catch(function (error) {
-      problem(note, error);
+      problem(note, refusalToShow(error));
     });
+}
+
+/*
+  A 409 that names a request waiting in the mailbox: the console has one place
+  and it is taken, by another screen's request or by an earlier one of this
+  screen. The console prints the waiting request as it holds it, the other
+  operator's name and a clock reading included. The page says what happened in
+  one sentence of its own and never repeats that text; any other answer of the
+  console is shown as it is written.
+*/
+var MAILBOX_TAKEN =
+  "demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), " +
+  "rien n'a ete envoye. Reessayer dans un instant.";
+
+function refusalToShow(error) {
+  return error.status === 409 && String(error.message).indexOf("(pending: ") !== -1 ? MAILBOX_TAKEN : error;
 }
 
 /*
@@ -1863,7 +1928,7 @@ function doManualApply() {
     })
     .catch(function (error) {
       var sent = state.manualSent;
-      if (error.status === 409 && sent && !sent.framed) {
+      if (refusalToShow(error) === MAILBOX_TAKEN && sent && !sent.framed) {
         // A second click in the cycle of the first: the mailbox has one place and still holds the
         // first target. That one is still the one to follow, and the note will say what became of it.
         problem(
@@ -1874,17 +1939,18 @@ function doManualApply() {
         return;
       }
       state.manualSent = null;
-      problem(note, error);
+      problem(note, refusalToShow(error));
     });
 }
 
 function doFaultReset() {
+  var stream = liveStream();
   api("/api/drive/fault-reset", { method: "POST", body: { operator: operatorName() } })
     .then(function (command) {
-      askLoop("reset", command);
+      askLoop("reset", command, stream);
     })
     .catch(function (error) {
-      problem(el("fault-note"), error);
+      problem(el("fault-note"), refusalToShow(error));
     });
 }
 
@@ -2855,6 +2921,7 @@ function doStart() {
   if (!profile) {
     return;
   }
+  var stream = liveStream();
   api("/api/session/start", {
     method: "POST",
     body: {
@@ -2865,12 +2932,12 @@ function doStart() {
     },
   })
     .then(function (command) {
-      askLoop("programme", command);
+      askLoop("programme", command, stream);
       showView("run");
       loadStatus();
     })
     .catch(function (error) {
-      problem(el("start-note"), error);
+      problem(el("start-note"), refusalToShow(error));
     });
 }
 
@@ -3028,7 +3095,41 @@ function noteLatch(source, rule) {
   }
 }
 
+var ACK_HOLDS_AT_REST = " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.";
+
+function takenBackNote(taken) {
+  return "acquittement repris par la machine : " + taken.rule +
+    " est de nouveau verrouille, sa regle s'est declenchee de nouveau." + (taken.waits ? ACK_HOLDS_AT_REST : "");
+}
+
+/*
+  The note saying an acknowledgement was taken back speaks in the present: it
+  is kept for as long as the frames show that rule latched, and wiped when
+  they no longer do (acknowledged again, from this screen or another). The
+  sentence about the session goes as soon as Mode is back to REPOS: left
+  there, it would go on saying that the session is not over.
+*/
+function followTakenBack(snapshot) {
+  var taken = state.ackTaken;
+  if (!taken) {
+    return;
+  }
+  var note = el("ack-note");
+  var safety = snapshot.safety;
+  if (note.textContent !== takenBackNote(taken)) {
+    // Something else has been written there since.
+    state.ackTaken = null;
+  } else if (!(safety && safety.latched && safety.rule === taken.rule)) {
+    state.ackTaken = null;
+    ok(note, "");
+  } else if (taken.waits && snapshot.mode === "repos") {
+    taken.waits = false;
+    problem(note, takenBackNote(taken));
+  }
+}
+
 function settleAcknowledgement(snapshot) {
+  followTakenBack(snapshot);
   var given = state.ackGiven;
   if (!given || snapshot.at <= given.at) {
     return;
@@ -3041,13 +3142,11 @@ function settleAcknowledgement(snapshot) {
   } else if (safety && safety.latched && given.cleared.indexOf(safety.rule) !== -1) {
     state.ackGiven = null;
     state.latchSeen.frame = safety.rule;
-    problem(
-      note,
-      "acquittement repris par la machine : " + safety.rule + " est de nouveau verrouille, sa regle s'est declenchee de nouveau." +
-        (SESSION_END_RULES[safety.rule] && snapshot.mode !== "repos"
-          ? " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS."
-          : "")
-    );
+    state.ackTaken = {
+      rule: safety.rule,
+      waits: Boolean(SESSION_END_RULES[safety.rule]) && snapshot.mode !== "repos",
+    };
+    problem(note, takenBackNote(state.ackTaken));
   } else if (snapshot.at - given.at > LOOP_ANSWER_S) {
     // A second of the machine's clock with the verdict gone: it held.
     var seen = state.latchSeen;

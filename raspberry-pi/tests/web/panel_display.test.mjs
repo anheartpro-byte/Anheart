@@ -2910,17 +2910,38 @@ async function startManual({ context, node }, at) {
 }
 
 // The operator starts a programme; the console takes the request into its mailbox at `at`.
-async function startProgramme({ context, node }, at) {
+async function startProgramme({ context, node }, at, detail = "standard_30_min") {
   context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
   node("profile").value = "standard_30_min";
   node("operator").value = "op";
   context.api = (path) =>
-    path === "/api/session/start"
-      ? Promise.resolve({ kind: "start", operator: "op", detail: "standard_30_min", at })
-      : never();
+    path === "/api/session/start" ? Promise.resolve({ kind: "start", operator: "op", detail, at }) : never();
   context.doStart();
   await settle();
 }
+
+// The telemetry socket of this screen opens again: a new socket, which delivers nothing of what the
+// machine published while the screen had none.
+function reopenSocket({ context }) {
+  context.state.stream += 1;
+  context.state.connected = true;
+}
+
+// The 409 the console answers while its mailbox holds a request, as it writes it: the waiting
+// request printed as the console holds it, another operator's name and a clock reading included.
+const mailboxTaken = (detail) => Object.assign(new Error(detail), { status: 409 });
+const TARGET_WAITS =
+  "the machine is running (pending: SetManualTarget(output_rpm=5.1, operator='autre ecran', at=18536.818417375)); try again in a moment";
+const START_WAITS =
+  "the machine is starting, not idle (pending: StartSession(profile_id='standard_30_min', operator='autre ecran', " +
+  "total_duration_s=2700.0, at=24511.358085541, subject_id='local', subject_hr_max=None, subject_age=None, cloud_session_id=None))";
+const RESET_BEHIND_START =
+  "the machine is starting (pending: StartSession(profile_id='standard_30_min', operator='autre ecran', " +
+  "total_duration_s=2700.0, at=24511.358085541, subject_id='local', subject_hr_max=None, subject_age=None, " +
+  "cloud_session_id=None)); try again in a moment";
+const MAILBOX_TAKEN =
+  "demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), " +
+  "rien n'a ete envoye. Reessayer dans un instant.";
 
 // The operator asks for a fault reset; the console takes the request into its mailbox at `at`.
 async function askReset({ context }, at) {
@@ -3111,6 +3132,304 @@ test("after a fault reset the note says what the frames show: the fault gone, or
   assert.equal(note.classes.has("note-bad"), false);
 });
 
+/* ------ "pris" is said of this screen's own start only on an unbroken stream ------ */
+
+// The two starts: how the operator asks, the frame that shows the session, the note, and what it reads.
+const STARTS = [
+  {
+    kind: "a manual start",
+    ask: (page, at) => startManual(page, at),
+    running: (at) => manualFrame(at),
+    note: "manual-note",
+    sent: SENT_MANUAL,
+    taken: "demarrage pris par la machine : manual_start bench (cible 0)",
+    unknown: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.",
+    words: ["manual_start", "bench", "cible 0"],
+  },
+  {
+    kind: "a programme start",
+    ask: (page, at) => startProgramme(page, at, "standard_30_min over 2700 s"),
+    running: (at) => snapshot({ at, mode: "seance", phase: "baseline" }),
+    note: "start-note",
+    sent: "demande envoyee : start standard_30_min over 2700 s - pas encore prise par la machine",
+    taken: "demarrage pris par la machine : start standard_30_min over 2700 s",
+    unknown: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.",
+    words: ["standard_30_min", "2700"],
+  },
+];
+const START_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.";
+
+for (const start of STARTS) {
+  test(`${start.kind} sent with the socket down is not said taken when a session then shows`, async () => {
+    // Given this screen's telemetry socket down: no frame and no event reaches it.
+    const page = panel();
+    const { frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    dropSocket(page);
+    // And a start the console takes into its mailbox.
+    await start.ask(page, 60);
+    const note = node(start.note);
+    assert.equal(note.textContent, start.sent);
+    // The loop refuses it, and that event is published while this screen has no socket: it is not
+    // sent again. Another screen then starts a session, and the loop takes that one.
+    // When the socket comes back and its first frame shows a session.
+    reopenSocket(page);
+    frame(start.running(61.5));
+    // Then the note does not say the machine took this request, and says why the screen cannot tell.
+    assert.equal(note.textContent, start.unknown);
+    assert.ok(note.classes.has("note-bad"));
+    // Nor does it repeat the words of the request: they would read as those of the session on screen.
+    for (const word of start.words) {
+      assert.equal(note.textContent.includes(word), false, word);
+    }
+    // And it stays so for as long as that session is shown, then goes with it.
+    frame(start.running(70));
+    assert.equal(note.textContent, start.unknown);
+    frame(snapshot({ at: 80 }));
+    assert.equal(note.textContent, "");
+  });
+
+  test(`${start.kind} whose socket dropped and reopened before the session showed is not said taken either`, async () => {
+    // Given a live screen and a start the console takes into its mailbox.
+    const page = panel();
+    const { frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    // When the socket drops and another opens before a frame shows the session: what the machine
+    // published in between is lost to this screen.
+    dropSocket(page);
+    reopenSocket(page);
+    frame(start.running(60.4));
+    // Then the page does not stand behind "pris".
+    assert.equal(node(start.note).textContent, start.unknown);
+  });
+
+  test(`${start.kind} sent while a new socket was still opening is not said taken either`, async () => {
+    // Given a socket that has dropped and a new one the page has asked for, not open yet.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    dropSocket(page);
+    context.state.stream += 1;
+    // And a start sent at that moment: what the machine publishes until the socket opens is lost.
+    await start.ask(page, 60);
+    // When that socket opens and its first frame shows a session.
+    context.state.connected = true;
+    frame(start.running(60.6));
+    // Then the page does not stand behind "pris": the socket was not delivering when the request left.
+    assert.equal(node(start.note).textContent, start.unknown);
+  });
+
+  test(`${start.kind} is said taken, with its own words, when the socket stayed up all along`, async () => {
+    const page = panel();
+    const { frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.3));
+    assert.equal(node(start.note).textContent, start.taken);
+    assert.equal(node(start.note).classes.has("note-bad"), false);
+  });
+
+  test(`${start.kind} sent with the socket down, and no session a second later: unknown, not "NON pris"`, async () => {
+    // Given a start sent with no socket: the session may have started and ended unseen.
+    const page = panel();
+    const { frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    dropSocket(page);
+    await start.ask(page, 60);
+    // When the socket is back and its frames, a second after the request, show no session.
+    reopenSocket(page);
+    frame(snapshot({ at: 60.9 }));
+    assert.equal(node(start.note).textContent, start.sent);
+    frame(snapshot({ at: 61.1 }));
+    // Then the note says that this screen does not know, not that the machine did not take it.
+    assert.equal(node(start.note).textContent, START_LOST);
+    assert.ok(node(start.note).classes.has("note-bad"));
+  });
+}
+
+test("a fault reset says what the frames show whatever the socket did: it claims nothing of the request", async () => {
+  const page = panel();
+  const { frame, node } = page;
+  frame(faultedFrame(59.8));
+  dropSocket(page);
+  await askReset(page, 60);
+  reopenSocket(page);
+  frame(snapshot({ at: 61.5 }));
+  assert.equal(node("fault-note").textContent, "le variateur ne signale plus de defaut");
+});
+
+test("the note of a manual start says (cible 0) only while the frames show the applied target at 0", async () => {
+  // Given a manual start the machine took: the session begins with a target of 0.
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  frame(manualFrame(60.3));
+  const note = node("manual-note");
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
+  // When another screen applies a target: the frames show it, and this screen wrote nothing.
+  frame(manualFrame(65, 249));
+  // Then the note no longer states a target the machine does not hold.
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench");
+  assert.equal(note.classes.has("note-bad"), false);
+  // And says it again if the applied target is back to 0.
+  frame(manualFrame(66, 0));
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
+  // The note still goes with the session.
+  frame(snapshot({ at: 80 }));
+  assert.equal(note.textContent, "");
+});
+
+test("a manual session first shown with a target already applied is not said to start at 0", async () => {
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  frame(manualFrame(60.3, 249));
+  assert.equal(node("manual-note").textContent, "demarrage pris par la machine : manual_start bench");
+});
+
+test("a refusal counts as the answer to a start only within a second of it, and the first one stands", async () => {
+  // Given a programme start, and the loop's refusal on its next tick.
+  const page = panel();
+  const { context, node } = page;
+  await startProgramme(page, 60);
+  const first = "demarrage refuse : age du passager requis pour une seance programmee";
+  context.addEvent(refusal(60.1, first));
+  const note = node("start-note");
+  assert.ok(note.textContent.endsWith(") : " + first), note.textContent);
+  // When a second refusal follows in the same second: another screen's, for something else.
+  context.addEvent(refusal(60.3, "consigne refusee : au-dessus du plafond", "autre ecran"));
+  // Then the first stays: the note does not follow every refusal the machine publishes.
+  assert.ok(note.textContent.endsWith(") : " + first), note.textContent);
+  // And a start with no answer yet does not take a refusal dated more than a second after it.
+  await startProgramme(page, 70);
+  context.addEvent(refusal(71.5, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "autre ecran"));
+  assert.equal(note.textContent, "demande envoyee : start standard_30_min - pas encore prise par la machine");
+});
+
+test("a reset left watching its fault does not take a later refusal for its own", async () => {
+  // Given a reset with no answer on this screen for a second: the fault is still reported.
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(faultedFrame(59.8));
+  await askReset(page, 60);
+  frame(faultedFrame(61.1));
+  const late = "le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.";
+  const note = node("fault-note");
+  assert.equal(note.textContent, late);
+  // When the machine refuses something else, seconds later, to this screen or another.
+  context.addEvent(refusal(65, START_REFUSED, "autre ecran"));
+  // Then that refusal is not written under the reset button.
+  assert.equal(note.textContent, late);
+  // And the note is still corrected when the fault goes.
+  frame(snapshot({ at: 66 }));
+  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
+});
+
+test("the late note of a reset is left alone once something else has been written there", async () => {
+  // Given a reset whose fault is still reported a second later.
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(faultedFrame(59.8));
+  await askReset(page, 60);
+  frame(faultedFrame(61.1));
+  // And a second click that gets no answer at all: its failure is what the note now says.
+  context.api = () => Promise.reject(new TypeError("Failed to fetch"));
+  context.doFaultReset();
+  await settle();
+  const note = node("fault-note");
+  assert.equal(note.textContent, "Failed to fetch");
+  // When the fault then goes.
+  frame(snapshot({ at: 63 }));
+  // Then the page does not write, over that failure, a note that belonged to the first request.
+  assert.equal(note.textContent, "Failed to fetch");
+});
+
+/* ------ the console's 409 while its mailbox holds a request ------ */
+
+test("a target refused because another screen's request waits is said in the page's own sentence", async () => {
+  // Given a manual session on screen and no target of this screen waiting.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  context.state.manualDraft = 6;
+  // When Appliquer is answered 409: the mailbox holds another screen's target, printed in the answer.
+  context.api = () => Promise.reject(mailboxTaken(TARGET_WAITS));
+  context.doManualApply();
+  await settle();
+  // Then the note is one sentence of the page, and nothing of what the console printed.
+  const note = node("manual-note");
+  assert.equal(note.textContent, MAILBOX_TAKEN);
+  assert.ok(note.classes.has("note-bad"));
+  for (const word of ["pending", "SetManualTarget", "autre ecran", "18536"]) {
+    assert.equal(note.textContent.includes(word), false, word);
+  }
+  assert.equal(context.state.manualSent, null);
+});
+
+test("once a tick has gone by since this screen's target, a 409 for a waiting request is another one's, not a second click", async () => {
+  // Given a target of this screen and a frame taken after it: the mailbox no longer holds it,
+  // though the frames do not show yet what the loop made of it.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2));
+  assert.notEqual(context.state.manualSent, null);
+  // When Appliquer is answered 409 for a request that waits: it is not this screen's.
+  context.api = () => Promise.reject(mailboxTaken(TARGET_WAITS));
+  context.doManualApply();
+  await settle();
+  // Then the note does not say that this screen's own target is still waiting.
+  assert.equal(node("manual-note").textContent, MAILBOX_TAKEN);
+});
+
+test("a 409 that names no waiting request is shown as it is, also while a target of this screen waits", async () => {
+  // Given a target of this screen in the mailbox, and no frame since.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  // When Appliquer is answered 409 because the session is ending: no request is said to wait.
+  const ending = "no manual session is running (the machine is stopping)";
+  context.api = () => Promise.reject(mailboxTaken(ending));
+  context.doManualApply();
+  await settle();
+  // Then the page does not say that the first target still waits for the machine.
+  assert.equal(node("manual-note").textContent, ending);
+});
+
+for (const [what, press, noteId, detail] of [
+  ["a manual start", (page) => { page.node("manual-bench").checked = true; page.context.doManualStart(); }, "manual-note", START_WAITS],
+  ["a programme start", (page) => {
+    page.context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
+    page.node("profile").value = "standard_30_min";
+    page.context.doStart();
+  }, "start-note", START_WAITS],
+  ["a fault reset", (page) => page.context.doFaultReset(), "fault-note", RESET_BEHIND_START],
+]) {
+  test(`${what} refused because another request waits is said the same way`, async () => {
+    const page = panel();
+    page.context.api = () => Promise.reject(mailboxTaken(detail));
+    press(page);
+    await settle();
+    const note = page.node(noteId);
+    assert.equal(note.textContent, MAILBOX_TAKEN);
+    for (const word of ["pending", "StartSession", "autre ecran", "subject_age", "24511"]) {
+      assert.equal(note.textContent.includes(word), false, word);
+    }
+  });
+}
+
+test("a 409 that names no waiting request is the console's own answer, shown as it is", async () => {
+  const page = panel();
+  const idle = "the machine is running, not idle";
+  page.node("manual-bench").checked = true;
+  page.context.api = () => Promise.reject(mailboxTaken(idle));
+  page.context.doManualStart();
+  await settle();
+  assert.equal(page.node("manual-note").textContent, idle);
+});
+
 /* ============ EX-5, the note of a manual target: refusals that are not about it ============ */
 
 const TAKEN_5 = "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)";
@@ -3161,8 +3480,8 @@ test("a second click in the cycle of the first is refused in French, and the not
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
   await apply(context, 5, 60);
-  const busy = "the machine is running (pending: manual_target 5.00 output rpm); try again in a moment";
-  context.api = () => Promise.reject(Object.assign(new Error(busy), { status: 409 }));
+  const busy = "the machine is running (pending: SetManualTarget(output_rpm=5.0, operator='op', at=60.0)); try again in a moment";
+  context.api = () => Promise.reject(mailboxTaken(busy));
   context.doManualApply();
   await settle();
   // Then the note does not show the console's English sentence, and the first target is still awaited.
@@ -3269,6 +3588,20 @@ test("a latch the status alone shows wipes that note as well", async () => {
   assert.equal(node("ack-note").textContent, "");
 });
 
+test("an emergency stop the status alone shows wipes that note too: it is held in its own slot, not in the floor", async () => {
+  const { context, node } = panel();
+  await acknowledge(context, refusedAck(NOTHING));
+  assert.equal(node("ack-note").textContent, NOTHING);
+  // When an emergency stop is latched from another screen and no frame reaches this one: the
+  // status shows it in the supervisor's slot, and the floor stays empty.
+  const stopped = latchedStatus(61);
+  assert.equal(stopped.floor, null);
+  context.api = () => Promise.resolve(stopped);
+  await context.loadStatus();
+  // Then the note no longer says that nothing is latched.
+  assert.equal(node("ack-note").textContent, "");
+});
+
 test("a refusal about a latch that stands is kept for as long as that latch is the one reported", async () => {
   // Given a latched emergency stop, known from the frames and from the status.
   const { context, frame, node } = panel();
@@ -3305,6 +3638,58 @@ test("an acknowledgement the machine takes back is said, with when it will hold"
       " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.",
   );
   assert.ok(note.classes.has("note-bad"));
+  // When Mode is back to REPOS with that verdict still latched.
+  frame(snapshot({ at: 75, mode: "repos", ...verdict("ramp_down", "session_standstill") }));
+  // Then the note stops saying that the session is not over, and keeps what the frames still show.
+  const TAKEN_BACK = "acquittement repris par la machine : session_standstill est de nouveau verrouille, sa regle s'est declenchee de nouveau.";
+  assert.equal(note.textContent, TAKEN_BACK);
+  assert.ok(note.classes.has("note-bad"));
+  frame(snapshot({ at: 75.2, mode: "repos", ...verdict("ramp_down", "session_standstill") }));
+  assert.equal(note.textContent, TAKEN_BACK);
+  // And once the frames no longer show that rule latched (acknowledged from another screen), the
+  // note stops saying that it is.
+  frame(snapshot({ at: 80 }));
+  assert.equal(note.textContent, "");
+});
+
+test("the same for session_overrun, the other rule that ends a session", async () => {
+  const { context, frame, node } = panel();
+  const overrun = { mode: "arret", phase: "recovery", ...verdict("ramp_down", "session_overrun") };
+  frame(snapshot({ at: 60, ...overrun }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["session_overrun"] });
+  frame(snapshot({ at: 60.4, ...overrun }));
+  assert.equal(
+    node("ack-note").textContent,
+    "acquittement repris par la machine : session_overrun est de nouveau verrouille, sa regle s'est declenchee de nouveau." +
+      " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.",
+  );
+});
+
+test("a rule that ends a session, taken back at REPOS, is said so with nothing about the session", async () => {
+  // Given session_standstill latched again at rest: the session is over, nothing is promised.
+  const { context, frame, node } = panel();
+  const atRest = { mode: "repos", ...verdict("ramp_down", "session_standstill") };
+  frame(snapshot({ at: 60, ...atRest }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["session_standstill"] });
+  frame(snapshot({ at: 60.4, ...atRest }));
+  assert.equal(
+    node("ack-note").textContent,
+    "acquittement repris par la machine : session_standstill est de nouveau verrouille, sa regle s'est declenchee de nouveau.",
+  );
+});
+
+test("the note of an acknowledgement taken back is left alone once something else is written there", async () => {
+  const { context, frame, node } = panel();
+  const standstill = { mode: "arret", phase: "recovery", ...verdict("ramp_down", "session_standstill") };
+  frame(snapshot({ at: 60, ...standstill }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["session_standstill"] });
+  frame(snapshot({ at: 60.4, ...standstill }));
+  // A second click, refused: that refusal is what the note now says.
+  const still = "the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging";
+  await acknowledge(context, refusedAck(still));
+  frame(snapshot({ at: 75, mode: "repos", ...verdict("ramp_down", "session_standstill") }));
+  frame(snapshot({ at: 80 }));
+  assert.equal(node("ack-note").textContent, still);
 });
 
 test("a rule that fires again for its own cause is said taken back, with no promise about REPOS", async () => {
@@ -3446,31 +3831,39 @@ test("the footer is measured again when the browser reports that it changed heig
 
 /* ============ a fault of the page is not a failed E-STOP ============ */
 
-test("a fault of the page while it draws the receipt is not reported as a failed E-STOP", () => {
-  // Given the request as the page sends it: what it attaches to the answer is kept here.
-  const { context } = panel();
-  const alerts = [];
-  context.window.alert = (message) => alerts.push(message);
-  let handlers = null;
-  context.api = () => ({
-    then: (answered, failed) => {
-      handlers = { answered, failed };
-      return { catch: () => undefined };
-    },
+// The receipt is drawn by two functions, one after the other: a fault in either leaves it recorded.
+for (const drawing of ["renderEstopUnanswered", "renderEstopBanner"]) {
+  test(`a fault of the page in ${drawing} while it draws the receipt is not reported as a failed E-STOP`, () => {
+    // Given the request as the page sends it: what it attaches to the answer is kept here.
+    const { context, shown } = panel();
+    const alerts = [];
+    context.window.alert = (message) => alerts.push(message);
+    let handlers = null;
+    context.api = () => ({
+      then: (answered, failed) => {
+        handlers = { answered, failed };
+        return { catch: () => undefined };
+      },
+    });
+    context.doEstop();
+    // Then the failure of the request is handled beside its answer, not after it.
+    assert.equal(typeof handlers.failed, "function");
+    // When the receipt arrives and drawing it throws.
+    const draw = context[drawing];
+    context[drawing] = () => {
+      throw new Error("drawing failed");
+    };
+    assert.throws(() => handlers.answered(receipt), /drawing failed/);
+    // Then no alert says the request failed, and what the receipt proves is already recorded.
+    assert.deepEqual(alerts, []);
+    assert.equal(context.state.estopReceipt, receipt);
+    assert.equal(context.state.estopAsked, null);
+    // So the next time the page draws, the latched stop is on screen.
+    context[drawing] = draw;
+    context.renderEstopBanner();
+    assert.equal(shown("estop-banner"), true);
   });
-  context.doEstop();
-  // Then the failure of the request is handled beside its answer, not after it.
-  assert.equal(typeof handlers.failed, "function");
-  // When the receipt arrives and drawing it throws.
-  context.renderEstopBanner = () => {
-    throw new Error("drawing failed");
-  };
-  assert.throws(() => handlers.answered(receipt), /drawing failed/);
-  // Then no alert says the request failed, and what the receipt proves is already recorded.
-  assert.deepEqual(alerts, []);
-  assert.equal(context.state.estopReceipt, receipt);
-  assert.equal(context.state.estopAsked, null);
-});
+}
 
 /* ============ the status lines under a verdict the runtime latched itself ============ */
 
