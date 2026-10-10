@@ -24,12 +24,15 @@ import httpx
 import pytest
 from tests.fake_dashboard import FakeDashboard
 
-from simulation import endurance
 from simulation.endurance import (
+    CLOSING_LIMIT,
     ENV,
+    EPOCH_MS,
+    FINISH_LIMIT,
     IDLE_PORT,
     NOTE_GATED_DSP,
     AnomalyError,
+    Console,
     GatedDsp,
     Operator,
     Plan,
@@ -255,7 +258,7 @@ async def test_ex1_a_session_that_does_not_finish_stops_the_scenario_and_fails_t
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One second to come down from a stop is not enough: the scenario says so and stops."""
-    monkeypatch.setattr(endurance, "FINISH_LIMIT", 1)
+    monkeypatch.setattr("simulation.endurance.FINISH_LIMIT", 1)
 
     run = await simulated(60, tmp_path / "out", Plan(manual=6, rest=5, sample_every=5))
 
@@ -280,14 +283,14 @@ async def test_ex1_a_programme_running_when_the_time_is_up_is_stopped_by_the_ope
     assert all(session.as_planned and session.delivered for session in run.sessions)
     # Stopped when the time was up, it came down and finished: it did not run its 400 s.
     assert run.sessions[1].started_at < 25
-    assert run.sessions[1].recorded < endurance.FINISH_LIMIT
+    assert run.sessions[1].recorded < FINISH_LIMIT
     assert statuses(run)["sessions"] is Status.PASS
 
 
 async def test_ex1_a_start_the_console_has_not_taken_stops_the_scenario(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(endurance, "COMMAND_SETTLE", 0)
+    monkeypatch.setattr("simulation.endurance.COMMAND_SETTLE", 0)
 
     run = await simulated(60, tmp_path / "out", Plan(manual=6, rest=5, sample_every=5))
 
@@ -302,7 +305,7 @@ async def test_ex1_a_dashboard_that_stops_answering_leaves_the_session_undeliver
     def unreachable(now: Callable[[], int]) -> FakeDashboard:
         return FakeDashboard(now=now, online=False)
 
-    monkeypatch.setattr(endurance, "FakeDashboard", unreachable)
+    monkeypatch.setattr("simulation.endurance.FakeDashboard", unreachable)
 
     run = await simulated(10, tmp_path / "out", Plan(manual=3, rest=2, sample_every=20))
 
@@ -313,7 +316,7 @@ async def test_ex1_a_dashboard_that_stops_answering_leaves_the_session_undeliver
     assert sync.owed >= 1
     assert (sync.points, sync.heartbeats) == (0, 0)
     # The scenario waited for it, two simulated minutes, before it gave up.
-    assert run.covered >= 10 + endurance.CLOSING_LIMIT
+    assert run.covered >= 10 + CLOSING_LIMIT
     verdict = {check.name: check for check in judge(run)}["sessions"]
     assert verdict.status is Status.FAIL
     assert "séances non livrées : [1]" in verdict.measured
@@ -367,8 +370,8 @@ async def test_ex1_the_operator_waits_for_the_console_and_reports_what_it_refuse
             await Operator(http).ready(attempts=2, wait=0.0)
 
 
-def console_on_a_manual_clock(tmp_path: Path) -> tuple[endurance.Console, ManualClock]:
-    clock = ManualClock(Monotonic(10.0), UnixMillis(endurance.EPOCH_MS))
+def console_on_a_manual_clock(tmp_path: Path) -> tuple[Console, ManualClock]:
+    clock = ManualClock(Monotonic(10.0), UnixMillis(EPOCH_MS))
     return build_console(tmp_path, clock, treat=GatedDsp(on=False), port=IDLE_PORT), clock
 
 
@@ -417,7 +420,7 @@ async def test_ex1_the_tick_meter_times_what_the_page_is_shown_and_ends_when_the
 def test_ex1_the_console_is_refused_without_its_dashboard_link_or_with_a_bad_configuration(
     tmp_path: Path,
 ) -> None:
-    clock = ManualClock(Monotonic(10.0), UnixMillis(endurance.EPOCH_MS))
+    clock = ManualClock(Monotonic(10.0), UnixMillis(EPOCH_MS))
     unlinked = {key: value for key, value in ENV.items() if key != "MACHINE_API_KEY"}
 
     with pytest.raises(ValueError, match="needs its dashboard link"):
