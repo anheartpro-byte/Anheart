@@ -160,6 +160,7 @@ from src.cloud_sync import (
 from src.contract import SoftwareVersion, read_software_version
 from src.control_surface import (
     LOCAL_SUBJECT,
+    Command,
     ControlSurface,
     EndSession,
     FaultReset,
@@ -917,7 +918,8 @@ class LocalPanel:
            latched by the route; this zeroes the reference), and the page's
            last presence ping with it;
         2. the mailbox is emptied and its command handed to the runtime; what
-           the runtime refuses goes back to the page as an event;
+           the runtime made of it, taken or refused, goes back to the page as
+           an event that carries the request's identifier;
         3. in simulation, the plant is advanced and the subject told the speed;
         4. the runtime ticks (reads only, while idle); a manual target it took
            back on that tick, because something came to hold the arm at
@@ -929,6 +931,11 @@ class LocalPanel:
            operator goes to the page as an event;
         6. the snapshot is published to the surface and, through it, the hub,
            and the surface learns whether a session is running.
+
+        The drive is awaited in steps 2 and 4, and the web server answers
+        requests meanwhile: a request can be accepted into the mailbox while a
+        tick is under way. It is taken by the NEXT tick, and the surface keeps
+        its place until then (:meth:`~src.control_surface.ControlSurface.note_idle`).
         """
         if self._surface.take_estop() is not None:
             self._runtime.request_estop(ESTOP_SOURCE)
@@ -949,7 +956,7 @@ class LocalPanel:
         withdrawn = self._runtime.take_withdrawn_target()
         if withdrawn is not None:
             # Nobody's command: the machine took back a target it had accepted.
-            self._surface.note_refused("", describe_withdrawn_target(withdrawn))
+            self._surface.note_withdrawn(describe_withdrawn_target(withdrawn))
         self._record(now, snapshot)
         self._surface.publish(snapshot)
         match self._runtime.state:
@@ -984,7 +991,13 @@ class LocalPanel:
             self._recorder.begin(request)
 
     async def _dispatch(self) -> None:
-        """Hand the mailbox's command to the runtime. Exhaustive over ``Command``."""
+        """Hand the mailbox's command to the runtime, and say what became of it.
+
+        Exhaustive over ``Command``. Each command taken here ends one way, said
+        to the surface under the request's identifier: taken, or refused with
+        the reason. The identifier goes back to the surface as it came; the
+        runtime is never shown it, and nothing here decides anything by it.
+        """
         command = self._surface.take_command()
         runtime = self._runtime
         match command:
@@ -992,44 +1005,55 @@ class LocalPanel:
                 pass
             case StartSession():
                 await self._start_programme(command)
-            case StartManual(occupancy=occupancy, operator=operator):
-                await self._start_manual(occupancy, operator)
-            case SetManualTarget(output_rpm=output_rpm, operator=operator):
+            case StartManual():
+                await self._start_manual(command)
+            case SetManualTarget(output_rpm=output_rpm):
                 target = runtime.set_manual_target(output_rpm)
-                if isinstance(target, Err):
-                    self._surface.note_refused(operator, describe_target_refusal(target.error))
-            case FaultReset(operator=operator):
+                self._answer(command, target, describe_target_refusal)
+            case FaultReset():
                 reset = await runtime.fault_reset()
-                if isinstance(reset, Err):
-                    self._surface.note_refused(operator, describe_reset_refusal(reset.error))
+                self._answer(command, reset, describe_reset_refusal)
             case EndSession(reason=reason):
                 runtime.request_stop(reason)
+                self._surface.note_taken(command)
             case _ as unreachable:
                 assert_never(unreachable)
 
-    async def _start_manual(self, occupancy: Occupancy, operator: str) -> None:
+    def _answer[T, E](
+        self, command: Command, outcome: Result[T, E], words: Callable[[E], str]
+    ) -> None:
+        """Tell the surface what the runtime made of ``command``: taken, or why not."""
+        if isinstance(outcome, Ok):
+            self._surface.note_taken(command)
+        else:
+            self._surface.note_refused(command, words(outcome.error))
+
+    async def _start_manual(self, command: StartManual) -> None:
         """Resolve the occupancy's ceiling from the configuration, then arm, or say why not.
 
         Before anything: a console out of service arms nothing.
         """
+        occupancy = command.occupancy
+        operator = command.operator
         out = self._service_refusal()
         if out is not None:
-            self._surface.note_refused(operator, out)
+            self._surface.note_refused(command, out)
             return
         ceiling = self._config.ceiling_for(occupancy)
         if isinstance(ceiling, Err):
-            self._surface.note_refused(operator, ceiling.error.detail)
+            self._surface.note_refused(command, ceiling.error.detail)
             return
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
-            self._surface.note_refused(operator, blocked)
+            self._surface.note_refused(command, blocked)
             return
         # Read before the drive is touched: the record's frames start with the arming.
         asked = self._clock.monotonic()
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
-            self._surface.note_refused(operator, describe_start_refusal(started.error))
+            self._surface.note_refused(command, describe_start_refusal(started.error))
             return
+        self._surface.note_taken(command)
         self._begin_record(
             SessionRequest(occupancy=occupancy, operator=operator, arming_began=asked)
         )
@@ -1085,6 +1109,7 @@ class LocalPanel:
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
             return
+        self._surface.note_taken(command)
         self._begin_record(
             SessionRequest(
                 occupancy=Occupancy.OCCUPIED,
@@ -1153,7 +1178,7 @@ class LocalPanel:
         return None if refusal is None else f"demarrage refuse : {refusal}"
 
     def _refuse_programme(self, command: StartSession, detail: str) -> None:
-        self._surface.note_refused(command.operator, detail)
+        self._surface.note_refused(command, detail)
         remote = command.cloud_session_id
         if remote is not None and self._listener is not None:
             self._listener.start_refused(remote, detail)

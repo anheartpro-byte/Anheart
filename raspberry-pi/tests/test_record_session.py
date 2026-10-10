@@ -23,8 +23,8 @@ from src.bitalino_client import ChannelData, LinkStats, SampleBatch
 from src.clock import ManualClock
 from src.cloud_sync import DASHBOARD_OPERATOR
 from src.contract import SoftwareVersion
+from src.control_surface import CANCELLED_BY_STOP, SessionEvent
 from src.control_surface import EventKind as SurfaceEvent
-from src.control_surface import SessionEvent
 from src.local_panel import (
     describe_record_storage,
     describe_start_refusal,
@@ -875,6 +875,10 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         (SurfaceEvent.END_REQUESTED, remote, "arret demande par Jean Dupont"),
         (SurfaceEvent.REFUSED, remote, "refuse"),
         (SurfaceEvent.DASHBOARD, "", "serveur incompatible (contrat 1.0 vs 2.0)"),
+        # A request a stop displaced before the loop took it: asked, and not done.
+        (SurfaceEvent.CANCELLED, OPERATOR, CANCELLED_BY_STOP),
+        # A request the loop took shows in the ticks: nothing more is written of it.
+        (SurfaceEvent.TAKEN, OPERATOR, "cible 3.00 tr/min de sortie"),
         (SurfaceEvent.SESSION_RUNNING, "", "session running"),
         (SurfaceEvent.SESSION_IDLE, "", "session idle"),
         (SurfaceEvent.RECORDING, "", "enregistrement degrade"),
@@ -896,6 +900,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("remote_command", "end_requested: arret demande par [redacted]", "remote"),
         ("refusal", "refused: refuse", "remote"),
         ("warning", "dashboard: serveur incompatible (contrat 1.0 vs 2.0)", "system"),
+        ("refusal", f"cancelled: {CANCELLED_BY_STOP}", ALIAS),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
 

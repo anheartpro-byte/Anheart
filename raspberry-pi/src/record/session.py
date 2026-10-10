@@ -452,7 +452,9 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             return EventKind.OPERATOR_ACTION
         case SurfaceEvent.ACKNOWLEDGED:
             return EventKind.VERDICT_ACK
-        case SurfaceEvent.REFUSED:
+        case SurfaceEvent.REFUSED | SurfaceEvent.CANCELLED:
+            # A request the loop refused, or one a stop displaced before the loop
+            # took it: either way it was asked, written above as asked, and not done.
             return EventKind.REFUSAL
         case SurfaceEvent.DASHBOARD:
             # News of the dashboard link (a server of another contract, a launch
@@ -461,8 +463,15 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             # refusal. The record's vocabulary is closed and has no kind of its
             # own for it: a warning, told apart by its ``dashboard:`` prefix.
             return EventKind.WARNING
-        case SurfaceEvent.SESSION_RUNNING | SurfaceEvent.SESSION_IDLE | SurfaceEvent.RECORDING:
-            # States the ticks already carry, and the recorder's own messages.
+        case (
+            SurfaceEvent.SESSION_RUNNING
+            | SurfaceEvent.SESSION_IDLE
+            | SurfaceEvent.TAKEN
+            | SurfaceEvent.RECORDING
+        ):
+            # States the ticks already carry (a request the loop took shows in
+            # them: the session, the target, the fault gone), and the recorder's
+            # own messages.
             return None
     raise assert_never(kind)
 
