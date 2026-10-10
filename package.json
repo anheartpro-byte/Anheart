@@ -1,6 +1,6 @@
 {
   "name": "-t",
-  "version": "0.0.0-dev",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "npm-run-all --parallel dev:frontend dev:backend",

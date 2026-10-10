@@ -1630,7 +1630,8 @@ Ce que fait la console :
   configuration.
 * **La version logicielle** est lue une fois, au démarrage, dans le fichier
   `raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker). Le dépôt y porte
-  `pi-0.0.0-dev` ; le script de release (`scripts/release.sh`, voir
+  le tag de la dernière version préparée (`pi-1.0.0` aujourd'hui, `pi-0.0.0-dev`
+  avant la première release) ; le script de release (`scripts/release.sh`, voir
   [release.md](release.md)) y écrit le tag de chaque version. Fichier absent, illisible ou mal formé : la console démarre
   quand même et annonce `pi-unknown`, jamais une version devinée. Cette valeur
   unique sert trois fois : la page l'affiche (pastille **Version**), chaque

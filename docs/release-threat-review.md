@@ -9,8 +9,8 @@ case non prouvée reste ouverte.
 - [ ] Le [modèle de menaces](menaces.md) correspond au SHA candidat et aux
   composants effectivement déployés ; les protections locales non déployées
   sont distinguées.
-- [ ] Chaque frontière modifiée et incident a été examiné avec les huit flux,
-  les actifs et les sept acteurs ; les nouvelles menaces ont un identifiant.
+- [ ] Chaque frontière modifiée et incident a été examiné avec les dix flux,
+  les actifs et les huit acteurs ; les nouvelles menaces ont un identifiant.
 - [ ] Les tickets de toutes les menaces OPEN ont été relus dans Linear ; date,
   UUID et URL du registre ont été actualisés depuis les réponses réelles.
 - [ ] Chaque ticket de sécurité cite les MEN concernés et leurs preuves de
