@@ -67,6 +67,7 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, cast
@@ -296,6 +297,46 @@ def ramp_duration(
             since = now - carry_after(here, moved, limits, geometry, dt)
             here = moved
     return Seconds(now)
+
+
+RAMPS_REMEMBERED: Final[int] = 8
+"""How many ramps :meth:`Ramp.duration` keeps the answer for: the last few snapshots."""
+
+
+@dataclass(frozen=True, slots=True)
+class Ramp:
+    """A walk :func:`ramp_duration` could make, named and not yet made.
+
+    What a manual session's snapshot carries for the screen in place of an
+    arrival time (:class:`~src.training.types.RampAhead`). Building one costs
+    four references. The walk itself costs a step of the motion profile for
+    every 0.2 s of ramp ahead, five hundred of them from standstill to the
+    nameplate speed at the shipped limits: measured on the simulated console,
+    it was thirty times everything else a control tick does during a climb.
+    So it is made when a reader asks how long, and not by the tick.
+
+    Frozen, and its four fields are the whole of what the walk reads: the
+    answer belongs to the snapshot that carries the ramp, whenever it is
+    asked for and whatever the session has done since.
+    """
+
+    start: MotorRpm
+    target: MotorRpm
+    limits: MotionLimits
+    geometry: MachineGeometry
+
+    def duration(self) -> Seconds | None:
+        """:func:`ramp_duration` for this ramp. Walked once, however many readers ask."""
+        return _walked(self)
+
+
+# The one piece of shared state in this module, and a transparent one: the
+# walk is a pure function of the four frozen fields above, so a remembered
+# answer is the answer. Every page that is open renders the same snapshot;
+# without this each of them would walk the same ramp again.
+@lru_cache(maxsize=RAMPS_REMEMBERED)
+def _walked(ramp: Ramp) -> Seconds | None:
+    return ramp_duration(ramp.start, ramp.target, ramp.limits, ramp.geometry)
 
 
 def count_reversals(setpoints: Sequence[MotorRpm]) -> int:

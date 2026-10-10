@@ -2084,6 +2084,48 @@ Jamais en même temps que la console sur le même câble. Le second programme la
 refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : fermez
 la console d'abord (voir §3.4 et §14).
 
+**Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
+Sur Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la
+session SSH se ferme (SIGHUP), et sur une erreur de son fil de bus, cet outil de banc
+lance l'arrêt du pilote (consigne à 0, arbre lu à l'arrêt, puis mots d'arrêt), une
+seule fois, et l'attend **35 s au plus** avant de se terminer. Pendant cette attente
+les signaux suivants sont ignorés, un second Ctrl+C compris : couper l'arrêt le
+laisserait à moitié fait. L'attente finie, les signaux retrouvent leur effet habituel.
+
+Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
+
+- `sortie: arret confirme, port libere` : l'arrêt a fini et l'arbre a été lu à l'arrêt ;
+- `sortie: ATTENTION: ...` : l'arrêt a fini sans pouvoir être confirmé, ou il a levé une
+  erreur, ou **il n'avait pas fini au bout des 35 s**
+  (`ATTENTION: l'arret du pilote n'a pas fini en 35 s`). Dans ce dernier cas l'outil se
+  termine quand même, de lui-même et tout de suite : il ne reste jamais suspendu à un
+  échange bloqué, et c'est sa fin qui rend le port et le verrou du câble. Cela peut
+  arriver sans panne : un arrêt demandé depuis la page juste avant (jusqu'à 25 s),
+  suivi de l'arrêt du pilote, peut dépasser 35 s sur un arbre qui tarde à s'arrêter ;
+- `sortie: fil de bus jamais demarre: ...` : la sortie a été demandée avant le démarrage
+  du fil de bus. Rien n'a été ouvert, rien n'a été commandé ;
+- `sortie: -` : le fil de bus est mort pendant la connexion, sur une erreur que le
+  pilote ne lève pas d'ordinaire, avant qu'un arrêt puisse être tenté. Rien n'a été
+  commandé.
+
+Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
+reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, et 1 quand l'arrêt
+n'avait pas fini au bout de l'attente.
+
+Rien de tout cela ne dépend de l'écriture de la dernière ligne. Si le terminal est
+fermé ou si la sortie allait dans un tube dont le lecteur a disparu (`| tee`, arrêté
+par le même Ctrl+C), plus personne ne peut la lire : elle est perdue, ou écrite sur la
+sortie d'erreur si elle existe encore, et l'arrêt, le retour des signaux, la fin du
+processus et son code de sortie sont les mêmes.
+
+**Chaque fois que l'arrêt n'est pas confirmé, et dans les cas qu'aucun programme ne
+peut intercepter (`kill -9`, c'est-à-dire SIGKILL, une coupure de courant, un plantage
+de l'interpréteur), le seul filet est le délai de communication du variateur (ttO),
+qui arrête le moteur quand plus rien ne lui parle.** Vérifiez ce délai sur le clavier
+du variateur avant de compter dessus, et après une sortie `ATTENTION` vérifiez sur le
+variateur que le moteur est à l'arrêt avant de relancer l'outil. Vérifié avec de vrais
+signaux envoyés à l'outil sur un pilote factice, jamais sur un variateur réel.
+
 **Le coup de poing a été frappé, mais la page ne le montre pas.**
 Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous
 demande de **déclarer** qu'il a été tiré.

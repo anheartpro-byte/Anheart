@@ -174,6 +174,86 @@ def test_the_redirect_keeps_its_query_on_one_line() -> None:
     assert live.viewer_location("\r\n") == "/viewer/index.html"
 
 
+def _answer_without_a_socket(path: str) -> list[tuple[str, ...]]:
+    """What ``do_GET`` sends for ``path``: the status, each header, the end of the headers.
+
+    The handler is built without a connection and its three writers are
+    replaced by recorders, as for the stream that loses its viewer below:
+    what is read here is what the handler asked to send, not what a client
+    made of it.
+    """
+    handler = live.Handler.__new__(live.Handler)
+    handler.path = path
+    sent: list[tuple[str, ...]] = []
+
+    def status(code: int, _message: str | None = None) -> None:
+        sent.append(("status", str(int(code))))
+
+    def header(keyword: str, value: str) -> None:
+        sent.append((keyword, value))
+
+    def end() -> None:
+        sent.append(("end",))
+
+    handler.send_response = status  # type: ignore[method-assign,assignment]  # no socket
+    handler.send_header = header  # type: ignore[method-assign]  # no socket
+    handler.end_headers = end  # type: ignore[method-assign]  # no socket
+    handler.do_GET()
+    return sent
+
+
+@pytest.mark.parametrize(
+    ("path", "location"),
+    [
+        ("/", "/viewer/index.html"),
+        ("", "/viewer/index.html"),
+        ("/?live=manual_27_rpm&speed=20", "/viewer/index.html?live=manual_27_rpm&speed=20"),
+        ("?trace=out/x.jsonl", "/viewer/index.html?trace=out/x.jsonl"),
+        ("/?trace=out/x\r\nsecond line\n", "/viewer/index.html?trace=out/xsecond line"),
+    ],
+)
+def test_the_root_answers_one_redirect_and_its_location_is_one_line(
+    path: str, location: str
+) -> None:
+    """The redirect branch of ``do_GET`` itself: one 302, one header, nothing else.
+
+    The test through the server reads where a client ended up after following
+    the redirect. This one reads the answer: the status is the temporary
+    redirect, the only header is ``Location``, the query is kept, and no line
+    break of the request reaches the header, with or without a leading slash.
+    """
+    sent = _answer_without_a_socket(path)
+    assert sent == [("status", "302"), ("Location", location), ("end",)]
+
+
+def test_the_location_of_the_redirect_goes_through_viewer_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``do_GET`` hands its query to :func:`viewer_location` and sends what comes back.
+
+    What ``test_the_redirect_keeps_its_query_on_one_line`` proves of that
+    function is only worth something if the handler calls it. Over HTTP the
+    standard library refuses a request line that holds a line break before
+    the handler runs, and it strips one from the path it parses, so no answer
+    of the real function can show whether the handler built its header
+    through it or wrote the query as it came. A stand-in can.
+    """
+    asked: list[str] = []
+
+    def stand_in(query: str) -> str:
+        asked.append(query)
+        return "/viewer/index.html?from-the-one-function"
+
+    monkeypatch.setattr(live, "viewer_location", stand_in)
+    sent = _answer_without_a_socket("/?trace=out/x.jsonl&speed=20")
+    assert asked == ["trace=out/x.jsonl&speed=20"]
+    assert sent == [
+        ("status", "302"),
+        ("Location", "/viewer/index.html?from-the-one-function"),
+        ("end",),
+    ]
+
+
 def test_the_server_lists_the_scenarios(server: str) -> None:
     with _get(server + "/api/scenarios") as response:
         names = json.loads(response.read())  # pyright: ignore[reportAny]

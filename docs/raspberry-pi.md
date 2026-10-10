@@ -217,6 +217,27 @@ nominatif.
    (transition 2). Sinon rien n'est envoyé.
 7. Compteurs de temps en zone, instantané.
 
+**L'instantané ne calcule rien pour l'écran.** En séance manuelle, la page
+affiche l'heure d'arrivée de la rampe (`arrivee ~m:ss`). C'est une marche du
+profil de mouvement, cycle par cycle, de la consigne en vigueur jusqu'à la
+cible (`ramp_duration`) : plus de cinq cents pas de 0 à la vitesse nominale
+avec les limites livrées. Le tic la faisait pour chaque instantané d'une
+rampe. Mesuré sur la console en simulation, pendant une montée de 0 à
+1380 tr/min moteur : 1,2 ms par tic en médiane et 2,5 ms au plus, alors que
+tout le reste du tic prenait 0,04 ms ; 0,66 s sur les 106 s de la montée.
+L'instantané porte maintenant la rampe sans la parcourir (`Ramp` : consigne,
+cible, limites, géométrie), et c'est la lecture qui la parcourt
+(`ManualView.ramp_eta`), une fois par instantané quel que soit le nombre de
+pages ouvertes. Le tic d'une montée revient à 0,04 ms. L'opérateur lit le
+même nombre : la marche part des valeurs que l'instantané a gardées, pas de
+l'état du runtime au moment de la lecture. Cette lecture se fait sur le même
+fil que la boucle, entre deux tics : elle ne s'intercale jamais entre une
+décision de sécurité et son écriture, ce que le tic ne faisait pas non plus
+(l'instantané est sa dernière étape). La seule marche qui reste dans un tic
+est celle d'une fin de séance, faite une fois, pour la règle `session_overrun`
+(voir [5.2](#52-les-18-règles-du-superviseur)). Mesures faites sur un poste
+de développement, jamais sur le Pi.
+
 Si le tic lève une exception : verdict `tick_exception` (GO_SILENT), consigne
 mise à zéro de façon synchrone, silence, puis l'exception remonte et la console
 s'arrête.
@@ -249,8 +270,8 @@ même verrou (lecture prudente, voir
 Le retour au calme d'un programme n'est pas dans ce cas non plus, qu'il se
 fasse sous un `FREEZE` ou sans verdict : la séance se termine sur
 `programme_complete`, à la durée prévue, sauf si la cause d'un `FREEZE` non
-verrouillé dure jusqu'au niveau suivant de sa règle, dont le RAMP_DOWN
-verrouillé termine alors la séance comme avant
+verrouillé dure jusqu'au RAMP_DOWN verrouillé de sa règle, qui termine alors
+la séance comme avant
 ([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)).
 
 ---
@@ -1295,9 +1316,10 @@ La séance se termine alors comme un programme mené à son terme : aucun
 `session_standstill`, aucun `session_overrun`, fin `programme_complete` à la
 durée prévue ; un FREEZE verrouillé reste à acquitter avant le départ suivant.
 Cela vaut pour un FREEZE verrouillé, et pour un FREEZE non verrouillé dont la
-cause cesse avant le niveau suivant de sa règle. Si elle dure, `hr_stale`
-(RAMP_DOWN à 60 s) ou `attendant_absent` (RAMP_DOWN à 120 s) termine la séance
-sur son verrou, comme avant. Une séance manuelle n'a pas de phase de ce
+cause cesse avant le RAMP_DOWN verrouillé de sa règle : 60 s pour `hr_stale`,
+dont le REDUCE à 30 s, arrivé pendant la descente, ne change pas cette fin, et
+120 s pour `attendant_absent`. Si elle dure jusque-là, ce RAMP_DOWN termine la
+séance sur son verrou, comme avant. Une séance manuelle n'a pas de phase de ce
 genre : un FREEZE y tient la consigne jusqu'à un arrêt demandé. `session_overrun`
 reste la seconde barrière derrière cette garde (vérifié en retirant la garde
 dans un test). Détails et vérifications dans

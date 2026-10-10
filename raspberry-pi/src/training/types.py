@@ -39,11 +39,12 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 from __future__ import annotations
 
 import re
+from abc import abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum, IntEnum, unique
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from src.motor.drive import DriveState, FaultReport
 from src.units import (
@@ -736,6 +737,25 @@ class RunMode(Enum):
     being brought out of service. Never "stopped" - read the MEASURED speed."""
 
 
+class RampAhead(Protocol):
+    """The ramp still to come to a manual target, timed only when somebody asks.
+
+    A manual view names its ramp without walking it. How long the ramp will
+    take is a walk of the motion profile, tick for tick, from the setpoint in
+    force to the target: several hundred steps from standstill to the
+    nameplate speed. Only a screen reads it, so it is the screen's reading
+    that pays for it, and never the control tick that took the snapshot.
+
+    The one implementation is :class:`~src.training.motion.Ramp`. It is a
+    protocol here because that module reads the machine's geometry, which
+    reads this one.
+    """
+
+    @abstractmethod
+    def duration(self) -> Seconds | None:
+        """Seconds the ramp takes at the motion limits; ``None`` when it would never arrive."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ManualView:
     """The manual session, as the operator's screen needs it.
@@ -760,12 +780,25 @@ class ManualView:
     "held".
     """
 
-    ramp_eta: Seconds | None
-    """Seconds until the setpoint reaches the target at the motion limits.
+    ramp: RampAhead | None
+    """The ramp from the setpoint in force to the target, as it stood in this snapshot.
 
-    ``None`` when unknown, and when a FREEZE holds the setpoint away from the
-    target: there is no arrival to announce.
+    ``None`` when a FREEZE holds the setpoint away from the target: there is
+    no arrival to announce. A setpoint already at its target has a ramp too,
+    of no length.
     """
+
+    @property
+    def ramp_eta(self) -> Seconds | None:
+        """Seconds until the setpoint reaches the target at the motion limits.
+
+        ``None`` when unknown, and when a FREEZE holds the setpoint away from
+        the target. Worked out when read, from what this snapshot holds: the
+        answer is the one the tick that took the snapshot would have given,
+        whenever it is asked for (see :class:`RampAhead`).
+        """
+        ramp = self.ramp
+        return None if ramp is None else ramp.duration()
 
 
 #: A drive observation older than this is no longer evidence about the machine.

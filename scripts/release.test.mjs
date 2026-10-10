@@ -802,6 +802,23 @@ test("ANH-195 EX-8 the commit status release.sh requires is the one the protecti
   assert.doesNotMatch(real("docs/release.md") + real(TEMPLATE), /deux approbations/i);
 });
 
+test("ANH-218 EX-7 no page that states the merge rule still asks for two reviewers", () => {
+  // Decision of the product owner, 5 October 2026: a merge takes one independent review, recorded as the
+  // commit status above, and no approval. The pages that state the rule, and the two templates a pull
+  // request is written on, must not ask for more than the process does. The history of a past pull
+  // request (docs/suivi-tickets.md) may still say that it had two.
+  const TWO = /deux\s+(approbations|reviewers|relecteurs|relectrices|revues\s+indépendantes)|two\s+(approvals|reviewers)/i;
+  for (const page of ["docs/roadmap.md", "docs/release.md", TEMPLATE, ".github/PULL_REQUEST_TEMPLATE.md"]) {
+    assert.doesNotMatch(real(page), TWO, page);
+  }
+  // The roadmap gives the rule in the same words as the release documents: one review, that status.
+  const roadmap = real("docs/roadmap.md");
+  assert.match(roadmap, new RegExp(`reçoit un avis indépendant, enregistré comme statut de commit \`${REVIEW}\``));
+  assert.match(roadmap, /n'est fusionné sans que l'avis indépendant écrive quels invariants il a vérifiés/);
+  assert.match(real(TEMPLATE), new RegExp(`une fois l'avis indépendant \`${REVIEW}\` réussi`));
+  assert.match(real(".github/PULL_REQUEST_TEMPLATE.md"), /Un avis d'agent indépendant existe sur ce même SHA/);
+});
+
 test("EX-2 prepare refuses when the CI state cannot be read", (t) => {
   const fx = fixture(t);
   refuses(fx.run(["prepare", ...ALL], { apiExit: "1" }), /lecture des vérifications CI impossible/);

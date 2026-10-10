@@ -217,6 +217,7 @@ from src.training.idle_recovery import UnknownEpisode
 from src.training.motion import (
     DEFAULT_MOTION_LIMITS,
     MotionLimits,
+    Ramp,
     carry_after,
     next_setpoint,
     ramp_duration,
@@ -3167,19 +3168,24 @@ class TrainingRuntime:
         verdict) is bounded twice, and this one only once. It walks at the
         motion limits towards the controller's demand, and that demand comes
         down on the control law's own ramp: at once by ``slew x`` the age of
-        its last decision (a head start of 3 to 78 rpm with the shipped
-        15 rpm/s and 5 s period), then by ``floor(slew x dt)`` whole rpm a
-        tick, which at 5 Hz is 2 or 3 rpm according to the tick's measured
-        length, against 2.48 for the shipped motion limits. While the head
-        start lasts the motion limits are what binds and the two descents are
-        the same, tick for tick. Once it is spent the ordinary one goes at
-        the control law's pace. So this walk is never faster than the motion
+        its last decision, in whole rpm rounded down (a head start of 2 to
+        77 rpm read on the software rig with the shipped 15 rpm/s and 5 s
+        period, where a tick measures a hair under its 0.2 s; 3 to 78 by the
+        nominal figures), then by ``floor(slew x dt)`` whole rpm a tick,
+        which at 5 Hz is 2 or 3 rpm according to the tick's measured length,
+        against 2.48 for the shipped motion limits. While the head start
+        lasts the motion limits are what binds and the two descents are the
+        same, tick for tick. Once it is spent the ordinary one goes at the
+        control law's pace. So this walk is never faster than the motion
         limits and never behind an ordinary descent, and it can be AHEAD of
-        one, with the shipped limits too: by up to 2.6 s from 193 rpm on the
-        shipped programme, in 9 of the 26 places the control period can fall
-        (measured on the software rig, never on the machine). It is also the
-        walk a programme's own cooldown takes when the timeline reaches it,
-        or goes on with it, under a FREEZE (ANH-189).
+        one, with the shipped limits too. By how much depends on the speed
+        it starts from, a longer descent outlasting a longer head start: on
+        the shipped programme, by up to 2.6 s from 193 rpm, in 9 of the 26
+        places the control period can fall, and by up to 4.4 s from the
+        profile's ceiling of 276 rpm, in 15 of them (measured on the software
+        rig, never on the machine). It is also the walk a programme's own
+        cooldown takes when the timeline reaches it, or goes on with it,
+        under a FREEZE (ANH-189).
 
         The time base. The hold arm leaves the profiler none, and a REDUCE on
         a programme walks its own ramp and leaves a stale one. Followed
@@ -4210,6 +4216,15 @@ class TrainingRuntime:
         does not move was the screen's half of ANH-175. A FREEZE holds every
         target but zero (:meth:`_stop_asked`), so a descent to zero keeps its
         ramp and its arrival time under one, because it is really under way.
+
+        The ramp is NAMED here and not walked. This runs at the end of every
+        tick, and the arrival time is a walk of the motion profile from the
+        setpoint in force to the target: work for the screen alone, which on
+        every tick of a climb cost thirty times the rest of the tick. The
+        snapshot carries what the walk reads (:class:`~src.training.motion.Ramp`)
+        and whoever shows the arrival time walks it, once per snapshot, after
+        the tick: ``ManualView.ramp_eta`` answers exactly what this method
+        used to compute, from the same four values.
         """
         manual = self._manual
         if manual is None:
@@ -4224,9 +4239,14 @@ class TrainingRuntime:
             ceiling=self._speed_view(manual.ceiling),
             min_run=self._speed_view(self._motion.min_run),
             ramping=applied != target and not held,
-            ramp_eta=(
+            ramp=(
                 None
                 if held
-                else ramp_duration(applied, target, self._motion, self._motion_geometry)
+                else Ramp(
+                    start=applied,
+                    target=target,
+                    limits=self._motion,
+                    geometry=self._motion_geometry,
+                )
             ),
         )

@@ -53,6 +53,61 @@ And one safety change in the loop: when the driver latches the link down, the
 console DISARMS. It then reconnects, but the keepalive does not resume until
 the operator arms again -- no automatic resumption of motion, anywhere.
 
+## How this process ends
+
+Every way out that Python gets to see asks for ONE thing, the driver's own
+stop (``ATV320Drive.close``: LFRD = 0, the shaft read at standstill, then the
+stop words), run once by the bus thread, and waits for it before the process
+ends:
+
+* Ctrl+C in the terminal (SIGINT);
+* ``kill <pid>``, a service manager or a container being stopped (SIGTERM);
+* the terminal or the SSH session going away (SIGHUP);
+* an exception in the bus thread, or the web server failing to start.
+
+SIGTERM and SIGHUP used to end the process with NO stop: the web server takes
+the signal, shuts itself down, then hands the signal back to whatever handled
+it before, and by default that is the end of the process on the spot, before
+any ``finally``. SIGHUP it does not take at all. All three now have one
+handler, this script's, and leave through ``main``'s ``finally``. Nothing in that path can do anything but stop: it sets
+one flag, and the bus thread answers it with the driver's stop and nothing
+else.
+
+The wait is bounded: 35 s (``SHUTDOWN_JOIN_S``). During it further signals are
+ignored, a second Ctrl+C included: cutting the stop short would leave it half
+done. The last line printed, ``sortie: ...``, says how the machine was left:
+
+* ``arret confirme, port libere``: the stop finished and read the shaft at
+  standstill;
+* ``ATTENTION: ...``: the stop finished without being able to confirm, or it
+  raised, or IT HAD NOT FINISHED WHEN THE WAIT ENDED. In that last case the
+  process ends at once all the same, by itself, so that it can never be left
+  hanging on a stuck exchange with signals ignored: its end is what gives the
+  port and the lock on the drive cable back. A stop asked for from the page
+  just before (up to 25 s) followed by the driver's own stop can outlast the
+  35 s on a shaft that is slow to come to rest;
+* ``fil de bus jamais demarre: ...``: the exit came before the bus thread was
+  started. Nothing was opened, nothing was commanded;
+* ``-``: the bus thread died while connecting, on an exception the driver
+  does not ordinarily raise, before any stop could be attempted. Nothing was
+  commanded.
+
+The exit status: 0 after a Ctrl+C taken while the page was served (the
+interruption itself during the start-up wait), 143 after SIGTERM, 129 after
+SIGHUP, and 1 when the stop had not finished when the wait ended.
+
+None of this depends on the last line being written. With the terminal gone
+or the pipe broken there is nobody to read it: the line is dropped, the
+signals are given back and the process ends as it would have, with the same
+status.
+
+What stops the motor whenever the stop was not confirmed, and what nothing
+here can cover at all: SIGKILL (``kill -9``), the power going, the interpreter
+itself crashing. No code runs then. THE NET IS THE DRIVE'S OWN COMMUNICATION
+TIMEOUT (ttO): the keepalive stops with the process and the drive stops the
+motor by itself. Check ttO on the keypad before relying on it, and check on
+the drive that the motor is at rest before starting the tool again.
+
 ## If the link is unstable, suspect the physical layer first
 Partial frames are an electrical symptom, not a software one. Check the common
 0 V on RJ45 pin 8, shielded twisted pair earthed at the drive end, and the
@@ -64,13 +119,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import queue
+import signal
 import sys
 import threading
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, assert_never, override
+from types import FrameType
+from typing import Annotated, Final, Literal, TextIO, assert_never, override
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -90,8 +149,8 @@ from scripts.drive_link import (
 from src.clock import RealClock
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
 from src.local_config import DriveLink
-from src.motor.drive import ControlWord, DriveState, DriveStatus, decode_speed
-from src.result import Err, Ok
+from src.motor.drive import ControlWord, DriveError, DriveState, DriveStatus, decode_speed
+from src.result import Err, Ok, Result
 from src.units import Metres, Monotonic, MotorRpm, elapsed
 
 # --- Nameplate: SEW-USOCOME KA37 DRS71S4/AL/DH --------------------------
@@ -472,7 +531,28 @@ class BusWorker(threading.Thread):
                     self.snap.last_error = f"keepalive: {describe_error(error)}"
 
     async def _main(self) -> None:
+        """Connect, cycle until asked to stop, and leave through the driver's stop.
+
+        The driver's stop is in a ``finally``: an exception raised by an action
+        or by a poll ends this thread, and it used to end it WITHOUT that stop,
+        leaving a motor that had been enabled to the drive's own ``ttO``
+        timeout alone. Now the stop sequence runs on every way out of the
+        cycle, and the exception goes on afterwards. The page is told first:
+        this thread is the only one that refreshes the snapshot, so what it
+        last showed would otherwise stay on screen as if it were current.
+        """
         await self._connect()
+        try:
+            await self._cycle()
+        except BaseException as error:
+            self.snap.armed = False
+            self._clear_live_fields()
+            self.snap.last_error = f"fil de bus arrete: {type(error).__name__}: {error}"
+            raise
+        finally:
+            await self._stop_and_release()
+
+    async def _cycle(self) -> None:
         while not self._stop_requested.is_set():
             started: Monotonic = self._clock.monotonic()
             while True:
@@ -488,14 +568,42 @@ class BusWorker(threading.Thread):
             self.snap.updated_at = self._clock.monotonic()
             spent = elapsed(started, self._clock.monotonic())
             await asyncio.sleep(max(0.05, CYCLE_S - spent))
-        # The driver's own stop: LFRD = 0, RFRD polled to standstill, only then
-        # 7 and 6 - and if standstill is not confirmed it leaves the run command
-        # and says so. Then the port is released.
-        match await self._built.drive.close():
-            case Ok():
-                self.exit_report = "arret confirme, port libere"
-            case Err(error):
-                self.exit_report = f"ATTENTION: {describe_error(error)}"
+
+    async def _stop_and_release(self) -> None:
+        """The driver's own stop, then the port. What it achieved is ``exit_report``.
+
+        LFRD = 0, RFRD polled to standstill, only then 7 and 6 - and if
+        standstill is not confirmed it leaves the run command and says so.
+
+        The driver answers a stop it could not confirm with an error, and that
+        is reported as a warning. Should the stop RAISE instead, nothing was
+        confirmed and the exit must not go on saying "-" as if nothing had
+        been attempted: the report says what was raised, and the port is let
+        go of directly, with the lock on the drive cable that goes with it.
+        The driver releases both as the last step of its stop, a step it did
+        not reach, and it will not try again: it counts itself closed from the
+        first call.
+        """
+        try:
+            closed = await self._built.drive.close()
+        except BaseException as error:
+            self.exit_report = (
+                f"ATTENTION: l'arret du pilote a leve {type(error).__name__}: {error}. "
+                "Arret NON confirme, port relache: seul le delai ttO du variateur arrete le moteur."
+            )
+            self._built.release_port()
+            raise
+        self.exit_report = _stop_report(closed)
+
+
+def _stop_report(closed: Result[None, DriveError]) -> str:
+    """What the driver's stop achieved, in the operator's words."""
+    match closed:
+        case Ok():
+            return "arret confirme, port libere"
+        case Err(error):
+            return f"ATTENTION: {describe_error(error)}"
+    raise assert_never(closed)
 
 
 worker: BusWorker | None = None
@@ -727,9 +835,183 @@ setInterval(tick,500); tick();
 """
 
 
+EXIT_HELP: Final[str] = (
+    "Sortie: Ctrl+C, SIGTERM (kill, arret d'un service) et SIGHUP (terminal ferme) lancent "
+    "tous l'arret du pilote (consigne a 0, arbre lu a l'arret, puis mots d'arret), une seule "
+    f"fois, et l'attendent {SHUTDOWN_JOIN_S:.0f} s au plus avant la fin du processus; pendant "
+    "cette attente les signaux sont ignores. Si l'arret n'a pas fini a temps, la derniere "
+    "ligne le dit (sortie: ATTENTION ...) et le processus se termine quand meme. SIGKILL "
+    "(kill -9), une coupure de courant ou un plantage de l'interpreteur ne peuvent pas etre "
+    "interceptes. Dans tous ces cas le seul filet est le delai de communication du variateur "
+    "(ttO), a verifier sur son clavier."
+)
+
+EXIT_STOP_UNFINISHED: Final[int] = 1
+"""The exit status when the process ends without having seen the driver's stop finish.
+
+Not zero: whatever started the tool must be able to tell this exit from a stop
+that was seen through.
+"""
+
+#: What ``signal.signal`` hands back: the handler a signal had before.
+type _Handler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
+
+
+def _exit_signals() -> tuple[signal.Signals, ...]:
+    """The signals that end this process and that Python can catch. Windows has no SIGHUP."""
+    if sys.platform == "win32":
+        return (signal.SIGINT, signal.SIGTERM)
+    return (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+def _leave(signum: int, _frame: FrameType | None) -> None:
+    """An exit signal: out of whatever the main thread is doing, through ``main``'s ``finally``.
+
+    The shield goes up FIRST, here, before the exception: two signals that
+    arrive together are two handlers, and the second one raising inside the
+    ``finally`` the first one led to would end the process before the stop.
+    Once this has run no other exit signal has a handler left, and one that
+    was already pending is dropped.
+
+    An exception and not a flag, because the main thread may be anywhere: in
+    the start-up wait, in the web server's loop (SIGHUP, which the web server
+    does not take: its loop is cancelled and it closes what it serves on the
+    way out), or in the web server just after it has shut itself down and
+    handed the signal back (Ctrl+C and SIGTERM, which it does take). Ctrl+C
+    stays the interruption it always was. SIGTERM and SIGHUP leave with the
+    status a shell gives a process ended by them, 128 plus the signal's
+    number.
+    """
+    _let_nothing_cut_the_stop()
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
+    raise SystemExit(128 + signum)
+
+
+def _leave_through_the_stop() -> Mapping[signal.Signals, _Handler]:
+    """From here Ctrl+C, SIGTERM and SIGHUP are exits through ``main``'s ``finally``.
+
+    Main thread only. Returns what each signal did before, to be given back
+    once the stop is over (:func:`_give_the_signals_back`).
+    """
+    return {wanted: signal.signal(wanted, _leave) for wanted in _exit_signals()}
+
+
+def _let_nothing_cut_the_stop() -> None:
+    """The stop is all that is left: a signal that arrives now must not end the process first.
+
+    A second ``kill``, a terminal closed after a Ctrl+C, an impatient second
+    Ctrl+C: each would otherwise end the process while the bus thread is in
+    the middle of the stop sequence. The wait they would cut is bounded
+    (:data:`SHUTDOWN_JOIN_S`), and the shield comes down when it is over
+    (:func:`_give_the_signals_back`): it never outlives the stop.
+    """
+    for unwanted in _exit_signals():
+        signal.signal(unwanted, signal.SIG_IGN)
+
+
+def _give_the_signals_back(before: Mapping[signal.Signals, _Handler]) -> None:
+    """The wait for the stop is over: each signal does again what it did before ``main``.
+
+    For a console started from a terminal that is the default: Ctrl+C
+    interrupts, SIGTERM and SIGHUP end the process. Whatever the interpreter
+    still waits for on its way out, the process can be ended by ordinary
+    means.
+    """
+    for restored, handler in before.items():
+        signal.signal(restored, signal.SIG_DFL if handler is None else handler)
+
+
+def _point_at_nothing(stream: TextIO) -> None:
+    """Make a stream that can no longer be written to harmless for the rest of the process.
+
+    Its file descriptor is pointed at the null device. What the stream still
+    holds, the line that failed included, then goes nowhere without failing:
+    the interpreter flushes standard output on its way out, and a flush that
+    fails there turns the exit status into 120, whatever the process meant
+    to leave with. A stream with no descriptor of its own has nothing to
+    point.
+    """
+    with contextlib.suppress(OSError, ValueError):
+        nothing = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(nothing, stream.fileno())
+        finally:
+            os.close(nothing)
+
+
+def _say_last(line: str) -> None:
+    """Say the last line where somebody may still read it. A dead terminal cannot make it raise.
+
+    Standard output first; if that fails, standard error, which may still be
+    the terminal when the output was piped to a reader that has gone. A
+    stream that fails (the terminal closed: an input/output error; the reader
+    gone: a broken pipe; the stream itself closed) is pointed at nothing, and
+    both streams are left flushed or harmless.
+    """
+    said = False
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not said:
+                print(line, file=stream)
+            stream.flush()
+        except (OSError, ValueError):
+            _point_at_nothing(stream)
+        else:
+            said = True
+
+
+def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handler]) -> None:
+    """Ask the bus thread for the driver's stop, wait for it within bounds, say how it went.
+
+    The bus thread's exit runs the driver's stop sequence; it is waited for
+    rather than left to die mid-stop with the process. The wait is bounded,
+    and a stop that has not finished when it ends is not passed over in
+    silence: the last line says ATTENTION, that nothing was confirmed, and
+    what is left to stop the motor. Then the process ENDS, by itself. A stop
+    that is stuck is stuck in a thread the interpreter would otherwise wait
+    for on its way out, with no limit, holding the port and the lock on the
+    drive cable; ending the process is what gives both back, and it is why
+    the tool can never be left for the operator to kill by force.
+
+    The report starts on a line of its own: the signal that brought the
+    process here may have cut a line that was being printed.
+
+    What follows the report does not depend on it. Giving the signals back
+    and ending the process are in ``finally`` blocks, and the report is
+    written by :func:`_say_last`, which a terminal that is gone cannot make
+    raise: a closed terminal is precisely how SIGHUP gets here, and a line
+    that could not be written used to leave the process alive, deaf to every
+    signal, on the stuck exchange it was about to walk away from.
+    """
+    started.shutdown()
+    if started.ident is None:
+        report = "fil de bus jamais demarre: rien n'a ete ouvert, rien n'a ete commande"
+    else:
+        started.join(timeout=SHUTDOWN_JOIN_S)
+        report = started.exit_report
+    unfinished = started.is_alive()
+    if unfinished:
+        report = (
+            f"ATTENTION: l'arret du pilote n'a pas fini en {SHUTDOWN_JOIN_S:.0f} s. Arret NON "
+            "confirme. Le port et le verrou du cable, encore tenus, sont rendus par la fin de "
+            "ce processus, qui se termine maintenant. Seul le delai de communication du "
+            "variateur (ttO) arrete le moteur: verifier sur le variateur qu'il est a l'arret "
+            "avant de relancer."
+        )
+    try:
+        _say_last(f"\nsortie: {report}")
+    finally:
+        try:
+            _give_the_signals_back(before)
+        finally:
+            if unfinished:
+                os._exit(EXIT_STOP_UNFINISHED)
+
+
 def main() -> int:
     global worker  # noqa: PLW0603
-    ap = argparse.ArgumentParser(description="Console manuelle ATV320")
+    ap = argparse.ArgumentParser(description="Console manuelle ATV320", epilog=EXIT_HELP)
     add_link_arguments(ap)
     ap.add_argument("--max-rpm", default=os.getenv("MOTOR_MAX_RPM", "300"))
     ap.add_argument("--host", default="127.0.0.1")
@@ -747,27 +1029,36 @@ def main() -> int:
         ap.error(f"--max-rpm={max_rpm} doit etre dans 0..{NOMINAL_RPM}")
 
     worker = BusWorker(link, max_rpm)
-    worker.start()
-    print(f"lien: {link.describe()}")
-    print(f"plaque: {NOMINAL_RPM} tr/min a {BASE_HZ} Hz, {NAMEPLATE_CURRENT_A} A, i={GEAR_RATIO}")
-    print(f"rejet des lectures > {MAX_PLAUSIBLE_CURRENT_A} A ou > {MAX_PLAUSIBLE_RPM} tr/min")
-    time.sleep(1.5)
-    s = worker.snap
-    if s.link_ok and s.status_word is not None:
-        print(f"variateur OK: {s.drive_state}, ETA=0x{s.status_word:04X}, HSP={s.hsp_hz} Hz")
-    else:
-        print(f"liaison NON etablie: {s.last_error}")
-        print("La console demarre quand meme et affichera l'etat reel de la liaison.")
-    print(f"\n  ->  http://{host}:{http_port}\n")
-    print("Rien ne tourne avant que VOUS armiez et cliquiez.")
+    # In this order: the exit signals first, then the `try`, then the bus
+    # thread. A signal that arrives once the thread exists must find both its
+    # handler and the `finally` below.
+    before = _leave_through_the_stop()
     try:
+        worker.start()
+        print(f"lien: {link.describe()}")
+        print(
+            f"plaque: {NOMINAL_RPM} tr/min a {BASE_HZ} Hz, {NAMEPLATE_CURRENT_A} A, i={GEAR_RATIO}"
+        )
+        print(f"rejet des lectures > {MAX_PLAUSIBLE_CURRENT_A} A ou > {MAX_PLAUSIBLE_RPM} tr/min")
+        time.sleep(1.5)
+        s = worker.snap
+        if s.link_ok and s.status_word is not None:
+            print(f"variateur OK: {s.drive_state}, ETA=0x{s.status_word:04X}, HSP={s.hsp_hz} Hz")
+        else:
+            print(f"liaison NON etablie: {s.last_error}")
+            print("La console demarre quand meme et affichera l'etat reel de la liaison.")
+        print(f"\n  ->  http://{host}:{http_port}\n")
+        print("Rien ne tourne avant que VOUS armiez et cliquiez.")
         uvicorn.run(app, host=host, port=http_port, log_level="warning")
     finally:
-        # The worker's exit runs the driver's stop sequence; wait for it rather
-        # than letting a daemon thread die mid-stop with the process.
-        worker.shutdown()
-        worker.join(timeout=SHUTDOWN_JOIN_S)
-        print(f"sortie: {worker.exit_report}")
+        # An exit that no signal asked for (the web server returning, an
+        # exception) gets here with the handlers still armed. A signal that
+        # lands at that instant raises from inside this block: the stop is
+        # in a `finally` of its own so that it runs all the same.
+        try:
+            _let_nothing_cut_the_stop()
+        finally:
+            _stop_and_report(worker, before)
     return 0
 
 

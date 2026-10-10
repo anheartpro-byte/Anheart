@@ -29,6 +29,34 @@ test("documentation alone runs neither the Python gates nor the site gates", () 
   assert.deepEqual(gates(["raspberry-pi/README.md", "simulation/SESSION_TESTS.md", "deploy/simulation-vercel/README.md"]), NOTHING);
 });
 
+test("a change to the hosted simulation engine runs the gate that tests it", () => {
+  // deploy/simulation-vercel/tests run in `simulation-gate`, a Python gate (ANH-218). Everything those
+  // tests read must start it: the wrapper and its tests, the entry point of the Git layout, the two
+  // lists of dependencies they compare, and what the wrapper serves and runs.
+  for (const path of [
+    "deploy/simulation-vercel/app.py",
+    "deploy/simulation-vercel/bitalino.py",
+    "deploy/simulation-vercel/tests/test_app.py",
+    "deploy/simulation-vercel/tests/test_dependencies.py",
+    "deploy/simulation-vercel/tests/test_a_new_file.py",
+    "deploy/simulation-vercel/requirements.txt",
+    "deploy/simulation-vercel/vercel.json",
+    "deploy/simulation-vercel/build.sh",
+    "simulation_app.py",
+    "pyproject.toml",
+    "simulation/live.py",
+    "simulation/scenarios/manual_32_rpm_refused.json",
+    "simulation/viewer/index.html",
+    "raspberry-pi/src/training/runtime.py",
+    "raspberry-pi/config/motion_limits.json",
+  ]) {
+    assert.equal(gates([path]).python, true, path);
+    assert.equal(gates([...DOCS, ...SITE, path]).python, true, path);
+  }
+  // Its page of documentation is read by none of them.
+  assert.deepEqual(gates(["deploy/simulation-vercel/README.md"]), NOTHING);
+});
+
 test("the site and Convex run their own gates and spare the Python ones", () => {
   assert.deepEqual(gates(SITE), NODE_ONLY);
   assert.deepEqual(gates(CONVEX), NODE_ONLY);

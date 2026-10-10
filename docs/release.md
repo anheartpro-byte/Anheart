@@ -269,13 +269,15 @@ branche que `main`. Chaque étape attend la réussite de la précédente.
 Laissé de côté, exprès :
 
 - **l'endurance nocturne** de l'enregistrement de séance (une journée simulée,
-  jusqu'à 35 minutes) : elle ne tourne que sur le déclenchement nocturne de
-  `ci.yml`, qui la lance chaque nuit sur la tête de `main`. La même boucle
+  jusqu'à 35 minutes) : elle tourne sur le déclenchement nocturne de
+  `ci.yml`, qui la lance chaque nuit sur la tête de `main`, et sur un
+  lancement manuel de `ci.yml` dont la case `endurance` est cochée. Cette
+  pipeline appelle `ci.yml` sans rien lui passer : elle ne la lance pas. La même boucle
   tourne quelques minutes simulées dans les tests du Pi de chaque exécution,
   donc ici aussi ;
 - **l'endurance nocturne de la console entière** (24 heures simulées, jusqu'à
-  240 minutes, une étape de `simulation (report)`) : même règle, le
-  déclenchement nocturne seul. Le même scénario tourne quelques minutes
+  240 minutes, une étape de `simulation (report)`) : le déclenchement
+  nocturne seul, sans case pour la lancer à la main. Le même scénario tourne quelques minutes
   simulées dans la batterie de simulation de chaque exécution, donc ici aussi
   ([framework-de-test.md](framework-de-test.md#17-endurance-de-la-console)) ;
 - les tests marqués `hardware` : ils demandent le variateur et le BITalino
