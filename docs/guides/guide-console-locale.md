@@ -538,7 +538,8 @@ Repères :
    si la cible n'est ni atteinte ni nulle : `consigne maintenue, cible non atteinte`.
 10. La note sous la grille : dernier message (ici
     `demarrage pris par la machine : manual_start bench (cible 0)` : la machine a
-    démarré la séance manuelle).
+    démarré la séance manuelle ; `(cible 0)` reste écrit tant que la cible appliquée
+    vaut 0, et disparaît si un autre écran en applique une).
 11. Barre latérale : Mode `MANUEL`, Etat `running`.
 
 Règles de la cible :
@@ -1194,6 +1195,9 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
    le mode passe à `MANUEL`, la pastille de la carte à `BANC - personne a bord : NON`.
    Si la note passe au rouge (`refus de la machine ...` ou `demarrage NON pris ...`), la
    séance n'a pas démarré : lisez la raison, et la liste **Evenements** (§14).
+   Si elle dit en rouge `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.`,
+   la liaison de cet écran a été coupée autour du clic : une séance manuelle tourne,
+   et l'écran ne peut pas dire si c'est la vôtre ou celle d'un autre écran (§14).
 6. Composez la cible : cliquez **+1 tr/min**. Le premier clic saute au minimum
    (1,10) ; chaque clic suivant ajoute 1. Après 27 clics, le brouillon affiche
    `27.10` en orange (capture `console-07-manuel-brouillon.png`).
@@ -1660,7 +1664,8 @@ Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
    `le variateur ne signale plus de defaut` quand le défaut a disparu (constaté 0,4 s
    après le clic, en simulation). En rouge, `refus de la machine (...) : reset refuse : ...`
    donne la raison d'un refus, et `le variateur signale toujours le defaut. ...` dit
-   qu'une seconde plus tard le défaut est encore là.
+   qu'une seconde plus tard le défaut est encore là. Passé cette seconde, un refus
+   de la machine n'est plus écrit sous ce bouton : il ne répond pas à ce clic.
 5. Vérifiez que la pastille du variateur quitte `fault` (constaté : `ready`).
 6. Allez dans **Securite** et acquittez le verdict `drive_fault` (§13.6 ; la case du
    coup de poing n'est pas nécessaire ici). Constaté : `acquitte par Mohamed : drive_fault`.
@@ -1906,13 +1911,16 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `cible NON prise par la machine : la cible appliquee est ... La raison n'est pas arrivee a cet ecran.` | une seconde après l'envoi, la machine ne tient pas la cible et cet écran n'a pas reçu la raison | lire Securite, l'encadré orange et la carte Variateur ; renvoyer la cible (§13.11) |
 | `cible NON prise par la machine : la seance manuelle est terminee.` | la séance s'est terminée avant que la cible soit prise | redémarrer une séance |
 | ✔ `seconde demande refusee par la console : la cible ... attend encore la machine (une demande a la fois). Reessayer dans un instant.` (rouge) | double clic sur **Appliquer** : la console n'a qu'une place, et la première cible y attend encore | rien ; la note dit ensuite ce que devient la première cible |
+| ✔ `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` (rouge ; sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** ou **Reset defaut variateur**) | la place de la console est prise par une autre demande, celle d'un autre écran ou une précédente de celui-ci : ce clic n'a pas été transmis à la machine. La page n'affiche pas le texte de la console, qui contient la demande en attente et le nom de son auteur | attendre un instant et recommencer si c'est encore voulu |
 | ✔ `demande envoyee : ... - pas encore prise par la machine` (démarrage manuel, démarrage de séance, reset) | la console a reçu la demande ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
-| ✔ `demarrage pris par la machine : ...` | une donnée reçue après la demande montre la séance démarrée | continuer ; la note s'efface à la fin de la séance |
+| ✔ `demarrage pris par la machine : ...` | la liaison de l'écran est restée ouverte depuis le clic, une donnée reçue après la demande montre la séance démarrée et aucun refus n'est arrivé. Après un démarrage manuel, `(cible 0)` n'est écrit que tant que la cible appliquée vaut 0 | continuer ; la note s'efface à la fin de la séance |
+| ✔ `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` ou `une seance est en cours. ...` (rouge) | la liaison de cet écran a été coupée entre le clic et la donnée qui montre la séance : un refus a pu être perdu, et la séance peut être celle d'un autre écran. La note ne reprend pas les mots de la demande | ne pas tenir la séance affichée pour celle demandée ici : lire **Mode**, le temps restant et la carte, et demander à qui conduit l'autre écran |
+| `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | même coupure, et une seconde après la demande aucune séance n'est affichée : elle a pu ne pas démarrer, ou démarrer et finir sans que cet écran le voie | lire **Mode**, **Securite** et la liste Evenements d'un écran resté relié, puis redemander |
 | ✔ `refus de la machine (<heure>) : demarrage refuse : ...` ou `reset refuse : ...` (rouge, sous le bouton) | la machine a refusé le démarrage ou le reset ; la suite du message est celle de la liste Evenements | lire la raison dans ce tableau |
-| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde après la demande, aucune séance et aucun refus sur cet écran | lire **Securite**, la carte **Variateur** et la liste Evenements, puis redemander |
+| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | la liaison de l'écran est restée ouverte, et une seconde après la demande il n'y a ni séance ni refus sur cet écran | lire **Securite**, la carte **Variateur** et la liste Evenements, puis redemander |
 | ✔ `le variateur ne signale plus de defaut` | après un reset, les données ne montrent plus de défaut | acquitter `drive_fault` (§13.9) |
 | `le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde après la demande de reset, le défaut est encore là, sans refus reçu | lire la carte **Variateur** et la liste Evenements |
-| `acquittement repris par la machine : <règle> est de nouveau verrouille, sa regle s'est declenchee de nouveau.` (rouge, sous **Acquitter**) | la console avait répondu 200, et la règle s'est verrouillée de nouveau au cycle suivant | traiter la cause ; pour `session_standstill` et `session_overrun`, la note ajoute que l'acquittement tiendra une fois **Mode** revenu à `REPOS` |
+| `acquittement repris par la machine : <règle> est de nouveau verrouille, sa regle s'est declenchee de nouveau.` (rouge, sous **Acquitter**) | la console avait répondu 200, et la règle s'est verrouillée de nouveau au cycle suivant | traiter la cause ; pour `session_standstill` et `session_overrun`, la note ajoute que l'acquittement tiendra une fois **Mode** revenu à `REPOS`, et retire cette phrase quand le mode y revient. La note s'efface quand la règle n'est plus verrouillée |
 | ✔ encadré `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE` | personne à bord : la fréquence cardiaque empêche la vitesse de monter (la raison suit) | §13.11 |
 | encadré `RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE` | personne à bord : la page ne reçoit plus cette information de la console | ne rien conclure ; lire la note après l'envoi |
 | ✔ bandeau `REPRISE AUTOMATIQUE POSSIBLE` | un avertissement non verrouillé tient ou baisse la vitesse : elle remontera seule quand il se lèvera | ne pas croire le bras arrêté pour de bon (§11, §15) |

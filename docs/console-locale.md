@@ -58,6 +58,11 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > à la page par le rejeu, faute de pouvoir le produire à l'instant voulu ; la phrase
 > sur `REPOS` d'un acquittement repris et la note d'une cible sous une retenue
 > `INCONNUE` ne sont tenues que par les tests de la page.
+> Trois cas l'ont été avec deux écrans réels, avant et après leur correction : un
+> démarrage (de séance, puis manuel) demandé pendant que la liaison de l'écran était
+> coupée et refusé par la boucle, suivi du démarrage d'un autre écran ; une cible
+> appliquée par un autre écran pendant que la note disait `(cible 0)` ; et un clic sur
+> **Appliquer** reçu pendant que la demande d'un autre écran attendait.
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -791,26 +796,57 @@ réponse 202, même pour un démarrage que la boucle refusait ensuite) :
 | Note | Sens |
 |---|---|
 | `demande envoyee : manual_start bench - pas encore prise par la machine` | la console a mis la demande dans sa boîte ; la boucle ne l'a pas encore jugée |
-| `demarrage pris par la machine : manual_start bench (cible 0)` | une image prise après la demande montre la séance manuelle. La note s'efface quand la séance n'est plus affichée |
+| `demarrage pris par la machine : manual_start bench (cible 0)` | sur une liaison restée ouverte depuis le clic, une image prise après la demande montre la séance manuelle, et aucun refus n'est arrivé. `(cible 0)` n'est écrit que tant que les images montrent une cible appliquée de 0 : la mention disparaît dès qu'un autre écran en applique une, et revient si la cible revient à 0. La note s'efface quand la séance n'est plus affichée |
 | `refus de la machine (<heure>) : demarrage refuse : …` (rouge) | la boucle a refusé ; le texte est celui de l'événement `refused` |
-| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde de l'horloge de la machine sans séance ni refus sur cet écran |
+| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | sur une liaison restée ouverte depuis le clic, une seconde de l'horloge de la machine sans séance ni refus sur cet écran |
+| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` (rouge) | une image montre une séance manuelle, mais la liaison de cet écran a été coupée depuis le clic (ou l'était au moment du clic). La note s'efface quand la séance n'est plus affichée |
+| `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | même coupure, et une seconde après la demande les images ne montrent pas de séance manuelle : elle a pu ne pas démarrer, ou démarrer et finir sans que cet écran le voie |
 
-Un refus daté après la demande peut répondre à la demande d'un autre écran prise dans
-le même cycle. Si une séance manuelle s'affiche ensuite, la page ne peut pas dire à qui
-elle est : la note s'efface, la carte montre la séance et la liste **Evenements** le
-refus. L'erreur d'une réponse HTTP (403, 409, 412…) s'affiche telle quelle.
+**Quand la page dit « pris ».** Un événement `refused` ne dit pas à quelle demande il
+répond, et la console ne renvoie pas à un écran les événements publiés pendant que sa
+liaison était coupée. Un démarrage refusé pendant une coupure, suivi du démarrage d'un
+autre écran, montre donc à cet écran une séance et aucun refus. La page n'écrit
+`demarrage pris par la machine`, avec les mots de sa propre demande, que si le
+WebSocket ouvert au moment du clic est encore celui qui livre l'image montrant la
+séance : sur une même liaison, tout événement publié entre-temps est arrivé avant
+cette image, un refus compris. Sinon elle dit seulement ce que les images montrent
+(une séance est en cours, ou n'est pas affichée) et que la réponse à sa demande ne lui
+est pas parvenue, sans reprendre les mots de la demande : ils se liraient comme ceux
+de la séance affichée. La règle est la même pour **Demarrer la seance** (section 9).
+Elle a été rejouée avec deux écrans (encadré du début de page).
+
+Un refus n'est tenu pour la réponse à une demande que s'il est daté dans la seconde
+qui la suit, à l'horloge de la machine ; le premier reste, un second ne le remplace
+pas. Un refus daté après la demande peut répondre à la demande d'un autre écran prise
+dans le même cycle. Si une séance manuelle s'affiche ensuite, la page ne peut pas dire
+à qui elle est : la note s'efface, la carte montre la séance et la liste
+**Evenements** le refus.
+
+L'erreur d'une réponse HTTP (403, 412, et les 409 qui ne nomment aucune demande en
+attente) s'affiche telle que la console l'écrit. Une exception : quand la boîte de la
+console est déjà prise par une autre demande, celle d'un autre écran ou une
+précédente de celui-ci, la console répond 409 et écrit dans sa réponse la demande en
+attente telle qu'elle la tient (`… (pending: …)`, avec le nom de l'autre opérateur et
+une heure de son horloge). La page n'affiche jamais ce texte. Sous **Demarrer
+MANUEL**, **Appliquer**, **Demarrer la seance** et **Reset defaut variateur**, elle
+écrit à la place, en rouge :
+`demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.`
 
 Trois précisions sur la note d'une cible, de la même date :
 
 - un refus daté après la cible n'est pas toujours le sien (celui d'un autre écran, ou
   d'une première cible que la machine reprend pendant qu'une seconde attend). La note
   dit alors `refus de la machine …`, puis `cible prise par la machine : …` dès qu'une
-  image montre que la machine tient la cible envoyée par cet écran ;
-- un second clic sur **Appliquer** dans le cycle du premier reçoit un 409 de la console
-  (`the machine is running (pending: …); try again in a moment`). La note dit
+  image montre que la machine tient la cible envoyée par cet écran. Le cas inverse
+  reste : un refus répondu à un autre écran **après** que la cible de celui-ci a été
+  prise remplace la note, alors que la machine tient toujours cette cible (la note en
+  dit moins que la machine, section 15) ;
+- un second clic sur **Appliquer** dans le cycle du premier reçoit ce même 409 : la
+  demande en attente est la première cible de cet écran, tant qu'aucune image prise
+  après elle n'est arrivée. La note dit alors
   `seconde demande refusee par la console : la cible … attend encore la machine (une demande a la fois). Reessayer dans un instant.`,
-  puis ce que devient la première cible. Un 409 reçu après un cycle (séance terminée,
-  par exemple) s'affiche tel que la console l'a écrit ;
+  puis ce que devient la première cible. Un 409 sans demande en attente (séance
+  terminée, par exemple) s'affiche tel que la console l'a écrit ;
 - avec une personne à bord, quand l'encadré de la fréquence cardiaque dit `INCONNUE`,
   la note d'une cible plus haute que la consigne ne dit plus
   `(suivie aux limites de mouvement)` : la page ne sait pas si la montée est retenue.
@@ -864,10 +900,13 @@ dès la réponse 202, même quand la boucle refusait) :
 `refus de la machine (<heure>) : reset refuse : …` en rouge, ou
 `le variateur ne signale plus de defaut` dès qu'une image prise après la demande ne
 montre plus de défaut. La note ne dit pas qui a levé le défaut, seulement ce que les
-images montrent ; elle s'efface si un défaut revient. Si le défaut est encore là une
-seconde plus tard sans refus sur cet écran :
+images montrent, que la liaison de l'écran ait été coupée ou non ; elle s'efface si un
+défaut revient. Si le défaut est encore là une seconde plus tard sans refus sur cet
+écran :
 `le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.`,
-corrigée quand le défaut disparaît.
+corrigée quand le défaut disparaît, sauf si autre chose a été écrit sous le bouton
+entre-temps. Passé cette seconde, un refus de la boucle, quel qu'il soit, n'est plus
+écrit sous ce bouton : il ne répond pas à cette demande.
 
 ### Reprise automatique de la liaison variateur
 
@@ -971,7 +1010,7 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Operateur` | obligatoire |
 | `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
 | `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
-| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
+| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. `pris` et `NON pris` ne sont écrits que si la liaison de l'écran est restée ouverte depuis le clic ; sinon, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` quand une image montre le mode `SEANCE`, ou `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` une seconde après la demande. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Une boîte déjà prise par une autre demande : même phrase que sous **Demarrer MANUEL** (section 6). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
@@ -1303,6 +1342,9 @@ la page l'efface ou la corrige quand ce qu'elle reçoit la rend fausse :
   Pour `session_standstill` et `session_overrun`, tant que le mode n'est pas revenu à
   `REPOS`, elle ajoute
   `La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.`
+  Cette phrase est retirée dès qu'une image montre le mode `REPOS`, et la note entière
+  s'efface dès que les images ne montrent plus cette règle verrouillée (acquittée de
+  nouveau, de cet écran ou d'un autre) : elle parle au présent.
   Passé cette seconde, un verrou qui revient est un nouveau verrou : la note s'efface.
   L'un et l'autre se jugent sur les images. Sans images en direct, la note reste telle
   qu'elle a été écrite ; seul le statut peut alors l'effacer, pour une règle qu'il
@@ -1701,6 +1743,17 @@ répondu à temps. Détail dans
   (`RESP · Respiration - AnHeart`) ; la place gardée pour le pied de page, mesurée au
   lieu d'être déclarée (elle valait 88 px pour un pied de page de 103 px, 92 px sur un
   écran étroit).
+- Ce que ces notes ne peuvent pas dire, faute d'un repère dans ce que la console
+  publie. Un événement `refused` ne porte pas l'identifiant de la demande à laquelle
+  il répond : un refus daté dans la seconde qui suit une demande de cet écran est
+  affiché comme sa réponse, même s'il répond à un autre écran ; et un refus répondu à
+  un autre écran après que la cible de celui-ci a été prise remplace la note
+  `cible prise par la machine`, alors que la machine tient toujours cette cible. Après
+  une coupure de sa liaison, un écran ne sait pas ce que la machine a fait de sa
+  demande de démarrage, et le dit (section 6) : la console ne lui renvoie pas les
+  événements manqués. Enfin le 409 d'une boîte déjà prise contient la demande en
+  attente telle que la console la tient, que la page n'affiche pas : la console ne
+  devrait pas l'envoyer. Ces trois points se traitent côté console.
 - Ces points relèvent de la page. Ils viennent du ticket
   [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178),
   qui a traité la note de la cible manuelle, l'encadré de la fréquence cardiaque, la
