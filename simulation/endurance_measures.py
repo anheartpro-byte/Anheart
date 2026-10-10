@@ -113,6 +113,11 @@ CSV_HEADER: Final[str] = "epoch_s,rss_kb,descriptors,data_kb,data_inodes"
 SAMPLES_SHOWN: Final[int] = 12
 """Readings shown in the Markdown summary; the JSON report keeps them all."""
 
+READINGS_HEADER: Final[str] = (
+    "| Instant | Mémoire résidente | Descripteurs | Données | Fichiers | Tic p50 / p99 (ms) |"
+)
+"""The head of the table of readings in the Markdown summary."""
+
 HALF: Final[float] = 0.50
 P99: Final[float] = 0.99
 
@@ -912,12 +917,15 @@ def progress(sample: Sample) -> str:
 def markdown(run: Run, checks: Sequence[Check]) -> str:
     """The summary a person reads: the verdict, each threshold, a few readings."""
     verdict = "PASS" if passed(checks) else "FAIL"
+    covered = (
+        f"Durée couverte : {hours_minutes(run.covered)} "
+        f"({hours_minutes(run.requested)} demandées), en {run.wall:.0f} s d'horloge murale "
+        f"et {run.cpu:.0f} s de processeur."
+    )
     lines = [
         f"## Endurance de la console ({run.mode.value}) : {verdict}",
         "",
-        f"Durée couverte : {hours_minutes(run.covered)} "
-        f"({hours_minutes(run.requested)} demandées), en {run.wall:.0f} s d'horloge murale "
-        f"et {run.cpu:.0f} s de processeur.",
+        covered,
         "",
         "| Seuil | Statut | Attendu | Mesuré |",
         "|---|---|---|---|",
@@ -928,21 +936,12 @@ def markdown(run: Run, checks: Sequence[Check]) -> str:
     )
     period = run.period
     if period is not None:
-        lines.extend(
-            [
-                "",
-                f"Écart entre deux tics : p50 {period.p50:.1f} ms, p99 {period.p99:.1f} ms, "
-                f"maximum {period.highest:.1f} ms.",
-            ]
+        gap = (
+            f"Écart entre deux tics : p50 {period.p50:.1f} ms, p99 {period.p99:.1f} ms, "
+            f"maximum {period.highest:.1f} ms."
         )
-    lines.extend(
-        [
-            "",
-            "| Instant | Mémoire résidente | Descripteurs | Données | Fichiers "
-            "| Tic p50 / p99 (ms) |",
-            "|---|---|---|---|---|---|",
-        ]
-    )
+        lines.extend(["", gap])
+    lines.extend(["", READINGS_HEADER, "|---|---|---|---|---|---|"])
     lines.extend(
         f"| {hours_minutes(sample.at)} | {megabytes(sample.rss)} | {sample.descriptors} | "
         f"{megabytes(sample.data_bytes)} | {sample.data_entries} | {_tick_cell(sample.tick)} |"

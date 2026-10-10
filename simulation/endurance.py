@@ -184,17 +184,38 @@ READY_ATTEMPTS: Final[int] = 100
 READY_WAIT: Final[float] = 0.1
 """The console's page is asked this many times, this far apart, before the run starts."""
 
-NOTES: Final[tuple[str, ...]] = (
+NOTE_HEALTH: Final[str] = (
     "Santé de la machine dans le heartbeat : absente (ANH-148 non fait). Les heartbeats "
-    "partent et sont comptés, sans objet de santé.",
-    "Tableau de bord simulé en mémoire (tests/fake_dashboard.py) : aucun déploiement Convex, "
-    "aucun réseau.",
-    "Variateur et BITalino simulés, pas de caméra, pas de page ouverte dans un navigateur "
-    "(un abonné du hub de télémétrie lit ce que la page lirait).",
-    "Dépôt hors machine des enregistrements : inexistant, donc aucune purge (seuil rotation).",
-    "Mémoire résidente : VmRSS de /proc sous Linux ; sur macOS, l'empreinte physique du "
-    "processus, qui compte aussi les pages que le système a compressées.",
+    "partent et sont comptés, sans objet de santé."
 )
+
+NOTE_DASHBOARD: Final[str] = (
+    "Tableau de bord simulé en mémoire (tests/fake_dashboard.py) : aucun déploiement Convex, "
+    "aucun réseau."
+)
+
+NOTE_HARDWARE: Final[str] = (
+    "Variateur et BITalino simulés, pas de caméra, pas de page ouverte dans un navigateur "
+    "(un abonné du hub de télémétrie lit ce que la page lirait)."
+)
+
+NOTE_DEPOSIT: Final[str] = (
+    "Dépôt hors machine des enregistrements : inexistant, donc aucune purge (seuil rotation)."
+)
+
+NOTE_MEMORY: Final[str] = (
+    "Mémoire résidente : VmRSS de /proc sous Linux ; sur macOS, l'empreinte physique du "
+    "processus, qui compte aussi les pages que le système a compressées."
+)
+
+NOTES: Final[tuple[str, ...]] = (
+    NOTE_HEALTH,
+    NOTE_DASHBOARD,
+    NOTE_HARDWARE,
+    NOTE_DEPOSIT,
+    NOTE_MEMORY,
+)
+"""What every run of the scenario leaves out, said in its report."""
 
 NOTE_GATED_DSP: Final[str] = (
     "Traitement du signal cardiaque (BioSPPy) exécuté autour des séances programmées "
