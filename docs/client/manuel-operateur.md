@@ -382,8 +382,11 @@ l'écran.*
   vérifie ensuite, et la même ligne change. Elle dit alors l'une de ces choses :
   - « demarrage pris par la machine » ou « cible prise par la machine » :
     après cette demande, l'écran a vu la séance démarrer, ou la machine
-    tenir cette cible. Pour un démarrage, il n'a vu entre les deux ni refus
-    ni autre demande de démarrage.
+    tenir cette cible. Pour un démarrage, il n'a vu ni refus, ni autre
+    demande de démarrage dans les deux secondes qui précèdent la vôtre ou
+    après elle. Cette ligne est remplacée par l'une des suivantes si un
+    refus ou une autre demande de démarrage arrive ensuite, et elle s'efface
+    quand la séance se termine.
   - En rouge, « refus de la machine » suivi de la raison. Le refus apparaît
     aussi dans la liste **Evenements** de la page **Seance**, sur une ligne
     « refused ».
@@ -397,12 +400,14 @@ l'écran.*
     dit alors pas si la séance en cours vient de votre demande.
   - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande »,
     suivi de « une autre demande de demarrage est aussi arrivee a la
-    machine » : deux demandes de démarrage sont arrivées à la machine en même
-    temps, la vôtre et une autre. Une séance est en cours ; la ligne ne dit
-    pas laquelle des deux demandes la machine a prise. La même phrase peut se
-    terminer par « il n'a pas recu l'evenement de sa propre demande » :
-    l'écran n'a pas vu passer votre demande, et ne dit pas non plus si la
-    séance en cours est la vôtre.
+    machine » : une autre demande de démarrage est arrivée à la machine près
+    de la vôtre. Une séance est en cours ; la ligne ne dit pas laquelle des
+    deux demandes la machine a prise, et elle peut s'afficher alors que la
+    séance est la vôtre. La même phrase peut se terminer par « sa liaison
+    venait de s'ouvrir » (l'écran était relié à la console depuis moins de
+    deux secondes) ou par « il n'a pas recu l'evenement de sa propre
+    demande » (l'écran n'a pas vu passer votre demande) : dans les deux cas
+    la ligne ne dit pas non plus si la séance en cours est la vôtre.
   - En rouge, « demande refusee par la console : une autre demande attend
     encore la machine », ou « seconde demande refusee par la console » : un
     clic précédent, de cet écran ou d'un autre, n'est pas encore traité, et

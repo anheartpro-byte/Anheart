@@ -65,7 +65,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > **Appliquer** reçu pendant que la demande d'un autre écran attendait ; et deux
 > clics sur **Demarrer MANUEL**, de deux écrans, acceptés tous deux dans le même
 > cycle (variateur simulé dont la lecture d'état est retardée de 70 ms, hors dépôt,
-> sans toucher à la console : obtenu au deuxième essai).
+> sans toucher à la console : obtenu au deuxième essai). La règle de la section 6 sur
+> « pris par la machine » est en outre tenue par un test de la page qui joue toutes
+> les suites de trois demandes au plus sur trois cycles face à un modèle de la boîte
+> de la console (17 976 suites, 5 097 histoires d'écran distinctes).
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -799,12 +802,13 @@ réponse 202, même pour un démarrage que la boucle refusait ensuite) :
 | Note | Sens |
 |---|---|
 | `demande envoyee : manual_start bench - pas encore prise par la machine` | la console a mis la demande dans sa boîte ; la boucle ne l'a pas encore jugée |
-| `demarrage pris par la machine : manual_start bench (cible 0)` | sur une liaison restée ouverte depuis le clic, une image prise après la demande montre la séance manuelle, aucun refus n'est arrivé, et la demande de cet écran est la seule demande de démarrage que la liaison a portée avant cette image. `(cible 0)` n'est écrit que tant que les images montrent une cible appliquée de 0 : la mention disparaît dès qu'un autre écran en applique une, et revient si la cible revient à 0. La note s'efface quand la séance n'est plus affichée |
+| `demarrage pris par la machine : manual_start bench (cible 0)` | sur une liaison restée ouverte depuis le clic, une image prise après la demande montre la séance manuelle, aucun refus n'est arrivé, et la demande de cet écran était seule (règle ci-dessous : aucune autre demande de démarrage dans les deux secondes qui la précèdent ni après elle). La note n'est gardée que tant que rien de ce que la liaison porte ne la contredit. `(cible 0)` n'est écrit que tant que les images montrent une cible appliquée de 0 : la mention disparaît dès qu'un autre écran en applique une, et revient si la cible revient à 0. La note s'efface quand la séance n'est plus affichée |
 | `refus de la machine (<heure>) : demarrage refuse : …` (rouge) | la boucle a refusé ; le texte est celui de l'événement `refused` |
 | `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | sur une liaison restée ouverte depuis le clic, une seconde de l'horloge de la machine sans séance ni refus sur cet écran |
 | `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` (rouge) | une image montre une séance manuelle, mais la liaison de cet écran a été coupée depuis le clic (ou l'était au moment du clic). La note s'efface quand la séance n'est plus affichée |
 | `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | même coupure, et une seconde après la demande les images ne montrent pas de séance manuelle : elle a pu ne pas démarrer, ou démarrer et finir sans que cet écran le voie |
-| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.` (rouge) | la liaison est restée ouverte, une image montre une séance manuelle, mais la liaison a porté une autre demande de démarrage en même temps que celle de cet écran : la page ne dit pas laquelle la boucle a prise. La note s'efface quand la séance n'est plus affichée |
+| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.` (rouge) | la liaison est restée ouverte, une image montre une séance manuelle, mais la liaison a porté une autre demande de démarrage proche de celle de cet écran (règle ci-dessous) : la page ne dit pas laquelle la boucle a prise. La même note remplace `demarrage pris par la machine` quand une autre demande de démarrage arrive ensuite. Elle s'efface quand la séance n'est plus affichée, ou à l'événement `session_idle` |
+| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison venait de s'ouvrir.` (rouge) | la liaison de cet écran livrait des images depuis moins de deux secondes quand la demande est partie (page tout juste ouverte, liaison tout juste revenue) : elle n'a pas pu voir si un autre écran venait de demander |
 | `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : il n'a pas recu l'evenement de sa propre demande.` (rouge) | la liaison est restée ouverte mais n'a pas porté l'événement `start_requested` de cette demande : la page n'a donc pas tout vu. Cas de garde, que la console telle qu'elle est ne produit pas |
 
 **Quand la page dit « pris ».** Un événement `refused` ne dit pas à quelle demande il
@@ -822,29 +826,47 @@ Elle a été rejouée avec deux écrans (encadré du début de page).
 
 **Une liaison ininterrompue ne suffit pas.** La boîte de la console n'a qu'une place.
 Un démarrage accepté pendant qu'un autre y attend encore prend cette place, sans
-qu'aucun refus soit publié : les deux écrans reçoivent 202, une seule séance démarre,
-et aucun des deux ne voit de refus. Ce cas arrive quand le second clic tombe dans le
-cycle du premier, sur une machine dont la lecture du variateur laisse la main à la
-console pendant le cycle (relevé avec un variateur simulé qui répond en 70 ms ; un
-variateur sur liaison série fait de même). Ce que les deux écrans voient, c'est la
-demande de l'autre : la console publie chaque démarrage qu'elle accepte comme un
-événement `start_requested`, daté de l'instant que porte le 202. La page n'écrit donc
-`demarrage pris par la machine` que si, sur la liaison restée ouverte :
+qu'aucun refus soit publié ; un démarrage accepté pendant que la boucle arme une
+séance est refusé un cycle plus tard. Deux écrans peuvent donc recevoir 202 pour une
+seule séance. Cela arrive quand deux clics tombent dans le même cycle ou dans deux
+cycles voisins, sur une machine dont les échanges avec le variateur laissent la main
+à la console pendant le cycle (relevé avec un variateur simulé dont la lecture d'état
+dure 70 ms ; un variateur sur liaison série fait de même). La page ne peut pas voir
+quel cycle a vidé la boîte : l'instant d'une image est pris après que la boucle a
+jugé la commande, si bien qu'une demande datée avant une image peut encore attendre.
+Elle ne cherche donc pas à reconstituer ce que la boucle a fait. Ce qu'elle voit,
+c'est chaque démarrage que la console accepte, publié comme un événement
+`start_requested` daté de l'instant que porte le 202. La règle, qui dit plutôt
+« ne sait pas » une fois de trop qu'une fois de moins :
 
-- elle a reçu l'événement `start_requested` de sa propre demande (même instant que
-  son 202 ; le nom de l'opérateur et les mots de la demande ne distinguent pas deux
-  écrans) ;
-- aucune autre demande de démarrage n'attendait encore quand cet événement est
-  arrivé. Une demande attend jusqu'à ce que la liaison montre que la boucle a vidé sa
-  boîte : un refus, ou une image d'un cycle commencé après elle ;
-- aucune autre demande de démarrage n'est arrivée ensuite, avant l'image qui montre
-  la séance.
+La page n'écrit `demarrage pris par la machine` que si la demande de cet écran
+était **seule** : (1) la liaison livrait déjà des images deux secondes avant la
+demande ; (2) elle a porté une fois, et une seule, l'événement de cette demande,
+reconnu à son instant exact (le nom de l'opérateur et les mots d'une demande ne
+distinguent pas deux écrans) ; (3) elle n'a porté aucune autre demande de démarrage
+datée moins de deux secondes avant celle-ci, quoi qu'il soit arrivé à cette autre ;
+(4) sur cette liaison, toute autre demande de démarrage, plus ancienne ou plus
+récente, a été vue résolue, par un refus daté après elle ou par une séance commencée
+puis terminée après elle (le refus qui résout une demande plus récente est aussi,
+pour la page, celui de la demande de cet écran : la note devient ce refus, ou
+s'efface si une séance s'affiche). Deux secondes font dix cycles de la boucle (0,2 s), et
+trois fois le plus long cycle que le superviseur laisse passer sans verdict
+`loop_stall` (0,6 s par défaut). Sinon la page écrit qu'une séance est en cours et
+qu'une autre demande de démarrage est aussi arrivée à la machine, sans les mots de
+sa propre demande, pour le premier écran comme pour le second.
 
-Dès que la liaison a porté deux demandes de démarrage ensemble, la page ne cherche
-pas à deviner laquelle la boucle a prise, pour le premier écran comme pour le second :
-elle écrit qu'une séance est en cours et qu'une autre demande de démarrage est aussi
-arrivée à la machine, sans les mots de sa propre demande. Rejoué avec deux écrans
-réels (encadré du début de page).
+Et `demarrage pris par la machine` n'est gardé que tant que rien de ce que la liaison
+porte ne le contredit. Une autre demande de démarrage, un refus daté après la
+demande, la fin de la séance (événement `session_idle`, qui arrive même quand les
+images de l'arrêt n'ont pas été livrées à cet écran) et un nouveau WebSocket le
+retirent chacun : la note devient « ne sait pas », le refus, ou s'efface.
+
+Cette règle est tenue par un test qui joue, contre le code de la page, toutes les
+suites de trois demandes au plus (démarrages de trois écrans au plus, resets, cibles,
+arrêts) sur trois cycles, face à un modèle de la boîte de la console : jamais une
+note ne dit « pris » d'une séance qui n'est pas celle que son écran a demandée. Les
+deux courses relevées ont été rejouées avec deux écrans réels (encadré du début de
+page).
 
 Pour un démarrage, tout refus daté après la demande compte tant que la demande est
 attendue, même si la boucle l'a jugée plus d'une seconde après ; le premier reste, un
@@ -1042,7 +1064,7 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Operateur` | obligatoire |
 | `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
 | `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
-| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. `pris` et `NON pris` ne sont écrits que si la liaison de l'écran est restée ouverte depuis le clic, et `pris` seulement si la demande de cet écran est la seule demande de démarrage qu'elle a portée (sinon, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.`) ; liaison coupée, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` quand une image montre le mode `SEANCE`, ou `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` une seconde après la demande. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Une boîte déjà prise par une autre demande : même phrase que sous **Demarrer MANUEL** (section 6). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
+| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. `pris` et `NON pris` ne sont écrits que si la liaison de l'écran est restée ouverte depuis le clic, et `pris` seulement si la demande de cet écran était seule, au sens de la section 6 (sinon, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.`, ou `… : sa liaison venait de s'ouvrir.`) ; liaison coupée, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` quand une image montre le mode `SEANCE`, ou `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` une seconde après la demande. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Une boîte déjà prise par une autre demande : même phrase que sous **Demarrer MANUEL** (section 6). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
@@ -1784,9 +1806,13 @@ répondu à temps. Détail dans
   une coupure de sa liaison, un écran ne sait pas ce que la machine a fait de sa
   demande de démarrage, et le dit (section 6) : la console ne lui renvoie pas les
   événements manqués. Quand deux demandes de démarrage sont acceptées dans le même
-  cycle, la seconde remplace la première dans la boîte sans refus publié : chacun des
-  deux écrans dit qu'il ne sait pas laquelle la machine a prise (section 6), alors
-  que la console, elle, le sait ; elle devrait refuser la seconde, ou le dire. Enfin
+  cycle ou dans deux cycles voisins, la seconde remplace la première dans la boîte
+  sans refus publié, ou est refusée un cycle plus tard. **La page ne peut pas être
+  certaine de la demande que la machine a prise tant que la console ne donne pas un
+  identifiant à chaque demande. D'ici là, elle dit « ne sait pas » chaque fois
+  qu'une autre demande de démarrage est passée près de la sienne (section 6), y
+  compris quand la séance est bien la sienne.** La console, elle, le sait ; elle
+  devrait refuser la seconde demande, ou dire laquelle elle a prise. Enfin
   le 409 d'une boîte déjà prise contient la demande en attente telle que la console
   la tient, que la page n'affiche pas : la console ne devrait pas l'envoyer. Ces
   quatre points se traitent côté console.
