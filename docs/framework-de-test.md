@@ -1108,7 +1108,7 @@ par un commit de fusion
 | Job | Contrôles et artefacts |
 |---|---|
 | `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)). Ne lance plus aucun test depuis ANH-183 : ce job n'est pas une vérification obligatoire, ses tests sont dans `docs` |
-| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne (`github.event_name == 'schedule'`), ou sur un lancement manuel de ce workflow dont la case `endurance` est cochée, une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128 ; voir [L'endurance nocturne, et comment la lancer à la main](#lendurance-nocturne-et-comment-la-lancer-à-la-main-anh-218)) |
+| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne (`github.event_name == 'schedule'`), ou sur un lancement manuel de ce workflow dont la case `endurance` est cochée, une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128 ; voir [L'endurance nocturne, et comment la lancer à la main](#lendurance-nocturne-et-comment-la-lancer-à-la-main-anh-218)). La case ne lance que cette endurance-là : celle de la console entière, dans `simulation (report)`, ne tourne que la nuit |
 | `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus : l'endurance de la console entière, 24 heures simulées (`python -m simulation.endurance simulated --hours 24`, ANH-164, [section 17](#17-endurance-de-la-console)) ; son rapport rejoint le même artefact |
@@ -1637,6 +1637,11 @@ lancement manuel dont la case est restée vide (la valeur par défaut), ni dans
 la pipeline de release, qui appelle `ci.yml` sans pouvoir lui passer cette
 case. Un lancement manuel, coché ou non, lance par ailleurs toutes les gates
 sans en sauter aucune et ajoute `--dsp` au rapport synthétique, comme la nuit.
+
+La case ne lance que cette étape. L'autre endurance nocturne, celle de la
+console entière ([section 17](#17-endurance-de-la-console), ANH-164), est une
+étape de `simulation (report)` qui ne tourne que sur le déclenchement
+nocturne : aucun lancement manuel ne la joue, case cochée ou non.
 
 Son échec fait échouer `pi (tests 1)`, donc `pi-gate`. Elle a 35 minutes, dans
 un job qui en a 60.
@@ -2277,9 +2282,11 @@ Elle ne recopie aucun job. `ci.yml`, `pi-install.yml`, `codeql.yml` et
 `deploy-production.yml` déclarent `workflow_call` et sont appelés tels quels.
 Un workflow appelé voit l'événement de son appelant, ici un lancement manuel :
 dans `ci.yml`, aucune gate n'est sautée par la règle de chemins, le rapport
-synthétique tourne avec ses scénarios `dsp`, et l'endurance nocturne ne tourne
-pas : hors de la nuit, seul un lancement manuel de `ci.yml` qui coche sa case
-la lance, et un workflow appelé ne reçoit pas cette case.
+synthétique tourne avec ses scénarios `dsp`, et aucune des deux endurances
+nocturnes ne tourne. Celle de l'enregistrement de séance ne tourne, hors de la
+nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et un
+workflow appelé ne reçoit pas cette case ; celle de la console entière ne
+tourne que la nuit.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de

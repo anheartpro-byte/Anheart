@@ -11,9 +11,12 @@ on:
     inputs:
       # The nightly endurance of the session record, asked for by hand: the
       # step of `pi (tests 1)` that otherwise runs on the nightly event alone.
-      # Off unless ticked, so that a manual run costs what it always did.
+      # Off unless ticked, so that a manual run costs what it always did. It
+      # starts that step and nothing else: the other nightly endurance, the
+      # one of the whole console in `simulation (report)`, runs on the nightly
+      # event alone and has no box.
       endurance:
-        description: "Lancer aussi l'endurance nocturne de l'enregistrement de séance : une journée simulée, jusqu'à 35 minutes de plus dans « pi (tests 1) »"
+        description: "Lancer aussi l'endurance nocturne de l'enregistrement de séance, et elle seule : une journée simulée, jusqu'à 35 minutes de plus dans « pi (tests 1) ». L'endurance de la console entière, dans « simulation (report) », ne tourne que la nuit."
         required: false
         type: boolean
         default: false
@@ -21,8 +24,8 @@ on:
   # is about to publish. A called workflow sees the event of its caller, a
   # manual run: no gate is skipped by the path rule, and the synthetic report
   # runs with its `--dsp` scenarios, as on any manual run. It declares no
-  # input: a caller cannot ask for the endurance, and the release pipeline
-  # does not run it.
+  # input: a caller cannot ask for the endurance of the session record, and
+  # the release pipeline runs neither of the two nightly endurances.
   workflow_call:
 
 permissions:
