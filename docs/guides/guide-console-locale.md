@@ -448,7 +448,8 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
   `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`.
   La demande n'est pas retirée : si elle finit par passer, le bandeau disparaît. Il
   disparaît aussi dès que le mode passe à `ARRET`, quelle que soit la façon dont
-  l'arrêt est venu.
+  l'arrêt est venu, ou quand l'état relu après le clic est `stopping`, ou `idle` sans
+  aucune demande en attente.
 * Si la demande échoue (console injoignable), le même bandeau dit tout de suite
   `la demande a echoue il y a N s et n'est plus en attente : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`,
   et une alerte dit `la demande d'arret (STOP) a echoue : ...`. Une demande échouée
@@ -1385,23 +1386,32 @@ Repères :
 >   `e-stop verrouille` dit `non` et l'acquittement ne demande pas la case du coup de
 >   poing : lisez la ligne `regle`.
 > * Quand `go_silent` devient le verdict en cours (liaison perdue avec le variateur,
->   par exemple), plus rien ne s'acquitte. La console dit alors à chaque écran si un
->   arrêt d'urgence est verrouillé derrière, y compris un arrêt déclenché par la
->   caméra, et le bandeau suit sa réponse : il reste, ou s'affiche sur un écran ouvert
->   ou rechargé après coup, tant qu'un arrêt d'urgence est tenu, jusqu'au redémarrage
->   de la console (la ligne `e-stop verrouille` dit `OUI`, la pastille Etat est
->   rouge) ; il disparaît si plus aucun ne l'est. C'est le cas d'une console relancée
->   qui repasse sous `go_silent`, ou d'un `quick_stop` de règle que `go_silent` a
->   remplacé : la pastille **Securite** dit `go_silent` en rouge, et c'est elle qu'il
->   faut lire.
+>   par exemple), plus rien ne s'acquitte, et **un bandeau déjà affiché reste jusqu'au
+>   redémarrage de la console**, qu'il vienne d'un arrêt d'urgence ou du `quick_stop`
+>   d'une règle. Dans ce second cas la console ne tient plus que `go_silent` (ligne
+>   `e-stop verrouille` : `non`), mais le bandeau ne s'efface pas tout seul : personne
+>   n'a rien acquitté. Lisez la pastille **Securite**, `go_silent` en rouge.
+> * Sous `go_silent`, la console dit à chaque écran si un arrêt d'urgence est
+>   verrouillé derrière, y compris un arrêt déclenché par la caméra : le bandeau
+>   s'affiche donc aussi sur un écran ouvert ou rechargé après coup (ligne
+>   `e-stop verrouille` : `OUI`, pastille Etat rouge). Et il disparaît quand la
+>   console répond que l'arrêt d'urgence qu'elle montrait n'est plus tenu : il a été
+>   acquitté juste avant `go_silent`, ou la console a été relancée.
+> * Après un redémarrage de la console, le bandeau d'avant disparaît à la première
+>   donnée sans alerte. Si la nouvelle console repasse sous `go_silent` avant, il
+>   disparaît pour un arrêt d'urgence (la console répond qu'elle n'en tient plus) ;
+>   pour le `quick_stop` d'une règle, seulement si l'écran peut prouver le
+>   redémarrage, sinon il reste jusqu'au rechargement de la page (§13.10).
 > * « Plus récent » se juge à l'horloge de la machine, pas à l'ordre d'arrivée sur
 >   l'écran. Une réponse en retard, demandée avant un acquittement et arrivée après,
 >   ne fait plus revenir le bandeau ; et de deux réponses croisées, l'écran garde
 >   celle que la machine a écrite en dernier.
 > * Limites qui restent, du côté prudent : si la liaison tombe (`NO LIVE DATA`) sur
 >   un arrêt verrouillé, le bandeau reste jusqu'au retour des données, même si l'arrêt
->   a été acquitté entre-temps ; et sous `go_silent`, un arrêt d'urgence posé depuis
->   un autre écran peut mettre jusqu'à 5 s à s'afficher ici.
+>   a été acquitté entre-temps ; sous `go_silent`, un arrêt d'urgence posé depuis
+>   un autre écran peut mettre jusqu'à 5 s à s'afficher ici ; et le bandeau du
+>   `quick_stop` d'une règle peut rester après un redémarrage de la console suivi de
+>   `go_silent`, jusqu'au rechargement de la page.
 >
 > Rejoué en simulation : E-STOP de la page, second écran, arrêt caméra, et perte de la
 > liaison au variateur au moment du clic (deux écrans). Le cas d'une règle
@@ -1414,7 +1424,12 @@ Repères :
 > réponse d'état retenue pendant un acquittement (le bandeau revenait 4,5 s ; il ne
 > revient plus) ; deux réponses d'état croisées, sans données en continu (le bandeau
 > manquait 4,8 s dans un ordre d'arrivée et tombait 4,7 s dans l'autre, alors que
-> l'arrêt était verrouillé ; il est levé tout de suite et reste).
+> l'arrêt était verrouillé ; il est levé tout de suite et reste). Et pour le
+> `quick_stop` d'une règle (`reverse_rotation`, séance manuelle de banc) : liaison au
+> variateur perdue dans la même console, le bandeau reste (relevé 12 s, acquittement
+> refusé par la console) ; console relancée puis `go_silent` pendant que l'écran était
+> coupé d'elle, le bandeau disparaît 0,1 s après le retour de l'écran (l'ancienne
+> console avait publié 69 instantanés, la nouvelle 15).
 >
 > Le bandeau **ARRET D'URGENCE NON CONFIRME** est un autre bandeau : il dit que la
 > demande E-STOP de cet écran n'a pas eu de réponse, ou qu'elle a échoué. Rejoué avec

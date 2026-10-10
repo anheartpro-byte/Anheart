@@ -440,9 +440,11 @@ s'arrête au mode : `liaison ouverte · repos`.
   `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`.
   La requête n'est jamais retirée. Le bandeau se baisse sur la réponse de la console
   (acceptation ou refus), sur une image qui montre le mode `ARRET`, ou sur une réponse
-  de statut demandée après le clic qui montre l'état `stopping` ou `idle`. Une image au
-  mode `REPOS` ne le baisse pas (un démarrage peut attendre derrière), ni une réponse
-  de statut demandée avant le clic.
+  de statut demandée après le clic qui montre l'état `stopping`, ou l'état `idle` sans
+  aucune demande en attente (`pending` vide). Ne le baissent pas : une image au mode
+  `REPOS` (un démarrage peut attendre derrière), une réponse de statut demandée avant
+  le clic, ni un statut `idle` dont `pending` porte encore une demande (un démarrage
+  accepté pendant un cycle attend le suivant, et l'état dit `idle` entre-temps).
 - Si la requête STOP échoue sans réponse de la console (console injoignable), ou sur
   une erreur de la console elle-même (code 5xx), le bandeau dit tout de suite
   `la demande a echoue il y a N s et n'est plus en attente : … - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`,
@@ -483,30 +485,54 @@ s'arrête au mode : `liaison ouverte · repos`.
     redemandé tout de suite, pour que la ligne `e-stop verrouille` et la pastille
     **Etat** ne restent pas en retard jusqu'au tour suivant ;
   - de deux réponses de statut, la page garde celle que la machine a écrite en dernier,
-    quel que soit l'ordre des demandes et l'ordre d'arrivée.
+    quel que soit l'ordre des demandes et l'ordre d'arrivée. Deux réponses qui portent
+    exactement le même `at`, ou une réponse sans `at`, sont appliquées dans l'ordre où
+    elles arrivent ; à `at` égal entre une image qui montre l'arrêt levé et un statut
+    qui le dit verrouillé, le bandeau est affiché.
 - Sous `go_silent`, les images ne peuvent rien dire de l'arrêt d'urgence : ce verdict
   prend sa place comme verdict retenu, et refuse tout acquittement. Le statut, lui, le
   peut : `/api/status` porte `supervisor_estop`, l'arrêt d'urgence que le superviseur
   tient verrouillé, quel qu'en soit l'auteur (bouton de la page, autre écran, caméra),
   et qui reste lisible quand `go_silent` a pris la place du verdict retenu et du
-  plancher. Une réponse de statut écrite après le passage des images à `go_silent`
-  décide donc seule :
-  - elle lève ou garde le bandeau si un arrêt d'urgence est verrouillé derrière
+  plancher. Une réponse de statut écrite après le passage des images à `go_silent` :
+  - lève ou garde le bandeau si un arrêt d'urgence est verrouillé derrière
     `go_silent`, aussi sur un écran ouvert ou rechargé après coup. La ligne
     `e-stop verrouille` dit alors `OUI` et la pastille **Etat** est rouge. Ce bandeau
     reste jusqu'au redémarrage de la console ;
-  - elle le baisse si plus aucun arrêt d'urgence n'est tenu : la console a été
-    relancée (un bandeau affiché avant le redémarrage ne reste plus jusqu'au
-    rechargement de la page), ou `go_silent` a remplacé le `quick_stop` verrouillé
-    d'une règle. La pastille **Securite** dit `go_silent` en rouge.
+  - le baisse si le dernier verrou montré par les images était l'arrêt d'urgence
+    lui-même (règle `operator_estop`) et qu'il n'est plus tenu : il a été acquitté
+    juste avant `go_silent`, ou la console a été relancée (un bandeau affiché avant le
+    redémarrage ne reste plus jusqu'au rechargement de la page) ;
+  - **ne le baisse pas** si le dernier verrou montré par les images était le
+    `quick_stop` verrouillé d'une règle (`reverse_rotation` par exemple) ou du
+    runtime, et que c'est la même console qui passe à `go_silent`. `go_silent` remplace
+    alors ce verdict, le statut ne montre plus que `go_silent`, personne n'a rien
+    acquitté et plus rien ne s'acquitte : le bandeau reste, avec la pastille
+    **Securite** `go_silent` en rouge, jusqu'au redémarrage de la console.
+    Jusqu'au 10 octobre 2026 il restait de la même façon.
 
-  Une réponse plus ancienne que ce passage peut lever le bandeau, jamais le baisser ;
-  le statut est redemandé tout de suite quand les images passent à `go_silent`.
+  Pour ce dernier cas, la page ne baisse le bandeau sous `go_silent` que si un
+  redémarrage de la console est prouvé depuis que le WebSocket en cours a montré ce
+  verrou (un WebSocket, une console) : l'horloge de la machine est repartie de zéro,
+  ou le nombre d'instantanés publiés par la console (troisième valeur de `counters`,
+  qui ne fait que monter tant qu'elle tourne) a baissé entre deux réponses de statut
+  demandées après ce moment. Une liaison coupée puis revenue ne prouve rien, et un
+  verrou montré de nouveau sur un nouveau WebSocket est celui de la console qui est au
+  bout. Sans preuve, le bandeau reste jusqu'à une image sans verdict ou jusqu'au
+  rechargement de la page : c'est le cas d'une console arrêtée avant d'avoir répondu à
+  un statut après le verrou (moins de 5 s), ou d'une nouvelle console qui a déjà
+  publié plus d'instantanés que l'ancienne n'en avait publié.
+
+  Une réponse plus ancienne que le passage à `go_silent` peut lever le bandeau, jamais
+  le baisser ; le statut est redemandé tout de suite quand les images passent à
+  `go_silent`.
 - Ce qui reste du côté prudent : si le WebSocket tombe sur une image qui montrait un
   arrêt verrouillé, le bandeau reste à côté de `NO LIVE DATA` jusqu'à la prochaine
-  image, même si le statut dit entre-temps l'arrêt levé ; et sous `go_silent`, un arrêt
+  image, même si le statut dit entre-temps l'arrêt levé ; sous `go_silent`, un arrêt
   d'urgence posé depuis un autre écran n'apparaît ici qu'au tour de statut suivant
-  (5 s au plus).
+  (5 s au plus) ; et le bandeau du `quick_stop` d'une règle, après une console relancée
+  puis repassée sous `go_silent` sans que le redémarrage soit prouvé, reste jusqu'au
+  rechargement de la page.
 - Si l'horloge de la machine repart de zéro (redémarrage du Pi), la page le voit : une
   image, ou une réponse demandée après celle qu'elle affiche, porte une heure plus
   ancienne. Ce qui arrive après ce redémarrage est alors tenu pour plus récent que ce
