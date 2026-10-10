@@ -200,7 +200,11 @@ nominatif.
    événement `recording`. L'instant de ce tic est dit au journal, par une
    affectation : c'est ce qui lui permet de savoir quelles trames du variateur
    n'appartiennent à aucune séance
-   ([15.2](#152-aucune-écriture-dans-la-boucle)).
+   ([15.2](#152-aucune-écriture-dans-la-boucle)). Deux tics font une lecture
+   de plus, d'un entier en mémoire : celui qui arme une séance, juste avant de
+   toucher le variateur, et celui qui la termine lisent combien de trames la
+   liste du variateur a refusées jusque-là, pour que l'enregistrement compte
+   celles de sa séance et aucune autre.
 6. L'instantané est publié vers la page.
 
 Une fois le tic revenu, et seulement alors, la tâche de contrôle le dit au
@@ -2484,7 +2488,9 @@ finir, ou la console ferme un enregistrement dont le runtime n'a pas donné de
 motif) et `superseded` (le fil du journal reçoit l'ouverture d'un
 enregistrement alors que le précédent n'a pas été fermé). Aucune des deux
 n'est attendue en fonctionnement normal : les voir dans un manifeste signale
-un défaut à examiner.
+un défaut à examiner. Un enregistrement ainsi remplacé dit, avant d'être
+clos, ce qui lui manque (la ligne `record_degraded:`, 15.3), comme un
+enregistrement fermé par la boucle : il était clos sans rien en dire.
 
 ### 15.2 Aucune écriture dans la boucle
 
@@ -2517,9 +2523,11 @@ jamais. Une première version prenait la liste sous un verrou partagé avec
 celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
 avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
 (l'appel au variateur attendait quand ce fil était arrêté dans sa prise). Le
-même test fait à chaque arrêt l'appel d'un armement, `Journal.open`, et celui
-par lequel le tic dit son instant au journal, `Journal.dispatched` (plus bas) :
-eux non plus n'attendent ce fil nulle part.
+même test fait à chaque arrêt l'appel d'un armement, `Journal.open`, celui
+par lequel le tic dit son instant au journal, `Journal.dispatched`, et la
+lecture du compte des refus que font le tic qui arme une séance et celui qui
+la termine, `Journal.frames_refused` (plus bas) : eux non plus n'attendent ce
+fil nulle part.
 
 **Sur quoi cette prise sans verrou repose.** Trois choses, toutes les trois
 nécessaires :
@@ -2559,7 +2567,12 @@ Selon le variateur branché :
   puis note l'appel : les mêmes observations d'appel que la simulation
   (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`,
   `read_failed`, `read_limits`), avec les mêmes registres. Jamais les deux à
-  la fois.
+  la fois. Un appel qui lève une exception au lieu de répondre est noté lui
+  aussi, au moment où il lève, comme un appel échoué (`ok: false` ; une
+  lecture d'état est alors `read_failed`), puis l'exception poursuit telle
+  quelle : le dernier échange d'un tic qui a levé, celui qu'un lecteur
+  cherche, est dans l'enregistrement. Une séance où aucun appel ne lève
+  enregistre exactement ce qu'elle enregistrait.
 
 Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
 une observation impossible à construire est comptée de même, et ne remonte
@@ -2611,7 +2624,12 @@ d'aucune séance :
   mis en file ou son départ refusé. Le fil lit cet instant au début de son
   cycle, avant la liste et avant la file : ce que la boucle avait mis en file
   jusque-là, ce cycle l'écrit, et ce qui reste d'avant cet instant sans
-  enregistrement ouvert n'appartient à aucune séance.
+  enregistrement ouvert n'appartient à aucune séance. Lu après, ce pourrait
+  être l'instant du tic même qui vient d'armer une séance dont ce cycle n'a
+  pas compté l'ouverture : les premiers échanges de cet armement, déjà pris,
+  seraient lâchés sans être comptés pour personne. Cet ordre est tenu par un
+  test qui retient le fil pendant qu'il ferme un enregistrement, la séance
+  suivante s'armant entre-temps (`test_record_frame_boundaries.py`).
 
 Ce qui est ainsi lâché, c'est tout ce que la console demande au variateur
 hors séance : la scrutation au repos (une lecture d'état), la consigne nulle
@@ -2626,15 +2644,35 @@ n'est pas une perte : rien n'est compté.
 qu'une prise peut ajouter). En temps normal il en garde quelques-unes : celles
 du tic en cours. Au-delà de la borne, les plus anciennes sont lâchées, et
 comptées. Elles rejoignent ce que la prise a refusé : des trames que personne
-n'a lues, dont on ne sait que le nombre et entre quels instants elles ont
-commencé (ce que la prise refuse est ce qu'elle a reçu de plus récent, donc
-après la dernière trame qu'elle a gardée). Un enregistrement compte ces trames
-quand sa séance recouvre cet intervalle, et le dit
-(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`). Quand deux
-séances le recouvrent, les deux enregistrements les comptent, parce que rien
-ne dit laquelle des deux a perdu quoi : `drive_frames_lost` est donc un
-majorant, jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
-ne recouvre aucune séance n'est pas une perte.
+n'a gardées. Un enregistrement dit combien il lui en manque
+(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`), et ce nombre
+est fait de deux comptes :
+
+- **ce que la prise a refusé à cette séance : exactement.** La prise ne date
+  pas ce qu'elle refuse, elle le compte. La boucle lit ce compte à l'instant
+  où elle demande l'armement, puis à l'instant où elle ferme l'enregistrement
+  (`Journal.frames_refused` : un entier lu en mémoire, sans verrou ni attente,
+  et qui ne lève jamais) : ce sont les deux instants qui bornent déjà les
+  trames de la séance. L'enregistrement compte la différence. Ce que la prise
+  a refusé à une console au repos, avant ou après la séance, n'y est plus : la
+  revue d'ANH-215 avait relevé 64 trames dites pour 47 perdues (le repos avait
+  rempli la prise avant l'armement) et 835 pour 829 (le repos après la
+  séance, avant que le fil revienne). Et deux séances qui ont attendu à
+  travers le même débordement comptent chacune les leurs. Tant que la séance
+  dure, le compte va jusqu'à la première prise du cycle en cours. Rien n'est
+  ajouté aux autres tics ;
+- **ce que le fil a lâché lui-même au-delà de 8192, et ce que la prise a
+  refusé quand son compte n'a pas pu être lu au début de l'armement : un
+  majorant.** De ces trames on ne sait que le nombre et entre quels instants
+  elles ont commencé (ce que la prise refuse est ce qu'elle a reçu de plus
+  récent, donc après la dernière trame qu'elle a gardée). Un enregistrement
+  les compte quand sa séance recouvre cet intervalle ; quand deux séances le
+  recouvrent, les deux les comptent, parce que rien ne dit laquelle a perdu
+  quoi : jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
+  ne recouvre aucune séance n'est pas une perte. Le premier cas demande plus
+  de 8192 échanges en attente sans enregistrement ouvert : il n'a été produit
+  que dans des tests, sur le journal seul ou en réduisant la borne, jamais
+  sur la console avec ses bornes.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -2691,7 +2729,11 @@ dans le battement de cœur vers le tableau de bord, champ `recordDegraded`
 (section 8). Dès que le disque accepte de nouveau une écriture, l'enregistrement
 le dit lui-même par un événement `warning` :
 `record_degraded: dropped=<n> failures=<n> last=<opération>:<erreur>`, avec
-`drive_frames_lost=<n>` avant `last=` quand des trames du variateur manquent.
+`drive_frames_lost=<n>` avant `last=` quand des trames du variateur manquent
+(ce que ce nombre compte, exactement ou en majorant : 15.2). La ligne est
+écrite quand ces comptes ont changé, au plus toutes les 2 s, et une dernière
+fois avant que l'enregistrement soit clos, qu'il le soit par la boucle ou
+parce qu'un autre le remplace (`superseded`).
 
 Une ligne coupée par un disque plein est retirée du fichier (retour à la
 dernière ligne complète) : l'enregistrement reste lisible et reprend si de la
@@ -2948,15 +2990,21 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   quand le fil du journal ne vient plus (4096 en attente), et celles que ce
   fil lâche lui-même au-delà de 8192 en attente d'un enregistrement. Elles
   sont comptées, et l'enregistrement le dit (15.2).
-- **À qui manquent les trames refusées, quand deux séances attendaient.** La
-  prise ne lit pas ce qu'elle refuse : elle ne donne qu'un nombre. Quand elle a
-  débordé pendant que deux séances attendaient le fil du journal, ce nombre
-  est compté pour chacune des deux dont la séance recouvre l'intervalle où ces
-  trames ont pu commencer, et il n'est pas partagé entre elles :
-  `drive_frames_lost` est un majorant. Il n'est compté que pour la seconde
-  quand la dernière trame gardée a commencé après la fin de la première.
-- L'échange pendant lequel le tic lève une exception : la prise note un appel
-  à son retour, et celui-là ne revient pas.
+- **Ce que `drive_frames_lost` ne dit pas exactement.** Ce que la prise a
+  refusé à une séance est compté pour elle seule, exactement (15.2). Deux
+  comptes restent des majorants, comptés pour chaque séance dont l'intervalle
+  les recouvre et non partagés entre elles : les trames que le fil du journal
+  lâche lui-même au-delà de 8192 ; et tout ce que la prise a refusé quand son
+  compte n'a pas pu être lu au début de l'armement (une faute de ce qui écoute
+  le variateur, journalisée : le départ a lieu quand même). Le compte exact
+  sépare les refus par l'ordre dans lequel la boucle les fait : si un échange
+  était un jour fait par un autre fil que la boucle à l'instant même où une
+  séance commence ou finit, il pourrait être compté du mauvais côté, à une
+  trame près.
+- Avec le pilote ATV320, l'échange pendant lequel un tic lèverait une
+  exception : ce pilote note lui-même ses échanges, pas la prise (15.2), et ce
+  cas n'a été rejoué que sur le simulateur, où l'appel qui lève est maintenant
+  dans l'enregistrement.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge

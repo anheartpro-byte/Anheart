@@ -307,7 +307,7 @@ son `detail` :
 | --- | --- |
 | `bitalino_loss:` | la console : la liaison d'acquisition a perdu ou comblé des échantillons (compteurs de la liaison) |
 | `dashboard:` | la console : une nouvelle du lien avec le tableau de bord montrée à l'opérateur, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` |
-| `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur, puis `last=<opération>:<erreur>` |
+| `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur (ce que ce nombre compte : [Observations du variateur](#observations-du-variateur)), puis `last=<opération>:<erreur>`. Une ligne par changement de ces comptes : la dernière de l'enregistrement fait foi, et elle est écrite avant sa clôture, y compris quand il est clos `superseded` |
 | `simulation:` | la simulation : ce qu'elle a fait au modèle |
 
 ## Observations du variateur
@@ -363,13 +363,33 @@ l'entrée, sans qu'elles prennent de place sous la borne). Sur un variateur qui 
 rien (le simulateur), elle l'enveloppe d'une prise qui note chaque appel, avec
 le vocabulaire et les registres des observations d'appel décrites ci-dessous
 (`src/record/drive_tap.py`,
-[raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Les
+[raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Un
+appel qui lève une exception au lieu de répondre y est noté au moment où il
+lève, comme un appel échoué (`ok: false`, valeurs inconnues à `null` ; une
+lecture d'état est alors `read_failed`). Les
 trames perdues faute de place (la prise pleine parce que personne ne venait,
 ou trop de trames en attente d'un enregistrement) sont comptées dans
-l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Ce nombre
-est un majorant : personne n'a lu ces trames, et quand deux séances
-recouvrent l'intervalle où elles ont pu commencer, chacun des deux
-enregistrements les compte. Les lignes sont celles de la séance, du début de
+l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`) : combien
+de trames du variateur manquent à cet enregistrement.
+
+- Pour les trames que la prise a refusées, ce nombre est **exact** : la
+  console lit le compte des refus au début de l'armement et à la fin de la
+  séance, et l'enregistrement compte la différence. Ce qu'une console au repos
+  s'est vu refuser avant ou après la séance n'y est pas.
+- Il reste un **majorant**, jamais inférieur à la perte réelle, dans deux
+  cas : les trames que le fil du journal a lâchées lui-même faute de place ;
+  et tout refus de la prise quand son compte n'a pas pu être lu au début de
+  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
+  recouvre celui où elles ont pu commencer, donc par deux enregistrements
+  quand deux séances le recouvrent.
+
+La ligne ne dit pas elle-même lequel des deux comptes a servi. Sur la console,
+le premier est le seul attendu : le second n'a été obtenu qu'en test (une
+borne réduite, une lecture du compte rendue fautive), et une lecture du compte
+qui échoue est écrite dans le journal de la console. Le format ne change pas :
+c'est le même texte dans le `detail` d'un événement `warning`, qu'un lecteur
+plus ancien lit comme avant, et le nombre n'est jamais plus grand que celui
+que la console écrivait jusque-là pour la même séance. Les lignes sont celles de la séance, du début de
 son armement à sa fin : ce que la console demande au variateur hors séance
 (scrutation au repos, consigne nulle après une séance, départ refusé,
 réarmement de défaut) n'y est pas, ni avant ni après, même quand cela

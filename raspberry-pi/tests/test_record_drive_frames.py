@@ -1116,7 +1116,7 @@ async def test_ex2_a_frame_source_that_raises_never_stops_the_session_or_its_rec
         raise RuntimeError("injected: the frame source raised")
 
     def broken(backend: DriveBackend, clock: Clock, *, sdk_frames: bool) -> Tapped:
-        return Tapped(tap_drive(backend, clock, sdk_frames=sdk_frames).backend, raising)
+        return replace(tap_drive(backend, clock, sdk_frames=sdk_frames), source=raising)
 
     monkeypatch.setattr(local_panel, "tap_drive", broken)
     recorded = recorded_rig(tmp_path)
