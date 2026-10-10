@@ -1297,8 +1297,9 @@ test("what sticks below the banners is told the room they take", () => {
     }
   };
   wire(context);
-  assert.equal(observers.length, 1);
+  assert.equal(observers.length, 2);
   assert.equal(observers[0][0], node("banners"));
+  assert.equal(observers[1][0], node("footer"));
   frame(snapshot({ ...verdict("quick_stop", "operator_estop") }));
   const wide = stack();
   // When the banner wraps onto more lines with nothing shown or hidden, and the browser reports it.
@@ -1618,7 +1619,10 @@ test("a refusal that reaches the screen before the 202 is not overwritten by it"
   context.addEvent(refusal(60.1, HELD));
   // When the 202 of that command arrives.
   await apply(context, 5, 60);
-  // Then the note still says refused, and nothing is awaited any more.
+  // Then the note still says refused, and stays so once the frames have shown the target not held.
+  assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
+  frame(manualFrame(60.2));
+  frame(manualFrame(61.2));
   assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
   assert.equal(context.state.manualSent, null);
   // And a later target is not taken for answered by that older refusal.
@@ -1808,7 +1812,7 @@ test("the same words under the kind `refused` would be taken for the machine's a
   await apply(context, 5, 60);
   context.addEvent(refusal(60.1, INCOMPATIBLE, ""));
   assert.ok(node("manual-note").textContent.startsWith("refus de la machine"), node("manual-note").textContent);
-  assert.equal(context.state.manualSent, null);
+  assert.equal(context.state.manualSent.refused, true);
 });
 
 test("an Appliquer the console refuses outright shows that answer and awaits nothing", async () => {
@@ -2890,3 +2894,618 @@ test("putting the console back in service takes its banner down and leaves that 
   assert.equal(announced(LATCHED), false);
   assert.equal(announced(OUT), true);
 });
+
+/* ============ EX-4, what the loop made of a start or of a fault reset ============ */
+
+const never = () => new Promise(() => undefined);
+
+// The operator starts a manual bench session; the console takes the request into its mailbox at `at`.
+async function startManual({ context, node }, at) {
+  node("manual-bench").checked = true;
+  node("manual-operator").value = "op";
+  context.api = (path) =>
+    path === "/api/manual/start" ? Promise.resolve({ kind: "manual_start", operator: "op", detail: "bench", at }) : never();
+  context.doManualStart();
+  await settle();
+}
+
+// The operator starts a programme; the console takes the request into its mailbox at `at`.
+async function startProgramme({ context, node }, at) {
+  context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
+  node("profile").value = "standard_30_min";
+  node("operator").value = "op";
+  context.api = (path) =>
+    path === "/api/session/start"
+      ? Promise.resolve({ kind: "start", operator: "op", detail: "standard_30_min", at })
+      : never();
+  context.doStart();
+  await settle();
+}
+
+// The operator asks for a fault reset; the console takes the request into its mailbox at `at`.
+async function askReset({ context }, at) {
+  context.api = (path) =>
+    path === "/api/drive/fault-reset" ? Promise.resolve({ kind: "fault_reset", operator: "op", detail: "", at }) : never();
+  context.doFaultReset();
+  await settle();
+}
+
+const OBF = { name: "dc_bus_overvoltage", mnemonic: "ObF", meaning: "surtension", raw_code: 18, message: "ObF (LFT 18): surtension" };
+const faultedFrame = (at, overrides = {}) =>
+  snapshot({ at, drive_state: "fault", fault: OBF, ...verdict("ramp_down", "drive_fault"), ...overrides });
+
+const START_REFUSED = "demarrage refuse : variateur en defaut (ObF, LFT 18)";
+const SENT_MANUAL = "demande envoyee : manual_start bench - pas encore prise par la machine";
+const NOT_TAKEN = "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.";
+
+test("the 202 of a manual start says the request is sent, then the frames say the machine took it", async () => {
+  // Given a machine at rest and the operator's click on Demarrer MANUEL.
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  // Then the 202 is not read as the machine's answer: the loop has not judged the start yet.
+  const note = node("manual-note");
+  assert.equal(note.textContent, SENT_MANUAL);
+  assert.equal(note.textContent.includes("accepte"), false);
+  // A frame taken after the request, before the loop got to it, changes nothing.
+  frame(snapshot({ at: 60.1 }));
+  assert.equal(note.textContent, SENT_MANUAL);
+  // When a frame taken after the request shows the manual session.
+  frame(manualFrame(60.3));
+  // Then the note says so, from the machine's own report.
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
+  assert.equal(note.classes.has("note-bad"), false);
+});
+
+test("a manual start the loop refuses turns the note into that refusal", async () => {
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  // When the loop refuses on its next tick: the drive shows a fault.
+  context.addEvent(refusal(60.1, START_REFUSED));
+  // Then the note is that refusal, in red, word for word, and no longer says "sent".
+  const note = node("manual-note");
+  assert.ok(note.textContent.startsWith("refus de la machine ("), note.textContent);
+  assert.ok(note.textContent.endsWith(") : " + START_REFUSED), note.textContent);
+  assert.ok(note.classes.has("note-bad"));
+  // And the frames that follow, at rest, neither turn it into a start nor add "not taken".
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60.1 + tick * 0.2 }));
+  }
+  assert.ok(note.textContent.endsWith(START_REFUSED), note.textContent);
+});
+
+test("a refusal that reaches the screen before the 202 of a start is not overwritten by it", async () => {
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  // Given the refusal delivered first by the socket: it is stamped after the request it answers.
+  context.addEvent(refusal(60.1, START_REFUSED));
+  await startManual(page, 60);
+  // Then the 202 does not put "sent" over it.
+  assert.ok(node("manual-note").textContent.endsWith(START_REFUSED), node("manual-note").textContent);
+  // An older refusal says nothing of a later start, already shown or delivered late.
+  await startManual(page, 70);
+  assert.equal(node("manual-note").textContent, SENT_MANUAL);
+  context.addEvent(refusal(69.5, START_REFUSED));
+  assert.equal(node("manual-note").textContent, SENT_MANUAL);
+});
+
+test("with no word from the loop for a second of its clock, the note says the start was not taken", async () => {
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  frame(snapshot({ at: 60.9 }));
+  assert.equal(node("manual-note").textContent, SENT_MANUAL);
+  // When a second of the machine's clock has gone by with no session and no refusal on this screen.
+  frame(snapshot({ at: 61.1 }));
+  // Then the note stops saying the request is on its way.
+  assert.equal(node("manual-note").textContent, NOT_TAKEN);
+  assert.ok(node("manual-note").classes.has("note-bad"));
+});
+
+test("the note stops saying the machine took the start once the session is over", async () => {
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  frame(manualFrame(60.3));
+  assert.ok(node("manual-note").textContent.startsWith("demarrage pris par la machine"));
+  // When the session ends: a STOP, a verdict, another screen.
+  frame(snapshot({ at: 75, mode: "arret", phase: "cooldown" }));
+  // Then the note is wiped rather than left under a card that shows no session.
+  assert.equal(node("manual-note").textContent, "");
+  // And it leaves alone what was written there since.
+  frame(snapshot({ at: 79 }));
+  await startManual(page, 80);
+  frame(manualFrame(80.3));
+  node("manual-note").textContent = "cible envoyee : 5.00 output rpm - pas encore prise par la machine";
+  frame(snapshot({ at: 90, mode: "arret", phase: "cooldown" }));
+  assert.ok(node("manual-note").textContent.startsWith("cible envoyee"));
+});
+
+test("a refusal and a session both after a start: the note says neither", async () => {
+  // Given a start, and a refusal dated after it: it may answer another screen's request.
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  context.addEvent(refusal(60.1, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "autre"));
+  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
+  // When a manual session is then on screen: this start's, or another screen's after this one was refused.
+  frame(manualFrame(60.3));
+  // Then the page claims neither that this start was taken nor that it was refused.
+  assert.equal(node("manual-note").textContent, "");
+});
+
+test("a programme start follows the same rule, in the note of the Seance page", async () => {
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startProgramme(page, 60);
+  const note = node("start-note");
+  assert.equal(note.textContent, "demande envoyee : start standard_30_min - pas encore prise par la machine");
+  // Refused by the loop: the rider's age is missing.
+  const refused = "demarrage refuse : age du passager requis pour une seance programmee";
+  context.addEvent(refusal(60.1, refused));
+  assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
+  assert.ok(note.classes.has("note-bad"));
+  // Asked again and taken: the frames show the programme running.
+  await startProgramme(page, 70);
+  frame(snapshot({ at: 70.3, mode: "seance", phase: "baseline" }));
+  assert.equal(note.textContent, "demarrage pris par la machine : start standard_30_min");
+  // The note goes with the session.
+  frame(snapshot({ at: 80 }));
+  assert.equal(note.textContent, "");
+  // And a start never answered at all is said so.
+  await startProgramme(page, 90);
+  frame(snapshot({ at: 91.1 }));
+  assert.equal(note.textContent, NOT_TAKEN);
+});
+
+test("a fault reset the loop refuses turns its note into that refusal", async () => {
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(faultedFrame(59.8));
+  await askReset(page, 60);
+  const note = node("fault-note");
+  assert.equal(note.textContent, "demande envoyee : fault_reset - pas encore prise par la machine");
+  assert.equal(note.textContent.includes("reset demande"), false);
+  // A frame taken before the request, and delivered after its 202, is not its answer.
+  frame(snapshot({ at: 59.9 }));
+  assert.equal(note.textContent, "demande envoyee : fault_reset - pas encore prise par la machine");
+  // When the loop refuses: another verdict stands in front of the fault.
+  const refused = "reset refuse : acquitter d'abord le verdict operator_estop";
+  context.addEvent(refusal(60.1, refused));
+  // Then the note says so, and a fault that goes by itself later does not turn it into a success.
+  assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
+  frame(snapshot({ at: 60.4 }));
+  assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
+});
+
+test("after a fault reset the note says what the frames show: the fault gone, or still reported", async () => {
+  const page = panel();
+  const { frame, node } = page;
+  frame(faultedFrame(59.8));
+  await askReset(page, 60);
+  const note = node("fault-note");
+  // A drive that drops its fault at once.
+  frame(snapshot({ at: 60.3 }));
+  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
+  // The note is true for as long as the frames show no fault: wiped when one is back.
+  frame(faultedFrame(70));
+  assert.equal(note.textContent, "");
+  // A drive that takes its time, with no refusal on this screen: said after a second, then corrected.
+  await askReset(page, 80);
+  frame(faultedFrame(81.1));
+  assert.equal(
+    note.textContent,
+    "le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.",
+  );
+  assert.ok(note.classes.has("note-bad"));
+  frame(snapshot({ at: 83 }));
+  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
+  assert.equal(note.classes.has("note-bad"), false);
+});
+
+/* ============ EX-5, the note of a manual target: refusals that are not about it ============ */
+
+const TAKEN_5 = "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)";
+
+test("a refusal answered to another screen does not stand once the machine holds the target sent", async () => {
+  // Given a target sent, and a refusal dated after it that answers another screen's request.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  context.addEvent(refusal(60.1, HELD, "autre ecran"));
+  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
+  // When the frames show the machine holding the target this screen sent.
+  frame(manualFrame(60.2, 249));
+  // Then the note says what the machine reports about that target, not the other screen's refusal.
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+});
+
+test("nor does one that reached the screen before the 202 of the target", async () => {
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  context.addEvent(refusal(60.1, HELD, "autre ecran"));
+  await apply(context, 5, 60);
+  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+});
+
+test("two clicks astride a cycle: the first target taken back, the second taken, and the note says taken", async () => {
+  // Given a first target the machine took, and a second click as the machine takes the first back.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+  await apply(context, 5, 60.3);
+  context.addEvent(refusal(60.4, TAKEN_BACK, ""));
+  frame(manualFrame(60.4, 0));
+  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
+  // When the next tick takes the second target.
+  frame(manualFrame(60.6, 249));
+  // Then the note no longer says refused of a target the machine holds.
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+});
+
+test("a second click in the cycle of the first is refused in French, and the note then says what became of the first", async () => {
+  // Given a target in the mailbox, and a second click before the loop has taken it.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  const busy = "the machine is running (pending: manual_target 5.00 output rpm); try again in a moment";
+  context.api = () => Promise.reject(Object.assign(new Error(busy), { status: 409 }));
+  context.doManualApply();
+  await settle();
+  // Then the note does not show the console's English sentence, and the first target is still awaited.
+  const note = node("manual-note");
+  assert.equal(
+    note.textContent,
+    "seconde demande refusee par la console : la cible 5.00 output rpm attend encore la machine (une demande a la fois). Reessayer dans un instant.",
+  );
+  assert.notEqual(context.state.manualSent, null);
+  // And when the machine takes it, the note says so.
+  frame(manualFrame(60.2, 249));
+  assert.equal(note.textContent, TAKEN_5);
+});
+
+test("a 409 once the loop has had its tick is the console's own answer, shown as it is", async () => {
+  // Given a target sent, and a frame taken after it: the mailbox no longer holds it.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2));
+  // When Appliquer is then refused: the session is ending.
+  const ending = "no manual session is running (the machine is stopping)";
+  context.api = () => Promise.reject(Object.assign(new Error(ending), { status: 409 }));
+  context.doManualApply();
+  await settle();
+  // Then that is not taken for a second click astride the first.
+  assert.equal(node("manual-note").textContent, ending);
+  assert.equal(context.state.manualSent, null);
+  // Nor is a request that got no answer at all, in the cycle of a first one or not.
+  await apply(context, 5, 70);
+  context.api = () => Promise.reject(new TypeError("Failed to fetch"));
+  context.doManualApply();
+  await settle();
+  assert.equal(node("manual-note").textContent, "Failed to fetch");
+});
+
+test("with a person on board and a console that no longer answers, a rise taken is not said to be followed", async () => {
+  // Given a person on board, an arm turning at 120 tr/min moteur, and nothing holding a rise.
+  const { context, clock, frame, node } = panel();
+  const at120 = { setpoint: turning(120), measured: turning(120) };
+  frame(riderFrame(59.6, 120, at120));
+  context.renderPanel(panelRow());
+  await apply(context, 5, 60);
+  frame(riderFrame(60.2, 249, at120));
+  frame(riderFrame(60.4, 249, at120));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+  // When the console stops saying whether the heart rate holds a rise: the box says "unknown".
+  let at = 60.4;
+  for (let tick = 0; tick < 20; tick += 1) {
+    at += 0.2;
+    frame(riderFrame(at, 249, at120));
+  }
+  assert.ok(clock.now - context.state.panelAt > 3500);
+  assert.equal(node("manual-hold-title").textContent, "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
+  // Then the note does not go on saying the rise is followed.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  // And says it again once the console answers that nothing holds.
+  context.renderPanel(panelRow());
+  frame(riderFrame(at + 0.2, 249, at120));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+});
+
+/* ============ EX-6, four small defects ============ */
+
+// The operator presses Acquitter; the console answers `answer`, a record or an Error.
+async function acknowledge(context, answer) {
+  const alerts = [];
+  context.window.alert = (message) => alerts.push(message);
+  context.api = (path) => {
+    if (path !== "/api/safety/acknowledge") {
+      return never();
+    }
+    return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+  };
+  context.doAcknowledge();
+  await settle();
+  return alerts;
+}
+
+const NOTHING = "nothing is latched to acknowledge";
+const refusedAck = (detail) => Object.assign(new Error(detail), { status: 409 });
+
+test("the note of an acknowledgement refused for nothing latched is wiped when a verdict latches", async () => {
+  // Given nothing latched, and an Acquitter the console refuses for that reason.
+  const { context, frame, node } = panel();
+  frame(snapshot({ at: 60 }));
+  await acknowledge(context, refusedAck(NOTHING));
+  assert.equal(node("ack-note").textContent, NOTHING);
+  // It stays while nothing is latched, unlatched warnings included.
+  frame(snapshot({ at: 61, ...verdict("freeze", "hr_stale", false) }));
+  assert.equal(node("ack-note").textContent, NOTHING);
+  // When a verdict latches.
+  frame(snapshot({ at: 62, mode: "arret", ...verdict("ramp_down", "drive_fault") }));
+  // Then the note no longer says, under the button, that nothing is latched.
+  assert.equal(node("ack-note").textContent, "");
+});
+
+test("a latch the status alone shows wipes that note as well", async () => {
+  const { context, node } = panel();
+  await acknowledge(context, refusedAck(NOTHING));
+  assert.equal(node("ack-note").textContent, NOTHING);
+  context.api = () => Promise.resolve(status({ at: 61, floor: verdict("freeze", "loop_stall").safety }));
+  await context.loadStatus();
+  assert.equal(node("ack-note").textContent, "");
+});
+
+test("a refusal about a latch that stands is kept for as long as that latch is the one reported", async () => {
+  // Given a latched emergency stop, known from the frames and from the status.
+  const { context, frame, node } = panel();
+  frame(snapshot({ at: 60, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  context.api = () => Promise.resolve(latchedStatus(60.1));
+  await context.loadStatus();
+  const still = "the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging";
+  await acknowledge(context, refusedAck(still));
+  // When frames and status go on reporting that same latch.
+  frame(snapshot({ at: 61, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  context.api = () => Promise.resolve(latchedStatus(61.1));
+  await context.loadStatus();
+  // Then the answer to the operator's click stays under the button.
+  assert.equal(node("ack-note").textContent, still);
+});
+
+test("an acknowledgement the machine takes back is said, with when it will hold", async () => {
+  // Given a session ended by session_standstill, still in its ending, and an acknowledgement given early.
+  const { context, frame, node } = panel();
+  const standstill = { mode: "arret", phase: "recovery", ...verdict("ramp_down", "session_standstill") };
+  frame(snapshot({ at: 60, ...standstill }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["session_standstill"] });
+  const note = node("ack-note");
+  assert.equal(note.textContent, "acquitte par op : session_standstill");
+  // A frame taken before the acknowledgement says nothing of it.
+  frame(snapshot({ at: 60.2, ...standstill }));
+  assert.equal(note.textContent, "acquitte par op : session_standstill");
+  // When the first frame taken after it shows the same verdict latched again.
+  frame(snapshot({ at: 60.4, ...standstill }));
+  // Then the note stops saying "acknowledged", and says when the acknowledgement will hold.
+  assert.equal(
+    note.textContent,
+    "acquittement repris par la machine : session_standstill est de nouveau verrouille, sa regle s'est declenchee de nouveau." +
+      " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.",
+  );
+  assert.ok(note.classes.has("note-bad"));
+});
+
+test("a rule that fires again for its own cause is said taken back, with no promise about REPOS", async () => {
+  // Given a drive fault during the ending of a session: its rule latches again for as long as the
+  // drive shows the fault, whatever the mode.
+  const { context, frame, node } = panel();
+  frame(faultedFrame(60, { mode: "arret", phase: "recovery" }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["drive_fault"] });
+  frame(faultedFrame(60.4, { mode: "arret", phase: "recovery" }));
+  assert.equal(
+    node("ack-note").textContent,
+    "acquittement repris par la machine : drive_fault est de nouveau verrouille, sa regle s'est declenchee de nouveau.",
+  );
+});
+
+test("an acknowledgement taken back is said even when the verdict was gone for a moment in between", async () => {
+  // Given a latched drive fault, known from the frames and from the status, and its acknowledgement.
+  const { context, frame, node } = panel();
+  frame(faultedFrame(60));
+  context.api = () => Promise.resolve(status({ at: 60.1, floor: verdict("ramp_down", "drive_fault").safety }));
+  await context.loadStatus();
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["drive_fault"] });
+  // When a frame and a status show the verdict gone, as they do between the acknowledgement and
+  // the next cycle of the rule.
+  frame(snapshot({ at: 60.35, drive_state: "fault", fault: OBF }));
+  context.api = () => Promise.resolve(status({ at: 60.36 }));
+  await context.loadStatus();
+  // And the next frame shows the rule latched again.
+  frame(faultedFrame(60.5));
+  // Then the note says so: the latch that takes the acknowledgement back is not a new latch that
+  // wipes the note which has just been written about it.
+  const TAKEN_BACK = "acquittement repris par la machine : drive_fault est de nouveau verrouille, sa regle s'est declenchee de nouveau.";
+  assert.equal(node("ack-note").textContent, TAKEN_BACK);
+  // And it stays for as long as that latch is the one reported, by the frames and by the status.
+  context.api = () => Promise.resolve(status({ at: 60.6, floor: verdict("ramp_down", "drive_fault").safety }));
+  await context.loadStatus();
+  frame(faultedFrame(60.7));
+  assert.equal(node("ack-note").textContent, TAKEN_BACK);
+});
+
+test("a latch that returns once an acknowledgement has held is a new latch, whatever the status last said", async () => {
+  // Given a latched drive fault the status showed too, and an acknowledgement whose own status
+  // request never comes back.
+  const { context, frame, node } = panel();
+  frame(faultedFrame(60));
+  context.api = () => Promise.resolve(status({ at: 60.1, floor: verdict("ramp_down", "drive_fault").safety }));
+  await context.loadStatus();
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["drive_fault"] });
+  // When the frames show the verdict gone for more than a second of the machine's clock.
+  for (let tick = 1; tick <= 7; tick += 1) {
+    frame(snapshot({ at: 60.3 + tick * 0.2 }));
+  }
+  assert.equal(node("ack-note").textContent, "acquitte par op : drive_fault");
+  // And the status, at last, shows that rule latched again.
+  context.api = () => Promise.resolve(status({ at: 75, floor: verdict("ramp_down", "drive_fault").safety }));
+  await context.loadStatus();
+  // Then the note of the earlier acknowledgement goes: what the status showed before it is not
+  // what stands now.
+  assert.equal(node("ack-note").textContent, "");
+});
+
+test("a latch the acknowledgement does not list, still reported, is not a new latch", async () => {
+  // Given a drive fault in the frames, another latched rule in the status, and an acknowledgement
+  // whose record lists the first alone.
+  const { context, frame, node } = panel();
+  frame(faultedFrame(60));
+  const floor = verdict("ramp_down", "hr_high").safety;
+  context.api = () => Promise.resolve(status({ at: 60.1, floor }));
+  await context.loadStatus();
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["drive_fault"] });
+  for (let tick = 1; tick <= 7; tick += 1) {
+    frame(snapshot({ at: 60.3 + tick * 0.2 }));
+  }
+  // When the status goes on reporting the rule the record did not list.
+  context.api = () => Promise.resolve(status({ at: 75, floor }));
+  await context.loadStatus();
+  // Then the note stays: it never said that rule was cleared, and nothing new has latched.
+  assert.equal(node("ack-note").textContent, "acquitte par op : drive_fault");
+});
+
+test("an acknowledgement that holds keeps its note", async () => {
+  const { context, frame, node } = panel();
+  frame(snapshot({ at: 60, ...verdict("quick_stop", "operator_estop") }));
+  await acknowledge(context, { operator: "op", at: 60.3, wall_clock: 0, cleared: ["operator_estop"] });
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(snapshot({ at: 60.3 + tick * 0.2 }));
+  }
+  assert.equal(node("ack-note").textContent, "acquitte par op : operator_estop");
+  assert.equal(context.state.ackGiven, null);
+  // And a verdict latched later is a new latch: the note of the earlier acknowledgement goes.
+  frame(snapshot({ at: 90, ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(node("ack-note").textContent, "");
+});
+
+test("the tab of a sensor page carries the title that page carries", () => {
+  const { context, node } = panel();
+  context.renderSensors([sensorRow()]);
+  context.showView("sensor", "RESP");
+  assert.equal(node("sensor-title").textContent, "RESP · Respiration");
+  assert.equal(context.document.title, "RESP · Respiration - AnHeart");
+});
+
+test("the room kept for the footer is the height the footer really has", () => {
+  // Given a footer taller than the height the stylesheet declares, in a browser with no ResizeObserver.
+  const { context, fire, node, published } = panel();
+  node("footer").offsetHeight = 103;
+  wire(context);
+  // Then the page and the sidebar are kept clear of it by its real height.
+  assert.equal(published.get("--footer-h"), "103px");
+  // And again when a narrower window gives it another one.
+  node("footer").offsetHeight = 76;
+  fire("resize");
+  assert.equal(published.get("--footer-h"), "76px");
+});
+
+test("a footer that cannot be measured leaves the height of the stylesheet in place", () => {
+  const { context, published } = panel();
+  wire(context);
+  assert.equal(published.has("--footer-h"), false);
+});
+
+test("the footer is measured again when the browser reports that it changed height", () => {
+  const { context, node, published } = panel();
+  const observers = [];
+  context.window.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe(target) {
+      observers.push([target, this.callback]);
+    }
+  };
+  node("footer").offsetHeight = 103;
+  wire(context);
+  node("footer").offsetHeight = 131;
+  observers.find((entry) => entry[0] === node("footer"))[1]();
+  assert.equal(published.get("--footer-h"), "131px");
+});
+
+/* ============ a fault of the page is not a failed E-STOP ============ */
+
+test("a fault of the page while it draws the receipt is not reported as a failed E-STOP", () => {
+  // Given the request as the page sends it: what it attaches to the answer is kept here.
+  const { context } = panel();
+  const alerts = [];
+  context.window.alert = (message) => alerts.push(message);
+  let handlers = null;
+  context.api = () => ({
+    then: (answered, failed) => {
+      handlers = { answered, failed };
+      return { catch: () => undefined };
+    },
+  });
+  context.doEstop();
+  // Then the failure of the request is handled beside its answer, not after it.
+  assert.equal(typeof handlers.failed, "function");
+  // When the receipt arrives and drawing it throws.
+  context.renderEstopBanner = () => {
+    throw new Error("drawing failed");
+  };
+  assert.throws(() => handlers.answered(receipt), /drawing failed/);
+  // Then no alert says the request failed, and what the receipt proves is already recorded.
+  assert.deepEqual(alerts, []);
+  assert.equal(context.state.estopReceipt, receipt);
+  assert.equal(context.state.estopAsked, null);
+});
+
+/* ============ the status lines under a verdict the runtime latched itself ============ */
+
+for (const id of ["verdicts-grid", "system-grid"]) {
+  test(`#${id} lists a verdict only the frames carry, instead of "aucun"`, async () => {
+    // Given a status with no verdict: the supervisor holds none. The runtime latched one of its own.
+    const { context, clock, frame, node } = panel();
+    context.api = () => Promise.resolve(status({ at: 60 }));
+    await context.loadStatus();
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "aucun");
+    // When the frames carry it.
+    frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "drive_precommanded") }));
+    // Then the lines fed by the status no longer say that no verdict stands.
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "drive_precommanded / quick_stop");
+    assert.equal(rows(node(id))["plancher verrouille"].textContent, "drive_precommanded / quick_stop");
+    // A warning that is not latched is the verdict in force, not a latched floor.
+    frame(snapshot({ at: 61, ...verdict("freeze", "hr_stale", false) }));
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "hr_stale / freeze");
+    assert.equal(rows(node(id))["plancher verrouille"].textContent, "aucun");
+    // A more severe verdict in the status is the one listed.
+    context.api = () => Promise.resolve(status({ at: 61.1, standing: silent().safety, floor: silent().safety }));
+    await context.loadStatus();
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "comms_lost / go_silent");
+    // As severe as the status's: the frames carry the one the machine applies, its own on a tie.
+    const stop = verdict("quick_stop", "operator_estop").safety;
+    context.api = () => Promise.resolve(status({ at: 61.2, estop_latched: true, standing: stop }));
+    await context.loadStatus();
+    frame(snapshot({ at: 61.4, mode: "arret", ...verdict("quick_stop", "enable_unconfirmed") }));
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "enable_unconfirmed / quick_stop");
+    // And once the frames have stopped, the status is all there is.
+    frame(snapshot({ at: 62, mode: "arret", ...verdict("quick_stop", "drive_precommanded") }));
+    context.state.connected = false;
+    clock.now += 5000;
+    context.api = () => Promise.resolve(status({ at: 67 }));
+    await context.loadStatus();
+    assert.equal(rows(node(id))["verdict retenu"].textContent, "aucun");
+  });
+}

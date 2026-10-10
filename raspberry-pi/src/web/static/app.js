@@ -85,10 +85,16 @@ var state = {
   sensorOrder: [],       // kinds, in configuration order
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
-  manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
+  manualSent: null,      // the target this page sent, until the machine has answered for it: {at, rpm, detail, refused, framed}
   manualTaken: null,     // the target the note says the machine took, and that note: {rpm, detail, text}
-  riseHeld: false,       // whether the console says the heart rate holds a manual rise (the box of the manual card)
+  riseHeld: false,       // whether the heart rate holds a manual rise, or may: the console says so, or no longer answers
   manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
+  loopAsked: {},         // a start or a reset this page sent, until the machine has answered: kind -> {at, said, refused, late}
+  loopDone: {},          // the note saying one of them happened, for as long as the frames show it: kind -> text
+  lastRefusal: null,     // the last `refused` event: one can reach the screen before the 202 of what it answers
+  ackGiven: null,        // the acknowledgement this page gave, until frames show whether it held: {at, cleared, text}
+  latchSeen: {},         // the latched rule each source last reported: a rule new to all of them is a new latch
+  verdictShown: "",      // the frames' verdict as the status lines last showed it
   dirty: {},             // canvas id -> true when it needs a redraw
 };
 
@@ -298,8 +304,11 @@ function showView(name, kind) {
   if (name === "sensor") {
     state.sensorKind = kind || state.sensorKind;
   }
-  // The tab is named after the page shown, by the label of its entry in the navigation.
-  document.title = (name === "sensor" ? state.sensorKind : el("nav-" + name).textContent) + " - AnHeart";
+  // The tab is named after the page shown: by the label of its entry in the navigation, and for a
+  // sensor by the title its page carries.
+  var shown = state.sensors[state.sensorKind];
+  var title = name !== "sensor" ? el("nav-" + name).textContent : shown ? sensorTitle(shown.row) : state.sensorKind;
+  document.title = title + " - AnHeart";
   VIEWS.forEach(function (view) {
     show(el("view-" + view), view === name);
   });
@@ -856,6 +865,21 @@ function fitBanners() {
 }
 
 /*
+  The footer is fixed over the bottom of the page, and the stylesheet keeps
+  the page and the sidebar clear of it by its height, --footer-h. A height
+  written in the stylesheet was a guess, and a short one: the two stops are
+  taller than it, and on a narrow screen the footer has another height again.
+  The last lines of a page then sat under the footer. So it is measured. The
+  value of the stylesheet stays until a height can be read.
+*/
+function fitFooter() {
+  var height = el("footer").offsetHeight;
+  if (height) {
+    document.documentElement.style.setProperty("--footer-h", height + "px");
+  }
+}
+
+/*
   Show or hide one banner, and measure the stack when that changes its height:
   the banner appears, goes, or stays with a text that was just `reworded` and
   may wrap differently. Measured after the change, never before. The
@@ -1007,6 +1031,19 @@ function renderSnapshot(snapshot) {
   renderConsole(snapshot);
   renderManual(snapshot);
   settleManualTarget(snapshot);
+  settleLoopAsks(snapshot);
+  settleAcknowledgement(snapshot);
+  noteLatch("frame", snapshot.safety && snapshot.safety.latched ? snapshot.safety.rule : null);
+  var carried = snapshot.safety
+    ? snapshot.safety.rule + "/" + snapshot.safety.action + "/" + snapshot.safety.latched
+    : "";
+  if (carried !== state.verdictShown) {
+    // The status lines list the verdict the frames carry when it is the worse one: kept in step.
+    state.verdictShown = carried;
+    if (state.status) {
+      renderStatusGrids(state.status);
+    }
+  }
   renderManualHold();
   noteEstopFrame(snapshot);
   estopSeenLatched(state.estopFrame.says);
@@ -1422,7 +1459,8 @@ function renderManualHold() {
   var known = Boolean(state.panel) && performance.now() - state.panelAt < PANEL_STALE_MS;
   var hold = known ? state.panel.manual_rise_hold : null;
   var unknown = Boolean(manual) && manual.occupancy !== "bench" && !known;
-  state.riseHeld = Boolean(manual) && Boolean(hold);
+  // Unknown counts as held for what the note of a target may say: see followsTarget().
+  state.riseHeld = Boolean(manual) && (Boolean(hold) || unknown);
   show(el("manual-hold"), Boolean(manual) && (Boolean(hold) || unknown));
   if (unknown) {
     text(el("manual-hold-title"), "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
@@ -1503,6 +1541,148 @@ function stepGr(direction) {
   nudgeDraft(grToOutputRpm(tenth / 10, radius), direction > 0);
 }
 
+/*
+  What became of a request the loop must judge: a manual start, a programme
+  start, a fault reset. Like a manual target (settleManualTarget), each is
+  answered 202 as soon as the mailbox holds it, and the loop takes it or
+  refuses it on its next tick. A note that said "accepte" at the 202 said it
+  of a start the machine went on to refuse.
+
+  So each note is written from what the machine reports:
+
+  - at the 202: sent, not taken yet;
+  - a `refused` event dated after the request is the loop's answer, word for
+    word. One that reached the screen before the 202 is not overwritten by it;
+  - the first frame taken after the request that shows what was asked for
+    says so: the session in that mode for a start, a drive with no fault for
+    a reset. For a reset the note says that much and no more: a fault that is
+    gone is what the frames show, not who cleared it;
+  - a second of the machine's clock with neither: not taken, and the reason
+    did not reach this screen (a socket that reconnects loses its events).
+    A drive can take longer than that to drop its fault: the note then says
+    the fault is still reported, and is corrected when it goes.
+
+  A note saying it happened is true only for as long as the frames show it,
+  and is wiped when they stop: the session ended, a fault is back.
+
+  One case the frames cannot settle. A refusal dated after a start may answer
+  another screen's request taken in the same tick, and the session may then
+  start: the page cannot tell whose it is, so the note says neither and is
+  wiped. The card shows the session, the list of events the refusal.
+*/
+var LOOP_ASKS = {
+  manual: {
+    note: function () {
+      return el("manual-note");
+    },
+    shows: function (snapshot) {
+      return snapshot.mode === "manuel";
+    },
+    done: function (said) {
+      return "demarrage pris par la machine : " + said + " (cible 0)";
+    },
+    missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
+  },
+  programme: {
+    note: function () {
+      return el("start-note");
+    },
+    shows: function (snapshot) {
+      return snapshot.mode === "seance";
+    },
+    done: function (said) {
+      return "demarrage pris par la machine : " + said;
+    },
+    missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
+  },
+  reset: {
+    note: function () {
+      return el("fault-note");
+    },
+    shows: function (snapshot) {
+      return !snapshot.fault;
+    },
+    done: function () {
+      return "le variateur ne signale plus de defaut";
+    },
+    missed: "le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.",
+  },
+};
+
+function refusalWords(event) {
+  return "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail;
+}
+
+/** The 202 of a start or a reset: sent, not taken yet. */
+function askLoop(kind, command) {
+  var said = (command.kind + " " + command.detail).trim();
+  var early = state.lastRefusal;
+  var refused = Boolean(early) && early.at >= command.at;
+  state.loopAsked[kind] = { at: command.at, said: said, refused: refused, late: null };
+  delete state.loopDone[kind];
+  if (refused) {
+    problem(LOOP_ASKS[kind].note(), refusalWords(early));
+  } else {
+    ok(LOOP_ASKS[kind].note(), "demande envoyee : " + said + " - pas encore prise par la machine");
+  }
+}
+
+/** A `refused` event, for whichever start or reset of this page it is dated after. */
+function refuseLoopAsks(event) {
+  Object.keys(state.loopAsked).forEach(function (kind) {
+    var asked = state.loopAsked[kind];
+    if (event.at >= asked.at && !asked.refused) {
+      asked.refused = true;
+      asked.late = null;
+      problem(LOOP_ASKS[kind].note(), refusalWords(event));
+    }
+  });
+}
+
+/** One frame, for the starts and resets still unanswered, and for the notes saying one happened. */
+function settleLoopAsks(snapshot) {
+  Object.keys(LOOP_ASKS).forEach(function (kind) {
+    var ask = LOOP_ASKS[kind];
+    var note = ask.note();
+    var done = state.loopDone[kind];
+    if (done !== undefined && note.textContent !== done) {
+      // Something else has been written there since: the note is no longer this one's to keep.
+      delete state.loopDone[kind];
+    } else if (done !== undefined && !ask.shows(snapshot)) {
+      delete state.loopDone[kind];
+      ok(note, "");
+    }
+    var asked = state.loopAsked[kind];
+    if (!asked || snapshot.at <= asked.at) {
+      return;
+    }
+    if (asked.late !== null && note.textContent !== asked.late) {
+      delete state.loopAsked[kind];
+      return;
+    }
+    if (ask.shows(snapshot)) {
+      delete state.loopAsked[kind];
+      if (asked.refused && kind !== "reset") {
+        // A refusal and the session both: whose is whose cannot be told from here.
+        ok(note, "");
+      } else if (!asked.refused) {
+        state.loopDone[kind] = ask.done(asked.said);
+        ok(note, state.loopDone[kind]);
+      }
+    } else if (snapshot.at - asked.at > LOOP_ANSWER_S && asked.late === null) {
+      if (asked.refused) {
+        delete state.loopAsked[kind];
+      } else if (kind === "reset") {
+        asked.late = ask.missed;
+        problem(note, ask.missed);
+      } else {
+        delete state.loopAsked[kind];
+        problem(note, ask.missed);
+      }
+    }
+  });
+}
+
 function doManualStart() {
   var note = el("manual-note");
   if (!el("manual-bench").checked) {
@@ -1515,7 +1695,7 @@ function doManualStart() {
   })
     .then(function (command) {
       state.manualDraft = null;
-      ok(note, "accepte : " + command.kind + " " + command.detail + " (cible 0)");
+      askLoop("manual", command);
       loadStatus();
     })
     .catch(function (error) {
@@ -1576,19 +1756,19 @@ function holdsTarget(manual, rpm) {
 }
 
 function noteLoopRefusal(event) {
+  state.lastRefusal = event;
+  refuseLoopAsks(event);
   var sent = state.manualSent;
   var answers = Boolean(sent && event.at >= sent.at);
   if (!answers && !manualOnScreen()) {
     return;
   }
   if (answers) {
-    state.manualSent = null;
+    // Kept until the frames have spoken: a refusal dated after a target is not always about it.
+    sent.refused = true;
   }
   state.manualRefusedAt = event.at;
-  problem(
-    el("manual-note"),
-    "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail
-  );
+  problem(el("manual-note"), refusalWords(event));
 }
 
 /*
@@ -1599,7 +1779,10 @@ function noteLoopRefusal(event) {
     it down whatever the target is. A freeze holds it away from every target
     but one: zero is a stop asked for, and a stop is followed under a freeze;
   - with no verdict, the heart rate of a person on board can hold a rise: the
-    box above the target says so, and a target above the setpoint waits.
+    box above the target says so, and a target above the setpoint waits. When
+    the console no longer says whether it does, the box says "unknown", and a
+    rise is not said to be followed either: the note may say less than is
+    true, never more.
 */
 function followsTarget(snapshot, manual) {
   var safety = snapshot.safety;
@@ -1638,12 +1821,18 @@ function settleManualTarget(snapshot) {
   if (!sent || snapshot.at <= sent.at) {
     return;
   }
+  // A tick has gone by since the 202: the mailbox no longer holds this target.
+  sent.framed = true;
   if (manual && holdsTarget(manual, sent.rpm)) {
+    // Also after a refusal dated after this target: it answered another screen, or the first of
+    // two clicks, and the machine holds what this one sent.
     var said = takenNote(sent.detail, followsTarget(snapshot, manual));
     ok(note, said);
     state.manualTaken = { rpm: sent.rpm, detail: sent.detail, text: said };
   } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
     return;
+  } else if (sent.refused) {
+    // The refusal on screen is the answer.
   } else if (manual) {
     problem(
       el("manual-note"),
@@ -1664,13 +1853,26 @@ function doManualApply() {
     body: { output_rpm: rpm, operator: operatorName() },
   })
     .then(function (command) {
-      if (state.manualRefusedAt !== null && state.manualRefusedAt >= command.at) {
-        return;
+      // A refusal that reached the screen before this 202 stays on screen; the frames still say
+      // whether the machine holds the target, for that refusal may be another screen's.
+      var refused = state.manualRefusedAt !== null && state.manualRefusedAt >= command.at;
+      state.manualSent = { at: command.at, rpm: rpm, detail: command.detail, refused: refused, framed: false };
+      if (!refused) {
+        ok(note, "cible envoyee : " + command.detail + " - pas encore prise par la machine");
       }
-      state.manualSent = { at: command.at, rpm: rpm, detail: command.detail };
-      ok(note, "cible envoyee : " + command.detail + " - pas encore prise par la machine");
     })
     .catch(function (error) {
+      var sent = state.manualSent;
+      if (error.status === 409 && sent && !sent.framed) {
+        // A second click in the cycle of the first: the mailbox has one place and still holds the
+        // first target. That one is still the one to follow, and the note will say what became of it.
+        problem(
+          note,
+          "seconde demande refusee par la console : la cible " + sent.detail +
+            " attend encore la machine (une demande a la fois). Reessayer dans un instant."
+        );
+        return;
+      }
       state.manualSent = null;
       problem(note, error);
     });
@@ -1679,7 +1881,7 @@ function doManualApply() {
 function doFaultReset() {
   api("/api/drive/fault-reset", { method: "POST", body: { operator: operatorName() } })
     .then(function (command) {
-      ok(el("fault-note"), "reset demande : " + command.kind + " (le variateur doit le confirmer)");
+      askLoop("reset", command);
     })
     .catch(function (error) {
       problem(el("fault-note"), error);
@@ -1843,6 +2045,11 @@ function channelName(channel) {
   return "A" + (channel + 1);
 }
 
+/** The title of a sensor, on its page, on its card and in the tab: one wording for the three. */
+function sensorTitle(row) {
+  return row.kind + " · " + row.label;
+}
+
 function metricValue(metric) {
   if (metric.value === null || metric.value === undefined || !isFinite(metric.value)) {
     return "-";
@@ -1947,7 +2154,7 @@ function buildSensorCard(row) {
   var root = make("button", "card sensor-card");
   root.type = "button";
   var head = make("h2");
-  var title = make("span", "", row.kind + " · " + row.label);
+  var title = make("span", "", sensorTitle(row));
   var badge = make("span", "pill");
   head.appendChild(title);
   head.appendChild(badge);
@@ -2054,7 +2261,7 @@ function renderSensorPage() {
     return;
   }
   var row = entry.row;
-  text(el("sensor-title"), row.kind + " · " + row.label);
+  text(el("sensor-title"), sensorTitle(row));
   pill(el("sensor-channel"), "canal " + channelName(row.channel), "");
   text(el("sensor-detail"), row.detail ? "Qualite : " + qualityText(row.quality) + " - " + row.detail : "Qualite : " + qualityText(row.quality));
   renderSensorHeader(entry);
@@ -2362,6 +2569,62 @@ function estopLatched(status) {
 }
 
 /*
+  The verdict in force and the most severe latched one, as the Securite and
+  Configuration pages list them. /api/status gives the supervisor's. The
+  runtime can latch a verdict of its own (a drive found running at start-up,
+  an enable that was not confirmed, a link it gave up on): the supervisor does
+  not hold it and the status does not show it, so these lines said "aucun"
+  under a verdict that stood. The frames do show it: the verdict they carry
+  is the worse of the runtime's and the supervisor's, the runtime's own on a
+  tie. So while frames are arriving, a verdict they carry that is at least as
+  severe as the status's is the one listed. With no live frame the status is
+  all there is: a latch of the runtime's own is then missing from these
+  lines, and only the console could put it there.
+*/
+function worseVerdict(polled, carried) {
+  return carried && (!polled || carried.rank >= polled.rank) ? carried : polled;
+}
+
+function verdictWords(verdict) {
+  return verdict ? verdict.rule + " / " + verdict.action : "aucun";
+}
+
+function liveVerdict() {
+  var fresh = state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
+  return fresh && state.snapshot ? state.snapshot.safety : null;
+}
+
+function renderStatusGrids(status) {
+  var estop = estopLatched(status);
+  var live = liveVerdict();
+  var standing = verdictWords(worseVerdict(status.standing, live));
+  var floor = verdictWords(worseVerdict(status.floor, live && live.latched ? live : null));
+  grid(el("verdicts-grid"), [
+    ["e-stop verrouille", estop ? "OUI" : "non", estop ? "flag-bad" : ""],
+    ["verdict retenu", standing],
+    ["plancher verrouille", floor],
+    ["regles actives", String(status.live.length)],
+    ["accompagnant vu", attendantSeen(status)],
+  ]);
+  grid(el("system-grid"), [
+    ["etat", status.run_state],
+    ["e-stop verrouille", estop ? "OUI" : "non"],
+    ["verdict retenu", standing],
+    ["plancher verrouille", floor],
+    ["regles actives", String(status.live.length)],
+    ["echantillons FC retenus", String(status.retained_hr_samples)],
+    ["accompagnant vu", attendantSeen(status)],
+    ["clients telemetrie", String(status.clients)],
+    ["clients evinces", String(status.evictions)],
+    ["ecg", status.ecg_fs_hz + " Hz, seq " + status.ecg_seq],
+    ["profils", status.profile_ids.join(", ") || "aucun"],
+    ["revision", String(status.profile_rev)],
+    ["commandes acc/ref", status.counters[0] + " / " + status.counters[1]],
+    ["snapshots", String(status.counters[2])],
+  ]);
+}
+
+/*
   One /api/status answer, applied unless the one on screen is newer.
 
   Newer means written later by the machine, and the machine says when it
@@ -2407,6 +2670,8 @@ function loadStatus() {
     }
     noteConsoleRun(status, sent);
     noteStatusLatch(status, sent);
+    noteLatch("floor", status.floor ? status.floor.rule : null);
+    noteLatch("estop", estopLatched(status) ? "operator_estop" : null);
     renderEstopBanner();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
@@ -2436,14 +2701,7 @@ function loadStatus() {
     }
     el("start").disabled =
       !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
-    var estop = estopLatched(status);
-    grid(el("verdicts-grid"), [
-      ["e-stop verrouille", estop ? "OUI" : "non", estop ? "flag-bad" : ""],
-      ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
-      ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
-      ["regles actives", String(status.live.length)],
-      ["accompagnant vu", attendantSeen(status)],
-    ]);
+    renderStatusGrids(status);
     var live = el("verdicts-live");
     live.textContent = "";
     status.live.forEach(function (verdict) {
@@ -2452,22 +2710,6 @@ function loadStatus() {
         (verdict.latched ? "  [verrouille]" : "");
       live.appendChild(li);
     });
-    grid(el("system-grid"), [
-      ["etat", status.run_state],
-      ["e-stop verrouille", estop ? "OUI" : "non"],
-      ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
-      ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
-      ["regles actives", String(status.live.length)],
-      ["echantillons FC retenus", String(status.retained_hr_samples)],
-      ["accompagnant vu", attendantSeen(status)],
-      ["clients telemetrie", String(status.clients)],
-      ["clients evinces", String(status.evictions)],
-      ["ecg", status.ecg_fs_hz + " Hz, seq " + status.ecg_seq],
-      ["profils", status.profile_ids.join(", ") || "aucun"],
-      ["revision", String(status.profile_rev)],
-      ["commandes acc/ref", status.counters[0] + " / " + status.counters[1]],
-      ["snapshots", String(status.counters[2])],
-    ]);
     var ports = el("ports");
     ports.textContent = "";
     if (!status.ports.length) {
@@ -2623,7 +2865,7 @@ function doStart() {
     },
   })
     .then(function (command) {
-      ok(el("start-note"), "accepte : " + command.kind + " " + command.detail);
+      askLoop("programme", command);
       showView("run");
       loadStatus();
     })
@@ -2699,28 +2941,32 @@ function doEstop() {
   // At once: a notice already up for a request that failed must not go on saying nothing is pending.
   renderEstopUnanswered();
   window.setTimeout(renderEstopUnanswered, ESTOP_ANSWER_MS);
+  // The two outcomes are two handlers of the same `then`, not a `then` and a `catch` after it:
+  // a fault of this page while it draws a receipt must not be reported as a request that failed.
   api("/api/session/estop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed E-STOP" },
-  })
-    .then(function (receipt) {
+  }).then(
+    function (receipt) {
+      // What the receipt proves is recorded before anything is drawn.
       state.estopAsked = null;
-      renderEstopUnanswered();
       state.estopReceipt = receipt;
       state.estopReceiptSent = state.statusSent;
+      renderEstopUnanswered();
       renderEstopBanner();
       loadStatus().catch(function () {
         /* the receipt keeps the banner up; the periodic refresh asks again */
       });
-    })
-    .catch(function (error) {
+    },
+    function (error) {
       // A doubt that proof has ended since is not reopened by an old request failing.
       if (state.estopAsked === asked) {
         failDoubt(asked, clicked, error.message);
       }
       renderEstopUnanswered();
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
-    });
+    }
+  );
 }
 
 function doAcknowledge() {
@@ -2729,13 +2975,89 @@ function doAcknowledge() {
     body: { operator: el("ack-operator").value, estop_released: el("ack-released").checked },
   })
     .then(function (record) {
-      ok(el("ack-note"), "acquitte par " + record.operator + (record.cleared.length ? " : " + record.cleared.join(", ") : ""));
+      var said = "acquitte par " + record.operator + (record.cleared.length ? " : " + record.cleared.join(", ") : "");
+      ok(el("ack-note"), said);
+      // The 200 says the latches were cleared, not that they stay so: the next frames do.
+      state.ackGiven = { at: record.at, cleared: record.cleared, text: said };
       loadStatus();
     })
     .catch(function (error) {
+      state.ackGiven = null;
       problem(el("ack-note"), error);
       window.alert("acquittement refuse : " + error.message);
     });
+}
+
+/*
+  The note under Acquitter speaks of the moment it was written. Two things
+  make it false afterwards, and the page sees both in what it receives.
+
+  A new latch. "nothing is latched to acknowledge", or "acquitte par ...",
+  left under the button while a verdict has latched since, reads as the state
+  of the machine. Each source says which rule it shows latched (the frames:
+  the verdict in force; the status: the supervisor's floor, and its emergency
+  stop). A rule that none of them showed is a new latch, and wipes the note.
+
+  An acknowledgement that does not hold. The console answers 200 as soon as
+  the latches are cleared, and a rule whose cause is still there latches again
+  on the next tick: the frames may never show the verdict gone, so nothing
+  above sees a new latch. So after a 200 the frames taken after it are read:
+  when one shows a rule the acknowledgement cleared latched again, the note
+  says so. For the two rules that end a session (session_standstill,
+  session_overrun) it also says when the acknowledgement will hold: once the
+  session is over, which the page shows as Mode back to REPOS.
+
+  The two meet. A frame or a status may show the verdict gone between the
+  acknowledgement and the tick that takes it back: that latch is the one the
+  note then speaks of, not a new one that wipes it. And once the frames have
+  shown the verdict gone for a second, what a source showed latched before the
+  acknowledgement no longer stands: the same rule, later, is a new latch, also
+  for a source that has not answered since.
+*/
+var SESSION_END_RULES = { session_standstill: true, session_overrun: true };
+
+function noteLatch(source, rule) {
+  var seen = state.latchSeen;
+  var known = Object.keys(seen).some(function (other) {
+    return seen[other] === rule;
+  });
+  seen[source] = rule;
+  if (rule && !known) {
+    state.ackGiven = null;
+    ok(el("ack-note"), "");
+  }
+}
+
+function settleAcknowledgement(snapshot) {
+  var given = state.ackGiven;
+  if (!given || snapshot.at <= given.at) {
+    return;
+  }
+  var note = el("ack-note");
+  var safety = snapshot.safety;
+  if (note.textContent !== given.text) {
+    // Something else has been written there since.
+    state.ackGiven = null;
+  } else if (safety && safety.latched && given.cleared.indexOf(safety.rule) !== -1) {
+    state.ackGiven = null;
+    state.latchSeen.frame = safety.rule;
+    problem(
+      note,
+      "acquittement repris par la machine : " + safety.rule + " est de nouveau verrouille, sa regle s'est declenchee de nouveau." +
+        (SESSION_END_RULES[safety.rule] && snapshot.mode !== "repos"
+          ? " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS."
+          : "")
+    );
+  } else if (snapshot.at - given.at > LOOP_ANSWER_S) {
+    // A second of the machine's clock with the verdict gone: it held.
+    var seen = state.latchSeen;
+    Object.keys(seen).forEach(function (source) {
+      if (given.cleared.indexOf(seen[source]) !== -1) {
+        seen[source] = null;
+      }
+    });
+    state.ackGiven = null;
+  }
 }
 
 function doAttest() {
@@ -2847,10 +3169,14 @@ function start() {
   if (window.ResizeObserver) {
     // Fires when a banner is shown, hidden or re-wrapped, and only then.
     new window.ResizeObserver(fitBanners).observe(el("banners"));
+    // And when the footer changes height: its status line goes on a narrow screen.
+    new window.ResizeObserver(fitFooter).observe(el("footer"));
   } else {
     // showBanner() already measures on show and hide; a resize can re-wrap the text.
     window.addEventListener("resize", fitBanners);
+    window.addEventListener("resize", fitFooter);
   }
+  fitFooter();
 
   showView("console");
   boot();
