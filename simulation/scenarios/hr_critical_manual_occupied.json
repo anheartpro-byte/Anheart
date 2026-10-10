@@ -1,0 +1,33 @@
+{
+  "name": "hr_critical_manual_occupied",
+  "description": "Person on board, manual at 19 rpm: the heart rate reads 170 (critical 158 on the console): QUICK_STOP.",
+  "tags": [
+    "manual",
+    "cardiac",
+    "occupied"
+  ],
+  "kind": "manual",
+  "duration_s": 300,
+  "manual": {
+    "occupancy": "occupied"
+  },
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 19.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "ecg_value",
+      "bpm": 170,
+      "duration_s": 30
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_critical"
+    ]
+  }
+}

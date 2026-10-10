@@ -7,5 +7,16 @@ export default defineConfig([
   ...nextCoreWebVitals,
   ...nextTypescript,
   ...convexPlugin.configs.recommended,
-  globalIgnores(["convex/_generated"]),
+  globalIgnores([
+    "convex/_generated/**",
+    "**/.venv/**",
+    "**/.venv-*/**",
+    "**/venv/**",
+    ".next/**",
+    "out/**",
+    "build/**",
+    "simulation/out/**",
+    "coverage/**",
+    "next-env.d.ts",
+  ]),
 ]);

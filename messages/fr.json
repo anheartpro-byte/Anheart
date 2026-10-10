@@ -16,12 +16,28 @@
     "copied": "Copié!",
     "all": "Tous",
     "actions": "Actions",
-    "view": "Voir"
+    "view": "Voir",
+    "name": "Nom"
   },
   "auth": {
     "signIn": "Se connecter",
     "signOut": "Se déconnecter",
     "signUp": "S'inscrire"
+  },
+  "feedback": {
+    "failed": "L'action a échoué. Réessayez.",
+    "failedWithReference": "L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : {requestId}.",
+    "machineRestored": "Machine restaurée.",
+    "apiKeyRegenerated": "Nouvelle clé API générée.",
+    "userDeleted": "Compte supprimé.",
+    "roleUpdated": "Rôle mis à jour.",
+    "patientCreated": "Patient créé.",
+    "patientUpdated": "Patient mis à jour.",
+    "launchRightGranted": "Droit de lancement accordé.",
+    "launchRightRevoked": "Droit de lancement retiré.",
+    "physiologySaved": "Physiologie enregistrée.",
+    "sessionLaunched": "Séance créée. Elle attend que la machine l'arme.",
+    "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page."
   },
   "nav": {
     "dashboard": "Tableau de bord",
@@ -36,13 +52,20 @@
     "technology": "Technologie",
     "benefits": "Avantages",
     "markets": "Marchés",
-    "faq": "FAQ"
+    "faq": "FAQ",
+    "myMachines": "Mes machines"
   },
   "sidebar": {
     "main": "Principal",
     "administration": "Administration",
     "management": "Gestion",
     "myHealth": "Ma Santé"
+  },
+  "breadcrumb": {
+    "details": "Détails",
+    "live": "En direct",
+    "new": "Nouveau",
+    "edit": "Modifier"
   },
   "settings": {
     "title": "Paramètres",
@@ -67,8 +90,6 @@
     "french": "Français (fr)",
     "languages": "Français, Anglais",
     "heartbeatTimeout": "Délai d'expiration du heartbeat",
-    "defaultSampleRate": "Fréquence d'échantillonnage par défaut",
-    "defaultBatchInterval": "Intervalle de batch par défaut",
     "general": "Général",
     "appearance": "Apparence",
     "notifications": "Notifications",
@@ -88,7 +109,7 @@
   "home": {
     "badge": "La gravité pour une vie meilleure",
     "title": "Entraînez Votre Cœur Avec la Gravité Artificielle",
-    "description": "La machine Gaura recréée une force centrifuge pour simuler une gravité jusqu'à 3 fois celle de la Terre, offrant un entraînement cardiovasculaire personnalisé ainsi qu'une aide au maintien de la masse musculaire et osseuse. La machine initialement conçu pour les athlètes et la rééducation médicale permettra également à toute personne, valide ou invalide, de maintenir son activité physique indéfiniment",
+    "description": "La machine Gaura recrée une force centrifuge pour simuler une gravité artificielle, offrant un entraînement cardiovasculaire personnalisé ainsi qu'une aide au maintien de la masse musculaire et osseuse. L'intensité se règle par la vitesse de rotation, dans les limites fixées par le logiciel de la machine. La machine initialement conçue pour les athlètes et la rééducation médicale permettra également à toute personne, valide ou invalide, de maintenir son activité physique indéfiniment",
     "getStarted": "Commencer",
     "signIn": "Se connecter",
     "goToDashboard": "Accéder au tableau de bord",
@@ -156,7 +177,7 @@
     "benefits": {
       "badge": "Bénéfice de la solution",
       "title": "Entraînement personnalisé, efficace et rapide",
-      "description": "30 à 40 minutes par jour, à une intensité de 1 à 3 G, suffisent pour obtenir des bénéfices cardiovasculaires et musculaires significatifs, tout en favorisant la récupération et l'entretien physique.",
+      "description": "30 à 40 minutes par jour suffisent pour obtenir des bénéfices cardiovasculaires et musculaires significatifs, tout en favorisant la récupération et l'entretien physique. L'intensité est réglée pour chaque personne par la vitesse de rotation, dans les limites fixées par le logiciel de la machine.",
       "heartTraining": "Entraînement cardiovasculaire ciblé",
       "heartTrainingDesc": "Renforcez votre système cardiovasculaire grâce à une stimulation adaptée et un programme d'entraînement personnalisé, conçu pour améliorer l'endurance et la circulation sanguine.",
       "recovery": "Amélioration de la Récupération",
@@ -250,9 +271,6 @@
     "regenerate": "Régénérer",
     "regenerateKeyDesc": "Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner.",
     "config": "Configuration",
-    "sampleRate": "Fréquence d'échantillonnage",
-    "channels": "Canaux",
-    "batchInterval": "Intervalle de batch (ms)",
     "noMachines": "Aucune machine trouvée",
     "deleteConfirm": "Supprimer cette machine?",
     "deleteConfirmDesc": "Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire.",
@@ -269,49 +287,67 @@
     "dangerZoneDesc": "Ces actions peuvent impacter le fonctionnement de la machine",
     "showDeleted": "Afficher les machines supprimées",
     "assignGestionnaires": "Assigner aux Gestionnaires",
-    "assignGestionnairesDesc": "Sélectionner les gestionnaires qui peuvent utiliser cette machine"
+    "assignGestionnairesDesc": "Sélectionner les gestionnaires qui peuvent utiliser cette machine",
+    "notFound": "Machine introuvable",
+    "createdAt": "Créée le",
+    "softwareVersion": "Version logicielle",
+    "contractVersion": "Contrat machine",
+    "versionSeen": "Versions annoncées {when}",
+    "dangerZone": "Zone de danger",
+    "regenerateKeyConfirmDesc": "La clé API actuelle sera invalidée immédiatement. La machine devra être reconfigurée avec la nouvelle clé.",
+    "form": {
+      "editDescription": "Mettre à jour la configuration de la machine",
+      "createDescription": "Configurer une nouvelle machine Raspberry Pi",
+      "namePlaceholder": "Raspberry Pi 1",
+      "locationPlaceholder": "Salle 101",
+      "nameRequired": "Le nom est obligatoire"
+    }
   },
   "sessions": {
     "title": "Sessions ECG",
-    "create": "Nouvelle session",
-    "createDescription": "Démarrer une nouvelle session d'enregistrement ECG",
     "active": "Actives",
     "completed": "Terminées",
     "failed": "Échouées",
     "pending": "En attente",
-    "selectMachine": "Sélectionner une machine",
-    "selectMachinePlaceholder": "Sélectionner une machine",
-    "selectPatient": "Sélectionner un patient",
-    "selectPatientPlaceholder": "Sélectionner un patient",
-    "selectChannels": "Canaux à enregistrer",
-    "start": "Démarrer la session",
-    "end": "Terminer la session",
     "duration": "Durée",
     "startedAt": "Démarrée à",
     "endedAt": "Terminée à",
-    "notes": "Notes",
-    "notesPlaceholder": "Notes optionnelles...",
     "viewLive": "Voir en direct",
     "viewReport": "Voir le rapport",
     "noSessions": "Aucune session trouvée",
-    "noOnlineMachines": "Aucune machine n'est actuellement en ligne. Veuillez attendre qu'une machine se connecte.",
-    "noPatients": "Aucun patient trouvé. Veuillez d'abord créer un patient.",
-    "endConfirm": "Êtes-vous sûr de vouloir terminer cette session?",
     "patient": "Patient",
     "machine": "Machine",
-    "startedBy": "Démarrée par"
+    "startedBy": "Démarrée par",
+    "status": {
+      "active": "Active",
+      "completed": "Terminée",
+      "pending": "En attente",
+      "failed": "Échouée"
+    },
+    "notFound": "Session introuvable",
+    "inProgress": "En cours"
   },
-  "ecg": {
-    "liveView": "Vue en direct",
-    "delayedView": "Vue différée (5s)",
-    "heartRate": "Fréquence cardiaque",
-    "bpm": "BPM",
-    "avgHeartRate": "FC moyenne",
-    "minHeartRate": "FC minimum",
-    "maxHeartRate": "FC maximum",
-    "hrv": "Variabilité cardiaque (HRV)",
-    "live": "En direct",
-    "delay": "5s de délai"
+  "sessionDetail": {
+    "failedTitle": "Session échouée",
+    "failedDescription": "Cette session a rencontré une erreur et a été interrompue.",
+    "pendingTitle": "En attente de l'appareil",
+    "noEcgData": "Aucune donnée ECG enregistrée pour cette session",
+    "timing": "Chronologie de la session",
+    "started": "Début",
+    "ended": "Fin",
+    "recordedChannels": "Canaux enregistrés",
+    "notes": "Notes de session",
+    "dataDuration": "Durée des données",
+    "seconds": "{seconds, number} s",
+    "recordedRange": "Données enregistrées de {start} à {end}",
+    "legacyTitle": "Ancien enregistrement ECG",
+    "legacyDescription": "Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule.",
+    "dataBatches": "Lots de données"
+  },
+  "sessionLive": {
+    "viewDetails": "Voir le détail de la session",
+    "started": "Démarrée {time}",
+    "legacyRecording": "Cette séance vient de l'ancien mode d'enregistrement ECG : elle n'a pas de vue en direct."
   },
   "gestionnaires": {
     "title": "Gestion des Gestionnaires",
@@ -323,8 +359,10 @@
     "noPatientsAssigned": "Aucun patient assigné",
     "assignMachines": "Assigner des Machines",
     "assignMachinesDesc": "Sélectionner les machines auxquelles ce gestionnaire peut accéder",
+    "machinesSaved": "Machines enregistrées : {added, plural, =0 {aucune ajoutée} one {# ajoutée} other {# ajoutées}}, {removed, plural, =0 {aucune retirée} one {# retirée} other {# retirées}}.",
     "assignPatients": "Assigner des Patients",
-    "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer"
+    "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer",
+    "patientsSaved": "Patients enregistrés : {added, plural, =0 {aucun ajouté} one {# ajouté} other {# ajoutés}}, {removed, plural, =0 {aucun retiré} one {# retiré} other {# retirés}}."
   },
   "users": {
     "title": "Gestion des utilisateurs",
@@ -352,16 +390,14 @@
   },
   "reports": {
     "title": "Rapports de sessions",
-    "description": "Consultez et téléchargez vos rapports de sessions terminées",
-    "download": "Télécharger PDF",
-    "generating": "Génération en cours...",
+    "description": "Consultez vos sessions terminées",
     "patientInfo": "Informations patient",
     "sessionInfo": "Informations session",
     "metrics": "Métriques",
-    "ecgOverview": "Aperçu ECG",
     "sessionReport": "Rapport de session",
     "noReports": "Aucun rapport disponible pour le moment",
-    "view": "Voir"
+    "view": "Voir",
+    "durationMinutes": "{minutes, number} min"
   },
   "privacy": {
     "title": "Politique de Confidentialité",
@@ -408,5 +444,195 @@
     "section10Title": "Nous Contacter",
     "section10Content": "Si vous avez des questions concernant ces Conditions Générales d'Utilisation, veuillez nous contacter à:",
     "backToHome": "Retour à l'accueil"
+  },
+  "training": {
+    "kind": {
+      "auto": "Auto",
+      "manual": "Manuel",
+      "recording": "Enregistrement"
+    },
+    "origin": {
+      "remote": "Tableau de bord",
+      "local": "Machine"
+    },
+    "manualOnlyAtMachine": "Manuel : uniquement depuis la console de la machine",
+    "runMode": {
+      "repos": "Repos",
+      "manuel": "Manuel",
+      "seance": "Séance",
+      "arret": "Arrêt"
+    },
+    "phase": {
+      "baseline": "Mesure de référence",
+      "warmup": "Échauffement",
+      "hold": "Maintien",
+      "cooldown": "Retour au calme",
+      "recovery": "Récupération",
+      "idle": "Inactif",
+      "done": "Terminé"
+    },
+    "safety": {
+      "none": "Aucune",
+      "freeze": "Vitesse figée",
+      "hold": "Maintien de la vitesse",
+      "reduce": "Réduction",
+      "ramp_down": "Décélération",
+      "quick_stop": "Arrêt rapide (rampe du variateur)",
+      "go_silent": "Mise en silence (arrêt par le variateur)",
+      "stop": "Arrêt",
+      "estop": "Arrêt d'urgence"
+    },
+    "driveState": {
+      "not_ready": "Non prêt",
+      "switch_on_disabled": "Mise en marche verrouillée",
+      "ready": "Prêt",
+      "switched_on": "Enclenché",
+      "operation_enabled": "En fonctionnement",
+      "fault": "Défaut",
+      "comm_lost": "Communication perdue"
+    },
+    "live": {
+      "title": "État en direct",
+      "description": "Rapporté par la machine à chaque signal",
+      "fresh": "En direct",
+      "stale": "Données périmées",
+      "staleDesc": "Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées.",
+      "lateDesc": "La machine envoie, mais ses mesures ne sont pas datées de maintenant (rattrapage après une coupure de liaison, ou horloge de la machine déréglée) : les valeurs affichées peuvent être dépassées.",
+      "noData": "La machine n'a encore rapporté aucun état.",
+      "offlineNoData": "Aucun état en direct : la machine n'envoie plus de signal.",
+      "runMode": "Mode",
+      "phase": "Phase",
+      "heartRate": "Fréquence cardiaque",
+      "outputRpm": "Vitesse du bras",
+      "motorRpm": "Moteur",
+      "setpoint": "Consigne",
+      "gLoad": "Charge",
+      "safetyAction": "Action de sécurité",
+      "driveState": "Variateur",
+      "updated": "Mis à jour {time}",
+      "noHeartRate": "Pas de fréquence cardiaque fiable"
+    },
+    "units": {
+      "bpm": "bpm",
+      "rpm": "tr/min",
+      "g": "g"
+    },
+    "programs": {
+      "title": "Programmes",
+      "description": "Programmes auto synchronisés depuis la machine (lecture seule)",
+      "disabled": "Programmes auto désactivés sur cette machine",
+      "none": "Aucun programme synchronisé depuis la machine",
+      "zone": "Zone cible",
+      "duration": "Durée",
+      "maxRpm": "Vitesse max",
+      "hardMax": "FC limite",
+      "armRpm": "{rpm} tr/min bras",
+      "motorRpm": "{rpm} tr/min moteur"
+    },
+    "rights": {
+      "title": "Droits de lancement",
+      "description": "Patients autorisés à lancer eux-mêmes une séance auto sur cette machine",
+      "none": "Aucun patient ne détient ce droit.",
+      "grant": "Accorder",
+      "revoke": "Retirer",
+      "selectUser": "Choisir un patient",
+      "noCandidates": "Aucun autre patient éligible",
+      "grantedBy": "Accordé par {name}, {date}",
+      "hrMax": "FC max : {value}",
+      "hrMaxMissing": "FC max non renseignée",
+      "revokeConfirm": "Retirer le droit de lancement ?",
+      "revokeConfirmDesc": "{name} ne pourra plus lancer de séance auto sur cette machine."
+    },
+    "launch": {
+      "button": "Lancer une séance auto",
+      "title": "Lancer une séance auto",
+      "description": "La fréquence cardiaque pilote la vitesse de rotation pour maintenir le pratiquant dans la zone du programme.",
+      "program": "Programme",
+      "selectProgram": "Choisir un programme",
+      "duration": "Durée (minutes)",
+      "durationHint": "Laisser vide pour la durée du programme ({minutes})",
+      "durationInvalid": "La durée doit être un nombre positif",
+      "rider": "Pratiquant",
+      "selectRider": "Choisir un pratiquant",
+      "myself": "Moi-même",
+      "riderHrMax": "FC max du pratiquant",
+      "hrMaxUnknown": "Non disponible ici, vérifiée par le serveur au lancement",
+      "hrMaxEstimated": "estimée",
+      "hrMaxMissing": "La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
+      "zoneTooHigh": "La zone monte à {zoneHigh} bpm, au-delà de 90 % de la FC max du pratiquant ({hrMax} bpm → plafond {ceiling} bpm). Le serveur refusera ce lancement.",
+      "hardMaxTooHigh": "La FC limite du programme ({hardMax} bpm) dépasse la FC max du pratiquant ({hrMax} bpm). Le serveur refusera ce lancement.",
+      "notes": "Notes",
+      "notesPlaceholder": "Notes optionnelles...",
+      "submit": "Lancer",
+      "notLaunchable": "Vous ne pouvez pas lancer de séance sur cette machine.",
+      "offline": "La machine est hors ligne.",
+      "inSession": "La machine est déjà en séance.",
+      "programsDisabled": "Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles.",
+      "noPrograms": "Aucun programme n'a été synchronisé depuis la machine.",
+      "pendingNote": "La séance reste « en attente » jusqu'à ce que la machine l'arme. La machine peut encore refuser le départ (sécurité, variateur…).",
+      "birthYearMissing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
+      "tooYoung": "Séance auto réservée aux pratiquants d'au moins {min} ans."
+    },
+    "myMachines": {
+      "title": "Mes machines",
+      "description": "Machines sur lesquelles vous pouvez lancer une séance auto",
+      "noRights": "Vous n'avez encore aucun droit de lancement. Un gestionnaire doit vous accorder le droit de lancer des séances sur une machine.",
+      "noMachines": "Aucune machine disponible.",
+      "myHrMax": "Votre FC max : {value}",
+      "myHrMaxMissing": "Votre FC max n'est pas renseignée : demandez à votre gestionnaire de la saisir avant de lancer une séance auto.",
+      "programsCount": "{count, plural, =0 {Aucun programme} one {# programme} other {# programmes}}",
+      "details": "Détails"
+    },
+    "session": {
+      "panelTitle": "Séance d'entraînement",
+      "target": "Cible {low}-{high} bpm",
+      "inZone": "Dans la zone",
+      "belowZone": "Sous la zone",
+      "aboveZone": "Au-dessus de la zone",
+      "elapsed": "Écoulé",
+      "remaining": "Restant",
+      "stop": "Arrêter la séance",
+      "cancel": "Annuler la séance",
+      "stopConfirm": "Arrêter la séance ?",
+      "stopConfirmDesc": "La machine va décélérer sur sa rampe de sécurité. La séance se terminera quand la machine confirmera l'arrêt.",
+      "cancelConfirm": "Annuler la séance ?",
+      "cancelConfirmDesc": "La séance n'a pas encore démarré sur la machine : elle sera annulée.",
+      "stopRequested": "Arrêt demandé, décélération en cours…",
+      "pending": "En attente que la machine arme la séance…",
+      "failed": "Séance échouée",
+      "completed": "Séance terminée",
+      "endReason": "Motif de fin",
+      "program": "Programme",
+      "zone": "Zone cible",
+      "operator": "Opérateur",
+      "origin": "Origine",
+      "kind": "Type",
+      "subjectHrMax": "FC max du pratiquant",
+      "plannedDuration": "Durée prévue",
+      "hrChart": "Fréquence cardiaque",
+      "speedChart": "Vitesse du bras",
+      "measured": "Mesurée",
+      "setpoint": "Consigne",
+      "zoneBand": "Zone cible",
+      "noTelemetry": "Aucune télémétrie reçue pour l'instant.",
+      "riderNotSpecified": "Pratiquant non précisé",
+      "viewDetails": "Voir le détail",
+      "trainingInfo": "Entraînement",
+      "telemetry": "Télémétrie"
+    },
+    "physiology": {
+      "title": "Physiologie",
+      "description": "Sert à valider la zone cible avant une séance auto (zone haute ≤ 90 % de la FC max).",
+      "hrMax": "FC max mesurée (bpm)",
+      "birthYear": "Année de naissance",
+      "effective": "FC max retenue",
+      "measured": "mesurée",
+      "estimated": "estimée (208 − 0,7 × âge)",
+      "notSet": "Non renseignée",
+      "hint": "Une FC max mesurée prime sur l'estimation par l'âge. Laisser vide pour effacer.",
+      "saved": "Enregistré",
+      "invalidHrMax": "La FC max doit être comprise entre 100 et 220 bpm",
+      "invalidBirthYear": "Année de naissance invalide"
+    }
   }
 }

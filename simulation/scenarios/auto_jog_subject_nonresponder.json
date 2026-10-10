@@ -1,0 +1,27 @@
+{
+  "name": "auto_jog_subject_nonresponder",
+  "description": "Non-responder (gain x0.35): the zone is unreachable. The controller saturates at the ceiling and must never exceed it (integrator windup case).",
+  "tags": [
+    "auto",
+    "subject",
+    "jog"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject_events": [
+    {
+      "event": "nonresponder",
+      "at_s": 0,
+      "duration_s": 3600
+    }
+  ],
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "max_output_rpm": 27.72,
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

@@ -11,6 +11,8 @@
     "jsx": "react-jsx",
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
+    /* convex/lib/contract.ts reads contracts/machine-api.json. */
+    "resolveJsonModule": true,
 
     /* These compiler options are required by Convex */
     "target": "ESNext",

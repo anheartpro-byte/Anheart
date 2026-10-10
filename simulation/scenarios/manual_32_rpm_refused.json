@@ -1,0 +1,21 @@
+{
+  "name": "manual_32_rpm_refused",
+  "description": "32 output rpm = 1593 motor rpm = 57.7 Hz: above the nameplate / HSP 50 Hz ceiling. Refusal is the correct behaviour; nothing moves.",
+  "tags": [
+    "manual",
+    "limits"
+  ],
+  "kind": "manual",
+  "duration_s": 60,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 32.0,
+      "expect": "refused"
+    }
+  ],
+  "expect": {
+    "max_output_rpm": 0.0
+  }
+}

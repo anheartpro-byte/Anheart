@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
@@ -15,6 +16,7 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -48,6 +50,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { PatientFormModal } from "@/components/modals/PatientFormModal";
+import { PhysiologyCard } from "@/components/training/PhysiologyCard";
 
 export default function UserDetailPage({
   params,
@@ -67,7 +70,7 @@ export default function UserDetailPage({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const deleteUser = useMutation(api.users.deleteUser);
+  const deleteUser = useMutationWithFeedback(api.users.deleteUser);
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -78,12 +81,11 @@ export default function UserDetailPage({
     (currentUser?.role === "gestionnaire" && user?.role === "user");
 
   const handleDelete = async () => {
-    try {
-      await deleteUser({ userId });
-      router.push("/dashboard/users");
-    } catch (err) {
-      console.error(err);
-    }
+    const result = await deleteUser(
+      { userId },
+      { success: t("feedback.userDeleted") },
+    );
+    if (result.ok) router.push("/dashboard/users");
   };
 
   if (user === undefined || currentUser === undefined) {
@@ -370,6 +372,13 @@ export default function UserDetailPage({
             )}
           </CardContent>
         </Card>
+
+        {/* Physiology (max heart rate) - managers of this user and admins */}
+        {canManage && (
+          <div className="lg:col-span-1">
+            <PhysiologyCard userId={userId} user={user} />
+          </div>
+        )}
       </div>
 
       {/* Delete Confirmation Dialog */}
@@ -410,7 +419,7 @@ export default function UserDetailPage({
 }
 
 function SessionStatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const statusLabel = useSessionStatusLabel();
 
   const variants: Record<
     string,
@@ -423,9 +432,7 @@ function SessionStatusBadge({ status }: { status: string }) {
   };
 
   return (
-    <Badge variant={variants[status] || "outline"}>
-      {t(status as "active" | "completed" | "pending" | "failed")}
-    </Badge>
+    <Badge variant={variants[status] || "outline"}>{statusLabel(status)}</Badge>
   );
 }
 

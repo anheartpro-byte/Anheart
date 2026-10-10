@@ -1,0 +1,24 @@
+{
+  "name": "estop_auto",
+  "description": "E-stop mid-HOLD: QUICK_STOP, reference zeroed at once, nothing resumes.",
+  "tags": [
+    "auto",
+    "stop",
+    "estop"
+  ],
+  "kind": "auto",
+  "duration_s": 1300,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "estop"
+    }
+  ],
+  "expect": {
+    "end_reason": "emergency_stop",
+    "rules": [
+      "operator_estop"
+    ]
+  }
+}

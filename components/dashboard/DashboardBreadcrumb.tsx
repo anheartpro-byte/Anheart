@@ -14,6 +14,7 @@ import { Fragment } from "react";
 
 export function DashboardBreadcrumb() {
   const t = useTranslations("nav");
+  const tBreadcrumb = useTranslations("breadcrumb");
   const pathname = usePathname();
 
   // Parse pathname into segments
@@ -21,25 +22,32 @@ export function DashboardBreadcrumb() {
 
   // Map segment names to translated labels
   const getLabel = (segment: string): string => {
-    // Handle IDs (usually the last segment that isn't a known page)
-    if (segment.length > 10 && !["new", "live", "edit"].includes(segment)) {
-      return "Details";
-    }
-
     const labelMap: Record<string, string> = {
       dashboard: t("dashboard"),
       machines: t("machines"),
       sessions: t("sessions"),
       users: t("users"),
       patients: t("patients"),
+      gestionnaires: t("gestionnaires"),
       settings: t("settings"),
       reports: t("reports"),
-      new: "New",
-      live: "Live",
-      edit: "Edit",
+      "my-machines": t("myMachines"),
+      new: tBreadcrumb("new"),
+      live: tBreadcrumb("live"),
+      edit: tBreadcrumb("edit"),
     };
 
-    return labelMap[segment] || segment;
+    // Known pages first: "gestionnaires" is long enough to look like an ID
+    if (labelMap[segment]) {
+      return labelMap[segment];
+    }
+
+    // Handle IDs (usually the last segment that isn't a known page)
+    if (segment.length > 10) {
+      return tBreadcrumb("details");
+    }
+
+    return segment;
   };
 
   // Build breadcrumb items
@@ -59,7 +67,7 @@ export function DashboardBreadcrumb() {
   return (
     <Breadcrumb>
       <BreadcrumbList>
-        {breadcrumbItems.map((item, index) => (
+        {breadcrumbItems.map((item) => (
           <Fragment key={item.href}>
             <BreadcrumbItem>
               {item.isLast ? (

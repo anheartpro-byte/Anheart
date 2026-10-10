@@ -26,6 +26,7 @@ import {
   Users,
   Settings,
   FileText,
+  Gauge,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -73,6 +74,11 @@ export function AppSidebar() {
       icon: Cpu,
     },
     {
+      labelKey: "myMachines",
+      href: "/dashboard/my-machines",
+      icon: Gauge,
+    },
+    {
       labelKey: "sessions",
       href: "/dashboard/sessions",
       icon: Activity,
@@ -86,6 +92,11 @@ export function AppSidebar() {
 
   // User (patient) menu items
   const userNavigation: NavItem[] = [
+    {
+      labelKey: "myMachines",
+      href: "/dashboard/my-machines",
+      icon: Gauge,
+    },
     {
       labelKey: "sessions",
       href: "/dashboard/sessions",

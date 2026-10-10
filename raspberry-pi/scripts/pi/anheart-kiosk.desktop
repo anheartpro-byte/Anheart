@@ -1,0 +1,9 @@
+[Desktop Entry]
+# Opens the operator page full screen when the Pi's desktop session starts.
+# Install:  mkdir -p ~/.config/autostart && cp scripts/pi/anheart-kiosk.desktop ~/.config/autostart/
+# The port must match UI_PORT in .env. Chromium keeps retrying until the
+# container is up; press Alt+F4 to leave the kiosk.
+Type=Application
+Name=AnHeart console
+Exec=sh -c 'until curl -s -o /dev/null http://127.0.0.1:8090/healthz; do sleep 2; done; exec chromium-browser --kiosk --noerrdialogs --disable-session-crashed-bubble --incognito http://127.0.0.1:8090/'
+X-GNOME-Autostart-enabled=true

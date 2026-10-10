@@ -1,0 +1,24 @@
+{
+  "name": "fault_ecg_dropout_short",
+  "description": "A 15 s ECG gap mid-HOLD: stale past 10 s (FREEZE), then fresh again.",
+  "tags": [
+    "auto",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_dropout",
+      "duration_s": 15
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_stale"
+    ]
+  }
+}

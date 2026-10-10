@@ -1,0 +1,69 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: '37 4 * * 1'
+  workflow_dispatch:
+  # Called by the release pipeline (release.yml), which then refuses to go on
+  # while an alert is open for `main`. The job that calls this workflow must
+  # grant `security-events: write` itself: a called workflow never holds more
+  # than its caller.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# One analysis at a time per pull request: a new push replaces the one in
+# progress. A push to develop or main, the weekly run and a manual run are
+# keyed by their commit: none is cancelled nor left waiting behind another,
+# so no commit of those branches is left with a cancelled analysis.
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Security analysis of the Python sources, of the JavaScript and TypeScript
+# sources and of the GitHub Actions workflows by GitHub CodeQL
+# (docs/framework-de-test.md, section CI, "Analyse statique externe"). The
+# results are in the Security tab of the repository, under "Code scanning".
+#
+# Not a gate. No job below is a required check, and none may take the name of
+# a job of ci.yml (scripts/ci/analysis-workflows.test.mjs). There is no `paths`
+# filter either: if these checks are made required one day, a workflow that
+# did not start would leave them pending.
+#
+# What is analysed is decided in .github/codeql/codeql-config.yml. Nothing is
+# installed and nothing of the repository is run: every language is read as
+# it is (build mode "none"). `security-events: write`, which publishes the
+# results, is given to this job, and to the one job of release.yml that calls
+# this workflow and hands it on: to no other job of the repository.
+
+jobs:
+  analyze:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Prepare CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: .github/codeql/codeql-config.yml
+      - name: Analyze and publish the results
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}

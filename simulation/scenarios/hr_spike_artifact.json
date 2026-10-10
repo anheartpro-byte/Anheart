@@ -1,0 +1,24 @@
+{
+  "name": "hr_spike_artifact",
+  "description": "A +40 bpm-in-2 s cardiac spike (scripted in the plant, so the TRUE rate reaches ~187 bpm) mid-HOLD: above the 175 bpm critical tier, so QUICK_STOP ends the session.",
+  "tags": [
+    "auto",
+    "cardiac"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "subject_events": [
+    {
+      "event": "hr_spike",
+      "at_s": 915,
+      "duration_s": 2
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_critical"
+    ],
+    "end_reason": "safety_verdict"
+  }
+}

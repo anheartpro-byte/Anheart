@@ -5,12 +5,14 @@ import { api } from "@/convex/_generated/api";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "@/i18n/navigation";
 import { Cpu, Activity, Users, Clock } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { useLocale } from "next-intl";
+import { OnlineMachinesCount } from "@/components/machines/MachineSignal";
 
 export default function DashboardPage() {
   const t = useTranslations();
@@ -25,8 +27,6 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  const onlineMachines =
-    machines?.filter((m) => m.status === "online").length ?? 0;
   const activeSessions =
     sessions?.filter((s) => s.status === "active").length ?? 0;
 
@@ -51,7 +51,9 @@ export default function DashboardPage() {
                 <Cpu className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{onlineMachines}</div>
+                <div className="text-2xl font-bold">
+                  <OnlineMachinesCount machines={machines ?? []} />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   / {machines?.length ?? 0} total
                 </p>
@@ -163,7 +165,7 @@ export default function DashboardPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const t = useTranslations("sessions");
+  const statusLabel = useSessionStatusLabel();
   const variants: Record<
     string,
     "default" | "secondary" | "destructive" | "outline"
@@ -176,7 +178,7 @@ function StatusBadge({ status }: { status: string }) {
 
   return (
     <Badge variant={variants[status] || "outline"} className="text-xs">
-      {t(status as "active" | "completed" | "pending" | "failed")}
+      {statusLabel(status)}
     </Badge>
   );
 }

@@ -16,12 +16,28 @@
     "copied": "Copied!",
     "all": "All",
     "actions": "Actions",
-    "view": "View"
+    "view": "View",
+    "name": "Name"
   },
   "auth": {
     "signIn": "Sign in",
     "signOut": "Sign out",
     "signUp": "Sign up"
+  },
+  "feedback": {
+    "failed": "The action failed. Try again.",
+    "failedWithReference": "The action failed. Try again. Reference to pass on if the problem persists: {requestId}.",
+    "machineRestored": "Machine restored.",
+    "apiKeyRegenerated": "New API key generated.",
+    "userDeleted": "Account deleted.",
+    "roleUpdated": "Role updated.",
+    "patientCreated": "Patient created.",
+    "patientUpdated": "Patient updated.",
+    "launchRightGranted": "Launch right granted.",
+    "launchRightRevoked": "Launch right revoked.",
+    "physiologySaved": "Physiology saved.",
+    "sessionLaunched": "Session created. It is waiting for the machine to arm it.",
+    "stopRequestSent": "Request sent. This page shows the state of the session."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -36,13 +52,20 @@
     "technology": "Technology",
     "benefits": "Benefits",
     "markets": "Markets",
-    "faq": "FAQ"
+    "faq": "FAQ",
+    "myMachines": "My machines"
   },
   "sidebar": {
     "main": "Main",
     "administration": "Administration",
     "management": "Management",
     "myHealth": "My Health"
+  },
+  "breadcrumb": {
+    "details": "Details",
+    "live": "Live",
+    "new": "New",
+    "edit": "Edit"
   },
   "settings": {
     "title": "Settings",
@@ -67,8 +90,6 @@
     "french": "French (fr)",
     "languages": "French, English",
     "heartbeatTimeout": "Heartbeat timeout",
-    "defaultSampleRate": "Default sample rate",
-    "defaultBatchInterval": "Default batch interval",
     "general": "General",
     "appearance": "Appearance",
     "notifications": "Notifications",
@@ -88,7 +109,7 @@
   "home": {
     "badge": "Gravity for Life",
     "title": "Train Your Heart With Artificial Gravity",
-    "description": "The Gaura machine recreates centrifugal force to simulate gravity up to 3 times that of Earth, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
+    "description": "The Gaura machine recreates centrifugal force to simulate artificial gravity, providing personalized cardiovascular training as well as support for maintaining muscle and bone mass. Intensity is set by the rotation speed, within the limits set by the machine's software. The machine, initially designed for athletes and medical rehabilitation, will also enable any person, able-bodied or disabled, to maintain their physical activity indefinitely.",
     "getStarted": "Get Started",
     "signIn": "Sign In",
     "goToDashboard": "Go to Dashboard",
@@ -156,12 +177,12 @@
     "benefits": {
       "badge": "Solution Benefits",
       "title": "Personalized, efficient, and fast training",
-      "description": "30 to 40 minutes per day, at an intensity of 1 to 3 G, are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance.",
+      "description": "30 to 40 minutes per day are sufficient to achieve significant cardiovascular and muscular benefits, while promoting recovery and physical maintenance. Intensity is set for each person by the rotation speed, within the limits set by the machine's software.",
       "heartTraining": "Targeted Cardiovascular Training",
       "heartTrainingDesc": "Strengthen your cardiovascular system through adapted stimulation and a personalized training program, designed to improve endurance and blood circulation.",
       "recovery": "Recovery Improvement",
       "recoveryDesc": "Accelerate muscle recovery by promoting better blood circulation in the lower limbs, enabling more efficient elimination of metabolic waste.",
-      "vo2max": "VO\u2082 Max Improvement",
+      "vo2max": "VO₂ Max Improvement",
       "vo2maxDesc": "Increase muscle oxygenation capacity and stimulate capillary network development, contributing to improved endurance and physical performance.",
       "vascularization": "Legs Vascularization",
       "vascularizationDesc": "Improve blood flow to lower extremities",
@@ -207,6 +228,8 @@
     "categories": {
       "general": "General Questions",
       "technology": "Technology & Training",
+      "health": "Health Benefits",
+      "medical": "Medical Applications",
       "athletes": "Athletes & Performance"
     }
   },
@@ -248,9 +271,6 @@
     "regenerate": "Regenerate",
     "regenerateKeyDesc": "Generate a new API key. Old key will stop working.",
     "config": "Configuration",
-    "sampleRate": "Sample Rate",
-    "channels": "Channels",
-    "batchInterval": "Batch Interval (ms)",
     "noMachines": "No machines found",
     "deleteConfirm": "Delete this machine?",
     "deleteConfirmDesc": "This machine will be deactivated. An administrator can restore it later if needed.",
@@ -267,49 +287,67 @@
     "dangerZoneDesc": "These actions may impact machine operation",
     "showDeleted": "Show deleted machines",
     "assignGestionnaires": "Assign to Gestionnaires",
-    "assignGestionnairesDesc": "Select which gestionnaires can use this machine"
+    "assignGestionnairesDesc": "Select which gestionnaires can use this machine",
+    "notFound": "Machine not found",
+    "createdAt": "Created",
+    "softwareVersion": "Software version",
+    "contractVersion": "Machine contract",
+    "versionSeen": "Versions announced {when}",
+    "dangerZone": "Danger Zone",
+    "regenerateKeyConfirmDesc": "This will invalidate the current API key immediately. The machine will need to be reconfigured with the new key.",
+    "form": {
+      "editDescription": "Update machine configuration",
+      "createDescription": "Configure a new Raspberry Pi machine",
+      "namePlaceholder": "Raspberry Pi 1",
+      "locationPlaceholder": "Room 101",
+      "nameRequired": "Name is required"
+    }
   },
   "sessions": {
     "title": "ECG Sessions",
-    "create": "New Session",
-    "createDescription": "Start a new ECG recording session",
     "active": "Active",
     "completed": "Completed",
     "failed": "Failed",
     "pending": "Pending",
-    "selectMachine": "Select Machine",
-    "selectMachinePlaceholder": "Select a machine",
-    "selectPatient": "Select Patient",
-    "selectPatientPlaceholder": "Select a patient",
-    "selectChannels": "Channels to Record",
-    "start": "Start Session",
-    "end": "End Session",
     "duration": "Duration",
     "startedAt": "Started At",
     "endedAt": "Ended At",
-    "notes": "Notes",
-    "notesPlaceholder": "Optional notes...",
     "viewLive": "View Live",
     "viewReport": "View Report",
     "noSessions": "No sessions found",
-    "noOnlineMachines": "No machines are currently online. Please wait for a machine to connect.",
-    "noPatients": "No patients found. Please create a patient first.",
-    "endConfirm": "Are you sure you want to end this session?",
     "patient": "Patient",
     "machine": "Machine",
-    "startedBy": "Started by"
+    "startedBy": "Started by",
+    "status": {
+      "active": "Active",
+      "completed": "Completed",
+      "pending": "Pending",
+      "failed": "Failed"
+    },
+    "notFound": "Session not found",
+    "inProgress": "In progress"
   },
-  "ecg": {
-    "liveView": "Live View",
-    "delayedView": "Delayed View (5s)",
-    "heartRate": "Heart Rate",
-    "bpm": "BPM",
-    "avgHeartRate": "Avg Heart Rate",
-    "minHeartRate": "Min Heart Rate",
-    "maxHeartRate": "Max Heart Rate",
-    "hrv": "Heart Rate Variability (HRV)",
-    "live": "Live",
-    "delay": "5s delay"
+  "sessionDetail": {
+    "failedTitle": "Session Failed",
+    "failedDescription": "This session encountered an error and was terminated.",
+    "pendingTitle": "Waiting for Device",
+    "noEcgData": "No ECG data recorded for this session",
+    "timing": "Session Timing",
+    "started": "Started",
+    "ended": "Ended",
+    "recordedChannels": "Recorded Channels",
+    "notes": "Session Notes",
+    "dataDuration": "Data Duration",
+    "seconds": "{seconds, number}s",
+    "recordedRange": "Data recorded from {start} to {end}",
+    "legacyTitle": "Former ECG recording",
+    "legacyDescription": "This session comes from the former ECG recording mode, which has been removed. It is kept read-only.",
+    "dataBatches": "Data Batches"
+  },
+  "sessionLive": {
+    "viewDetails": "View Session Details",
+    "started": "Started {time}",
+    "legacyRecording": "This session comes from the former ECG recording mode: it has no live view."
   },
   "gestionnaires": {
     "title": "Gestionnaire Management",
@@ -321,8 +359,10 @@
     "noPatientsAssigned": "No patients assigned yet",
     "assignMachines": "Assign Machines",
     "assignMachinesDesc": "Select which machines this gestionnaire can access",
+    "machinesSaved": "Machines saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}.",
     "assignPatients": "Assign Patients",
-    "assignPatientsDesc": "Select which patients this gestionnaire can manage"
+    "assignPatientsDesc": "Select which patients this gestionnaire can manage",
+    "patientsSaved": "Patients saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}."
   },
   "users": {
     "title": "User Management",
@@ -350,16 +390,14 @@
   },
   "reports": {
     "title": "Session Reports",
-    "description": "View and download your completed session reports",
-    "download": "Download PDF",
-    "generating": "Generating...",
+    "description": "View your completed sessions",
     "patientInfo": "Patient Information",
     "sessionInfo": "Session Information",
     "metrics": "Metrics",
-    "ecgOverview": "ECG Overview",
     "sessionReport": "Session Report",
     "noReports": "No reports available yet",
-    "view": "View"
+    "view": "View",
+    "durationMinutes": "{minutes, number} min"
   },
   "privacy": {
     "title": "Privacy Policy",
@@ -406,5 +444,195 @@
     "section10Title": "Contact Us",
     "section10Content": "If you have any questions about these Terms and Conditions, please contact us at:",
     "backToHome": "Back to Home"
+  },
+  "training": {
+    "kind": {
+      "auto": "Auto",
+      "manual": "Manual",
+      "recording": "Recording"
+    },
+    "origin": {
+      "remote": "Dashboard",
+      "local": "Machine"
+    },
+    "manualOnlyAtMachine": "Manual: only from the machine's console",
+    "runMode": {
+      "repos": "Idle",
+      "manuel": "Manual",
+      "seance": "Session",
+      "arret": "Stopping"
+    },
+    "phase": {
+      "baseline": "Baseline",
+      "warmup": "Warm-up",
+      "hold": "Hold",
+      "cooldown": "Cool-down",
+      "recovery": "Recovery",
+      "idle": "Idle",
+      "done": "Done"
+    },
+    "safety": {
+      "none": "None",
+      "freeze": "Speed frozen",
+      "hold": "Hold speed",
+      "reduce": "Reduce",
+      "ramp_down": "Ramp down",
+      "quick_stop": "Quick stop (drive ramp)",
+      "go_silent": "Go silent (drive stops on its own)",
+      "stop": "Stop",
+      "estop": "Emergency stop"
+    },
+    "driveState": {
+      "not_ready": "Not ready",
+      "switch_on_disabled": "Switch-on disabled",
+      "ready": "Ready",
+      "switched_on": "Switched on",
+      "operation_enabled": "Operation enabled",
+      "fault": "Fault",
+      "comm_lost": "Communication lost"
+    },
+    "live": {
+      "title": "Live state",
+      "description": "Reported by the machine with each heartbeat",
+      "fresh": "Live",
+      "stale": "Stale",
+      "staleDesc": "No recent heartbeat from the machine: the values shown may be out of date.",
+      "lateDesc": "The machine is sending, but its measurements are not dated now (catching up after a link loss, or the machine's clock is off): the values shown may be out of date.",
+      "noData": "The machine has not reported any state yet.",
+      "offlineNoData": "No live state: the machine has stopped sending.",
+      "runMode": "Mode",
+      "phase": "Phase",
+      "heartRate": "Heart rate",
+      "outputRpm": "Arm speed",
+      "motorRpm": "Motor",
+      "setpoint": "Setpoint",
+      "gLoad": "Load",
+      "safetyAction": "Safety action",
+      "driveState": "Drive",
+      "updated": "Updated {time}",
+      "noHeartRate": "No trustworthy heart rate"
+    },
+    "units": {
+      "bpm": "bpm",
+      "rpm": "rpm",
+      "g": "g"
+    },
+    "programs": {
+      "title": "Programmes",
+      "description": "Auto programmes synced from the machine (read-only)",
+      "disabled": "Auto programmes are disabled on this machine",
+      "none": "No programme synced from the machine",
+      "zone": "Target zone",
+      "duration": "Duration",
+      "maxRpm": "Max speed",
+      "hardMax": "HR limit",
+      "armRpm": "{rpm} rpm arm",
+      "motorRpm": "{rpm} rpm motor"
+    },
+    "rights": {
+      "title": "Launch rights",
+      "description": "Patients allowed to launch an auto session on this machine themselves",
+      "none": "No patient holds this right.",
+      "grant": "Grant",
+      "revoke": "Revoke",
+      "selectUser": "Choose a patient",
+      "noCandidates": "No other eligible patient",
+      "grantedBy": "Granted by {name}, {date}",
+      "hrMax": "Max HR: {value}",
+      "hrMaxMissing": "Max HR not set",
+      "revokeConfirm": "Revoke the launch right?",
+      "revokeConfirmDesc": "{name} will no longer be able to launch auto sessions on this machine."
+    },
+    "launch": {
+      "button": "Launch auto session",
+      "title": "Launch an auto session",
+      "description": "The heart rate drives the rotation speed to hold the rider in the programme's zone.",
+      "program": "Programme",
+      "selectProgram": "Choose a programme",
+      "duration": "Duration (minutes)",
+      "durationHint": "Leave empty for the programme's duration ({minutes})",
+      "durationInvalid": "Duration must be a positive number",
+      "rider": "Rider",
+      "selectRider": "Choose a rider",
+      "myself": "Myself",
+      "riderHrMax": "Rider's max HR",
+      "hrMaxUnknown": "Not available here, checked by the server at launch",
+      "hrMaxEstimated": "estimated",
+      "hrMaxMissing": "The rider's max heart rate (or birth year) is not set: a manager must enter it before any auto session.",
+      "zoneTooHigh": "The zone goes up to {zoneHigh} bpm, above 90% of the rider's max HR ({hrMax} bpm → ceiling {ceiling} bpm). The server will refuse this launch.",
+      "hardMaxTooHigh": "The programme's HR limit ({hardMax} bpm) is above the rider's max HR ({hrMax} bpm). The server will refuse this launch.",
+      "notes": "Notes",
+      "notesPlaceholder": "Optional notes...",
+      "submit": "Launch",
+      "notLaunchable": "You cannot launch a session on this machine.",
+      "offline": "The machine is offline.",
+      "inSession": "The machine is already in a session.",
+      "programsDisabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
+      "noPrograms": "No programme has been synced from the machine.",
+      "pendingNote": "The session stays \"pending\" until the machine arms it. The machine may still refuse to start (safety, drive…).",
+      "birthYearMissing": "The rider's birth year is not set: a manager must enter it before any auto session.",
+      "tooYoung": "Auto sessions are for riders aged {min} or over."
+    },
+    "myMachines": {
+      "title": "My machines",
+      "description": "Machines you can launch an auto session on",
+      "noRights": "You do not have any launch right yet. A manager must grant you the right to launch sessions on a machine.",
+      "noMachines": "No machine available.",
+      "myHrMax": "Your max HR: {value}",
+      "myHrMaxMissing": "Your max heart rate is not set: ask your manager to enter it before launching an auto session.",
+      "programsCount": "{count, plural, =0 {No programme} one {# programme} other {# programmes}}",
+      "details": "Details"
+    },
+    "session": {
+      "panelTitle": "Training session",
+      "target": "Target {low}-{high} bpm",
+      "inZone": "In zone",
+      "belowZone": "Below zone",
+      "aboveZone": "Above zone",
+      "elapsed": "Elapsed",
+      "remaining": "Remaining",
+      "stop": "Stop session",
+      "cancel": "Cancel session",
+      "stopConfirm": "Stop the session?",
+      "stopConfirmDesc": "The machine will ramp down on its safety ramp. The session ends when the machine confirms it has stopped.",
+      "cancelConfirm": "Cancel the session?",
+      "cancelConfirmDesc": "The session has not started on the machine yet: it will be cancelled.",
+      "stopRequested": "Stop requested, ramping down…",
+      "pending": "Waiting for the machine to arm the session…",
+      "failed": "Session failed",
+      "completed": "Session completed",
+      "endReason": "End reason",
+      "program": "Programme",
+      "zone": "Target zone",
+      "operator": "Operator",
+      "origin": "Origin",
+      "kind": "Type",
+      "subjectHrMax": "Rider's max HR",
+      "plannedDuration": "Planned duration",
+      "hrChart": "Heart rate",
+      "speedChart": "Arm speed",
+      "measured": "Measured",
+      "setpoint": "Setpoint",
+      "zoneBand": "Target zone",
+      "noTelemetry": "No telemetry received yet.",
+      "riderNotSpecified": "Rider not specified",
+      "viewDetails": "View details",
+      "trainingInfo": "Training",
+      "telemetry": "Telemetry"
+    },
+    "physiology": {
+      "title": "Physiology",
+      "description": "Used to vet the target zone before an auto session (zone high ≤ 90% of max HR).",
+      "hrMax": "Measured max HR (bpm)",
+      "birthYear": "Birth year",
+      "effective": "Max HR used",
+      "measured": "measured",
+      "estimated": "estimated (208 − 0.7 × age)",
+      "notSet": "Not set",
+      "hint": "A measured max HR wins over the age estimate. Leave empty to clear.",
+      "saved": "Saved",
+      "invalidHrMax": "Max HR must be between 100 and 220 bpm",
+      "invalidBirthYear": "Invalid birth year"
+    }
   }
 }

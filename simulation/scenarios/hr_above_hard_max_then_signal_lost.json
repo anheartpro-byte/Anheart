@@ -1,0 +1,37 @@
+{
+  "name": "hr_above_hard_max_then_signal_lost",
+  "description": "The heart rate reads 168 bpm (hard max 165) for 3 s mid-HOLD, then the electrodes come off (no_signal) for 90 s: the readings with no rate do not restart the dwell, hr_hard_max ends the session when it elapses, and hr_stale never becomes the standing verdict.",
+  "tags": [
+    "auto",
+    "cardiac",
+    "fault",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1300,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "ecg_value",
+      "bpm": 168,
+      "duration_s": 3
+    },
+    {
+      "at_s": 903,
+      "do": "ecg_quality",
+      "quality": "no_signal",
+      "duration_s": 90
+    }
+  ],
+  "expect": {
+    "rules": [
+      "hr_hard_max"
+    ],
+    "forbid_rules": [
+      "hr_critical",
+      "hr_stale"
+    ],
+    "end_reason": "safety_verdict"
+  }
+}

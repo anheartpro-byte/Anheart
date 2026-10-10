@@ -1,109 +1,46 @@
-import { query, internalMutation, internalQuery } from "./_generated/server";
+/**
+ * ECG batches of the retired recording mode: read-only history.
+ *
+ * The table `ecg_data` was filled by the ECG recorder, which no longer exists.
+ * No function writes to it any more; the queries below only read what was
+ * stored, under the same access rule as the session they belong to.
+ */
+import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { getCurrentUserOrThrow, canAccessMachine } from "./lib/auth";
+import { getCurrentUserOrThrow, canAccessSession } from "./lib/auth";
 
 // ============================================
-// Internal Functions (for HTTP endpoints)
+// Shared validators for treated ECG batches
 // ============================================
 
-/**
- * Store a batch of ECG data from RPi
- */
-export const storeEcgBatch = internalMutation({
-  args: {
-    machineId: v.id("machines"),
-    sessionId: v.id("sessions"),
-    timestamp: v.number(),
-    samples: v.array(
-      v.object({
-        channel: v.string(),
-        values: v.array(v.number()),
-      }),
-    ),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    // Validate session exists
-    const session = await ctx.db.get(args.sessionId);
-    if (!session) {
-      throw new Error("Session not found");
-    }
-
-    // Validate session is active
-    if (session.status !== "active") {
-      throw new Error(`Session is not active (status: ${session.status})`);
-    }
-
-    // Validate session belongs to this machine
-    if (session.machineId !== args.machineId) {
-      throw new Error("Session does not belong to this machine");
-    }
-
-    // Store the data batch
-    await ctx.db.insert("ecg_data", {
-      sessionId: args.sessionId,
-      timestamp: args.timestamp,
-      samples: args.samples,
-    });
-
-    return null;
-  },
+const sampleValidator = v.object({
+  channel: v.string(),
+  values: v.array(v.number()),
+  unit: v.optional(v.string()),
 });
 
-/**
- * Get data count for a session (for debugging)
- */
-export const getSessionDataCount = internalQuery({
-  args: {
-    sessionId: v.id("sessions"),
-  },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const data = await ctx.db
-      .query("ecg_data")
-      .withIndex("by_session_and_timestamp", (q) =>
-        q.eq("sessionId", args.sessionId),
-      )
-      .collect();
-    return data.length;
-  },
-});
+const metricsValidator = v.record(
+  v.string(),
+  v.object({
+    heartRate: v.optional(v.number()),
+    hrv: v.optional(v.number()),
+    respRate: v.optional(v.number()),
+    scrCount: v.optional(v.number()),
+    activations: v.optional(v.number()),
+    pulse: v.optional(v.number()),
+    quality: v.optional(v.string()),
+  }),
+);
 
-/**
- * Get all ECG data for a session (for summary generation)
- */
-export const getAllSessionData = internalQuery({
-  args: {
-    sessionId: v.id("sessions"),
-  },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
-  handler: async (ctx, args) => {
-    const data = await ctx.db
-      .query("ecg_data")
-      .withIndex("by_session_and_timestamp", (q) =>
-        q.eq("sessionId", args.sessionId),
-      )
-      .collect();
-
-    return data.map((d) => ({
-      timestamp: d.timestamp,
-      samples: d.samples,
-    }));
-  },
+const batchValidator = v.object({
+  timestamp: v.number(),
+  sampleRate: v.optional(v.number()),
+  samples: v.array(sampleValidator),
+  metrics: v.optional(metricsValidator),
 });
 
 // ============================================
-// Public Queries (Task 3.3)
+// Public queries (history)
 // ============================================
 
 /**
@@ -115,17 +52,7 @@ export const getSessionAllData = query({
     sessionId: v.id("sessions"),
     maxBatches: v.optional(v.number()),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const maxBatches = args.maxBatches ?? 100; // Default to 100 batches (~100 seconds of data)
@@ -136,12 +63,9 @@ export const getSessionAllData = query({
       return [];
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -158,7 +82,9 @@ export const getSessionAllData = query({
 
     return data.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -172,17 +98,7 @@ export const getRecentEcgData = query({
     sessionId: v.id("sessions"),
     seconds: v.optional(v.number()),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const seconds = args.seconds ?? 10;
@@ -194,12 +110,12 @@ export const getRecentEcgData = query({
       return [];
     }
 
-    // Check access
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
     const isPatient = currentUser._id === session.userId;
     const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
 
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -231,7 +147,9 @@ export const getRecentEcgData = query({
 
     return filteredData.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -245,17 +163,7 @@ export const getSessionEcgRange = query({
     startTime: v.number(),
     endTime: v.number(),
   },
-  returns: v.array(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-  ),
+  returns: v.array(batchValidator),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
 
@@ -265,12 +173,9 @@ export const getSessionEcgRange = query({
       return [];
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return [];
     }
 
@@ -290,7 +195,9 @@ export const getSessionEcgRange = query({
 
     return data.map((d) => ({
       timestamp: d.timestamp,
+      sampleRate: d.sampleRate,
       samples: d.samples,
+      metrics: d.metrics,
     }));
   },
 });
@@ -321,12 +228,9 @@ export const getSessionDataStats = query({
       return null;
     }
 
-    // Check access
-    const isPatient = currentUser._id === session.userId;
-    const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
-
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 
@@ -380,18 +284,7 @@ export const getLatestEcgBatch = query({
   args: {
     sessionId: v.id("sessions"),
   },
-  returns: v.union(
-    v.object({
-      timestamp: v.number(),
-      samples: v.array(
-        v.object({
-          channel: v.string(),
-          values: v.array(v.number()),
-        }),
-      ),
-    }),
-    v.null(),
-  ),
+  returns: v.union(batchValidator, v.null()),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
     const now = Date.now();
@@ -402,12 +295,12 @@ export const getLatestEcgBatch = query({
       return null;
     }
 
-    // Check access
+    // Check access: the session's organisation, then its rider or whoever
+    // can access its machine
     const isPatient = currentUser._id === session.userId;
     const isAdmin = currentUser.role === "admin";
-    const canAccessMach = await canAccessMachine(ctx, session.machineId);
 
-    if (!isPatient && !isAdmin && !canAccessMach) {
+    if (!(await canAccessSession(ctx, session, currentUser))) {
       return null;
     }
 
@@ -434,7 +327,9 @@ export const getLatestEcgBatch = query({
 
     return {
       timestamp: data.timestamp,
+      sampleRate: data.sampleRate,
       samples: data.samples,
+      metrics: data.metrics,
     };
   },
 });

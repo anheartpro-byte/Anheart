@@ -1,0 +1,37 @@
+{
+  "name": "manual_low_ceiling_300",
+  "description": "Console default MOTOR_MAX_RPM=300 (6.0 output rpm): 27 is refused, 6 is accepted.",
+  "tags": [
+    "manual",
+    "limits"
+  ],
+  "kind": "manual",
+  "duration_s": 200,
+  "manual": {
+    "occupancy": "bench",
+    "ceiling_motor_rpm": 300
+  },
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "refused"
+    },
+    {
+      "at_s": 4,
+      "do": "manual_target",
+      "output_rpm": 6.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 100,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 6.0,
+    "max_output_rpm": 6.05
+  }
+}

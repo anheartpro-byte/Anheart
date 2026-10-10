@@ -1,0 +1,31 @@
+{
+  "name": "auto_rest_after_end_then_start_again",
+  "description": "ANH-181, the console left at rest after a finished programme. The shipped 30-min profile shortened to 1400 s runs to its own end; then nobody touches anything for 2830 s, twice the planned duration and far past the 1430 s (duration plus 30 s of grace) at which session_overrun used to latch over the machine at rest, take every acknowledgement back and refuse every start until the console was restarted. The rule must not fire: a START at 4230 s is accepted and a new session runs.",
+  "tags": [
+    "auto",
+    "nominal",
+    "rest"
+  ],
+  "kind": "auto",
+  "duration_s": 4260,
+  "profile": "standard_30_min",
+  "profile_overrides": {
+    "total_duration_s": 1400
+  },
+  "actions": [
+    {
+      "at_s": 4230,
+      "do": "start_again",
+      "expect": "accepted"
+    }
+  ],
+  "expect": {
+    "end_reason": "shutdown",
+    "max_output_rpm": 5.55,
+    "forbid_rules": [
+      "session_overrun",
+      "hr_critical",
+      "hr_hard_max"
+    ]
+  }
+}

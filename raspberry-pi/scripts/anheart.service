@@ -1,26 +1,60 @@
+# AnHeart operator console: the console's Docker image, started by systemd.
+#
+# Installed by scripts/install.sh, which also writes the drop-in
+# anheart.service.d/10-version.conf: the version shown by
+# `systemctl status anheart` and the image of that version (ANHEART_IMAGE).
+# Do not install this file by hand; docs/pi-image.md describes the one path.
+#
+# What a start can and cannot do. The image runs the console and nothing else.
+# A console that starts is at rest and read-only: it starts no session, and a
+# drive it finds enabled is zeroed and latched until an operator acknowledges
+# it. That holds at boot and after a restart by systemd alike: a restart never
+# resumes a session.
 [Unit]
-Description=AnHeart ECG Monitor
-Documentation=https://github.com/yourrepo/anheart
-After=network-online.target bluetooth.target
+Description=Console opérateur Anheart
+Requires=docker.service
+After=docker.service network-online.target bluetooth.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/anheart/raspberry-pi
-Environment="PATH=/home/pi/anheart/raspberry-pi/venv/bin:/usr/bin"
-ExecStart=/home/pi/anheart/raspberry-pi/venv/bin/python -m src.main
-Restart=always
+# Replaced by the drop-in. Left as it is, the start fails on a missing image
+# rather than run a version nobody chose.
+Environment=ANHEART_IMAGE=anheart-console:not-installed
+# One console at a time: the container is always named anheart, and one of
+# that name found at a start (left behind by a client that died, or started
+# another way) is stopped the way the console is always stopped (SIGTERM:
+# controlled ramp-down), then removed. This unit does not ask it whether it is
+# at rest; scripts/install.sh does, before it starts or restarts this unit.
+# Nothing to do, and nothing reported as failed, when there is none.
+ExecStartPre=/bin/sh -c 'if /usr/bin/docker container inspect anheart >/dev/null 2>&1; then /usr/bin/docker stop -t 60 anheart; /usr/bin/docker rm anheart 2>/dev/null; fi; exit 0'
+# --privileged, /dev and the host's D-Bus: the USB-RS485 adapter of the ATV320
+# and the BITalino's RFCOMM node. --network host: the page binds to the Pi's
+# own loopback (UI_HOST=127.0.0.1). The journal already keeps what the console
+# prints, so Docker keeps no second copy (--log-driver none). --pull never: an
+# image that is not on this machine fails the start at once; nothing is ever
+# fetched from a registry.
+ExecStart=/usr/bin/docker run --rm --name anheart --log-driver none \
+    --pull never \
+    --privileged --network host \
+    --volume /var/run/dbus:/var/run/dbus \
+    --volume /dev:/dev \
+    --volume /var/lib/anheart/data:/app/data \
+    --volume /var/lib/anheart/records:/app/data/records \
+    --env-file /etc/anheart/anheart.env \
+    ${ANHEART_IMAGE}
+# SIGTERM is the console's controlled stop: it zeroes the speed reference and
+# releases the drive link. 60 s for the ramp, before Docker escalates.
+ExecStop=/usr/bin/docker stop -t 60 anheart
+# Whatever ended the unit, no console outlives it.
+ExecStopPost=/bin/sh -c '/usr/bin/docker container inspect anheart >/dev/null 2>&1 && /usr/bin/docker stop -t 60 anheart; exit 0'
+TimeoutStopSec=90
+# Exit code 2 is a configuration error (the console lists every problem and
+# exits): restarting would only loop on it.
+Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
 SyslogIdentifier=anheart
-
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/pi/anheart/raspberry-pi
 
 [Install]
 WantedBy=multi-user.target

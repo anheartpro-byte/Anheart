@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
 import { useRouter, Link } from "@/i18n/navigation";
@@ -34,10 +35,21 @@ import {
   Trash2,
   Pencil,
   RotateCcw,
+  Play,
 } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
+import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
+import {
+  LastSignal,
+  MachineStatusBadge,
+  MachineStatusText,
+  VersionsSeen,
+} from "@/components/machines/MachineSignal";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
+import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
+import { MachineLiveCard } from "@/components/training/MachineLiveCard";
+import { MachineProgramsCard } from "@/components/training/ProfileList";
+import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
 export default function MachineDetailPage({
   params,
@@ -54,16 +66,20 @@ export default function MachineDetailPage({
   const user = useQuery(api.users.getCurrentUser);
 
   const [showEditModal, setShowEditModal] = useState(false);
+  const [editSaved, setEditSaved] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [showLaunchModal, setShowLaunchModal] = useState(false);
 
-  const deleteMachine = useMutation(api.machines.deleteMachine);
-  const regenerateApiKey = useMutation(api.machines.regenerateApiKey);
-  const restoreMachine = useMutation(api.machines.restoreMachine);
+  const deleteMachine = useMutationWithFeedback(api.machines.deleteMachine);
+  const regenerateApiKey = useMutationWithFeedback(
+    api.machines.regenerateApiKey,
+  );
+  const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -71,33 +87,31 @@ export default function MachineDetailPage({
   const isAdmin = user?.role === "admin";
 
   const handleDelete = async () => {
-    try {
-      await deleteMachine({ machineId });
-      router.push("/dashboard/machines");
-    } catch (err) {
-      console.error(err);
-    }
+    const result = await deleteMachine(
+      { machineId },
+      { success: t("machines.deleteSuccess") },
+    );
+    if (result.ok) router.push("/dashboard/machines");
   };
 
   const handleRestore = async () => {
     setRestoring(true);
-    try {
-      await restoreMachine({ machineId });
-      setShowRestoreDialog(false);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRestoring(false);
-    }
+    const result = await restoreMachine(
+      { machineId },
+      { success: t("feedback.machineRestored") },
+    );
+    if (result.ok) setShowRestoreDialog(false);
+    setRestoring(false);
   };
 
   const handleRegenerate = async () => {
-    try {
-      const result = await regenerateApiKey({ machineId });
-      setNewApiKey(result.apiKey);
+    const result = await regenerateApiKey(
+      { machineId },
+      { success: t("feedback.apiKeyRegenerated") },
+    );
+    if (result.ok) {
+      setNewApiKey(result.value.apiKey);
       setShowRegenerateDialog(false);
-    } catch (err) {
-      console.error(err);
     }
   };
 
@@ -116,7 +130,7 @@ export default function MachineDetailPage({
   if (machine === null) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Machine not found</p>
+        <p className="text-muted-foreground">{t("machines.notFound")}</p>
         <Link
           href="/dashboard/machines"
           className="text-primary hover:underline mt-2 inline-block"
@@ -160,10 +174,19 @@ export default function MachineDetailPage({
           <h1 className="text-2xl font-bold">{machine.name}</h1>
           <p className="text-muted-foreground">{machine.location || "-"}</p>
         </div>
-        <MachineStatusBadge
-          status={machine.status}
-          isDeleted={machine.isDeleted}
-        />
+        <div className="flex items-center gap-3">
+          {canManage && !machine.isDeleted && (
+            <Button onClick={() => setShowLaunchModal(true)}>
+              <Play className="h-4 w-4 mr-2" />
+              {t("training.launch.button")}
+            </Button>
+          )}
+          <MachineStatusBadge
+            machine={machine}
+            isDeleted={machine.isDeleted}
+            className="text-sm"
+          />
+        </div>
       </div>
 
       {/* Machine Info - Full width grid layout */}
@@ -176,7 +199,10 @@ export default function MachineDetailPage({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setShowEditModal(true)}
+                  onClick={() => {
+                    setEditSaved(false);
+                    setShowEditModal(true);
+                  }}
                 >
                   <Pencil className="h-4 w-4 mr-2" />
                   {t("common.edit")}
@@ -185,59 +211,64 @@ export default function MachineDetailPage({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {editSaved && (
+              <div
+                role="status"
+                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
+              >
+                {t("machines.updateSuccess")}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-muted-foreground">
                   {t("machines.status")}
                 </p>
-                <p className="font-medium">{machine.status}</p>
+                <p className="font-medium">
+                  <MachineStatusText machine={machine} />
+                </p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
                   {t("machines.lastHeartbeat")}
                 </p>
                 <p className="font-medium">
-                  {machine.lastHeartbeat > 0
-                    ? formatDistanceToNow(machine.lastHeartbeat, {
-                        addSuffix: true,
-                        locale: dateLocale,
-                      })
-                    : "-"}
+                  <LastSignal machine={machine} />
                 </p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  {t("machines.sampleRate")}
-                </p>
-                <p className="font-medium">{machine.config.sampleRate} Hz</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">
-                  {t("machines.batchInterval")}
-                </p>
-                <p className="font-medium">{machine.config.batchInterval} ms</p>
               </div>
             </div>
             <Separator />
             <div>
               <p className="text-sm text-muted-foreground">
-                {t("machines.channels")}
+                {t("machines.createdAt")}
               </p>
-              <div className="flex gap-1 flex-wrap mt-1">
-                {machine.config.channels.map((ch) => (
-                  <Badge key={ch} variant="secondary">
-                    {ch}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            <Separator />
-            <div>
-              <p className="text-sm text-muted-foreground">Created</p>
               <p className="font-medium">
                 {format(machine.createdAt, "PPP", { locale: dateLocale })}
               </p>
             </div>
+            <Separator />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.softwareVersion")}
+                </p>
+                <p className="font-medium">{machine.softwareVersion ?? "-"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.contractVersion")}
+                </p>
+                <p className="font-medium">{machine.contractVersion ?? "-"}</p>
+              </div>
+            </div>
+            {machine.lastVersionSeenAt !== undefined && (
+              <p className="text-xs text-muted-foreground">
+                <VersionsSeen
+                  at={machine.lastVersionSeenAt}
+                  serverNow={machine.serverNow}
+                />
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -270,11 +301,26 @@ export default function MachineDetailPage({
         )}
       </div>
 
+      {/* Training: live state and synced programmes */}
+      {!machine.isDeleted && (
+        <div className="grid lg:grid-cols-2 gap-6">
+          <MachineLiveCard machineId={machineId} />
+          <MachineProgramsCard machineId={machineId} />
+        </div>
+      )}
+
+      {/* Launch rights - admins and gestionnaires of this machine */}
+      {canManage && !machine.isDeleted && (
+        <LaunchRightsCard machineId={machineId} isAdmin={isAdmin} />
+      )}
+
       {/* Danger Zone - Only show if not deleted */}
       {canManage && !machine.isDeleted && (
         <Card className="border-destructive/50">
           <CardHeader>
-            <CardTitle className="text-destructive">Danger Zone</CardTitle>
+            <CardTitle className="text-destructive">
+              {t("machines.dangerZone")}
+            </CardTitle>
             <CardDescription>{t("machines.dangerZoneDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -369,8 +415,7 @@ export default function MachineDetailPage({
           <DialogHeader>
             <DialogTitle>{t("machines.regenerateKey")}</DialogTitle>
             <DialogDescription>
-              This will invalidate the current API key immediately. The machine
-              will need to be reconfigured with the new key.
+              {t("machines.regenerateKeyConfirmDesc")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -421,52 +466,21 @@ export default function MachineDetailPage({
         </DialogContent>
       </Dialog>
 
+      {/* Launch Auto Session Modal */}
+      <LaunchTrainingModal
+        open={showLaunchModal}
+        onOpenChange={setShowLaunchModal}
+        machineId={machineId}
+      />
+
       {/* Edit Machine Modal */}
       <MachineFormModal
         open={showEditModal}
         onOpenChange={setShowEditModal}
         machine={machine}
+        onSuccess={() => setEditSaved(true)}
       />
     </div>
-  );
-}
-
-function MachineStatusBadge({
-  status,
-  isDeleted,
-}: {
-  status: string;
-  isDeleted?: boolean;
-}) {
-  const t = useTranslations("machines");
-
-  if (isDeleted) {
-    return (
-      <Badge variant="destructive" className="text-sm">
-        {t("deleted")}
-      </Badge>
-    );
-  }
-
-  const variants: Record<
-    string,
-    "default" | "secondary" | "destructive" | "outline"
-  > = {
-    online: "default",
-    offline: "destructive",
-    in_session: "secondary",
-  };
-
-  const labels: Record<string, string> = {
-    online: t("online"),
-    offline: t("offline"),
-    in_session: t("inSession"),
-  };
-
-  return (
-    <Badge variant={variants[status] || "outline"} className="text-sm">
-      {labels[status] || status}
-    </Badge>
   );
 }
 

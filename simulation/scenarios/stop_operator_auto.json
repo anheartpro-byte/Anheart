@@ -1,0 +1,21 @@
+{
+  "name": "stop_operator_auto",
+  "description": "Operator STOP mid-HOLD of the jog programme: cooldown ramp, recovery, finished.",
+  "tags": [
+    "auto",
+    "stop"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "final_state": "finished"
+  }
+}

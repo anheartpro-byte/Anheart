@@ -1,0 +1,32 @@
+{
+  "name": "manual_retarget_mid_ramp",
+  "description": "Climbing to 27, the operator changes their mind to 10 at 40 s: the setpoint turns round at the motion limits.",
+  "tags": [
+    "manual",
+    "nominal"
+  ],
+  "kind": "manual",
+  "duration_s": 260,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 40,
+      "do": "manual_target",
+      "output_rpm": 10.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 150,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "max_output_rpm": 11.0
+  }
+}

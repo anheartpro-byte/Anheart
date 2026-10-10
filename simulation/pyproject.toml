@@ -1,0 +1,149 @@
+# Anheart machine simulation and scenario battery - tool configuration.
+#
+# Same contract as raspberry-pi/ (.claude/skills/anheart-strict-python/SKILL.md):
+# basedpyright strict with zero Any, mypy strict, ruff, and a coverage gate.
+# No [project] table: this folder is run in place as the `simulation` package,
+# with the repository root and raspberry-pi/ on the import path, so that
+# `import src....` resolves to the REAL runtime, drive simulator and physiology.
+# Nothing here re-implements that physics; it only drives and records it.
+#
+# The tools are run from simulation/ with the raspberry-pi venv:
+#     ./scripts/check.sh
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+include = ["."]
+exclude = [
+    "**/__pycache__",
+    "out",
+    "viewer",
+    # The CAD extractor runs in its own venv against OCP, which ships no stubs
+    # usable under zero-Any. It is a script, like raspberry-pi/scripts/.
+    "cad",
+]
+# The repository root (so `simulation.*` resolves) and raspberry-pi/ (so
+# `src.*` resolves) plus raspberry-pi's hand-written vendor stubs.
+extraPaths = ["..", "../raspberry-pi"]
+stubPath = "../raspberry-pi/stubs"
+typeCheckingMode = "strict"
+venvPath = "../raspberry-pi"
+venv = ".venv"
+
+reportAny = "error"
+reportExplicitAny = "error"
+reportUnknownMemberType = "error"
+reportUnknownArgumentType = "error"
+reportUnknownVariableType = "error"
+reportUnknownParameterType = "error"
+reportUnknownLambdaType = "error"
+reportMissingTypeStubs = "error"
+reportUnnecessaryIsInstance = "error"
+# Off for the reason raspberry-pi/pyproject.toml gives: it fires on every
+# `case _ as unreachable: assert_never(unreachable)` guard of a correct match.
+reportUnnecessaryComparison = "none"
+reportUnnecessaryContains = "error"
+reportImplicitOverride = "error"
+reportUninitializedInstanceVariable = "error"
+reportMissingParameterType = "error"
+reportPrivateUsage = "error"
+reportIncompatibleMethodOverride = "error"
+reportUnusedCallResult = "none"
+reportImplicitStringConcatenation = "none"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "..:../raspberry-pi:../raspberry-pi/stubs"
+explicit_package_bases = true
+exclude = ["^cad/", "^out/", "^viewer/"]
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_any_unimported = true
+warn_return_any = true
+warn_unreachable = true
+strict_equality = true
+no_implicit_reexport = true
+enable_error_code = [
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+    "ignore-without-code",
+    "possibly-undefined",
+    "unused-awaitable",
+    "explicit-override",
+    "exhaustive-match",
+]
+
+# raspberry-pi/src is checked by raspberry-pi's own gate. Here it is followed
+# for its types only, so a finding in a module another engineer is editing
+# cannot fail this gate - and cannot be "fixed" from here.
+[[tool.mypy.overrides]]
+module = ["src", "src.*"]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["peakutils.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [".venv", "cad/.venv-cad", "out"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "ANN", "ASYNC", "S", "B", "A", "C4",
+    "DTZ", "T20", "PT", "RET", "SIM", "ARG", "PTH", "PL", "TRY",
+    "FLY", "PERF", "FURB", "RUF",
+]
+# TRY004 misreads `isinstance(x, Err)` (a Result branch) as a type check.
+ignore = ["PLR0913", "TRY003", "TRY004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["simulation", "src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "SLF001", "PLR0915"]
+# The CLI and the live server print by design.
+"run.py" = ["T201"]
+"live.py" = ["T201"]
+# The CAD extractor is an operator script run in its own venv (see its docstring).
+"cad/**" = ["ANN", "PERF401", "T201", "E501", "PLR0912", "PLR0914", "PLR0915", "PLR2004", "C901", "PGH003", "S324", "RUF001"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "src.units.Bpm", "src.units.GLoad", "src.units.Hertz", "src.units.Metres",
+    "src.units.Monotonic", "src.units.MotorRpm", "src.units.OutputRpm",
+    "src.units.RpmPerSecond", "src.units.Seconds", "src.units.UnixMillis",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["..", "../raspberry-pi"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers --strict-config -p no:cacheprovider"
+markers = ["slow: runs a long (30-45 min simulated) session"]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = ["cad/*", "tests/*", "scripts/*"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 100
+# `case _ as unreachable: assert_never(...)` is proven unreachable by BOTH type
+# checkers (that is its whole purpose); it is excluded as a statically dead arm,
+# never with a pragma.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@overload",
+    '\.\.\.$',
+    'if __name__ == "__main__":',
+    "case _ as unreachable:",
+    "assert_never\\(",
+]

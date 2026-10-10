@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, use, useEffect } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
@@ -26,6 +27,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
+import { MachineStatusBadge } from "@/components/machines/MachineSignal";
+import { machineIdsToSave } from "@/lib/gestionnaireMachines";
+import { patientIdsToSave } from "@/lib/gestionnairePatients";
 
 export default function GestionnaireDetailPage({
   params,
@@ -50,14 +54,24 @@ export default function GestionnaireDetailPage({
     { gestionnaireId },
   );
 
-  const assignMachines = useMutation(api.machines.assignMachineToGestionnaires);
-  const assignPatients = useMutation(api.users.assignPatientsToGestionnaire);
+  const setGestionnaireMachines = useMutationWithFeedback(
+    api.machines.setGestionnaireMachines,
+  );
+  const assignPatients = useMutationWithFeedback(
+    api.users.assignPatientsToGestionnaire,
+  );
 
   const [showMachineDialog, setShowMachineDialog] = useState(false);
   const [showPatientDialog, setShowPatientDialog] = useState(false);
-  const [selectedMachines, setSelectedMachines] = useState<string[]>([]);
-  const [selectedPatients, setSelectedPatients] = useState<string[]>([]);
+  const [selectedMachines, setSelectedMachines] = useState<Id<"machines">[]>(
+    [],
+  );
+  const [selectedPatients, setSelectedPatients] = useState<Id<"users">[]>([]);
   const [saving, setSaving] = useState(false);
+  const [machinesError, setMachinesError] = useState<string | null>(null);
+  const [machinesSaved, setMachinesSaved] = useState<string | null>(null);
+  const [patientsError, setPatientsError] = useState<string | null>(null);
+  const [patientsSaved, setPatientsSaved] = useState<string | null>(null);
 
   const gestionnaire = gestionnaires?.find((g) => g._id === gestionnaireId);
 
@@ -106,39 +120,88 @@ export default function GestionnaireDetailPage({
     );
   }
 
+  // The machines the window shows a box for.
+  const listedMachines = allMachines.filter((m) => !m.isDeleted);
+
+  const openMachineDialog = () => {
+    // The window always opens on the gestionnaire's current machines, never on
+    // boxes left from a cancelled edit.
+    if (!gestionnaireMachines) return;
+    setSelectedMachines(gestionnaireMachines.map((m) => m._id));
+    setMachinesError(null);
+    setMachinesSaved(null);
+    setShowMachineDialog(true);
+  };
+
   const handleSaveMachines = async () => {
+    if (!gestionnaireMachines) return;
     setSaving(true);
+    setMachinesError(null);
     try {
-      // For each selected machine, ensure this gestionnaire is assigned
-      // This is a simplified approach - ideally we'd have a bulk update
-      for (const machineId of selectedMachines) {
-        const machine = allMachines.find((m) => m._id === machineId);
-        if (machine) {
-          // Get current gestionnaires and add this one if not present
-          await assignMachines({
-            machineId: machineId as Id<"machines">,
-            gestionnaireIds: [gestionnaireId],
-          });
-        }
+      // The server sets this gestionnaire's list exactly and touches no other
+      // gestionnaire's link.
+      const result = await setGestionnaireMachines(
+        {
+          gestionnaireId,
+          machineIds: machineIdsToSave({
+            checked: selectedMachines,
+            listed: listedMachines.map((m) => m._id),
+            linked: gestionnaireMachines.map((m) => m._id),
+          }),
+        },
+        { success: (saved) => t("gestionnaires.machinesSaved", saved) },
+      );
+      if (!result.ok) {
+        setMachinesError(result.message);
+        return;
       }
       setShowMachineDialog(false);
-    } catch (error) {
-      console.error(error);
+      setMachinesSaved(t("gestionnaires.machinesSaved", result.value));
     } finally {
       setSaving(false);
     }
   };
 
+  // The patients window needs both lists: the gestionnaire's own patients,
+  // which tick the boxes, and the patients to choose from, which are the
+  // boxes. Until both are known it is neither opened nor saved.
+  const patientsLoaded =
+    gestionnairePatients !== undefined && allPatients !== undefined;
+
+  const openPatientDialog = () => {
+    // The window always opens on the gestionnaire's current patients, never on
+    // boxes left from a cancelled edit.
+    if (!gestionnairePatients || !allPatients) return;
+    setSelectedPatients(gestionnairePatients.map((p) => p._id));
+    setPatientsError(null);
+    setPatientsSaved(null);
+    setShowPatientDialog(true);
+  };
+
   const handleSavePatients = async () => {
+    if (!gestionnairePatients || !allPatients) return;
     setSaving(true);
+    setPatientsError(null);
     try {
-      await assignPatients({
-        gestionnaireId,
-        patientIds: selectedPatients as Id<"users">[],
-      });
+      // The server sets this gestionnaire's list exactly and writes only the
+      // links that differ from it.
+      const result = await assignPatients(
+        {
+          gestionnaireId,
+          patientIds: patientIdsToSave({
+            checked: selectedPatients,
+            listed: allPatients.map((p) => p._id),
+            linked: gestionnairePatients.map((p) => p._id),
+          }),
+        },
+        { success: (saved) => t("gestionnaires.patientsSaved", saved) },
+      );
+      if (!result.ok) {
+        setPatientsError(result.message);
+        return;
+      }
       setShowPatientDialog(false);
-    } catch (error) {
-      console.error(error);
+      setPatientsSaved(t("gestionnaires.patientsSaved", result.value));
     } finally {
       setSaving(false);
     }
@@ -183,14 +246,23 @@ export default function GestionnaireDetailPage({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowMachineDialog(true)}
+                onClick={openMachineDialog}
+                disabled={gestionnaireMachines === undefined}
               >
                 <Pencil className="h-4 w-4 mr-2" />
                 {t("common.edit")}
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            {machinesSaved && (
+              <div
+                role="status"
+                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
+              >
+                {machinesSaved}
+              </div>
+            )}
             {gestionnaireMachines && gestionnaireMachines.length > 0 ? (
               <div className="space-y-2">
                 {gestionnaireMachines.map((m) => (
@@ -199,11 +271,7 @@ export default function GestionnaireDetailPage({
                     className="flex items-center justify-between p-2 rounded-md bg-muted/50"
                   >
                     <span className="font-medium">{m.name}</span>
-                    <Badge
-                      variant={m.status === "online" ? "default" : "secondary"}
-                    >
-                      {m.status}
-                    </Badge>
+                    <MachineStatusBadge machine={m} />
                   </div>
                 ))}
               </div>
@@ -232,15 +300,34 @@ export default function GestionnaireDetailPage({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowPatientDialog(true)}
+                onClick={openPatientDialog}
+                disabled={!patientsLoaded}
               >
                 <Pencil className="h-4 w-4 mr-2" />
                 {t("common.edit")}
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            {gestionnairePatients && gestionnairePatients.length > 0 ? (
+          <CardContent className="space-y-3">
+            {patientsSaved && (
+              <div
+                role="status"
+                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
+              >
+                {patientsSaved}
+              </div>
+            )}
+            {gestionnairePatients === undefined && (
+              <p className="text-muted-foreground text-sm">
+                {t("common.loading")}
+              </p>
+            )}
+            {gestionnairePatients?.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                {t("gestionnaires.noPatientsAssigned")}
+              </p>
+            )}
+            {gestionnairePatients && gestionnairePatients.length > 0 && (
               <div className="space-y-2">
                 {gestionnairePatients.map((p) => (
                   <div
@@ -256,10 +343,6 @@ export default function GestionnaireDetailPage({
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                {t("gestionnaires.noPatientsAssigned")}
-              </p>
             )}
           </CardContent>
         </Card>
@@ -274,44 +357,44 @@ export default function GestionnaireDetailPage({
               {t("gestionnaires.assignMachinesDesc")}
             </DialogDescription>
           </DialogHeader>
+          {machinesError && (
+            <div
+              role="alert"
+              className="bg-destructive/10 text-destructive p-3 rounded-md text-sm"
+            >
+              {machinesError}
+            </div>
+          )}
           <div className="max-h-64 overflow-y-auto space-y-2 py-4">
-            {allMachines
-              .filter((m) => !m.isDeleted)
-              .map((machine) => (
-                <div key={machine._id} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`machine-${machine._id}`}
-                    checked={selectedMachines.includes(machine._id)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        setSelectedMachines([...selectedMachines, machine._id]);
-                      } else {
-                        setSelectedMachines(
-                          selectedMachines.filter((id) => id !== machine._id),
-                        );
-                      }
-                    }}
-                  />
-                  <label
-                    htmlFor={`machine-${machine._id}`}
-                    className="flex-1 cursor-pointer"
-                  >
-                    <span className="font-medium">{machine.name}</span>
-                    {machine.location && (
-                      <span className="text-muted-foreground ml-2">
-                        ({machine.location})
-                      </span>
-                    )}
-                  </label>
-                  <Badge
-                    variant={
-                      machine.status === "online" ? "default" : "outline"
+            {listedMachines.map((machine) => (
+              <div key={machine._id} className="flex items-center space-x-2">
+                <Checkbox
+                  id={`machine-${machine._id}`}
+                  checked={selectedMachines.includes(machine._id)}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      setSelectedMachines([...selectedMachines, machine._id]);
+                    } else {
+                      setSelectedMachines(
+                        selectedMachines.filter((id) => id !== machine._id),
+                      );
                     }
-                  >
-                    {machine.status}
-                  </Badge>
-                </div>
-              ))}
+                  }}
+                />
+                <label
+                  htmlFor={`machine-${machine._id}`}
+                  className="flex-1 cursor-pointer"
+                >
+                  <span className="font-medium">{machine.name}</span>
+                  {machine.location && (
+                    <span className="text-muted-foreground ml-2">
+                      ({machine.location})
+                    </span>
+                  )}
+                </label>
+                <MachineStatusBadge machine={machine} />
+              </div>
+            ))}
           </div>
           <DialogFooter>
             <Button
@@ -337,8 +420,26 @@ export default function GestionnaireDetailPage({
               {t("gestionnaires.assignPatientsDesc")}
             </DialogDescription>
           </DialogHeader>
+          {patientsError && (
+            <div
+              role="alert"
+              className="bg-destructive/10 text-destructive p-3 rounded-md text-sm"
+            >
+              {patientsError}
+            </div>
+          )}
           <div className="max-h-64 overflow-y-auto space-y-2 py-4">
-            {allPatients && allPatients.length > 0 ? (
+            {!patientsLoaded && (
+              <p className="text-muted-foreground text-center py-4">
+                {t("common.loading")}
+              </p>
+            )}
+            {patientsLoaded && allPatients.length === 0 && (
+              <p className="text-muted-foreground text-center py-4">
+                {t("users.noPatients")}
+              </p>
+            )}
+            {patientsLoaded &&
               allPatients.map((patient) => (
                 <div key={patient._id} className="flex items-center space-x-2">
                   <Checkbox
@@ -366,12 +467,7 @@ export default function GestionnaireDetailPage({
                     </span>
                   </label>
                 </div>
-              ))
-            ) : (
-              <p className="text-muted-foreground text-center py-4">
-                {t("users.noPatients")}
-              </p>
-            )}
+              ))}
           </div>
           <DialogFooter>
             <Button
@@ -380,7 +476,10 @@ export default function GestionnaireDetailPage({
             >
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSavePatients} disabled={saving}>
+            <Button
+              onClick={handleSavePatients}
+              disabled={saving || !patientsLoaded}
+            >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {t("common.save")}
             </Button>

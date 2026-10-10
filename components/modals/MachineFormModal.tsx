@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
+import { submitGestionnaireList } from "@/lib/machineForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,19 +31,15 @@ import {
 } from "@/components/ui/form";
 import { Copy, Check, AlertTriangle, Loader2 } from "lucide-react";
 
-// Available BITalino sensor channels (A1-A6)
-const AVAILABLE_CHANNELS = ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"];
+// Validation messages are passed in so they follow the active locale.
+const createMachineSchema = (messages: { nameRequired: string }) =>
+  z.object({
+    name: z.string().min(1, messages.nameRequired).max(100),
+    location: z.string().max(200).optional(),
+    gestionnaireIds: z.array(z.string()).optional(),
+  });
 
-const machineSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100),
-  location: z.string().max(200).optional(),
-  sampleRate: z.number().min(100).max(10000),
-  batchInterval: z.number().min(100).max(5000),
-  channels: z.array(z.string()).min(1, "Select at least one channel"),
-  gestionnaireIds: z.array(z.string()).optional(),
-});
-
-type MachineFormValues = z.infer<typeof machineSchema>;
+type MachineFormValues = z.infer<ReturnType<typeof createMachineSchema>>;
 
 interface MachineFormModalProps {
   open: boolean;
@@ -50,11 +48,6 @@ interface MachineFormModalProps {
     _id: Id<"machines">;
     name: string;
     location?: string;
-    config: {
-      sampleRate: number;
-      channels: string[];
-      batchInterval: number;
-    };
     gestionnaires?: Array<{
       _id: Id<"users">;
       firstName: string;
@@ -78,10 +71,19 @@ export function MachineFormModal({
   const [copied, setCopied] = useState(false);
 
   const gestionnaires = useQuery(api.users.listGestionnaires);
-  const createMachine = useMutation(api.machines.createMachine);
-  const updateMachine = useMutation(api.machines.updateMachine);
-  const assignMachineToGestionnaires = useMutation(
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const createMachine = useMutationWithFeedback(api.machines.createMachine);
+  const updateMachine = useMutationWithFeedback(api.machines.updateMachine);
+  const assignMachineToGestionnaires = useMutationWithFeedback(
     api.machines.assignMachineToGestionnaires,
+  );
+
+  const machineSchema = useMemo(
+    () =>
+      createMachineSchema({
+        nameRequired: t("machines.form.nameRequired"),
+      }),
+    [t],
   );
 
   const form = useForm<MachineFormValues>({
@@ -89,9 +91,6 @@ export function MachineFormModal({
     defaultValues: {
       name: "",
       location: "",
-      sampleRate: 100,
-      batchInterval: 1000,
-      channels: ["ECG"],
       gestionnaireIds: [],
     },
   });
@@ -102,53 +101,52 @@ export function MachineFormModal({
       form.reset({
         name: machine?.name ?? "",
         location: machine?.location ?? "",
-        sampleRate: machine?.config.sampleRate ?? 100,
-        batchInterval: machine?.config.batchInterval ?? 1000,
-        channels: machine?.config.channels ?? ["ECG"],
         gestionnaireIds: machine?.gestionnaires?.map((g) => g._id) ?? [],
       });
     }
   }, [open, machine, form]);
 
   const onSubmit = async (values: MachineFormValues) => {
-    try {
-      if (isEditing) {
-        await updateMachine({
+    const showFailure = (message: string) => form.setError("root", { message });
+    if (isEditing) {
+      const updated = await updateMachine(
+        {
           machineId: machine._id,
           name: values.name,
           location: values.location || undefined,
-          config: {
-            sampleRate: values.sampleRate,
-            channels: values.channels,
-            batchInterval: values.batchInterval,
-          },
-        });
-        // Update gestionnaire assignments
-        if (values.gestionnaireIds) {
-          await assignMachineToGestionnaires({
+        },
+        { success: t("machines.updateSuccess") },
+      );
+      if (!updated.ok) return showFailure(updated.message);
+      // The gestionnaire list is an admin-only call. Whether it is made is
+      // decided in lib/machineForm.ts, never here: only for a caller
+      // allowed to choose the gestionnaires, and only when the list
+      // changed. A gestionnaire saving the name or the place never makes it.
+      const assigned = await submitGestionnaireList({
+        role: currentUser?.role,
+        current: machine.gestionnaires?.map((g) => g._id) ?? [],
+        selected: values.gestionnaireIds as Id<"users">[] | undefined,
+        assign: (gestionnaireIds) =>
+          assignMachineToGestionnaires({
             machineId: machine._id,
-            gestionnaireIds: values.gestionnaireIds as Id<"users">[],
-          });
-        }
-        onOpenChange(false);
-        onSuccess?.();
-      } else {
-        const result = await createMachine({
+            gestionnaireIds,
+          }),
+      });
+      // `assigned` is null when the call was not made: nothing was refused.
+      if (assigned && !assigned.ok) return showFailure(assigned.message);
+      onOpenChange(false);
+      onSuccess?.();
+    } else {
+      const created = await createMachine(
+        {
           name: values.name,
           location: values.location || undefined,
-          config: {
-            sampleRate: values.sampleRate,
-            channels: values.channels,
-            batchInterval: values.batchInterval,
-          },
           gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
-        });
-        setApiKey(result.apiKey);
-      }
-    } catch (error) {
-      form.setError("root", {
-        message: error instanceof Error ? error.message : "An error occurred",
-      });
+        },
+        { success: t("machines.createSuccess") },
+      );
+      if (!created.ok) return showFailure(created.message);
+      setApiKey(created.value.apiKey);
     }
   };
 
@@ -166,21 +164,6 @@ export function MachineFormModal({
     form.reset();
     onOpenChange(false);
     if (hadApiKey) onSuccess?.();
-  };
-
-  const toggleChannel = (channel: string) => {
-    const current = form.getValues("channels");
-    if (current.includes(channel)) {
-      form.setValue(
-        "channels",
-        current.filter((c) => c !== channel),
-        { shouldValidate: true },
-      );
-    } else {
-      form.setValue("channels", [...current, channel], {
-        shouldValidate: true,
-      });
-    }
   };
 
   // Show API key dialog after creation
@@ -232,8 +215,8 @@ export function MachineFormModal({
           </DialogTitle>
           <DialogDescription>
             {isEditing
-              ? "Update machine configuration"
-              : "Configure a new Raspberry Pi machine"}
+              ? t("machines.form.editDescription")
+              : t("machines.form.createDescription")}
           </DialogDescription>
         </DialogHeader>
 
@@ -252,7 +235,10 @@ export function MachineFormModal({
                 <FormItem>
                   <FormLabel>{t("machines.name")} *</FormLabel>
                   <FormControl>
-                    <Input placeholder="Raspberry Pi 1" {...field} />
+                    <Input
+                      placeholder={t("machines.form.namePlaceholder")}
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -266,82 +252,11 @@ export function MachineFormModal({
                 <FormItem>
                   <FormLabel>{t("machines.location")}</FormLabel>
                   <FormControl>
-                    <Input placeholder="Room 101" {...field} />
+                    <Input
+                      placeholder={t("machines.form.locationPlaceholder")}
+                      {...field}
+                    />
                   </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="sampleRate"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("machines.sampleRate")} (Hz)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={100}
-                        max={10000}
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1000)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="batchInterval"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("machines.batchInterval")}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={100}
-                        max={5000}
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1000)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <FormField
-              control={form.control}
-              name="channels"
-              render={() => (
-                <FormItem>
-                  <FormLabel>{t("machines.channels")} *</FormLabel>
-                  <div className="flex flex-wrap gap-2">
-                    {AVAILABLE_CHANNELS.map((channel) => (
-                      <Button
-                        key={channel}
-                        type="button"
-                        variant={
-                          form.watch("channels").includes(channel)
-                            ? "default"
-                            : "outline"
-                        }
-                        size="sm"
-                        onClick={() => toggleChannel(channel)}
-                      >
-                        {channel}
-                      </Button>
-                    ))}
-                  </div>
                   <FormMessage />
                 </FormItem>
               )}

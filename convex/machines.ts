@@ -6,30 +6,37 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import {
+  ORGANIZATION_ADMIN_ROLES,
+  STAFF_ROLES,
   requireRole,
   getCurrentUserOrThrow,
   canAccessMachine,
   canManageMachine,
-  isGestionnaireOfMachine,
+  inScope,
+  organizationRoleOf,
+  requireGestionnaireAdmin,
+  sameOrganization,
 } from "./lib/auth";
-import { generateApiKey, hashApiKey } from "./lib/crypto";
+import { generateApiKey } from "./lib/crypto";
+import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
+// One threshold for the server's job and for the dashboard, which reads the
+// age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
+import { LIVE_FRESH_MS } from "../lib/training";
 
 /**
- * Create a new machine (Raspberry Pi) - Admin only
+ * Create a new machine (Raspberry Pi) - Anheart admin only
  * Admin creates machines and assigns them to gestionnaires
+ *
+ * The machine belongs to exactly one organisation: `organizationId`, or the
+ * admin's own when it is not given. Only gestionnaires of that organisation
+ * can be assigned.
  */
 export const createMachine = mutation({
   args: {
     name: v.string(),
     location: v.optional(v.string()),
-    config: v.optional(
-      v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    ),
     gestionnaireIds: v.optional(v.array(v.id("users"))), // Gestionnaires to assign this machine to
+    organizationId: v.optional(v.id("organizations")), // Defaults to the admin's organisation
   },
   returns: v.object({
     machineId: v.id("machines"),
@@ -38,20 +45,22 @@ export const createMachine = mutation({
   handler: async (ctx, args) => {
     const currentUser = await requireRole(ctx, ["admin"]);
 
-    const { plain, hashed } = generateApiKey();
+    const organizationId = args.organizationId ?? currentUser.organizationId;
+    if (!(await ctx.db.get(organizationId))) {
+      throw new Error("Organization not found");
+    }
+
+    const { plain, hashed, selector } = await generateApiKey();
     const now = Date.now();
 
     const machineId = await ctx.db.insert("machines", {
+      organizationId,
       name: args.name,
       apiKey: hashed,
+      apiKeySelector: selector,
       status: "offline",
       lastHeartbeat: 0,
       location: args.location,
-      config: args.config ?? {
-        sampleRate: 1000,
-        channels: ["ECG"],
-        batchInterval: 1000,
-      },
       createdAt: now,
     });
 
@@ -59,9 +68,14 @@ export const createMachine = mutation({
     if (args.gestionnaireIds && args.gestionnaireIds.length > 0) {
       for (let i = 0; i < args.gestionnaireIds.length; i++) {
         const gestionnaireId = args.gestionnaireIds[i];
-        const gestionnaire = await ctx.db.get(gestionnaireId);
-        if (gestionnaire && gestionnaire.role === "gestionnaire") {
+        const role = await organizationRoleOf(
+          ctx,
+          gestionnaireId,
+          organizationId,
+        );
+        if (role === "gestionnaire") {
           await ctx.db.insert("machine_gestionnaires", {
+            organizationId,
             machineId,
             gestionnaireId,
             isOwner: i === 0, // First one is the primary owner
@@ -81,7 +95,9 @@ export const createMachine = mutation({
 });
 
 /**
- * Assign a machine to gestionnaires (Admin only)
+ * Assign a machine to gestionnaires (Admin only: Anheart's, or the admin of
+ * the machine's organisation). Only gestionnaires of the machine's
+ * organisation are assigned.
  */
 export const assignMachineToGestionnaires = mutation({
   args: {
@@ -90,10 +106,10 @@ export const assignMachineToGestionnaires = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, ["admin"]);
+    const currentUser = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
 
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) {
+    if (!machine || !inScope(currentUser, machine.organizationId)) {
       throw new Error("Machine not found");
     }
 
@@ -112,9 +128,14 @@ export const assignMachineToGestionnaires = mutation({
     // Add new relations
     for (let i = 0; i < args.gestionnaireIds.length; i++) {
       const gestionnaireId = args.gestionnaireIds[i];
-      const gestionnaire = await ctx.db.get(gestionnaireId);
-      if (gestionnaire && gestionnaire.role === "gestionnaire") {
+      const role = await organizationRoleOf(
+        ctx,
+        gestionnaireId,
+        machine.organizationId,
+      );
+      if (role === "gestionnaire") {
         await ctx.db.insert("machine_gestionnaires", {
+          organizationId: machine.organizationId,
           machineId: args.machineId,
           gestionnaireId,
           isOwner: i === 0,
@@ -125,6 +146,81 @@ export const assignMachineToGestionnaires = mutation({
     }
 
     return null;
+  },
+});
+
+/**
+ * Set the exact list of machines a gestionnaire manages (admin only: the
+ * Anheart admin, or the admin of the gestionnaire's organisation), among the
+ * machines of that organisation.
+ *
+ * Only this gestionnaire's rows of `machine_gestionnaires` are read and
+ * written: a machine added here keeps its other gestionnaires, and a machine
+ * removed here stays managed by them. A link that already exists is left as it
+ * is, with its `isOwner`. A new link is never an owner link.
+ */
+export const setGestionnaireMachines = mutation({
+  args: {
+    gestionnaireId: v.id("users"),
+    machineIds: v.array(v.id("machines")),
+  },
+  returns: v.object({
+    added: v.number(),
+    removed: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const { currentUser, organizationId } = await requireGestionnaireAdmin(
+      ctx,
+      args.gestionnaireId,
+    );
+
+    // Only the links of the organisation the decision applies to: what this
+    // gestionnaire manages in another organisation is not read nor written.
+    const existingRelations = (
+      await ctx.db
+        .query("machine_gestionnaires")
+        .withIndex("by_gestionnaire", (q) =>
+          q.eq("gestionnaireId", args.gestionnaireId),
+        )
+        .collect()
+    ).filter((r) => r.organizationId === organizationId);
+
+    const wanted = new Set(args.machineIds);
+    const linked = new Set(existingRelations.map((r) => r.machineId));
+
+    const toAdd = [...wanted].filter((machineId) => !linked.has(machineId));
+    const toRemove = existingRelations.filter((r) => !wanted.has(r.machineId));
+
+    // Every machine to link must exist, in that organisation, before anything
+    // is written. A machine of another organisation is a machine that does
+    // not exist.
+    for (const machineId of toAdd) {
+      const machine = await ctx.db.get(machineId);
+      if (!machine || machine.organizationId !== organizationId) {
+        throw new Error("Machine not found");
+      }
+    }
+
+    for (const relation of toRemove) {
+      await ctx.db.delete(relation._id);
+    }
+
+    const now = Date.now();
+    for (const machineId of toAdd) {
+      await ctx.db.insert("machine_gestionnaires", {
+        organizationId,
+        machineId,
+        gestionnaireId: args.gestionnaireId,
+        isOwner: false,
+        createdAt: now,
+        createdBy: currentUser._id,
+      });
+    }
+
+    return {
+      added: toAdd.length,
+      removed: new Set(toRemove.map((r) => r.machineId)).size,
+    };
   },
 });
 
@@ -140,7 +236,8 @@ export const regenerateApiKey = mutation({
     apiKey: v.string(),
   }),
   handler: async (ctx, args) => {
-    const canManage = await canManageMachine(ctx, args.machineId);
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
       throw new Error("Not authorized to manage this machine");
     }
@@ -151,11 +248,12 @@ export const regenerateApiKey = mutation({
     }
 
     // Generate new API key
-    const { plain, hashed } = generateApiKey();
+    const { plain, hashed, selector } = await generateApiKey();
 
     // Update machine with new hashed key
     await ctx.db.patch(args.machineId, {
       apiKey: hashed,
+      apiKeySelector: selector,
     });
 
     // Return plain key (shown only this once!)
@@ -184,14 +282,14 @@ export const getMachine = query({
       ),
       lastHeartbeat: v.number(),
       location: v.optional(v.string()),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
       createdAt: v.number(),
       isDeleted: v.optional(v.boolean()),
       deletedAt: v.optional(v.number()),
+      softwareVersion: v.optional(v.string()),
+      contractVersion: v.optional(v.string()),
+      lastVersionSeenAt: v.optional(v.number()),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       gestionnaires: v.array(
         v.object({
           _id: v.id("users"),
@@ -213,7 +311,7 @@ export const getMachine = query({
       return null;
     }
 
-    const hasAccess = await canAccessMachine(ctx, args.machineId);
+    const hasAccess = await canAccessMachine(ctx, args.machineId, currentUser);
     if (!hasAccess) {
       return null;
     }
@@ -249,10 +347,13 @@ export const getMachine = query({
       status: machine.status,
       lastHeartbeat: machine.lastHeartbeat,
       location: machine.location,
-      config: machine.config,
       createdAt: machine.createdAt,
       isDeleted: machine.isDeleted,
       deletedAt: machine.deletedAt,
+      softwareVersion: machine.softwareVersion,
+      contractVersion: machine.contractVersion,
+      lastVersionSeenAt: machine.lastVersionSeenAt,
+      serverNow: Date.now(),
       gestionnaires: validGestionnaires,
     };
   },
@@ -278,6 +379,8 @@ export const listMachines = query({
       name: v.string(),
       status: v.string(),
       lastHeartbeat: v.number(),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       location: v.optional(v.string()),
       isDeleted: v.optional(v.boolean()),
     }),
@@ -285,16 +388,24 @@ export const listMachines = query({
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
 
-    let allMachines = await ctx.db.query("machines").collect();
+    let allMachines;
 
     if (currentUser.role === "admin") {
-      // Admin sees all machines, optionally including deleted ones
+      // Anheart admin sees all machines, optionally including deleted ones
+      allMachines = await ctx.db.query("machines").collect();
       if (!args.includeDeleted) {
         allMachines = allMachines.filter((m) => !m.isDeleted);
       }
-      if (args.status) {
-        allMachines = allMachines.filter((m) => m.status === args.status);
-      }
+    } else if (currentUser.role === "org_admin") {
+      // Organisation admin sees the machines of their organisation (never deleted ones)
+      allMachines = (
+        await ctx.db
+          .query("machines")
+          .withIndex("by_organization", (q) =>
+            q.eq("organizationId", currentUser.organizationId),
+          )
+          .collect()
+      ).filter((m) => !m.isDeleted);
     } else if (currentUser.role === "gestionnaire") {
       // Gestionnaire sees machines they manage via relation table (never deleted ones)
       const relations = await ctx.db
@@ -304,26 +415,31 @@ export const listMachines = query({
         )
         .collect();
 
-      const machineIdSet = new Set(
-        relations.map((r) => r.machineId.toString()),
+      const managed = await Promise.all(
+        relations.map((r) => ctx.db.get(r.machineId)),
       );
-      allMachines = allMachines.filter(
-        (m) => machineIdSet.has(m._id.toString()) && !m.isDeleted,
+      allMachines = managed.filter(
+        (m): m is NonNullable<typeof m> =>
+          m !== null &&
+          sameOrganization(currentUser, m.organizationId) &&
+          !m.isDeleted,
       );
-
-      if (args.status) {
-        allMachines = allMachines.filter((m) => m.status === args.status);
-      }
     } else {
       // Users don't see machines
       return [];
     }
 
+    if (args.status) {
+      allMachines = allMachines.filter((m) => m.status === args.status);
+    }
+
+    const serverNow = Date.now();
     return allMachines.map((m) => ({
       _id: m._id,
       name: m.name,
       status: m.status,
       lastHeartbeat: m.lastHeartbeat,
+      serverNow,
       location: m.location,
       isDeleted: m.isDeleted,
     }));
@@ -331,24 +447,18 @@ export const listMachines = query({
 });
 
 /**
- * Update machine configuration
+ * Update a machine's name or location
  */
 export const updateMachine = mutation({
   args: {
     machineId: v.id("machines"),
     name: v.optional(v.string()),
     location: v.optional(v.string()),
-    config: v.optional(
-      v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const canManage = await canManageMachine(ctx, args.machineId);
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
       throw new Error("Not authorized to manage this machine");
     }
@@ -361,7 +471,6 @@ export const updateMachine = mutation({
     const updates: Record<string, unknown> = {};
     if (args.name !== undefined) updates.name = args.name;
     if (args.location !== undefined) updates.location = args.location;
-    if (args.config !== undefined) updates.config = args.config;
 
     if (Object.keys(updates).length > 0) {
       await ctx.db.patch(args.machineId, updates);
@@ -381,7 +490,7 @@ export const deleteMachine = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
-    const canManage = await canManageMachine(ctx, args.machineId);
+    const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
       throw new Error("Not authorized to manage this machine");
     }
@@ -452,115 +561,26 @@ export const restoreMachine = mutation({
 });
 
 /**
- * Get machine by ID (internal use)
- */
-export const getMachineById = internalQuery({
-  args: {
-    machineId: v.id("machines"),
-  },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    const machine = await ctx.db.get(args.machineId);
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
-  },
-});
-
-/**
  * Get machine by API key (for HTTP endpoints)
  */
 export const getMachineByApiKey = internalQuery({
   args: {
-    apiKeyHash: v.string(),
+    apiKey: v.string(),
   },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    const machine = await ctx.db
-      .query("machines")
-      .withIndex("by_api_key", (q) => q.eq("apiKey", args.apiKeyHash))
-      .unique();
-
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
-  },
+  returns: authenticatedMachine,
+  handler: (ctx, args) => authenticateMachine(ctx, args.apiKey),
 });
 
 /**
  * Validate machine API key from HTTP request
- * Takes plain API key, hashes it internally, and returns machine if valid
+ * Takes the complete credential and returns a machine only after verification.
  */
 export const validateMachineApiKey = internalQuery({
   args: {
     apiKey: v.string(),
   },
-  returns: v.union(
-    v.object({
-      _id: v.id("machines"),
-      name: v.string(),
-      status: v.string(),
-      config: v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    // Hash the plain API key
-    const hashed = hashApiKey(args.apiKey);
-
-    // Look up machine by hashed key
-    const machine = await ctx.db
-      .query("machines")
-      .withIndex("by_api_key", (q) => q.eq("apiKey", hashed))
-      .unique();
-
-    if (!machine) return null;
-
-    return {
-      _id: machine._id,
-      name: machine.name,
-      status: machine.status,
-      config: machine.config,
-    };
-  },
+  returns: authenticatedMachine,
+  handler: (ctx, args) => authenticateMachine(ctx, args.apiKey),
 });
 
 /**
@@ -572,6 +592,8 @@ export const recordHeartbeat = internalMutation({
     batteryLevel: v.optional(v.number()),
     wifiStrength: v.optional(v.number()),
     activeSessionId: v.optional(v.string()),
+    softwareVersion: v.optional(v.string()),
+    contractVersion: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -588,10 +610,19 @@ export const recordHeartbeat = internalMutation({
       newStatus = "in_session";
     }
 
-    // Update machine
+    // Update machine. A heartbeat that went through the contract gate states
+    // the versions as they are now: a software version it did not send is
+    // cleared rather than left to look current.
     await ctx.db.patch(args.machineId, {
       lastHeartbeat: now,
       status: newStatus,
+      ...(args.contractVersion === undefined
+        ? {}
+        : {
+            softwareVersion: args.softwareVersion,
+            contractVersion: args.contractVersion,
+            lastVersionSeenAt: now,
+          }),
     });
 
     // Record heartbeat history
@@ -623,7 +654,7 @@ export const checkOfflineMachines = internalMutation({
   }),
   handler: async (ctx) => {
     const now = Date.now();
-    const cutoff = now - 90000; // 90 seconds ago
+    const cutoff = now - LIVE_FRESH_MS;
 
     // Get online machines
     const onlineMachines = await ctx.db
@@ -676,7 +707,8 @@ export const getRecentHeartbeats = query({
     }),
   ),
   handler: async (ctx, args) => {
-    const hasAccess = await canAccessMachine(ctx, args.machineId);
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const hasAccess = await canAccessMachine(ctx, args.machineId, currentUser);
     if (!hasAccess) {
       return [];
     }
@@ -711,7 +743,12 @@ export const assignGestionnaireToMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, ["admin", "gestionnaire"]);
+    const currentUser = await requireRole(ctx, STAFF_ROLES);
+
+    // Check permissions - the machine is one the caller manages
+    if (!(await canManageMachine(ctx, args.machineId, currentUser))) {
+      throw new Error("Not authorized to manage this machine");
+    }
 
     // Verify machine exists
     const machine = await ctx.db.get(args.machineId);
@@ -719,25 +756,14 @@ export const assignGestionnaireToMachine = mutation({
       throw new Error("Machine not found");
     }
 
-    // Verify gestionnaire exists and has correct role
-    const gestionnaire = await ctx.db.get(args.gestionnaireId);
-    if (!gestionnaire) {
-      throw new Error("Gestionnaire not found");
-    }
-    if (gestionnaire.role !== "gestionnaire") {
+    // Verify gestionnaire has the correct role in the machine's organisation
+    const role = await organizationRoleOf(
+      ctx,
+      args.gestionnaireId,
+      machine.organizationId,
+    );
+    if (role !== "gestionnaire") {
       throw new Error("Target user is not a gestionnaire");
-    }
-
-    // Check permissions - gestionnaire can only manage machines they own
-    if (currentUser.role === "gestionnaire") {
-      const isManager = await isGestionnaireOfMachine(
-        ctx,
-        currentUser._id,
-        args.machineId,
-      );
-      if (!isManager) {
-        throw new Error("Not authorized to manage this machine");
-      }
     }
 
     // Check if relation already exists
@@ -756,6 +782,7 @@ export const assignGestionnaireToMachine = mutation({
 
     // Create relation
     await ctx.db.insert("machine_gestionnaires", {
+      organizationId: machine.organizationId,
       machineId: args.machineId,
       gestionnaireId: args.gestionnaireId,
       isOwner: false, // New assignments are not owners
@@ -777,18 +804,13 @@ export const removeGestionnaireFromMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, ["admin", "gestionnaire"]);
+    const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     // Check permissions
+    if (!(await canManageMachine(ctx, args.machineId, currentUser))) {
+      throw new Error("Not authorized to manage this machine");
+    }
     if (currentUser.role === "gestionnaire") {
-      const isManager = await isGestionnaireOfMachine(
-        ctx,
-        currentUser._id,
-        args.machineId,
-      );
-      if (!isManager) {
-        throw new Error("Not authorized to manage this machine");
-      }
       // Gestionnaire cannot remove themselves if they are the only one
       if (args.gestionnaireId === currentUser._id) {
         const allRelations = await ctx.db
@@ -840,7 +862,8 @@ export const getGestionnairesForMachine = query({
     }),
   ),
   handler: async (ctx, args) => {
-    const hasAccess = await canAccessMachine(ctx, args.machineId);
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const hasAccess = await canAccessMachine(ctx, args.machineId, currentUser);
     if (!hasAccess) {
       return [];
     }
@@ -881,6 +904,8 @@ export const getMachinesForGestionnaire = query({
       name: v.string(),
       status: v.string(),
       lastHeartbeat: v.number(),
+      // The server's clock in this answer: what `lastHeartbeat` is aged on.
+      serverNow: v.number(),
       location: v.optional(v.string()),
       isOwner: v.boolean(),
     }),
@@ -891,23 +916,14 @@ export const getMachinesForGestionnaire = query({
     // Determine which gestionnaire to query for
     let targetGestionnaireId = args.gestionnaireId;
 
-    if (!targetGestionnaireId) {
-      if (currentUser.role === "gestionnaire") {
-        targetGestionnaireId = currentUser._id;
-      } else if (currentUser.role !== "admin") {
-        return [];
-      }
-    }
-
     // Admin can query any gestionnaire, gestionnaires only their own
-    if (currentUser.role !== "admin") {
-      if (currentUser.role === "gestionnaire") {
-        if (targetGestionnaireId !== currentUser._id) {
-          return [];
-        }
-      } else {
+    if (currentUser.role === "gestionnaire") {
+      targetGestionnaireId ??= currentUser._id;
+      if (targetGestionnaireId !== currentUser._id) {
         return [];
       }
+    } else if (!ORGANIZATION_ADMIN_ROLES.includes(currentUser.role)) {
+      return [];
     }
 
     if (!targetGestionnaireId) {
@@ -922,15 +938,18 @@ export const getMachinesForGestionnaire = query({
       )
       .collect();
 
+    const serverNow = Date.now();
     const machines = await Promise.all(
       relations.map(async (r) => {
         const m = await ctx.db.get(r.machineId);
-        if (!m) return null;
+        // Only the machines of an organisation the caller may see
+        if (!m || !inScope(currentUser, m.organizationId)) return null;
         return {
           _id: m._id,
           name: m.name,
           status: m.status,
           lastHeartbeat: m.lastHeartbeat,
+          serverNow,
           location: m.location,
           isOwner: r.isOwner,
         };

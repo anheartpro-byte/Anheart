@@ -1,0 +1,316 @@
+# AnHeart Raspberry Pi client - tool configuration.
+#
+# Deliberately NO [project] table. This file exists only to hold tool config in
+# one place; it is not a package definition. The application is run as
+# `python -m src.local_panel` from this directory, and the Dockerfile copies
+# the requirement lock files before src/ so its layer cache keeps working. Adding
+# [project] would force a src/ -> src/anheart/ rename touching every import.
+#
+# Why this much strictness: this code commands a motor with a person inside it.
+# Passing a heart rate where revolutions-per-minute are expected, or missing an
+# error case from the drive, must be a compile-time failure and not a surprise
+# on the bench. See .claude/skills/anheart-strict-python/SKILL.md.
+
+# =========================================================================
+# Strict-check migration
+# =========================================================================
+# What is listed below predates this contract and is excluded from BOTH type
+# checkers until it is migrated. It is NOT exempt in spirit:
+# signal_processing.py carries the heart rate that drives the motor and is the
+# next to be converted (bitalino_client.py, the other safety-chain module, is
+# done) -- most of its diagnostics are untyped numpy / biosppy calls that the
+# stubs under stubs/ resolve.
+#
+#   src/signal_processing.py   scripts/*
+#
+# =========================================================================
+# Static verification - basedpyright (primary)
+# =========================================================================
+# basedpyright over plain pyright because it reports the implicit `Any` that
+# leaks in from untyped libraries (pymodbus, bitalino, biosppy) - which is
+# exactly where holes would otherwise appear.
+[tool.basedpyright]
+# 3.12 rather than the 3.11 originally planned: numpy 2.5 ships stubs using
+# PEP 695 `type` statements, which a 3.11 target rejects outright. The Docker
+# base moves to 3.12 to match, so dev and production are judged alike.
+pythonVersion = "3.12"
+include = ["src", "tests", "scripts"]
+# typing_fixtures holds deliberately-wrong modules that test_typing_contract.py
+# runs the checker against on purpose; they must not fail the normal pass.
+exclude = [
+    "**/__pycache__",
+    ".venv",
+    "stubs",
+    "tests/typing_fixtures",
+    # --- pending strict-check migration (see banner above) ---
+    "src/signal_processing.py",
+    "scripts",
+]
+stubPath = "stubs"
+typeCheckingMode = "strict"
+
+reportAny = "error"
+reportExplicitAny = "error"
+reportUnknownMemberType = "error"
+reportUnknownArgumentType = "error"
+reportUnknownVariableType = "error"
+reportUnknownParameterType = "error"
+reportUnknownLambdaType = "error"
+reportMissingTypeStubs = "error"
+reportUnnecessaryIsInstance = "error"
+# OFF deliberately, and this is a considered trade rather than a shortcut.
+# basedpyright narrows a closed union so completely that the
+# `case _ as unreachable: assert_never(unreachable)` guard at the end of a
+# CORRECT exhaustive match is provably dead code, so this rule fires on every
+# one of them. The guard has to stay: it is what makes an INCOMPLETE match fail,
+# in both checkers, naming the variant that was forgotten (verified in
+# tests/test_typing_contract.py). Redundant comparisons outside match statements
+# are still caught, by mypy's `redundant-expr` error code.
+reportUnnecessaryComparison = "none"
+reportUnnecessaryContains = "error"
+reportImplicitOverride = "error"
+reportUninitializedInstanceVariable = "error"
+reportMissingParameterType = "error"
+reportPrivateUsage = "error"
+reportIncompatibleMethodOverride = "error"
+reportUnusedCallResult = "none"
+reportImplicitStringConcatenation = "none"
+
+# =========================================================================
+# Static verification - mypy (second opinion)
+# =========================================================================
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tests", "scripts"]
+mypy_path = "stubs"
+exclude = [
+    "tests/typing_fixtures/",
+    # --- pending strict-check migration (see banner above) ---
+    "src/signal_processing[.]py$",
+    "scripts/",
+]
+strict = true
+
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_any_unimported = true
+warn_return_any = true
+warn_unreachable = true
+strict_equality = true
+no_implicit_reexport = true
+enable_error_code = [
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+    "ignore-without-code",
+    "possibly-undefined",
+    "unused-awaitable",
+    "explicit-override",
+    "exhaustive-match",
+]
+
+# The vendor libraries have no py.typed. Rather than silencing them, each is
+# covered by a hand-written stub under stubs/ and touched from exactly ONE
+# isolation module, so domain types are all the rest of the code ever sees.
+# If a stub is incomplete the build fails here, which is the intent.
+[[tool.mypy.overrides]]
+module = ["peakutils.*"]
+ignore_missing_imports = true
+
+# =========================================================================
+# Lint / format
+# =========================================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["."]
+exclude = ["stubs", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "ANN", "ASYNC", "S", "B", "A", "C4",
+    "DTZ", "T20", "PT", "RET", "SIM", "ARG", "PTH", "PL", "TRY",
+    "FLY", "PERF", "FURB", "RUF",
+]
+ignore = [
+    "PLR0913",
+    "TRY003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN401", "SLF001", "PLR0915"]
+# Operator tools print by design and take paths from argv.
+"scripts/**" = ["ANN001", "ANN201", "ANN202", "ASYNC250", "E501", "PERF401", "PLC0415", "PLR2004", "PLW1510", "PTH100", "PTH120", "RUF059", "S110", "S603", "S607", "SIM105", "T201", "TRY300", "TRY400"]
+
+# --- pending strict-check migration ------------------------------------
+# Same module excluded from the type checkers (see the banner at the top of
+# this file). Listed per-file rather than globally so the rules stay live for
+# every migrated module, and so removing a file from this block is part of
+# migrating it. S110 and SIM105 (an exception swallowed without a word) are
+# no longer waived: the quality grade of this module must never fall back to
+# "good" in silence.
+"src/signal_processing.py" = ["ANN001", "ANN201", "ANN204", "E501", "PLR0911", "PLR0912", "PLR2004", "TRY300", "TRY400"]
+
+[tool.ruff.lint.flake8-bugbear]
+# NewType constructors are identity functions erased at runtime, so using one
+# in a default argument is free. B008 exists for expensive or mutable defaults;
+# `Monotonic(0.0)` is neither.
+extend-immutable-calls = [
+    "src.units.AdcCount",
+    "src.units.Amperes",
+    "src.units.Bpm",
+    "src.units.BpmPerMinute",
+    "src.units.GLoad",
+    "src.units.GearRatio",
+    "src.units.Hertz",
+    "src.units.Metres",
+    "src.units.Millivolts",
+    "src.units.Monotonic",
+    "src.units.MotorRpm",
+    "src.units.OutputRpm",
+    "src.units.RawRegister",
+    "src.units.RegisterAddress",
+    "src.units.ResultantG",
+    "src.units.RpmPerSecond",
+    "src.units.Seconds",
+    "src.units.StatusWord",
+    "src.units.UnixMillis",
+]
+
+[tool.ruff.lint.flake8-annotations]
+mypy-init-return = false
+suppress-none-returning = false
+allow-star-arg-any = false
+ignore-fully-untyped = false
+
+# =========================================================================
+# Tests
+# =========================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --strict-markers --strict-config -m 'not hardware'"
+markers = [
+    "hardware: needs a real BITalino or ATV320 attached (excluded by default)",
+    "slow: takes more than a second",
+]
+
+# =========================================================================
+# Coverage
+# =========================================================================
+[tool.coverage.run]
+branch = true
+source = ["src"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# The blocking 100% gate covers the SAFETY CHAIN only: the heart rate that
+# drives the motor comes out of bitalino_client + signal_processing, so a bad
+# column parse or a mis-classified signal quality would make the machine
+# accelerate on noise. The rest of the web layer is reported separately and
+# is not gate-blocking.
+include = [
+    "src/units.py",
+    "src/result.py",
+    "src/clock.py",
+    "src/motor/*",
+    "src/training/*",
+    "src/sim/*",
+    "src/bitalino_client.py",
+    # The local console's safety chain: the one geometry every speed and
+    # g-load is rendered through, the typed boundary the heart rate crosses on
+    # its way from the DSP to the runtime, and the configuration that sets the
+    # radius and the motor-rpm ceiling.
+    "src/geometry.py",
+    "src/ecg_pipeline.py",
+    "src/local_config.py",
+    # The macOS BITalino transport: on the Mac every heart rate is computed
+    # from bytes that crossed it, and a silent link must surface as lost.
+    "src/bitalino_rfcomm_macos.py",
+    # The local console's composition root: the one place the runtime, the
+    # shared supervisor, the drive and the BITalino are wired together, and
+    # the exit path that releases the drive. Plus the link report it serves.
+    "src/local_panel.py",
+    "src/panel_lifecycle.py",
+    "src/task_completion.py",
+    "src/web/profile_writer.py",
+    "src/panel_status.py",
+    # The dashboard link: it can submit a start and forward a stop, so every
+    # branch that decides either is tested, like the rest of the console.
+    "src/cloud_sync.py",
+    # What that link has last heard of itself, as the state the operator reads
+    # on the console: it must never say reachable of a dashboard that is not.
+    "src/link_state.py",
+    # What that link sends of a session, read back from its record on disk:
+    # which session goes first, what a refusal does to the cursor, and when an
+    # end is sent. It can also have a running session stopped (a start the
+    # dashboard refuses).
+    "src/record_uplink.py",
+    # The versioned contract of that link: it decides whether a launch that
+    # came down from the dashboard may be armed at all.
+    "src/contract.py",
+    # Every BITalino channel's typed processor, the one scipy boundary they
+    # share, and the camera/presence fail-safe: all under the same gate.
+    "src/dsp.py",
+    "src/sensors/*",
+    "src/presence/*",
+    "src/record/*",
+    # The legacy ECG treatment: the quality grade that decides whether a heart
+    # rate is extracted at all, and that extraction (BioSPPy). Still outside
+    # the type checkers (see the banner at the top of this file), no longer
+    # outside this gate.
+    "src/signal_processing.py",
+]
+fail_under = 100
+# `# pragma: no cover` is intentionally NOT an exclusion for the safety chain:
+# an unreachable branch there is a design smell, not a waiver.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "@overload",
+    '\.\.\.$',
+]
+
+# =========================================================================
+# Project bookkeeping (read by tests/test_typing_contract.py)
+# =========================================================================
+[tool.anheart]
+# Safety-chain modules that are NOT yet under the 100% branch-coverage gate.
+# None today: every module of the chain is in the include list above. The list
+# stays, empty, because it is the only other place a module of the chain may
+# be: a test fails if it ever grows or goes stale, and the quality report of
+# the CI reads it to name what the threshold leaves out.
+coverage_pending = []
+
+# The full set the gate must cover: include + coverage_pending.
+safety_chain = [
+    "src/units.py",
+    "src/result.py",
+    "src/clock.py",
+    "src/motor/*",
+    "src/training/*",
+    "src/sim/*",
+    "src/bitalino_client.py",
+    "src/signal_processing.py",
+    "src/geometry.py",
+    "src/ecg_pipeline.py",
+    "src/local_config.py",
+    "src/bitalino_rfcomm_macos.py",
+    "src/local_panel.py",
+    "src/panel_lifecycle.py",
+    "src/task_completion.py",
+    "src/web/profile_writer.py",
+    "src/panel_status.py",
+    "src/cloud_sync.py",
+    "src/link_state.py",
+    "src/record_uplink.py",
+    "src/contract.py",
+    "src/dsp.py",
+    "src/sensors/*",
+    "src/presence/*",
+    "src/record/*",
+]

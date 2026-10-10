@@ -1,0 +1,21 @@
+{
+  "name": "auto_jog_150_leg_tip_estimate",
+  "description": "Jog zone with the leg tip at the stature-based estimate (1.42 m) instead of the CAD upper bound.",
+  "tags": [
+    "auto",
+    "nominal",
+    "jog",
+    "geometry"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "geometry": {
+    "leg_tip_radius_m": 1.4218
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "min_in_zone_fraction": 0.5
+  }
+}

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 
@@ -30,7 +31,7 @@ export default function SettingsPage() {
   const t = useTranslations();
   const user = useQuery(api.users.getCurrentUser);
   const users = useQuery(api.users.listUsers, {});
-  const updateUserRole = useMutation(api.users.updateUserRole);
+  const updateUserRole = useMutationWithFeedback(api.users.updateUserRole);
 
   const [selectedUserId, setSelectedUserId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("");
@@ -40,20 +41,20 @@ export default function SettingsPage() {
     if (!selectedUserId || !selectedRole) return;
 
     setUpdating(true);
-    try {
-      await updateUserRole({
+    const result = await updateUserRole(
+      {
         userId: selectedUserId as Parameters<
           typeof updateUserRole
         >[0]["userId"],
         role: selectedRole as "admin" | "gestionnaire" | "user",
-      });
+      },
+      { success: t("feedback.roleUpdated") },
+    );
+    if (result.ok) {
       setSelectedUserId("");
       setSelectedRole("");
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setUpdating(false);
     }
+    setUpdating(false);
   };
 
   if (user === undefined) {
@@ -233,8 +234,6 @@ export default function SettingsPage() {
             <Separator />
             <div className="text-sm text-muted-foreground">
               <p>{t("settings.heartbeatTimeout")}: 90s</p>
-              <p>{t("settings.defaultSampleRate")}: 1000 Hz</p>
-              <p>{t("settings.defaultBatchInterval")}: 1000 ms</p>
             </div>
           </CardContent>
         </Card>

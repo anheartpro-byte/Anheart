@@ -1,0 +1,22 @@
+{
+  "name": "attendant_absent_auto",
+  "description": "The attendant stops pinging the console mid-HOLD.",
+  "tags": [
+    "auto",
+    "fault"
+  ],
+  "kind": "auto",
+  "duration_s": 1500,
+  "profile": "jog_150_30_min",
+  "actions": [
+    {
+      "at_s": 900,
+      "do": "attendant_leaves"
+    }
+  ],
+  "expect": {
+    "rules": [
+      "attendant_absent"
+    ]
+  }
+}

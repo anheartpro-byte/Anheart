@@ -1,0 +1,45 @@
+{
+  "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
+  "contract_version": "1.1",
+  "header": "X-Anheart-Contract",
+  "server_version_field": "server_contract_version",
+  "contract_exempt_routes": {
+    "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."
+  },
+  "heartbeat_version_fields": [
+    "software_version",
+    "contract_version",
+    "medical_parameters_version",
+    "config_hash"
+  ],
+  "error_codes": {
+    "contract_unsupported": {
+      "statuses": [426],
+      "meaning": "La majeure du contrat annoncée par la machine est absente ou n'est pas servie. La réponse porte `supported`, la liste des majeures servies."
+    },
+    "unauthorized": {
+      "statuses": [401],
+      "meaning": "En-tête Authorization absent, clé inconnue, machine supprimée ou désactivée."
+    },
+    "invalid_request": {
+      "statuses": [400],
+      "meaning": "Corps ou paramètres mal formés : la même requête sera refusée de nouveau."
+    },
+    "session_not_found": {
+      "statuses": [400, 404],
+      "meaning": "Séance inconnue, ou qui n'appartient pas à la machine authentifiée."
+    },
+    "session_not_pending": {
+      "statuses": [400],
+      "meaning": "La séance n'attend plus son départ (annulée, déjà démarrée ou terminée)."
+    },
+    "machine_not_found": {
+      "statuses": [400],
+      "meaning": "La machine authentifiée n'existe plus au moment de l'écriture."
+    },
+    "request_failed": {
+      "statuses": [400],
+      "meaning": "Toute autre erreur levée pendant le traitement ; `message` porte le texte."
+    }
+  }
+}

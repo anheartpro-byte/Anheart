@@ -1,0 +1,11 @@
+# Traces and reports written by `python -m simulation.run` / the battery.
+out/
+# The CAD extraction runs in its own venv (cadquery-ocp is ~300 MB).
+cad/.venv-cad/
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.hypothesis/

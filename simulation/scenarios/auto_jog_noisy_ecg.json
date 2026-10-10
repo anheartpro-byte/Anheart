@@ -1,0 +1,25 @@
+{
+  "name": "auto_jog_noisy_ecg",
+  "description": "Heart rate delivered with +/-4 bpm Gaussian measurement noise (seeded).",
+  "tags": [
+    "auto",
+    "subject",
+    "jog",
+    "ecg"
+  ],
+  "kind": "auto",
+  "duration_s": 1810,
+  "profile": "jog_150_30_min",
+  "ecg": {
+    "mode": "direct",
+    "noise_bpm": 4,
+    "seed": 7
+  },
+  "expect": {
+    "end_reason": "programme_complete",
+    "final_state": "finished",
+    "forbid_rules": [
+      "hr_critical"
+    ]
+  }
+}

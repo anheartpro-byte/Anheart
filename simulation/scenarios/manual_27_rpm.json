@@ -1,0 +1,27 @@
+{
+  "name": "manual_27_rpm",
+  "description": "Bench manual session to 27 output rpm (1344 motor rpm, 48.7 Hz), hold, operator stop.",
+  "tags": [
+    "manual",
+    "nominal"
+  ],
+  "kind": "manual",
+  "duration_s": 420,
+  "actions": [
+    {
+      "at_s": 2,
+      "do": "manual_target",
+      "output_rpm": 27.0,
+      "expect": "accepted"
+    },
+    {
+      "at_s": 200,
+      "do": "operator_stop"
+    }
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 27.0,
+    "max_output_rpm": 27.05
+  }
+}
