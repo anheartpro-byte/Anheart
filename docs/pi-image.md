@@ -21,9 +21,12 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 >   la console et la relance quand elle se fige ou meurt
 >   ([Le chien de garde](#le-chien-de-garde)). Dans la machine de remplacement,
 >   une console figée en pleine séance est arrêtée par le chien de garde du
->   service puis relancée au repos, et une console qui meurt trois fois de
+>   service puis relancée au repos (13 s après le gel dans l'exécution
+>   38072378030 du job `pi-install`), et une console qui meurt trois fois de
 >   suite revient hors service (étapes 9 et 10 de la
->   [section 5](#5-ce-que-la-ci-vérifie)).
+>   [section 5](#5-ce-que-la-ci-vérifie)). Une console qui ne répond
+>   réellement à rien, pas même à son arrêt, n'a été exercée nulle part sous
+>   le vrai systemd.
 > - **Pas vérifié** : aucune installation sur un vrai Raspberry Pi, ni avec le
 >   vrai variateur, ni avec le vrai BITalino. Le chien de garde **matériel** du
 >   Pi n'a jamais été armé ni déclenché : seul son réglage est écrit et relu.
@@ -124,7 +127,7 @@ la même chose.
 | BlueZ | paquet `bluez` : 5.66-1+rpt2+deb12u2 dans l'image figée (5.66-1+deb12u2 dans Debian, celui de la CI) | déjà dans l'image, vérifié par le script |
 | Service de temps | paquet `chrony` de Debian 12 (série 4.3) ; il prend la place de `systemd-timesyncd`, le service de temps de Raspberry Pi OS (à constater sur un Pi, [section 6](#6-installer-un-vrai-raspberry-pi)) | installé par `scripts/install.sh` |
 | libusb | paquet `libusb-1.0-0` : 2:1.0.26-1 dans l'image figée | déjà dans l'image, vérifié par le script |
-| socat | paquet `socat` de Debian 12 ; le script et le test de bout en bout affichent la version qu'ils trouvent | installé par `scripts/install.sh` : c'est le relais du chien de garde ([section 4](#le-chien-de-garde)) |
+| socat | paquet `socat` de Debian 12 : 1.7.4.4-2 (installé par la CI le 10 octobre 2026) | installé par `scripts/install.sh` : c'est le relais du chien de garde ([section 4](#le-chien-de-garde)) |
 | systemd | 252.39-1~deb12u2 dans l'image figée | déjà dans l'image |
 
 Le fichier se télécharge sur `downloads.raspberrypi.com`, dossier
@@ -370,25 +373,49 @@ un processus du conteneur. L'unité lance donc `socat`, qui est un des siens : i
 et transmet chaque datagramme à systemd tel quel (`NotifyAccess=all`). Il
 n'invente rien : une console qui ne dit rien n'est pas entendue. S'il meurt,
 systemd n'entend plus la console et l'arrête au bout de 10 s, par son arrêt
-contrôlé : une panne du relais coûte un arrêt propre, jamais un arrêt brutal.
+contrôlé : une panne du relais coûte un arrêt contrôlé, jamais un arrêt brutal.
 Sans `socat`, l'unité refuse de démarrer (`AssertFileIsExecutable`).
+
+**Un relais présent mais qui ne démarre pas** (il n'arrive pas à écouter) est
+le cas à connaître, parce que la console a alors l'air de marcher. Elle
+tourne, sa page répond, elle peut armer une séance ; mais systemd ne l'entend
+jamais se dire prête. Au bout de 300 s (`TimeoutStartSec`) il arrête l'unité
+par son arrêt contrôlé, **séance en cours comprise**, la relance, et
+recommence toutes les 300 s jusqu'à sa limite de démarrages. Ce que
+l'opérateur voit : sous les pastilles de la page, `chien de garde : N
+notification(s) non envoyee(s)`, avec N qui monte ; sur le Pi,
+`systemctl status anheart` reste à `activating`, et `journalctl -u anheart`
+porte `notification not sent` et l'erreur de `socat`. **Ne pas lancer de
+séance sur une console qui affiche cette ligne.** Lu dans l'unité et dans le
+code, jamais observé.
 
 **Ce qui se passe quand la console se tait.**
 
-| Instant | Console dont la boucle tourne encore (un tic bloqué) | Console figée (elle ne répond à rien) |
-|---|---|---|
-| 0 | dernier tic terminé ; plus aucune trame vers le variateur | idem |
-| ttO du variateur | le variateur arrête le moteur | idem |
-| 10 s | systemd : `Watchdog timeout`, SIGTERM (`WatchdogSignal=SIGTERM`) | idem ; le signal reste sans effet |
-| quelques secondes | la console sort par son arrêt contrôlé, avec le code 1 | - |
-| 25 s (`TimeoutAbortSec=15`) | - | systemd abandonne et passe à l'arrêt ordinaire de l'unité : `docker stop -t 60`, qui tue au bout de 60 s |
-| + 2 s (`RestartSec=2`) | nouvelle console, au repos | nouvelle console, au repos, environ 90 s après le gel |
+Trois cas, qui ne se ressemblent pas, et un seul des trois a été observé sous
+le vrai systemd.
+
+| Instant | Tic bloqué, boucle vivante | Processus figé, puis relâché par l'arrêt (`SIGSTOP`, `docker pause`) | Processus qui ne répond à rien, pas même à l'arrêt |
+|---|---|---|---|
+| 0 | dernier tic terminé ; plus aucune trame vers le variateur | idem | idem |
+| ttO du variateur | le variateur arrête le moteur | idem | idem |
+| 10 s | systemd : `Watchdog timeout`, puis SIGTERM suivi de SIGCONT aux processus de l'unité (`WatchdogSignal=SIGTERM`) ; `docker run` relaie les deux à la console | idem : **le SIGCONT réveille la console** | idem ; sans effet |
+| ensuite | la console sort par son arrêt contrôlé | la console réveillée fait un tic, en retard (`loop_stall`, `GO_SILENT`), puis sort par son arrêt contrôlé et clôt son enregistrement : 60 ms dans la CI | rien pendant 15 s (`TimeoutAbortSec=15`), puis l'arrêt ordinaire de l'unité : `docker stop -t 60`, qui tue au bout de 60 s |
+| Code de sortie | 1 : aucun tic depuis plus de 3 s à l'arrêt | 1 : le tic revenu en retard a marqué le processus | tuée |
+| + 2 s (`RestartSec=2`) | nouvelle console, au repos | nouvelle console, au repos, **13 s après le gel** | nouvelle console, au repos, environ 90 s après le gel (calculé : 10 + 15 + 60 + 2) |
+| Vu où | banc logiciel, face à un modèle de systemd (`test_ex4_a_stalled_loop_is_ended_by_the_watchdog_…`) | **sous le vrai systemd** : test de bout en bout, étape 9 (durées de l'exécution 38072378030) ; et banc logiciel (`test_ex4_a_console_frozen_then_woken_by_its_own_stop_…`) | **jamais sous systemd.** Lu dans l'unité ; côté console, banc logiciel face au modèle (`test_ex4_a_frozen_console_is_killed_…`) |
+
+Un gel appliqué du dehors à la console (`SIGSTOP`, `docker pause`) est
+toujours levé par l'arrêt lui-même : c'est le cas du milieu. Celui de droite
+demande un processus bloqué hors de sa boucle d'événements, qu'aucun geste
+extérieur ne produit.
 
 La nouvelle console est un nouveau processus : pas d'attestation, pas de
 séance, et un variateur trouvé activé ou en rotation est mis à zéro et
 verrouillé ([Allumage et redémarrage](#allumage-et-redémarrage--rien-ne-repart-seul)).
-Si la séance coupée a laissé son enregistrement ouvert, elle écrit
-l'avertissement « démarrage après arrêt non propre » et le montre sur sa page.
+Dans les trois cas son démarrage suit un arrêt non propre : il est compté, et
+elle écrit l'avertissement « démarrage après arrêt non propre ». Elle y nomme
+l'enregistrement de la séance coupée quand il est resté ouvert, ce qui est le
+cas d'une console tuée ; une console réveillée par son arrêt a clos le sien.
 
 **La limite, et le mode hors service.**
 
@@ -414,11 +441,16 @@ figé. Il ne redémarre **pas** le Pi quand systemd tourne mais n'arrive plus à
 relancer la console : l'unité reste alors en échec et le Pi reste joignable
 pour le diagnostic ([section 8](#8-limites-et-reste-à-faire)).
 
-**Non vérifié.** Tout ce qui précède a tourné avec le vrai systemd et le vrai
-Docker de Debian 12, dans la machine de remplacement, en simulation
-([section 5](#5-ce-que-la-ci-vérifie), étapes 1, 9 et 10). Sur un vrai Pi :
-rien. En particulier que `/dev/watchdog0` existe, que systemd l'arme, et qu'un
-Pi figé redémarre, ne se constate que sur la machine
+**Ce qui est vérifié, et ce qui ne l'est pas.** A tourné avec le vrai systemd
+et le vrai Docker de Debian 12, dans la machine de remplacement, en
+simulation ([section 5](#5-ce-que-la-ci-vérifie)) : le démarrage par le relais
+et le signe de vie (étape 1), la console figée puis réveillée par son arrêt
+(étape 9), les morts répétées, le mode hors service et la remise en service
+(étape 10). N'a jamais tourné sous systemd : une console qui ne répond à rien
+(la colonne de droite du tableau), un relais qui ne démarre pas, la sortie
+d'une console sur une exception de son tic. Sur un vrai Pi : rien. En
+particulier que `/dev/watchdog0` existe, que systemd l'arme, et qu'un Pi figé
+redémarre, ne se constate que sur la machine
 ([section 6](#6-installer-un-vrai-raspberry-pi), étape 7).
 
 ### L'arrêt
@@ -622,11 +654,13 @@ Le workflow `.github/workflows/pi-install.yml` lance
 | 6. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
 | 7. Console que le service n'a pas lancée | un conteneur `anheart` lancé à la main tourne une séance : l'installation **refuse**, ne le touche pas, ne démarre pas le service ; une fois la séance terminée, l'installation passe, l'unité arrête et retire ce conteneur puis lance le sien |
 | 8. Arrêt puis rallumage | la machine de remplacement est arrêtée (arrêt ordonné) puis rallumée ; la console revient seule, au repos ; une ligne écrite dans le journal avant l'arrêt y est encore, et les lignes de la console d'avant l'arrêt aussi |
-| 9. Console figée en pleine séance | la console est figée (`SIGSTOP` : elle ne termine plus de tic et ne répond à rien) ; pas avant 10 s, systemd écrit `Watchdog timeout (limit 10s)!`, constate l'échec `watchdog` et lance une autre console ; elle est au repos, sans attestation ; elle se dit démarrée après un arrêt non propre et nomme l'enregistrement que la séance figée a laissé ouvert ; le journal hors séance porte l'avertissement |
+| 9. Console figée en pleine séance | la console est figée (`SIGSTOP` : elle ne termine plus de tic) ; pas avant 10 s, systemd écrit `Watchdog timeout (limit 10s)!` et arrête l'unité, ce qui réveille la console ; elle dit elle-même que son arrêt n'est pas propre et sort en erreur (`status=1/FAILURE`) ; systemd constate l'échec `watchdog` et lance une autre console ; l'enregistrement de la séance figée est clos ; la nouvelle console est au repos, sans attestation, se dit démarrée après un arrêt non propre, compte ce démarrage, et le journal hors séance porte l'avertissement |
 | 10. Console qui meurt en boucle | la console est tuée jusqu'à son troisième démarrage après un arrêt non propre en dix minutes : elle tourne, répond, se dit hors service, et le journal le porte ; un départ demandé n'est pas armé ; `POST /api/service/restore`, avec un nom, la remet en service, sans rien lancer ; une séance démarre alors ; après un redémarrage propre elle est toujours en service |
 
 Rien n'y touche du matériel ni un tableau de bord : variateur simulé, ECG
-simulé, clé de machine vide. Deux choses n'y sont pas. Le variateur simulé vit
+simulé, clé de machine vide. Trois choses n'y sont pas. Une console qui ne
+répond à rien, pas même à son arrêt : `SIGSTOP` est levé par l'arrêt de
+systemd, et aucun geste extérieur ne bloque la console autrement. Le variateur simulé vit
 dans le processus de la console et meurt avec lui : ce qu'une console relancée
 fait d'un variateur **laissé en marche** est vérifié ailleurs, par
 `tests/test_supervised_console.py`, où le variateur simulé survit à la console.
@@ -671,10 +705,9 @@ sur le même commit que `ci.yml`.
 
 **Durée.** Sur la PR #37 (run 37607234436) : 2 min 40 s pour le job, dont
 environ une minute pour construire l'image sur le runner arm64. Ce n'est pas la
-durée sur un Raspberry Pi, qui reste à mesurer. Les étapes 9 et 10 ajoutent
-environ deux minutes et demie : la console figée n'est remplacée qu'après les
-10 s du chien de garde, les 15 s laissées à la console pour sortir et les 60 s
-de l'arrêt de l'unité.
+durée sur un Raspberry Pi, qui reste à mesurer. À l'étape 9, la console figée
+a été remplacée 13 s après le gel (exécution 38072378030) : les 10 s du chien
+de garde, l'arrêt de la console réveillée, les 2 s d'attente et le démarrage.
 
 **Le lancer soi-même.** `bash raspberry-pi/scripts/pi/test_install.sh`, sur une
 machine avec Docker. La machine de remplacement y construit l'image complète de
@@ -747,9 +780,14 @@ variateur ni BITalino.
      `"watchdog":{"enabled":true` avec `"failed":0` dans
      `curl -s http://127.0.0.1:8090/api/panel` ;
    - figer la console : `sudo kill -STOP $(sudo docker inspect --format '{{.State.Pid}}' anheart)`,
-     puis `journalctl -u anheart -f`. Attendu : `Watchdog timeout (limit 10s)!`
-     après 10 s, une nouvelle console environ 90 s après le gel, au repos
-     (constats de l'étape 5). Noter les deux durées.
+     puis `journalctl -u anheart -f`. Attendu, d'après la machine de
+     remplacement : `Watchdog timeout (limit 10s)!` 10 s après le gel ; l'arrêt
+     de systemd réveille la console, qui écrit `not a clean stop` et sort
+     (`status=1/FAILURE`) ; une nouvelle console quelques secondes plus tard
+     (13 s après le gel dans la CI ; plus sur un Pi, où la console met plus
+     longtemps à se charger), au repos (constats de l'étape 5). Sa page écrit
+     sous les pastilles `demarre apres un arret non propre`. Noter les deux
+     durées.
 
    Le déclenchement du chien de garde **matériel** (Pi entier figé) et les
    essais avec le variateur sont dans la procédure de banc, pas ici
@@ -840,6 +878,7 @@ nouvelles versions.
 | Durée de construction de l'image sur un Pi 4 et sur un Pi 5 | idem, étape 4 |
 | Publier et signer l'image, la faire tirer par le Pi | chef de projet (registre, clé), ANH-126, ANH-168 |
 | Faire tourner la console sous le compte `anheart`, sans privilèges ; pare-feu ; système en lecture seule | ANH-151 |
+| Une console qui ne répond réellement à rien, pas même à son arrêt, n'a été exercée nulle part sous systemd : tout gel appliqué du dehors est levé par l'arrêt. Ce que l'unité fait alors (15 s, puis `docker stop`, qui tue au bout de 60 s) est lu, pas observé | à observer le jour où le cas se présente ; aucun essai sûr ne le produit |
 | Le chien de garde du service, la relance et le mode hors service n'ont jamais tourné sur un vrai Pi ; le chien de garde matériel n'a jamais été armé ni déclenché | une personne avec le matériel : [section 6](#6-installer-un-vrai-raspberry-pi), étape 7, puis la procédure de banc de [securite.md](securite.md#96-essai-au-banc--procédure-non-faite) |
 | Quand systemd tourne mais n'arrive plus à relancer la console (limite de dix démarrages atteinte, Docker bloqué), l'unité reste en échec et **le Pi ne redémarre pas de lui-même** : seul un système entier figé est redémarré par le chien de garde matériel. Le faire redémarrer aussi dans ce cas est une ligne de l'unité (`StartLimitAction=reboot`), au prix d'un Pi qui redémarre en boucle, donc difficile à joindre, quand la console ne peut pas démarrer du tout (image absente) | décision du chef de projet ; d'ici là, `systemctl reset-failed anheart` ou un redémarrage du Pi à la main |
 | L'état « hors service » n'est pas remonté au tableau de bord : il est sur la page de la console et dans son journal | ANH-148 (champs de santé du heartbeat) |

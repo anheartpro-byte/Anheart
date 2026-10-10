@@ -158,9 +158,10 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
 ne peut pas s'attacher au port), toutes s'arrêtent et le variateur est relâché.
-Code de sortie : 0 (normal), 1 (une tâche a échoué, ou la console a été arrêtée
-alors que sa boucle de contrôle ne terminait plus de tic), 2 (configuration
-refusée). Sur un Pi installé, systemd relance la console après un code 1
+Code de sortie : 0 (normal), 1 (une tâche a échoué, ou la boucle de contrôle
+de ce processus est restée plus de 3 s sans terminer de tic, à l'instant de
+l'arrêt ou plus tôt), 2 (configuration refusée). Sur un Pi installé, systemd
+relance la console après un code 1
 ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
 `cloud_step` est la seule tâche qui avale ses exceptions : le tableau de bord
@@ -303,6 +304,7 @@ n'est atteinte que si la première est revenue.
 | il revient (y compris console verrouillée, silencieuse sur le variateur, ou hors service) | `READY=1` au premier, puis `WATCHDOG=1` à chacun |
 | il lève une exception | rien ; la console sort avec le code 1 |
 | il ne revient pas (appel qui n'aboutit jamais, boucle bloquée, processus figé) | rien |
+| il revient en retard, plus de 3 s après le précédent (la boucle ou le processus a été figé, puis relâché) | `WATCHDOG=1`, comme pour tout tic revenu ; le processus est marqué, et son arrêt ne sera pas propre (voir « L'arrêt » plus bas) |
 
 Aucun minuteur, aucune autre tâche et aucun fil n'envoie cette notification :
 un tic bloqué ne peut pas être couvert par une boucle qui tourne encore à côté.
@@ -317,12 +319,39 @@ en face : l'appel rend la main tout de suite, l'échec est compté
 tic suivant envoie le sien. Sans `NOTIFY_SOCKET` (poste de développement,
 tests, image lancée à la main), rien n'est envoyé et rien n'est compté.
 
-**L'arrêt.** Quand la console s'arrête d'elle-même, elle le dit
-(`STOPPING=1`) : le temps que met le variateur à s'arrêter n'est pas pris pour
-une boucle figée. Et elle regarde si sa boucle terminait encore des tics quand
-l'arrêt a commencé : sans tic revenu depuis plus de 3 s (le seuil où
-`loop_stall` passe en `GO_SILENT`), l'arrêt n'est pas propre, qui que ce soit
-qui l'ait demandé, et la console sort avec le code 1.
+**L'arrêt, et le gel dont on se souvient.** Quand la console s'arrête
+d'elle-même, elle le dit (`STOPPING=1`) : le temps que met le variateur à
+s'arrêter n'est pas pris pour une boucle figée. Et son arrêt n'est **pas
+propre**, donc code de sortie 1 et rien d'écrit comme arrêt propre, dès que sa
+boucle de contrôle est restée plus de 3 s sans terminer de tic (le seuil où
+`loop_stall` passe en `GO_SILENT`) :
+
+* à l'instant où l'arrêt commence (un tic bloqué, par exemple) ;
+* **ou à n'importe quel moment depuis le démarrage de ce processus** : un tic
+  revenu plus de 3 s après le précédent le marque
+  (`ServiceWatchdog.tick_completed`), et rien ne l'efface.
+
+La seconde règle est un verrou gardé pour la vie du processus, et il le faut.
+Une console figée n'est pas arrêtée pendant qu'elle est figée : c'est l'arrêt
+de systemd qui la réveille (il fait suivre son signal d'arrêt d'un signal de
+reprise, et `docker run` relaie les deux). Vu dans la CI le 10 octobre 2026
+(job `pi-install`, exécution 38072378030) : console figée par `SIGSTOP`,
+`Watchdog timeout` à 10 s, réveil, **un** tic 10,09 s après le précédent
+(`loop_stall`, `GO_SILENT`), puis seulement l'arrêt, traité en 60 ms. Jugé sur
+« la boucle tourne-t-elle maintenant », cet arrêt passait pour propre, et une
+console qui se fige et revient sans cesse n'était jamais comptée. Le tic en
+retard est donc la preuve, pas son effacement.
+
+Le seuil est celui où le superviseur se tait. Les deux ne mesurent pas au
+même endroit du tic (le superviseur entre deux évaluations, ce verrou entre
+deux fins de tic) : ils s'accordent à la durée d'un tic près. Un processus qui
+porte ce verrou a donc aussi un verdict `loop_stall` verrouillé, à ce tic ou
+au suivant, et c'est `GO_SILENT` dès que le temps a été perdu entre deux tics,
+ce qui est le cas d'un processus figé. Il faut de toute façon qu'un opérateur
+regarde cette console. Que l'arrêt vienne de systemd dix secondes plus tard ou
+d'une personne le lendemain, le démarrage qui suit est compté comme suivant un
+gel. Le verrou n'envoie rien et ne retient rien : les notifications restent
+une par tic revenu, tic en retard compris. Il ne change que le code de sortie.
 
 **Les redémarrages en boucle : hors service.** Chaque redémarrage est un
 nouveau processus qui ne sait rien du précédent. Ce qui doit lui survivre est
@@ -333,22 +362,23 @@ séance (`src/service_state.py`).
 |---|---|
 | Arrêt propre | la console est sortie d'elle-même avec le code 0, et l'a écrit en dernier, variateur arrêté et enregistrement clos. Tout le reste est un arrêt **non propre** : mort, exception, boucle figée, coupure de courant |
 | Démarrage après un arrêt non propre | compté, avec son instant sur l'horloge monotone de la console |
+| Processus mort avant son premier tic | pas compté par la console : il n'a jamais écrit son démarrage (voir plus bas). Il ne s'est jamais dit prêt non plus : c'est systemd qui le compte, dans sa propre limite |
 | Hors service | au **troisième** démarrage après un arrêt non propre en **dix minutes**, pendant un même démarrage du système. Les instants d'un autre démarrage du système ne se comparent à rien et ne sont pas repris : une machine coupée au mur chaque soir n'est pas une boucle |
 | Ce que fait une console hors service | tout sauf armer : elle sert sa page, fait ses tics, lit le variateur, arrête et verrouille un variateur trouvé en marche. Un départ manuel, programmé ou venu du tableau de bord est refusé avec la raison et la marche à suivre |
 | Combien de temps | jusqu'à ce qu'un opérateur nommé la remette en service (`POST /api/service/restore`, page Securite). Ni le temps, ni un redémarrage propre, ni un redémarrage du Pi ne le lèvent |
 | Remise en service | vaut tout de suite, en mémoire. Elle est ensuite écrite sur un fil à part, 5 s au plus. Si le disque refuse, la page le dit, et la console revient hors service après son prochain redémarrage, à lever de la même façon. Elle ne lance rien : un départ demande toujours une attestation et un départ explicite |
 | Fichier absent | premier démarrage : en service |
-| Fichier illisible ou abîmé | compté comme **un** arrêt non propre, jamais comme une raison d'être hors service |
-| Disque qui ne prend pas le fichier | rien n'est refusé ; la page dit que l'état n'est pas gardé |
+| Fichier illisible ou abîmé | compté comme **un** arrêt non propre, jamais comme une raison d'être hors service. Conséquence assumée, à faire valider par le chef de projet : si la console était hors service, un fichier abîmé la remet en service sans opérateur nommé |
+| Disque qui ne prend pas le fichier | rien n'est refusé ; la page dit que l'état n'est pas gardé. Chaque démarrage compte alors pour un et le compte n'atteint jamais trois : la détection de boucle est inactive tant que le disque refuse |
 | À la main | supprimer `/var/lib/anheart/records/service-state.json`, console arrêtée, revient à une remise en service |
 
 Ce mécanisme ne peut donc jamais retenir une machine pour de bon : la page qui
 dit « hors service » est celle qui le lève.
 
 **Le démarrage après un arrêt non propre (EX-3).** Au démarrage, avant que la
-boucle tourne, la console lit ce fichier et regarde le dernier enregistrement
-de séance (`listing` de `src/record/export.py`, qui sait ce qu'est un
-enregistrement clos). Si le processus précédent n'a pas écrit son arrêt propre,
+boucle tourne, la console **lit** ce fichier et regarde le dernier
+enregistrement de séance (`listing` de `src/record/export.py`, qui sait ce
+qu'est un enregistrement clos). Si le processus précédent n'a pas écrit son arrêt propre,
 ou si le dernier enregistrement est resté ouvert sans qu'un démarrage l'ait
 déjà signalé, elle écrit un événement `warning` dans son journal et dans le
 journal hors séance ([15.9](#159-le-journal-hors-séance)) :
@@ -356,9 +386,25 @@ journal hors séance ([15.9](#159-le-journal-hors-séance)) :
 <nom> non clos`. Un enregistrement resté ouvert le reste pour toujours : il est
 signalé par un démarrage, pas par tous ceux qui suivent.
 
-Rien de cela ne parle au variateur. Son état est lu par le premier tic, comme
-avant, avant que la boîte aux lettres puisse contenir un ordre, et la console
-ne se dit prête à systemd qu'après ce premier tic.
+**Le variateur d'abord.** Rien de cela ne parle au variateur. Son état est lu
+par le premier tic, comme avant, avant que la boîte aux lettres puisse
+contenir un ordre. Ce que ce changement ajoute vient après ce premier tic :
+la console ne se dit prête à systemd qu'alors, et c'est alors seulement
+qu'elle **écrit** ce démarrage sur le disque, sur un fil à part
+(`LocalPanel._record_start`). L'écriture, avec sa synchronisation, est la
+seule opération qu'une carte SD fatiguée peut rendre lente : elle ne se place
+jamais entre un démarrage et le premier regard sur le variateur.
+
+Ce qui reste avant le premier tic est deux lectures, dans le dossier que le
+journal vient de préparer : le fichier d'état et la liste des enregistrements,
+comme les autres fichiers que la console lit pour démarrer (sa version, ses
+limites, ses profils). Leur place ne peut pas compter pour le moteur : tant
+que le premier tic n'a pas eu lieu, la console n'envoie aucune trame, donc un
+variateur laissé en marche n'entend aucun maître et son propre délai de
+communication court. Retarder la première lecture ne garde jamais un moteur
+commandé ; cela retarde seulement le second filet, la mise à zéro par la
+console, de la durée de ces lectures, à côté des secondes que met le
+programme à se charger.
 
 **Ce que le tableau de bord n'en sait pas encore.** Le heartbeat ne porte pas
 l'état « hors service » : son corps fait partie du contrat versionné avec
@@ -373,9 +419,12 @@ local, et le coût d'un envoi que personne ne prend),
 propriétés), `tests/test_supervised_console.py` (la vraie console sur l'horloge
 réelle, face à un modèle de systemd : un tic qui ne revient pas arrête les
 notifications alors que la boucle tourne ; une exception ou une boucle figée
-finit le processus ; au redémarrage, un variateur laissé en marche est arrêté
-et verrouillé, et rien ne bouge avant qu'un opérateur ait attesté, acquitté,
-démarré et donné une cible) et `tests/test_out_of_service_console.py` (la page
+finit le processus ; une console gelée puis réveillée par son arrêt sort en
+erreur, qu'un tic en retard ait tourné avant l'arrêt ou non ; le démarrage
+n'est écrit qu'après la première lecture du variateur ; au redémarrage, un
+variateur laissé en marche est arrêté et verrouillé, et rien ne bouge avant
+qu'un opérateur ait attesté, acquitté, démarré et donné une cible) et
+`tests/test_out_of_service_console.py` (la page
 et les routes d'une console hors service). Avec le vrai systemd : le test
 d'installation de bout en bout ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)).
 Rien sur un vrai Pi.

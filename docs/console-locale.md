@@ -374,7 +374,7 @@ quand il n'y a rien à dire.
 
 | Texte | Sens |
 |---|---|
-| `demarre apres un arret non propre` | le processus précédent n'a pas fini par son arrêt contrôlé |
+| `demarre apres un arret non propre` | le processus précédent n'a pas fini par un arrêt propre : il est mort, il est sorti en erreur, ou sa boucle de contrôle était restée plus de 3 s sans terminer de tic |
 | `(enregistrement <nom> non clos)`, à la suite | la séance coupée a laissé son enregistrement ouvert ; dit par un seul démarrage |
 | `N sur 3 en 10 min avant la mise hors service` | le compte des démarrages après un arrêt non propre |
 | `etat des redemarrages non enregistre sur le disque` | le fichier d'état n'a pas pu être écrit : ce qui est affiché vaut jusqu'au prochain redémarrage |
