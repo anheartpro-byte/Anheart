@@ -9,11 +9,14 @@ test keeps the suite independent of the shell it is launched from.
 
 from __future__ import annotations
 
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 import src.motor.drive_process_lock
+from tests.notify_support import Listener
 
 #: The dashboard link's keys: the only ones that carry a credential. Listed
 #: explicitly rather than pattern-matched, so adding one here is deliberate.
@@ -33,3 +36,21 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate each test from the dashboard credentials of the ambient environment."""
     for name in ANHEART_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def short_directory() -> Iterator[Path]:
+    """A directory whose path fits a socket's name (about a hundred bytes, less on macOS).
+
+    ``tmp_path`` is too long for one on some systems.
+    """
+    with tempfile.TemporaryDirectory(prefix="anh") as name:
+        yield Path(name)
+
+
+@pytest.fixture
+def listener(short_directory: Path) -> Iterator[Listener]:
+    """A service manager's notification socket, listening (``tests/notify_support.py``)."""
+    made = Listener(short_directory)
+    yield made
+    made.close()

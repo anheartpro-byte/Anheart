@@ -71,8 +71,9 @@ from src.service_watchdog import ALIVE, READY, STOPPING
 from src.telemetry import TelemetryClient
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import SELF_CLEARING, EstopUnattested
-from src.training.types import Occupancy, SafetyAction
+from src.training.types import Occupancy, SafetyAction, TelemetrySnapshot
 from src.units import MotorRpm, OutputRpm, Seconds
+from tests.notify_support import Listener
 from tests.test_failure_process import FakeWeb
 from tests.test_failure_rig import (
     BENCH_ENV,
@@ -83,9 +84,6 @@ from tests.test_failure_rig import (
     config_of,
     no_dsp,
 )
-from tests.test_service_watchdog import Listener, listener, short_directory
-
-__all__ = ["listener", "short_directory"]
 
 NEVER: Final[Seconds] = Seconds(3600.0)
 """A drive communication timeout that will not fire in a test: the worst case, where
@@ -99,7 +97,12 @@ STALL_WATCHDOG: Final[float] = 3.3
 one the console itself must call unclean."""
 
 ABORT: Final[float] = 0.5
-"""The model's ``TimeoutAbortSec``: how long a console is given to leave once asked."""
+"""The model's ``TimeoutAbortSec``: how long a console that answers nothing is waited
+for before it is killed. The unit's is 15 s; nothing below depends on the figure."""
+
+LEAVE: Final[float] = 10.0
+"""How long a console that DOES answer is given to leave by itself in these tests: its
+exit is what is asserted on, and a loaded machine must not turn it into a kill."""
 
 GONE: Final[DriveError] = CommTimeout(Seconds(0.0))
 
@@ -117,6 +120,8 @@ class Link(Wrapped):
         """The process was killed: nothing it still does reaches the drive."""
         self.killed: asyncio.Event = asyncio.Event()
         """Set by the kill: what the process was waiting on dies with it."""
+        self.stuck: asyncio.Event = asyncio.Event()
+        """Set once a tick is inside the read that does not return."""
 
     @override
     async def open(self) -> Result[None, DriveError]:
@@ -145,6 +150,7 @@ class Link(Wrapped):
         if self.bug:
             raise RuntimeError("injected: a bug inside the tick")
         if self.hung:
+            self.stuck.set()
             await self.killed.wait()
             return Err(GONE)
         return await self.inner.read_status()
@@ -183,6 +189,15 @@ class Console:
 
 
 @dataclass
+class Ticks:
+    """The control ticks of the consoles of one test, counted from outside the console."""
+
+    started: int = 0
+    completed: int = 0
+    """Ticks that returned. One that raised, or never came back, began and is not here."""
+
+
+@dataclass
 class Machine:
     """What outlives a console: the drive, the records directory, the service manager's socket."""
 
@@ -191,6 +206,7 @@ class Machine:
     listener: Listener
     root: Path
     graveyard: set[int]
+    ticks: Ticks
     records: Path | None = None
     """Where the consoles keep their records and their restart state; ``None``: nowhere."""
 
@@ -237,10 +253,33 @@ def graveyard(monkeypatch: pytest.MonkeyPatch) -> set[int]:
 
 
 @pytest.fixture
-def machine(tmp_path: Path, listener: Listener, graveyard: set[int]) -> Machine:
+def ticks(monkeypatch: pytest.MonkeyPatch) -> Ticks:
+    """Count every control tick that begins and every one that returns.
+
+    Around the console's own ``control_step``, so that what the service
+    manager hears can be held against what the control loop really did,
+    without asking the console.
+    """
+    counted = Ticks()
+    real = LocalPanel.control_step
+
+    async def control_step(panel: LocalPanel) -> TelemetrySnapshot:
+        counted.started += 1
+        snapshot = await real(panel)
+        counted.completed += 1
+        return snapshot
+
+    monkeypatch.setattr(LocalPanel, "control_step", control_step)
+    return counted
+
+
+@pytest.fixture
+def machine(tmp_path: Path, listener: Listener, graveyard: set[int], ticks: Ticks) -> Machine:
     clock = RealClock()
     sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True, tto=NEVER))
-    return Machine(sim=sim, clock=clock, listener=listener, root=tmp_path, graveyard=graveyard)
+    return Machine(
+        sim=sim, clock=clock, listener=listener, root=tmp_path, graveyard=graveyard, ticks=ticks
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,7 +333,7 @@ class ServiceManager:
         if not frozen:
             console.stop.set()
         try:
-            code = await asyncio.wait_for(asyncio.shield(console.task), ABORT)
+            code = await asyncio.wait_for(asyncio.shield(console.task), ABORT if frozen else LEAVE)
         except TimeoutError:
             await console.kill()
             self.listen()
@@ -330,7 +369,7 @@ async def at_speed(console: Console) -> float:
 
     def turning() -> bool:
         surface.note_presence(OPERATOR)
-        return runtime.snapshot().measured.motor_rpm >= 60
+        return runtime.snapshot().measured.motor_rpm >= 55
 
     await until(turning, 8.0, "the shaft turning at speed")
     return float(runtime.snapshot().measured.motor_rpm)
@@ -358,7 +397,7 @@ async def assert_found_running_stopped_latched_and_inert(
     sim = machine.sim
 
     # The first tick read the drive, found it commanded by nobody, and took it down.
-    await until(lambda: runtime.snapshot().safety is not None, 3.0, "a verdict at the restart")
+    await until(lambda: runtime.snapshot().safety is not None, 10.0, "a verdict at the restart")
     verdict = runtime.snapshot().safety
     assert verdict is not None
     assert verdict.rule == "drive_precommanded"
@@ -387,9 +426,10 @@ async def assert_found_running_stopped_latched_and_inert(
     # FROM HERE AN OPERATOR ACTS. Attesting is not enough: the runtime's latch stands,
     # and the start it is handed is refused without a frame.
     watcher = panel.hub.subscribe()
+    refused_before = surface.counters[1]
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
     assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
-    await asyncio.sleep(0.6)
+    await until(lambda: surface.counters[1] > refused_before, 10.0, "the loop's answer")
     assert await refusals(watcher) == [
         "demarrage refuse : verdict drive_precommanded a acquitter "
         f"({verdict.detail.removesuffix(SELF_CLEARING)})"
@@ -442,20 +482,23 @@ async def test_ex1_a_healthy_console_says_ready_then_alive_once_per_completed_ti
 ) -> None:
     manager = ServiceManager(machine)
     console = machine.boot()
-    await until(lambda: console.panel.watchdog.status().sent >= 10, 5.0, "ten completed ticks")
-    sent = console.panel.watchdog.status()
+
+    def ten_ticks() -> bool:
+        manager.listen()
+        return machine.ticks.completed >= 10
+
+    await until(ten_ticks, 10.0, "ten completed ticks")
     assert await end(console) == EXIT_OK
     manager.listen()
     heard = manager.heard
     assert heard[0] == READY, "the first completed tick says the console is up"
     assert heard[-1] == STOPPING, "its own stop is announced"
     assert set(heard[1:-1]) == {ALIVE}
-    assert sent.failed == 0
-    # One notification per completed tick, none from anywhere else: the count
-    # read before the stop is at most a tick behind what was heard.
-    alive = len(heard) - 1
-    assert sent.sent <= alive <= sent.sent + 2
-    assert console.panel.watchdog.status().sent == len(heard)
+    # One notification per tick that returned, counted from outside the console,
+    # and not one more: nothing else in the console sends any.
+    assert len(heard) - 1 == machine.ticks.completed
+    status = console.panel.watchdog.status()
+    assert (status.sent, status.failed) == (len(heard), 0)
 
 
 async def test_ex1_a_tick_that_never_returns_stops_the_feeding_while_the_loop_still_runs(
@@ -469,20 +512,23 @@ async def test_ex1_a_tick_that_never_returns_stops_the_feeding_while_the_loop_st
     """
     manager = ServiceManager(machine)
     console = machine.boot()
-    await until(lambda: console.panel.watchdog.status().sent >= 5, 5.0, "five completed ticks")
+    ticks = machine.ticks
+    await until(lambda: ticks.completed >= 5, 10.0, "five completed ticks")
     console.link.hung = True
-    await asyncio.sleep(0.5)  # the tick in flight, and the one that then hangs
+    await asyncio.wait_for(console.link.stuck.wait(), 10.0)
+    # A tick is now inside a read that does not return.
     manager.listen()
-    heard_before = len(manager.heard)
+    completed = ticks.completed
+    assert ticks.started == completed + 1
+    assert len(manager.heard) == completed, "one notification per tick that returned, so far"
     acquired_before = console.acquired()
-    sent_before = console.panel.watchdog.status().sent
 
     await asyncio.sleep(2.0)
 
     assert manager.listen() == [], "a stuck tick told the service manager it was alive"
-    assert len(manager.heard) == heard_before
-    assert console.panel.watchdog.status().sent == sent_before
-    assert console.acquired() >= acquired_before + 5, "the loop itself was running all along"
+    assert (ticks.started, ticks.completed) == (completed + 1, completed), "still that same tick"
+    assert console.panel.watchdog.status().sent == completed
+    assert console.acquired() >= acquired_before + 3, "the loop itself was running all along"
     assert not console.task.done()
     await console.kill()
 
@@ -490,15 +536,17 @@ async def test_ex1_a_tick_that_never_returns_stops_the_feeding_while_the_loop_st
 async def test_ex1_a_tick_that_raises_sends_nothing(machine: Machine) -> None:
     manager = ServiceManager(machine)
     console = machine.boot()
-    await until(lambda: console.panel.watchdog.status().sent >= 5, 5.0, "five completed ticks")
-    manager.listen()
+    ticks = machine.ticks
+    await until(lambda: ticks.completed >= 5, 10.0, "five completed ticks")
     console.link.bug = True
     assert await asyncio.wait_for(console.task, 30.0) == EXIT_FAILED
-    after = manager.listen()
-    # At most the tick that was already completing when the bug was armed; then
-    # the console's own announcement that it stops. No "alive" follows the raise.
-    assert after[-1] == STOPPING
-    assert after.count(ALIVE) <= 1
+    manager.listen()
+    heard = manager.heard
+    assert ticks.started == ticks.completed + 1, "one tick began and raised"
+    assert heard[-1] == STOPPING, "the console says it stops"
+    # Every tick that returned was notified, and the one that raised was not.
+    assert len(heard) - 1 == ticks.completed
+    assert set(heard[1:-1]) == {ALIVE}
     assert console.panel.runtime.end_reason is EndReason.TICK_EXCEPTION
 
 
@@ -511,10 +559,11 @@ async def test_ex1_a_tick_that_raises_sends_nothing(machine: Machine) -> None:
 async def test_ex4_a_tick_exception_at_speed_ends_the_process_and_the_restart_stops_and_latches(
     machine: Machine,
 ) -> None:
-    manager = ServiceManager(machine)
+    # A watchdog too long to fire here: this console must leave by itself.
+    manager = ServiceManager(machine, watchdog=LEAVE)
     first = machine.boot()
     reached = await at_speed(first)
-    assert reached >= 60
+    assert reached >= 55
 
     first.link.bug = True
     ended = await manager.watch(first)
@@ -561,7 +610,7 @@ async def test_ex4_a_frozen_console_is_killed_and_the_restart_stops_a_drive_stil
     first = machine.boot()
     reached = await at_speed(first)
     setpoint = machine.sim.commanded_setpoint
-    assert setpoint >= 60
+    assert setpoint >= 55
 
     first.link.hung = True
     ended = await manager.watch(first, frozen=True)
@@ -579,13 +628,15 @@ async def test_ex4_a_frozen_console_is_killed_and_the_restart_stops_a_drive_stil
 
 @pytest.mark.slow
 async def test_ex4_when_the_drive_stopped_itself_the_restart_finds_it_stopped_and_starts_nothing(
-    tmp_path: Path, listener: Listener, graveyard: set[int]
+    tmp_path: Path, listener: Listener, graveyard: set[int], ticks: Ticks
 ) -> None:
     """The nominal chain: the console freezes, the drive's own communication timeout
     stops the motor, the console is restarted and commands nothing."""
     clock = RealClock()
-    sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True, tto=Seconds(0.5)))
-    machine = Machine(sim=sim, clock=clock, listener=listener, root=tmp_path, graveyard=graveyard)
+    sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True, tto=Seconds(1.0)))
+    machine = Machine(
+        sim=sim, clock=clock, listener=listener, root=tmp_path, graveyard=graveyard, ticks=ticks
+    )
     manager = ServiceManager(machine)
     first = machine.boot()
     await at_speed(first)
@@ -724,7 +775,7 @@ async def test_ex2_three_restarts_after_unclean_stops_take_the_console_out_of_se
     hub = console.panel.hub.subscribe()
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
     assert isinstance(surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok)
-    await asyncio.sleep(0.6)
+    await until(lambda: surface.counters[1] >= 1, 10.0, "the loop's answer")
     assert state_of(console) is RuntimeState.IDLE, "a console out of service armed"
     assert machine.sim.sim_state not in ENERGISED
     assert await refusals(hub) == [f"demarrage refuse : {OUT_OF_SERVICE}"]

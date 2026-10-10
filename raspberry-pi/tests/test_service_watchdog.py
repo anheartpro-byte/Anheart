@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import logging
 import socket
-import tempfile
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -34,44 +32,9 @@ from src.service_watchdog import (
     destination,
 )
 from src.units import Monotonic, Seconds, elapsed
+from tests.notify_support import Listener
 
 OVERDUE: Final[Seconds] = Seconds(3.0)
-
-
-class Listener:
-    """A service manager's side of the socket: bound, never blocking, read on demand."""
-
-    def __init__(self, directory: Path) -> None:
-        self.path: Path = directory / "notify"
-        self.socket: socket.socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        self.socket.bind(str(self.path))
-        self.socket.setblocking(False)
-
-    def heard(self) -> list[bytes]:
-        """Every datagram waiting, in order."""
-        taken: list[bytes] = []
-        while True:
-            try:
-                taken.append(self.socket.recv(4096))
-            except BlockingIOError:
-                return taken
-
-    def close(self) -> None:
-        self.socket.close()
-
-
-@pytest.fixture
-def short_directory() -> Iterator[Path]:
-    """A directory whose path fits a socket's name (about a hundred bytes, less on macOS)."""
-    with tempfile.TemporaryDirectory(prefix="anh") as name:
-        yield Path(name)
-
-
-@pytest.fixture
-def listener(short_directory: Path) -> Iterator[Listener]:
-    made = Listener(short_directory)
-    yield made
-    made.close()
 
 
 def test_ex1_the_first_completed_tick_says_ready_and_alive_and_the_next_ones_alive(
