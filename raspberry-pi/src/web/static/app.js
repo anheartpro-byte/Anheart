@@ -91,6 +91,7 @@ var state = {
   manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
   loopAsked: {},         // a start or a reset this page sent, until the machine has answered: kind -> {at, said, refused, late, stream}
   loopDone: {},          // the note saying one of them happened, for as long as the frames show it: kind -> {said, text}
+  startLog: [],          // the start requests this stream has carried, newest last: {at, stream, open, contested}
   lastRefusal: null,     // the last `refused` event: one can reach the screen before the 202 of what it answers
   ackGiven: null,        // the acknowledgement this page gave, until frames show whether it held: {at, cleared, text}
   ackTaken: null,        // the note saying the machine took one back, for as long as the frames show that latch: {rule, waits}
@@ -1590,9 +1591,29 @@ function stepGr(direction) {
   screen's request did not reach it. The words of the request are not
   repeated there: they would read as those of the session on screen. A reset
   never says more than the frames show, on any stream.
+
+  An unbroken stream is not enough. The console's mailbox has one place, and
+  a start accepted while another still waits in it takes that place with no
+  refusal published: two screens each get a 202, one session starts, and
+  neither sees a refusal. What both do see is the other's request: every start
+  the console accepts is published as a `start_requested` event, stamped with
+  the instant the 202 carries. So "pris" also wants this screen's request to
+  have been the only one before the loop: its own event seen once on the
+  stream, no other start request waiting when it came (startLog), and none
+  after it until the frame that shows the session. Operator names and the
+  words of a request tell no two screens apart; when the stream carried more
+  than one start request the page does not guess which one the loop took,
+  whichever came first. It says a session is running and that another start
+  request reached the machine as well.
+
+  A refusal answers a start for as long as the start is awaited, however late
+  the loop judged it: the window of a second is the reset's alone.
 */
 var LINK_CUT = "sa liaison a ete coupee.";
+var START_RIVAL = "une autre demande de demarrage est aussi arrivee a la machine.";
+var START_UNSEEN = "il n'a pas recu l'evenement de sa propre demande.";
 var START_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : " + LINK_CUT;
+var START_LOG = 8;
 var LOOP_ASKS = {
   manual: {
     note: function () {
@@ -1606,8 +1627,7 @@ var LOOP_ASKS = {
       return "demarrage pris par la machine : " + said + (atZero ? " (cible 0)" : "");
     },
     missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
-    unknown: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : " + LINK_CUT,
-    lost: START_LOST,
+    unknown: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : ",
   },
   programme: {
     note: function () {
@@ -1620,8 +1640,7 @@ var LOOP_ASKS = {
       return "demarrage pris par la machine : " + said;
     },
     missed: "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.",
-    unknown: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : " + LINK_CUT,
-    lost: START_LOST,
+    unknown: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : ",
   },
   reset: {
     note: function () {
@@ -1659,12 +1678,62 @@ function askLoop(kind, command, stream) {
   }
 }
 
-/** A `refused` event, for whichever start or reset of this page it is dated just after. */
+/*
+  A `start_requested` event: a start the console has taken into its mailbox,
+  this screen's or another's. One that arrives while an earlier one of the
+  same stream has not been answered was accepted over it, and is marked. A
+  request is answered once the loop has emptied the mailbox that held it,
+  which the stream shows as a refusal, or as a frame of a tick that began
+  after the request. What an earlier socket carried is another console's as
+  far as this page can tell (a restarted one keeps nothing in its mailbox, and
+  its clock may read earlier): it contests nothing here.
+*/
+function noteStartRequest(event) {
+  var waiting = state.startLog.some(function (seen) {
+    return seen.open && seen.stream === state.stream;
+  });
+  state.startLog.push({ at: event.at, stream: state.stream, open: true, contested: waiting });
+  state.startLog = state.startLog.slice(-START_LOG);
+}
+
+function closeStartRequests(before) {
+  state.startLog.forEach(function (seen) {
+    if (seen.at < before) {
+      seen.open = false;
+    }
+  });
+}
+
+/** Why the page cannot say that the loop took THIS start, from the requests the stream carried; null when it can. */
+function startDoubt(asked) {
+  var mine = 0;
+  var rival = false;
+  state.startLog.forEach(function (seen) {
+    if (seen.stream !== state.stream) {
+      return;
+    }
+    if (seen.at === asked.at) {
+      // This screen's own: the console stamps the event and the 202 with the same instant.
+      mine += 1;
+      rival = rival || seen.contested;
+    } else if (seen.at > asked.at) {
+      rival = true;
+    }
+  });
+  if (rival) {
+    return START_RIVAL;
+  }
+  return mine ? null : START_UNSEEN;
+}
+
+/** A `refused` event, for whichever start or reset of this page it answers. */
 function refuseLoopAsks(event) {
   Object.keys(state.loopAsked).forEach(function (kind) {
     var asked = state.loopAsked[kind];
     var since = event.at - asked.at;
-    if (since >= 0 && since <= LOOP_ANSWER_S && !asked.refused) {
+    // A reset goes on watching its fault after the loop has answered: past the second, a refusal is not its own.
+    var answers = since >= 0 && (Boolean(LOOP_ASKS[kind].unknown) || since <= LOOP_ANSWER_S);
+    if (answers && !asked.refused) {
       asked.refused = true;
       asked.late = null;
       problem(LOOP_ASKS[kind].note(), refusalWords(event));
@@ -1700,22 +1769,23 @@ function settleLoopAsks(snapshot) {
       delete state.loopAsked[kind];
       return;
     }
-    // Whether this frame came over the socket that was open when the request left (none was, when
-    // `stream` is null): only then has every event since reached this screen. A reset says what
-    // the frames show on any stream.
-    var unbroken = !ask.unknown || asked.stream === state.stream;
+    // Why the page cannot stand behind "pris" for a start, or null. This frame came over another
+    // socket than the one open when the request left (none was, when `stream` is null): events
+    // were lost. Or the stream carried more than this one start request. A reset says what the
+    // frames show whatever the stream did.
+    var doubt = !ask.unknown ? null : asked.stream !== state.stream ? LINK_CUT : startDoubt(asked);
     if (ask.shows(snapshot)) {
       delete state.loopAsked[kind];
       if (asked.refused && ask.unknown) {
         // A refusal and the session both: whose is whose cannot be told from here.
         ok(note, "");
-      } else if (!asked.refused && unbroken) {
+      } else if (!asked.refused && doubt === null) {
         state.loopDone[kind] = { said: asked.said, text: ask.done(asked.said, snapshot) };
         ok(note, state.loopDone[kind].text);
       } else if (!asked.refused) {
         // A session, and no way to tell whose: said as that, without the words of the request.
-        state.loopDone[kind] = { said: null, text: ask.unknown };
-        problem(note, ask.unknown);
+        state.loopDone[kind] = { said: null, text: ask.unknown + doubt };
+        problem(note, state.loopDone[kind].text);
       }
     } else if (snapshot.at - asked.at > LOOP_ANSWER_S && asked.late === null) {
       if (asked.refused) {
@@ -1725,10 +1795,12 @@ function settleLoopAsks(snapshot) {
         problem(note, ask.missed);
       } else {
         delete state.loopAsked[kind];
-        problem(note, unbroken ? ask.missed : ask.lost);
+        problem(note, doubt === LINK_CUT ? START_LOST : ask.missed);
       }
     }
   });
+  // The tick of this frame began after them: the loop has emptied the mailbox that held them.
+  closeStartRequests(snapshot.at);
 }
 
 function doManualStart() {
@@ -2002,7 +2074,11 @@ function renderZoneBand(bpm) {
 
 function addEvent(event) {
   if (event.kind === "refused") {
+    // The loop has judged what its mailbox held: no start request waits any more.
+    closeStartRequests(Infinity);
     noteLoopRefusal(event);
+  } else if (event.kind === "start_requested") {
+    noteStartRequest(event);
   }
   state.events.unshift(event);
   state.events = state.events.slice(0, 40);
