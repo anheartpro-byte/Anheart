@@ -5,14 +5,15 @@ comment chaque composant est versionné, ce que fait `scripts/release.sh`, ce qu
 le responsable de release doit prouver avant la fusion, et quelle version une
 machine a le droit de recevoir.
 
-> **État réel (8 octobre 2026).** Le script, le modèle de PR, le changelog et le
+> **État réel (10 octobre 2026).** Le script, le modèle de PR, le changelog et le
 > registre Convex existent et sont testés (`npm run test:release`,
 > `npm run test:convex`), et la CI lance ces deux suites à chaque exécution
-> ([section 7](#7-tests)). **Aucune release n'a encore été faite** : aucun tag
-> n'existe, `CHANGELOG.md` n'a aucune section, et les trois composants portent
-> la valeur de développement `0.0.0-dev`. La première release réelle
-> (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) reste à faire par le responsable du
-> produit en suivant la [section 3](#3-le-déroulé). Le registre Convex n'est
+> ([section 7](#7-tests)). **Une première release est préparée, aucune n'est
+> encore publiée** : le script a écrit `pi-1.0.0`, `cloud-1.0.0` et `web-1.0.0`
+> dans les fichiers de version et leurs sections dans `CHANGELOG.md`, le Pi au
+> niveau `bench`. Aucun tag n'existe : ils seront posés sur `main` par la
+> pipeline, après la fusion de la PR de release, en suivant la
+> [section 3](#3-le-déroulé). Le registre Convex n'est
 > déployé nulle part. La règle « une machine ne reçoit qu'une version validée
 > pour son état » est écrite et testée, mais rien ne l'applique encore : voir
 > la [section 2](#2-le-niveau-de-validation-dune-version-du-pi).

@@ -1538,11 +1538,12 @@ mineure : Convex d'abord
 | Version du Pi (`raspberry-pi/VERSION`) | Majeure de contrat | Version Convex minimale |
 |---|---|---|
 | `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.1`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
+| `pi-1.0.0` | 1 (contrat `1.1`) | `cloud-1.0.0`, première version publiée qui sert la majeure 1 |
 
 Cette matrice est tenue à jour à chaque release (check-list de
-[release.md](release.md)) : une ligne par version publiée du Pi. Aucune
-version n'a encore été publiée : elle ne contient que la ligne de
-développement.
+[release.md](release.md)) : une ligne par version publiée du Pi. La première
+version préparée est `pi-1.0.0`, avec `cloud-1.0.0` ; la ligne de développement
+reste pour les consoles construites avant elle.
 
 Limites à connaître :
 
