@@ -992,6 +992,266 @@ test("a status from before a restart of the machine's clock does not speak for t
   assert.equal(shown("estop-banner"), false);
 });
 
+/* ------ a latched stop the status showed: the same rule, whatever raised the banner ------ */
+
+// The telemetry socket of this screen drops while its requests are still answered.
+function dropSocket({ context, clock }) {
+  context.state.connected = false;
+  clock.now += 5000;
+  context.refreshLiveness();
+}
+
+// One /api/status answer, asked and applied now.
+async function answer(context, row) {
+  context.api = () => Promise.resolve(row);
+  await context.loadStatus();
+}
+
+// How the screen comes to show a banner the status alone raised: after frames that then stopped,
+// or with no frame ever received.
+const STATUS_ALONE = [
+  ["with the socket down", (page) => {
+    page.frame(snapshot({ at: 58, mode: "manuel" }));
+    dropSocket(page);
+    assert.equal(page.shown("banner"), true);
+  }],
+  ["with no frame ever received", () => undefined],
+];
+
+for (const [how, given] of STATUS_ALONE) {
+  test(`go_silent replacing a rule's quick stop keeps a banner the status raised, ${how}`, async () => {
+    // Given the latched quick stop of a rule, which this screen learns from the status alone.
+    const page = panel();
+    const { context, shown } = page;
+    given(page);
+    await answer(context, ruleStopStatus(60.3, 39));
+    assert.equal(shown("estop-banner"), true);
+    // When go_silent replaces it in that same console: its count of snapshots goes on rising, and
+    // its status shows go_silent with no emergency stop held behind it.
+    await answer(context, silenceAfter(65.3, 96));
+    // Then the banner stays: nobody acknowledged anything, and nothing can be from then on.
+    assert.equal(shown("estop-banner"), true);
+    // And with every answer that follows, for as long as that console runs.
+    await answer(context, silenceAfter(70.3, 166));
+    assert.equal(shown("estop-banner"), true);
+  });
+
+  test(`that banner goes with a console proven restarted, ${how}`, async () => {
+    // Given the same banner, kept under the go_silent of the console that showed the latch.
+    const page = panel();
+    const { context, shown } = page;
+    given(page);
+    await answer(context, ruleStopStatus(60.3, 39));
+    await answer(context, silenceAfter(65.3, 96));
+    assert.equal(shown("estop-banner"), true);
+    // When a status shows fewer snapshots published than the console that showed the latch had:
+    // a console started since, which holds nothing of what the other held.
+    await answer(context, silenceAfter(80.3, 15));
+    // Then the banner goes.
+    assert.equal(shown("estop-banner"), false);
+  });
+}
+
+test("frames that come back under go_silent do not take down a banner the status raised", async () => {
+  // Given a banner raised by the status with the socket down, and kept under go_silent.
+  const page = panel();
+  const { context, frame, shown } = page;
+  frame(snapshot({ at: 58, mode: "manuel" }));
+  dropSocket(page);
+  await answer(context, ruleStopStatus(60.3, 39));
+  await answer(context, silenceAfter(65.3, 96));
+  // When the socket comes back: the frames are under go_silent, and a status is written after them.
+  context.state.connected = true;
+  context.state.stream += 1;
+  context.api = () => Promise.resolve(silenceAfter(71.1, 170));
+  frame(snapshot({ at: 71, mode: "repos", ...silent() }));
+  await settle();
+  // Then the banner stays: that console showed the latch, and has not restarted.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a rule's quick stop the status showed, then shown released outside go_silent, takes its banner down", async () => {
+  // Given a banner raised by the status alone.
+  const { context, shown } = panel();
+  await answer(context, ruleStopStatus(60.3, 39));
+  assert.equal(shown("estop-banner"), true);
+  // When a later status shows no latched stop and no go_silent: it was acknowledged.
+  await answer(context, status({ at: 65.3, counters: [1, 0, 96] }));
+  // Then the banner goes.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a latch the status has since shown released is forgotten: it does not hold a later banner under go_silent", async () => {
+  // Given the latched quick stop of a rule the status showed, then showed released: acknowledged.
+  const { context, frame, shown } = panel();
+  await answer(context, ruleStopStatus(60.3, 100));
+  await answer(context, status({ at: 65.3, counters: [1, 0, 150] }));
+  assert.equal(shown("estop-banner"), false);
+  // And an emergency stop latched since, which the frames show.
+  context.api = () => new Promise(() => undefined);
+  frame(snapshot({ at: 70, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // When that stop is acknowledged and go_silent stands, before a frame has shown either.
+  context.api = () => Promise.resolve(silenceAfter(71.1, 400));
+  frame(snapshot({ at: 71, mode: "repos", ...silent() }));
+  await settle();
+  // Then the status speaks for the emergency stop, and the rule's old latch holds nothing.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("the status shows an emergency stop, then a rule's quick stop alone: go_silent keeps the banner of the second", async () => {
+  // Given an emergency stop the status showed, which the status carries behind go_silent.
+  const { context, shown } = panel();
+  await answer(context, { ...latchedStatus(60.3), counters: [1, 0, 39] });
+  // And, at the next answer, the latched quick stop of a rule with no emergency stop held: the
+  // first was acknowledged and the rule latched in between, unseen by this screen.
+  await answer(context, ruleStopStatus(65.3, 96));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent replaces it in that console.
+  await answer(context, silenceAfter(70.3, 166));
+  // Then the banner stays: the latch last shown is not one the status carries.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a rule's quick stop the status shows again after a restart is the new console's own", async () => {
+  // Given the latched quick stop of a rule shown by the status of a console that ran for a while.
+  const { context, shown } = panel();
+  await answer(context, ruleStopStatus(60.3, 5000));
+  // And the same rule latched in the console started since: fewer snapshots published, which
+  // proves a restart, but one that came before this latch.
+  await answer(context, ruleStopStatus(75.3, 30));
+  // When go_silent replaces it there.
+  await answer(context, silenceAfter(80.3, 60));
+  // Then the banner stays: it is the console that showed this latch that went silent.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("the status that showed the latch gives the first count: the very next answer can prove the restart", async () => {
+  // Given the latched quick stop of a rule shown by the status of a console that ran for a while.
+  const { context, shown } = panel();
+  await answer(context, ruleStopStatus(60.3, 5000));
+  assert.equal(shown("estop-banner"), true);
+  // When the next answer, under go_silent, shows far fewer snapshots published.
+  await answer(context, silenceAfter(75.3, 40));
+  // Then the console that wrote the first has been replaced, and the banner goes.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a status asked before the one that showed the latch proves nothing about what followed it", async () => {
+  // Given a status request in flight when another, asked after it, shows the latched quick stop of a rule.
+  const { context, shown } = panel();
+  const early = deferred();
+  context.api = () => early.promise;
+  const asked = context.loadStatus();
+  await answer(context, ruleStopStatus(60.3, 5000));
+  assert.equal(shown("estop-banner"), true);
+  // When the first one is answered at last, under go_silent, with fewer snapshots published.
+  early.resolve(silenceAfter(61.1, 40));
+  await asked;
+  // Then the banner stays: only answers asked after the latch was shown count as proof.
+  assert.equal(shown("estop-banner"), true);
+  // And one asked after it proves the restart.
+  await answer(context, silenceAfter(66.1, 65));
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("an emergency stop the status showed goes when the status under go_silent no longer carries it", async () => {
+  // Given an emergency stop the status alone showed, then go_silent standing in front of it.
+  const { context, shown } = panel();
+  await answer(context, { ...latchedStatus(60.3), counters: [1, 0, 39] });
+  await answer(context, { ...cameraStopBehindSilence(65.3), counters: [1, 0, 96] });
+  assert.equal(shown("estop-banner"), true);
+  // When a status under go_silent shows no emergency stop held behind it: the status carries that
+  // latch itself, and a console cannot release it under go_silent, so it is another console.
+  await answer(context, silenceAfter(70.3, 166));
+  // Then the banner goes, with no other proof.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("the banner of a rule's quick stop the status showed goes with a machine whose clock restarted", async () => {
+  // Given the latched quick stop of a rule shown by the status, on a machine up for hours.
+  const { context, shown } = panel();
+  await answer(context, ruleStopStatus(20000.3, 500));
+  assert.equal(shown("estop-banner"), true);
+  // When the Pi reboots and its console goes silent: the next answer, asked once that one was in,
+  // is written on a clock that started again, by a console that has published more snapshots.
+  await answer(context, silenceAfter(33, 600));
+  // Then the latch was shown before the reboot, and the status of the new console decides.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a restart of the clock seen before a latch the status showed does not speak for it", async () => {
+  // Given a machine whose clock restarted, as this screen saw from two status answers.
+  const { context, shown } = panel();
+  await answer(context, status({ at: 20000, counters: [0, 0, 900] }));
+  await answer(context, status({ at: 33, counters: [0, 0, 20] }));
+  // And, after that, the latched quick stop of a rule shown by the status.
+  await answer(context, ruleStopStatus(40.3, 60));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent replaces it in that console.
+  await answer(context, silenceAfter(45.3, 110));
+  // Then the banner stays: the restart came before the latch, and proves nothing about it.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a restart of the clock seen before a latch the frames showed does not speak for it", async () => {
+  // Given a machine whose clock restarted, as this screen saw from its frames.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 20001 }));
+  frame(snapshot({ at: 31 }));
+  // And, after that, the latched quick stop of a rule shown by the frames.
+  frame(snapshot({ at: 32, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent replaces it in that console, and its status is written under that go_silent.
+  context.api = () => Promise.resolve(silenceAfter(33.1, 160));
+  frame(snapshot({ at: 33, mode: "repos", ...silent() }));
+  await settle();
+  // Then the banner stays: the restart came before the latch, and proves nothing about it.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("the same count of snapshots twice proves no restart: a latch the frames showed keeps its banner", async () => {
+  // Given the latched quick stop of a rule, shown by the frames and by the status of that console.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  await answer(context, ruleStopStatus(60.3, 300));
+  // When go_silent replaces it and the next status shows the very same count: two answers within
+  // one tick, or a loop that has stalled.
+  context.api = () => Promise.resolve(silenceAfter(61.1, 300));
+  frame(snapshot({ at: 61, mode: "repos", ...silent() }));
+  await settle();
+  // Then nothing says the console restarted, and the banner stays.
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("the same count of snapshots twice proves no restart: a latch the status showed keeps its banner", async () => {
+  const { context, shown } = panel();
+  await answer(context, ruleStopStatus(60.3, 96));
+  await answer(context, silenceAfter(60.35, 96));
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a restart proven by one status still holds when the next shows the count rising again", async () => {
+  // Given the latched quick stop of a rule shown by the frames, then a socket that drops on it.
+  const page = panel();
+  const { context, frame, shown } = page;
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  await answer(context, ruleStopStatus(60.3, 5000));
+  dropSocket(page);
+  // And a status from a console started since, at rest: far fewer snapshots published. The last
+  // frame still shows the latch, so the banner stays.
+  await answer(context, status({ at: 70, counters: [0, 0, 40] }));
+  assert.equal(shown("estop-banner"), true);
+  // When the frames come back under the go_silent of that new console, whose count has gone on rising.
+  context.state.connected = true;
+  context.state.stream += 1;
+  context.api = () => Promise.resolve(silenceAfter(75.1, 65));
+  frame(snapshot({ at: 75, mode: "repos", ...silent() }));
+  await settle();
+  // Then the restart proven before still holds: the latch was another console's, and the banner goes.
+  assert.equal(shown("estop-banner"), false);
+});
+
 test("losing the machine keeps the last latched stop on screen, next to NO LIVE DATA", () => {
   // Given a latched emergency stop on a live page.
   const { context, clock, frame, shown } = panel();

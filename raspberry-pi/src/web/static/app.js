@@ -76,6 +76,7 @@ var state = {
   estopFrame: null,      // what the frames say about it, and since when: {says, since, at, boot, asked}
   stream: 0,             // telemetry sockets opened so far: the frames of one socket come from one console
   estopLatch: null,      // the latched stop the frames last showed, until they show it released (see noteConsoleRun)
+  statusLatch: null,     // the latched stop the status last showed, until a status shows it released (see noteStatusLatch)
   estopAsked: null,      // this page's E-STOP with no proof of a latch yet: a doubt (see openDoubt)
   stopAsked: null,       // this page's STOP with no answer and no proof it was taken: a doubt as well
   view: "console",
@@ -480,8 +481,9 @@ function noteEstopFrame(snapshot) {
 }
 
 /*
-  The latched stop the frames last showed, when they then turn to go_silent
-  without having shown it released: may the status speak for it?
+  The latched stop this page was last shown, by the frames (estopLatch) or by
+  the status (statusLatch), when go_silent then stands without the page having
+  been shown it released: may the status speak for it?
 
   For the emergency stop itself, yes. The status carries that latch
   (statusOpinion), go_silent or not, so it says whether the stop is still
@@ -493,36 +495,76 @@ function noteEstopFrame(snapshot) {
   anything, and nothing can be acknowledged from then on: a banner that went
   at that moment would read as an acknowledgement, on a machine that has just
   reached its most severe state. So that banner stays for as long as it is the
-  same console that showed the latch. It goes with a console that restarted,
-  which holds nothing of what the previous one held, and only when the
-  restart is proven. The latch is remembered with the socket that delivered
-  it (one socket, one console), and the proof is one of:
+  same console that showed the latch, whichever of the frames and the status
+  showed it. It goes with a console that restarted, which holds nothing of
+  what the previous one held, and only when the restart is proven. The proof
+  is one of:
 
-  - the machine's clock restarted after those frames (machineBoot); or
+  - the machine's clock restarted after the latch was shown (machineBoot); or
   - the count of snapshots the console has published, which only ever rises
-    while it runs (`counters` of the status), went down between two status
-    answers that were both asked after that socket first showed the latch:
-    asked then, the first comes from the console that showed it or a later
-    one, and the second from a later one still.
+    while it runs (`counters` of the status), went down. For a latch the
+    frames showed, remembered with the socket that delivered it (one socket,
+    one console): between two status answers that were both asked after that
+    socket first showed it. Asked then, the first comes from the console that
+    showed it or a later one, and the second from a later one still. For a
+    latch the status showed: between that answer, which the console holding
+    the latch wrote, and one asked after it.
 
-  A frame stream that broke and came back proves no restart: the link can drop
-  under a console that keeps running. And a latch shown again over a new
-  socket is that socket's console's own: the proof starts again from there.
-  Unproven, the banner stays, until the frames show no verdict or the page is
-  reloaded.
+  Equal counts prove nothing: two answers within one tick, or a loop that has
+  stalled, give the same count. A frame stream that broke and came back proves
+  no restart either: the link can drop under a console that keeps running.
+  And a latch shown again, over a new socket or by a later status, is the own
+  latch of the console that shows it: the proof starts again from there.
+  Unproven, the banner stays, until the frames show no verdict, a status shows
+  the stop released outside go_silent, or the page is reloaded.
+
+  The proof by the count holds for one console behind the address the page
+  talks to, which is how the console is run: with two behind it, an answer
+  from the other would read as a restart.
 */
 function noteConsoleRun(status, sent) {
-  var latch = state.estopLatch;
-  if (latch && sent > latch.sent) {
-    var published = status.counters[2];
-    latch.restarted = latch.restarted || (latch.count !== null && published < latch.count);
-    latch.count = published;
+  var published = status.counters[2];
+  [state.estopLatch, state.statusLatch].forEach(function (latch) {
+    if (latch && sent > latch.sent) {
+      latch.restarted = latch.restarted || (latch.count !== null && published < latch.count);
+      latch.count = published;
+    }
+  });
+}
+
+/*
+  A status answer that shows a latched stop is remembered as the frames' is:
+  which stop, the console's count of snapshots when it wrote the answer, and
+  the machine's clock. Each such answer is the console of that moment showing
+  its own latch, so it replaces what was remembered. An answer that shows no
+  latched stop and no go_silent has seen it released: only an acknowledgement,
+  or a console that restarted, takes a latched quick stop away without
+  go_silent. Under go_silent it is kept, for statusSpeaksForLatch to judge.
+*/
+function underGoSilent(status) {
+  return Boolean(status.standing) && status.standing.action === "go_silent";
+}
+
+function noteStatusLatch(status, sent) {
+  if (statusOpinion(status) === "latched") {
+    state.statusLatch = {
+      rule: estopLatched(status) ? "operator_estop" : status.standing.rule,
+      boot: state.machineBoot,
+      sent: sent,
+      count: status.counters[2],
+      restarted: false,
+    };
+  } else if (!underGoSilent(status)) {
+    state.statusLatch = null;
   }
 }
 
-function statusSpeaksForLatch() {
-  var latch = state.estopLatch;
+function statusSpeaksFor(latch) {
   return !latch || latch.rule === "operator_estop" || latch.restarted || state.machineBoot > latch.boot;
+}
+
+function statusSpeaksForLatch() {
+  return statusSpeaksFor(state.estopLatch) && statusSpeaksFor(state.statusLatch);
 }
 
 /*
@@ -554,24 +596,30 @@ function statusCoversFrames(frame) {
   only on a report that says the stop is released and that nothing newer
   denies.
 
-  - The receipt, and a frame showing a latched stop, RAISE it, whoever latched
-    the stop (this page, another screen, the camera, a rule).
-  - Frames saying "released": the banner follows whichever the machine wrote
-    last, those frames or the status. A status answer that says "latched" and
-    is older than the frame on screen does not bring the banner back: it was
-    asked before an acknowledgement and arrived after it.
-  - Frames under go_silent cannot say. The status can say whether an
-    emergency stop is held behind go_silent, and once it was written after the
-    frames turned to go_silent it raises the banner for one that is. It takes
-    the banner down only where it can speak for what the frames last showed
-    (statusSpeaksForLatch): the emergency stop itself, or a latch shown by a
-    console that has since restarted. The latched quick stop of a rule that
-    go_silent replaced, in the console that showed it, keeps its banner. An
-    older answer may raise the banner, never lower it.
-  - No frame yet: the status alone. No status yet: the frames alone.
-  - In every other case it KEEPS what it shows; unknown is never read as
-    released. So does a socket that goes quiet on a frame showing a latched
-    stop: only a later frame takes that banner down.
+  What RAISES it, whoever latched the stop (this page, another screen, the
+  camera, a rule): the receipt, a frame showing a latched stop, and a status
+  answer showing one unless a frame taken after that answer shows it released
+  (asked before an acknowledgement, the answer arrived after it).
+
+  What takes it DOWN, and what each proves:
+
+  - a frame with no latched stop and no go_silent, when no status has
+    answered yet or when it was taken after the status on screen: the frames
+    themselves show the stop released;
+  - a status answer that shows no latched stop, when no frame is newer, and
+    only where it can speak for every latched stop this page was shown
+    (statusTakesDown, statusSpeaksForLatch). Outside go_silent it can:
+    nothing but an acknowledgement, or a console that restarted, takes a
+    latched quick stop away there. Under go_silent it can for the emergency
+    stop itself, which the status carries behind go_silent, and for a latch
+    of a console proven restarted; under frames turned to go_silent the
+    answer must also have been written after they turned. The latched quick
+    stop of a rule that go_silent replaced, in the console that showed it,
+    keeps its banner, whether the frames or the status had shown it.
+
+  In every other case it KEEPS what it shows; unknown is never read as
+  released. So does a socket that goes quiet on a frame showing a latched
+  stop: only a later frame takes that banner down.
 
   The receipt holds the banner from the click until a frame taken after the
   latch can speak, or a status asked after it answers: the banner neither
@@ -590,17 +638,27 @@ function renderEstopBanner() {
     if (said === "clear") {
       state.estopShown = false;
     }
-  } else if (said === null) {
-    state.estopShown = polled === "latched";
-  } else if (said === "clear") {
-    state.estopShown = polled === "latched" && !frameOutdatesStatus(frame);
+  } else if (said === "clear" && frameOutdatesStatus(frame)) {
+    state.estopShown = false;
   } else if (polled === "latched") {
     state.estopShown = true;
-  } else if (statusCoversFrames(frame) && statusSpeaksForLatch()) {
+  } else if (statusTakesDown(frame)) {
     state.estopShown = false;
   }
   showBanner(el("estop-banner"), state.estopShown);
   askStatusIfUnsettled();
+}
+
+/*
+  The status on screen shows no latched stop, and no frame is newer: may it
+  take the banner down? One gate for every such answer, go_silent or not: it
+  must speak for every latched stop this page was shown. Outside go_silent it
+  always does, having just released what the status had shown (noteStatusLatch)
+  while frames that are not under go_silent hold no latch of their own.
+*/
+function statusTakesDown(frame) {
+  var seen = !(frame && frame.says === "silent") || statusCoversFrames(frame);
+  return seen && statusSpeaksForLatch();
 }
 
 /*
@@ -2285,6 +2343,7 @@ function loadStatus() {
       stopSettled();
     }
     noteConsoleRun(status, sent);
+    noteStatusLatch(status, sent);
     renderEstopBanner();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
