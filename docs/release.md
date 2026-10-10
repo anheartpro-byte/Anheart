@@ -273,6 +273,11 @@ Laissé de côté, exprès :
   `ci.yml`, qui la lance chaque nuit sur la tête de `main`. La même boucle
   tourne quelques minutes simulées dans les tests du Pi de chaque exécution,
   donc ici aussi ;
+- **l'endurance nocturne de la console entière** (24 heures simulées, jusqu'à
+  240 minutes, une étape de `simulation (report)`) : même règle, le
+  déclenchement nocturne seul. Le même scénario tourne quelques minutes
+  simulées dans la batterie de simulation de chaque exécution, donc ici aussi
+  ([framework-de-test.md](framework-de-test.md#17-endurance-de-la-console)) ;
 - les tests marqués `hardware` : ils demandent le variateur et le BITalino
   réels, et aucun runner n'en a ;
 - les tests du site dans un navigateur : ils n'existent pas encore (ANH-83) ;
