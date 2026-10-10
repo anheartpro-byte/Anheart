@@ -359,7 +359,7 @@ def lft_code_for(
 
     Inverted from the shared table rather than duplicated, so an extension made
     during commissioning reaches the simulator too; a second hardcoded copy is
-    how a simulator starts testing a fiction. Linear scan over the 67 entries,
+    how a simulator starts testing a fiction. Linear scan over the 61 entries,
     at injection time only.
     """
     for code, mapped in codes.items():
