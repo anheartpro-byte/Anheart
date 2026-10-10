@@ -292,6 +292,14 @@ script leaves systemd's hardware-watchdog setting
 (`/etc/systemd/system.conf.d/10-anheart-watchdog.conf`) in place. See
 `docs/pi-image.md`, "Le chien de garde".
 
+The page is served in clear on the Pi's own loopback, which is how it is
+installed today. Off loopback the console serves TLS or does not start:
+`scripts/pi/make_console_tls.sh` makes the console's certificate on the Pi
+(under an authority of that Pi alone, whose private key is not kept), and
+`UI_TLS_CERT`, `UI_TLS_KEY` and `UI_TLS_NAMES` hand it to the console. The
+installation does not use it yet, and no tablet has been tried. See
+`docs/pi-image.md`, "Le certificat de la console".
+
 ### Control the service
 
 ```bash

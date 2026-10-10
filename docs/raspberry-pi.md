@@ -122,7 +122,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/service_watchdog.py` | Ce que la console dit au gestionnaire de service (systemd) : prête, puis vivante, puis qu'elle s'arrête. | Une notification n'est envoyée que par la ligne qui suit un tic de contrôle revenu ; l'envoi est un datagramme local non bloquant, un échec est compté et oublié ; sans gestionnaire de service, rien n'est envoyé. Voir [3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service). Porte 100 %. |
 | `src/service_state.py` | Ce que la console garde de ses propres redémarrages, d'un processus au suivant : un fichier à côté des enregistrements. | Trois démarrages après un arrêt non propre en dix minutes mettent la console hors service ; un fichier absent ou abîmé, ou un disque qui refuse, ne le fait jamais ; la remise en service vaut tout de suite, quoi que réponde le disque (tests de propriétés). Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
-| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
+| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`), et le certificat de la console (`tls.py`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum **et** un certificat sont exigés : la page n'y est servie qu'en TLS ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)). Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
 
 ### 2.6 L'enregistrement de séance (`src/record/`)
@@ -2008,9 +2008,12 @@ sort avec le code 2.
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
-| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` obligatoire |
+| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
+| `UI_TLS_CERT` | aucun | chemin du certificat de la console (PEM), tel que la console le voit | va avec `UI_TLS_KEY` : les deux, ou aucun. Obligatoire hors boucle locale. Renseigné, la console sert en TLS partout où elle écoute, boucle locale comprise |
+| `UI_TLS_KEY` | aucun | chemin de sa clé privée (PEM, **sans phrase secrète**) | va avec `UI_TLS_CERT`. Un fichier absent, illisible, qui n'est pas la clé du certificat, ou protégé par une phrase secrète : la console refuse de démarrer et dit lequel (code 2) |
+| `UI_TLS_NAMES` | aucun | adresses IPv4 et noms sous lesquels une tablette ouvre la console, ceux que porte le certificat, séparés par des virgules (`10.42.0.1,anheart.internal`) | chacun donne une origine acceptée par la WebSocket, en `https`, au port de la page. Refusée sans certificat (elle serait sans effet), et si une valeur n'est ni une adresse IPv4 ni un nom d'hôte |
 | `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
 | `HR_HARD_MAX_BPM` | `148` | palier dur du superviseur | 100..220 |
@@ -2181,6 +2184,88 @@ l'enregistrement, lui, remplace par un alias. Une exception imprévue est
 journalisée avec son texte, quel qu'il soit. La voie sans signal est encore
 nommée (`Channel ... has no analog signal`), sans les deux mesures que cette
 ligne portait.
+
+### 12.5 La page en TLS hors de la boucle locale
+
+Ticket ANH-151, lot TLS, 10 octobre 2026. **Écrit et testé dans la gate du Pi ;
+pas actif sur un Pi installé**, où la page écoute sur la boucle locale
+([pi-image.md](pi-image.md#le-certificat-de-la-console)). Aucune tablette
+réelle n'a ouvert la page en TLS.
+
+**La règle.** Hors de la boucle locale, la page, les commandes et le jeton
+traversent un réseau, et ils le traversent en TLS ou pas du tout :
+
+| `UI_HOST` | `UI_TLS_CERT` et `UI_TLS_KEY` | Ce que fait la console |
+|---|---|---|
+| boucle locale (`127.0.0.1`, `::1`, `localhost`) | absents | HTTP en clair, comme avant : développement, simulateur, tests, écran du Pi |
+| boucle locale | présents | TLS, sur la boucle locale aussi |
+| toute autre adresse | présents | TLS |
+| toute autre adresse | absents | **refuse de démarrer**, code 2 : `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '…' in clear HTTP: …` |
+
+Il y a **un seul port et un seul transport**. Une console qui a un certificat
+ne parle que TLS sur `UI_PORT` : aucun second port en clair n'existe à côté,
+et rien ne répond à une requête en clair par une redirection. Un client qui
+parle HTTP en clair à ce port échoue à la poignée de main et sa connexion est
+fermée, sans réponse HTTP et sans ligne dans le journal
+(`tests/test_console_tls.py`). La console n'envoie pas non plus l'en-tête
+`Strict-Transport-Security` : il retirerait à l'opérateur, le jour où le
+certificat a expiré et où il faut arrêter la machine, le moyen de passer
+l'avertissement du navigateur.
+
+**Le certificat est lu une fois, au démarrage.** Le point d'entrée ouvre les
+deux fichiers avant de construire quoi que ce soit de la console : un
+certificat qu'elle ne peut pas servir est une erreur de configuration comme
+les autres, dite avec le fichier en cause, et la console sort avec le code 2,
+sur lequel le service ne la relance pas. Les messages (clé
+`UI_TLS_CERT/UI_TLS_KEY`) :
+
+| Message | Cause |
+|---|---|
+| `the certificate <chemin> is not a file the console can see` (ou `the private key …`) | fichier absent, ou dossier non monté dans le conteneur |
+| `the private key <chemin> cannot be read: Permission denied` | droits du fichier, compte de la console |
+| `<chemin> holds no PEM certificate` / `holds no PEM private key` | les deux chemins inversés, ou un autre fichier |
+| `the private key <chemin> is not the one of the certificate <chemin>` | clé et certificat de deux générations différentes |
+| `the private key <chemin> is protected by a passphrase: …` | la console démarre sans personne : une clé à phrase secrète est refusée, jamais demandée au terminal |
+| `the TLS library refuses <certificat> with <clé>: …` | fichier abîmé |
+
+Aucun de ces messages ne cite le contenu d'un fichier. Ensuite la console garde
+son certificat en mémoire : rien, sur le fil de la boucle de contrôle, n'attend
+jamais ces fichiers, et les remplacer ou les supprimer sous une console qui
+tourne ne change rien avant son prochain démarrage.
+
+**Les dates ne sont pas jugées par la console.** Un certificat expiré est servi
+comme un autre : c'est la tablette qui le juge, avec sa propre horloge. Une
+console qui refuserait de démarrer ou de servir parce que son certificat a
+expiré ferait d'un renouvellement en retard une machine que plus personne ne
+peut joindre, et parierait cela sur l'horloge d'un Pi sans pile. Ce qui
+prévient de l'échéance est `scripts/pi/make_console_tls.sh --check`
+([pi-image.md](pi-image.md#renouveler)). Ce que cela donne pour une séance en
+cours est en [securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
+
+**La WebSocket.** Elle passe par le même port, donc en TLS (`wss`), avec les
+deux mêmes contrôles qu'avant, faits avant l'acceptation : le jeton et
+l'en-tête `Origin`. Une console qui sert son certificat n'accepte que des
+origines `https` : celle de `UI_HOST` et celles de `UI_TLS_NAMES`, au port de
+la page (sans le port quand c'est 443, comme l'écrit un navigateur). L'origine
+`http` de sa propre adresse est refusée comme celle d'un inconnu. Une console
+en clair, donc en boucle locale, garde les origines qu'elle acceptait.
+
+**Le jeton dans l'URL de la WebSocket.** Un navigateur ne peut pas poser
+d'en-tête sur une WebSocket : le jeton y voyage en paramètre `?token=`. Hors de
+la boucle locale, cette URL ne circule qu'à l'intérieur de TLS, et la console
+ne tient pas de journal d'accès : le jeton n'est lisible ni sur le réseau ni
+dans le journal du service. Il reste visible sur la tablette elle-même (outils
+du navigateur), comme tout ce que la page détient.
+
+**Réglages TLS.** TLS 1.2 au minimum, suites par défaut de la bibliothèque,
+aucun certificat demandé au client : qui a le droit de parler à la console
+reste l'affaire du jeton, et demain de l'authentification de l'opérateur.
+`UI_HOST` peut être l'adresse du point d'accès ou `0.0.0.0` ; dans le second
+cas, `UI_TLS_NAMES` est nécessaire pour que la page ouverte à l'adresse du
+point d'accès voie sa WebSocket acceptée.
+
+`scripts/pi/preflight.sh` dit avant le démarrage ce que la console dirait :
+`UI_HOST=… needs UI_TLS_CERT and UI_TLS_KEY`.
 
 ---
 
