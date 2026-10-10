@@ -39,7 +39,8 @@ readonly CONTAINER="anheart"
 readonly OS_CODENAME="bookworm"
 readonly OS_REFERENCE="2026-10-06"
 # chrony: the one time service of the machine (docs/pi-image.md, "L'heure").
-readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl chrony)
+# socat: the relay of the unit's watchdog (docs/pi-image.md, "Le chien de garde").
+readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl chrony socat)
 
 readonly ROOT="${ANHEART_ROOT:-}"
 readonly CONFIG_DIR="$ROOT/etc/anheart"
@@ -53,6 +54,8 @@ readonly CHRONY_CONF="$ROOT/etc/chrony/conf.d/anheart.conf"
 readonly JOURNALD_CONF="$ROOT/etc/systemd/journald.conf.d/anheart.conf"
 # Where the kernel lists the real-time clocks it found, if any.
 readonly RTC_DIR="$ROOT/sys/class/rtc"
+# systemd's own settings: the hardware watchdog of the Pi (install_watchdog).
+readonly MANAGER_DROP_IN="$ROOT/etc/systemd/system.conf.d/10-anheart-watchdog.conf"
 
 # How long the start test waits for GET /healthz, in seconds. The first start
 # on a Pi imports the whole signal-processing stack from a cold SD card.
@@ -388,6 +391,38 @@ install_file() {
     fi
 }
 
+# The hardware watchdog of the Pi (bcm2835_wdt, /dev/watchdog0): armed and fed
+# by systemd itself, so that a system that freezes whole, systemd included, is
+# reset by the hardware. 15 s is the longest that watchdog can count. This is
+# not what restarts a frozen console: that is the unit's own WatchdogSec.
+# The file is read by systemd when it starts or reloads its configuration: at
+# the latest at the next boot of this machine. Writing it changes nothing for
+# the console, which is neither restarted nor marked as changed.
+install_watchdog() {
+    say "Hardware watchdog"
+    local draft
+    mkdir -p "$(dirname "$MANAGER_DROP_IN")"
+    draft="$(mktemp "$(dirname "$MANAGER_DROP_IN")/.anheart-watchdog.XXXXXX")"
+    cat > "$draft" <<'EOF'
+# Written by scripts/install.sh (docs/pi-image.md, "Le chien de garde").
+[Manager]
+RuntimeWatchdogSec=15s
+EOF
+    if [ -e "$MANAGER_DROP_IN" ] && cmp -s "$draft" "$MANAGER_DROP_IN"; then
+        rm -f "$draft"
+        note "$MANAGER_DROP_IN unchanged"
+    else
+        chmod 0644 "$draft"
+        mv "$draft" "$MANAGER_DROP_IN"
+        note "$MANAGER_DROP_IN written: armed at the next boot at the latest"
+    fi
+    if [ -e "$ROOT/dev/watchdog" ]; then
+        note "/dev/watchdog is present"
+    else
+        warn "no /dev/watchdog on this machine: nothing resets it if the whole system freezes"
+    fi
+}
+
 install_unit() {
     say "Service $SERVICE"
     mkdir -p "$DROP_IN_DIR"
@@ -484,6 +519,7 @@ create_account
 create_directories
 write_env
 build_image
+install_watchdog
 install_unit
 start_service
 start_test

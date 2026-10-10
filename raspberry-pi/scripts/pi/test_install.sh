@@ -36,11 +36,25 @@
 #   8. after a shutdown and a power-on of the stand-in, the console is back by
 #      itself, at rest, and the journal written before the shutdown is still
 #      there. The shutdown is an orderly one: a power cut in the middle of a
-#      write is not simulated here.
+#      write is not simulated here;
+#   9. a console frozen in the middle of a session (SIGSTOP: it completes no
+#      tick and answers nothing) is ended by the unit's watchdog and started
+#      again by systemd, at rest; it says it started after an unclean stop
+#      and names the session record that was left open;
+#  10. a console that dies again and again comes up out of service: it runs,
+#      says so, and arms nothing, until a named operator puts it back in
+#      service.
 #
 # Nothing here touches hardware or a dashboard: the drive is the simulator and
 # MACHINE_API_KEY stays empty. Every session is a manual bench session at
-# target 0 on the simulated drive.
+# target 0 on the simulated drive. The simulated drive lives in the console's
+# own process: what a restart finds of a drive left RUNNING is not here, it
+# is tests/test_supervised_console.py, where the drive outlives the console.
+#
+# The hardware watchdog is not exercised either: install.sh writes systemd's
+# setting for it, which this test reads back, and the stand-in's systemd is
+# told to take /dev/null for a watchdog device, so that it never arms the one
+# of the machine this test runs on.
 #
 # ANHEART_TEST_KEEP=1 leaves the stand-in running for inspection
 # (docker exec -it anheart-install-test bash).
@@ -110,6 +124,7 @@ wait_for_system() {
 
 healthz() { in_machine curl --silent --fail --max-time 3 "http://127.0.0.1:$port/healthz" 2> /dev/null || true; }
 status()  { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/status" 2> /dev/null || true; }
+# What the console says of itself: in service or not, its last stop, its watchdog, its clock.
 panel()   { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/panel" 2> /dev/null || true; }
 
 # What the console says of the machine's wall clock: yes (a time service keeps
@@ -149,6 +164,24 @@ wait_for_run_state() {
 
 container_id() { in_machine docker inspect --format '{{.Id}}' anheart 2> /dev/null || true; }
 
+# wait_for_replacement ID SECONDS LABEL: systemd must start another console than ID.
+wait_for_replacement() {
+    local attempt current=""
+    for ((attempt = 0; attempt < $2; attempt++)); do
+        current="$(container_id)"
+        [ -n "$current" ] && [ "$current" != "$1" ] && return 0
+        sleep 1
+    done
+    fail "systemd did not start the console again within $2 s ($3)"
+}
+
+# The session records on the machine, oldest first, by name.
+records() {
+    in_machine find /var/lib/anheart/records -mindepth 1 -maxdepth 1 -type d -name '2*Z_*' -printf '%f\n' | sort
+}
+
+restarts() { in_machine systemctl show --property NRestarts --value anheart; }
+
 # A manual bench session at target 0 on the simulated drive.
 start_session() {
     post /api/safety/attest '{"operator":"install-test","sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
@@ -181,7 +214,10 @@ RUN apt-get update \\
         systemd systemd-sysv dbus sudo curl ca-certificates \\
     && rm -rf /var/lib/apt/lists/*
 STOPSIGNAL SIGRTMIN+3
-CMD ["/lib/systemd/systemd"]
+# install.sh sets systemd's hardware watchdog. In a container systemd reads its
+# own command line as the kernel's: it is told to take /dev/null for the
+# device, and so never arms a watchdog of the machine that runs this test.
+CMD ["/lib/systemd/systemd", "systemd.watchdog_device=/dev/null"]
 EOF
 # Privileged with its own cgroup namespace and /var/lib/docker on a volume:
 # what a Docker daemon needs to run inside a container.
@@ -292,6 +328,33 @@ for ((attempt = 0; attempt < 60; attempt++)); do
 done
 [ "$health" = "healthy" ] || fail "the image's own health check never passed (state: ${health:-none})"
 ok "the image's health check on /healthz reports healthy"
+
+# The watchdog and the restart policy, as systemd itself reads the unit.
+unit="$(in_machine systemctl show --property Type,NotifyAccess,WatchdogUSec,Restart,RestartUSec,StartLimitBurst anheart)"
+expect_in "$unit" "Type=notify" "the service is ready when the console says so"
+expect_in "$unit" "WatchdogUSec=10s" "the service must be heard every 10 s"
+expect_in "$unit" "Restart=on-failure" "a failure is followed by a restart"
+expect_in "$unit" "RestartUSec=2s" "two seconds later"
+expect_in "$unit" "StartLimitBurst=10" "within a limit of restarts"
+# The console's notifications reach systemd through the unit's relay: the
+# service has been up for longer than the watchdog's 10 s, and was not ended.
+first_id="$(container_id)"
+sleep 15
+[ "$(container_id)" = "$first_id" ] || fail "the console was replaced within 15 s: its notifications do not reach systemd"
+[ "$(restarts)" = "0" ] || fail "the service was restarted $(restarts) time(s) on a healthy console"
+case "$(in_machine journalctl --unit anheart --no-pager)" in
+    *"Watchdog timeout"*) fail "the watchdog ended a healthy console" ;;
+esac
+ok "more than 15 s without a restart: the watchdog is fed by the console"
+answer="$(panel)"
+expect_in "$answer" '"watchdog":{"enabled":true' "the console says a service manager watches it"
+expect_in "$answer" '"failed":0,' "and that every notification left"
+expect_in "$answer" '"service":{"out_of_service":false,"unclean_starts":0,' "a first start is in service"
+expect_in "$(in_machine stat --format '%U:%G %a' /var/lib/anheart/records/service-state.json)" "root:root 600" \
+    "the restart state is kept next to the records, private"
+# systemd's own setting for the hardware watchdog, where systemd reads it.
+expect_in "$(in_machine systemd-analyze cat-config systemd/system.conf)" "RuntimeWatchdogSec=15s" \
+    "systemd is told to arm the hardware watchdog (15 s)"
 
 # --- 2. Second install: nothing changes ------------------------------------------------
 
@@ -490,8 +553,98 @@ expect_in "$(in_machine journalctl --unit anheart --no-pager)" "shutdown complet
 expect_in "$(in_machine systemctl status anheart --no-pager --lines 0)" "version $THIRD_VERSION" \
     "systemctl status anheart shows version $THIRD_VERSION"
 
+# --- 9. A console frozen in the middle of a session ---------------------------------------
+
+step "9. The console freezes in the middle of a session: the watchdog has it restarted"
+known="$(records | wc -l)"
+start_session "manual bench session before the freeze"
+for ((attempt = 0; attempt < 20; attempt++)); do
+    [ "$(records | wc -l)" -gt "$known" ] && break
+    sleep 1
+done
+[ "$(records | wc -l)" -gt "$known" ] || fail "the session before the freeze wrote no record"
+frozen_record="$(records | tail -n 1)"
+before_id="$(container_id)"
+before_restarts="$(restarts)"
+# SIGSTOP on the console itself: every thread of it stops. It completes no
+# tick, tells systemd nothing, and answers no signal but the last one.
+console_pid="$(in_machine docker inspect --format '{{.State.Pid}}' anheart)"
+begin="$(date +%s)"
+in_machine bash -c "kill -STOP $console_pid" || fail "the console could not be frozen"
+ok "the console is frozen (process $console_pid), its session record is $frozen_record"
+# 10 s for the watchdog, 15 s for the console to leave by itself, then the
+# unit's usual stop: SIGTERM, and the kill 60 s later.
+wait_for_replacement "$before_id" 200 "after the freeze"
+elapsed=$(($(date +%s) - begin))
+[ "$elapsed" -ge 10 ] || fail "the frozen console was replaced after $elapsed s: before the watchdog's 10 s"
+ok "systemd started another console $elapsed s after the freeze"
+wait_for_console "after the freeze"
+logged="$(in_machine journalctl --unit anheart --no-pager --since "@$begin")"
+expect_in "$logged" "Watchdog timeout (limit 10s)" "the journal says the watchdog ended the frozen console"
+expect_in "$logged" "Failed with result 'watchdog'" "and that the service failed on its watchdog"
+[ "$(restarts)" -gt "$before_restarts" ] || fail "systemd does not count a restart of the service"
+ok "systemd restarted the service by itself"
+expect_at_rest "after the restart by the watchdog"
+answer="$(panel)"
+expect_in "$answer" '"unclean_stop":true' "the new console says it started after an unclean stop"
+expect_in "$answer" "\"open_record\":\"$frozen_record\"" "and names the session record that was left open"
+in_machine test ! -e "/var/lib/anheart/records/$frozen_record/checksums.sha256" \
+    || fail "the record of the frozen session was closed"
+written=""
+for ((attempt = 0; attempt < 15; attempt++)); do
+    written="$(in_machine cat /var/lib/anheart/records/logbook/events.jsonl 2> /dev/null || true)"
+    case "$written" in *"enregistrement de seance $frozen_record non clos"*) break ;; esac
+    sleep 1
+done
+expect_in "$written" "unclean_stop: demarrage apres arret non propre : enregistrement de seance $frozen_record non clos" \
+    "the logbook holds the warning: start after an unclean stop"
+
+# --- 10. A console that keeps dying ------------------------------------------------------
+
+step "10. The console dies again and again: out of service, until a named operator puts it back"
+begin="$(date +%s)"
+deaths=0
+# Three starts after an unclean stop within ten minutes. The freeze above was
+# one; the kill of step 5 is another when this run got here in under ten minutes.
+while :; do
+    case "$(panel)" in *'"out_of_service":true'*) break ;; esac
+    [ "$deaths" -lt 3 ] || fail "three more deaths did not take the console out of service"
+    before_id="$(container_id)"
+    in_machine docker kill --signal KILL anheart > /dev/null
+    deaths=$((deaths + 1))
+    wait_for_replacement "$before_id" 60 "after death $deaths"
+    wait_for_console "after death $deaths"
+done
+[ "$deaths" -ge 1 ] || fail "the console was out of service before it died once more"
+ok "after $deaths more death(s) the console is out of service"
+expect_in "$(panel)" '"unclean_starts":3,' "at its third start after an unclean stop in ten minutes"
+[ "$(in_machine systemctl is-active anheart)" = "active" ] || fail "the service is not running"
+expect_in "$(healthz)" '"status":"ok"' "out of service, the console still runs and answers"
+expect_in "$(in_machine journalctl --unit anheart --no-pager --since "@$begin")" "out_of_service: console hors service" \
+    "the journal says the console is out of service"
+post /api/safety/attest '{"operator":"install-test","sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
+    || fail "the console out of service refused the attestation"
+post /api/manual/start '{"occupancy":"bench","operator":"install-test"}' > /dev/null \
+    || fail "the console out of service did not take the request to start"
+sleep 3
+expect_in "$(status)" '"run_state":"idle"' "out of service, a start that is asked for is not armed"
+answer="$(post /api/service/restore '{"operator":"install-test"}')" \
+    || fail "the console refused to be put back in service"
+expect_in "$answer" '"out_of_service":false' "a named operator puts the console back in service"
+expect_in "$answer" '"persisted":true' "and that is written on the machine"
+expect_in "$(status)" '"run_state":"idle"' "putting it back in service starts nothing"
+start_session "manual bench session on the console back in service"
+ok "back in service, a session starts when an operator starts one"
+post /api/session/stop '{"operator":"install-test","reason":"install test"}' > /dev/null \
+    || fail "the simulated console refused to end the session"
+wait_for_run_state idle "after the session was ended at the console"
+in_machine systemctl restart anheart || fail "systemctl restart anheart failed"
+wait_for_console "after a restart by hand"
+expect_in "$(panel)" '"out_of_service":false' "still in service after a clean restart"
+expect_at_rest "after the restart of the console back in service"
+
 step "Versions seen in this run"
-in_machine dpkg-query --show --showformat='  ${Package} ${Version}\n' docker.io bluez libusb-1.0-0 systemd chrony
+in_machine dpkg-query --show --showformat='  ${Package} ${Version}\n' docker.io bluez libusb-1.0-0 socat systemd chrony
 in_machine docker exec anheart python --version | sed 's/^/  /'
 in_machine docker image ls --format '  {{.Repository}}:{{.Tag}} {{.Size}}' anheart-console
 printf '\nINSTALL TEST PASSED\n'

@@ -33,6 +33,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -42,6 +43,7 @@ import pytest
 from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_PATH, read_software_version
 from src.local_config import EcgSource, MotorBackend, load_local_config
 from src.result import Ok
+from src.service_state import THRESHOLD, WINDOW
 
 CONSOLE: Final[Path] = Path(__file__).resolve().parents[1]
 REPOSITORY: Final[Path] = CONSOLE.parent
@@ -216,6 +218,11 @@ class Machine:
     def journald_conf(self) -> Path:
         return self.root / "etc" / "systemd" / "journald.conf.d" / "anheart.conf"
 
+    @property
+    def manager_drop_in(self) -> Path:
+        """systemd's own settings, as written by the installer: the hardware watchdog."""
+        return self.root / "etc" / "systemd" / "system.conf.d" / "10-anheart-watchdog.conf"
+
     def set(self, name: str, text: str = "") -> None:
         """Script one answer of the stubs (see :data:`STUB`)."""
         (self.state / name).write_text(text, encoding="utf-8")
@@ -300,7 +307,7 @@ def test_a_first_install_leaves_the_account_the_directories_and_the_service(
     first = machine.install()
     assert first.exit_code == 0, first.output
 
-    for package in ("docker.io", "bluez", "libusb-1.0-0"):
+    for package in ("docker.io", "bluez", "libusb-1.0-0", "socat"):
         assert first.called("apt-get install", package), package
     assert first.called("useradd", "--system", "anheart")
 
@@ -360,7 +367,8 @@ def test_a_version_that_cannot_name_an_image_is_refused_before_anything(
 def test_a_second_install_changes_nothing_and_restarts_nothing(machine: Machine) -> None:
     """EX-2, idempotence: same files, no package manager, no start, no restart."""
     assert machine.install().exit_code == 0
-    before = {path: path.read_bytes() for path in (machine.env_file, machine.unit, machine.drop_in)}
+    kept = (machine.env_file, machine.unit, machine.drop_in, machine.manager_drop_in)
+    before = {path: path.read_bytes() for path in kept}
 
     second = machine.install()
     assert second.exit_code == 0, second.output
@@ -835,7 +843,13 @@ def test_one_way_to_run_the_console_on_a_pi_remains() -> None:
     started = _directive("ExecStart")
     assert len(started) == 1
     words = started[0].split()
-    assert words[:3] == ["/usr/bin/docker", "run", "--rm"]
+    # Before `docker run`, only the shell line that starts the watchdog relay and
+    # then becomes the command it was given (see the tests of the relay below).
+    assert words[:2] == ["/bin/sh", "-c"]
+    run = words.index("/usr/bin/docker")
+    assert words[run - 1] == "anheart"
+    assert words[run : run + 3] == ["/usr/bin/docker", "run", "--rm"]
+    assert words.count("/usr/bin/docker") == 1
     # The image is the last word: nothing replaces the command the image runs,
     # which tests/test_legacy_recorder_retired.py holds to the console.
     assert words[-1] == "${ANHEART_IMAGE}"
@@ -883,6 +897,168 @@ def test_the_unit_stops_the_console_on_its_controlled_stop_and_never_loops_on_a_
         assert forced not in unit, forced
     for step in (*_directive("ExecStartPre"), *_directive("ExecStopPost")):
         assert "/usr/bin/docker stop -t 60 anheart" in step
+
+
+# =========================================================================
+# ANH-162: the watchdog of the unit, the restart policy, the hardware watchdog
+# =========================================================================
+
+
+def test_ex1_the_unit_must_hear_the_console_every_ten_seconds_once_it_said_ready() -> None:
+    """``Type=notify``: the watchdog counts from the console's own "ready", never from
+    the instant the image starts, which on a cold SD card is long before the first tick."""
+    assert _directive("Type") == ["notify"]
+    assert _directive("WatchdogSec") == ["10"]
+    assert int(_directive("TimeoutStartSec")[0]) >= 180, "the installer itself waits 180 s"
+    installer = _read(INSTALLER)
+    assert 'readonly HEALTH_TIMEOUT_S="${ANHEART_HEALTH_TIMEOUT_S:-180}"' in installer
+
+
+def test_ex1_the_watchdog_asks_for_the_controlled_stop_and_the_unit_never_kills_a_console() -> None:
+    """A console whose loop is stuck is stopped like any other: SIGTERM first. The one
+    that answers nothing is ended by the unit's usual ``docker stop``, which escalates."""
+    assert _directive("WatchdogSignal") == ["SIGTERM"]
+    abort = int(_directive("TimeoutAbortSec")[0])
+    assert 0 < abort < int(_directive("TimeoutStopSec")[0])
+    # What follows the watchdog is ExecStopPost, never ExecStop: it does the stop itself.
+    assert "/usr/bin/docker stop -t 60 anheart" in _directive("ExecStopPost")[0]
+
+
+def _relay() -> tuple[str, list[str]]:
+    """The shell line of ``ExecStart`` as ``sh`` receives it: its script, then its arguments."""
+    started = re.fullmatch(r"/bin/sh -c '([^']*)' (.*)", _directive("ExecStart")[0])
+    assert started is not None, "ExecStart is no longer `/bin/sh -c '<relay>' <command>`"
+    # systemd turns `$$` into `$` before the shell sees the line.
+    return started.group(1).replace("$$", "$"), started.group(2).split()
+
+
+def test_ex1_the_unit_hands_the_console_a_socket_that_a_process_of_the_unit_listens_on() -> None:
+    """systemd only hears the processes of the unit; the console is a process of the
+    container. The relay is one of the unit's, and the console is given its socket."""
+    assert _directive("NotifyAccess") == ["all"], "the relay is not the unit's main process"
+    assert _directive("RuntimeDirectory") == ["anheart"]
+    script, command = _relay()
+    assert script == (
+        "/usr/bin/socat -u UNIX-RECV:/run/anheart/notify,unlink-early "
+        'UNIX-SENDTO:"$NOTIFY_SOCKET" & exec "$@"'
+    )
+    pairs = set(itertools.pairwise(command))
+    assert ("--volume", "/run/anheart:/run/anheart") in pairs
+    assert ("--env", "NOTIFY_SOCKET=/run/anheart/notify") in pairs
+    # A start with no relay would never be heard: it is refused at once instead.
+    assert _directive("AssertFileIsExecutable") == ["/usr/bin/socat"]
+    packages = _captures(r"^readonly PACKAGES=\((.*)\)$", _read(INSTALLER))
+    assert "socat" in packages[0].split()
+
+
+RELAY_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$@" > "$RELAY_SEEN"
+"""
+DOCKER_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$0" "$@" > "$DOCKER_SEEN"
+exit 7
+"""
+
+
+@needs_sh
+def test_ex1_the_unit_starts_the_relay_then_becomes_the_command_it_was_given(
+    tmp_path: Path,
+) -> None:
+    """The shell line of ``ExecStart``, run for real with a scripted relay and a scripted
+    ``docker``: the relay is started on systemd's own socket, and the shell is replaced by
+    ``docker run`` with every argument and with its exit code."""
+    assert SH is not None
+    script, command = _relay()
+    relay = tmp_path / "socat"
+    relay.write_text(RELAY_STUB, encoding="utf-8")
+    docker = tmp_path / "docker"
+    docker.write_text(DOCKER_STUB, encoding="utf-8")
+    for tool in (relay, docker):
+        tool.chmod(0o755)
+    assert command[:2] == ["anheart", "/usr/bin/docker"]
+    arguments = command[2:]
+    done = subprocess.run(  # noqa: S603  # fixed argv, scripted tools only
+        [
+            SH,
+            "-c",
+            script.replace("/usr/bin/socat", str(relay)),
+            "anheart",
+            str(docker),
+            *arguments,
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "NOTIFY_SOCKET": "/run/systemd/notify",
+            "RELAY_SEEN": str(tmp_path / "relay-seen"),
+            "DOCKER_SEEN": str(tmp_path / "docker-seen"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert done.returncode == 7, "the unit's main process ends with the console's exit code"
+    seen = _read(tmp_path / "docker-seen").splitlines()
+    assert seen == [str(docker), *arguments], "every argument reaches docker, in order"
+    assert seen[-1] == "${ANHEART_IMAGE}"
+    heard = tmp_path / "relay-seen"
+    for _ in range(100):
+        if heard.exists() and _read(heard).count("\n") == 3:
+            break
+        time.sleep(0.05)
+    assert _read(heard).splitlines() == [
+        "-u",
+        "UNIX-RECV:/run/anheart/notify,unlink-early",
+        "UNIX-SENDTO:/run/systemd/notify",
+    ]
+
+
+def test_ex2_a_failure_is_followed_by_a_restart_two_seconds_later_within_a_limit() -> None:
+    assert _directive("Restart") == ["on-failure"]
+    assert _directive("RestartSec") == ["2"]
+    assert _directive("RestartPreventExitStatus") == ["2"], "a refused configuration never loops"
+    burst = int(_directive("StartLimitBurst")[0])
+    interval = int(_directive("StartLimitIntervalSec")[0])
+    assert burst == 10
+    # The slowest loop is the frozen console: 10 s unheard, the abort timeout, then
+    # the 60 s of the unit's stop. The limit must still be reached inside its interval.
+    slowest = int(_directive("WatchdogSec")[0]) + int(_directive("TimeoutAbortSec")[0]) + 60
+    assert (burst + 1) * (slowest + int(_directive("RestartSec")[0]) + 20) < interval
+    # The console puts itself out of service long before systemd gives up on it.
+    assert burst > THRESHOLD
+    assert interval >= WINDOW
+
+
+@pytest.mark.slow
+@needs_bash
+def test_ex1_the_installer_has_systemd_arm_the_hardware_watchdog_and_restarts_nothing_for_it(
+    machine: Machine,
+) -> None:
+    first = machine.install()
+    assert first.exit_code == 0, first.output
+    written = _read(machine.manager_drop_in)
+    assert "[Manager]\nRuntimeWatchdogSec=15s\n" in written
+    assert _mode(machine.manager_drop_in) == 0o644
+    assert "no /dev/watchdog on this machine" in first.output, "a machine without one is told"
+    # The file is in place before systemd is asked to read its configuration again.
+    reload = next(index for index, call in enumerate(first.calls) if "daemon-reload" in call)
+    start = next(index for index, call in enumerate(first.calls) if "start anheart" in call)
+    assert reload < start
+    # A console already running is not restarted because of this file alone.
+    machine.manager_drop_in.unlink()
+    again = machine.install()
+    assert again.exit_code == 0, again.output
+    assert machine.manager_drop_in.exists()
+    assert not again.called("systemctl restart")
+    assert "nothing changed: left alone" in again.output
+    # With the device there, nothing is warned about.
+    (machine.root / "dev").mkdir()
+    (machine.root / "dev" / "watchdog").write_text("", encoding="utf-8")
+    third = machine.install()
+    assert third.exit_code == 0, third.output
+    assert "/dev/watchdog is present" in third.output
+    assert "no /dev/watchdog" not in third.output
+    assert f"{machine.manager_drop_in} unchanged" in third.output
 
 
 def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:
@@ -1157,8 +1333,20 @@ def test_the_workflow_runs_the_end_to_end_install_on_arm64() -> None:
         '--name anheart --network host --env-file "$ENV_FILE"',
         "{{.HostConfig.AutoRemove}}",
         "docker stop -t 120",
+        # ANH-162: the watchdog fed by a healthy console, a frozen console
+        # restarted by it, the restart loop and the way out of it.
+        "WatchdogUSec=10s",
+        "kill -STOP $console_pid",
+        "Watchdog timeout (limit 10s)",
+        r"\"open_record\":\"$frozen_record\"",
+        "unclean_stop: demarrage apres arret non propre",
+        '"out_of_service":true',
+        "/api/service/restore",
+        "RuntimeWatchdogSec=15s",
     ):
         assert proof in script, proof
+    # The stand-in never arms the hardware watchdog of the machine that runs the test.
+    assert 'CMD ["/lib/systemd/systemd", "systemd.watchdog_device=/dev/null"]' in script
 
 
 def test_the_workflow_can_only_read_and_pins_every_action() -> None:
