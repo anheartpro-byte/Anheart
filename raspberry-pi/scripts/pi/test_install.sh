@@ -14,9 +14,13 @@
 #
 #   1. a first install ends with the console enabled at boot, running,
 #      answering GET /healthz, at rest, and `systemctl status anheart` showing
-#      the version of the VERSION file;
+#      the version of the VERSION file; the time service is installed and
+#      enabled, the journal is on the disk and bounded, and the console reads
+#      the state of the machine's clock from the kernel, as timedatectl does;
 #   2. a second install changes nothing: the configuration is not rewritten,
-#      its secret is not printed, the console is not restarted;
+#      its secret is not printed, the console is not restarted; a change of
+#      the journal's settings restarts journald and not the console, which
+#      goes on writing to the journal;
 #   3. while a session runs, its record is written under /var/lib/anheart/records
 #      and stamped with the version, and an install that would replace the
 #      console refuses and restarts nothing;
@@ -30,8 +34,9 @@
 #      hand) is not replaced while it runs a session; at rest it is, and the
 #      unit stops and removes it before it starts its own;
 #   8. after a shutdown and a power-on of the stand-in, the console is back by
-#      itself, at rest. The shutdown is an orderly one: a power cut in the
-#      middle of a write is not simulated here.
+#      itself, at rest, and the journal written before the shutdown is still
+#      there. The shutdown is an orderly one: a power cut in the middle of a
+#      write is not simulated here.
 #
 # Nothing here touches hardware or a dashboard: the drive is the simulator and
 # MACHINE_API_KEY stays empty. Every session is a manual bench session at
@@ -105,6 +110,18 @@ wait_for_system() {
 
 healthz() { in_machine curl --silent --fail --max-time 3 "http://127.0.0.1:$port/healthz" 2> /dev/null || true; }
 status()  { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/status" 2> /dev/null || true; }
+panel()   { in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TOKEN" "http://127.0.0.1:$port/api/panel" 2> /dev/null || true; }
+
+# What the console says of the machine's wall clock: yes (a time service keeps
+# it), no, unreadable (it could not ask the kernel), or absent.
+console_clock() {
+    case "$(panel)" in
+        *'"wall_clock":{"state":"synchronised"'*) echo yes ;;
+        *'"wall_clock":{"state":"unsynchronised"'*) echo no ;;
+        *'"wall_clock":{"state":"unreadable"'*) echo unreadable ;;
+        *) echo absent ;;
+    esac
+}
 
 post() {
     in_machine curl --silent --fail --max-time 5 --request POST \
@@ -217,6 +234,56 @@ ok "the generated configuration carries no machine key: no dashboard is contacte
 expect_in "$(in_machine journalctl --unit anheart --no-pager)" "variateur: simulateur" \
     "the journal holds the console's own start line, on the simulated drive"
 
+# The time service: installed, enabled at boot, and given the two directives
+# the console's reading of the clock relies on. Whether it runs here is said,
+# not required: it needs the right to set the clock of the machine under it.
+expect_in "$(in_machine dpkg-query --show --showformat='${db:Status-Status}' chrony)" "installed" \
+    "the time service chrony is installed"
+[ "$(in_machine systemctl is-enabled chrony)" = "enabled" ] || fail "chrony is not enabled at boot"
+ok "chrony is enabled at boot"
+chrony_conf="$(in_machine cat /etc/chrony/conf.d/anheart.conf)"
+expect_in "$chrony_conf" "rtcsync" "chrony publishes its state to the kernel and keeps a real-time clock on time"
+expect_in "$chrony_conf" "makestep 1 3" "chrony steps a clock that restarted on an old time"
+ok "chrony is $(in_machine systemctl is-active chrony || true) in this stand-in (said, not required)"
+
+# The console reads the state of the machine's clock from the kernel, inside
+# its container, and systemd reads the same kernel: they must agree. The
+# console asks every 10 s, and the state may change while chrony starts.
+clock="$(console_clock)"
+case "$clock" in
+    yes | no) ok "the console reads the state of the machine's clock in its container (kept by a time service: $clock)" ;;
+    *) fail "the console does not say what the machine's clock is worth (got: $clock)" ;;
+esac
+system_clock=""
+agreed=""
+for ((attempt = 0; attempt < 8; attempt++)); do
+    system_clock="$(in_machine timedatectl show --property=NTPSynchronized --value 2> /dev/null || true)"
+    clock="$(console_clock)"
+    case "$system_clock" in yes | no) ;; *) break ;; esac
+    if [ "$clock" = "$system_clock" ]; then agreed=yes; break; fi
+    sleep 5
+done
+case "$system_clock" in
+    yes | no)
+        [ -n "$agreed" ] || fail "the console says the clock is kept: $clock, timedatectl says: $system_clock"
+        ok "the console and timedatectl agree on the clock (synchronized: $system_clock)" ;;
+    *) ok "timedatectl gives no answer in this stand-in: the console's reading is not compared" ;;
+esac
+
+# The journal: on the disk, and bounded. journald says itself what it applies.
+journald_conf="$(in_machine cat /etc/systemd/journald.conf.d/anheart.conf)"
+expect_in "$journald_conf" "Storage=persistent" "the journal is kept on the disk"
+expect_in "$journald_conf" "SystemMaxUse=200M" "the journal is bounded to 200 MB"
+in_machine sh -c 'ls /var/log/journal/*/system.journal' > /dev/null 2>&1 \
+    || fail "the journal is not written under /var/log/journal"
+ok "the journal is written under /var/log/journal"
+usage="$(in_machine journalctl --no-pager --output cat | grep -F 'System Journal (/var/log/journal/' | tail -n 1 || true)"
+if [ -n "$usage" ]; then
+    expect_in "$usage" "max 200.0M" "journald reports the bound it applies"
+else
+    ok "journald wrote no usage line in this stand-in: its bound is read from its configuration only"
+fi
+
 health=""
 for ((attempt = 0; attempt < 60; attempt++)); do
     health="$(in_machine docker inspect --format '{{.State.Health.Status}}' anheart 2> /dev/null || true)"
@@ -252,6 +319,27 @@ expect_in "$(in_machine stat --format '%U:%G %a' "$ENV_FILE")" "root:root 600" "
 [ "$(container_id)" = "$before_id" ] || fail "the console was restarted although nothing changed"
 ok "the console was not restarted"
 expect_in "$output" "nothing changed: left alone" "install.sh says it left the console alone"
+
+# The journal's settings changed under a running console: journald is restarted
+# to read them, the console is not, and it goes on writing to the journal.
+in_machine sh -c 'printf "# changed by the install test\n" >> /etc/systemd/journald.conf.d/anheart.conf'
+before_id="$(container_id)"
+begin="$(date +%s)"
+output="$(install 2>&1)" || { printf '%s\n' "$output"; fail "the install failed after a change of the journal's settings"; }
+expect_in "$output" "/etc/systemd/journald.conf.d/anheart.conf written" "install.sh puts the journal's settings back"
+[ "$(container_id)" = "$before_id" ] || fail "the console was restarted by a change of the journal's settings"
+expect_in "$(in_machine systemctl show --property NRestarts anheart)" "NRestarts=0" \
+    "the console was not restarted by the restart of journald"
+# A request the console refuses and logs, with no effect on its state: it
+# carries no token, on a console that now requires one.
+in_machine curl --silent --max-time 3 "http://127.0.0.1:$port/api/status" > /dev/null || true
+logged=""
+for ((attempt = 0; attempt < 10; attempt++)); do
+    logged="$(in_machine journalctl --unit anheart --no-pager --since "@$begin")"
+    case "$logged" in *"rejected GET /api/status"*) break ;; esac
+    sleep 1
+done
+expect_in "$logged" "rejected GET /api/status" "what the console writes after that restart still reaches the journal"
 
 # --- 3. Never under a session ---------------------------------------------------------
 
@@ -385,17 +473,25 @@ expect_at_rest "after the replacement of the console started by hand"
 # --- 8. Shutdown and power-on -------------------------------------------------------------
 
 step "8. Shutdown, then power-on, of the stand-in"
+# A line of this run, to look for afterwards. /run is a tmpfs that the restart
+# empties: a journal that was not on the disk would be gone with it.
+marker="written-before-the-shutdown-$$"
+in_machine logger --tag anheart-install-test "$marker"
 docker stop -t 120 "$MACHINE" > /dev/null
 docker start "$MACHINE" > /dev/null
 wait_for_system
 wait_for_console "after the power-on"
 ok "the console is back by itself"
 expect_at_rest "after the power-on"
+expect_in "$(in_machine journalctl --no-pager --output cat --identifier anheart-install-test || true)" "$marker" \
+    "a line written before the shutdown is still in the journal after the power-on"
+expect_in "$(in_machine journalctl --unit anheart --no-pager)" "shutdown complete: emergency zero" \
+    "the console's own lines from before the shutdown are still there too"
 expect_in "$(in_machine systemctl status anheart --no-pager --lines 0)" "version $THIRD_VERSION" \
     "systemctl status anheart shows version $THIRD_VERSION"
 
 step "Versions seen in this run"
-in_machine dpkg-query --show --showformat='  ${Package} ${Version}\n' docker.io bluez libusb-1.0-0 systemd
+in_machine dpkg-query --show --showformat='  ${Package} ${Version}\n' docker.io bluez libusb-1.0-0 systemd chrony
 in_machine docker exec anheart python --version | sed 's/^/  /'
 in_machine docker image ls --format '  {{.Repository}}:{{.Tag}} {{.Size}}' anheart-console
 printf '\nINSTALL TEST PASSED\n'

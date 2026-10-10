@@ -70,6 +70,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/units.py` | Types d'unités (`NewType`) : `Bpm`, `MotorRpm`, `OutputRpm`, `Seconds`, `Monotonic`, `Hertz`, `Amperes`, `GLoad`, `ResultantG`, `Metres`… et les conversions. | Une FC passée à la place d'une vitesse, ou des tr/min moteur confondus avec des tr/min de sortie (facteur 49,79), ne passent pas la vérification de types. Porte 100 %. |
 | `src/result.py` | `Ok[T]`, `Err[E]`, `Result[T, E]`. | Les chemins moteur et sécurité renvoient des erreurs typées au lieu de lever des exceptions. Porte 100 %. |
 | `src/clock.py` | Le seul module qui lit l'horloge (`RealClock`, `SimClock`, `ManualClock`). | Aucun autre module de `src/` n'appelle `time.monotonic()` ou `time.time()` (test par recherche de texte, `tests/test_clock.py`). Une séance de 30 min se simule en quelques secondes. Porte 100 %. |
+| `src/wall_clock.py` | Dit si l'horloge murale est tenue par un service de temps, et avec quelle erreur : l'état que le noyau publie (`adjtimex`, lu sans rien changer), la dernière lecture gardée en mémoire (`WallClockWatch`), les mots montrés à l'opérateur. | L'horloge murale date et ne décide de rien d'autre : aucune durée n'en dépend. Lue par une tâche à elle, jamais dans le tic ; une lecture qui échoue donne une horloge « non vérifiée », jamais une exception. Voir [12.4](#124-lhorloge-murale-et-le-journal-de-la-console). Porte 100 %. |
+| `src/log_format.py` | La forme des lignes que la console écrit dans son journal : un objet JSON par ligne, champ `event`. | Une ligne par message, même avec un retour à la ligne ou une trace d'erreur. Ce que les lignes ne doivent pas porter est tenu par `tests/test_log_format.py`. |
 | `src/geometry.py` | `MachineGeometry` : rayon (sans défaut) et rapport (49,79 par défaut). Toute vitesse et tout g passent par là. | Un seul endroit convertit tr/min moteur ↔ tr/min de sortie ↔ Hz ↔ g. Porte 100 %. |
 | `src/local_config.py` | Lit et valide les clés `.env` de la console. | Signale **toutes** les erreurs d'un coup au démarrage. `ARM_RADIUS_M` n'a pas de défaut. Porte 100 %. |
 
@@ -149,6 +151,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `presence_step` | 0,05 s (20 Hz) | lit la caméra et applique son verdict |
 | `cloud_step` | 1 s | une étape d'envoi du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
 | `cloud_stop_step` | 50 ms | dit la séance en cours au tableau de bord (déclaration ou confirmation du départ), puis pose la question de l'arrêt demandé (toutes les 3 s en séance). Une tâche à elle : elle n'attend ni l'envoi, ni une retenue de l'envoi, ni le disque, et ne lit aucun fichier |
+| `clock_step` | 10 s (`WALL_CLOCK_PERIOD`) | demande au noyau si un service de temps tient l'horloge murale ([12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un appel système qui recopie quelques variables du noyau : ni fichier, ni réseau, ni attente. Les portes de départ, l'enregistrement et la page ne lisent que sa dernière réponse, en mémoire |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -157,6 +160,8 @@ Code de sortie : 0 (normal), 1 (une tâche a échoué), 2 (configuration refusé
 
 `cloud_step` est la seule tâche qui avale ses exceptions : le tableau de bord
 est un observateur, un bogue de report ne doit pas arrêter une séance.
+`clock_step` n'en lève pas : une lecture de l'horloge qui échoue est rendue
+comme un état (« non vérifiée »), jamais comme une exception.
 
 Un fil à part, `record-journal`, écrit l'enregistrement de séance sur disque.
 Ce n'est pas une tâche de la boucle : aucune des tâches ci-dessus n'ouvre ni
@@ -290,6 +295,19 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    `SWITCH_ON` → `ENABLE_OPERATION`. Si le mot d'activation échoue sans réponse,
    la sortie est supposée active : verrou `enable_unconfirmed` (QUICK_STOP).
 
+**Avant ces portes, sur la console : l'horloge murale, pour une personne à
+bord seulement.** Un départ déclaré « personne à bord » (séance manuelle
+`occupied`, ou tout programme) est refusé quand aucun service de temps ne
+tient l'horloge murale, ou quand son état n'a pas pu être lu
+(`LocalPanel._clock_refusal`, [12.4](#124-lhorloge-murale-et-le-journal-de-la-console)) :
+l'enregistrement d'une telle séance est une preuve, et doit être daté par une
+horloge dont quelqu'un répond. Le refus est demandé avant le runtime, après la
+caméra : rien n'a touché le variateur. Il ne lit que la dernière réponse
+gardée en mémoire. Un départ de banc, lui, n'est jamais refusé pour cela : la
+séance démarre et l'opérateur est prévenu. `OCCUPANCY_OCCUPIED_ENABLED=false`
+refuse avant l'horloge : elle ajoute un refus à un mode ouvert, elle n'en ouvre
+aucun.
+
 ### 4.3 Séance manuelle
 
 * Démarrée **uniquement depuis la console** (`/api/manual/start`). Rien dans le
@@ -396,7 +414,8 @@ Portes supplémentaires, dans l'ordre (`LocalPanel._start_programme`) :
    `zone_high ≤ 0,9 × FC max`).
 5. `max_rpm` du profil ≤ plafond personne à bord.
 6. Caméra (si configurée) : la porte de départ accepte.
-7. Portes du runtime : celles de 4.2, plus les paliers cardiaques du profil
+7. Horloge murale tenue par un service de temps ([4.2](#42-portes-communes-à-tout-départ-_refuse_arming-_arm)).
+8. Portes du runtime : celles de 4.2, plus les paliers cardiaques du profil
    **égaux** à ceux du superviseur (`HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`), et un
    plan de commande constructible.
 
@@ -1518,7 +1537,12 @@ elle en a mis de côté, qu'un autre enregistrement porte un curseur ou non.
 ### 8.5 Les dates
 
 La console n'a pas d'horloge sauvegardée : démarrée sans réseau, elle date ce
-qu'elle écrit d'une heure fausse, corrigée d'un coup au retour du réseau.
+qu'elle écrit d'une heure fausse, corrigée d'un coup au retour du réseau. Elle
+sait maintenant le dire : le manifeste de chaque enregistrement porte
+`clocks.wall_trusted`, faux quand aucun service de temps ne tenait l'horloge à
+son ouverture ([12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Ce
+drapeau reste sur le disque : il n'est pas envoyé au tableau de bord, et ce qui
+suit ne change pas.
 
 - **Dans l'enregistrement**, un tic et un événement sont datés en secondes
   depuis le début de la séance, sur l'**horloge monotone**. Le manifeste porte
@@ -1545,7 +1569,7 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
 
 | L'enregistrement est daté | Ce que la console dit | Ce que le tableau de bord affiche |
 |---|---|---|
-| après le 1er janvier 2024 | aucun âge | la date que la console avait écrite, comme avant. Elle peut être fausse de la durée pendant laquelle le Pi était éteint ; rien ne permet de le savoir (une heure fiable est le sujet d'ANH-163) |
+| après le 1er janvier 2024 | aucun âge | la date que la console avait écrite, comme avant. Elle peut être fausse de la durée pendant laquelle le Pi était éteint ; le tableau de bord n'a aucun moyen de le savoir. Sur le Pi, le manifeste de l'enregistrement le dit (`clocks.wall_trusted`, [12.4](#124-lhorloge-murale-et-le-journal-de-la-console)) |
 | avant (une horloge jamais réglée) | un âge **minimal** : le temps depuis lequel cette console tourne, plus la durée de l'enregistrement, plus une minute | la séance, datée au plus tard qu'elle puisse avoir commencé. Sa vraie date est perdue ; elle n'est ni en 1970, ni lue comme mesurée à l'instant |
 
 ### 8.6 Ce que la synchronisation ne peut pas coûter
@@ -1854,6 +1878,130 @@ Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
 sont plus lues par rien : restées dans un `.env` existant, elles sont ignorées.
 Le niveau de journalisation de la console est fixe (`INFO`).
 
+### 12.4 L'horloge murale et le journal de la console
+
+Aucune clé de `.env` ne règle ce qui suit : l'heure et le journal du système
+sont réglés par l'installation du Pi ([pi-image.md](pi-image.md#lheure)), et la
+console lit ce qu'elle y trouve.
+
+> **Vérifié, et pas vérifié.** Tout ce que fait la console est couvert par les
+> tests automatiques, avec un état d'horloge que le test décide
+> (`tests/test_wall_clock.py`, `tests/test_wall_clock_console.py`,
+> `tests/test_log_format.py`). L'appel au noyau lui-même tourne sur Linux dans
+> la CI, et dans l'image de la console sur arm64, où sa réponse est comparée à
+> celle de `timedatectl` ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)).
+> Rien n'a été constaté sur un vrai Pi : l'essai de coupure secteur
+> ([pi-image.md](pi-image.md#essai-de-coupure-secteur--à-faire-au-banc)) n'est
+> pas fait.
+
+**Deux horloges, deux rôles, et cela ne change pas.** L'horloge monotone règle
+tout ce qui décide : le tic, les délais, les rampes, le superviseur
+(`src/clock.py`). L'horloge murale ne fait que dater ce qui quitte la machine.
+Rien de ce qui suit n'entre dans le tic de contrôle, ni dans une règle de
+sécurité, ni dans une durée.
+
+**Ce que la console lit.** `src/wall_clock.py` demande au noyau l'état de son
+horloge (`adjtimex`, sans rien y changer) : c'est là que le service de temps du
+Pi, `chrony`, publie s'il est synchronisé, l'erreur qu'il estime et l'erreur
+qu'il garantit. La règle est celle de `timedatectl` : l'horloge est tenue quand
+l'erreur garantie est sous 16 secondes, la valeur que le noyau garde pour une
+horloge dont personne ne répond. La lecture se fait une fois au démarrage, puis
+toutes les 10 secondes dans une tâche à elle (`clock_step`,
+[3.1](#31-les-tâches-de-la-console)) ; tout le reste lit la dernière réponse en
+mémoire.
+
+| État | Quand | Page (ligne `horloge` sous les pastilles) | `clocks.wall_trusted` | Départ de banc | Départ avec une personne à bord |
+|---|---|---|---|---|---|
+| `synchronised` | un service de temps tient l'horloge | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | `true` | accepté | accepté |
+| `unsynchronised` | aucune source de temps jointe depuis l'allumage du Pi, ou plus depuis longtemps | `horloge NON FIABLE · aucune source de temps jointe : ...`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
+| `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
+| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté, sans avertissement | accepté |
+
+**Hors Linux, la console ne juge pas son horloge.** L'appel qu'elle fait
+n'existe que sous Linux (`system_probe`, `src/wall_clock.py`). Sur un Mac elle
+l'écrit une fois dans son journal au démarrage (`wall clock: not judged on this
+system`), n'affiche pas la ligne, ne prévient ni ne refuse rien à ce titre, et
+ses manifestes portent `wall_trusted: null` : « non jugée », jamais « fiable ».
+Sans cela, toute séance avec une personne à bord y serait refusée, simulation
+comprise, faute d'une question que ce système ne permet pas de poser. Le Pi,
+où une personne sera à bord, juge toujours : un état illisible y refuse.
+
+Ce que l'opérateur lit, mot pour mot :
+
+* au départ d'une séance de banc, dans la liste des événements (événement
+  `recording`, qui n'est pas écrit dans l'enregistrement : son manifeste le dit
+  déjà) : `horloge murale non fiable (<motif>) : les dates de l'enregistrement
+  de cette seance ne sont pas sures, et son manifeste le dit. La seance et la
+  securite continuent.` ;
+* au refus d'un départ avec une personne à bord : `demarrage refuse : horloge
+  murale non fiable (<motif>). Avec une personne a bord, l'enregistrement de la
+  seance doit etre date par une horloge synchronisee : retablir le reseau du Pi
+  et attendre que la ligne horloge de la console dise synchronisee`.
+
+**Ce que cela ne fait pas.**
+
+* **L'écart mesuré n'est pas écrit dans le manifeste.** `clocks.ntp_offset_s`
+  reste `null` : la console ne connaît pas l'écart signé que `chrony` mesure
+  (il faudrait l'interroger), et n'écrit pas un nombre qu'elle n'a pas lu. Les
+  deux erreurs que le noyau publie sont sur la page et dans `/api/panel`
+  (`wall_clock.estimated_error_s`, `wall_clock.max_error_s`), pas dans
+  l'enregistrement.
+* **Une horloge qui se dérègle ou se règle pendant une séance** ne change pas
+  le manifeste déjà écrit : `wall_trusted` dit ce que valait l'horloge à
+  l'ouverture de l'enregistrement. La fin (`ended_at`) est datée par l'horloge
+  du moment.
+* **Une horloge temps réel ne suffit pas** : sans réseau, la console dit
+  « NON FIABLE » même si le Pi en a une
+  ([pi-image.md](pi-image.md#lheure)).
+* **Le tableau de bord n'en sait rien** : ni l'état de l'horloge ni son erreur
+  ne sont dans le battement de cœur (ANH-148), et le contrôle pré-vol qui
+  regroupera ce contrôle avec les autres n'existe pas (ANH-142).
+  `clock_offset_s()` et `is_trusted()` de `src/wall_clock.py` sont ce que ces
+  deux tickets auront à lire.
+
+**Le journal de la console.** Tout ce que la console journalise sort sur
+l'erreur standard, un objet JSON par ligne (`src/log_format.py`) :
+
+```json
+{"ts": "2026-10-10T16:21:04.512Z", "level": "WARNING", "logger": "src.wall_clock", "event": "wall clock: unsynchronised (aucune source de temps jointe : l'heure peut etre fausse de la duree pendant laquelle le Pi etait eteint)"}
+```
+
+| Champ | Contenu |
+|---|---|
+| `ts` | l'heure UTC du message, sur l'horloge murale : elle ne vaut pas mieux que cette horloge |
+| `level` | `INFO`, `WARNING`, `ERROR` ou `CRITICAL` |
+| `logger` | le module qui parle |
+| `event` | ce qui s'est passé : la phrase du module, avec ses valeurs dans le texte |
+| `exception` | la trace d'une erreur, quand il y en a une ; absent sinon |
+
+Sur le Pi, c'est le journal du service, gardé sur le disque et borné à 200 Mo
+par l'installation ([pi-image.md](pi-image.md#le-journal-du-système)).
+
+**Pas de donnée de santé dans le journal.** Aucune fréquence cardiaque, aucune
+valeur tirée des échantillons d'une voie, rien qui identifie un passager n'est
+remis à un journaliseur. C'est tenu de deux façons
+(`tests/test_log_format.py`, avec `tests/test_runtime_log_privacy.py` pour le
+runtime) :
+
+* chaque appel de journalisation de `src/` est relu : son format est un texte
+  fixe, et aucun des noms qu'on lui passe ne désigne une fréquence cardiaque,
+  une valeur d'échantillon ou un passager ;
+* une vraie console est menée là où ces données existent (un passager refusé
+  pour son âge, une personne à bord dont la fréquence cardiaque déclenche un
+  verdict cardiaque), tout ce qu'elle journalise est capté : le verdict y est,
+  par le nom de sa règle, sans la fréquence, sans l'âge, sans le programme.
+
+Ce que le journal porte quand même, et qui n'est pas une donnée de santé : les
+deux paliers cardiaques de la configuration dans la bannière de démarrage
+(`paliers 148/158 bpm`, un réglage de la machine) ; le nom de la règle d'un
+verdict (`hr_critical`) ; l'identifiant de séance d'un lancement venu du
+tableau de bord ; l'adresse du BITalino ; et **le nom saisi par l'opérateur**
+dans trois lignes (attestation, acquittement, acquittement de la caméra), que
+l'enregistrement, lui, remplace par un alias. Une exception imprévue est
+journalisée avec son texte, quel qu'il soit. La voie sans signal est encore
+nommée (`Channel ... has no analog signal`), sans les deux mesures que cette
+ligne portait.
+
 ---
 
 ## 13. Le contrat de code strict et la gate
@@ -2127,7 +2275,7 @@ locale aléatoire.
 | Moment | Ce qui se passe |
 |---|---|
 | Démarrage de la console | le dossier racine est créé s'il manque, mis en mode 700, et son espace libre est mesuré, en octets et en inodes |
-| Le runtime vient d'armer une séance | le dossier de la séance est créé avec son manifeste d'ouverture (`ended_at` et `end_reason` à `null`) |
+| Le runtime vient d'armer une séance | le dossier de la séance est créé avec son manifeste d'ouverture (`ended_at` et `end_reason` à `null`), qui dit ce que valait l'horloge murale à cet instant (`clocks.wall_trusted`, [12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un état d'horloge illisible ne coûte pas l'enregistrement : il est ouvert et dit `false` |
 | Chaque tic (5 Hz) | une ligne de `ticks.csv` ; un événement à chaque changement de phase, de verdict ou de défaut variateur |
 | Chaque appel au variateur | une ligne de `drive_frames.jsonl` : ce qui a été demandé, ce qui a été répondu, en combien de temps (15.2) |
 | Chaque lot du BITalino | un bloc brut `ecg_raw/NNNNNN.bin.gz`, toutes voies, **avant** tout traitement |
@@ -2531,7 +2679,8 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   l'enregistrement : `drive_frames.jsonl` commence avec l'enregistrement.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
-- Les contrôles pré-vol (`preflight: null`).
+- Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge
+  murale (`clocks.ntp_offset_s: null` ; `clocks.wall_trusted`, lui, est écrit).
 - Hors séance, les changements d'état que personne n'a demandés (un verdict
   ou un défaut variateur qui apparaît ou disparaît console au repos) : le
   journal hors séance (15.9) ne garde que les événements de la console.

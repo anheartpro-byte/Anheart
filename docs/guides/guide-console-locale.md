@@ -189,8 +189,12 @@ Au démarrage, le terminal affiche une ligne de résumé. Celle constatée avec 
 commande complète ci-dessus :
 
 ```text
-WARNING src.local_panel: Console du banc sur http://127.0.0.1:8731/ - MANUEL + PROGRAMMES (plafond 1380 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun
+{"ts": "...", "level": "WARNING", "logger": "__main__", "event": "Console du banc sur http://127.0.0.1:8731/ - MANUEL + PROGRAMMES (plafond 1380 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun"}
 ```
+
+Depuis le 10 octobre 2026, chaque ligne que la console écrit est un objet JSON : la
+phrase à lire est dans le champ `event`. Celle de cet exemple a été constatée avant ce
+changement, sous sa forme d'alors ; seule son enveloppe a changé.
 
 Lisez cette ligne à chaque démarrage : elle dit si le variateur est le **simulateur**
 ou le vrai, quel est le plafond de vitesse, et si la console est reliée au tableau
@@ -200,7 +204,7 @@ de bord distant (`aucun` = non).
 exemple (constaté) :
 
 ```text
-WARNING src.local_panel: console stopped: emergency zero ACKNOWLEDGED; the drive link closed cleanly
+{"ts": "...", "level": "WARNING", "logger": "src.panel_lifecycle", "event": "console stopped: emergency zero ACKNOWLEDGED; the drive link closed cleanly"}
 ```
 
 ou, si rien n'a jamais été commandé : `console stopped: runtime never started: drive link released without a write`.
@@ -403,7 +407,12 @@ sans le site.
 
 Sous les pastilles, une ligne précise le motif et l'âge de la dernière réponse du
 tableau de bord, par exemple
-`serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`. Une seule
+`serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`. Depuis le
+10 octobre 2026, une ligne `horloge` la suit : `horloge synchronisee`, ou, en orange,
+`horloge NON FIABLE` tant que la machine n'a joint aucune source de temps (après une
+coupure de courant, jusqu'au retour du réseau). En orange, une séance de banc démarre
+avec un avertissement, et un départ avec une personne à bord est refusé. Cette ligne
+vient du code et des tests automatiques ; elle n'est sur aucune capture de ce guide. Une seule
 requête lente ne fait pas passer la pastille au rouge : elle dit encore `joignable`
 pendant 25 s, et c'est cet âge qui grandit. Si la pastille est **barrée**, c'est la
 console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).

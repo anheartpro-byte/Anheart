@@ -12,7 +12,9 @@ something does not work:
 * whether motion is enabled at all in this build, and the geometry every g on
   the screen was computed with;
 * which build this console is (``raspberry-pi/VERSION``), and how its link with
-  the dashboard is doing (:mod:`src.link_state`).
+  the dashboard is doing (:mod:`src.link_state`);
+* whether a time service keeps the wall clock that dates what the console
+  writes (:mod:`src.wall_clock`).
 
 These are plain frozen records. The composition root
 (:mod:`src.local_panel`) builds one on request through :class:`PanelSource`;
@@ -32,6 +34,7 @@ from src.ecg_pipeline import EcgBridgeStats
 from src.link_state import LinkStatus
 from src.training.runtime import IdleLink, RiseHold
 from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
+from src.wall_clock import WallClockState
 
 # The two kinds of link the records below report. They are defined here, below
 # the configuration that chooses them (``src.local_config`` imports the web
@@ -126,6 +129,10 @@ class PanelStatus:
 
     dashboard: LinkStatus
     """The link with the dashboard, as the operator reads it now."""
+
+    wall_clock: WallClockState | None = None
+    """What the wall clock is worth, as the console last read it; ``None`` on a
+    console built without a probe. It dates the records, and decides nothing else."""
 
 
 class PanelSource(Protocol):

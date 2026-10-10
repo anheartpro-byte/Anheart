@@ -20,6 +20,12 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 > - **Pas vérifié** : aucune installation sur un vrai Raspberry Pi, ni avec le
 >   vrai variateur, ni avec le vrai BITalino. La liste de ce qu'une personne
 >   doit faire et constater est en [section 6](#6-installer-un-vrai-raspberry-pi).
+> - **Heure et journal du système (10 octobre 2026)** : le script installe le
+>   service de temps `chrony` et règle un journal gardé sur le disque et borné ;
+>   la console dit si son horloge est tenue par ce service
+>   ([section 4](#lheure)). Vérifié dans la machine de remplacement, pas sur
+>   un Pi : **l'essai de coupure secteur n'est pas fait**
+>   ([section 6](#essai-de-coupure-secteur--à-faire-au-banc)).
 > - **Pas fait** : l'image n'est ni publiée dans un registre ni signée
 >   ([section 1](#ce-qui-reste-pour-une-image-construite-et-signée-par-la-ci)).
 
@@ -106,6 +112,7 @@ la même chose.
 | SHA-256 du fichier | `9e938c5a6981c3f498b3b564c527f3e1fd58ef20bbf703be0eea748384a6c1af` | publié par Raspberry Pi à côté du fichier (`.sha256`) |
 | Docker | paquet `docker.io` de Debian 12 : 20.10.24+dfsg1-1+deb12u1+b6 (installé par la CI le 7 octobre 2026) | installé par `scripts/install.sh` |
 | BlueZ | paquet `bluez` : 5.66-1+rpt2+deb12u2 dans l'image figée (5.66-1+deb12u2 dans Debian, celui de la CI) | déjà dans l'image, vérifié par le script |
+| Service de temps | paquet `chrony` de Debian 12 (série 4.3) ; il prend la place de `systemd-timesyncd`, le service de temps de Raspberry Pi OS (à constater sur un Pi, [section 6](#6-installer-un-vrai-raspberry-pi)) | installé par `scripts/install.sh` |
 | libusb | paquet `libusb-1.0-0` : 2:1.0.26-1 dans l'image figée | déjà dans l'image, vérifié par le script |
 | systemd | 252.39-1~deb12u2 dans l'image figée | déjà dans l'image |
 
@@ -117,9 +124,9 @@ référence de l'image (`/etc/rpi-issue`) à celle de cette page et **avertit** 
 elle diffère, sans refuser : une image plus récente de la même série reste
 Debian 12.
 
-Les paquets du système (`docker.io`, `bluez`, `libusb-1.0-0`) viennent de
-Debian 12 : ils sont figés par la série, qui ne reçoit que des corrections, pas
-par un numéro exact. Les numéros ci-dessus sont ceux de la série au 7 octobre
+Les paquets du système (`docker.io`, `bluez`, `libusb-1.0-0`, `chrony`) viennent
+de Debian 12 : ils sont figés par la série, qui ne reçoit que des corrections,
+pas par un numéro exact. Les numéros ci-dessus sont ceux de la série au 7 octobre
 2026 ; le script affiche ceux qu'il trouve.
 
 ### L'image de la console
@@ -195,7 +202,9 @@ Dans l'ordre :
 | Système | refuse tout autre système que Debian 12 ; avertit si l'architecture n'est pas arm64 ou si la référence Raspberry Pi OS diffère | idem |
 | Version | lit `raspberry-pi/VERSION` ; refuse une version qui ne peut pas nommer une image | idem |
 | Console en marche | si le service tourne déjà, ou si un conteneur nommé `anheart` tourne sans lui (lancé à la main, ou resté d'une autre façon de lancer l'image), demande à la console si elle est au repos ; **refuse de continuer sinon**, y compris quand elle ne répond pas | idem |
-| Paquets | installe `docker.io`, `bluez`, `libusb-1.0-0`, `ca-certificates`, `curl` ; active Docker et le Bluetooth | rien à installer : `apt` n'est pas appelé |
+| Paquets | installe `docker.io`, `bluez`, `libusb-1.0-0`, `ca-certificates`, `curl`, `chrony` ; active Docker et le Bluetooth | rien à installer : `apt` n'est pas appelé |
+| Heure | écrit `/etc/chrony/conf.d/anheart.conf`, active et démarre `chrony` ; dit si la machine a une horloge temps réel ([section 4](#lheure)) | fichier identique : `chrony` n'est pas redémarré |
+| Journal du système | écrit `/etc/systemd/journald.conf.d/anheart.conf` (`Storage=persistent`, `SystemMaxUse=200M`) et redémarre `systemd-journald` ([section 4](#le-journal-du-système)) | fichier identique : rien n'est redémarré |
 | Compte | crée le compte système `anheart` (sans connexion) | déjà là |
 | Dossiers | `/var/lib/anheart/data` (profils locaux) et `/var/lib/anheart/records` (enregistrements de séance, mode 700), propriété de `anheart` | propriétaire et mode remis |
 | Configuration | écrit `/etc/anheart/anheart.env` à partir de `.env.pi.example`, lisible par root seul (mode 600) | **le fichier existant n'est jamais réécrit ni affiché** ; propriétaire et mode remis |
@@ -247,7 +256,8 @@ Docker crée pour ce montage un dossier vide `/var/lib/anheart/data/records` sur
 le Pi ; les enregistrements sont dans `/var/lib/anheart/records`.
 
 **Désinstaller** : `sudo bash scripts/uninstall.sh` arrête la console et retire
-le service. La configuration, les données, le compte et les images restent.
+le service. La configuration, les données, le compte et les images restent, et
+les deux réglages du système aussi (le service de temps et le journal).
 
 ---
 
@@ -407,6 +417,83 @@ arrêt **ordonné** de la machine de remplacement : une coupure franche de
 l'alimentation, en plein milieu d'une écriture, n'est pas simulée. C'est
 l'étape 6 de la [marche à suivre sur un vrai Pi](#6-installer-un-vrai-raspberry-pi).
 
+### L'heure
+
+**L'horloge murale ne sert qu'à dater.** La console ne compte aucune durée
+dessus : délais, rampes et règles de sécurité lisent l'horloge monotone, qu'un
+changement d'heure ne touche pas
+([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)).
+Elle date ce que la console écrit : le début d'un enregistrement de séance, une
+ligne du journal.
+
+Un Raspberry Pi 4 n'a pas d'horloge sauvegardée par une pile. Après une coupure
+de courant il redémarre à l'heure de son dernier arrêt, et se trompe de toute
+la durée de la coupure tant qu'il n'a pas retrouvé une source de temps.
+
+| Ce que fait l'installation | Pourquoi |
+|---|---|
+| installe `chrony` | un seul service de temps : le paquet `chrony` prend la place de `systemd-timesyncd`, celui de Raspberry Pi OS (les deux paquets s'excluent). `chrony` plutôt que lui, comme le demandait le ticket, pour deux raisons : il publie au noyau l'erreur qu'il estime et celle qu'il garantit, que la console lit sans parler à aucun service ; et il tient à l'heure une horloge temps réel quand la machine en a une. Ces deux comportements sont ceux que décrit sa documentation : ni l'un ni l'autre n'a été observé sur un Pi |
+| écrit `/etc/chrony/conf.d/anheart.conf` | les deux directives dont dépend ce que lit la console : `makestep 1 3` (l'heure est corrigée d'un coup, et non lentement, quand elle est fausse de plus d'une seconde à l'une des trois premières corrections après le démarrage de `chrony`) et `rtcsync` (une fois synchronisé, `chrony` le dit au noyau, et le noyau recopie l'heure dans l'horloge temps réel toutes les 11 minutes). Les serveurs de temps sont ceux du fichier de Debian (`2.debian.pool.ntp.org`) |
+| dit si une horloge temps réel est là | il lit `/sys/class/rtc/rtc0`. Présente : le noyau la lit à l'allumage et `chrony` la tient à l'heure, sans autre réglage. Absente : il le dit |
+
+**Ce que la console en dit.** Sur le Pi, toutes les 10 secondes, hors de la
+boucle de contrôle, elle demande au noyau ce que vaut l'horloge : la question que pose
+`timedatectl` pour afficher `System clock synchronized`, jugée par la même
+règle. Sa réponse est sur la page (ligne `horloge` sous les pastilles), dans le
+manifeste de chaque enregistrement (`clocks.wall_trusted`) et dans son journal
+(`wall clock: ...`, au démarrage et à chaque changement).
+
+```sh
+timedatectl                         # System clock synchronized: yes
+chronyc tracking                    # la source, l'écart mesuré, l'erreur
+chronyc sources                     # les serveurs joints
+journalctl -u anheart | grep '"event": "wall clock'
+```
+
+**Avec une horloge temps réel et sans réseau, la console dit encore « NON
+FIABLE ».** Elle ne fait confiance qu'à un service de temps synchronisé. Une
+horloge temps réel remet le Pi à une heure plausible à l'allumage, mais rien
+dans ce dépôt ne vérifie qu'elle est juste : une pile morte, ou l'horloge
+intégrée d'un Pi 5 sans pile, donnent une heure lisible et fausse. La règle qui
+ferait confiance à un module est à écrire quand un module sera choisi et
+essayé ([section 8](#8-limites-et-reste-à-faire)).
+
+### Le journal du système
+
+Ce que la console écrit va dans le journal de systemd (`journalctl -u anheart`).
+L'installation règle ce journal par `/etc/systemd/journald.conf.d/anheart.conf` :
+
+| Réglage | Effet |
+|---|---|
+| `Storage=persistent` | le journal est écrit sous `/var/log/journal`, sur la carte : il survit à un redémarrage. Sans ce réglage, un système sans ce dossier le garde en mémoire et le perd |
+| `SystemMaxUse=200M` | il n'occupe jamais plus de 200 Mo : les lignes les plus anciennes sont retirées. Sans ce réglage, sa limite est un dixième de la carte (jusqu'à 4 Go), sur la carte qui porte aussi les enregistrements de séance, dont un départ exige 500 Mo libres |
+
+`journald` lit ce fichier à son démarrage : le script le redémarre quand il
+vient de l'écrire, sans toucher à la console (systemd garde le fil par lequel
+elle écrit).
+
+**Chaque ligne de la console est un objet JSON**, avec quatre champs (`ts`,
+`level`, `logger`, `event`) et un cinquième, `exception`, quand il y a une
+trace d'erreur ([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)) :
+
+```sh
+journalctl -u anheart -o cat                                 # les lignes telles qu'écrites
+journalctl -u anheart -o cat | grep '"level": "ERROR"'
+journalctl --disk-usage                                      # la place occupée
+```
+
+Deux choses à savoir :
+
+* **Une coupure de courant peut emporter les dernières minutes du journal.**
+  `journald` ne force l'écriture sur le disque que toutes les 5 minutes, et tout
+  de suite pour un message critique. Ce n'est pas le cas de l'enregistrement de
+  séance, poussé sur le disque toutes les 2 secondes
+  ([raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)) : c'est lui
+  la trace d'une séance, pas le journal.
+* **Ce que le script d'entrée de l'image écrit avant la console** (une ou deux
+  lignes sur la liaison RFCOMM) et la trace d'une erreur qui empêcherait
+  Python de démarrer ne sont pas en JSON.
+
 ### Sous quel compte
 
 Le compte `anheart` possède les dossiers de données. **La console tourne encore
@@ -430,17 +517,29 @@ Le workflow `.github/workflows/pi-install.yml` lance
 
 | Étape | Ce qui doit être vrai |
 |---|---|
-| 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; le contrôle de santé de l'image passe à `healthy` |
-| 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console ; le `curl` de Debian 12 envoie bien un en-tête lu sur son entrée standard |
+| 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; `chrony` est installé, activé au démarrage, avec ses deux directives ; la console, dans son conteneur, lit l'état de l'horloge de la machine et dit la même chose que `timedatectl` ; le journal est sous `/var/log/journal` et `journald` annonce lui-même sa borne de 200 Mo ; le contrôle de santé de l'image passe à `healthy` |
+| 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console ; le `curl` de Debian 12 envoie bien un en-tête lu sur son entrée standard ; un réglage du journal modifié fait redémarrer `journald` et pas la console, dont les lignes suivantes arrivent encore au journal |
 | 3. Séance en cours | une séance manuelle simulée tourne ; son enregistrement s'écrit dans `/var/lib/anheart/records`, avec la version de l'image ; une installation qui remplacerait la console **refuse** et ne touche à rien |
 | 4. Service arrêté en pleine séance | `systemctl stop anheart` rend la main en moins de 60 s ; systemd constate un arrêt propre (code 0) ; le journal porte le `shutdown complete` de la console ; l'enregistrement est clos, raison `shutdown` ; aucun conteneur ne reste ; redémarrée, la console est au repos, sans attestation |
 | 5. Arrêt brutal | la console est tuée en pleine séance ; systemd la relance ; elle est au repos, sans attestation |
 | 6. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
 | 7. Console que le service n'a pas lancée | un conteneur `anheart` lancé à la main tourne une séance : l'installation **refuse**, ne le touche pas, ne démarre pas le service ; une fois la séance terminée, l'installation passe, l'unité arrête et retire ce conteneur puis lance le sien |
-| 8. Arrêt puis rallumage | la machine de remplacement est arrêtée (arrêt ordonné) puis rallumée ; la console revient seule, au repos |
+| 8. Arrêt puis rallumage | la machine de remplacement est arrêtée (arrêt ordonné) puis rallumée ; la console revient seule, au repos ; une ligne écrite dans le journal avant l'arrêt y est encore, et les lignes de la console d'avant l'arrêt aussi |
 
 Rien n'y touche du matériel ni un tableau de bord : variateur simulé, ECG
 simulé, clé de machine vide.
+
+**Ce que la machine de remplacement ne montre pas de l'heure.** Elle partage
+l'horloge de la machine qui lance le test : `chrony` y est installé et activé,
+mais qu'il y tourne et s'y synchronise n'est pas exigé, et une heure fausse au
+démarrage n'y est pas provoquée. Le remplacement de `systemd-timesyncd` par
+`chrony`, la correction de l'heure au retour du réseau, une horloge temps réel
+et une coupure de courant ne se voient que sur un vrai Pi
+([section 6](#essai-de-coupure-secteur--à-faire-au-banc)). Ce que la console
+fait d'une horloge que personne ne tient (elle démarre, prévient au banc,
+refuse une personne à bord, l'écrit dans le manifeste) est prouvé par la gate
+du Pi, avec un état d'horloge décidé par le test
+(`tests/test_wall_clock_console.py`).
 
 **Quand il tourne.** Sur une PR qui modifie de quoi l'installation est faite
 (`Dockerfile`, fichiers `requirements*.txt`, `scripts/install.sh`,
@@ -513,7 +612,14 @@ variateur ni BITalino.
    - `curl -s http://127.0.0.1:8090/api/status` : commence par
      `{"run_state":"idle"` et contient `"attested":false` ;
    - après une minute, `sudo docker inspect --format '{{.State.Health.Status}}' anheart` :
-     `healthy`.
+     `healthy` ;
+   - `timedatectl` : `System clock synchronized: yes` et `NTP service: active`,
+     et `systemctl is-active chrony systemd-timesyncd` : `active` puis
+     `inactive` (ou `unknown`), pour le remplacement d'un service par l'autre ;
+   - sur la page de la console, sous les pastilles : `horloge synchronisee`,
+     suivie de deux erreurs en millisecondes ;
+   - `journalctl --disk-usage` répond, et `ls /var/log/journal` montre un
+     dossier.
 6. **Couper et remettre l'alimentation**, sans rien taper. Une fois le Pi
    redémarré, refaire les constats de l'étape 5 : la console doit être revenue
    seule, au repos. **C'est le critère d'acceptation du ticket** : consigner
@@ -534,9 +640,37 @@ variateur ni BITalino.
    ([section 4](#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
 
 Ce que ces étapes ne couvrent pas : l'écran en plein écran au démarrage
-([deploiement.md](deploiement.md#75-vérifier-puis-démarrer)), le durcissement
-du système, l'horloge et les journaux persistants
-([section 8](#8-limites-et-reste-à-faire)).
+([deploiement.md](deploiement.md#75-vérifier-puis-démarrer)) et le durcissement
+du système ([section 8](#8-limites-et-reste-à-faire)).
+
+### Essai de coupure secteur : à faire au banc
+
+**Non fait à ce jour.** C'est le critère d'acceptation qui reste au ticket de
+l'horloge et des journaux (ANH-163), et il complète l'étape 6 ci-dessus. Il
+demande un Pi installé (étapes 1 à 5), son réseau, et de quoi couper ce réseau
+(débrancher le câble, ou éteindre le point d'accès). Ni variateur ni BITalino :
+console en simulation, **capsule vide**. Compter une demi-heure.
+
+À noter pour chaque constat : l'heure d'une montre, ce qui est lu, et si c'est
+ce qui est attendu. Le tout se consigne dans un commentaire du ticket ANH-163,
+avec la référence du Pi et celle du système (`cat /etc/rpi-issue`).
+
+| | Faire | Lire | Attendu |
+|---|---|---|---|
+| 1 | Pi en marche, réseau branché, attendre 2 minutes | `timedatectl` ; la ligne `horloge` de la page | `System clock synchronized: yes` ; `horloge synchronisee`, deux erreurs en millisecondes |
+| 2 | démarrer une séance manuelle de banc (cible 0), puis **STOP** | page Configuration, « Exporter l'enregistrement », puis `manifest.json` de l'archive | `"wall_trusted":true` ; `started_at` à l'heure de la montre |
+| 3 | noter l'heure de la montre. **Couper le réseau**, puis **couper l'alimentation** du Pi, sans rien taper. Attendre **10 minutes** au moins | | |
+| 4 | remettre l'alimentation, **sans le réseau**. Attendre que la page réponde | la ligne `horloge` ; `date` dans un terminal du Pi ; `timedatectl` | `horloge NON FIABLE`, en orange ; `date` en retard d'environ la durée de la coupure ; `System clock synchronized: no`. La console a démarré seule, au repos |
+| 5 | démarrer une séance manuelle de banc (cible 0), puis **STOP** | la liste des événements ; le manifeste exporté | un événement `horloge murale non fiable (...)` ; `"wall_trusted":false` ; `started_at` en retard comme `date` |
+| 6 | rebrancher le réseau, noter l'heure de la montre | la ligne `horloge`, toutes les 10 secondes ; `chronyc tracking` | `horloge synchronisee` ; noter en combien de temps. `date` est de nouveau à l'heure de la montre |
+| 7 | démarrer une troisième séance de banc, puis **STOP** | le manifeste exporté | `"wall_trusted":true` ; `started_at` à l'heure de la montre |
+| 8 | relire le journal | `journalctl -u anheart -o cat \| grep '"event": "wall clock'` ; `journalctl --list-boots` | les lignes d'avant la coupure sont là (journal gardé) ; une ligne `unsynchronised` après le rallumage, une `synchronised` après le retour du réseau. Noter la dernière ligne écrite avant la coupure et son heure : c'est ce que la coupure a laissé du journal |
+| 9 | relire les trois enregistrements | `sudo ls /var/lib/anheart/records` | trois dossiers ; celui de l'étape 5 porte dans son nom l'heure fausse |
+
+Ce que cet essai ne dit pas : le comportement d'un module d'horloge temps réel
+(aucun n'est monté), ni celui d'une séance avec une personne à bord, mode fermé
+(`OCCUPANCY_OCCUPIED_ENABLED=false`). Le refus d'un tel départ sur une horloge
+que personne ne tient est prouvé par les tests.
 
 ---
 
@@ -577,7 +711,10 @@ nouvelles versions.
 | Publier et signer l'image, la faire tirer par le Pi | chef de projet (registre, clé), ANH-126, ANH-168 |
 | Faire tourner la console sous le compte `anheart`, sans privilèges ; pare-feu ; système en lecture seule | ANH-151 |
 | Relancer une console qui ne répond plus (chien de garde) | ANH-162 |
-| Horloge fiable, journaux persistants et bornés | ANH-163 |
+| Essai de coupure secteur au banc ([section 6](#essai-de-coupure-secteur--à-faire-au-banc)) : il n'est pas fait, et lui seul montre le remplacement de `systemd-timesyncd`, la correction de l'heure au retour du réseau et ce que la coupure laisse du journal | une personne avec le matériel ; ANH-163 |
+| Horloge temps réel : aucun module n'est monté ni essayé. Le script en signale une et `chrony` la tiendrait à l'heure, mais la console ne lui fait pas confiance sans réseau ([section 4](#lheure)). Choisir un module, l'activer dans `/boot/firmware/config.txt`, puis écrire la règle de confiance | chef de projet (matériel), puis un ticket |
+| Les serveurs de temps sont ceux de Debian, sur Internet. Un site qui ferme la sortie NTP (UDP 123) laisse l'horloge « NON FIABLE » : y déclarer le serveur de temps du site (`/etc/chrony/sources.d/`) | à décider par site |
+| Le contrôle pré-vol qui regroupe l'horloge avec les autres contrôles, et l'horloge dans le battement de cœur vers le tableau de bord | ANH-142, ANH-148 |
 | Mises à jour à distance | ANH-116, ANH-168, ANH-169 |
 | Le verrou du câble du variateur (`/tmp/anheart-drive.lock`) est celui du conteneur : un outil de banc lancé sur le Pi **hors** du conteneur n'est pas refusé par la console. D'ici là, la règle est pour la personne : **aucun outil de banc ou de diagnostic tant que le service tourne** ([section 4](#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)). Les sources de ces outils arrivent sur le Pi avec le dossier copié, mais rien n'y est installé pour les lancer (Python 3.11 du système, aucun environnement), et ils ne sont pas dans l'image | à concevoir (verrou partagé entre le Pi et le conteneur, ou outils lancés dans le conteneur), dans la suite de ANH-74 ; **condition avant de relier au vrai variateur une console lancée par ce service** |
 | Un `systemctl start anheart` à la main, ou la relance après la mort du client Docker, arrête une console trouvée en marche sans lui demander si elle est au repos ([section 4](#une-seule-console-à-la-fois)) | limite assumée ; `scripts/install.sh`, lui, pose la question |

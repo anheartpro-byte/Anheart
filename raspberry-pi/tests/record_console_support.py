@@ -25,6 +25,7 @@ from src.record.session import SessionRecorder
 from src.result import Ok
 from src.training.runtime import RuntimeState
 from src.units import Monotonic, UnixMillis
+from src.wall_clock import WallClockProbe
 from tests.test_failure_rig import BENCH_ENV, OPERATOR, TICK, Rig, Wrapped, attest, make_rig
 
 
@@ -105,6 +106,7 @@ def recorded_rig(
     treat: TreatFunction | None = None,
     dsp: bool = False,
     transport: CloudTransportFactory | None = None,
+    wall_clock: WallClockProbe | None = None,
 ) -> RecordedRig:
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     journal = Journal(tmp_path / "records", clock)
@@ -117,6 +119,7 @@ def recorded_rig(
         clock=clock,
         transport=transport,
         journal=journal,
+        wall_clock=wall_clock,
     )
     return RecordedRig(rig=rig, journal=journal, clock=clock)
 

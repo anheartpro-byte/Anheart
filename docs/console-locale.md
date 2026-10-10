@@ -95,9 +95,14 @@ MOTOR_BACKEND=sim ECG_SOURCE=sim ARM_RADIUS_M=1.5 UI_PORT=8090 MACHINE_API_KEY= 
 Au démarrage, le terminal affiche une ligne de résumé (vérifiée) :
 
 ```
-WARNING __main__: Console du banc sur http://127.0.0.1:8090/ - MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun
-INFO src.web.app: operator interface serving 25 routes on 127.0.0.1:8090 (loopback=True, token=none)
+{"ts": "2026-10-10T16:21:03.870Z", "level": "WARNING", "logger": "__main__", "event": "Console du banc sur http://127.0.0.1:8090/ - MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun"}
+{"ts": "2026-10-10T16:21:04.512Z", "level": "INFO", "logger": "src.web.app", "event": "operator interface serving 25 routes on 127.0.0.1:8090 (loopback=True, token=none)"}
 ```
+
+Depuis le 10 octobre 2026, chaque ligne du journal de la console est un objet JSON
+(champs `ts`, `level`, `logger`, `event`) : la phrase vérifiée ci-dessus est dans
+`event`, et les heures de cet exemple sont illustratives
+([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)).
 
 Points à savoir :
 
@@ -241,7 +246,8 @@ Les états `run_state` (vue « intention » de la surface de commande) :
 | `stopping` | une fin ou un E-STOP est accepté ; un E-STOP garde cet état jusqu'à l'acquittement |
 
 Sous les pastilles, une première ligne donne le motif de l'état du lien avec le
-tableau de bord et l'âge de sa dernière réponse (voir ci-dessous). Une seconde indique
+tableau de bord et l'âge de sa dernière réponse (voir ci-dessous). Une deuxième dit ce
+que vaut l'horloge de la machine (voir « Ligne horloge », plus bas). La dernière indique
 l'adresse d'écoute, par exemple `127.0.0.1:8090 boucle locale · sans jeton`, ou
 `… RESEAU · jeton` hors boucle locale.
 
@@ -334,6 +340,34 @@ un tableau de bord qui répond 426 au milieu d'une séance, une adresse qui n'es
 tableau de bord, une séance dont rien n'arrive alors que la question d'arrêt est
 servie) et `raspberry-pi/tests/web/panel_dashboard_link.test.mjs` (la page). Pas
 rejoué dans un navigateur, ni face à un déploiement Convex réel.
+
+### Ligne horloge : l'heure de la machine
+
+Sous les pastilles, la ligne `horloge` dit si l'horloge murale de la machine est tenue
+par un service de temps. Cette horloge ne fait que **dater** : les enregistrements de
+séance, le journal. Aucune durée, aucune règle de sécurité n'en dépend
+([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)).
+Un Raspberry Pi n'a pas d'horloge sauvegardée : après une coupure de courant il
+redémarre à l'heure de son dernier arrêt, jusqu'au retour du réseau.
+
+| Ce qui est écrit | Couleur | Quand | Que faire |
+|---|---|---|---|
+| `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | celle du texte | un service de temps tient l'horloge ; les deux nombres sont l'erreur qu'il estime et celle qu'il garantit | rien |
+| `horloge NON FIABLE · aucune source de temps jointe : l'heure peut etre fausse de la duree pendant laquelle le Pi etait eteint` | orange | la machine n'a joint aucune source de temps depuis son allumage, ou plus depuis longtemps | vérifier le réseau du Pi, puis attendre : la ligne change d'elle-même, en dix secondes au plus après la synchronisation |
+| `horloge NON VERIFIEE · etat de l'horloge illisible (...)` | orange | sur un Pi, la console n'a pas pu lire l'état de l'horloge | lire le journal de la console |
+| (ligne vide) | | la console ne tourne pas sous Linux (le Mac du banc et des développeurs) : elle ne juge pas son horloge, ne prévient de rien et ne refuse rien à ce titre | rien |
+
+Tant que la ligne est orange : une séance de **banc** démarre, avec un événement
+`horloge murale non fiable (...)` dans la liste, et le manifeste de son enregistrement
+porte `wall_trusted: false` ; un départ **avec une personne à bord** est refusé
+(`demarrage refuse : horloge murale non fiable (...)`). La console lit l'état toutes
+les 10 secondes ; comme **Console** et **Serveur**, la ligne est barrée quand
+`/api/panel` ne répond plus depuis 3,5 s.
+
+Vérifié par `raspberry-pi/tests/test_wall_clock_console.py` (la console en simulation,
+avec un état d'horloge que le test décide) et
+`raspberry-pi/tests/web/panel_wall_clock.test.mjs` (la page). Pas rejoué dans un
+navigateur, ni sur un Pi.
 
 ### Navigation
 

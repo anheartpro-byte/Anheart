@@ -101,8 +101,16 @@ case "$name" in
             is-active) has active ;;
             is-enabled) has enabled ;;
             # The unit first stops and removes any container named anheart.
-            start | restart) rm -f "$STUB_STATE/foreign-console"; : > "$STUB_STATE/active" ;;
-            enable) case "$*" in *anheart.service*) : > "$STUB_STATE/enabled" ;; esac ;;
+            # Another unit restarted (the system journal) is not the console.
+            start | restart)
+                case "$*" in *anheart.service*)
+                    rm -f "$STUB_STATE/foreign-console"; : > "$STUB_STATE/active" ;;
+                esac ;;
+            enable)
+                case "$*" in
+                    *anheart.service*) : > "$STUB_STATE/enabled" ;;
+                    *chrony.service*) if has chrony-broken; then exit 1; fi ;;
+                esac ;;
             status) echo "scripted status" ;;
         esac ;;
     docker)
@@ -199,6 +207,14 @@ class Machine:
     @property
     def drop_in(self) -> Path:
         return self.unit.parent / "anheart.service.d" / "10-version.conf"
+
+    @property
+    def chrony_conf(self) -> Path:
+        return self.root / "etc" / "chrony" / "conf.d" / "anheart.conf"
+
+    @property
+    def journald_conf(self) -> Path:
+        return self.root / "etc" / "systemd" / "journald.conf.d" / "anheart.conf"
 
     def set(self, name: str, text: str = "") -> None:
         """Script one answer of the stubs (see :data:`STUB`)."""
@@ -298,7 +314,7 @@ def test_a_first_install_leaves_the_account_the_directories_and_the_service(
     assert first.called("docker build", f"--tag anheart-console:{version}", str(machine.tree))
     assert first.called("systemctl enable anheart.service")
     assert first.called("systemctl start anheart.service")
-    assert not first.called("systemctl restart")
+    assert not first.called("systemctl restart", "anheart")
     # The start test: the console answered /healthz, and said it was at rest.
     assert first.called("curl", "/healthz")
     assert first.called("curl", "/api/status")
@@ -544,7 +560,7 @@ def test_a_console_the_service_did_not_start_is_replaced_only_at_rest(machine: M
     started = names.index(["systemctl", "start"])
     assert asked[0] < names.index(["dpkg-query", "--show"]), "asked before anything is installed"
     assert any(built < index < started for index in asked), "asked again after the build"
-    assert not done.called("systemctl restart")
+    assert not done.called("systemctl restart", "anheart")
     assert "the console is at rest" in done.output
 
 
@@ -560,7 +576,8 @@ def test_a_console_the_service_did_not_start_is_left_alone_if_a_session_began_me
     assert refused.exit_code == 1
     assert refused.called("docker build")
     assert not refused.called("systemctl start")
-    assert not refused.called("systemctl restart")
+    # The system journal was restarted on this first run; the console never is.
+    assert not refused.called("systemctl restart", "anheart")
     assert "does not say it is at rest: nothing is restarted" in refused.output
 
 
@@ -584,6 +601,156 @@ def test_the_start_test_fails_when_a_started_console_is_not_at_rest(machine: Mac
     failed = machine.install()
     assert failed.exit_code == 1
     assert "does not say it is at rest after its start" in failed.output
+
+
+# =========================================================================
+# ANH-163: the time service and the system journal
+# =========================================================================
+
+
+def _directives(path: Path) -> list[str]:
+    """The lines of a configuration file that are not comments or blank."""
+    return [
+        line.strip()
+        for line in _read(path).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_ex1_the_install_sets_up_the_time_service(machine: Machine) -> None:
+    """chrony installed, given the two directives the console's reading relies on, started."""
+    first = machine.install()
+    assert first.exit_code == 0, first.output
+    assert first.called("apt-get install", "chrony")
+    assert _directives(machine.chrony_conf) == ["makestep 1 3", "rtcsync"]
+    assert _mode(machine.chrony_conf) == 0o644
+    assert first.called("systemctl try-restart chrony.service"), "a new file is read at a start"
+    assert first.called("systemctl enable --now chrony.service")
+    order = [call for call in first.calls if call.startswith(("apt-get install", "systemctl"))]
+    assert order.index("systemctl enable --now chrony.service") > next(
+        index for index, call in enumerate(order) if call.startswith("apt-get install")
+    ), "the time service is started once its package is there"
+
+    second = machine.install()
+    assert second.exit_code == 0, second.output
+    assert not second.called("systemctl try-restart"), "an unchanged file restarts nothing"
+    assert second.called("systemctl enable --now chrony.service")
+    assert f"{machine.chrony_conf} unchanged" in second.output
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_ex1_a_real_time_clock_is_reported_when_the_machine_has_one(
+    machine: Machine,
+) -> None:
+    """Without one (a Pi as delivered) the install says what that means; with one, it names it."""
+    without = machine.install()
+    assert without.exit_code == 0, without.output
+    assert "no real-time clock on this machine" in without.output
+    assert "the console says so" in without.output
+
+    clock = machine.root / "sys" / "class" / "rtc" / "rtc0"
+    clock.mkdir(parents=True)
+    (clock / "name").write_text("rtc-ds1307 1-0068\n", encoding="utf-8")
+    found = machine.install()
+    assert found.exit_code == 0, found.output
+    assert "real-time clock found: rtc0 (rtc-ds1307 1-0068)" in found.output
+    assert "no real-time clock" not in found.output
+    assert "rtcsync" in _directives(machine.chrony_conf), "what keeps that clock on time"
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_ex1_a_time_service_that_does_not_start_does_not_stop_the_install(
+    machine: Machine,
+) -> None:
+    """The console is installed all the same, and will say its clock is not trusted."""
+    machine.set("chrony-broken")
+    done = machine.install()
+    assert done.exit_code == 0, done.output
+    assert "WARNING: the time service (chrony) did not start" in done.output
+    assert "the console will say its clock is not trusted" in done.output
+    assert done.called("systemctl start anheart.service")
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_ex2_the_install_keeps_the_journal_on_disk_and_bounds_it(
+    machine: Machine,
+) -> None:
+    """``Storage=persistent`` and ``SystemMaxUse=200M``, read by journald at its restart."""
+    first = machine.install()
+    assert first.exit_code == 0, first.output
+    assert _directives(machine.journald_conf) == [
+        "[Journal]",
+        "Storage=persistent",
+        "SystemMaxUse=200M",
+    ]
+    assert _mode(machine.journald_conf) == 0o644
+    assert first.called("systemctl restart systemd-journald.service")
+    assert first.called("journalctl --flush")
+
+    second = machine.install()
+    assert second.exit_code == 0, second.output
+    assert not second.called("systemctl restart"), "an unchanged file restarts nothing"
+    assert not second.called("journalctl --flush")
+    assert f"{machine.journald_conf} unchanged" in second.output
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_a_change_of_the_two_system_files_never_restarts_the_console(
+    machine: Machine,
+) -> None:
+    """A machine installed before this script set them: its console is left running."""
+    assert machine.install().exit_code == 0
+    machine.chrony_conf.unlink()
+    machine.journald_conf.write_text("[Journal]\nStorage=volatile\n", encoding="utf-8")
+
+    done = machine.install()
+    assert done.exit_code == 0, done.output
+    assert done.called("systemctl try-restart chrony.service")
+    assert done.called("systemctl restart systemd-journald.service")
+    assert not done.called("systemctl restart", "anheart")
+    assert not done.called("systemctl start", "anheart")
+    assert "nothing changed: left alone" in done.output
+    assert _directives(machine.journald_conf)[1:] == ["Storage=persistent", "SystemMaxUse=200M"]
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh163_nothing_of_the_system_is_touched_under_a_console_that_is_not_at_rest(
+    machine: Machine,
+) -> None:
+    """The refusal comes first: neither file is written, neither service restarted."""
+    assert machine.install().exit_code == 0
+    machine.chrony_conf.unlink()
+    machine.journald_conf.unlink()
+    machine.set("status", RUNNING)
+
+    refused = machine.install()
+    assert refused.exit_code == 1
+    assert not machine.chrony_conf.exists()
+    assert not machine.journald_conf.exists()
+    assert not refused.called("systemctl restart")
+    assert not refused.called("systemctl try-restart")
+
+
+def test_anh163_the_end_to_end_test_checks_the_clock_and_the_journal_in_a_real_system() -> None:
+    """What the stubs above cannot show is asked of a real systemd, by the CI's install test."""
+    script = _read(END_TO_END)
+    for needed in (
+        "/etc/chrony/conf.d/anheart.conf",
+        "systemctl is-enabled chrony",
+        "/etc/systemd/journald.conf.d/anheart.conf",
+        "/var/log/journal",
+        "max 200.0M",
+        "timedatectl show --property=NTPSynchronized",
+        '"wall_clock":{"state":"',
+    ):
+        assert needed in script, needed
 
 
 @pytest.mark.slow

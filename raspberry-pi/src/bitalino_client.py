@@ -826,7 +826,12 @@ class BITalinoClient:
             )
 
     def _check_signal_integrity(self, channels: Sequence[ChannelData]) -> None:
-        """Warn once per acquisition about a channel carrying no analog signal."""
+        """Warn once per acquisition about a channel carrying no analog signal.
+
+        The channel is named; what was measured on it is not written: no value
+        taken from the samples goes to the log, not even of a channel judged
+        empty (``tests/test_log_format.py``). The two thresholds are constants.
+        """
         if self._integrity_checked:
             return
         self._integrity_checked = True
@@ -836,11 +841,9 @@ class BITalinoClient:
             spread = statistics.pstdev(values)
             if peak <= NO_SIGNAL_MAX and spread < NO_SIGNAL_STD:
                 logger.warning(
-                    "Channel %s has no analog signal (max=%d, std=%.2f) - check the "
-                    "sensor is plugged into its BITalino port.",
+                    "Channel %s has no analog signal - check the sensor is plugged into "
+                    "its BITalino port.",
                     ch.channel,
-                    int(peak),
-                    spread,
                 )
 
 

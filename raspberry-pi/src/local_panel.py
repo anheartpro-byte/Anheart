@@ -92,6 +92,17 @@ A stop asked for from the dashboard is looked for by another task
 (:meth:`LocalPanel.cloud_stop_step`), which does nothing else: the question
 keeps its cadence while the sending waits on a slow disk or a slow upload.
 
+The wall clock dates, and decides nothing
+-----------------------------------------
+
+Whether a time service keeps the wall clock is asked by a task of its own
+(:meth:`LocalPanel.clock_step`, :mod:`src.wall_clock`), never by the control
+tick, which reads the monotonic clock and nothing else. The last answer is
+shown on the page and written in each record's manifest
+(``clocks.wall_trusted``). On a clock nobody answers for, a bench session
+starts and the operator is told; a start with a person on board is refused
+before the runtime is asked anything.
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -155,6 +166,7 @@ from src.local_config import (
     load_local_config,
     retired_keys,
 )
+from src.log_format import json_handler
 from src.motor.atv320 import ATV320Drive, serial_master
 from src.motor.drive import DriveBackend
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
@@ -228,6 +240,14 @@ from src.training.runtime import (
 from src.training.safety import SELF_CLEARING, SafetyLimits
 from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
+from src.wall_clock import (
+    WallClockProbe,
+    WallClockState,
+    WallClockWatch,
+    detail_of,
+    is_trusted,
+    system_probe,
+)
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
 
@@ -273,6 +293,10 @@ STOP_WATCH_PERIOD: Final[Seconds] = Seconds(0.05)
 asked every :data:`~src.cloud_sync.STATUS_PERIOD`; this only bounds how late it can be,
 and a look that finds nothing due reads a clock and returns."""
 
+WALL_CLOCK_PERIOD: Final[Seconds] = Seconds(10.0)
+"""How often the console asks what the wall clock is worth: a state that changes when
+a network comes back or goes, not within a second. See :meth:`LocalPanel.clock_step`."""
+
 STOP_POLL: Final[Seconds] = Seconds(0.05)
 STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
 """At exit the console looks this often, this many times, whether the session
@@ -301,8 +325,6 @@ ESTOP_SOURCE: Final[str] = "console web: e-stop"
 
 type CloudTransportFactory = Callable[[CloudConfig], CloudTransport]
 """Builds the dashboard transport from the configuration; tests pass a fake."""
-
-LOG_FORMAT: Final[str] = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 # =========================================================================
@@ -465,7 +487,15 @@ def recorded_tap(first: BatchTap, recorder: SessionRecorder) -> BatchTap:
 class PanelReporter:
     """Builds :class:`~src.panel_status.PanelStatus` on request. Reads only."""
 
-    __slots__ = ("_clock", "_config", "_dashboard", "_ecg", "_runtime", "_software_version")
+    __slots__ = (
+        "_clock",
+        "_config",
+        "_dashboard",
+        "_ecg",
+        "_runtime",
+        "_software_version",
+        "_wall_clock",
+    )
 
     def __init__(
         self,
@@ -476,16 +506,20 @@ class PanelReporter:
         ecg: EcgLink,
         software_version: SoftwareVersion,
         dashboard: LinkHealth | None,
+        wall_clock: WallClockWatch | None = None,
     ) -> None:
         """``software_version``: what this build calls itself, read once at startup.
         ``dashboard``: what the dashboard link last heard of itself, which that link
-        alone writes; ``None`` on a console that has no machine key."""
+        alone writes; ``None`` on a console that has no machine key.
+        ``wall_clock``: the last reading of the wall clock's standing; ``None`` on a
+        console built without a probe."""
         self._clock: Clock = clock
         self._config: LocalConfig = config
         self._runtime: TrainingRuntime = runtime
         self._ecg: EcgLink = ecg
         self._software_version: SoftwareVersion = software_version
         self._dashboard: LinkHealth | None = dashboard
+        self._wall_clock: WallClockWatch | None = wall_clock
 
     def panel_status(self) -> PanelStatus:
         """The link panel, now."""
@@ -493,6 +527,7 @@ class PanelReporter:
         link = config.drive_link
         now = self._clock.monotonic()
         dashboard = self._dashboard
+        wall_clock = self._wall_clock
         return PanelStatus(
             at=now,
             motion_enabled=True,
@@ -508,6 +543,7 @@ class PanelReporter:
             motor_max_rpm=config.motor_max_rpm,
             software_version=self._software_version,
             dashboard=NOT_CONFIGURED if dashboard is None else dashboard.status(now),
+            wall_clock=None if wall_clock is None else wall_clock.current(),
         )
 
 
@@ -573,6 +609,7 @@ class LocalPanel:
         "_store",
         "_surface",
         "_transport",
+        "_wall_clock",
     )
 
     def __init__(
@@ -595,9 +632,11 @@ class LocalPanel:
         cloud: CloudSync | None = None,
         transport: HttpxTransport | None = None,
         recorder: SessionRecorder | None = None,
+        wall_clock: WallClockWatch | None = None,
     ) -> None:
         self._clock: Clock = clock
         self._recorder: SessionRecorder | None = recorder
+        self._wall_clock: WallClockWatch | None = wall_clock
         self._config: LocalConfig = config
         self._drive: DriveSide = drive
         self._runtime: TrainingRuntime = runtime
@@ -772,7 +811,7 @@ class LocalPanel:
         if isinstance(ceiling, Err):
             self._surface.note_refused(operator, ceiling.error.detail)
             return
-        blocked = self._presence_refusal(occupancy)
+        blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
             self._surface.note_refused(operator, blocked)
             return
@@ -781,6 +820,12 @@ class LocalPanel:
             self._surface.note_refused(operator, describe_start_refusal(started.error))
             return
         self._begin_record(SessionRequest(occupancy=occupancy, operator=operator))
+        untrusted = self._untrusted_clock()
+        if untrusted is not None:
+            # Nobody on board (a person on board was refused above): the session
+            # starts, and the operator is told what its record's dates are worth.
+            # Said about the record, never refused.
+            self._surface.note_recording(describe_clock_warning(untrusted))
         if self._listener is not None:
             self._listener.session_started(
                 StartedSession(
@@ -853,7 +898,7 @@ class LocalPanel:
         return rider_age_refusal(command.subject_age, self._config.min_rider_age)
 
     def _prepare_programme(self, command: StartSession) -> Result[Program, str]:
-        """Gates 1-4 and the camera: the programme to arm, or the sentence saying why not."""
+        """Gates 1-4, the camera and the wall clock: the programme to arm, or why not."""
         admission = self._admission_refusal(command)
         if admission is not None:
             return Err(admission)
@@ -874,7 +919,8 @@ class LocalPanel:
                 f"demarrage refuse : programme a {program.profile.max_rpm} tr/min moteur, "
                 f"au-dessus du plafond personne a bord ({ceiling.value} tr/min)"
             )
-        blocked = self._presence_refusal(Occupancy.OCCUPIED)
+        occupied = Occupancy.OCCUPIED
+        blocked = self._presence_refusal(occupied) or self._clock_refusal(occupied)
         if blocked is not None:
             return Err(blocked)
         return Ok(program)
@@ -909,6 +955,46 @@ class LocalPanel:
             return None
         gate = self._presence.start_gate(self._clock.monotonic(), occupancy)
         return gate.error.detail if isinstance(gate, Err) else None
+
+    @property
+    def wall_clock(self) -> WallClockWatch | None:
+        """The last reading of the wall clock's standing, or ``None`` without a probe."""
+        return self._wall_clock
+
+    async def clock_step(self) -> None:
+        """Ask again whether a time service keeps the wall clock. No-op without a probe.
+
+        A task of its own, never the control tick: the tick reads the monotonic
+        clock and nothing else. The question is one system call that copies a
+        few kernel variables (:class:`~src.wall_clock.KernelClock`); it opens
+        nothing and waits for nothing, and the watch never raises. The gates,
+        the record and the page read what it left in memory.
+        """
+        if self._wall_clock is not None:
+            self._wall_clock.refresh()
+
+    def _untrusted_clock(self) -> WallClockState | None:
+        """The wall clock's standing when nobody answers for it, else ``None``.
+
+        ``None`` too on a console built without a probe: it judges nothing. Reads memory.
+        """
+        watch = self._wall_clock
+        if watch is None:
+            return None
+        state = watch.current()
+        return None if is_trusted(state) else state
+
+    def _clock_refusal(self, occupancy: Occupancy) -> str | None:
+        """Why the wall clock refuses a start declared ``occupancy``, or ``None``.
+
+        Only a start with a person on board: its record is evidence, and must
+        be dated by a clock somebody answers for. Asked before the runtime is,
+        like the camera: nothing has touched the drive when it refuses.
+        """
+        untrusted = self._untrusted_clock()
+        if untrusted is None or occupancy is not Occupancy.OCCUPIED:
+            return None
+        return describe_clock_refusal(untrusted)
 
     async def sensor_step(self) -> None:
         """Re-process every sensor window (on a worker thread) and publish the readings."""
@@ -962,6 +1048,7 @@ class LocalPanel:
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
+            asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
         failed = await PanelTasks(stop, web, self.close).run(control, observers)
         return EXIT_FAILED if failed else EXIT_OK
@@ -1166,6 +1253,7 @@ def build_panel(
     drive: DriveSide | None = None,
     transport: CloudTransportFactory | None = None,
     journal: Journal | None = None,
+    wall_clock: WallClockProbe | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -1188,11 +1276,20 @@ def build_panel(
     it reports its own exchanges, and a delegating tap otherwise. The SDK's
     transport calls are kept only when ``RECORD_DRIVE_SDK_FRAMES`` asks.
 
+    ``wall_clock`` says whether a time service keeps the wall clock
+    (:func:`~src.wall_clock.system_probe` in production; a test gives a fake).
+    It is read here once, then by :meth:`LocalPanel.clock_step`. ``None``:
+    the console judges nothing about its clock: nothing is warned or refused
+    on its account, and a manifest says ``wall_trusted: null``. That is what a
+    test that is not about the clock wants, and what a system that cannot be
+    asked gets (anything but Linux).
+
     The build's version is read here, once (``raspberry-pi/VERSION``): startup
     I/O, with nothing turning. The page, the heartbeat and every record's
     manifest are given that one value.
     """
     version = read_software_version()
+    watch = None if wall_clock is None else WallClockWatch(wall_clock)
     # What the dashboard link hears of itself, for the page. The link writes
     # it from its own task, the page's route reads it: both on the event loop.
     link_health = None if config.cloud is None else LinkHealth(clock.monotonic())
@@ -1230,6 +1327,7 @@ def build_panel(
             drive=drive,
             ecg=ecg_side,
             software_version=version,
+            wall_clock=None if watch is None else watch.current,
         )
     )
     # ONE supervisor: the surface latches the runtime's own. And the runtime
@@ -1276,6 +1374,7 @@ def build_panel(
         ecg=ecg,
         software_version=version,
         dashboard=link_health,
+        wall_clock=watch,
     )
     services = Services(
         clock=clock,
@@ -1333,6 +1432,7 @@ def build_panel(
         cloud=cloud,
         transport=owned,
         recorder=recorder,
+        wall_clock=watch,
     )
 
 
@@ -1378,9 +1478,11 @@ def build_recorder(
     drive: DriveSide,
     ecg: EcgSide,
     software_version: SoftwareVersion,
+    wall_clock: Callable[[], WallClockState] | None = None,
 ) -> SessionRecorder:
     """The session record's loop side, stamped with the configuration actually applied
-    and with the version of this build."""
+    and with the version of this build. ``wall_clock``: the last reading of the wall
+    clock's standing, for each manifest."""
     simulator = drive.simulator
     radius = config.geometry.radius
     leg_tip = config.leg_tip_radius
@@ -1392,6 +1494,7 @@ def build_recorder(
         leg_tip=radius if leg_tip is None else Metres(max(float(leg_tip), float(radius))),
         sim_state=None if simulator is None else _sim_state_of(simulator),
         link_stats=ecg.link_stats,
+        wall_clock=wall_clock,
     )
 
 
@@ -1495,6 +1598,25 @@ _BUSY: Final[Mapping[Activity, str]] = {
     Activity.PURGING: "la purge des enregistrements deposes est en cours",
 }
 """What the journal thread said it was starting, in words for the operator."""
+
+
+def describe_clock_refusal(state: WallClockState) -> str:
+    """Why a start with a person on board is refused on a wall clock nobody answers for."""
+    return (
+        f"demarrage refuse : horloge murale non fiable ({detail_of(state)}). Avec une "
+        "personne a bord, l'enregistrement de la seance doit etre date par une horloge "
+        "synchronisee : retablir le reseau du Pi et attendre que la ligne horloge de la "
+        "console dise synchronisee"
+    )
+
+
+def describe_clock_warning(state: WallClockState) -> str:
+    """What the operator is told when a bench session starts on such a clock."""
+    return (
+        f"horloge murale non fiable ({detail_of(state)}) : les dates de l'enregistrement "
+        "de cette seance ne sont pas sures, et son manifeste le dit. La seance et la "
+        "securite continuent."
+    )
 
 
 def rider_age_refusal(age: int | None, minimum: int) -> str | None:
@@ -1697,10 +1819,20 @@ async def run_console(
     stopped, whatever happens to this coroutine's caller afterwards: the entry
     point gives :func:`bound_exit`. ``None``, which is what a test wants: the
     process is left alone.
+
+    The wall clock is judged where the system can be asked what it is worth
+    (:func:`~src.wall_clock.system_probe`): on the Pi. Elsewhere the console
+    says once that it does not judge it.
     """
     event = asyncio.Event() if stop is None else stop
     clock = RealClock()
-    panel = build_panel(config, clock=clock, journal=open_journal(config, clock))
+    probe = system_probe()
+    if probe is None:
+        _logger.warning(
+            "wall clock: not judged on this system (no way to ask what it is worth): "
+            "nothing is warned or refused on its account, and the records say nothing of it"
+        )
+    panel = build_panel(config, clock=clock, journal=open_journal(config, clock), wall_clock=probe)
     undo = install_stop_signals(event)
     code = EXIT_FAILED
     try:
@@ -1732,10 +1864,12 @@ def describe_config(config: LocalConfig) -> str:
 
 
 def main(environ: Mapping[str, str] | None = None) -> int:
-    """``python -m src.local_panel``. Returns the process exit code."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    """``python -m src.local_panel``. Returns the process exit code.
+
+    Everything the console logs leaves as one JSON object per line
+    (:mod:`src.log_format`): on the Pi that is the journal of its service.
+    """
+    logging.basicConfig(level=logging.INFO, handlers=[json_handler()])
     env = load_environment() if environ is None else environ
     for key in retired_keys(env):
         _logger.warning("configuration: %s is set and no longer read: %s", key, RETIRED_KEYS[key])

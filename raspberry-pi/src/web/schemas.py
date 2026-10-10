@@ -73,6 +73,15 @@ from src.training.types import (
     ZoneCounters,
 )
 from src.units import Monotonic, Seconds
+from src.wall_clock import (
+    Synchronised,
+    WallClockState,
+    clock_offset_s,
+    detail_of,
+    is_trusted,
+    state_name,
+)
+from src.wall_clock import label_of as wall_clock_label
 from src.web.deps import PresenceView, SerialPortInfo, WebConfig
 
 
@@ -618,6 +627,42 @@ class DashboardLinkRow:
 
 
 @dataclass(frozen=True, slots=True)
+class WallClockRow:
+    """Whether a time service keeps the machine's wall clock. Part of ``GET /api/panel``."""
+
+    state: str
+    """``synchronised``, ``unsynchronised`` or ``unreadable``."""
+
+    trusted: bool
+    """Whether the dates the console writes can be believed. Only ``synchronised`` is."""
+
+    label: str
+    """The word the page shows for it."""
+
+    detail: str
+    """Why, in one line of plain text."""
+
+    estimated_error_s: float | None
+    """The error the time service estimates, in seconds; null when it is not known."""
+
+    max_error_s: float | None
+    """The error the time service guarantees, in seconds; null when nobody keeps the clock."""
+
+    @classmethod
+    def of(cls, state: WallClockState) -> WallClockRow:
+        """Render a :data:`~src.wall_clock.WallClockState`."""
+        bound = state.max_error if isinstance(state, Synchronised) else None
+        return cls(
+            state=state_name(state),
+            trusted=is_trusted(state),
+            label=wall_clock_label(state),
+            detail=detail_of(state),
+            estimated_error_s=_finite(clock_offset_s(state)),
+            max_error_s=_finite(bound),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     """The local console's link panel. ``GET /api/panel``."""
 
@@ -638,10 +683,14 @@ class PanelRow:
 
     dashboard: DashboardLinkRow
 
+    wall_clock: WallClockRow | None
+    """Null on a console that does not judge its clock."""
+
     @classmethod
     def of(cls, status: PanelStatus) -> PanelRow:
         """Render a :class:`~src.panel_status.PanelStatus`."""
         hold = status.manual_rise_hold
+        wall_clock = status.wall_clock
         return cls(
             motion_enabled=status.motion_enabled,
             programs_enabled=status.programs_enabled,
@@ -655,6 +704,7 @@ class PanelRow:
             motor_max_rpm=int(status.motor_max_rpm),
             software_version=status.software_version,
             dashboard=DashboardLinkRow.of(status.dashboard),
+            wall_clock=None if wall_clock is None else WallClockRow.of(wall_clock),
         )
 
 
