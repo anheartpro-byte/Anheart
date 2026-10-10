@@ -699,6 +699,64 @@ async def test_a_manual_ending_is_stated_with_the_descent_from_the_speed_it_open
     assert stated.recovery == recovery
 
 
+@pytest.mark.parametrize("session", ["a programme", "a manual session"])
+async def test_an_emergency_stop_at_speed_is_stated_with_the_descent_from_the_speed_it_left(
+    session: str,
+) -> None:
+    """An emergency stop at speed: the ending is stated from the speed it found, not from its zero.
+
+    The one ending whose setpoint has already changed when it is first stated.
+    ``request_estop`` records the ending and then zeroes the reference, in the
+    same call, before any tick: on the first tick that states the ending the
+    setpoint in force is zero, and only the record still holds the speed the
+    arm was turning at. The descent stated is the one from THAT speed, as for
+    any other ending, and not the 4 s of an ending opened at rest. Worked out
+    from the setpoint in force on that first tick instead, it would be those
+    4 s (measured on the software rig from 194 motor rpm: 4.0 s for 29.9 s),
+    and no other ending tells the two apart: a stop is recorded on the tick
+    that states it, with the setpoint it has not yet touched.
+
+    What the figure is for once the setpoint is at zero: ``session_overrun``
+    then counts the ending's recovery after it. The reference is at zero but
+    the shaft is only on its way there, so the recovery is counted from the
+    end of the descent the speed called for, as it would be had the arm been
+    walked down. Nothing moves either way: the rule has no setpoint left to
+    bring back.
+    """
+    if session == "a programme":
+        rig = await _programme()
+        await rig.run(40.0)
+        speed = int(_applied(rig))
+        expected = _expected(speed, RIG_MOTION, float(LIMITS.slew))
+    else:
+        rig = await _manual_session()
+        _target(rig, 200)
+        await rig.run(30.0)
+        speed = int(_applied(rig))
+        expected = _expected(speed, DEFAULT_MOTION_LIMITS, None)
+    assert speed > 0, "the arm is not turning: not this case"
+
+    with _observations() as seen:
+        rig.runtime.request_estop("console web: e-stop")
+        zeroed = int(_applied(rig))
+        ending = rig.runtime.ending
+        await rig.step()
+        first = seen[-1].ending
+        await rig.run(20.0)
+        stated = {o.ending for o in seen}
+
+    assert zeroed == 0, "the emergency stop did not zero the reference before the tick"
+    assert ending is not None
+    assert ending.reason is EndReason.EMERGENCY_STOP
+    assert ending.setpoint == speed
+    assert first is not None
+    assert float(first.descent) == pytest.approx(expected)
+    assert float(first.descent) > float(COMMISSIONED_DECEL_S) + 1.0
+    assert stated == {first}, "the descent stated changed once the setpoint was at zero"
+    assert _standing_rule(rig) == RULE_OPERATOR_ESTOP
+    assert _overrun(rig) is None
+
+
 async def test_an_emergency_stop_at_an_idle_console_is_counted_from_zero() -> None:
     """No session at all: the ending is stated from zero, like the time since no start.
 
