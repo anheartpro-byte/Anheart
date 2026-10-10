@@ -55,7 +55,7 @@ from src.motor.drive import (
     describe_fault,
 )
 from src.motor.simulated import SimState, SimulatedDrive
-from src.result import Ok, Result
+from src.result import Err, Ok, Result
 from src.training.runtime import RuntimeState
 from src.training.safety import RULE_DRIVE_FAULT
 from src.training.types import Occupancy
@@ -409,23 +409,29 @@ def simulator_of(panel: LocalPanel) -> SimulatedDrive:
     return simulator
 
 
+async def turning(tmp_path: Path, clock: ManualClock) -> LocalPanel:
+    """A real console in a manual bench session, the arm turning at 3 rpm."""
+    panel = build_panel(config(), clock=clock, profiles_path=tmp_path / "p.json")
+    attested = panel.surface.attest_estop_wiring(OPERATOR)
+    assert isinstance(attested, Ok)
+    started = panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(started, Ok)
+    await run(panel, clock, 1.0)
+    target = panel.surface.submit_manual_target(output_rpm=OutputRpm(3.0), operator=OPERATOR)
+    assert isinstance(target, Ok)
+    await run(panel, clock, 20.0)
+    measured = panel.runtime.snapshot().measured.motor_rpm
+    assert measured > 50, "the arm must be turning"
+    return panel
+
+
 @pytest.mark.parametrize("fault", FAULTS_TO_INJECT, ids=fault_id)
 async def test_every_fault_while_turning_stops_the_arm_and_latches(
     fault: DriveFault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     written = record_writes(monkeypatch)
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
-    panel = build_panel(config(), clock=clock, profiles_path=tmp_path / "p.json")
-    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
-    assert isinstance(
-        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
-    )
-    await run(panel, clock, 1.0)
-    assert isinstance(
-        panel.surface.submit_manual_target(output_rpm=OutputRpm(3.0), operator=OPERATOR), Ok
-    )
-    await run(panel, clock, 20.0)
-    assert panel.runtime.snapshot().measured.motor_rpm > 50, "the arm must be turning"
+    panel = await turning(tmp_path, clock)
 
     simulator = simulator_of(panel)
     words_before = len(written.words)
@@ -485,6 +491,60 @@ async def test_every_fault_while_turning_stops_the_arm_and_latches(
     after_reset = panel.runtime.supervisor.standing
     assert after_reset is not None
     assert after_reset.latched
+    await panel.close()
+
+
+CLEARING_BY_THEMSELVES: Final[tuple[DriveFault, ...]] = tuple(
+    fault
+    for fault in LFT_FAULT_CODES.values()
+    if fault.mnemonic.upper() in CLEARED_WITH_THEIR_CAUSE
+)
+
+
+@pytest.mark.parametrize("fault", CLEARING_BY_THEMSELVES, ids=fault_id)
+async def test_a_fault_the_drive_clears_by_itself_leaves_the_console_latched(
+    fault: DriveFault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nine faults clear "as soon as their cause disappears", the manual says (USF is one).
+
+    The drive then leaves FAULT with nobody asking, whatever the table says of
+    the reset. The stop and the latch are the console's, not the drive's: it
+    enables nothing, its reference stays at 0, its verdict still stands and a
+    start is refused until that verdict is acknowledged by name. The simulated
+    drive does not clear a fault alone, so the same transition out of FAULT is
+    taken here at the drive, behind the console's back.
+    """
+    assert len(CLEARING_BY_THEMSELVES) == 9
+    written = record_writes(monkeypatch)
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    panel = await turning(tmp_path, clock)
+    simulator = simulator_of(panel)
+    simulator.inject_fault(fault)
+    await run(panel, clock, 120.0)
+    faulted = simulator.sim_state
+    assert faulted is SimState.FAULT
+
+    cleared = await simulator.write_command(ControlWord.FAULT_RESET)
+    assert cleared == Ok(None)
+    words_before = len(written.words)
+    references_before = len(written.references)
+    await run(panel, clock, 60.0)
+
+    assert ControlWord.ENABLE_OPERATION not in written.words[words_before:]
+    assert set(written.references[references_before:]) <= {MotorRpm(0)}
+    resting = simulator.sim_state
+    assert resting in {SimState.SWITCH_ON_DISABLED, SimState.READY_TO_SWITCH_ON}
+    assert panel.runtime.snapshot().measured.motor_rpm == 0
+    assert panel.runtime.applied_rpm == 0
+    standing = panel.runtime.supervisor.standing
+    assert standing is not None
+    assert standing.latched
+    assert standing.rule == RULE_DRIVE_FAULT
+    start = panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(start, Err)
+    await run(panel, clock, 5.0)
+    assert ControlWord.ENABLE_OPERATION not in written.words[words_before:]
+    assert panel.runtime.snapshot().measured.motor_rpm == 0
     await panel.close()
 
 
