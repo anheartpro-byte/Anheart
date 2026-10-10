@@ -66,8 +66,8 @@ for (const scenario of scenarios) {
 }
 
 // ANH-221: the page says, in one sentence, when the tickets of the registry
-// were read. A registry dated again without that sentence, or the reverse, was
-// found twice in review.
+// were read. That sentence had fallen behind the registry once already, which
+// the review of the first release found: the two are held together here.
 test("docs/menaces.md gives the read dates the registry carries, and no other", () => {
   // Given: the dates of the real registry and the sentence of the real page.
   const carried = new Set(
