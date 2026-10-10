@@ -28,6 +28,7 @@ from src.local_config import LocalConfig
 from src.local_panel import (
     WALL_CLOCK_PERIOD,
     LocalPanel,
+    ServiceDesk,
     describe_clock_refusal,
     describe_clock_warning,
     run_console,
@@ -375,9 +376,22 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
     real = local_panel.build_panel
 
     def remembered(
-        config: LocalConfig, *, clock: Clock, journal: Journal, wall_clock: WallClockProbe | None
+        config: LocalConfig,
+        *,
+        clock: Clock,
+        journal: Journal,
+        wall_clock: WallClockProbe | None,
+        notify_socket: str | None,
+        service: ServiceDesk,
     ) -> LocalPanel:
-        panel = real(config, clock=clock, journal=journal, wall_clock=wall_clock)
+        panel = real(
+            config,
+            clock=clock,
+            journal=journal,
+            wall_clock=wall_clock,
+            notify_socket=notify_socket,
+            service=service,
+        )
         built.append(panel)
         return panel
 

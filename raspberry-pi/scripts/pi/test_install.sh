@@ -191,6 +191,9 @@ records() {
 
 restarts() { in_machine systemctl show --property NRestarts --value anheart; }
 
+# What the console keeps of its restarts, as it is on the disk.
+restart_state() { in_machine cat /var/lib/anheart/records/service-state.json 2> /dev/null || true; }
+
 # A manual bench session at target 0 on the simulated drive.
 start_session() {
     post /api/safety/attest '{"operator":"install-test","sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
@@ -632,10 +635,19 @@ while :; do
     case "$(panel)" in *'"out_of_service":true'*) break ;; esac
     [ "$deaths" -lt 3 ] || fail "three more deaths did not take the console out of service"
     before_id="$(container_id)"
+    before_state="$(restart_state)"
     in_machine docker kill --signal KILL anheart > /dev/null
     deaths=$((deaths + 1))
     wait_for_replacement "$before_id" 60 "after death $deaths"
     wait_for_console "after death $deaths"
+    # A console writes its start on the disk after its first control tick,
+    # once the drive is read: one killed before that is not counted. Each of
+    # these deaths is of a console whose start was written.
+    for ((attempt = 0; attempt < 30; attempt++)); do
+        [ "$(restart_state)" != "$before_state" ] && break
+        sleep 1
+    done
+    [ "$(restart_state)" != "$before_state" ] || fail "the console did not write its start after death $deaths"
 done
 [ "$deaths" -ge 1 ] || fail "the console was out of service before it died once more"
 ok "after $deaths more death(s) the console is out of service"

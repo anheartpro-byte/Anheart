@@ -410,7 +410,8 @@ def test_ex2_the_console_s_banner_names_its_cardiac_tiers_which_are_settings(
 
     handed: list[object] = []
 
-    async def never_run(_config: object, *, stopped: object) -> int:
+    async def never_run(_config: object, *, stopped: object, notify_socket: str | None) -> int:
+        assert notify_socket is None, "no service manager started this test"
         handed.append(stopped)  # kept, never called: it would end this very process
         return local_panel.EXIT_OK
 
