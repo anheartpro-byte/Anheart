@@ -61,10 +61,15 @@ def statuses(run: Run) -> dict[str, Status]:
 
 
 async def test_ex1_a_short_simulated_day_chains_manual_and_programmed_sessions_and_measures_them(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run = await simulated(SHORT_DAY_S, tmp_path / "out", SHORT_DAY)
 
+    # One line a reading as the day goes: a run cut short still leaves what it measured.
+    said = [line for line in capsys.readouterr().err.splitlines() if " résidents, " in line]
+    assert len(said) == len(run.samples)
+    assert said[0].startswith("0 h 00 : ")
+    assert "descripteurs" in said[-1]
     the_day_covers_what_was_asked_and_the_last_session_is_let_to_finish(run)
     a_manual_session_a_programme_and_a_second_manual_session_ended_as_planned(run)
     every_session_reached_the_simulated_dashboard_whole(run)

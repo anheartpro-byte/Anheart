@@ -4,8 +4,9 @@
 is the instrument next to it. It reads four things, none of them through a
 hook in the console:
 
-* the **resident memory** of the process (``/proc/self/status``, or ``ps``
-  where there is no ``/proc``);
+* the **resident memory** of the process: ``VmRSS`` of ``/proc/self/status``
+  on Linux; on macOS its physical footprint, which counts the pages the
+  system compressed (:func:`darwin_memory` says why);
 * its **open file descriptors** (``/proc/self/fd``, or ``/dev/fd``);
 * the **data folder**: what the file system gave it (allocated bytes) and how
   many files and directories it holds (inodes), record by record;
@@ -184,30 +185,53 @@ class Histogram:
 # =========================================================================
 
 
-def ps_resident_kib(pid: int) -> str:
-    """What ``ps`` prints for the resident size of ``pid``, in KiB. Raises on failure."""
-    listed = subprocess.run(  # noqa: S603  # a fixed command, and a process id of ours
-        ["/bin/ps", "-o", "rss=", "-p", str(pid)],
-        check=True,
-        capture_output=True,
-        text=True,
+def said_by(command: Sequence[str]) -> str:
+    """What a system tool prints. Raises when it cannot be run or fails."""
+    listed = subprocess.run(  # noqa: S603  # fixed commands, given a process id of ours
+        command, check=True, capture_output=True, text=True
     )
     return listed.stdout
 
 
-def resident_bytes(
-    *, status: Path = Path("/proc/self/status"), ps: Callable[[int], str] = ps_resident_kib
+def darwin_memory(
+    pid: int,
+    *,
+    footprint: Path = Path("/usr/bin/footprint"),
+    said: Callable[[Sequence[str]], str] = said_by,
 ) -> int:
-    """The resident memory of this process, in bytes.
+    """What ``pid`` takes in memory where there is no ``/proc``, in bytes.
 
-    Linux says it in ``/proc/self/status`` (``VmRSS``). Where there is no
-    ``/proc`` (macOS, a developer's workstation) ``ps`` is asked instead.
-    Raises ``ValueError`` when neither gives a number.
+    On macOS the resident size ``ps`` prints is no measure of a leak: under
+    memory pressure the system compresses the pages of a process, and its
+    resident size FALLS by half while it has freed nothing (measured on this
+    scenario: 165 MB to 71 MB in twenty simulated minutes). The physical
+    footprint counts the compressed pages too, and is what the system charges
+    the process: ``footprint`` prints it. ``ps`` is the last resort, on a
+    system that has neither.
+    """
+    if footprint.exists():
+        report = said([str(footprint), "-f", "bytes", "--noCategories", str(pid)])
+        for line in report.splitlines():
+            name, _, value = line.strip().partition(": ")
+            if name == "phys_footprint":
+                return int(value.split()[0])
+    return int(said(["/bin/ps", "-o", "rss=", "-p", str(pid)]).strip()) * KIB
+
+
+def resident_bytes(
+    *, status: Path = Path("/proc/self/status"), elsewhere: Callable[[int], int] = darwin_memory
+) -> int:
+    """The memory this process takes, in bytes.
+
+    Linux says its resident size in ``/proc/self/status`` (``VmRSS``). Where
+    there is no ``/proc`` (macOS, a developer's workstation),
+    :func:`darwin_memory` is asked. Raises ``ValueError`` when a ``/proc``
+    gives no number.
     """
     try:
         text = status.read_text(encoding="ascii")
     except OSError:
-        return int(ps(os.getpid()).strip()) * KIB
+        return elsewhere(os.getpid())
     for line in text.splitlines():
         if line.startswith("VmRSS:"):
             return int(line.split()[1]) * KIB
@@ -874,6 +898,15 @@ def _shown(samples: Sequence[Sample]) -> Sequence[Sample]:
 
 def _tick_cell(tick: Quantiles | None) -> str:
     return "-" if tick is None else f"{tick.p50:.2f} / {tick.p99:.2f}"
+
+
+def progress(sample: Sample) -> str:
+    """One line for the log of a run in progress: a run cut short still leaves its readings."""
+    return (
+        f"{hours_minutes(sample.at)} : {megabytes(sample.rss)} résidents, "
+        f"{sample.descriptors} descripteurs, {megabytes(sample.data_bytes)} et "
+        f"{sample.data_entries} fichiers de données, tic p50 / p99 {_tick_cell(sample.tick)} ms\n"
+    )
 
 
 def markdown(run: Run, checks: Sequence[Check]) -> str:

@@ -81,6 +81,7 @@ from simulation.endurance_measures import (
     markdown,
     observed,
     passed,
+    progress,
     samples_from_csv,
     write_report,
 )
@@ -191,6 +192,8 @@ NOTES: Final[tuple[str, ...]] = (
     "Variateur et BITalino simulés, pas de caméra, pas de page ouverte dans un navigateur "
     "(un abonné du hub de télémétrie lit ce que la page lirait).",
     "Dépôt hors machine des enregistrements : inexistant, donc aucune purge (seuil rotation).",
+    "Mémoire résidente : VmRSS de /proc sous Linux ; sur macOS, l'empreinte physique du "
+    "processus, qui compte aussi les pages que le système a compressées.",
 )
 
 NOTE_GATED_DSP: Final[str] = (
@@ -641,7 +644,11 @@ class Day:
         await self._operator.ping()
         self.elapsed += 1
         if self.elapsed % self._plan.sample_every == 0:
-            self.samples.append(await self._world.sample(float(self.elapsed)))
+            sample = await self._world.sample(float(self.elapsed))
+            self.samples.append(sample)
+            # Said as the run goes: hours of silence would hide a run that is stuck, and a
+            # run stopped at its time limit would leave nothing of what it had measured.
+            sys.stderr.write(progress(sample))
 
     async def _wait(self, seconds: int) -> None:
         """Up to ``seconds`` of the console's life: fewer when the run is over first."""

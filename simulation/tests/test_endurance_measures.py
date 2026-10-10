@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from simulation.endurance_measures import (
     check_rss,
     check_sessions,
     check_tick,
+    darwin_memory,
     document,
     footprint,
     judge,
@@ -53,8 +55,9 @@ from simulation.endurance_measures import (
     open_descriptors,
     passed,
     per_hour,
-    ps_resident_kib,
+    progress,
     resident_bytes,
+    said_by,
     samples_from_csv,
     warm_up,
     write_report,
@@ -113,30 +116,68 @@ def test_ex1_the_histogram_never_understates_a_centile_and_costs_the_same_whatev
 # =========================================================================
 
 
-def test_ex1_resident_memory_is_read_from_proc_and_from_ps_where_there_is_no_proc(
+def test_ex1_resident_memory_is_read_from_proc_and_asked_elsewhere_where_there_is_no_proc(
     tmp_path: Path,
 ) -> None:
     status = tmp_path / "status"
     status.write_text("Name:\tpython\nVmPeak:\t  999 kB\nVmRSS:\t   51200 kB\n", encoding="ascii")
 
     from_proc = resident_bytes(status=status)
-    from_ps = resident_bytes(status=tmp_path / "absent", ps=lambda _pid: "  2048\n")
+    elsewhere = resident_bytes(status=tmp_path / "absent", elsewhere=lambda pid: pid * 0 + 2048)
 
     assert from_proc == 51200 * KIB
-    assert from_ps == 2048 * KIB
+    assert elsewhere == 2048
     status.write_text("Name:\tkthreadd\n", encoding="ascii")
     with pytest.raises(ValueError, match="no VmRSS line"):
         resident_bytes(status=status)
 
 
+FOOTPRINT_REPORT = """======================================================================
+python [26931]: 64-bit    Footprint: 146965200 B (16384 bytes per page)
+======================================================================
+
+Auxiliary data:
+    phys_footprint: 146965200 B
+    phys_footprint_peak: 149078736 B
+"""
+
+
+def test_ex1_on_macos_the_physical_footprint_is_read_and_ps_only_as_a_last_resort(
+    tmp_path: Path,
+) -> None:
+    """The resident size macOS prints falls when it compresses pages: it cannot show a leak."""
+    tool = tmp_path / "footprint"
+    tool.write_text("", encoding="ascii")
+    asked: list[Sequence[str]] = []
+
+    def answering(report: str) -> Callable[[Sequence[str]], str]:
+        def said(command: Sequence[str]) -> str:
+            asked.append(command)
+            return "  87632\n" if command[0] == "/bin/ps" else report
+
+        return said
+
+    counted = darwin_memory(4242, footprint=tool, said=answering(FOOTPRINT_REPORT))
+    unreadable = darwin_memory(4242, footprint=tool, said=answering("footprint: no such line\n"))
+    without = darwin_memory(4242, footprint=tmp_path / "absent", said=answering(""))
+
+    assert counted == 146_965_200, "the compressed pages are counted: not the resident 87 632 KiB"
+    assert asked[0] == [str(tool), "-f", "bytes", "--noCategories", "4242"]
+    assert unreadable == 87_632 * KIB
+    assert without == 87_632 * KIB
+    assert asked[-1] == ["/bin/ps", "-o", "rss=", "-p", "4242"]
+
+
 def test_ex1_this_process_can_be_read_on_the_machine_the_tests_run_on() -> None:
     """The real sources, whatever the system: a number of megabytes, a handful of descriptors."""
-    listed = ps_resident_kib(os.getpid())
+    listed = said_by(["/bin/ps", "-o", "rss=", "-p", str(os.getpid())])
     resident = resident_bytes()
+    measured = darwin_memory(os.getpid())
     descriptors = open_descriptors()
 
     assert int(listed.strip()) > 1000
     assert 10 * MIB < resident < 4096 * MIB
+    assert 10 * MIB < measured < 4096 * MIB
     assert descriptors >= 3
 
 
@@ -279,6 +320,12 @@ def test_ex1_a_reading_holds_the_four_measures(tmp_path: Path) -> None:
     assert reading.blocks is not None
     assert reading.blocks > 1000
     assert reading.tick is tick
+    # What the run says of it as it goes, one line a reading.
+    said = progress(replace(reading, rss=150 * MIB, descriptors=9, data_bytes=3 * MIB))
+    assert said == (
+        "0 h 01 : 150.0 Mo résidents, 9 descripteurs, 3.0 Mo et 8 fichiers de données, "
+        "tic p50 / p99 1.00 / 2.00 ms\n"
+    )
 
 
 # =========================================================================
