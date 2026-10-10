@@ -366,10 +366,13 @@ le vocabulaire et les registres des observations d'appel décrites ci-dessous
 [raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Les
 trames perdues parce que personne ne venait les prendre sont comptées dans
 l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Les lignes
-commencent avec l'enregistrement : la scrutation d'une console au repos n'y
-est pas, et les échanges qui précèdent l'ouverture n'y sont que s'ils
-attendaient encore quand le fil du journal a ouvert l'enregistrement, moins
-d'un cycle en temps normal (leur `t` est alors négatif).
+sont celles de la séance, du début de son armement à sa fin : la scrutation
+d'une console sans séance n'y est pas, ni avant ni après, même quand elle
+attendait avec les trames de la séance que le fil du journal vienne les
+prendre. Les échanges de l'armement précèdent l'ouverture de l'enregistrement
+(leur `t` est négatif) : ils y sont s'ils attendaient encore quand le fil du
+journal a ouvert l'enregistrement, donc pas ceux qu'il avait pris à un cycle
+précédent ([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel

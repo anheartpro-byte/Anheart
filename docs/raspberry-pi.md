@@ -2513,7 +2513,33 @@ deux d'entre eux notent en même temps), et le fil du journal n'y touche
 jamais. Une première version prenait la liste sous un verrou partagé avec
 celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
 avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
-(l'appel au variateur attendait quand ce fil était arrêté dans sa prise).
+(l'appel au variateur attendait quand ce fil était arrêté dans sa prise). Le
+même test fait à chaque arrêt l'appel d'un armement, `Journal.open` : lui non
+plus n'attend ce fil nulle part.
+
+**Sur quoi cette prise sans verrou repose.** Trois choses, toutes les trois
+nécessaires :
+
+- dans CPython, `append`, `popleft` et `len` d'une `deque` sont chacun une
+  opération indivisible, parce que l'interpréteur n'exécute qu'un fil à la
+  fois (son verrou global, le GIL) : un ajout et un retrait faits en même
+  temps par deux fils ne laissent jamais la liste à moitié modifiée ;
+- un seul fil retire, le fil du journal : il lit combien d'observations
+  attendent, puis en retire ce nombre une à une. Personne d'autre ne retirant,
+  chacune est encore là quand il la prend ; ce qui est noté entre-temps attend
+  le cycle suivant. Deux fils qui retireraient compteraient chacun sur la même
+  observation ;
+- ceux qui notent passent un par un, par leur verrou, pour que la borne et le
+  compte des refus restent exacts.
+
+C'est vérifié sur CPython 3.12 avec son verrou global, la version de l'image
+du Pi (`python:3.12`), par les tests qui notent depuis plusieurs fils pendant
+qu'un autre prend. **Ce n'est pas vérifié sur un interpréteur sans verrou
+global** (la variante « free-threaded » de CPython) : aucun de ces tests n'y a
+tourné, et la première des trois conditions y repose sur autre chose que ce
+qui est décrit ici. Avant d'y faire tourner la console, relire ces deux listes
+(`CallTap`, `ExchangeLog`) et y rejouer ces tests.
+
 Selon le variateur branché :
 
 - le pilote ATV320 rapporte lui-même ses échanges Modbus dans un journal
@@ -2539,18 +2565,36 @@ ce qui écoute le variateur), le cycle continue : les lignes, les événements e
 les blocs bruts sont écrits, les trames de ce cycle sont perdues et comptées
 comme une écriture manquée de l'enregistrement (`write_failed`,
 `erreur d'ecriture (append : <faute>)`), et la faute est journalisée une fois.
+Elle est comptée pour l'enregistrement ouvert à ce moment-là et, quand ce même
+cycle en ouvre un, pour celui-là aussi : les trames de son armement étaient
+parmi celles qui manquent.
 
-Les trames prises sont remises à un enregistrement à trois moments du cycle :
-avant qu'un enregistrement soit fermé, à celui-là (une séance ouverte **et**
-fermée pendant que le fil était occupé ailleurs, par exemple par la longue
-fermeture de la précédente, garde donc ses trames) ; avant qu'un
-enregistrement soit ouvert par-dessus un autre resté ouvert, à celui resté
-ouvert ; et une fois la file écrite, à l'enregistrement alors ouvert (les
-trames d'un armement vont à la séance qu'il arme, avec un `t` légèrement
-négatif). Quand un autre enregistrement est ouvert plus loin dans le même
-cycle, les trames commencées à partir de son début l'attendent. Sans aucun
-enregistrement ouvert, la scrutation d'une console au repos n'est écrite nulle
-part.
+**Une trame n'est écrite que dans l'enregistrement de la séance pendant
+laquelle elle a commencé**, quel que soit le retard du fil du journal (15.8
+donne les deux cas où une trame de séance n'est écrite nulle part). Pour
+ses trames, une séance va de l'instant où la console demande l'armement au
+runtime (lu avant tout échange avec le variateur) à l'instant où elle ferme
+son enregistrement (lu après les échanges de son dernier tic), bornes
+comprises. Les trames prises sont remises à trois moments du cycle :
+
+- avant qu'un enregistrement soit fermé, à celui-là, celles qui ont commencé
+  au plus tard à la fin de sa séance (une séance ouverte **et** fermée pendant
+  que le fil était occupé ailleurs, par exemple par la longue fermeture de la
+  précédente, garde donc ses trames) ;
+- avant qu'un enregistrement soit ouvert par-dessus un autre resté ouvert, à
+  celui resté ouvert, celles qui ont commencé avant l'armement du nouveau ;
+- une fois la file écrite, à l'enregistrement alors ouvert (les trames d'un
+  armement vont à la séance qu'il arme, avec un `t` légèrement négatif).
+
+Un enregistrement ne reçoit jamais ce qui a commencé avant son propre
+armement. Ce qui a commencé après la fin d'une séance attend un enregistrement
+ouvert plus loin dans le même cycle : quand deux séances s'enchaînent pendant
+un seul cycle du fil, chacune garde les échanges de son armement, son `open`
+compris. Le reste est la scrutation d'une console sans séance : elle n'est
+écrite nulle part, que le fil du journal l'ait prise à l'heure, sans
+enregistrement ouvert, ou trouvée en attente derrière la fermeture d'une
+séance ou devant l'ouverture de la suivante. Ce n'est pas une perte, et rien
+n'est compté.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -2851,9 +2895,27 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 ### 15.8 Ce qui n'est pas enregistré aujourd'hui
 
-- Les échanges avec le variateur d'une console au repos, et ceux d'un
-  armement qui précèdent de plus d'un cycle (0,2 s) l'ouverture de
-  l'enregistrement : `drive_frames.jsonl` commence avec l'enregistrement.
+- Les échanges avec le variateur d'une console sans séance : avant la
+  première, entre deux séances et après la dernière. `drive_frames.jsonl` va
+  du début de l'armement d'une séance à sa fin, et ne contient rien d'autre,
+  même quand cette scrutation attendait avec les trames de la séance que le
+  fil du journal vienne les prendre (15.2).
+- Le début d'un armement, quand le fil du journal passe pendant cet armement.
+  Ce fil ne garde pas d'un cycle à l'autre ce qu'il prend alors qu'aucun
+  enregistrement n'est ouvert, et l'enregistrement n'est ouvert qu'une fois la
+  séance armée : les échanges de l'armement qu'il a déjà pris à ce moment-là
+  ne sont dans aucun enregistrement. C'est rare tant que l'armement est bref
+  devant le cycle (0,2 s), ce qui est le cas en simulation, et c'est la règle
+  dès qu'il dure plus d'un cycle. Sa durée sur un vrai variateur n'est pas
+  mesurée.
+- Les échanges du dernier tic d'une séance, quand la boucle fait ce tic
+  pendant que le fil du journal prend les trames : le fil lit la file après sa
+  prise, y trouve la fermeture et ferme l'enregistrement sans ces trames,
+  qu'il ne prendra qu'au cycle suivant. Il faut que les deux se croisent
+  pendant la prise elle-même : quelques microsecondes quand le fil est à
+  l'heure, davantage quand beaucoup de trames l'attendent. Rien ne compte ces
+  trames. Ce cas et le précédent sont reproduits sur le journal seul, pas
+  mesurés sur une console qui tourne.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge

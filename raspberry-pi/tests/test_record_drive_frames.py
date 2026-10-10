@@ -713,7 +713,7 @@ def test_ex2_the_frames_of_an_arming_go_to_the_record_that_arming_opens(tmp_path
     journal.listen(waiting)
     waiting.add(9.9, "read_limits")
     waiting.add(9.95, "command")
-    journal.open(session(), Privacy())
+    journal.open(session(), Privacy(), since=Monotonic(9.9))
     journal.drain()
     assert frames_of(journal) == [(-0.1, "read_limits"), (-0.05, "command")]
 
@@ -771,8 +771,8 @@ def test_ex2_two_sessions_within_one_cycle_each_get_the_frames_that_began_in_the
 
     journal.open(started_at(1, 10.0), Privacy())
     waiting.add(10.5)
-    journal.close(closing())
-    waiting.add(15.0, "read_status")  # at rest between the two: the first one's, after its end
+    journal.close(closing(until=Monotonic(10.6)))
+    waiting.add(15.0, "read_status")  # at rest between the two: in no session, so in no record
     # Something asked at the console between the two, as there usually is.
     refused = note(
         wall_clock=UnixMillis(1_791_195_015_000),
@@ -785,11 +785,11 @@ def test_ex2_two_sessions_within_one_cycle_each_get_the_frames_that_began_in_the
     assert logged is True
     journal.open(started_at(2, 20.0), Privacy())
     waiting.add(20.5, "speed")
-    journal.close(closing())
+    journal.close(closing(until=Monotonic(20.6)))
     journal.drain()
 
     first, second = records(journal.root)
-    assert frames_in(first) == [(0.5, "read_status"), (5.0, "read_status")]
+    assert frames_in(first) == [(0.5, "read_status")]
     assert frames_in(second) == [(0.5, "speed")], "timed from its own start"
 
 
@@ -804,6 +804,7 @@ def test_ex2_a_record_opened_over_one_still_open_leaves_it_the_frames_that_came_
     journal.drain()
 
     waiting.add(10.5)
+    waiting.add(20.0, "open")  # at the very instant the arming of the second began: its own
     waiting.add(20.5, "speed")
     journal.open(started_at(2, 20.0), Privacy())  # the first was never closed: superseded
     journal.close(closing())
@@ -811,7 +812,7 @@ def test_ex2_a_record_opened_over_one_still_open_leaves_it_the_frames_that_came_
 
     first, second = records(journal.root)
     assert frames_in(first) == [(0.5, "read_status")]
-    assert frames_in(second) == [(0.5, "speed")]
+    assert frames_in(second) == [(0.0, "open"), (0.5, "speed")]
 
 
 class Broken:
