@@ -318,6 +318,50 @@ test("what the report adds to a gate cannot change the verdict of that gate", ()
   assert.ok(added >= 10, `${added} steps of the report were read`);
 });
 
+// --- The endurance of the whole console (ANH-164; docs/framework-de-test.md, section 17) ---
+//
+// 24 simulated hours take hours of a runner. They run on the nightly event
+// alone, as one step of the job of the simulation reports; every other run has
+// the short form, a test of the battery. A later edit could move the day to
+// every pull request, soften its failure, or stop keeping its report.
+test("the 24 simulated hours of the console run at night only, fail their gate and leave their report", () => {
+  const steps = stepsOf("simulation-report");
+  const endurance = steps.filter((text) => /^ {8}run: .*-m simulation\.endurance /m.test(text));
+  assert.equal(endurance.length, 1);
+  const step = endurance[0] ?? "";
+  assert.ok(
+    step.includes(
+      "\n        run: raspberry-pi/.venv/bin/python -m simulation.endurance simulated --hours 24 --out simulation/out/ci/endurance\n",
+    ),
+  );
+  assert.match(step, /^ {8}if: \$\{\{ github\.event_name == 'schedule' \}\}$/m);
+  // No other job runs it: a pull request never waits for a simulated day.
+  assert.equal(workflow.split("-m simulation.endurance").length - 1, 1);
+  // Its failure is the failure of the job, which `simulation-gate` waits for and requires.
+  assert.doesNotMatch(step, /continue-on-error/);
+  assert.match(own("simulation-gate", "needs") ?? "", /\bsimulation-report\b/);
+  // It has a limit of its own, and the job's is that limit plus the one of the synthetic report.
+  const minutes = (/** @type {string} */ text) => Number(/^ {8}timeout-minutes: (\d+)$/m.exec(text)?.[1]);
+  const synthetic = steps.find((text) => text.startsWith("name: Synthetic simulation report\n")) ?? "";
+  assert.ok(minutes(step) >= 120, "a simulated day does not fit in less on a runner");
+  assert.equal(Number(own("simulation-report", "timeout-minutes")), minutes(synthetic) + minutes(step));
+  // The report is kept with the synthetic ones, after the day ran and whatever its verdict.
+  const KEPT = "Keep the synthetic reports";
+  const kept = steps.find((text) => text.startsWith(`name: ${KEPT}\n`)) ?? "";
+  assert.ok(steps.indexOf(kept) > steps.indexOf(step));
+  assert.equal(stepCondition("simulation-report", KEPT), "${{ !cancelled() }}");
+  for (const file of ["endurance.json", "endurance.md"]) {
+    assert.ok(kept.includes(`\n            simulation/out/ci/endurance/${file}\n`), file);
+  }
+  // The short form every run has: the same scenario, a few simulated minutes, in the battery.
+  assert.match(
+    atRoot("simulation/tests/test_endurance.py"),
+    /^async def test_ex1_a_short_simulated_day_chains_manual_and_programmed_sessions_and_measures_them\(/m,
+  );
+  // And 24 hours is what the command runs when it is not told how many.
+  assert.match(atRoot("simulation/endurance.py"), /"--hours", type=float, default=24\.0/);
+});
+
 // --- The thresholds of Convex and of the site (ANH-203; docs/framework-de-test.md,
 // "Seuils de couverture de Convex et du site") ---
 //

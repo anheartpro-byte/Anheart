@@ -48,6 +48,8 @@ simulation/
   cohort/generate.py          the seeded 30-subject cohort generator -> cohort/cohort.json
   cohort/battery.py           every subject x {auto jog, auto standard 30 min, manual 27 rpm bench}
   quick.py                    CLI: python -m simulation.quick (instant verdicts + report.html/json)
+  endurance.py                CLI: python -m simulation.endurance (the whole console for 24 simulated hours, or in real time)
+  endurance_measures.py       what that scenario reads (memory, tick, descriptors, data folder) and its thresholds
   SESSION_TESTS.md            acceptance-test mapping, implemented cases and remaining proposals
   tests/                      pytest + hypothesis
   scripts/check.sh            the gate (ruff, basedpyright strict, mypy strict, tests, 100% coverage)
