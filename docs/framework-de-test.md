@@ -1512,17 +1512,15 @@ que soit la règle.
 
 * les deux tests de `SAME_PROCESS` vont à la part 0 ;
 * les tests d'au moins dix secondes sont nommés dans `PI_SLOW_SECONDS`, avec
-  leur durée mesurée en CI : 52 lignes à la mesure, qui désignaient 119 des
-  4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a réécrit
-  trois de ces tests : leurs remplaçants sont distribués par leur rang
-  jusqu'à la prochaine mise à jour de la table ; plus sept lignes ajoutées par
-  ANH-191 pour ses propres tests, dont la durée est estimée d'après un poste
-  de développement et reste à remplacer par une mesure en CI, et deux par
-  ANH-129 pour les tests longs de la synchronisation : le test d'acceptation,
-  21 s, et la séance sous un contrat refusé, 22 s ; et deux par ANH-210 pour
-  ceux de la pastille Serveur : le test d'acceptation, 13 s mesurées en CI, et
-  la séance dont rien n'arrive, 32 s estimées d'après un poste de
-  développement). Ils sont distribués du plus lent au moins
+  leur durée mesurée en CI : 52 lignes à la première mesure, qui désignaient
+  119 des 4267 tests et les deux tiers de leur temps (49 depuis qu'ANH-185 a
+  réécrit trois de ces tests), et deux d'ANH-129 pour les tests longs de la
+  synchronisation (le test d'acceptation, 21 s, et la séance sous un contrat
+  refusé, 22 s). Neuf autres lignes avaient été écrites avant toute mesure,
+  d'après un poste de développement : sept par ANH-191 et deux par ANH-210.
+  Elles ont été mesurées le 10 octobre 2026 (ANH-215), voir « Remise à jour de
+  la table » plus bas : la table compte maintenant 61 lignes. Ils sont
+  distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
   paramètre vaut pour chaque cas du test : les 61 cas de
   `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
@@ -1586,6 +1584,55 @@ runner pour `pi-gate`. Après la remise à jour sur `develop` du 9 octobre
 (4404 tests, `src/signal_processing.py` sous le seuil : 13 383 lignes et
 2 998 branches), run 37914849627 : 9 min 13 s sur un Xeon 6973P-C (1959 s
 cumulés) et 13 min 03 s sur un EPYC 7763 (2881 s), verdict après 14 min 05 s.
+
+**Remise à jour de la table (ANH-215, 10 octobre 2026).** Les durées de chaque
+test ont été relues dans les fichiers JUnit de deux runs verts de `develop`,
+4979 tests chacun : 38062342869 (`pi (tests 1)` 11 min 22 s sur un EPYC 9V74,
+`pi (tests 2)` 13 min 42 s sur un EPYC 7763) et 38057681312 (8 min 27 s sur un
+EPYC 9V45, 11 min 27 s sur un Xeon Platinum 8573C). Elles sont ramenées aux
+secondes de la table en deux temps : dans chaque run, les secondes du runner
+le plus lent à celles de l'autre (1,36 et 1,59 fois plus lent, sur les 115 et
+113 cas paramétrés que les deux jobs se partageaient) ; puis à la table par ce
+que montrent les 118 cas qu'elle nommait déjà (ce runner mettait 1,34 et 0,99
+fois les secondes écrites), et la moyenne des deux runs. Ce que cela a changé :
+
+* les neuf lignes écrites sans mesure. Quatre gardent une ligne : les tests
+  d'acceptation des trames du variateur (21 s), des inodes (14 s) et du
+  journal hors séance (21 s), et la séance dont rien n'arrive (15 s, là où
+  32 étaient écrites). Les cinq autres prennent moins de dix secondes et
+  quittent la table : les deux tests de sortie (8 et 7 s), la minute de trames
+  (9,5 s), l'interrupteur des trames du SDK (1 s) et le 426 en cours de séance
+  (7 s). `test_the_indicator_hears_every_exchange_of_a_session_started_at_the_machine`
+  (ANH-210), 15 s sur le runner le plus lent, vaut 8 s dans ces secondes : il
+  n'a pas de ligne non plus ;
+* une ligne quatre fois trop haute : le programme lancé depuis le site,
+  15 s là où 60 étaient écrites ;
+* six tests d'au moins dix secondes qui n'avaient pas de ligne : trois de
+  `test_runtime_ending_alerts.py` (37, 21 et 15 s), un de
+  `test_runtime_session_overrun.py` (21 s), un de `test_failure_ecg_grade.py`
+  (13 s) et un de `test_record_session.py` (10 s).
+
+Les autres lignes n'ont pas été touchées : la plupart s'accordent aux deux
+runs à un dixième près, cinq mesurent 2 à 7 s de moins dans les deux, trop peu
+pour déplacer la distribution.
+
+Rejouée sur les durées de ces deux runs, ramenées dans chacun à son runner le
+plus rapide, la règle donne, avant et après :
+
+| Run | Table | Parts 0 à 3 | Parts 4 à 7 | Part la plus lourde | Part la plus légère |
+|---|---|---|---|---|---|
+| 38062342869 | avant | 2168 s | 2057 s | 597 s | 482 s |
+| 38062342869 | après | 2165 s | 2060 s | 561 s | 513 s |
+| 38057681312 | avant | 1610 s | 1442 s | 443 s | 338 s |
+| 38057681312 | après | 1583 s | 1469 s | 410 s | 365 s |
+
+Le cumul des deux jobs bouge peu (5 % d'écart avant comme après sur le
+premier run, 10 % puis 7 % sur le second) : c'est la part la plus lourde, celle
+qu'un job attend, qui baisse de 6 à 7 %, et l'écart entre les huit parts qui
+passe de 115 s à 48 s et de 105 s à 45 s. Ces chiffres sont un calcul sur des
+durées mesurées avant ce changement, pas la mesure d'un run qui le porte.
+L'écart observé entre les deux jobs de ces runs (2 min 20 s et 3 min) vient
+d'abord du processeur de leur runner, auquel la table ne peut rien.
 
 Limites, les mêmes que pour la table de la simulation :
 
