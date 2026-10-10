@@ -1179,6 +1179,13 @@ raspberry-pi/.venv/bin/mypy --config-file pyproject.toml
 raspberry-pi/.venv/bin/pytest deploy/simulation-vercel/tests
 ```
 
+La CI lance la dernière de ces commandes, les tests, dans `simulation-gate` :
+une vérification obligatoire, que la règle de chemins lance pour tout fichier
+que ces tests lisent (`deploy/simulation-vercel/`, `simulation_app.py`,
+`simulation/`, `raspberry-pi/src`, les deux listes de dépendances). Un test en
+échec y bloque la fusion. Les quatre contrôles statiques au-dessus ne sont
+lancés par aucun job : ils restent à lancer à la main.
+
 ---
 
 ## 7. Le Raspberry Pi

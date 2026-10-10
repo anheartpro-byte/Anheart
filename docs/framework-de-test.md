@@ -1108,11 +1108,11 @@ par un commit de fusion
 | Job | Contrôles et artefacts |
 |---|---|
 | `changes` | classe les fichiers changés par la PR et dit aux quatre gates ci-dessous si elles peuvent être sautées (voir [Gates lancées selon les fichiers changés](#gates-lancées-selon-les-fichiers-changés-anh-184)). Ne lance plus aucun test depuis ANH-183 : ce job n'est pas une vérification obligatoire, ses tests sont dans `docs` |
-| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
+| `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne (`github.event_name == 'schedule'`), ou sur un lancement manuel de ce workflow dont la case `endurance` est cochée, une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128 ; voir [L'endurance nocturne, et comment la lancer à la main](#lendurance-nocturne-et-comment-la-lancer-à-la-main-anh-218)) |
 | `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
 | `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus : l'endurance de la console entière, 24 heures simulées (`python -m simulation.endurance simulated --hours 24`, ANH-164, [section 17](#17-endurance-de-la-console)) ; son rapport rejoint le même artefact |
-| `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
+| `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; puis les tests du moteur de simulation hébergé, `deploy/simulation-vercel/tests` (depuis ANH-218 : aucun job ne les lançait) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
@@ -1439,7 +1439,7 @@ l'ordre de collecte pour tous les autres.
 
 | Job | Parts | Ce qu'il exécute |
 |---|---|---|
-| `pi (tests 1)` | 0 à 3 | ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis ses quatre parts, un processus pytest chacune ; la nuit, l'endurance de l'enregistrement de séance |
+| `pi (tests 1)` | 0 à 3 | ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis ses quatre parts, un processus pytest chacune ; la nuit, ou sur un lancement manuel qui le demande, l'endurance de l'enregistrement de séance |
 | `pi (tests 2)` | 4 à 7 | les mêmes contrôles, puis ses quatre parts |
 | `pi-gate` | aucune | les tests du lanceur, puis le verdict sur les huit parts |
 
@@ -1618,6 +1618,50 @@ test lent reconnu par son nom ou par un de ses cas, les tests lents distribués
 selon leur durée et tous les autres par leur rang, chaque test choisi par une
 part et une seule.
 
+### L'endurance nocturne, et comment la lancer à la main (ANH-218)
+
+L'étape « Pi endurance » de `pi (tests 1)` joue une journée simulée de séances
+avec l'enregistrement de séance écrit (`tests/test_record_endurance.py`, le
+seul test marqué `slow`, sauté sans `ANHEART_ENDURANCE_HOURS`). Elle tourne :
+
+* **chaque nuit**, sur le déclenchement `schedule` de `ci.yml`. GitHub ne
+  lance un workflow planifié que sur la branche par défaut : c'est la tête de
+  `main` qui est jouée, jamais une branche ;
+* **sur un lancement manuel de `ci.yml` dont la case `endurance` est cochée**,
+  sur la branche choisie. C'est le seul moyen de la jouer sur une branche,
+  donc avant de fusionner un changement qui la touche. Depuis un poste :
+  `gh workflow run ci.yml --ref <branche> -f endurance=true`.
+
+Elle ne tourne dans aucun autre cas : ni sur une PR, ni sur un push, ni sur un
+lancement manuel dont la case est restée vide (la valeur par défaut), ni dans
+la pipeline de release, qui appelle `ci.yml` sans pouvoir lui passer cette
+case. Un lancement manuel, coché ou non, lance par ailleurs toutes les gates
+sans en sauter aucune et ajoute `--dsp` au rapport synthétique, comme la nuit.
+
+Son échec fait échouer `pi (tests 1)`, donc `pi-gate`. Elle a 35 minutes, dans
+un job qui en a 60.
+
+**Ce qui a été mesuré, et ce qui ne l'a pas été.** Depuis que la gate du Pi est
+répartie sur deux jobs, cette étape n'avait jamais tourné, et la version de
+24 heures n'a jamais été jouée en entier par personne. Sur un poste de
+développement (jamais sur un runner), la commande de l'étape avec
+`ANHEART_ENDURANCE_HOURS=2` : 8 séances, 36 760 tics, réussie en 108 s, soit
+2,9 ms par tic, dont l'essentiel est l'écriture de l'enregistrement mesurée
+sous `tracemalloc`. À ce rythme les 24 heures (95 séances) demandent une
+vingtaine de minutes sur ce poste. Le même test en version courte prend 20 s
+sur un runner là où il en prend 15 sur ce poste, sous couverture dans les deux
+cas. Par extrapolation, et rien de plus : une trentaine de minutes sur un
+runner ordinaire, et plus que les 35 minutes de l'étape sur un runner deux
+fois plus lent, comme la CI en a déjà donné. Seule la durée de la première
+exécution réelle dira si ce budget tient.
+
+`scripts/ci/ci-workflow.test.mjs` tient l'étape : elle existe dans une seule
+part, la nuit la lance, un lancement manuel ne la lance que case cochée, un
+workflow appelant ne peut pas la demander, rien n'adoucit son échec, et la
+commande choisit bien le test qu'elle doit jouer (le marqueur `slow` et la
+variable `ANHEART_ENDURANCE_HOURS` sont les mêmes dans le workflow et dans le
+fichier de test : renommé d'un seul côté, l'étape réussirait sans rien jouer).
+
 ### Gate de simulation répartie (ANH-184)
 
 En un seul job, `simulation-gate` prenait de 49 à 66 minutes (runs 37502103415
@@ -1643,7 +1687,7 @@ depuis ANH-183, et la règle de partage est celle de la simulation.
 | `simulation (cohort)` | 0 | `tests/test_cohort.py` en entier, seul sur son runner |
 | `simulation (battery 1)` à `simulation (battery 3)` | 1 à 4, 5 à 8, 9 à 12 | le reste de la batterie, quatre processus par runner |
 | `simulation (report)` | aucune | le rapport `simulation.quick --all` |
-| `simulation-gate` | aucune | le verdict sur les 13 parts |
+| `simulation-gate` | aucune | le verdict sur les 13 parts, puis les tests du moteur hébergé (`deploy/simulation-vercel/tests`) |
 
 `simulation/scripts/check.sh` reste la définition de la gate. Deux variables
 d'environnement choisissent l'étape :
@@ -2219,8 +2263,9 @@ Elle ne recopie aucun job. `ci.yml`, `pi-install.yml`, `codeql.yml` et
 `deploy-production.yml` déclarent `workflow_call` et sont appelés tels quels.
 Un workflow appelé voit l'événement de son appelant, ici un lancement manuel :
 dans `ci.yml`, aucune gate n'est sautée par la règle de chemins, le rapport
-synthétique tourne avec ses scénarios `dsp`, et l'endurance nocturne, réservée
-au déclenchement nocturne, ne tourne pas.
+synthétique tourne avec ses scénarios `dsp`, et l'endurance nocturne ne tourne
+pas : hors de la nuit, seul un lancement manuel de `ci.yml` qui coche sa case
+la lance, et un workflow appelé ne reçoit pas cette case.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de

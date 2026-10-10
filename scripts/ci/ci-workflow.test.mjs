@@ -554,13 +554,116 @@ test("the Pi gate still judges every test once and the whole coverage, from what
   const check = atRoot("raspberry-pi/scripts/check.sh");
   assert.ok(check.includes(' --combine "$COMBINE" --evidence "$EVIDENCE" --fail-under 100 '));
   assert.ok(check.includes(' --shares "$SHARES" --evidence "$EVIDENCE" ${REPORT:+'), "a part applies no threshold");
-  // The nightly endurance of the session record: in one part only, and its failure fails that part.
-  const endurance = stepsOf("pi-tests").filter((text) => /^ {8}run: .*test_record_endurance\.py/m.test(text));
-  assert.equal(endurance.length, 1);
-  assert.match(endurance[0] ?? "", /^ {8}if: \$\{\{ github\.event_name == 'schedule' && matrix\.endurance \}\}$/m);
-  assert.doesNotMatch(endurance[0] ?? "", /continue-on-error/);
-  assert.equal(tests.match(/^ {12}endurance: true$/gm)?.length, 1, "one part runs the endurance");
+  // The nightly endurance of the session record is a step of one part: see the test below.
   assert.doesNotMatch(gate, /pytest tests\//, "the job that judges runs no test of the console");
+});
+
+// --- The nightly endurance of the session record (ANH-128, ANH-218) ---
+//
+// A simulated day of sessions with the record written, in one step of one part of the Pi tests. It
+// had never run since the Pi gate was cut in two jobs: the nightly event starts on the default
+// branch only, and no manual run could reach the step. What follows holds that the step exists, that
+// the night starts it, that a manual run starts it when it is asked to and never otherwise, that the
+// release pipeline cannot, and that the command it runs still selects the test it is there for. That
+// last point is not a detail: a marker or a variable renamed on one side only leaves a step that
+// passes having run nothing.
+
+test("the nightly endurance runs every night, on a manual run that asks for it, and nowhere else", () => {
+  const tests = jobs.get("pi-tests") ?? "";
+  const triggers = workflow.slice(0, workflow.indexOf("\npermissions:"));
+  const endurance = stepsOf("pi-tests").filter((text) => /^ {8}run: .*test_record_endurance\.py/m.test(text));
+  assert.equal(endurance.length, 1, "one step of the Pi tests runs the endurance");
+  const step = endurance[0] ?? "";
+  // One part only: the matrix names it, and the step asks the matrix.
+  assert.equal(tests.match(/^ {12}endurance: true$/gm)?.length, 1, "one part runs the endurance");
+  assert.equal(tests.match(/^ {12}endurance: false$/gm)?.length, 1, "the other part says it does not");
+  // The night starts it. A manual run starts it only with the box ticked: compared with `true`, so
+  // that the text "false" is not a ticked box. No other event can.
+  assert.match(triggers, /^ {2}schedule:\n {4}- cron: '\d+ \d+ \* \* \*'$/m, "the workflow no longer runs every night");
+  assert.equal(
+    /^ {8}if:[ \t]*(.*)$/m.exec(step)?.[1],
+    "${{ (github.event_name == 'schedule' || inputs.endurance == true) && matrix.endurance }}",
+  );
+  const box = /^ {2}workflow_dispatch:\n {4}inputs:\n((?: {6}.*\n)+)/m.exec(triggers)?.[1] ?? "";
+  assert.deepEqual(
+    [...box.matchAll(/^ {6}([a-z_]+):$/gm)].map(([, name]) => name),
+    ["endurance"],
+    "the inputs of a manual run",
+  );
+  assert.match(box, /^ {8}type: boolean$/m);
+  assert.match(box, /^ {8}default: false$/m, "a manual run costs what it always did unless it asks");
+  assert.match(box, /^ {8}required: false$/m);
+  // A workflow that calls this one (the release pipeline) can hand it no input: the box is empty there.
+  assert.match(triggers, /^ {2}workflow_call:$/m);
+  assert.doesNotMatch(triggers, /^ {2}workflow_call:\n {4}/m, "a caller could ask for the endurance");
+  assert.equal(workflow.split("inputs.").length - 1, 2, "`inputs.` is read in the comment and in the condition of the step");
+  // Its failure fails the part, hence `pi-gate`; and it has the time the documentation gives it.
+  assert.doesNotMatch(step, /continue-on-error/);
+  const limit = Number(/^ {8}timeout-minutes: (\d+)$/m.exec(step)?.[1]);
+  const budget = Number(own("pi-tests", "timeout-minutes"));
+  assert.equal(limit, 35);
+  assert.ok(budget - limit >= 20, `the tests of the part have ${budget - limit} minutes before the endurance`);
+  // What it runs: the one test marked `slow`, with the variable that test waits for. From raspberry-pi/,
+  // with the environment the step before it installed.
+  assert.match(step, /^ {8}working-directory: raspberry-pi$/m);
+  assert.match(step, /^ {8}run: \.venv\/bin\/python -m pytest tests\/test_record_endurance\.py -m slow -s$/m);
+  const hours = /^ {10}([A-Z_]+): '24'$/m.exec(step)?.[1];
+  assert.equal(hours, "ANHEART_ENDURANCE_HOURS");
+  const file = atRoot("raspberry-pi/tests/test_record_endurance.py");
+  assert.match(file, new RegExp(`^HOURS_KEY: Final\\[str\\] = "${hours}"$`, "m"), "the test waits for another variable");
+  assert.match(file, /^NIGHTLY_HOURS: Final\[float\] = float\(os\.environ\.get\(HOURS_KEY, "0"\) or "0"\)$/m);
+  // One test carries the marker, and it is the one skipped without the variable: `-m slow` selects it alone.
+  assert.equal(file.match(/^@pytest\.mark\.slow$/gm)?.length, 1);
+  assert.match(
+    file,
+    /^@pytest\.mark\.slow\n@pytest\.mark\.skipif\(NIGHTLY_HOURS <= 0, .*\)\nasync def test_ex10_a_day_of_console_in_simulation_/m,
+  );
+  // The marker is one pytest knows: with `--strict-markers` an unknown one stops the collection.
+  assert.match(atRoot("raspberry-pi/pyproject.toml"), /^ {4}"slow: /m);
+});
+
+// --- The hosted simulation engine, tested by a gate that existed (ANH-218) ---
+//
+// deploy/simulation-vercel/tests drive the wrapper Vercel serves, with the real simulation runtime
+// behind it. No job ran them: the wrapper could stop importing, or stop refusing a name it must
+// refuse, with every check green. They have no job of their own, for the reason the release tooling
+// has none: branch protection lists the required checks by name, and a step of a required job fails
+// that job.
+
+test("the hosted simulation engine is tested by `simulation-gate`, and nothing softens the step", () => {
+  const GATE = "simulation-gate";
+  const name = "Test the hosted simulation engine";
+  const steps = stepsOf(GATE);
+  const at = steps.findIndex((text) => text.startsWith(`name: ${name}\n`));
+  assert.ok(at > 0, `${GATE}: no step "${name}"`);
+  const step = steps[at] ?? "";
+  // The whole directory, from the repository root, with the interpreter the job installed.
+  assert.match(step, /^ {8}run: raspberry-pi\/\.venv\/bin\/python -m pytest deploy\/simulation-vercel\/tests$/m);
+  assert.doesNotMatch(step, /working-directory/, "the root is where pyproject.toml gives pytest its paths");
+  const install = steps.findIndex((text) => text.startsWith("name: Install Python dependencies\n"));
+  assert.ok(install >= 0 && install < at, "the environment must be installed first");
+  // It fails the job when a test fails, runs whatever the steps before it found, never on a cancelled run.
+  assert.ok(!softened(step), "the step can pass though a test failed");
+  assert.equal(stepCondition(GATE, name), "${{ !cancelled() }}");
+  // The job is a required check, and the path rule can skip it only as it skips the simulation itself.
+  assert.ok(REQUIRED.includes(GATE));
+  assert.equal(own(GATE, "if"), GATED.get(GATE));
+  // No other step of the workflow runs them: once, in one place.
+  const running = [...jobs].flatMap(([id]) =>
+    stepsOf(id)
+      .filter((text) => /^ {8,10}(run: )?.*\bpytest\b.*deploy\/simulation-vercel/m.test(text))
+      .map((text) => `${id}: ${titleOf(text)}`),
+  );
+  assert.deepEqual(running, [`${GATE}: name: ${name}`]);
+  // What the command relies on: the directory holds the tests, and the root manifest names the paths
+  // they import from (the wrapper, the simulation package, the code of the Pi).
+  const files = readdirSync(new URL("../../deploy/simulation-vercel/tests/", import.meta.url));
+  assert.ok(files.includes("test_app.py") && files.includes("test_dependencies.py"), files.join(", "));
+  const manifest = atRoot("pyproject.toml");
+  assert.match(manifest, /^testpaths = \["deploy\/simulation-vercel\/tests"\]$/m);
+  assert.match(manifest, /^pythonpath = \["\.", "raspberry-pi", "deploy\/simulation-vercel"\]$/m);
+  // The job installs nothing of Vercel and holds no token: these tests reach no deployment.
+  assert.doesNotMatch(jobs.get(GATE) ?? "", /vercel (deploy|pull|build)|VERCEL_TOKEN/i);
 });
 
 test("the Pi gate script refuses two ways of running the tests at once, before it runs anything", () => {
