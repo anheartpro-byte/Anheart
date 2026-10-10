@@ -48,6 +48,15 @@ class Element {
   addEventListener() {}
 }
 
+// The page's script, compiled once: each page of a test runs it in a context of its own.
+const script = new vm.Script(source, { filename: fileURLToPath(new URL("app.js", assets)) });
+// Every element of the markup that carries an id: its classes and its text.
+const marked = [...html.matchAll(/<[a-z0-9]+\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)/g)].map((tag) => [
+  tag[1],
+  /\bclass="([^"]*)"/.exec(tag[0])?.[1],
+  tag[2].trim(),
+]);
+
 // Every banner of the markup, found by its class: its id and what it contains.
 const banners = [...html.matchAll(/<div id="([^"]+)" class="banner(?: [^"]*)?"[^>]*>([\s\S]*?)<\/div>/g)].map(
   (banner) => ({ id: banner[1], inner: banner[2] }),
@@ -55,12 +64,7 @@ const banners = [...html.matchAll(/<div id="([^"]+)" class="banner(?: [^"]*)?"[^
 
 // The shipped page and script, with every element carrying the classes and the text the markup gives it.
 function panel() {
-  const nodes = new Map(
-    [...html.matchAll(/<[a-z0-9]+\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)/g)].map((tag) => [
-      tag[1],
-      new Element(/\bclass="([^"]*)"/.exec(tag[0])?.[1], tag[2].trim()),
-    ]),
-  );
+  const nodes = new Map(marked.map(([id, classes, text]) => [id, new Element(classes, text)]));
   const clock = { now: 1000 };
   const published = new Map();
   const listeners = [];
@@ -80,14 +84,15 @@ function panel() {
     },
     performance: { now: () => clock.now },
   });
-  vm.runInContext(source, context, { filename: fileURLToPath(new URL("app.js", assets)) });
+  script.runInContext(context);
   // The page's own request code, for a test that answers at the network instead (`context.fetch`).
   const send = context.api;
   // A machine that answers nothing until the test says what it answers.
   context.api = () => new Promise(() => undefined);
-  // A page whose socket is open and delivering frames.
+  // A page whose socket is open and has been delivering frames for a long time.
   context.state.connected = true;
   context.state.lastFrameAt = clock.now;
+  context.state.streamFrom = { stream: context.state.stream, at: Number.NEGATIVE_INFINITY };
   const node = (id) => {
     assert.ok(nodes.has(id), `the page has no #${id}`);
     return nodes.get(id);
@@ -3219,8 +3224,11 @@ for (const start of STARTS) {
     for (const word of start.words) {
       assert.equal(note.textContent.includes(word), false, word);
     }
-    // And it stays so for as long as that session is shown, then goes with it.
+    // And it stays so for as long as that session is shown, then goes with it. Another start
+    // request does not change the reason it gives: the first one stands.
     frame(start.running(70));
+    assert.equal(note.textContent, start.unknown);
+    page.context.addEvent(startRequested(71, "ecran B", start.published));
     assert.equal(note.textContent, start.unknown);
     frame(snapshot({ at: 80 }));
     assert.equal(note.textContent, "");
@@ -3364,30 +3372,84 @@ for (const start of STARTS) {
     assert.equal(node(start.note).textContent, start.taken);
   });
 
-  test(`${start.kind} after another screen's that the loop refused is said taken`, async () => {
-    // Given another screen's start, and the loop's refusal of it: the mailbox is empty again.
+  test(`${start.kind} more than two seconds after another screen's that the loop refused is said taken`, async () => {
+    // Given another screen's start, and the loop's refusal of it: the stream has shown it resolved.
     const page = panel();
     const { context, frame, node } = page;
+    frame(snapshot({ at: 55.8 }));
+    context.addEvent(startRequested(56, "ecran A", start.published));
+    context.addEvent(refusal(56.1, START_REFUSED, "ecran A"));
+    // When this screen's start follows, more than two seconds later, and a session shows.
     frame(snapshot({ at: 59.8 }));
-    context.addEvent(startRequested(59.9, "ecran A", start.published));
-    context.addEvent(refusal(59.95, START_REFUSED, "ecran A"));
-    // When this screen's start follows, and a session shows.
     await start.ask(page, 60);
     frame(start.running(60.2));
-    // Then the earlier request was answered before this one: nothing contests it.
+    // Then nothing contests it.
     assert.equal(node(start.note).textContent, start.taken);
   });
 
+  test(`${start.kind} less than two seconds after another screen's is not said taken, even one the loop refused`, async () => {
+    // Given another screen's start just before, refused by the loop: the page does not try to
+    // work out which tick judged what.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 57.8 }));
+    context.addEvent(startRequested(58.1, "ecran A", start.published));
+    context.addEvent(refusal(58.2, START_REFUSED, "ecran A"));
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+  });
+
   test(`${start.kind} after another screen's whole session is said taken`, async () => {
-    // Given another screen's start a while ago: frames of later ticks have come since.
+    // Given another screen's start a while ago, and its session, begun and ended since.
     const page = panel();
     const { context, frame, node } = page;
     context.addEvent(startRequested(30, "ecran A", start.published));
     frame(start.running(30.2));
+    context.addEvent(sessionRunning(30.25));
+    frame(snapshot({ at: 45 }));
+    context.addEvent(sessionIdle(45.05));
     frame(snapshot({ at: 59.8 }));
     await start.ask(page, 60);
     frame(start.running(60.2));
     assert.equal(node(start.note).textContent, start.taken);
+  });
+
+  test(`${start.kind}: a refusal dated before an older request does not resolve it`, async () => {
+    // Given another screen's start a while ago, and a refusal of an earlier command delivered
+    // after it: it says nothing of that request.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 54.8 }));
+    context.addEvent(startRequested(55, "ecran A", start.published));
+    context.addEvent(refusal(54.9, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "ecran C"));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+  });
+
+  test(`${start.kind} whose own event reached the screen twice is not said taken`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    context.addEvent(startRequested(60, "op", start.published));
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+  });
+
+  test(`${start.kind} after an older request the stream never showed resolved is not said taken`, async () => {
+    // Given another screen's start a while ago on this socket: no refusal of it, and no session
+    // that began and ended since. On a machine that slow, it may still wait.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 54.8 }));
+    context.addEvent(startRequested(55, "ecran A", start.published));
+    context.addEvent(sessionIdle(55.1));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
   });
 
   test(`${start.kind} whose own request event never reached the screen is not said taken`, async () => {
@@ -3430,16 +3492,40 @@ for (const start of STARTS) {
     frame(snapshot({ at: 59.8 }));
     await start.ask(page, 60);
     dropSocket(page);
-    // When another socket opens, and the operator asks again on that one.
+    // When another socket opens and delivers frames, and the operator asks again on that one.
     reopenSocket(page);
-    await start.ask(page, 70);
-    frame(start.running(70.2));
+    frame(snapshot({ at: 60.5 }));
+    await start.ask(page, 63);
+    frame(start.running(63.2));
     // Then this request is said taken: its stream is unbroken, whatever the first one's was.
     assert.equal(node(start.note).textContent, start.taken);
   });
 }
 
 for (const start of STARTS) {
+  test(`${start.kind} sent less than two seconds after its socket began to deliver is not said taken`, async () => {
+    // Given a socket that has just opened: a page just loaded, or a link just back. Another
+    // screen's start request, a moment earlier, is one this socket never carried.
+    const page = panel();
+    const { context, frame, node } = page;
+    dropSocket(page);
+    reopenSocket(page);
+    frame(snapshot({ at: 58.5 }));
+    // When this screen starts at once, and a session shows.
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    // Then the page does not know who else asked before it could see: it does not say "pris".
+    assert.equal(node(start.note).textContent, start.doubt + "sa liaison venait de s'ouvrir.");
+    assert.ok(node(start.note).classes.has("note-bad"));
+    // Two seconds of frames later, a start is judged as any other.
+    context.addEvent(sessionRunning(60.25));
+    frame(snapshot({ at: 80 }));
+    context.addEvent(sessionIdle(80.05));
+    await start.ask(page, 90);
+    frame(start.running(90.2));
+    assert.equal(node(start.note).textContent, start.taken);
+  });
+
   test(`${start.kind}: a request left unanswered on a socket since closed contests nothing on the new one`, async () => {
     // Given another screen's start seen on a first socket, on a machine up for hours, never answered
     // there: the Pi restarted. The new console holds nothing of it, and its clock reads earlier.
@@ -3449,7 +3535,8 @@ for (const start of STARTS) {
     context.addEvent(startRequested(20000.1, "ecran A", start.published));
     dropSocket(page);
     reopenSocket(page);
-    // When this screen starts on the new socket, before any frame of it, and a session shows.
+    // When this screen starts on the new socket, some seconds after its first frame, and a session shows.
+    frame(snapshot({ at: 50 }));
     await start.ask(page, 60);
     frame(start.running(60.2));
     // Then nothing contests this request.
@@ -3476,6 +3563,20 @@ test("the page keeps the last few start requests of the stream, not all of them"
   }
   assert.equal(context.state.startLog.length, 8);
   assert.equal(context.state.startLog[7].at, 79);
+});
+
+test("the note of a fault reset is not a note about a session: the events of a start leave it alone", async () => {
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(faultedFrame(59.8));
+  await askReset(page, 60);
+  frame(snapshot({ at: 60.3 }));
+  const gone = "le variateur ne signale plus de defaut";
+  assert.equal(node("fault-note").textContent, gone);
+  context.addEvent(startRequested(61, "ecran B", "manuel bench"));
+  context.addEvent(refusal(61.1, START_REFUSED, "ecran B"));
+  context.addEvent(sessionIdle(61.2));
+  assert.equal(node("fault-note").textContent, gone);
 });
 
 test("a fault reset says what the frames show whatever the socket did: it claims nothing of the request", async () => {
@@ -4167,3 +4268,553 @@ for (const id of ["verdicts-grid", "system-grid"]) {
     assert.equal(rows(node(id))["verdict retenu"].textContent, "aucun");
   });
 }
+
+/* ============ "pris" is kept only while nothing the stream carries contradicts it ============ */
+
+for (const start of STARTS) {
+  test(`${start.kind}: another start request while the note says "pris" takes it down`, async () => {
+    // Given a start the machine took, said so.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.taken);
+    // When another start request reaches the machine, which the console accepted.
+    context.addEvent(startRequested(60.3, "ecran B", start.published));
+    // Then the session on screen may no longer be this screen's: the note stops saying "pris".
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+    assert.ok(node(start.note).classes.has("note-bad"));
+    // And a frame that still shows a session does not bring it back.
+    frame(start.running(60.6));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+  });
+
+  test(`${start.kind}: a refusal dated after it, received while the note says "pris", takes it down`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.taken);
+    // When the loop publishes a refusal a tick later.
+    const late = "demarrage refuse : la machine est deja running";
+    context.addEvent(refusal(60.5, late));
+    // Then the note shows what the machine refused, and no longer says that it took this request.
+    assert.ok(node(start.note).textContent.endsWith(") : " + late), node(start.note).textContent);
+    frame(start.running(60.6));
+    assert.ok(node(start.note).textContent.endsWith(") : " + late), node(start.note).textContent);
+  });
+
+  test(`${start.kind}: a refusal does not put its words over a note that already does not know`, async () => {
+    // Given two start requests in one cycle: this screen does not know which one the loop took.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    context.addEvent(startRequested(60.085, "ecran B", start.published));
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+    // When the loop refuses one of them a tick later.
+    context.addEvent(refusal(60.4, "demarrage refuse : la machine est deja running", "ecran B"));
+    if (start.note === "start-note") {
+      // Then the note still says that it does not know: that refusal may be the other screen's.
+      assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+    } else {
+      // The card of a manual session shows every refusal the machine publishes, as it always did.
+      assert.equal(node(start.note).textContent.includes("pris par la machine"), false);
+    }
+  });
+
+  test(`${start.kind}: a refusal dated before it does not take "pris" down`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    // A refusal of an older command, delivered late.
+    context.addEvent(refusal(59.9, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "ecran B"));
+    frame(start.running(60.4));
+    if (start.note === "start-note") {
+      assert.equal(node(start.note).textContent, start.taken);
+    } else {
+      // The card of a manual session shows every refusal the machine publishes: "pris" is gone
+      // there too, and the note says less.
+      assert.equal(node(start.note).textContent.includes("pris par la machine"), false);
+    }
+  });
+
+  test(`${start.kind}: the end of the session wipes "pris" even when no frame of it was delivered`, async () => {
+    // Given a start the machine took, and a session that then ends: its frames are ones the
+    // console coalesced away for this screen, a socket that stalled for a moment.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    context.addEvent(sessionRunning(60.25));
+    context.addEvent({ kind: "end_requested", at: 60.4, wall_clock: 0, operator: "ecran B", detail: "stop" });
+    // When the event of the session's end arrives: events are never coalesced.
+    context.addEvent(sessionIdle(60.65));
+    // Then the note no longer says "pris".
+    assert.equal(node(start.note).textContent, "");
+    // And another screen's session, shown by the next frame delivered, is not said to be this one's.
+    context.addEvent(startRequested(60.7, "ecran B", start.published));
+    frame(start.running(60.8));
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: the end of the session leaves alone what was written over "pris" since`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    node(start.note).textContent = "autre chose";
+    context.addEvent(startRequested(60.4, "ecran B", start.published));
+    context.addEvent(sessionIdle(61));
+    assert.equal(node(start.note).textContent, "autre chose");
+  });
+
+  test(`${start.kind}: a new socket takes "pris" down for as long as a session shows`, async () => {
+    // Given a start the machine took, then the socket of this screen dropped and reopened.
+    const page = panel();
+    const { frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.taken);
+    dropSocket(page);
+    reopenSocket(page);
+    // When the new socket shows a session: this one, or another started since.
+    frame(start.running(70));
+    // Then the page does not go on saying "pris": it has not seen what happened in between.
+    assert.equal(node(start.note).textContent, start.unknown);
+    frame(snapshot({ at: 80 }));
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: the note that does not know which request ran goes with the session's end too`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    await start.ask(page, 60);
+    context.addEvent(startRequested(60.085, "ecran B", start.published));
+    frame(start.running(60.2));
+    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
+    context.addEvent(sessionRunning(60.25));
+    context.addEvent(sessionIdle(61));
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  // The page's own request is the event stamped with the very instant of its 202, no other.
+  for (const [what, other] of [
+    ["just before", 59.9],
+    ["a few tenths of a second after", 60.3],
+    ["more than two seconds before, resolved", 57],
+  ]) {
+    test(`${start.kind}: another screen's event dated ${what} is not taken for this screen's own`, async () => {
+      // Given a 202, and on the stream another screen's start request alone: this screen's own
+      // event did not arrive.
+      const page = panel();
+      const { context, frame, node } = page;
+      frame(snapshot({ at: 56.8 }));
+      if (other < 60) {
+        context.addEvent(startRequested(other, "ecran B", start.published));
+        context.addEvent(refusal(other + 0.05, START_REFUSED, "ecran B"));
+        frame(snapshot({ at: 59.8 }));
+      }
+      context.api = (path) => (path === start.path ? Promise.resolve(start.command(60)) : never());
+      start.press(page);
+      await settle();
+      if (other > 60) {
+        context.addEvent(startRequested(other, "ecran B", start.published));
+      }
+      frame(start.running(60.5));
+      // Then the page does not say "pris".
+      assert.equal(node(start.note).textContent.includes("pris par la machine"), false, node(start.note).textContent);
+      assert.ok(node(start.note).textContent.startsWith(start.doubt), node(start.note).textContent);
+    });
+  }
+}
+
+/* ============ the family: a model of the console's mailbox, and every interleaving of three requests ============ */
+
+/*
+  What the console does with its mailbox, as src/control_surface.py and the control step of
+  src/local_panel.py do it, reduced to what bears on a start note:
+
+  - one command waits at a time. A start is accepted whenever the surface reads idle, also over a
+    command that waits: it takes its place, and nothing is published for the one replaced;
+  - the surface reads idle again as soon as a tick ends with no session, though a start accepted
+    during that tick still waits (`note_idle`), and after any refusal (`note_refused`);
+  - a tick empties the mailbox, judges the command (a start while a session runs is refused with a
+    `refused` event), takes the frame's instant AFTER that, ticks the runtime, publishes the
+    frame, then reports the session running or idle;
+  - requests are accepted while the loop awaits the drive: during the judging, and during the
+    runtime's tick;
+  - a reset is accepted when no start is in flight and the mailbox is empty, a target when a
+    session runs and the mailbox is empty, a stop when a session runs or is being started.
+
+  Every message goes out in the order the console emits it, with the session the runtime ran at
+  that moment: that is what a note saying "pris" is held against.
+*/
+function mailboxModel(manual) {
+  const model = { clock: 100, pending: null, starting: false, live: false, ending: false, session: null, started: [], target: 0, out: [] };
+  const reads = () => (model.ending ? "stopping" : model.live ? "running" : model.starting ? "starting" : "idle");
+  const emit = (message) => model.out.push({ ...message, session: model.session });
+  const publish = (kind, operator, detail) => emit({ event: { kind, at: model.clock, wall_clock: 0, operator, detail } });
+  const conflict = (detail) => ({ ok: false, error: Object.assign(new Error(detail), { status: 409 }) });
+  const waiting = () => (model.pending ? ` (pending: ${model.pending.printed})` : "");
+
+  // An HTTP request: the console's answer, after whatever it published for it.
+  model.submit = (request) => {
+    const state = reads();
+    if (request.kind === "start") {
+      if (state !== "idle") return conflict(`the machine is ${state}, not idle${waiting()}`);
+      model.clock += 0.004;
+      model.pending = request;
+      model.starting = true;
+      publish("start_requested", request.operator, request.published);
+      return { ok: true, body: { kind: request.reply, operator: request.operator, detail: request.detail, at: model.clock } };
+    }
+    if (request.kind === "reset") {
+      if (state === "starting" || model.pending) return conflict(`the machine is ${state}${waiting()}; try again in a moment`);
+      model.clock += 0.004;
+      model.pending = request;
+      publish("fault_reset_requested", request.operator, "reset defaut");
+      return { ok: true };
+    }
+    if (request.kind === "target") {
+      if (state !== "running") return conflict(`no manual session is running (the machine is ${state})`);
+      if (model.pending) return conflict(`the machine is ${state}${waiting()}; try again in a moment`);
+      model.pending = request;
+      return { ok: true };
+    }
+    if (state === "idle") return conflict(`there is no session to end (the machine is ${state})`);
+    if (state === "stopping") return conflict(`the machine is already ${state}`);
+    model.clock += 0.004;
+    model.ending = true;
+    model.pending = request;
+    publish("end_requested", request.operator, "stop");
+    return { ok: true };
+  };
+
+  const refuse = (command, detail) => {
+    model.starting = false;
+    publish("refused", command.operator, detail);
+  };
+
+  // One tick, in three steps, so that requests can be placed between them.
+  model.take = () => {
+    model.taken = model.pending;
+    model.pending = null;
+    model.clock += 0.02;
+  };
+  model.judge = () => {
+    const command = model.taken;
+    model.clock += 0.03;
+    if (command && command.kind === "start") {
+      if (model.session) {
+        refuse(command, "demarrage refuse : la machine est deja running");
+      } else {
+        model.session = command;
+        model.started.push(command);
+      }
+    } else if (command && command.kind === "reset") {
+      if (model.session) refuse(command, "reset refuse : mouvement encore commande (running)");
+    } else if (command && command.kind === "target") {
+      if (model.session && manual) model.target = 249;
+      else refuse(command, "consigne refusee : aucune seance manuelle en cours");
+    } else if (command && command.kind === "stop") {
+      model.session = null;
+      model.target = 0;
+    }
+    model.clock += 0.01;
+    // The frame's instant: taken once the command has been judged.
+    model.instant = model.clock;
+  };
+  model.publish = (cycle) => {
+    model.clock += 0.03;
+    emit({ frame: { at: model.instant, running: Boolean(model.session), target: model.target }, cycle });
+    if (model.session && !model.live) {
+      model.live = true;
+      model.starting = false;
+      publish("session_running", "", "session running");
+    } else if (!model.session && (model.live || model.starting || model.ending)) {
+      model.live = false;
+      model.starting = false;
+      model.ending = false;
+      publish("session_idle", "", "session idle");
+    }
+    model.clock = 100 + 0.2 * (cycle + 1);
+  };
+  return model;
+}
+
+const FAMILY_CYCLES = 3;
+const FAMILY_PLACES = ["before the tick", "during the judging", "during the runtime's tick"];
+// One quiet tick after the three: what was accepted last is judged and shown.
+const FAMILY_TICKS = FAMILY_CYCLES + 1;
+
+// One request of an interleaving, as the model takes it. `index` makes the words of a programme unique.
+function familyRequest({ kind, screen }, index, manual) {
+  const operator = kind === "start" ? `ecran ${screen}` : "un ecran";
+  if (kind !== "start") {
+    return { kind, operator, printed: `${kind}(operator='${operator}')` };
+  }
+  const seconds = 1800 + 60 * (index + 1);
+  const said = manual ? "manual_start bench" : `start standard_30_min over ${seconds} s`;
+  return {
+    kind,
+    screen,
+    operator,
+    said,
+    reply: manual ? "manual_start" : "start",
+    detail: manual ? "bench" : `standard_30_min over ${seconds} s`,
+    published: manual ? "manuel bench" : "start standard_30_min",
+    printed: `Start(operator='${operator}')`,
+  };
+}
+
+const describeFamily = (requests, dropped) =>
+  requests
+    .map(({ kind, screen, slot }) => `${kind}${kind === "start" ? ` by screen ${screen}` : ""} ${FAMILY_PLACES[slot % 3]} of cycle ${Math.floor(slot / 3) + 1}`)
+    .join(", ") + (dropped.length ? `; frame of cycle ${dropped.map((cycle) => cycle + 1).join(" and ")} not delivered` : "");
+
+/*
+  One interleaving, in two steps.
+
+  First the model alone: what each screen that asks for a start lives through, in order. Its own
+  clicks and the console's answers to them, every event, and every frame unless this run withholds
+  it (a frame the console coalesced away for a slow socket). Each message carries what a note is
+  held against: the session the runtime ran when the console emitted it, and the requests the loop
+  had taken by then.
+*/
+function familyHistories(requests, dropped, manual) {
+  const model = mailboxModel(manual);
+  const histories = new Map();
+  for (const { kind, screen } of requests) {
+    if (kind === "start") histories.set(screen, []);
+  }
+  let sent = 0;
+  const deliver = () => {
+    for (; sent < model.out.length; sent += 1) {
+      const message = model.out[sent];
+      if (message.frame && dropped.includes(message.cycle)) continue;
+      for (const history of histories.values()) history.push({ ...message, started: model.started.slice() });
+    }
+  };
+  const made = requests.map((request, index) => ({ ...familyRequest(request, index, manual), slot: request.slot }));
+  for (let cycle = 0; cycle < FAMILY_TICKS; cycle += 1) {
+    for (let place = 0; place < 3; place += 1) {
+      for (const request of made.filter((each) => each.slot === cycle * 3 + place)) {
+        // A click is sent before the console publishes anything for it, and answered after.
+        if (request.kind === "start") histories.get(request.screen).push({ press: true });
+        const outcome = model.submit(request);
+        deliver();
+        if (request.kind === "start") histories.get(request.screen).push({ answer: outcome, started: model.started.slice() });
+      }
+      if (place === 0) model.take();
+      else if (place === 1) model.judge();
+      else model.publish(cycle);
+      deliver();
+    }
+  }
+  return histories;
+}
+
+/*
+  Then the page code: one real page lives through one history. The invariant: IF its note says
+  "pris par la machine" THEN the session that runs is the one this screen asked for, in its own
+  words. It is held at every point where the page has been told what runs:
+
+  - after every message it receives, the request the note speaks of is one the loop took;
+  - after every frame it receives, the session that frame shows is that request's;
+  - after a `session_idle`, no note says "pris" any more.
+
+  Between the end of a session and the first message that says so, a note may still say "pris" of
+  the session that has just ended: that is the console's own delay, and the request was taken.
+  Returns what the note read at the end.
+*/
+async function liveFamilyHistory(history, screen, manual, where) {
+  const start = STARTS[manual ? 0 : 1];
+  const page = panel();
+  const note = page.node(start.note);
+  const hold = (step) => {
+    const text = note.textContent;
+    if (!text.startsWith("demarrage pris par la machine")) {
+      return;
+    }
+    const said = `${where()}: screen ${screen} says "${text}"`;
+    const mine = (request) => Boolean(request) && request.screen === screen && text.includes(request.said);
+    assert.ok(step.started.some(mine), `${said} of a request the loop never took`);
+    if (step.frame) {
+      const shown = step.session ? `the session of screen ${step.session.screen} (${step.session.said})` : "no session";
+      assert.ok(mine(step.session), `${said} while the frame it has just received shows ${shown}`);
+    }
+    if (step.event) {
+      assert.notEqual(step.event.kind, "session_idle", `${said} after the session ended`);
+    }
+  };
+  let answer = null;
+  for (const step of history) {
+    if (step.press) {
+      answer = deferred();
+      const held = answer.promise;
+      page.context.api = (path) => (path === start.path ? held : never());
+      start.press(page);
+      continue;
+    }
+    if (step.event) {
+      page.context.addEvent(step.event);
+    } else if (step.frame) {
+      const { at, running, target } = step.frame;
+      page.frame(!running ? snapshot({ at }) : manual ? manualFrame(at, target) : snapshot({ at, mode: "seance", phase: "baseline" }));
+    } else {
+      if (step.answer.ok) answer.resolve(step.answer.body);
+      else answer.reject(step.answer.error);
+      // The page handles the answer in the microtasks that follow: no turn of the event loop is needed.
+      for (let hop = 0; hop < 4; hop += 1) await null;
+    }
+    hold(step);
+  }
+  return note.textContent;
+}
+
+// What tells two histories apart for a page and for the invariant: everything the page receives,
+// and, for each message, whether the session and the requests taken are this screen's.
+function familyHistoryKey(history, screen) {
+  const own = (request) => (request.screen === screen ? request.said : "");
+  return JSON.stringify(
+    history.map((step) => {
+      if (step.press) return 0;
+      const taken = step.started.map(own).join("|");
+      if (step.answer) return [step.answer.ok ? step.answer.body : step.answer.error.message, taken];
+      const runs = step.session ? own(step.session) || "another" : null;
+      return [step.event ?? step.frame, runs, taken];
+    }),
+  );
+}
+
+/*
+  Plays one interleaving: each screen's history on a real page. A history already lived through,
+  message for message and with the same sessions behind it, is not played again (`played` keeps
+  what its note read): the page has no other input. Returns what each note read at the end.
+*/
+async function playFamily(requests, dropped, manual, played = new Map()) {
+  const notes = new Map();
+  for (const [screen, history] of familyHistories(requests, dropped, manual)) {
+    const key = `${manual} ${familyHistoryKey(history, screen)}`;
+    if (!played.has(key)) {
+      played.set(key, await liveFamilyHistory(history, screen, manual, () => describeFamily(requests, dropped)));
+    }
+    notes.set(screen, played.get(key));
+  }
+  return notes;
+}
+
+// Every interleaving of `count` requests: their kinds, where each falls in the three cycles, and
+// which screen asks for each start (screens are named in the order they first appear).
+function* familyInterleavings(count, kinds = ["start", "reset", "target", "stop"]) {
+  const slots = FAMILY_CYCLES * 3;
+  function* build(prefix, screens) {
+    if (prefix.length === count) {
+      if (prefix.some((request) => request.kind === "start")) yield prefix;
+      return;
+    }
+    const from = prefix.length ? prefix[prefix.length - 1].slot : 0;
+    for (let slot = from; slot < slots; slot += 1) {
+      for (const kind of kinds) {
+        if (kind !== "start") {
+          yield* build([...prefix, { kind, slot }], screens);
+          continue;
+        }
+        for (let screen = 1; screen <= screens + 1; screen += 1) {
+          yield* build([...prefix, { kind, slot, screen }], Math.max(screens, screen));
+        }
+      }
+    }
+  }
+  yield* build([], 0);
+}
+
+// The three orderings the reviews found, each of them one of the interleavings below.
+const FAMILY_NAMED = [
+  {
+    name: "two starts in one cycle",
+    requests: [{ kind: "start", slot: 1, screen: 1 }, { kind: "start", slot: 3, screen: 2 }],
+    dropped: [],
+  },
+  {
+    name: "three requests in two cycles",
+    requests: [{ kind: "reset", slot: 0 }, { kind: "start", slot: 1, screen: 1 }, { kind: "start", slot: 4, screen: 2 }],
+    dropped: [],
+  },
+  {
+    name: "start, stop, start with the stop's frames coalesced",
+    requests: [{ kind: "start", slot: 0, screen: 1 }, { kind: "stop", slot: 3 }, { kind: "start", slot: 6, screen: 2 }],
+    dropped: [1],
+  },
+];
+
+test("two starts in one cycle: one session runs, and neither screen says it took its request", async () => {
+  for (const manual of [true, false]) {
+    const notes = await playFamily(FAMILY_NAMED[0].requests, [], manual);
+    const doubt = STARTS[manual ? 0 : 1].doubt + RIVAL;
+    assert.equal(notes.get(1), doubt);
+    assert.equal(notes.get(2), doubt);
+  }
+});
+
+test("three requests in two cycles: the second start, refused a tick later, is never said taken", async () => {
+  for (const manual of [true, false]) {
+    const notes = await playFamily(FAMILY_NAMED[1].requests, [], manual);
+    // The session that runs is screen 1's; screen 2's request was refused once it was armed.
+    assert.equal(notes.get(2).includes("pris par la machine"), false, notes.get(2));
+    assert.equal(notes.get(1).includes("standard_30_min over 1860"), false, notes.get(1));
+  }
+});
+
+test("start, stop, start with the stop's frames coalesced: the first note does not stay over the next session", async () => {
+  for (const manual of [true, false]) {
+    const notes = await playFamily(FAMILY_NAMED[2].requests, [1], manual);
+    assert.equal(notes.get(1), "");
+  }
+});
+
+test(`every interleaving of up to three requests over three cycles: a note says "pris" only of the session its screen asked for`, async () => {
+  const seen = new Set();
+  const lived = new Map();
+  let played = 0;
+  let taken = 0;
+  const began = Date.now();
+  // What a run withholds: nothing, or the frame of the middle cycle.
+  for (const dropped of [[], [1]]) {
+    for (const count of [1, 2, 3]) {
+      for (const requests of familyInterleavings(count)) {
+        // Programme starts carry words of their own; manual starts are played up to two requests.
+        for (const manual of count < 3 ? [false, true] : [false]) {
+          const notes = await playFamily(requests, dropped, manual, lived);
+          played += 1;
+          for (const text of notes.values()) {
+            if (text.startsWith("demarrage pris par la machine")) taken += 1;
+          }
+          seen.add(`${manual ? "manual" : "programme"}: ${describeFamily(requests, dropped)}`);
+        }
+      }
+    }
+  }
+  // The orderings the reviews found are among them.
+  for (const named of FAMILY_NAMED) {
+    assert.ok(seen.has(`programme: ${describeFamily(named.requests, named.dropped)}`), named.name);
+  }
+  // And the invariant is not held by a page that never says "pris": a start alone is said taken.
+  const alone = await playFamily([{ kind: "start", slot: 0, screen: 1 }], [], false);
+  assert.equal(alone.get(1), "demarrage pris par la machine : start standard_30_min over 1860 s");
+  assert.ok(taken > 0);
+  console.log(
+    `# start-note family: ${played} interleavings, ${lived.size} distinct page histories played, ` +
+      `"pris" at the end of ${taken} notes, in ${Date.now() - began} ms`,
+  );
+});
