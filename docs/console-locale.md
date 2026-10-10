@@ -1490,11 +1490,15 @@ répondu à temps. Détail dans
 - Un acquittement de `session_standstill` (ou de `session_overrun`) donné avant le
   retour du mode à `REPOS` répond 200 puis est repris, sans que la page dise quand il
   tiendra (section 11).
-- Le bandeau `ARRET D'URGENCE VERROUILLE` garde deux cas, du côté prudent (section 5) :
-  un WebSocket tombé sur une image qui montrait un arrêt verrouillé, et un arrêt
-  d'urgence posé depuis un autre écran sous `go_silent`. Les trois cas relevés avant le
-  10 octobre 2026 (console relancée puis `go_silent`, réponse de statut tardive après
-  un acquittement rapide, ordre de deux réponses de statut) sont traités.
+- Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas, du côté prudent (section 5) :
+  un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
+  d'urgence posé depuis un autre écran sous `go_silent` ; et le bandeau du `quick_stop`
+  d'une règle après une console relancée puis repassée sous `go_silent`, quand le
+  redémarrage n'est pas prouvé. Des trois cas relevés avant le 10 octobre 2026, deux
+  sont traités (réponse de statut tardive après un acquittement rapide, ordre de deux
+  réponses de statut) ; le troisième (console relancée puis `go_silent`) l'est pour
+  l'arrêt d'urgence lui-même, et pour le `quick_stop` d'une règle quand le redémarrage
+  est prouvé.
 - La note `nothing is latched to acknowledge` reste sous le bouton Acquitter après un
   nouveau verrou ; l'onglet de la page d'un capteur porte le type seul (`RESP -
   AnHeart`) alors que la page titre `RESP · Respiration` ; la hauteur du pied de page
