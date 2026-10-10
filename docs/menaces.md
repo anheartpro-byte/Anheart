@@ -416,14 +416,14 @@ Stockage local et F4 · Pi/Convex · T, R, D · Haute, intégrité de la preuve 
 
 **Existant vérifié dans le source.** [`Writer.close`](../raspberry-pi/src/record/writer.py) écrit à la clôture `checksums.sha256`, une empreinte SHA-256 par fichier ; un enregistrement clos n'accepte plus d'ajout, un bloc n'est jamais remplacé, et le lecteur signale tout fichier manquant, tronqué ou différent de son empreinte ([enregistrement.md](enregistrement.md#fermeture-intégrité-et-lecture-interrompue)) ; dossiers et fichiers sont privés (MEN-18). [`purge`](../raspberry-pi/src/record/retention.py) ne retire un enregistrement qu'après un dépôt confirmé hors de la machine, lié à l'empreinte de ses sommes de contrôle, puis le délai de conservation ; rien n'écrit encore cette confirmation. Un départ est refusé, variateur non touché, sous 500 Mo ou 36 016 inodes libres sous le dossier des enregistrements, et quand la mesure est illisible ou trop ancienne ([`storage_gate`](../raspberry-pi/src/record/session.py), seuils dans [`journal.py`](../raspberry-pi/src/record/journal.py), [raspberry-pi.md, 15.4](raspberry-pi.md#154-départ-refusé-sous-500-mo)). Le journal hors séance est borné sur disque ([`Logbook`](../raspberry-pi/src/record/logbook.py), [ANH-191](https://linear.app/anheart/issue/ANH-191/boite-noire-suites-danh-128-inodes-trames-variateur-journal-hors)). Une écriture refusée en cours de séance n'arrête ni la séance ni la sécurité : elle est comptée, dite à l'opérateur et annoncée dans le battement de cœur au tableau de bord, qui ne l'affiche pas encore. Côté Convex, un point ou un événement n'est écrit qu'une fois, et un lot renvoyé ne change rien à ce qui est stocké (`storeTelemetry`, `storeEvents` dans [`training.ts`](../convex/training.ts)) ; cet effet dépend du redéploiement [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en). Ces sommes de contrôle ne sont pas authentifiées : elles montrent une altération accidentelle, pas une réécriture par un compte qui peut écrire le dossier. **Le Pi détient la seule copie complète** : Convex ne reçoit que la télémétrie à 1 Hz et les événements ([`upload.py`](../raspberry-pi/src/record/upload.py)), ni l'ECG brut, ni les trames du variateur. Rien de ceci n'a été constaté sur un Pi installé.
 
-**Manquant.** [ANH-130](https://linear.app/anheart/issue/ANH-130/depot-des-enregistrements-de-seance-dans-convex-storage-organise-par) apporte le dépôt hors de la machine, condition de la purge déjà écrite, et la vérification des fichiers déposés : d'ici là le disque ne se libère que par une intervention, et l'accumulation finit en départs refusés. Comment authentifier les empreintes (clé hors de portée du compte de la console, ou empreinte déposée hors de la machine dès la clôture) reste à décider. [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes) apporte l'heure fiable et les journaux persistants bornés, dont dépend la date que porte la preuve (MEN-11). [ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu) durcit l'accès au système et fait tourner la console sans privilèges. Aucune alerte de flotte ne prévient qu'un disque se remplit ou qu'un enregistrement est dégradé. Le ticket qui porte les alertes de flotte est [ANH-150](https://linear.app/anheart/issue/ANH-150/vues-de-flotte-et-alertes-equipe-liste-filtrable-detail-machine) : lu le 10 octobre 2026, il prévoyait une alerte sous 1 Go de disque libre et une autre sur un dépôt d'enregistrement en échec, aucune pour un enregistrement dégradé ; l'ajout de cette règle lui a été demandé ce jour-là. Il dépend d'[ANH-148](https://linear.app/anheart/issue/ANH-148/sante-de-la-machine-dans-le-heartbeat-temperature-disque-horloge), qui fait garder par Convex et afficher sur la fiche de la machine la santé annoncée par le battement de cœur, disque libre et `recordDegraded` compris. Aucun de ces contrôles n'est annoncé ici comme fait.
+**Manquant.** [ANH-130](https://linear.app/anheart/issue/ANH-130/depot-des-enregistrements-de-seance-dans-convex-storage-organise-par) apporte le dépôt hors de la machine, condition de la purge déjà écrite, et la vérification des fichiers déposés : d'ici là le disque ne se libère que par une intervention, et l'accumulation finit en départs refusés. Comment authentifier les empreintes (clé hors de portée du compte de la console, ou empreinte déposée hors de la machine dès la clôture) reste à décider. [ANH-163](https://linear.app/anheart/issue/ANH-163/pi-horloge-fiable-ntp-ou-rtc-journaux-persistants-et-bornes) apporte l'heure fiable et les journaux persistants bornés, dont dépend la date que porte la preuve (MEN-11). [ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu) durcit l'accès au système et fait tourner la console sans privilèges. Aucune alerte de flotte ne prévient qu'un disque se remplit ou qu'un enregistrement est dégradé. Le ticket qui porte les alertes de flotte est [ANH-150](https://linear.app/anheart/issue/ANH-150/vues-de-flotte-et-alertes-equipe-liste-filtrable-detail-machine) : lu le 10 octobre 2026, il prévoyait une alerte sous 1 Go de disque libre et une autre sur un dépôt d'enregistrement en échec, aucune pour un enregistrement dégradé dans la liste de son exigence ; depuis ce jour-là, sa section de traçabilité porte cette règle comme alerte à ajouter à cette liste. Il dépend d'[ANH-148](https://linear.app/anheart/issue/ANH-148/sante-de-la-machine-dans-le-heartbeat-temperature-disque-horloge), qui fait garder par Convex et afficher sur la fiche de la machine la santé annoncée par le battement de cœur, disque libre et `recordDegraded` compris. Aucun de ces contrôles n'est annoncé ici comme fait.
 
 **Preuve de fermeture attendue.** Sur une machine d'essai, avec des enregistrements synthétiques : un enregistrement modifié après sa clôture, sommes de contrôle recalculées comprises, reconnu comme tel au dépôt ; un enregistrement déposé puis purgé retrouvé complet hors de la machine ; aucune purge sans dépôt confirmé ; un disque rempli produit le refus de départ attendu, et l'équipe en est prévenue avant que l'opérateur ne le rencontre.
 
 ## MEN-21 Service de simulation hébergé ouvert à Internet
 
 - Status: OPEN
-- Issues: [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de), [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite)
+- Issues: [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de), [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite), [ANH-198](https://linear.app/anheart/issue/ANH-198/vercel-plus-de-deploiement-automatique-un-bouton-de-deploiement-pour)
 
 F10 · Livraison (simulation hébergée) · D · Haute seulement si la perte de service est importante, c'est-à-dire si elle atteint aussi le site : cela suppose des quotas communs sur le compte d'hébergement, ce que le dépôt ne permet pas de vérifier ; sinon en deçà de l'échelle de ce modèle. Aucune machine, aucun mouvement, aucune donnée de santé lue ; personne non concernée.
 
@@ -431,7 +431,7 @@ F10 · Livraison (simulation hébergée) · D · Haute seulement si la perte de 
 
 **Existant vérifié dans le source.** [`app.py`](../deploy/simulation-vercel/app.py) n'accepte un scénario que par son nom, dans le catalogue fermé des scénarios livrés (`CATALOGUE`, `_refusal`) : aucun fichier n'est lu d'après un nom reçu. La vitesse demandée est ramenée dans un intervalle fermé (`_clamp_speed`), et les scénarios en mode `dsp` n'y tournent pas. Le processus n'ouvre ni port Modbus, ni capteur, ni lien vers Convex : tout ce qu'un scénario touche est un modèle, et la bibliothèque de rejeu que son build copie n'y est pas lue (MEN-19). Dans [`deploy-production.yml`](../.github/workflows/deploy-production.yml) et [`deploy-preview.yml`](../.github/workflows/deploy-preview.yml), le site et la simulation sont deux projets d'une même équipe d'hébergement, déployés avec le même jeton ([deploiement.md, 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main)). Les quotas, la facturation et les protections du compte d'hébergement sont des réglages hors du dépôt : ils n'ont pas été inspectés.
 
-**Manquant.** À décider : la séparation entre le site et la simulation, pour les jetons de déploiement (un jeton par projet, ou un jeton commun assumé par écrit) et pour les quotas (comptes ou équipes distincts, ou plafonds par projet). [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) porte la livraison et ses droits ; [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) l'inventaire et la rotation des secrets. Le partage réel des quotas se constate dans les réglages du compte d'hébergement, pas dans le dépôt. Aucune séparation n'est annoncée ici comme faite.
+**Manquant.** À décider : la séparation entre le site et la simulation, pour les jetons de déploiement (un jeton par projet, ou un jeton commun assumé par écrit) et pour les quotas (comptes ou équipes distincts, ou plafonds par projet). [ANH-198](https://linear.app/anheart/issue/ANH-198/vercel-plus-de-deploiement-automatique-un-bouton-de-deploiement-pour) a écrit la livraison du site et de la simulation, deux boutons lancés à la main et un seul jeton pour les deux projets, et n'a pas tranché cette séparation ; [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) garde le déploiement de Convex, les environnements et le lien entre la livraison et les gates ; [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) l'inventaire et la rotation des secrets. Le partage réel des quotas se constate dans les réglages du compte d'hébergement, pas dans le dépôt. Aucune séparation n'est annoncée ici comme faite.
 
 **Preuve de fermeture attendue.** Décision écrite sur la séparation ; portée de chaque jeton et quotas ou plafonds de chaque projet constatés dans les réglages par une personne habilitée ; inventaire des secrets à jour ; simulation rendue indisponible sur un environnement d'essai sans effet constaté sur le site.
 
@@ -455,7 +455,7 @@ Le validateur échoue sur catalogue absent, doublon, référence inconnue, statu
 invalide, ticket absent du registre ou lien ne correspondant pas au ticket.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
-`get_issue`. Chaque ligne porte sa date de lecture : 2026-10-10 pour les 39
+`get_issue`. Chaque ligne porte sa date de lecture : 2026-10-10 pour les 40
 lignes. La revue de release de ce jour-là n'avait relu aucun ticket ; la
 relecture a suivi le même jour, et son résultat, ticket par ticket, est dans
 les preuves de la PR qui a redaté le registre. Les 32 tickets déjà inscrits,
@@ -465,8 +465,9 @@ n'est supprimé ni fusionné. Sept tickets que cette page nommait sans qu'ils
 soient au registre ont été lus le même jour et y sont inscrits : ANH-98,
 ANH-103, ANH-104 et ANH-105 (décisions et analyses séparées, citées en tête,
 dans MEN-04 et dans MEN-14), ANH-135 (MEN-08), ANH-136 (le ticket de ce modèle)
-et ANH-148 (MEN-20). Tout ticket que cette page nomme est désormais au
-registre. Le fichier de tests vérifie que la phrase qui donne ces dates nomme
+et ANH-148 (MEN-20). ANH-198, lu ce jour-là lui aussi, y entre avec son
+inscription dans le champ Issues de MEN-21. Tout ticket que cette page nomme
+est désormais au registre. Le fichier de tests vérifie que la phrase qui donne ces dates nomme
 celles que porte le registre, et aucune autre. Aucun jeton Linear n'est requis
 en CI.
 Ce snapshot atteste **l'existence au jour de lecture**, pas le statut actuel,
@@ -487,20 +488,30 @@ la menace. Les mappings exacts sont les champs Issues de chaque fiche.
 Le 5 octobre 2026, le responsable de l'intégration a ajouté les backlinks
 aux 27 tickets de traitement référencés ; leur texte et leur identité ont été
 revérifiés par lecture de chaque ticket dans Linear. À la relecture du
-10 octobre 2026, ces 27 tickets portent toujours leur section « Traçabilité des
-menaces » ; aucune ne cite une menace que cette page n'attribue pas au ticket,
-et aucun ticket, description et commentaires lus, ne dit fermer ou accepter une
-menace. Les attributions faites depuis le 5 octobre, elles, n'y sont pas
-reportées. Aucun ticket ne cite dans cette section MEN-18, MEN-19, MEN-20 ni
-MEN-21 : il manque MEN-18 à ANH-130, ANH-151, ANH-172 et ANH-191 ; MEN-19 à
-ANH-172 ; MEN-20 à ANH-130, ANH-150, ANH-151, ANH-163 et ANH-191 ; MEN-21 à
-ANH-126 et ANH-153. Quatre tickets entrés depuis dans un champ Issues n'ont pas
-la section : ANH-129 (MEN-11), ANH-172, ANH-177 (qui nomme MEN-08 et MEN-17
-dans son titre) et ANH-191. Le texte à ajouter à chacun de ces dix tickets a
-été remis le même jour au responsable de l'intégration, qui l'écrit dans
-Linear ; sa présence se constate à la relecture suivante, pas ici. Cette
-traçabilité ne ferme aucune menace. Une fermeture exige le résultat observé, le
-SHA, le déploiement applicable et une revue.
+10 octobre 2026, ces 27 tickets portaient toujours leur section « Traçabilité
+des menaces » ; aucune ne citait une menace que cette page n'attribue pas au
+ticket, et aucun ticket, description et commentaires lus, ne disait fermer ou
+accepter une menace. Les attributions faites depuis le 5 octobre n'y étaient
+pas reportées : dix tickets ne citaient pas une menace que cette page leur
+attribue. Le responsable de l'intégration y a écrit le texte manquant le même
+jour, et la description de chacun a été relue ensuite. Six sections nomment
+désormais, dans leur phrase « Menaces concernées » : pour ANH-126, MEN-06,
+MEN-16 et MEN-21 ; pour ANH-130, MEN-09, MEN-18 et MEN-20 ; pour ANH-150,
+MEN-13 et MEN-20 ; pour ANH-151, MEN-04, MEN-05, MEN-14, MEN-15, MEN-18 et
+MEN-20 ; pour ANH-153, MEN-06, MEN-07, MEN-16 et MEN-21 ; pour ANH-163,
+MEN-11, MEN-13 et MEN-20. Chacune se termine par une ligne datée du 10 octobre
+2026, qui nomme la menace ajoutée et renvoie à la preuve de fermeture de sa
+fiche. Quatre tickets qui n'avaient pas la section la portent : ANH-129
+(MEN-11), ANH-172 (MEN-18 et MEN-19), ANH-177 (MEN-08 et MEN-17) et ANH-191
+(MEN-18 et MEN-20). Dans ANH-150, la liste des alertes de l'exigence n'a pas
+changé : la règle d'un enregistrement dégradé est écrite dans la section, comme
+alerte à ajouter à cette liste. D'après ces lectures du même jour, les dix
+tickets après l'écriture et les autres avant, chaque ticket d'un champ Issues
+cite dans sa section chaque menace que cette page lui attribue, sauf un :
+ANH-198, inscrit ce jour-là dans le champ Issues de MEN-21, n'avait pas de
+section à sa lecture, et le texte lui a été demandé. Cette traçabilité ne ferme
+aucune menace. Une fermeture exige le résultat observé, le SHA, le déploiement
+applicable et une revue.
 
 ## Procédure de revue aux jalons et avant pilote
 
