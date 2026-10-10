@@ -139,7 +139,7 @@ relue après écriture (l'« écho ») ; un écho qui ne suit pas déclenche
 `setpoint_unconfirmed`.
 
 **LFT** (registre du variateur, *Last FaulT*)\
-Le code du dernier défaut du variateur. La table complète (66 codes) est dans
+Le code du dernier défaut du variateur. La table complète (60 codes) est dans
 [raspberry-pi.md](raspberry-pi.md). « nOF » signifie « pas de défaut ».
 
 **MANUEL (séance manuelle)**\

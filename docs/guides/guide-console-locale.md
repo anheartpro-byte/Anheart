@@ -52,6 +52,10 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > du code et des tests automatiques ; il n'a pas été rejoué dans un navigateur, ni face
 > à un vrai tableau de bord. **Aucune capture n'a été reprise** : celles de ce guide
 > montrent encore six pastilles, sans **Serveur** ni **Version**.
+>
+> L'ajout du 10 octobre 2026 (ticket ANH-78) aligne la liste des défauts du variateur
+> de §13.9 sur la documentation de l'ATV320. Il vient du code et des tests
+> automatiques. Aucun défaut n'a été provoqué sur le vrai variateur (§16).
 
 ---
 
@@ -1531,9 +1535,13 @@ complète des codes est dans [raspberry-pi.md](../raspberry-pi.md).
 
 **Réarmer ou pas ?** La console classe chaque défaut :
 
-| Réarmables depuis la console (26) | Non réarmables : couper l'alimentation du variateur et inspecter (42) |
+| Réarmables depuis la console (22) | Non réarmables : couper l'alimentation du variateur et inspecter (40) |
 |---|---|
-| `SLF1`, `SLF2`, `SLF3` (liaison perdue), `CnF`, `EPF1`, `EPF2`, `OHF` (surchauffe variateur), `OLF` (surcharge moteur), `ObF` (surtension au freinage), `OSF`, `PHF` (perte de phase), `USF` (sous tension), `COF`, `SSF`, `PtFL`, `OtFL`, `tJF`, `SrF`, `AI2F`, `LFF3`, `dLF`, `CSF`, `ULF`, `OLC`, `FbE`, `FbES` | `OCF` (surintensité), `SOF` (survitesse), `SCF1` à `SCF5` (courts circuits), `InF` et variantes, `EEF1`, `EEF2`, `CFF`, `CFI`, `CFI2`, `ILF`, `CrF`, `SPF`, `OPF1`, `OPF2`, `tnF`, `bLF`, `brF`, `ECF`, `PrF`, `FCF1`, `FCF2`, `LCF`, `dCF`, `HdF`, `HCF`, `ASF`, `SAFF`, tout code inconnu |
+| `SLF1`, `SLF2`, `SLF3` (liaison perdue), `CnF`, `EPF1`, `EPF2`, `OHF` (surchauffe variateur), `OLF` (surcharge moteur), `ObF` (surtension au freinage), `OSF`, `PHF` (perte de phase), `USF` (sous tension), `COF`, `SSF`, `PtFL`, `OtFL`, `tJF`, `LFF3`, `dLF`, `CSF`, `ULF`, `OLC` | `OCF` (surintensité), `SOF` (survitesse), `AnF` (glissement de charge), `SCF1`, `SCF3`, `SCF4`, `SCF5` (courts circuits), `InF1` et les autres `InF`, `EEF1`, `EEF2`, `CFF`, `CFI`, `CFI2`, `ILF`, `CrF1`, `SPF`, `OPF1`, `OPF2`, `tnF`, `bLF`, `brF`, `FCF1`, `FCF2`, `LCF`, `HdF`, `HCF`, `ASF`, `SAFF`, `FbE`, `FbES` (blocs fonction du variateur), tout code inconnu |
+
+Depuis le 10 octobre 2026, cette liste suit la documentation de l'ATV320 lui-même
+(60 défauts) : sources, codes ajoutés ou retirés et raisons dans
+[raspberry-pi.md, section 6](../raspberry-pi.md#6-les-défauts-du-variateur-table-lft).
 
 Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
 
@@ -1639,7 +1647,10 @@ cette fermeture. Ni une valeur ancienne à l'écran, ni le seul arrêt du
 processus ne prouve alors l'arrêt de l'arbre ; aucune séance ne reprend seule.
 
 **Coupure secteur du variateur** : au retour, le variateur peut afficher `USF`
-(sous tension, réarmable) ; suivez §13.9.
+(sous tension, réarmable) ; suivez §13.9. D'après le manuel de l'ATV320, ce défaut
+s'efface de lui-même quand la tension revient. Rien ne repart seul pour autant : un
+verdict de la console reste en place (`drive_fault`, ou `go_silent` si la liaison est
+tombée avec le variateur). Non vérifié sur la machine.
 
 ### 13.11 La cible manuelle est refusée, ou revient à 0
 
@@ -2034,6 +2045,10 @@ Pour être clair sur ce que ce guide garantit :
   code, les tests automatiques sur la console en simulation et des mesures sur le banc
   d'essai logiciel. Aucune capture, rien de rejoué dans un navigateur ni sur la vraie
   machine.
+* **Défauts réels du variateur** : aucun défaut n'a été provoqué sur le vrai variateur
+  pour ce guide. La procédure pour en vérifier trois au banc, capsule vide (`SLF1`,
+  `USF`, `EPF1`), est écrite et **non réalisée** :
+  [raspberry-pi.md, section 6.4](../raspberry-pi.md#64-vérification-au-banc-de-trois-défauts-réels-procédure-prête-non-réalisée).
 * **Reconnexion d'un vrai BITalino** : non rejouée (le simulateur utilisé ici reste
   déconnecté).
 * **Durées** (montée à 27 tr/min en environ 1 min 45, arrêt en environ 1 min 40,

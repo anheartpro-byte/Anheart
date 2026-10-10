@@ -21,7 +21,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 7. [Le visualiseur 2D : `simulation.live`](#7-le-visualiseur-2d--simulationlive)
 8. [Écrire un nouveau scénario JSON](#8-écrire-un-nouveau-scénario-json)
 9. [La cohorte de 30 personnes](#9-la-cohorte-de-30-personnes)
-10. [La matrice de 199 pannes](#10-la-matrice-de-199-pannes)
+10. [La matrice de 187 pannes](#10-la-matrice-de-187-pannes)
 11. [Les invariants vérifiés sur chaque trace](#11-les-invariants-vérifiés-sur-chaque-trace)
 12. [Les « xfail strict » et le cas résiduel S07](#12-les--xfail-strict--et-le-cas-résiduel-s07)
 13. [La géométrie extraite de la CAO](#13-la-géométrie-extraite-de-la-cao)
@@ -94,8 +94,8 @@ gros (nombre de tests collectés) :
 | `test_web_api.py`, `test_web_panel.py` | 142 + 21 | les routes HTTP de la console locale |
 | `test_atv320.py`, `test_drive_contract.py`, `test_ftdi_link.py` | 139 + 79 + 65 | le pilote Modbus ATV320 et la liaison FTDI |
 | `test_simulated_drive.py`, `test_sim.py` | 97 + 114 | les simulateurs (variateur, BITalino, physiologie) |
-| `test_drive_faults_complete.py` | 78 | **chacun** des 66 codes LFT injecté sur la vraie console |
-| `test_failure_drive.py`, `_ecg`, `_process`, `_operator`, `_rig` | 84 + 14 + 11 + 16 + 1 | pannes injectées sur la vraie racine de composition (`build_panel`) |
+| `test_drive_faults_complete.py` | 93 | la table tenue contre les deux documents de l'ATV320 ; **chacune** des 61 valeurs LFT, plus un code inconnu, injectée sur la vraie console |
+| `test_failure_drive.py`, `_ecg`, `_process`, `_operator`, `_rig` | 78 + 14 + 11 + 16 + 1 | pannes injectées sur la vraie racine de composition (`build_panel`) |
 | `test_cloud_sync.py` | 113 | le lien avec Convex (lancement, arrêt, réseau mort, ce que chaque réponse du serveur veut dire) |
 | `test_record_cursor.py`, `test_record_upload.py`, `test_record_uplink.py` | 33 + 64 + 139 | l'envoi des séances relues sur le disque : curseur, relecture à 1 Hz, ordre, reprise, réponses ([détail](#synchronisation-par-relecture-du-journal-local-anh-129)) |
 | `test_cloud_journal_e2e.py`, `test_cloud_journal_wiring.py` | 2 + 39 | le test d'acceptation de la synchronisation (coupure, console tuée, reprise) et son câblage dans la vraie console |
@@ -198,7 +198,7 @@ tests passés, 100 % de branches sur la chaîne de sécurité (10386 instruction
 |---|---|---|
 | `test_battery.py` | 182 | chaque scénario de `scenarios/` : invariants, attentes, chemin de sortie, aller-retour JSONL |
 | `test_cohort.py` | 202 | les 30 personnes × 3 séances, la reproductibilité du fichier de cohorte, la barrière d'âge et de FC max |
-| `test_failures.py` | 405 | les 199 cas de la matrice de pannes, plus « aucun cas ne laisse du couple ou un arbre qui tourne » |
+| `test_failures.py` | 381 | les 187 cas de la matrice de pannes, plus « aucun cas ne laisse du couple ou un arbre qui tourne » |
 | `test_scenario.py` | 49 | le parseur de scénarios (refus des clés inconnues, des valeurs invalides) |
 | `test_limits.py` | 36 | g à 27 et 32 tr/min, limites anti-nausée, profils livrés |
 | `test_invariants.py` | 29 | le vérificateur lui-même : chaque invariant doit se déclencher sur une trace corrompue exprès |
@@ -209,7 +209,7 @@ tests passés, 100 % de branches sur la chaîne de sécurité (10386 instruction
 | `test_quick.py` | 9 | `simulation.quick` |
 | `test_properties.py` | 5 | propriétés hypothesis : n'importe quelle suite de consignes, n'importe quel arrêt à n'importe quel moment, n'importe quel sujet plausible |
 | `test_panel_crosscheck.py` | 1 | la vraie console (`build_panel`) monte à 27 tr/min par **exactement** les mêmes consignes que le harnais |
-| **Total** | **985** | |
+| **Total** | **961** | |
 
 ```sh
 PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m pytest simulation/tests --co -q | tail -15
@@ -322,7 +322,7 @@ usage: python -m simulation.quick [-h] [--cohort] [--failures] [--all] [--dsp]
 |---|---|
 | `target` | un **cas de la matrice** (`drive_fault_overcurrent_manual`), un **scénario** (`manual_27_rpm`) ou un **identifiant de sujet** (`S07` : ses trois séances). Cherché dans cet ordre. |
 | `--cohort` | 30 sujets × 3 séances (90 exécutions) |
-| `--failures` | la matrice de pannes (199 cas) |
+| `--failures` | la matrice de pannes (187 cas) |
 | `--all` | scénarios + pannes + cohorte |
 | `--dsp` | exécute la **vraie** chaîne ECG là où elle est demandée. Sans `--dsp`, un scénario `dsp` tourne en mode `direct`, et un cas qui a besoin du vrai DSP est marqué `SKIPPED` |
 | `--workers N` | nombre de processus (0 = un par CPU, défaut) |
@@ -343,8 +343,8 @@ $PY -m simulation.quick S07
 $PY -m simulation.quick --cohort
 # 90 runs: 89 PASS, 1 XFAIL - 26.61 s wall (8 workers)
 
-$PY -m simulation.quick --failures
-# 199 runs: 192 PASS, 7 SKIPPED - 37.74 s wall (8 workers)
+$PY -m simulation.quick --failures --workers 2
+# 187 runs: 180 PASS, 7 SKIPPED - 88.49 s wall (2 workers)
 
 $PY -m simulation.quick --failures --dsp     # les 7 cas DSP en plus (~15 s chacun)
 $PY -m simulation.quick --all --dsp          # tout
@@ -833,11 +833,11 @@ Deux façons de faire :
    viennent du même générateur, dans un ordre fixe ; changer la taille change
    aussi les sujets suivants, donc les tableaux de `simulation/README.md`.
 
-## 10. La matrice de 199 pannes
+## 10. La matrice de 187 pannes
 
 ### 10.1 Ce que c'est
 
-`simulation/failures.py` construit 199 **cas**. Chaque cas est un document de
+`simulation/failures.py` construit 187 **cas**. Chaque cas est un document de
 scénario dans le même schéma JSON (section 8), plus ce qui doit être vrai
 après. Pour chaque cas, `tests/test_failures.py` vérifie :
 
@@ -859,7 +859,7 @@ Un second test vérifie qu'**aucun cas**, défaut connu ou pas, ne laisse du
 couple ou un arbre qui tourne.
 
 Familles (catégories `drive`, `ecg`, `process`, `operator`) : perte de
-communication à chaque phase ; **chacun des 66 codes LFT** plus un code
+communication à chaque phase ; **chacun des 60 codes LFT** plus un code
 inconnu (251), en AUTO et en MANUEL ; variateur trouvé déjà en marche ;
 mots de commande refusés ; écho LFRD faux ; vitesse qui ne suit pas ; état
 figé ; ECG perdu à chaque phase ; échec de connexion ; signaux corrompus avant
@@ -867,8 +867,8 @@ le vrai DSP ; SIGTERM à chaque phase ; exception dans le tick ; arrêt de
 boucle 1-5 s ; saut d'horloge ; erreurs opérateur (double START, réarmement
 interdit, consignes absurdes).
 
-Résultat : **199 PASS, 0 XFAIL** d'après `simulation/README.md` (avec
-`--dsp`). Sans `--dsp`, `simulation.quick --failures` donne 192 PASS et 7
+Résultat : **187 PASS, 0 XFAIL** d'après `simulation/README.md` (avec
+`--dsp`). Sans `--dsp`, `simulation.quick --failures` donne 180 PASS et 7
 SKIPPED (les 7 cas à vrai DSP).
 
 ```sh
@@ -1260,7 +1260,7 @@ aucune variable, `check.sh` se comporte exactement comme avant.
 
 Chaque processus collecte toute la suite, comme en série, puis ne garde que
 les tests dont le rang dans l'ordre de collecte lui revient : un sur quatre
-avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 67 cas lourds, qui
+avec quatre processus (`scripts/ci/pi_gate_shard.py`). Les 61 cas lourds, qui
 se suivent, sont ainsi distribués à tour de rôle entre tous les processus.
 Depuis ANH-183, les tests d'au moins dix secondes font exception : ils sont
 distribués selon leur durée mesurée (voir « La règle de partage du Pi », dans
@@ -1512,7 +1512,7 @@ que soit la règle.
   la séance dont rien n'arrive, 32 s estimées d'après un poste de
   développement). Ils sont distribués du plus lent au moins
   lent, chacun à la part qui en a reçu le moins jusque-là. Une ligne sans
-  paramètre vaut pour chaque cas du test : les 67 cas de
+  paramètre vaut pour chaque cas du test : les 61 cas de
   `test_a_drive_fault_at_speed_ends_the_session_with_its_mnemonic`, dix
   secondes chacun. Une ligne avec paramètre ne désigne que ce cas, pour les
   tests dont les cas diffèrent : un programme interrompu dans sa dernière
