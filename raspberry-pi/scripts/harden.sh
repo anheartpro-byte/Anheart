@@ -110,6 +110,18 @@ ids() {
     printf '%s:%s' "$user" "$group"
 }
 
+# The numbers of the console's account, as `uid:gid`. Never root's: a console
+# given them would be root, whatever else this script and the unit do.
+account_ids() {
+    local numbers
+    numbers="$(ids "$ACCOUNT")" \
+        || die "the account $ACCOUNT does not exist: sudo bash scripts/install.sh creates it"
+    case "$numbers" in
+        0:* | *:0) die "the account $ACCOUNT has a number of root's: the console would run as root" ;;
+    esac
+    printf '%s' "$numbers"
+}
+
 # how_many COMMAND...: the number of lines COMMAND prints. An entry that goes
 # away while a tree is read is not an error: the console may be running.
 how_many() {
@@ -213,6 +225,7 @@ describe_account() {
 
 step_account() {
     local entry shell status
+    account_ids > /dev/null
     entry="$(getent passwd "$ACCOUNT" || true)"
     [ -n "$entry" ] || die "the account $ACCOUNT does not exist: sudo bash scripts/install.sh creates it"
     shell="${entry##*:}"
@@ -249,8 +262,8 @@ describe_files() {
 
 step_files() {
     local account root_ids
-    account="$(ids "$ACCOUNT")" \
-        || die "the account $ACCOUNT does not exist: sudo bash scripts/install.sh creates it"
+    # It has said why when it fails.
+    account="$(account_ids)" || exit 1
     root_ids="$(ids root)" || die "this machine has no account root"
     # The configuration: the machine's API key, the token of the page, and the
     # limits the console applies. Root's Docker client reads it for the

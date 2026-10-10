@@ -1127,7 +1127,9 @@ une gate : voir
 Un troisième, `pi-install.yml`, exécute l'installation du Raspberry Pi de bout
 en bout sur un runner arm64 (job `pi-install`) : le vrai `scripts/install.sh`
 dans une machine de remplacement, la console démarrée en simulation et
-interrogée sur `/healthz`. **Ce n'est pas une gate non plus** : il ne se
+interrogée sur `/healthz`, puis `scripts/harden.sh` et `scripts/uninstall.sh`,
+après une relecture des scripts du Pi par ShellCheck. **Ce n'est pas une gate
+non plus** : il ne se
 déclenche, sur une PR, que si elle modifie de quoi l'installation est faite, et
 à chaque push sur `develop`. Ce qu'il vérifie, ses permissions et ce qu'il
 implique pour `scripts/release.sh` sont dans

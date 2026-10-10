@@ -1745,6 +1745,29 @@ def test_anh151_ex4_the_installer_tells_the_unit_the_account_by_number(machine: 
     assert not refused.called("systemctl start anheart.service")
 
 
+@pytest.mark.slow
+@needs_bash
+@pytest.mark.parametrize("number", ["account-uid", "account-gid"])
+def test_anh151_ex4_an_account_with_a_number_of_roots_is_refused_before_anything_is_built(
+    machine: Machine, number: str
+) -> None:
+    """The unit runs the console under the numbers of the account: were they root's, the
+    console would be root, with everything else in place. Nothing is built or started."""
+    machine.set(number, "0\n")
+    refused = machine.install()
+    assert refused.exit_code == 1
+    assert "the account anheart has a number of root's" in refused.output
+    for never in ("docker build", "systemctl start", "chown", "systemctl mask"):
+        assert not refused.called(never), never
+    assert not machine.unit.exists()
+    assert not machine.account_drop_in.exists()
+    # The step that gives the files away refuses on its own too.
+    alone = machine.harden("files")
+    assert alone.exit_code == 1
+    assert "the account anheart has a number of root's" in alone.output
+    assert not alone.called("chown")
+
+
 @needs_sh
 def test_anh151_ex4_the_relay_runs_as_the_account_in_a_directory_given_to_it(
     tmp_path: Path,
