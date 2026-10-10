@@ -89,6 +89,7 @@ from src.training.runtime import RecordStorageLow, RuntimeLimits, TrainingRuntim
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, Phase, TelemetrySnapshot
 from src.units import Metres, Monotonic, OutputRpm, elapsed, output_rpm_to_g
+from src.wall_clock import WallClockState, is_trusted
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
 
@@ -287,8 +288,16 @@ class SessionRequest:
     cloud_session_id: str | None = None
 
 
-def manifest_for(stamp: Stamp, request: SessionRequest, clock: Clock) -> Manifest:
-    """The opening manifest of one session. Identifiers only, never a name."""
+def manifest_for(
+    stamp: Stamp, request: SessionRequest, clock: Clock, wall_trusted: bool | None = None
+) -> Manifest:
+    """The opening manifest of one session. Identifiers only, never a name.
+
+    ``wall_trusted``: whether a time service keeps the wall clock that dates
+    this record (``clocks.wall_trusted``); ``None`` when nobody judged it.
+    ``ntp_offset_s`` stays ``None``: the console does not know the signed
+    offset its time service measured, and writes no number it did not read.
+    """
     identity = uuid4().hex
     started = utc_stamp(clock)
     subject = request.subject_id.strip()
@@ -309,7 +318,12 @@ def manifest_for(stamp: Stamp, request: SessionRequest, clock: Clock) -> Manifes
         software_version=stamp.software_version,
         contract_version=CONTRACT_VERSION,
         medical_parameters_version=stamp.medical_parameters_version,
-        clocks=Clocks(monotonic_start=clock.monotonic(), utc_start=started, ntp_offset_s=None),
+        clocks=Clocks(
+            monotonic_start=clock.monotonic(),
+            utc_start=started,
+            ntp_offset_s=None,
+            wall_trusted=wall_trusted,
+        ),
         started_at=started,
         ended_at=None,
         end_reason=None,
@@ -498,6 +512,7 @@ class SessionRecorder:
         "_sim_state",
         "_stamp",
         "_status",
+        "_wall_clock",
     )
 
     def __init__(
@@ -510,9 +525,13 @@ class SessionRecorder:
         leg_tip: Metres,
         sim_state: Callable[[], str] | None = None,
         link_stats: Callable[[], LinkStats] | None = None,
+        wall_clock: Callable[[], WallClockState] | None = None,
     ) -> None:
         """``sim_state``: the simulated drive's internal state, when there is a simulator.
-        ``link_stats``: the acquisition link's loss counters, when it has any."""
+        ``link_stats``: the acquisition link's loss counters, when it has any.
+        ``wall_clock``: what the wall clock is worth, as last read by the console
+        (memory only: :meth:`~src.wall_clock.WallClockWatch.current`); ``None`` on a
+        console built without a probe, whose manifests then say nothing of it."""
         self._clock: Clock = clock
         self._journal: Journal = journal
         self._stamp: Stamp = stamp
@@ -520,6 +539,7 @@ class SessionRecorder:
         self._leg_tip: Metres = leg_tip
         self._sim_state: Callable[[], str] | None = sim_state
         self._link_stats: Callable[[], LinkStats] | None = link_stats
+        self._wall_clock: Callable[[], WallClockState] | None = wall_clock
         self._live: _Live | None = None
         self._status: JournalStatus = journal.status(clock.monotonic())
         self._said: tuple[Cause | None, str | None] = (None, None)
@@ -578,7 +598,7 @@ class SessionRecorder:
             self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None))
         live = _Live(origin=clock.monotonic(), names=names_of(request.operator))
         self._live = live
-        self._journal.open(manifest_for(self._stamp, request, clock), _EMAILS)
+        self._journal.open(manifest_for(self._stamp, request, clock, self._wall_trusted()), _EMAILS)
         kind = "manual" if request.program is None else "auto"
         self._event(
             live,
@@ -587,6 +607,24 @@ class SessionRecorder:
             f"{kind} session started",
             operator_alias(request.operator),
         )
+
+    def _wall_trusted(self) -> bool | None:
+        """Whether the wall clock that dates the record being opened is kept by a time service.
+
+        Never costs the record: a state that cannot be read is a clock nobody
+        answers for, so the record is opened and says ``False``.
+        """
+        source = self._wall_clock
+        if source is None:
+            return None
+        try:
+            return is_trusted(source())
+        except Exception:  # an observer of the clock: the record is opened whatever it does
+            _logger.exception(
+                "session recorder: the wall clock state could not be read; "
+                "the record is opened and says its clock is not trusted"
+            )
+            return False
 
     @_total
     def observe(

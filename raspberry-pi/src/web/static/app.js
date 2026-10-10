@@ -345,7 +345,7 @@ var FRAME_FED = [
   "safety-action", "run-safety-action", "phase", "manual-state",
   "console-ecg-state", "ecg-state",
 ];
-var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard"];
+var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard", "wall-clock"];
 var STATUS_FED = ["run-state", "attest-state"];
 
 function markStale(ids, stale) {
@@ -900,6 +900,19 @@ function renderDashboardLink(link) {
   text(el("dashboard-link-detail"), said.join(" · "));
 }
 
+/*
+  What the machine's wall clock is worth, as the console states it
+  (`wall_clock` in /api/panel): its word, why, and whether the dates the
+  console writes can be believed. The page decides nothing: it writes the
+  console's words, in orange when the clock is not one to believe. A console
+  that does not judge its clock sends none, and the line stays empty.
+*/
+function renderWallClock(clock) {
+  var node = el("wall-clock");
+  text(node, "horloge " + clock.label + (clock.detail ? " · " + clock.detail : ""));
+  node.className = "bind" + (clock.trusted ? "" : " bind-warn");
+}
+
 function renderPanel(panel) {
   state.panel = panel;
   state.panelAt = performance.now();
@@ -910,6 +923,9 @@ function renderPanel(panel) {
   }
   pill(el("software-version"), panel.software_version, "");
   renderDashboardLink(panel.dashboard);
+  if (panel.wall_clock) {
+    renderWallClock(panel.wall_clock);
+  }
   state.motionEnabled = panel.motion_enabled;
   state.programsEnabled = panel.programs_enabled;
   pill(el("console-mode"), panel.motion_enabled ? "mouvement actif" : "LECTURE SEULE", panel.motion_enabled ? "warn" : "good");

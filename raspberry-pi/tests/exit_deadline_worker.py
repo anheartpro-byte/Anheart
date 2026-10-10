@@ -30,6 +30,7 @@ from src.clock import Clock
 from src.local_config import LocalConfig
 from src.local_panel import LocalPanel, build_panel
 from src.record.journal import Journal
+from src.wall_clock import WallClockProbe
 from src.web import routes
 
 _never = threading.Event()
@@ -47,10 +48,16 @@ def no_deadline(_code: int) -> None:
 
 
 def main(root: Path, port: str, mode: str) -> int:
-    def build(config: LocalConfig, *, clock: Clock, journal: Journal) -> LocalPanel:
+    def build(
+        config: LocalConfig, *, clock: Clock, journal: Journal, wall_clock: WallClockProbe | None
+    ) -> LocalPanel:
         # The console's own profile store stays out of the repository's ``data/``.
         return build_panel(
-            config, clock=clock, journal=journal, profiles_path=root.parent / "profiles.json"
+            config,
+            clock=clock,
+            journal=journal,
+            wall_clock=wall_clock,
+            profiles_path=root.parent / "profiles.json",
         )
 
     with contextlib.ExitStack() as patched:

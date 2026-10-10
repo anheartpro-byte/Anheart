@@ -109,6 +109,25 @@ jamais zéro présumé. L'heure UTC sert à la corrélation entre machines ; les
 instants `t` des flux sont relatifs au début monotone. Des observations de
 préparation antérieures au départ peuvent avoir un `t` négatif.
 
+`clocks.wall_trusted` dit ce que valait l'horloge murale qui a donné
+`utc_start`, à l'ouverture de l'enregistrement :
+
+| Valeur | Sens |
+| --- | --- |
+| `true` | un service de temps tenait cette horloge : `utc_start` et `started_at` peuvent être crus |
+| `false` | personne n'en répondait (aucune source de temps jointe depuis l'allumage de la machine, ou état illisible) : ces dates peuvent être fausses de toute la durée pendant laquelle la machine était éteinte. Les instants `t`, eux, restent justes : ils sont monotones |
+| `null`, ou champ absent | le producteur n'a pas jugé son horloge : la simulation (son horloge est déterministe), et tout enregistrement écrit avant ce champ |
+
+Le champ suit la règle des champs ajoutés au schéma 2 : optionnel à la lecture
+(son absence vaut `null`, un enregistrement plus ancien se relit et se rejoue
+comme avant), émis explicitement par le writer. La version du schéma ne change
+pas. Dans l'autre sens, un lecteur d'une version antérieure refuse un
+manifeste qui le porte, comme il refuse toute clé qu'il ne connaît pas : après
+un retour à une version antérieure de la console, les enregistrements écrits
+par la plus récente ne se relisent qu'avec elle. La console écrit `true` ou
+`false` ([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)) ;
+elle laisse `ntp_offset_s` à `null`, faute de connaître l'écart mesuré.
+
 La copie `profile` conserve `total_duration_s`, `baseline_s`, `warmup_max_s`,
 `hold_min_s`, `cooldown_s`, `recovery_s`, `zone_low_bpm`, `zone_high_bpm`,
 `hard_max_bpm`, `critical_bpm`, `subject_hr_max`, `min_run_rpm`, `max_rpm`,

@@ -111,6 +111,12 @@
     not an event: a page opened an hour into an incompatibility reads it at
     once. The line under the chips says why, and how old the last answer is.
     "Version" is the build this console runs (raspberry-pi/VERSION).
+
+    Under the chips, a line of its own says what the machine's wall clock is
+    worth, as the console states it in /api/panel: kept by a time service
+    ("synchronisee", with the error it answers for) or not. That clock only
+    dates the records; when nobody answers for it the line turns orange and
+    says so, and a start with a person on board is refused.
   -->
   <dl class="chips">
     <dt>Mode</dt><dd><span id="run-mode" class="pill">REPOS</span></dd>
@@ -123,6 +129,7 @@
     <dt>Version</dt><dd><span id="software-version" class="pill">-</span></dd>
   </dl>
   <div id="dashboard-link-detail" class="bind"></div>
+  <div id="wall-clock" class="bind"></div>
   <div id="bind" class="bind">&mdash;</div>
 
   <nav class="nav">

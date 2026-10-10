@@ -19,6 +19,8 @@
 #     machine that turns is not something a script decides. That holds for a
 #     console the service did not start too (a container named `anheart` run
 #     by hand, or left by an older way of running the image).
+#   * the time service and the system journal are set by two small files of
+#     their own; changing one restarts that system service, never the console.
 #
 # This script never talks to the drive and starts no session. The console it
 # starts comes up at rest, as it does after every start (docs/pi-image.md).
@@ -36,7 +38,8 @@ readonly CONTAINER="anheart"
 # The system this script is written for (docs/pi-image.md, "Versions figées").
 readonly OS_CODENAME="bookworm"
 readonly OS_REFERENCE="2026-10-06"
-readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl)
+# chrony: the one time service of the machine (docs/pi-image.md, "L'heure").
+readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl chrony)
 
 readonly ROOT="${ANHEART_ROOT:-}"
 readonly CONFIG_DIR="$ROOT/etc/anheart"
@@ -46,6 +49,10 @@ readonly UNIT_DIR="$ROOT/etc/systemd/system"
 readonly UNIT_FILE="$UNIT_DIR/$SERVICE.service"
 readonly DROP_IN_DIR="$UNIT_DIR/$SERVICE.service.d"
 readonly DROP_IN="$DROP_IN_DIR/10-version.conf"
+readonly CHRONY_CONF="$ROOT/etc/chrony/conf.d/anheart.conf"
+readonly JOURNALD_CONF="$ROOT/etc/systemd/journald.conf.d/anheart.conf"
+# Where the kernel lists the real-time clocks it found, if any.
+readonly RTC_DIR="$ROOT/sys/class/rtc"
 
 # How long the start test waits for GET /healthz, in seconds. The first start
 # on a Pi imports the whole signal-processing stack from a cold SD card.
@@ -202,6 +209,82 @@ install_packages() {
     # No adapter, no service: the console then shows the ECG link as down.
     systemctl enable --now bluetooth.service \
         || warn "the bluetooth service did not start (no adapter?)"
+}
+
+# system_file TARGET: its content is read on standard input. The file is
+# replaced only when the content differs, and the exit status says which: 0
+# written, 1 unchanged. It never touches `changed`: that one is about the
+# console's image and unit, and decides whether the console is restarted.
+# Called as the condition of an `if`, where a failing command does not stop
+# the script by itself: each step that can fail says so and stops it.
+system_file() {
+    local target="$1" directory draft
+    directory="$(dirname "$target")"
+    mkdir -p "$directory" || die "cannot create $directory"
+    draft="$(mktemp "$directory/.anheart.XXXXXX")" || die "cannot write under $directory"
+    cat > "$draft" || die "cannot write under $directory"
+    if [ -e "$target" ] && cmp -s "$draft" "$target"; then
+        rm -f "$draft"
+        note "$target unchanged"
+        return 1
+    fi
+    chmod 0644 "$draft" && mv "$draft" "$target" || die "cannot write $target"
+    note "$target written"
+}
+
+# The wall clock only dates what the console writes (records, journal); the
+# console never times anything on it. A Raspberry Pi has no battery-backed
+# clock: after a power cut it restarts on the time of its last shutdown, and
+# chrony corrects it once the network is back. Until then the console says its
+# clock is not trusted (it asks the kernel, where chrony publishes its state).
+configure_clock() {
+    say "Clock"
+    if system_file "$CHRONY_CONF" <<'EOF'
+# Written by scripts/install.sh (docs/pi-image.md, "L'heure"). The two
+# directives the console's reading of the clock relies on, stated here so that
+# an edit of the distribution's own file does not change them unnoticed.
+
+# Step the clock when it is more than 1 s off at one of the first three
+# updates after chronyd started: a Pi without a real-time clock restarts on the
+# time of its last shutdown, however long it was off.
+makestep 1 3
+
+# Once synchronised, tell the kernel so (the console reads it there) and keep
+# a real-time clock, when the machine has one, on the system time: the kernel
+# copies it there every 11 minutes.
+rtcsync
+EOF
+    then
+        # Read at its start only. Nothing to restart when it is not running.
+        systemctl try-restart chrony.service || true
+    fi
+    systemctl enable --now chrony.service \
+        || warn "the time service (chrony) did not start: the console will say its clock is not trusted"
+    local rtc="$RTC_DIR/rtc0"
+    if [ -e "$rtc" ]; then
+        note "real-time clock found: rtc0 ($(cat "$rtc/name" 2>/dev/null || echo unnamed)). The system reads it at power-on and chrony keeps it on time"
+    else
+        note "no real-time clock on this machine: after a power cut the time is wrong until the network is back, and the console says so"
+    fi
+}
+
+# Kept on the disk, so the journal survives a restart; bounded, so it cannot
+# fill the card the session records are written on.
+configure_journal() {
+    say "System journal"
+    if system_file "$JOURNALD_CONF" <<'EOF'
+# Written by scripts/install.sh (docs/pi-image.md, "Le journal du système").
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+EOF
+    then
+        # journald reads its configuration at its start. The console's output
+        # stays connected across this restart: systemd holds the stream.
+        systemctl restart systemd-journald.service
+        # What was logged since power-on moves to the disk with it.
+        journalctl --flush || warn "the journal of this boot was not moved to the disk"
+    fi
 }
 
 create_account() {
@@ -395,6 +478,8 @@ if console_running; then
     require_idle_console
 fi
 install_packages
+configure_clock
+configure_journal
 create_account
 create_directories
 write_env
