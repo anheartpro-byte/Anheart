@@ -35,7 +35,14 @@ console while no record is open, which a closed record can no longer take.
 The drive's frames do not go through the queue. They wait in a bounded list of
 their own (:mod:`src.record.drive_tap`), filled by whoever talks to the drive,
 and the journal thread takes them at every cycle: nothing is put on the control
-tick for them.
+tick for them. Each goes to the record of the session it began in, from the
+instant the arming of that session began (:attr:`Opening.since`) to the instant
+it ended (:attr:`Closing.until`), whenever the thread comes for it: what it
+takes before the record of a session is open waits here, bounded, for that
+opening. What began in no session (a console at rest polling its drive, a
+start that was refused) is written nowhere. And the frames nobody could keep
+are counted for the records whose sessions they can have begun in
+(:class:`Gap`).
 
 A long operation (closing a record of thousands of files, the retention) is
 still one cycle, but not a silent one: between two files the thread measures
@@ -51,6 +58,7 @@ thread, and to it alone: the bound relies on there being one producer.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import sys
@@ -65,7 +73,7 @@ from typing import Final, assert_never
 
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
-from src.record.drive_tap import FrameSource, Observation
+from src.record.drive_tap import FRAME_BACKLOG, FrameSource, Observation
 from src.record.ecg import Header, RawBlock
 from src.record.logbook import Logbook, Note, note
 from src.record.retention import purge
@@ -144,13 +152,18 @@ PRIVATE_MODE: Final[int] = 0o700
 
 @dataclass(frozen=True, slots=True)
 class Limits:
-    """What may wait in memory. Past either bound the newest value is refused."""
+    """What may wait in memory. Past a bound of the queue the newest value is refused."""
 
     entries: int = 4096
     """Queued values of any kind: several minutes of a session at its normal rate."""
 
     samples: int = 200_000
     """Queued raw sample values: about half a minute of six channels at 1000 Hz."""
+
+    frames: int = 2 * FRAME_BACKLOG
+    """Drive frames the journal thread holds while no record can take them yet: what
+    it carried over from its last cycle, and what one take of the tap can add. Past
+    it the oldest are let go, and counted (:class:`Gap`)."""
 
 
 DEFAULT_LIMITS: Final[Limits] = Limits()
@@ -194,6 +207,10 @@ class Opening:
     session: int
     manifest: Manifest
     privacy: Privacy
+    since: Monotonic
+    """When the arming of that session began, on the console's clock. The drive's
+    frames that began at that instant or later are the session's; what began
+    before it is an idle console's polling, or an earlier session's."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +220,10 @@ class Closing:
     ended_at: UnixMillis
     end_reason: str
     observation: EndObservation | None
+    until: Monotonic
+    """When that session ended, on the console's clock. The drive's frames that
+    began at that instant or earlier are the session's; what began after it is
+    not, however long it waited for the journal thread next to them."""
 
 
 type Item = Opening | Closing | Entry | Note
@@ -269,7 +290,9 @@ class Progress:
 
     frames_lost: int = 0
     """Drive observations that session's record did not get: refused by their bounded
-    list, or impossible to build."""
+    list, impossible to build, or let go by the journal thread for lack of room. None
+    of them was read, so this is every one that can have begun in that session
+    (:class:`Gap`): never fewer than it lost, more when a neighbour lost some too."""
 
     activity: Activity = Activity.IDLE
 
@@ -366,6 +389,40 @@ def _sample_count(item: Item) -> int:
     return 0
 
 
+def just_before(instant: Monotonic) -> Monotonic:
+    """The last instant the clock can give before ``instant``.
+
+    What began at ``instant`` did not begin before it: where the frames of
+    one session stop because the arming of the next began, they stop here.
+    """
+    return Monotonic(math.nextafter(instant, -math.inf))
+
+
+@dataclass(frozen=True, slots=True)
+class Gap:
+    """Drive frames nobody kept for a record, and between which instants they began.
+
+    The tap refused them (it was full, or one could not be built), or the
+    journal thread let them go for lack of room. None was read: all that is
+    known is how many, and that they began no earlier than ``began`` and no
+    later than ``ended``. A record counts a gap when its session overlaps that
+    stretch; two sessions that both overlap it both count it, because nothing
+    says which of them lost what. A gap that overlaps no session is no loss.
+    """
+
+    count: int
+    began: Monotonic
+    ended: Monotonic
+
+    def joined(self, other: Gap) -> Gap:
+        """Both as one: every frame of either, over the stretch that covers both."""
+        return Gap(
+            self.count + other.count,
+            Monotonic(min(self.began, other.began)),
+            Monotonic(max(self.ended, other.ended)),
+        )
+
+
 # =========================================================================
 # The disk side: one thread, and nothing else, touches this
 # =========================================================================
@@ -383,26 +440,32 @@ class Scribe:
         "_clock",
         "_consumed",
         "_discarded",
+        "_dispatched",
         "_error",
         "_failures",
         "_frames",
         "_frames_fault",
         "_frames_lost",
-        "_frames_lost_before",
+        "_gap",
         "_logbook",
         "_logbook_synced_at",
+        "_missing",
         "_path",
         "_probed_at",
         "_publish",
         "_published_at",
         "_purged_at",
         "_retention_days",
+        "_room",
         "_root",
         "_samples",
         "_session",
+        "_since",
         "_storage",
         "_synced_at",
+        "_taken_at",
         "_unlogged",
+        "_untaken",
         "_waiting",
         "_warned",
         "_writer",
@@ -414,11 +477,18 @@ class Scribe:
         clock: Clock,
         retention_days: int | None,
         publish: Callable[[Progress], None],
+        *,
+        dispatched: Callable[[], Monotonic],
+        room: int,
     ) -> None:
+        """``dispatched``: the instant of the last control tick the loop reported
+        (:meth:`Journal.dispatched`). ``room``: the drive frames that may wait here."""
         self._root: Path = root
         self._clock: Clock = clock
         self._retention_days: int | None = retention_days
         self._publish: Callable[[Progress], None] = publish
+        self._dispatched: Callable[[], Monotonic] = dispatched
+        self._room: int = room
         # Due at once: the first idle cycle after startup applies the retention.
         self._purged_at: Monotonic = Monotonic(clock.monotonic() - PURGE_PERIOD)
         self._writer: Writer | None = None
@@ -432,11 +502,22 @@ class Scribe:
         self._discarded: int = 0
         self._warned: int = 0
         self._unlogged: int = 0
+        # What the tap said it had refused so far, the last time it was taken.
         self._frames_lost: int = 0
-        self._frames_lost_before: int = 0
+        self._taken_at: Monotonic = clock.monotonic()
         self._frames_fault: str | None = None
-        # The frames taken at the start of the cycle in progress, not yet handed to a record.
+        # Why the frames of the cycle in progress could not be taken, when they could not.
+        self._untaken: RecordError | None = None
+        # The frames taken and not yet handed to a record. Kept from one cycle to the
+        # next while no record is open: the arming of a session whose record is not
+        # open yet, until its opening claims them. Never more than ``_room``.
         self._waiting: tuple[Observation, ...] = ()
+        # The frames nobody kept, that no record has counted or disowned yet.
+        self._gap: Gap | None = None
+        # How many of them the session of the record last opened can have lost.
+        self._missing: int = 0
+        # When the arming of the record last opened began: its frames start there.
+        self._since: Monotonic = clock.monotonic()
         self._error: RecordError | None = None
         self._path: Path | None = None
         self._synced_at: Monotonic = clock.monotonic()
@@ -467,7 +548,7 @@ class Scribe:
             discarded=self._discarded,
             error=self._error,
             path=self._path,
-            frames_lost=self._frames_lost - self._frames_lost_before,
+            frames_lost=self._missing,
             activity=self._activity,
         )
 
@@ -478,36 +559,55 @@ class Scribe:
         lasts, and once at the end.
 
         The drive's observations are taken first and handed to a record at
-        three moments, so that each goes to the record it is about whatever the
-        queue held when the thread came back:
+        three moments, so that each goes to the record of the session it began
+        in whatever the queue held when the thread came back:
 
-        * before a record is closed, to that record: a closing queued behind
-          them does not cost the last frames of its session, and a session
-          that opened AND closed while the thread was away (a long close of
-          the previous record, a disk that hung) still gets its frames;
-        * before a record is opened over one still open, to the one still open;
+        * before a record is closed, to that record, those that began no later
+          than its session ended: a closing queued behind them does not cost
+          the last frames of its session, and a session that opened AND closed
+          while the thread was away (a long close of the previous record, a
+          disk that hung) still gets its frames;
+        * before a record is opened over one still open, to the one still
+          open, those that began before the arming of the new one did;
         * once the queue is written, to the record then open: the frames of an
           arming belong to the session it armed.
 
-        When another record is opened later in the same cycle, the frames that
-        began at or after its start wait for it. With no record open at all,
-        nobody is recording: they are let go.
+        A record is only ever handed what began at or after the start of its
+        own arming (:meth:`_hand_frames`). What began after a session ended
+        goes on waiting, in this cycle and the next ones, for the opening of
+        the record it belongs to: the arming of a session lasts as long as
+        the drive takes, and its record is opened only once it is armed. The
+        tap is taken again before a record is closed: the loop noted the last
+        frames of that session before it queued the closing, but maybe after
+        this cycle had taken what waited.
+
+        What waits is let go, as no session's, in two cases only: it began
+        before the arming of the record that is open; or no record is open and
+        it began before the last control tick the loop reported
+        (:meth:`_forget`). And it is bounded (:meth:`_keep`): past the bound
+        the oldest are let go and counted, like those the tap refused
+        (:class:`Gap`).
         """
         now = self._clock.monotonic()
-        self._waiting = self._taken()
+        # Read before anything is taken: see :meth:`_forget`.
+        dispatched = self._dispatched()
+        self._untaken = None
+        self._keep(self._taken())
         count = len(queue)
-        for index in range(count):
+        for _ in range(count):
             item = queue.popleft()
             self._consumed += 1
             self._samples += _sample_count(item)
             if isinstance(item, Opening):
-                self._hand_frames(_origin(item))
+                self._hand_frames(just_before(item.since))
             elif isinstance(item, Closing):
-                self._hand_frames(_next_origin(queue, count - index - 1))
+                if self._untaken is None:
+                    self._keep(self._taken())
+                self._hand_frames(item.until)
             self._note(self._take(item, now, dropped, unlogged))
             self._pulse()
         self._hand_frames(None)
-        self._waiting = ()
+        self._forget(dispatched)
         self._checkpoint(now, dropped)
         self._published_at = self._clock.monotonic()
         self._publish(self.progress())
@@ -538,7 +638,12 @@ class Scribe:
         Total: a source that raises costs the frames of this cycle, counted as
         one failure of the record like any value that could not be written,
         and never the cycle. The rows, the events and the raw blocks behind it
-        are still written.
+        are still written. A record opened later in this cycle counts it too
+        (:meth:`_open`): the frames of its arming were among them.
+
+        What the tap says it refused since it was last taken becomes a
+        :class:`Gap`. It refuses the newest when it is full, so those began
+        after the last one it kept; with nothing kept, after the previous take.
         """
         frames = self._frames
         if frames is None:
@@ -551,23 +656,97 @@ class Scribe:
                 # Once per kind of fault, with its traceback: this runs five times a second.
                 self._frames_fault = fault
                 _logger.exception("session journal: the drive's frames could not be taken")
-            self._note(Err(RecordError("append", fault)))
+            self._untaken = RecordError("append", fault)
+            self._note(Err(self._untaken))
             return ()
+        moment = self._clock.monotonic()
+        observations = taken.observations
+        refused = taken.lost - self._frames_lost
+        if refused > 0:
+            began = observations[-1].at if observations else self._taken_at
+            self._lose(Gap(refused, began, moment))
         self._frames_lost = taken.lost
-        return taken.observations
+        self._taken_at = moment
+        return observations
 
-    def _hand_frames(self, before: Monotonic | None) -> None:
-        """Write the waiting frames to the record that is open, if one is.
+    def _keep(self, taken: tuple[Observation, ...]) -> None:
+        """Add what was just taken to what waits, within the bound.
 
-        ``before``: only those that began before that instant, the start of a
-        record opened later in this cycle; the others go on waiting for it.
+        Past ``_room`` the oldest are let go: the newest are those of the
+        arming in progress, the ones a record is about to claim. What is let
+        go is counted, with when it began (:class:`Gap`): the record whose
+        session it began in will say so.
+        """
+        waiting = (*self._waiting, *taken)
+        over = len(waiting) - self._room
+        if over > 0:
+            shed = waiting[:over]
+            waiting = waiting[over:]
+            self._lose(
+                Gap(
+                    over,
+                    Monotonic(min(o.at for o in shed)),
+                    Monotonic(max(o.at for o in shed)),
+                )
+            )
+        self._waiting = waiting
+
+    def _lose(self, gap: Gap) -> None:
+        pending = self._gap
+        self._gap = gap if pending is None else pending.joined(gap)
+
+    def _forget(self, dispatched: Monotonic) -> None:
+        """With no record open, let go of what began before the last tick the loop reported.
+
+        ``dispatched`` is the instant of a control tick whose mailbox was
+        dispatched (:meth:`Journal.dispatched`): every arming asked for
+        before it was over by then, its opening queued or its start refused.
+        This cycle read it first, before the tap and the queue. So whatever
+        the loop had queued by then, this cycle has written: a session armed
+        before that instant has had its record opened, and if no record is
+        open now, it has also been closed, with the frames it noted before
+        its closing (the tap is taken again for a closing). And a session
+        armed after that instant began after it.
+
+        What is left from before that instant is therefore no session's: the
+        polling of a console at rest, the exchanges of an arming that was
+        refused, the zero reference written after a session, a fault reset.
+        It is not a loss, and a gap that ended before that instant is not one
+        either. What began at or after it waits: it may be the arming of a
+        session whose record is not open yet.
+        """
+        if self._writer is not None:
+            return
+        self._waiting = tuple(o for o in self._waiting if o.at >= dispatched)
+        gap = self._gap
+        if gap is not None and gap.ended < dispatched:
+            self._gap = None
+
+    def _hand_frames(self, until: Monotonic | None) -> None:
+        """Write to the record that is open, if one is, the waiting frames of its session.
+
+        Its session: from the instant its arming began to ``until``, the
+        instant it ended (``None``: it is still going). What began before the
+        arming is no session's (:meth:`_forget`): it is let go. What began
+        after ``until`` goes on waiting, for the record of a later session.
+
+        The frames nobody kept are settled the same way: the record counts
+        the gap when its session overlaps it, and the gap is kept for a later
+        record only if part of it lies after ``until``.
         """
         writer = self._writer
         if writer is None:
             return
+        since = self._since
         waiting = self._waiting
-        due = waiting if before is None else tuple(o for o in waiting if o.at < before)
-        self._waiting = () if before is None else tuple(o for o in waiting if o.at >= before)
+        due = tuple(o for o in waiting if o.at >= since and (until is None or o.at <= until))
+        self._waiting = () if until is None else tuple(o for o in waiting if o.at > until)
+        gap = self._gap
+        if gap is not None:
+            if gap.ended >= since and (until is None or gap.began <= until):
+                self._missing += gap.count
+            if until is None or gap.ended <= until:
+                self._gap = None
         origin = _started(writer.manifest)
         for observation in due:
             try:
@@ -636,9 +815,15 @@ class Scribe:
         self._discarded = 0
         self._warned = 0
         self._unlogged = 0
-        self._frames_lost_before = self._frames_lost
+        self._missing = 0
         self._error = None
         self._path = None
+        self._since = opening.since
+        untaken = self._untaken
+        if untaken is not None:
+            # The frames of this very cycle could not be taken, and the counts have
+            # just started again: those of this record's arming were among them.
+            self._note(Err(untaken))
         try:
             prepare_root(self._root)
         except OSError as error:
@@ -710,7 +895,7 @@ class Scribe:
 
     def _warn(self, writer: Writer, now: Monotonic, dropped: int) -> None:
         """Say in the record itself what it is missing, once per change, if the disk lets us."""
-        frames = self._frames_lost - self._frames_lost_before
+        frames = self._missing
         lost = dropped + self._failures + frames
         if lost == self._warned:
             return
@@ -731,23 +916,6 @@ def _started(manifest: Manifest) -> Monotonic:
     return Monotonic(manifest.clocks.monotonic_start)
 
 
-def _origin(opening: Opening) -> Monotonic:
-    return _started(opening.manifest)
-
-
-def _next_origin(queue: deque[Item], ahead: int) -> Monotonic | None:
-    """The start of the next record opened among the first ``ahead`` items, or ``None``.
-
-    Read by index, never by iteration: the event loop appends at the other end
-    while this looks, and only this thread ever removes.
-    """
-    for index in range(ahead):
-        item = queue[index]
-        if isinstance(item, Opening):
-            return _origin(item)
-    return None
-
-
 # =========================================================================
 # The producer side
 # =========================================================================
@@ -757,13 +925,15 @@ class Journal:
     """The bounded queue and its thread. See the module docstring.
 
     Mutable. The fields below are written by the event loop thread only, except
-    ``_progress``, which the journal thread replaces whole; ``_dropped`` and
-    ``_unlogged`` are the two producer fields that thread reads (two ``int``,
-    for the warnings it writes into the record and into the logbook).
+    ``_progress``, which the journal thread replaces whole; ``_dropped``,
+    ``_unlogged`` and ``_dispatched_at`` are the three producer fields that
+    thread reads (two ``int``, for the warnings it writes into the record and
+    into the logbook, and an instant, for the drive's frames no record claims).
     """
 
     __slots__ = (
         "_clock",
+        "_dispatched_at",
         "_dropped",
         "_limits",
         "_mark",
@@ -803,7 +973,16 @@ class Journal:
         self._limits: Limits = limits
         self._period: Seconds = period
         self._queue: deque[Item] = deque()
-        self._scribe: Scribe = Scribe(root, clock, retention_days, self._publish)
+        # Nothing was armed before the console was built.
+        self._dispatched_at: Monotonic = clock.monotonic()
+        self._scribe: Scribe = Scribe(
+            root,
+            clock,
+            retention_days,
+            self._publish,
+            dispatched=self._last_dispatch,
+            room=limits.frames,
+        )
         self._progress: Progress = self._scribe.progress()
         self._session: int = 0
         self._open: bool = False
@@ -830,13 +1009,18 @@ class Journal:
 
     # --- the producer: event loop thread only -----------------------------
 
-    def open(self, manifest: Manifest, privacy: Privacy) -> None:
-        """A session was armed: queue the creation of its record. Never refused."""
+    def open(self, manifest: Manifest, privacy: Privacy, *, since: Monotonic | None = None) -> None:
+        """A session was armed: queue the creation of its record. Never refused.
+
+        ``since``: when the arming began (:attr:`Opening.since`). ``None``:
+        nobody can say, and the frames of the record begin with the record.
+        """
         self._session += 1
         self._open = True
         self._dropped = 0
         self._unlogged = 0
-        self._enqueue(Opening(self._session, manifest, privacy))
+        begun = _started(manifest) if since is None else since
+        self._enqueue(Opening(self._session, manifest, privacy, begun))
 
     def close(self, closing: Closing) -> None:
         """The session is over: queue the finalisation of its record. Never refused."""
@@ -879,6 +1063,23 @@ class Journal:
     def _enqueue(self, item: Item) -> None:
         self._put += 1
         self._queue.append(item)
+
+    def dispatched(self, now: Monotonic) -> None:
+        """The loop says: the control tick of instant ``now`` has dispatched its mailbox.
+
+        Every arming asked for before ``now`` is over by then: the record of
+        its session is queued for opening, or its start was refused. And the
+        next arming can only begin at a later tick. One assignment: it takes
+        no lock and waits for nothing. The journal thread reads it to tell
+        the drive's frames that began in no session, which it lets go, from
+        those of an arming whose record is not open yet, which it keeps
+        (:meth:`Scribe._forget`).
+        """
+        self._dispatched_at = now
+
+    def _last_dispatch(self) -> Monotonic:
+        """The journal thread's read of that instant: a whole value, read at once."""
+        return self._dispatched_at
 
     def status(self, now: Monotonic) -> JournalStatus:
         """Where the record stands. Reads memory only; call it every tick.

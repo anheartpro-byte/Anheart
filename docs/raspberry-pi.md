@@ -197,7 +197,10 @@ nominatif.
 4. Le runtime fait son tic.
 5. Le tic est remis à l'enregistrement de séance (en mémoire seulement), et ce
    que l'enregistrement a à dire à l'opérateur part vers la page comme
-   événement `recording`.
+   événement `recording`. L'instant de ce tic est dit au journal, par une
+   affectation : c'est ce qui lui permet de savoir quelles trames du variateur
+   n'appartiennent à aucune séance
+   ([15.2](#152-aucune-écriture-dans-la-boucle)).
 6. L'instantané est publié vers la page.
 
 Une fois le tic revenu, et seulement alors, la tâche de contrôle le dit au
@@ -2513,7 +2516,34 @@ deux d'entre eux notent en même temps), et le fil du journal n'y touche
 jamais. Une première version prenait la liste sous un verrou partagé avec
 celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
 avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
-(l'appel au variateur attendait quand ce fil était arrêté dans sa prise).
+(l'appel au variateur attendait quand ce fil était arrêté dans sa prise). Le
+même test fait à chaque arrêt l'appel d'un armement, `Journal.open`, et celui
+par lequel le tic dit son instant au journal, `Journal.dispatched` (plus bas) :
+eux non plus n'attendent ce fil nulle part.
+
+**Sur quoi cette prise sans verrou repose.** Trois choses, toutes les trois
+nécessaires :
+
+- dans CPython, `append`, `popleft` et `len` d'une `deque` sont chacun une
+  opération indivisible, parce que l'interpréteur n'exécute qu'un fil à la
+  fois (son verrou global, le GIL) : un ajout et un retrait faits en même
+  temps par deux fils ne laissent jamais la liste à moitié modifiée ;
+- un seul fil retire, le fil du journal : il lit combien d'observations
+  attendent, puis en retire ce nombre une à une. Personne d'autre ne retirant,
+  chacune est encore là quand il la prend ; ce qui est noté entre-temps attend
+  le cycle suivant. Deux fils qui retireraient compteraient chacun sur la même
+  observation ;
+- ceux qui notent passent un par un, par leur verrou, pour que la borne et le
+  compte des refus restent exacts.
+
+C'est vérifié sur CPython 3.12 avec son verrou global, la version de l'image
+du Pi (`python:3.12`), par les tests qui notent depuis plusieurs fils pendant
+qu'un autre prend. **Ce n'est pas vérifié sur un interpréteur sans verrou
+global** (la variante « free-threaded » de CPython) : aucun de ces tests n'y a
+tourné, et la première des trois conditions y repose sur autre chose que ce
+qui est décrit ici. Avant d'y faire tourner la console, relire ces deux listes
+(`CallTap`, `ExchangeLog`) et y rejouer ces tests.
+
 Selon le variateur branché :
 
 - le pilote ATV320 rapporte lui-même ses échanges Modbus dans un journal
@@ -2539,18 +2569,72 @@ ce qui écoute le variateur), le cycle continue : les lignes, les événements e
 les blocs bruts sont écrits, les trames de ce cycle sont perdues et comptées
 comme une écriture manquée de l'enregistrement (`write_failed`,
 `erreur d'ecriture (append : <faute>)`), et la faute est journalisée une fois.
+Elle est comptée pour l'enregistrement ouvert à ce moment-là et, quand ce même
+cycle en ouvre un, pour celui-là aussi : les trames de son armement étaient
+parmi celles qui manquent.
 
-Les trames prises sont remises à un enregistrement à trois moments du cycle :
-avant qu'un enregistrement soit fermé, à celui-là (une séance ouverte **et**
-fermée pendant que le fil était occupé ailleurs, par exemple par la longue
-fermeture de la précédente, garde donc ses trames) ; avant qu'un
-enregistrement soit ouvert par-dessus un autre resté ouvert, à celui resté
-ouvert ; et une fois la file écrite, à l'enregistrement alors ouvert (les
-trames d'un armement vont à la séance qu'il arme, avec un `t` légèrement
-négatif). Quand un autre enregistrement est ouvert plus loin dans le même
-cycle, les trames commencées à partir de son début l'attendent. Sans aucun
-enregistrement ouvert, la scrutation d'une console au repos n'est écrite nulle
-part.
+**Chaque trame va à l'enregistrement de la séance pendant laquelle elle a
+commencé, et à aucun autre**, quel que soit le moment où le fil du journal
+passe. Pour ses trames, une séance va de l'instant où la console demande
+l'armement au runtime (lu avant tout échange avec le variateur) à l'instant où
+elle ferme son enregistrement (lu après les échanges de son dernier tic),
+bornes comprises. Les trames prises sont remises à trois moments du cycle :
+
+- avant qu'un enregistrement soit fermé, à celui-là, celles qui ont commencé
+  au plus tard à la fin de sa séance. Le fil **reprend d'abord la liste** : la
+  boucle a noté les dernières trames de la séance avant de mettre sa fermeture
+  en file, mais peut-être après que ce cycle a pris ce qui attendait ;
+- avant qu'un enregistrement soit ouvert par-dessus un autre resté ouvert, à
+  celui resté ouvert, celles qui ont commencé avant l'armement du nouveau ;
+- une fois la file écrite, à l'enregistrement alors ouvert (les trames d'un
+  armement vont à la séance qu'il arme, avec un `t` légèrement négatif).
+
+**Ce qui n'a pas encore d'enregistrement attend, d'un cycle au suivant.**
+L'armement d'une séance dure ce que le variateur met à répondre, et son
+enregistrement n'est ouvert qu'une fois la séance armée : le fil du journal
+peut passer une ou plusieurs fois entre-temps. Les trames qu'il prend alors
+restent chez lui jusqu'à l'ouverture qui les réclame. Quand deux séances
+s'enchaînent pendant un seul cycle, ou que le fil passe au milieu d'un
+armement, chacune garde donc les échanges de son armement, son `open`
+compris.
+
+Une trame en attente n'est lâchée que dans deux cas, où elle n'est celle
+d'aucune séance :
+
+- un enregistrement s'ouvre, et elle a commencé avant le début de son
+  armement ;
+- aucun enregistrement n'est ouvert, et elle a commencé avant un tic dont la
+  boucle a depuis rendu compte. À chaque tic, une fois sa boîte de commandes
+  vidée, la boucle dit au journal l'instant de ce tic
+  (`Journal.dispatched`, une affectation, sans verrou ni attente) : tout
+  armement demandé avant cet instant est alors terminé, son enregistrement
+  mis en file ou son départ refusé. Le fil lit cet instant au début de son
+  cycle, avant la liste et avant la file : ce que la boucle avait mis en file
+  jusque-là, ce cycle l'écrit, et ce qui reste d'avant cet instant sans
+  enregistrement ouvert n'appartient à aucune séance.
+
+Ce qui est ainsi lâché, c'est tout ce que la console demande au variateur
+hors séance : la scrutation au repos (une lecture d'état), la consigne nulle
+qu'elle écrit à chaque tic après une séance, les échanges d'un départ refusé
+après avoir touché le variateur (son ouverture, ses lectures), un réarmement
+de défaut entre deux séances. Rien de cela n'est écrit dans un
+enregistrement, que le fil l'ait pris à l'heure ou trouvé en attente, et ce
+n'est pas une perte : rien n'est compté.
+
+**Borné, et compté.** Le fil garde au plus 8192 trames en attente
+(`Limits.frames`, deux fois la borne de la prise : ce qu'il gardait, et ce
+qu'une prise peut ajouter). En temps normal il en garde quelques-unes : celles
+du tic en cours. Au-delà de la borne, les plus anciennes sont lâchées, et
+comptées. Elles rejoignent ce que la prise a refusé : des trames que personne
+n'a lues, dont on ne sait que le nombre et entre quels instants elles ont
+commencé (ce que la prise refuse est ce qu'elle a reçu de plus récent, donc
+après la dernière trame qu'elle a gardée). Un enregistrement compte ces trames
+quand sa séance recouvre cet intervalle, et le dit
+(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`). Quand deux
+séances le recouvrent, les deux enregistrements les comptent, parce que rien
+ne dit laquelle des deux a perdu quoi : `drive_frames_lost` est donc un
+majorant, jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
+ne recouvre aucune séance n'est pas une perte.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -2597,7 +2681,7 @@ fil du journal et lue par la boucle comme un état.
 | Cause (`Cause`) | Quand | Message à l'opérateur (événement `recording`) |
 |---|---|---|
 | `write_failed` | le disque a refusé une écriture ou la création du dossier (plein, droits, E/S) | `enregistrement de seance degrade : disque plein (append). La seance et la securite continuent.` (ou `ecriture refusee, droits insuffisants`, ou `erreur d'ecriture`) |
-| `queue_full` | la file bornée a refusé des valeurs, ou la liste bornée des trames du variateur a refusé des observations | `enregistrement de seance degrade : file d'ecriture pleine, des mesures sont perdues. …` |
+| `queue_full` | la file bornée a refusé des valeurs, la liste bornée des trames du variateur a refusé des observations, ou le fil du journal a lâché faute de place des trames qui attendaient un enregistrement (15.2) | `enregistrement de seance degrade : file d'ecriture pleine, des mesures sont perdues. …` |
 | `stalled` | des valeurs attendent et le fil n'en a consommé aucune depuis 5 s : le disque ne répond plus | `enregistrement de seance degrade : le disque ne repond plus (<n> elements en attente). …` |
 | `storage_unavailable` | le dossier racine ne peut être ni créé, ni mis en 700, ni mesuré | `enregistrement de seance indisponible : dossier <chemin> inutilisable (creation, droits ou mesure de l'espace libre)` |
 
@@ -2859,9 +2943,28 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 ### 15.8 Ce qui n'est pas enregistré aujourd'hui
 
-- Les échanges avec le variateur d'une console au repos, et ceux d'un
-  armement qui précèdent de plus d'un cycle (0,2 s) l'ouverture de
-  l'enregistrement : `drive_frames.jsonl` commence avec l'enregistrement.
+- Les échanges avec le variateur hors de toute séance : avant la première,
+  entre deux séances et après la dernière. `drive_frames.jsonl` va du début de
+  l'armement d'une séance à sa fin, et ne contient rien d'autre. Ce sont, sans
+  qu'aucun soit écrit dans un enregistrement : la scrutation d'une console au
+  repos ; la consigne nulle écrite à chaque tic après une séance ; les
+  échanges d'un départ **refusé** après avoir touché le variateur ; un
+  réarmement de défaut entre deux séances. Les demandes de la console
+  correspondantes (départ demandé, départ refusé, réarmement) sont, elles,
+  dans le journal hors séance (15.9), sans les échanges.
+- Les trames du variateur lâchées faute de place : celles que la prise refuse
+  quand le fil du journal ne vient plus (4096 en attente), et celles que ce
+  fil lâche lui-même au-delà de 8192 en attente d'un enregistrement. Elles
+  sont comptées, et l'enregistrement le dit (15.2).
+- **À qui manquent les trames refusées, quand deux séances attendaient.** La
+  prise ne lit pas ce qu'elle refuse : elle ne donne qu'un nombre. Quand elle a
+  débordé pendant que deux séances attendaient le fil du journal, ce nombre
+  est compté pour chacune des deux dont la séance recouvre l'intervalle où ces
+  trames ont pu commencer, et il n'est pas partagé entre elles :
+  `drive_frames_lost` est un majorant. Il n'est compté que pour la seconde
+  quand la dernière trame gardée a commencé après la fin de la première.
+- L'échange pendant lequel le tic lève une exception : la prise note un appel
+  à son retour, et celui-là ne revient pas.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge

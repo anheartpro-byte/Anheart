@@ -55,8 +55,13 @@ def record_of(journal: Journal) -> Path:
     return path
 
 
-def closing(reason: str = "operator_stop") -> Closing:
-    return Closing(ended_at=ENDED, end_reason=reason, observation=None)
+LASTING: Final[Monotonic] = Monotonic(START + 3600.0)
+"""A session's end later than anything these tests note: its record keeps every frame
+that began in it. A test about where the frames stop gives its own instant."""
+
+
+def closing(reason: str = "operator_stop", until: Monotonic = LASTING) -> Closing:
+    return Closing(ended_at=ENDED, end_reason=reason, observation=None, until=until)
 
 
 def batch(seq: int, samples: int = 200, channels: int = 1) -> RawBatch:
@@ -80,6 +85,20 @@ def count_fsync(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
     monkeypatch.setattr(os, "fsync", counted)
     return calls
+
+
+def skip_fsync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every ``os.fsync`` from here on returns at once, flushing nothing.
+
+    For a test that makes thousands of records and judges nothing about what
+    reaches the device: on a runner's disk their flushes alone take longer
+    than everything the test is about.
+    """
+
+    def skipped(_descriptor: int) -> None:
+        """Nothing is flushed."""
+
+    monkeypatch.setattr(os, "fsync", skipped)
 
 
 @dataclass

@@ -377,10 +377,45 @@ l'écran.*
   vitesse possible (ligne « minimum de rotation »).
 - La ligne « cible appliquee » dit ce que la machine vise vraiment. Fiez-vous à
   elle, pas au brouillon orange.
-- Une réponse qui commence par « accepte : » ou « cible envoyee : » sous les
-  boutons veut seulement dire que la demande est reçue. La machine vérifie
-  ensuite. Si elle refuse, le refus apparaît dans la liste **Evenements** de la
-  page **Seance**, sur une ligne « refused ».
+- Une réponse qui commence par « demande envoyee : » ou « cible envoyee : »
+  sous les boutons veut seulement dire que la demande est reçue. La machine
+  vérifie ensuite, et la même ligne change. Elle dit alors l'une de ces choses :
+  - « demarrage pris par la machine » ou « cible prise par la machine » :
+    après cette demande, l'écran a vu la séance démarrer, ou la machine
+    tenir cette cible. Pour un démarrage, il n'a vu ni refus, ni autre
+    demande de démarrage dans les deux secondes qui précèdent la vôtre ou
+    après elle. Cette ligne est remplacée par l'une des suivantes si un
+    refus ou une autre demande de démarrage arrive ensuite, et elle s'efface
+    quand la séance se termine.
+  - En rouge, « refus de la machine » suivi de la raison. Le refus apparaît
+    aussi dans la liste **Evenements** de la page **Seance**, sur une ligne
+    « refused ».
+  - En rouge, « demarrage NON pris par la machine » ou « cible NON prise par
+    la machine » : une seconde a passé sans que l'écran voie ni l'un ni
+    l'autre.
+  - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande » ou
+    « cet ecran ne sait pas ce que la machine a fait de sa demande de
+    demarrage », suivi de « sa liaison a ete coupee » : la liaison de l'écran
+    avec la console a été coupée entre votre clic et la réponse. La ligne ne
+    dit alors pas si la séance en cours vient de votre demande.
+  - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande »,
+    suivi de « une autre demande de demarrage est aussi arrivee a la
+    machine » : une autre demande de démarrage est arrivée à la machine près
+    de la vôtre. Une séance est en cours ; la ligne ne dit pas laquelle des
+    deux demandes la machine a prise, et elle peut s'afficher alors que la
+    séance est la vôtre. La même phrase peut se terminer par « sa liaison
+    venait de s'ouvrir » (l'écran était relié à la console depuis moins de
+    deux secondes) ou par « il n'a pas recu l'evenement de sa propre
+    demande » (l'écran n'a pas vu passer votre demande) : dans les deux cas
+    la ligne ne dit pas non plus si la séance en cours est la vôtre.
+  - En rouge, « demande refusee par la console : une autre demande attend
+    encore la machine », ou « seconde demande refusee par la console » : un
+    clic précédent, de cet écran ou d'un autre, n'est pas encore traité, et
+    celui-ci n'a pas été envoyé à la machine.
+
+  > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+  > quand cette ligne dit que l'écran ne sait pas si la machine a pris sa
+  > demande.
 - Pour changer de vitesse : composez un nouveau brouillon, puis **Appliquer**.
 - Vous pouvez ramener vous-même le bras à l'arrêt en appliquant une cible de
   0. Si **Securite** affiche « none » à ce moment, la séance continue :

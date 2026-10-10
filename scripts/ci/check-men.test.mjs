@@ -64,3 +64,23 @@ for (const scenario of scenarios) {
     }
   });
 }
+
+// ANH-221: the page says, in one sentence, when the tickets of the registry
+// were read. That sentence had fallen behind the registry once already, which
+// the review of the first release found: the two are held together here.
+test("docs/menaces.md gives the read dates the registry carries, and no other", () => {
+  // Given: the dates of the real registry and the sentence of the real page.
+  const carried = new Set(
+    registry
+      .split(/\r?\n/)
+      .filter((row) => row && !row.startsWith("#"))
+      .map((row) => row.split("\t")[2]),
+  );
+  const page = readFileSync(new URL("../../docs/menaces.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  // When: the sentence is read up to its full stop.
+  const sentence = /Chaque ligne porte sa date de lecture :([^.]+)\./.exec(page);
+  // Then: it names each date a row carries, and none that no row carries.
+  assert.ok(sentence, "the sentence that gives the read dates");
+  const stated = new Set(sentence[1]?.match(/\d{4}-\d{2}-\d{2}/g));
+  assert.deepEqual([...stated].sort(), [...carried].sort());
+});
