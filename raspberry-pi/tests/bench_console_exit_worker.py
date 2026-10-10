@@ -19,13 +19,18 @@ The parent cannot look into this process, so the stand-in writes one word a
 line to the report file: ``open`` when the bus thread has connected,
 ``serving`` when the web server has started (its signal handlers are in place
 by then), ``served`` when it has closed what it serves, ``stopping`` when the
-driver's stop begins and ``stopped`` when it has finished. The web server
-listens on a port the system picks: nothing here needs to reach it.
+driver's stop begins and ``stopped`` when it has finished. Once ``main`` is
+over it writes ``signals-back`` if each exit signal does again what it did
+before ``main``, ``signals-kept`` if not. The report file is the only thing
+written that way: the standard output and error of this process are the
+script's own, and a test may have closed them. The web server listens on a
+port the system picks: nothing here needs to reach it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -114,7 +119,13 @@ def main() -> int:
     bench.app.router.on_startup.append(serving)
     bench.app.router.on_shutdown.append(served)
     sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", "0"]
-    return bench.main()
+    watched = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    before = [signal.getsignal(exit_signal) for exit_signal in watched]
+    try:
+        return bench.main()
+    finally:
+        after = [signal.getsignal(exit_signal) for exit_signal in watched]
+        report.note("signals-back" if after == before else "signals-kept")
 
 
 if __name__ == "__main__":

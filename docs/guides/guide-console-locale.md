@@ -2101,7 +2101,22 @@ Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
   termine quand même, de lui-même et tout de suite : il ne reste jamais suspendu à un
   échange bloqué, et c'est sa fin qui rend le port et le verrou du câble. Cela peut
   arriver sans panne : un arrêt demandé depuis la page juste avant (jusqu'à 25 s),
-  suivi de l'arrêt du pilote, peut dépasser 35 s sur un arbre qui tarde à s'arrêter.
+  suivi de l'arrêt du pilote, peut dépasser 35 s sur un arbre qui tarde à s'arrêter ;
+- `sortie: fil de bus jamais demarre: ...` : la sortie a été demandée avant le démarrage
+  du fil de bus. Rien n'a été ouvert, rien n'a été commandé ;
+- `sortie: -` : le fil de bus est mort pendant la connexion, sur une erreur que le
+  pilote ne lève pas d'ordinaire, avant qu'un arrêt puisse être tenté. Rien n'a été
+  commandé.
+
+Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
+reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, et 1 quand l'arrêt
+n'avait pas fini au bout de l'attente.
+
+Rien de tout cela ne dépend de l'écriture de la dernière ligne. Si le terminal est
+fermé ou si la sortie allait dans un tube dont le lecteur a disparu (`| tee`, arrêté
+par le même Ctrl+C), plus personne ne peut la lire : elle est perdue, ou écrite sur la
+sortie d'erreur si elle existe encore, et l'arrêt, le retour des signaux, la fin du
+processus et son code de sortie sont les mêmes.
 
 **Chaque fois que l'arrêt n'est pas confirmé, et dans les cas qu'aucun programme ne
 peut intercepter (`kill -9`, c'est-à-dire SIGKILL, une coupure de courant, un plantage

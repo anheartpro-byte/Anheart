@@ -19,7 +19,8 @@ enabled to the drive's ``ttO`` timeout alone:
 And when the stop itself raised, or had not finished when the bounded wait
 for it ended, the exit said ``-``, as if no stop had been attempted; in the
 second case the process could then stay for good, deaf to every signal but
-SIGKILL.
+SIGKILL. It still could when the last line had nowhere to go, the terminal
+closed or the pipe broken: the write failed before the process was ended.
 
 The first group of tests runs the bus thread in this process, over a stand-in
 drive that counts. The second sends real signals to the real ``main()``, in a
@@ -34,15 +35,19 @@ net for those, and the script says so.
 
 from __future__ import annotations
 
+import errno
+import io
+import os
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import FrameType
-from typing import Final, cast
+from typing import Final, Literal, assert_never, cast, override
 
 import pytest
 
@@ -447,6 +452,17 @@ signals_reach_a_process = pytest.mark.skipif(
 CONFIRMED_LINE: Final[str] = "\nsortie: arret confirme, port libere\n"
 """The report of a stop that finished and was confirmed, on a line of its own."""
 
+ENDED_WELL: Final[list[str]] = ["stopping", "stopped", "signals-back"]
+"""How the stand-in's report ends when the stop ran once, to its end, before ``main`` was over,
+and every exit signal then did again what it did before ``main``."""
+
+STOP_UNFINISHED: Final[int] = 1
+"""The exit status of a console that ended without having seen the stop finish. Written here
+as the number the guide gives, not read from the script: zero would say all went well."""
+
+type Output = Literal["a file", "a pipe", "a terminal"]
+"""Where the console's standard output and error go. The last two can be closed under it."""
+
 
 @dataclass(frozen=True, slots=True)
 class _Console:
@@ -455,6 +471,14 @@ class _Console:
     process: subprocess.Popen[bytes]
     report: Path
     log: Path
+    closing: Callable[[], None] | None = None
+    """What takes the console's output away, when it is not a file."""
+
+    def lose_output(self) -> None:
+        """Take the console's output away from under it: its next write there fails."""
+        closing = self.closing
+        assert closing is not None, "this console writes to a file, which nothing takes away"
+        closing()
 
     def words(self) -> list[str]:
         """What the stand-in drive has written so far, one word a line."""
@@ -477,29 +501,53 @@ class _Console:
         return self.process.wait(timeout=PATIENCE)
 
     def said(self) -> str:
+        """What the console printed, when its output was a file."""
+        if not self.log.exists():
+            return ""
         return self.log.read_text(encoding="utf-8", errors="replace")
 
 
-def _console(tmp_path: Path, *, stop: str = "0", wait: float | None = None) -> _Console:
+def _console(
+    tmp_path: Path, *, stop: str = "0", wait: float | None = None, output: Output = "a file"
+) -> _Console:
     """Start the real ``main()`` over the stand-in drive. The caller ends it with a signal.
 
     ``stop`` is how long the stand-in's stop takes, in seconds, or ``stuck``
     for one that never returns; ``wait`` replaces the 35 s the script waits
-    for the stop.
+    for the stop. ``output`` is where the console writes: a file the test
+    reads afterwards, or something ``lose_output`` can take away, a pipe
+    (whose reader then is gone) or a terminal (which then is closed).
     """
     report = tmp_path / "report.txt"
     log = tmp_path / "console.log"
     command = [sys.executable, str(WORKER), str(report), stop]
     if wait is not None:
         command.append(str(wait))
-    with log.open("wb") as output:
-        process = subprocess.Popen(  # noqa: S603  # this interpreter, a file of this repository
-            command,
-            cwd=WORKER.parent.parent,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-        )
-    return _Console(process=process, report=report, log=log)
+    home = WORKER.parent.parent
+    match output:
+        case "a file":
+            with log.open("wb") as kept:
+                process = subprocess.Popen(  # noqa: S603  # this interpreter, a file of this repository
+                    command, cwd=home, stdout=kept, stderr=subprocess.STDOUT
+                )
+            return _Console(process, report, log)
+        case "a pipe":
+            process = subprocess.Popen(  # noqa: S603  # this interpreter, a file of this repository
+                command, cwd=home, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            )
+            reader = process.stdout
+            assert reader is not None
+            return _Console(process, report, log, reader.close)
+        case "a terminal":
+            ours, theirs = os.openpty()
+            try:
+                process = subprocess.Popen(  # noqa: S603  # this interpreter, a file of this repository
+                    command, cwd=home, stdout=theirs, stderr=theirs
+                )
+            finally:
+                os.close(theirs)
+            return _Console(process, report, log, partial(os.close, ours))
+    raise assert_never(output)
 
 
 def _kill_if_left(console: _Console) -> None:
@@ -526,7 +574,8 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     Ctrl+C always ended this way. SIGTERM and SIGHUP ended the process with no
     stop at all. In the three cases the web server has closed what it serves
     before the stop begins: it takes Ctrl+C and SIGTERM itself, and SIGHUP
-    cancels its loop.
+    cancels its loop. And once ``main`` is over each signal does again what it
+    did before.
     """
     console = _console(tmp_path)
     try:
@@ -539,8 +588,9 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     said = console.said()
 
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-1] == "stopped", "the process ended before the driver's stop had finished"
-    assert words[-3:] == ["served", "stopping", "stopped"], "the web server was left open"
+    assert words[-4:] == ["served", *ENDED_WELL], (
+        f"not one whole stop after the web server: {words}"
+    )
     assert code == status, said
     assert CONFIRMED_LINE in said
 
@@ -560,7 +610,7 @@ def test_a_sigterm_during_the_start_up_wait_ends_in_the_driver_s_stop_too(tmp_pa
 
     assert "serving" not in words, "the web server was already up: not this case"
     assert words.count("stopping") == 1
-    assert words[-1] == "stopped"
+    assert words[-3:] == ENDED_WELL, words
     assert code == BY_SIGTERM, said
     assert CONFIRMED_LINE in said
 
@@ -609,7 +659,7 @@ def test_two_different_signals_at_the_same_instant_still_end_in_one_stop(
 
     assert "serving" not in words, "the web server was already up: not this case"
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-1] == "stopped", "the process ended before the driver's stop had finished"
+    assert words[-3:] == ENDED_WELL, f"the process ended before the stop had finished: {words}"
     assert CONFIRMED_LINE in said
     assert code in (BY_SIGINT, BY_SIGTERM, BY_HANG_UP), said
 
@@ -636,7 +686,7 @@ def test_signals_that_arrive_during_the_stop_do_not_cut_it_short(tmp_path: Path)
     said = console.said()
 
     assert words.count("stopping") == 1
-    assert words.count("stopped") == 1, f"the stop was cut short: {said}"
+    assert words[-3:] == ENDED_WELL, f"the stop was cut short: {said}"
     assert code == BY_SIGTERM, said
     assert CONFIRMED_LINE in said
 
@@ -657,10 +707,11 @@ def test_a_stop_not_finished_when_the_wait_ends_is_said_and_the_process_ends_by_
     * the last line says so, with ATTENTION: the stop is not confirmed, the
       port and the lock on the cable were still held, and the drive's own
       communication timeout is what stops the motor. It used to be ``-``;
-    * the process ends at once, by itself. The stop that never returns is
-      blocked in a thread the interpreter waits for on its way out: the
-      process used to stay there for good, ignoring Ctrl+C, SIGTERM and
-      SIGHUP, the port and the lock held, until somebody killed it by force.
+    * the process ends at once, by itself, with the status the guide gives
+      for it, which is not zero. The stop that never returns is blocked in a
+      thread the interpreter waits for on its way out: the process used to
+      stay there for good, ignoring Ctrl+C, SIGTERM and SIGHUP, the port and
+      the lock held, until somebody killed it by force.
     """
     console = _console(tmp_path, stop=stop, wait=1.0)
     try:
@@ -677,9 +728,172 @@ def test_a_stop_not_finished_when_the_wait_ends_is_said_and_the_process_ends_by_
 
     assert words.count("stopping") == 1, "the driver's stop was not even begun"
     assert "stopped" not in words, "the stop had finished: not this case"
-    assert code == bench.EXIT_STOP_UNFINISHED, said
+    assert code == STOP_UNFINISHED == bench.EXIT_STOP_UNFINISHED, said
     assert took < 10.0, f"the process took {took:.1f} s to end once the wait was over"
     assert last.startswith("sortie: ATTENTION: l'arret du pilote n'a pas fini en 1 s."), said
     assert "Arret NON confirme" in last
     assert "Le port et le verrou du cable, encore tenus" in last
     assert "delai de communication du variateur (ttO)" in last
+
+
+# --- the console's output taken away from under it ------------------------
+#
+# The last line is written to a terminal that may be gone: closing the
+# terminal is how SIGHUP comes, and a Ctrl+C in a pipeline ends the reader of
+# the pipe too. The write then fails. It used to fail BEFORE the signals were
+# given back and before the process was ended, which were skipped.
+
+GONE: Final = pytest.mark.parametrize(
+    ("output", "sent", "status"),
+    [
+        pytest.param("a pipe", signal.SIGINT, 0, id="the reader of its pipe gone, then Ctrl+C"),
+        pytest.param("a terminal", HANG_UP, BY_HANG_UP, id="its terminal closed, then SIGHUP"),
+    ],
+)
+
+
+@signals_reach_a_process
+@GONE
+def test_with_its_output_gone_a_normal_stop_still_gives_the_signals_back_and_keeps_its_status(
+    tmp_path: Path, output: Output, sent: signal.Signals, status: int
+) -> None:
+    """Nobody can read the last line. Everything else happens as if somebody could.
+
+    One stop, to its end; each signal then does again what it did before
+    ``main`` (they stayed ignored); and the exit status is the one this exit
+    has with a terminal (it was 1, the status of the write that failed, and a
+    line left unwritten would make it 120 when the interpreter flushes on its
+    way out).
+    """
+    console = _console(tmp_path, output=output)
+    try:
+        console.wait_for("serving")
+        console.lose_output()
+        console.process.send_signal(sent)
+        code = console.ended()
+    finally:
+        _kill_if_left(console)
+    words = console.words()
+
+    assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
+    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop, signals given back: {words}"
+    assert code == status
+
+
+@signals_reach_a_process
+@GONE
+def test_with_its_output_gone_a_stuck_exchange_still_ends_the_process_by_itself(
+    tmp_path: Path, output: Output, sent: signal.Signals, status: int
+) -> None:
+    """The stop never returns AND the last line cannot be written: the process still ends.
+
+    Within the bound (one second here), by itself, with the status of a stop
+    that was not seen through, whatever signal began the exit. It used to
+    stay for good: the write raised before the forced end, the interpreter
+    then waited for the stuck thread, and Ctrl+C, SIGTERM and SIGHUP were
+    still ignored.
+    """
+    console = _console(tmp_path, stop="stuck", wait=1.0, output=output)
+    try:
+        console.wait_for("serving")
+        console.lose_output()
+        console.process.send_signal(sent)
+        asked = time.monotonic()
+        code = console.ended()
+        took = time.monotonic() - asked
+    finally:
+        _kill_if_left(console)
+    words = console.words()
+
+    assert status != STOP_UNFINISHED, "the two statuses could not be told apart"
+    assert words.count("stopping") == 1, "the driver's stop was not even begun"
+    assert "stopped" not in words, "the stop had finished: not this case"
+    assert code == STOP_UNFINISHED
+    assert took < 10.0, f"the process took {took:.1f} s to end once the wait was over"
+
+
+class _Gone(io.StringIO):
+    """A terminal that is gone: every write to it fails, and it has no descriptor to redirect."""
+
+    @override
+    def write(self, text: str, /) -> int:
+        raise BrokenPipeError(errno.EPIPE, "nobody is reading")
+
+
+def test_the_last_line_goes_to_standard_error_when_standard_output_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Output piped to a reader that has gone, the terminal still there on standard error.
+
+    The operator can still be told how the machine was left, there. And with
+    both gone the line is dropped without a word: nothing is raised.
+    """
+    still_there = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", _Gone())
+    monkeypatch.setattr(sys, "stderr", still_there)
+    bench._say_last("\nsortie: arret confirme, port libere")  # pyright: ignore[reportPrivateUsage]
+    on_error = still_there.getvalue()
+
+    monkeypatch.setattr(sys, "stderr", _Gone())
+    bench._say_last("\nsortie: -")  # pyright: ignore[reportPrivateUsage]
+
+    assert on_error == CONFIRMED_LINE
+
+
+class _ForcedEndError(Exception):
+    """Raised in place of the forced end of the process, which the test could not outlive."""
+
+
+class _StillStopping:
+    """A bus thread that was started and has not finished its stop when the wait for it ends."""
+
+    ident: int | None = 1
+    exit_report: str = "-"
+
+    def shutdown(self) -> None:
+        """Asked to stop: it does not."""
+
+    def join(self, timeout: float | None = None) -> None:
+        """Waited for: it does not come."""
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def test_what_follows_the_last_line_happens_whatever_becomes_of_the_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The line fails in a way nobody foresaw: the signals are given back, the process ended.
+
+    Writing the last line is replaced by something that raises what the
+    script does not catch. Both things that follow are in ``finally`` blocks:
+    each exit signal does again what it did before, and the process is ended
+    with the status of a stop that was not seen through, which is 1.
+    """
+    ended_with: list[int] = []
+
+    def garbled(_line: str) -> None:
+        raise UnicodeError("the line could not be encoded")
+
+    def forced_end(status: int) -> None:
+        ended_with.append(status)
+        raise _ForcedEndError
+
+    before = _handlers()
+    monkeypatch.setattr(bench, "_say_last", garbled)
+    monkeypatch.setattr(os, "_exit", forced_end)
+    try:
+        bench._let_nothing_cut_the_stop()  # pyright: ignore[reportPrivateUsage]
+        shielded = _handlers()
+        with pytest.raises(_ForcedEndError):
+            bench._stop_and_report(  # pyright: ignore[reportPrivateUsage]
+                cast(bench.BusWorker, _StillStopping()), before
+            )
+        after = _handlers()
+    finally:
+        for watched, handler in before.items():
+            signal.signal(watched, signal.SIG_DFL if handler is None else handler)
+
+    assert set(shielded.values()) == {signal.SIG_IGN}
+    assert after == before, "the signals were not given back"
+    assert ended_with == [STOP_UNFINISHED], "the process was not ended, or not with that status"

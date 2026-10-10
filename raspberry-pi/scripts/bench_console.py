@@ -85,7 +85,21 @@ done. The last line printed, ``sortie: ...``, says how the machine was left:
   hanging on a stuck exchange with signals ignored: its end is what gives the
   port and the lock on the drive cable back. A stop asked for from the page
   just before (up to 25 s) followed by the driver's own stop can outlast the
-  35 s on a shaft that is slow to come to rest.
+  35 s on a shaft that is slow to come to rest;
+* ``fil de bus jamais demarre: ...``: the exit came before the bus thread was
+  started. Nothing was opened, nothing was commanded;
+* ``-``: the bus thread died while connecting, on an exception the driver
+  does not ordinarily raise, before any stop could be attempted. Nothing was
+  commanded.
+
+The exit status: 0 after a Ctrl+C taken while the page was served (the
+interruption itself during the start-up wait), 143 after SIGTERM, 129 after
+SIGHUP, and 1 when the stop had not finished when the wait ended.
+
+None of this depends on the last line being written. With the terminal gone
+or the pipe broken there is nobody to read it: the line is dropped, the
+signals are given back and the process ends as it would have, with the same
+status.
 
 What stops the motor whenever the stop was not confirmed, and what nothing
 here can cover at all: SIGKILL (``kill -9``), the power going, the interpreter
@@ -105,6 +119,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import queue
 import signal
@@ -114,7 +129,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import FrameType
-from typing import Annotated, Final, Literal, assert_never, override
+from typing import Annotated, Final, Literal, TextIO, assert_never, override
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -832,7 +847,11 @@ EXIT_HELP: Final[str] = (
 )
 
 EXIT_STOP_UNFINISHED: Final[int] = 1
-"""The exit status when the process ends without having seen the driver's stop finish."""
+"""The exit status when the process ends without having seen the driver's stop finish.
+
+Not zero: whatever started the tool must be able to tell this exit from a stop
+that was seen through.
+"""
 
 #: What ``signal.signal`` hands back: the handler a signal had before.
 type _Handler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
@@ -903,6 +922,45 @@ def _give_the_signals_back(before: Mapping[signal.Signals, _Handler]) -> None:
         signal.signal(restored, signal.SIG_DFL if handler is None else handler)
 
 
+def _point_at_nothing(stream: TextIO) -> None:
+    """Make a stream that can no longer be written to harmless for the rest of the process.
+
+    Its file descriptor is pointed at the null device. What the stream still
+    holds, the line that failed included, then goes nowhere without failing:
+    the interpreter flushes standard output on its way out, and a flush that
+    fails there turns the exit status into 120, whatever the process meant
+    to leave with. A stream with no descriptor of its own has nothing to
+    point.
+    """
+    with contextlib.suppress(OSError, ValueError):
+        nothing = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(nothing, stream.fileno())
+        finally:
+            os.close(nothing)
+
+
+def _say_last(line: str) -> None:
+    """Say the last line where somebody may still read it. A dead terminal cannot make it raise.
+
+    Standard output first; if that fails, standard error, which may still be
+    the terminal when the output was piped to a reader that has gone. A
+    stream that fails (the terminal closed: an input/output error; the reader
+    gone: a broken pipe; the stream itself closed) is pointed at nothing, and
+    both streams are left flushed or harmless.
+    """
+    said = False
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not said:
+                print(line, file=stream)
+            stream.flush()
+        except (OSError, ValueError):
+            _point_at_nothing(stream)
+        else:
+            said = True
+
+
 def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handler]) -> None:
     """Ask the bus thread for the driver's stop, wait for it within bounds, say how it went.
 
@@ -918,6 +976,13 @@ def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handle
 
     The report starts on a line of its own: the signal that brought the
     process here may have cut a line that was being printed.
+
+    What follows the report does not depend on it. Giving the signals back
+    and ending the process are in ``finally`` blocks, and the report is
+    written by :func:`_say_last`, which a terminal that is gone cannot make
+    raise: a closed terminal is precisely how SIGHUP gets here, and a line
+    that could not be written used to leave the process alive, deaf to every
+    signal, on the stuck exchange it was about to walk away from.
     """
     started.shutdown()
     if started.ident is None:
@@ -934,11 +999,14 @@ def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handle
             "variateur (ttO) arrete le moteur: verifier sur le variateur qu'il est a l'arret "
             "avant de relancer."
         )
-    print(f"\nsortie: {report}", flush=True)
-    _give_the_signals_back(before)
-    if unfinished:
-        sys.stderr.flush()
-        os._exit(EXIT_STOP_UNFINISHED)
+    try:
+        _say_last(f"\nsortie: {report}")
+    finally:
+        try:
+            _give_the_signals_back(before)
+        finally:
+            if unfinished:
+                os._exit(EXIT_STOP_UNFINISHED)
 
 
 def main() -> int:
