@@ -1642,18 +1642,32 @@ Son échec fait échouer `pi (tests 1)`, donc `pi-gate`. Elle a 35 minutes, dans
 un job qui en a 60.
 
 **Ce qui a été mesuré, et ce qui ne l'a pas été.** Depuis que la gate du Pi est
-répartie sur deux jobs, cette étape n'avait jamais tourné, et la version de
-24 heures n'a jamais été jouée en entier par personne. Sur un poste de
-développement (jamais sur un runner), la commande de l'étape avec
-`ANHEART_ENDURANCE_HOURS=2` : 8 séances, 36 760 tics, réussie en 108 s, soit
-2,9 ms par tic, dont l'essentiel est l'écriture de l'enregistrement mesurée
-sous `tracemalloc`. À ce rythme les 24 heures (95 séances) demandent une
-vingtaine de minutes sur ce poste. Le même test en version courte prend 20 s
-sur un runner là où il en prend 15 sur ce poste, sous couverture dans les deux
-cas. Par extrapolation, et rien de plus : une trentaine de minutes sur un
-runner ordinaire, et plus que les 35 minutes de l'étape sur un runner deux
-fois plus lent, comme la CI en a déjà donné. Seule la durée de la première
-exécution réelle dira si ce budget tient.
+répartie sur deux jobs, cette étape n'avait jamais tourné, et la journée de
+24 heures n'avait jamais été jouée en entier. Elle l'a été une fois : exécution
+38070260283 du 10 octobre 2026, lancée à la main, case `endurance` cochée, sur
+le commit `14e0dc2` d'une branche de PR. Ses quinze jobs ont réussi. L'étape a
+tourné dans `pi (tests 1)` et a été sautée dans `pi (tests 2)` :
+
+| Mesure | Valeur |
+|---|---|
+| Durée de l'étape | 21 min 22 s, pour une limite de 35 minutes |
+| Durée du job `pi (tests 1)` | 34 min 24 s, pour une limite de 60 minutes |
+| Séances jouées, tics | 95 séances, 436 525 tics |
+| Tas Python | 0,26 Mo après les deux premières séances, 0,33 Mo à la fin ; 744 octets de croissance médiane par séance |
+| Objets suivis par le ramasse-miettes | 190 311 du début à la fin |
+| Coût d'un tic | 347 µs au début, 345 µs à la fin |
+
+C'est **une** exécution, manuelle, sur une branche de PR. Le déclenchement
+nocturne planifié, qui joue la tête de `main`, n'a pas encore tourné : la
+première nuit reste à regarder. Une seule mesure ne dit pas non plus ce que
+donnerait un runner plus lent : il reste 13 minutes et demie de marge à
+l'étape, et la CI a déjà donné des runners deux fois plus lents sur les tests
+du Pi.
+
+Avant cette exécution, la commande de l'étape avait été jouée sur un poste de
+développement avec `ANHEART_ENDURANCE_HOURS=2` : 8 séances, 36 760 tics,
+réussie en 108 s, soit 2,9 ms par tic sur un poste chargé, dont l'essentiel
+est l'écriture de l'enregistrement mesurée sous `tracemalloc`.
 
 `scripts/ci/ci-workflow.test.mjs` tient l'étape : elle existe dans une seule
 part, la nuit la lance, un lancement manuel ne la lance que case cochée, un
