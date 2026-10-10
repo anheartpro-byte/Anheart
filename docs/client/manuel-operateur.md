@@ -377,10 +377,12 @@ l'écran.*
   vitesse possible (ligne « minimum de rotation »).
 - La ligne « cible appliquee » dit ce que la machine vise vraiment. Fiez-vous à
   elle, pas au brouillon orange.
-- Une réponse qui commence par « accepte : » ou « cible envoyee : » sous les
-  boutons veut seulement dire que la demande est reçue. La machine vérifie
-  ensuite. Si elle refuse, le refus apparaît dans la liste **Evenements** de la
-  page **Seance**, sur une ligne « refused ».
+- Une réponse qui commence par « demande envoyee : » ou « cible envoyee : »
+  sous les boutons veut seulement dire que la demande est reçue. La machine
+  vérifie ensuite, et la même ligne dit ce qu'elle en a fait : « demarrage pris
+  par la machine » ou « cible prise par la machine », ou bien, en rouge,
+  « refus de la machine » suivi de la raison. Le refus apparaît aussi dans la
+  liste **Evenements** de la page **Seance**, sur une ligne « refused ».
 - Pour changer de vitesse : composez un nouveau brouillon, puis **Appliquer**.
 - Vous pouvez ramener vous-même le bras à l'arrêt en appliquant une cible de
   0. Si **Securite** affiche « none » à ce moment, la séance continue :

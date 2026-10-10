@@ -50,6 +50,14 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > étant retenues ou coupées entre la page et elle ; jamais sur la machine réelle.
 > Le bandeau levé par le statut seul (WebSocket de l'écran coupé, ou aucune image
 > reçue) puis gardé sous `go_silent` l'a été aussi, jusqu'à la console relancée.
+> Les notes des boutons de démarrage et de reset, la note d'une cible après un refus
+> qui n'était pas le sien ou un double clic, la note sous **Acquitter**, les lignes
+> `verdict retenu` et `plancher verrouille`, le titre de l'onglet d'un capteur et la
+> place du pied de page (sections 2, 4, 6, 9, 11 et 15, ajoutés le 10 octobre 2026)
+> ont été rejoués de la même façon. Le refus d'un autre écran y est un événement remis
+> à la page par le rejeu, faute de pouvoir le produire à l'instant voulu ; la phrase
+> sur `REPOS` d'un acquittement repris et la note d'une cible sous une retenue
+> `INCONNUE` ne sont tenues que par les tests de la page.
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -152,7 +160,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 | Bandeaux en haut | Cinq rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, neuf pastilles (six sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
-| Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
+| Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
 
 Sur un écran étroit, la barre latérale se replie derrière un bouton `☰ Menu`. Une barre
 mobile affiche alors le mode, l'état de rotation et l'état du lien avec le tableau de
@@ -432,7 +440,9 @@ navigateur, ni sur un Pi.
 canal `A1`…`A6` et une pastille de couleur selon la qualité), `Seance`, `Configuration`,
 `Securite`. Changer de page ne recharge rien : aucune navigation ne peut figer un nombre.
 Le titre de l'onglet suit la page affichée : `Tableau de bord - AnHeart`,
-`Securite - AnHeart`, et le type du capteur pour la page d'un capteur (`ECG - AnHeart`).
+`Securite - AnHeart`, et le titre de la page pour celle d'un capteur
+(`RESP · Respiration - AnHeart` ; jusqu'au 10 octobre 2026, le type seul :
+`RESP - AnHeart`).
 
 ---
 
@@ -774,9 +784,36 @@ avant tout verdict ; une cible envoyée alors est refusée pour cette raison. Su
 fréquence cardiaque simulée, la raison `baisse trop vite` s'allume et s'éteint d'une
 seconde à l'autre : la garde est sensible ([securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178)).
 
-Autres messages sous la carte : `accepte : manual_start bench (cible 0)`, ou l'erreur
-de la réponse HTTP. Le refus d'un **démarrage** manuel par la boucle n'y apparaît pas :
-la note dit encore `accepte : …`, et le refus est dans la liste **Evenements**.
+**La note d'un démarrage manuel suit elle aussi la réponse de la boucle** (depuis le
+10 octobre 2026 ; avant, elle disait `accepte : manual_start bench (cible 0)` dès la
+réponse 202, même pour un démarrage que la boucle refusait ensuite) :
+
+| Note | Sens |
+|---|---|
+| `demande envoyee : manual_start bench - pas encore prise par la machine` | la console a mis la demande dans sa boîte ; la boucle ne l'a pas encore jugée |
+| `demarrage pris par la machine : manual_start bench (cible 0)` | une image prise après la demande montre la séance manuelle. La note s'efface quand la séance n'est plus affichée |
+| `refus de la machine (<heure>) : demarrage refuse : …` (rouge) | la boucle a refusé ; le texte est celui de l'événement `refused` |
+| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde de l'horloge de la machine sans séance ni refus sur cet écran |
+
+Un refus daté après la demande peut répondre à la demande d'un autre écran prise dans
+le même cycle. Si une séance manuelle s'affiche ensuite, la page ne peut pas dire à qui
+elle est : la note s'efface, la carte montre la séance et la liste **Evenements** le
+refus. L'erreur d'une réponse HTTP (403, 409, 412…) s'affiche telle quelle.
+
+Trois précisions sur la note d'une cible, de la même date :
+
+- un refus daté après la cible n'est pas toujours le sien (celui d'un autre écran, ou
+  d'une première cible que la machine reprend pendant qu'une seconde attend). La note
+  dit alors `refus de la machine …`, puis `cible prise par la machine : …` dès qu'une
+  image montre que la machine tient la cible envoyée par cet écran ;
+- un second clic sur **Appliquer** dans le cycle du premier reçoit un 409 de la console
+  (`the machine is running (pending: …); try again in a moment`). La note dit
+  `seconde demande refusee par la console : la cible … attend encore la machine (une demande a la fois). Reessayer dans un instant.`,
+  puis ce que devient la première cible. Un 409 reçu après un cycle (séance terminée,
+  par exemple) s'affiche tel que la console l'a écrit ;
+- avec une personne à bord, quand l'encadré de la fréquence cardiaque dit `INCONNUE`,
+  la note d'une cible plus haute que la consigne ne dit plus
+  `(suivie aux limites de mouvement)` : la page ne sait pas si la montée est retenue.
 
 ### Carte « Frequence cardiaque (regulation) »
 
@@ -820,7 +857,17 @@ Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
 sauf si la machine est au repos, que tout autre verdict est acquitté et que le variateur
 montre l'arbre arrêté. Certains défauts ne sont **pas réarmables** depuis la console
 (`reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter`).
-Message d'accord : `reset demande : fault_reset (le variateur doit le confirmer)`.
+La note sous le bouton suit la réponse de la boucle, comme celle d'un démarrage
+(jusqu'au 10 octobre 2026 : `reset demande : fault_reset (le variateur doit le confirmer)`
+dès la réponse 202, même quand la boucle refusait) :
+`demande envoyee : fault_reset - pas encore prise par la machine` ; puis
+`refus de la machine (<heure>) : reset refuse : …` en rouge, ou
+`le variateur ne signale plus de defaut` dès qu'une image prise après la demande ne
+montre plus de défaut. La note ne dit pas qui a levé le défaut, seulement ce que les
+images montrent ; elle s'efface si un défaut revient. Si le défaut est encore là une
+seconde plus tard sans refus sur cet écran :
+`le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.`,
+corrigée quand le défaut disparaît.
 
 ### Reprise automatique de la liaison variateur
 
@@ -924,7 +971,7 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Operateur` | obligatoire |
 | `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
 | `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
-| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord, la page reste sur Seance |
+| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
@@ -1046,6 +1093,17 @@ Voir la [section 16](#16-lenregistrement-de-séance-boîte-noire-locale).
   verrouillé le plus sévère du superviseur, quelle que soit la règle : défaut variateur,
   fréquence cardiaque, `session_standstill`, caméra…), `regles actives`,
   `accompagnant vu`. Puis la liste des règles actives (`action règle détail [verrouille]`).
+  `/api/status` ne donne que les verdicts du superviseur. Le runtime peut en verrouiller
+  un de lui-même (`drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`),
+  que ces deux lignes disaient `aucun`. Depuis le 10 octobre 2026, tant que des images
+  arrivent, elles affichent le verdict que portent les images quand il est au moins
+  aussi sévère que celui du statut (pour `plancher verrouille`, seulement s'il est
+  verrouillé). Sans images en direct, elles ne montrent que ce que dit le statut : un
+  verrou propre au runtime y manque alors, et seule la console pourrait l'y mettre.
+  Rejoué dans un navigateur, avec un variateur simulé laissé en marche avant le
+  démarrage de la console : les images portent `drive_precommanded / quick_stop`
+  verrouillé, `/api/status` ne montre aucun verdict ; les deux lignes disaient `aucun`,
+  elles disent `drive_precommanded / quick_stop`, sur Securite et sur Configuration.
 
 Les règles elles-mêmes (identifiants, seuils, actions) sont décrites dans
 [raspberry-pi.md](raspberry-pi.md).
@@ -1227,6 +1285,33 @@ Résultats possibles (vérifiés en simulation) :
 
 Un refus s'affiche sous le bouton et dans une boîte d'alerte `acquittement refuse : …`.
 
+La note sous le bouton parle du moment où elle a été écrite. Depuis le 10 octobre 2026
+la page l'efface ou la corrige quand ce qu'elle reçoit la rend fausse :
+
+- **un nouveau verrou l'efface.** Chaque source dit quelle règle elle montre verrouillée
+  (les images : le verdict en vigueur ; le statut : le plancher du superviseur et son
+  arrêt d'urgence). Une règle qu'aucune ne montrait est un nouveau verrou :
+  `nothing is latched to acknowledge`, ou `acquitte par …`, ne reste plus sous le
+  bouton. Un refus qui parle d'un verrou toujours là (`the emergency stop is still
+  latched…`) reste ;
+- **un acquittement repris est dit.** La console répond 200 dès que les verrous sont
+  effacés ; une règle dont la cause est encore là se verrouille de nouveau au cycle
+  suivant. Quand, dans la seconde qui suit l'acquittement (à l'horloge de la machine),
+  une image montre de nouveau verrouillée une règle qu'il avait effacée, la note
+  devient, en rouge,
+  `acquittement repris par la machine : <règle> est de nouveau verrouille, sa regle s'est declenchee de nouveau.`
+  Pour `session_standstill` et `session_overrun`, tant que le mode n'est pas revenu à
+  `REPOS`, elle ajoute
+  `La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.`
+  Passé cette seconde, un verrou qui revient est un nouveau verrou : la note s'efface.
+  L'un et l'autre se jugent sur les images. Sans images en direct, la note reste telle
+  qu'elle a été écrite ; seul le statut peut alors l'effacer, pour une règle qu'il
+  montre verrouillée et qu'aucune source ne montrait la dernière fois qu'elle a parlé.
+  Rejoué dans un navigateur avec `drive_fault` au repos (défaut encore présent) : la
+  note `acquitte par banc : drive_fault` restait ; elle passe au rouge 0,1 s après, au
+  plus, sur quatre rejeux. La phrase sur `REPOS` n'est tenue que par les tests de la
+  page.
+
 ### Remise en service d'une console hors service
 
 Sous l'acquittement, et seulement quand la console se dit hors service
@@ -1320,7 +1405,8 @@ Rejoué en simulation, dans cet ordre :
 
 1. **Securite** → cocher les deux cases, saisir un nom, `Enregistrer l'attestation`.
 2. **Tableau de bord** → cocher `BANC - personne a bord : NON`, saisir `Operateur`,
-   `Demarrer MANUEL`. Réponse `accepte : manual_start bench (cible 0)`.
+   `Demarrer MANUEL`. La note dit `demande envoyee : manual_start bench - pas encore prise par la machine`,
+   puis `demarrage pris par la machine : manual_start bench (cible 0)`.
 3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
    `RAMPE EN COURS` s'affiche jusqu'à l'arrivée.
 4. Surveiller **Vitesse mesuree** (pas la consigne).
@@ -1580,17 +1666,17 @@ répondu à temps. Détail dans
   et le bandeau « LECTURE SEULE » de la page existent encore, mais ni l'un ni l'autre ne
   sont atteignables avec `src.local_panel`, qui construit la console avec
   `motion_enabled=True`.
-- Après un démarrage manuel, un démarrage de programme ou un reset de défaut, la note
-  du bouton dit `accepte : …` ou `reset demande : …` dès la réponse 202, même quand la
-  boucle refuse ensuite la demande : hors séance manuelle, ce refus n'apparaît que
-  dans la liste **Evenements** de la page Seance. Pour une cible manuelle, la note suit
-  maintenant la réponse de la boucle (section 6).
 - La phrase anglaise ajoutée aux avertissements non verrouillés (section 11) figure
   encore dans le détail du verdict d'un bras manuel tenu à l'arrêt, où plus rien ne
   peut remonter. Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`, lui, suit la cible.
-- Un acquittement de `session_standstill` (ou de `session_overrun`) donné avant le
-  retour du mode à `REPOS` répond 200 puis est repris, sans que la page dise quand il
-  tiendra (section 11).
+- Un défaut du variateur apparu au repos ne lève aucun verdict avant une tentative de
+  démarrage : le premier démarrage est accepté par la console (202) puis refusé par la
+  boucle. Depuis le 10 octobre 2026 la note du bouton le dit
+  (`refus de la machine … : demarrage refuse : variateur en defaut …`), mais le défaut
+  ne se voit toujours pas dans la pastille **Securite** avant ce clic.
+- `/api/status` ne montre pas un verdict que le runtime a verrouillé de lui-même : les
+  lignes `verdict retenu` et `plancher verrouille` le prennent dans les images tant
+  qu'il en arrive (section 11), et ne l'ont pas sans images en direct.
 - Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas, du côté prudent (section 5) :
   un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
   d'urgence posé depuis un autre écran sous `go_silent` ; et le bandeau du `quick_stop`
@@ -1606,10 +1692,15 @@ répondu à temps. Détail dans
   réponses de statut) ; le troisième (console relancée puis `go_silent`) l'est pour
   l'arrêt d'urgence lui-même, et pour le `quick_stop` d'une règle quand le redémarrage
   est prouvé.
-- La note `nothing is latched to acknowledge` reste sous le bouton Acquitter après un
-  nouveau verrou ; l'onglet de la page d'un capteur porte le type seul (`RESP -
-  AnHeart`) alors que la page titre `RESP · Respiration` ; la hauteur du pied de page
-  déclarée dans la feuille de style est plus petite que sa hauteur réelle.
+- Traités le 10 octobre 2026 : les notes des boutons de démarrage et de reset, qui
+  disaient `accepte : …` ou `reset demande : …` avant la réponse de la boucle
+  (sections 6 et 9) ; la note d'une cible après un refus qui n'était pas le sien ou un
+  double clic (section 6) ; la note `nothing is latched to acknowledge` restée après un
+  nouveau verrou, et l'acquittement repris sans que la page le dise (section 11) ;
+  l'onglet de la page d'un capteur, qui porte maintenant le titre de la page
+  (`RESP · Respiration - AnHeart`) ; la place gardée pour le pied de page, mesurée au
+  lieu d'être déclarée (elle valait 88 px pour un pied de page de 103 px, 92 px sur un
+  écran étroit).
 - Ces points relèvent de la page. Ils viennent du ticket
   [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178),
   qui a traité la note de la cible manuelle, l'encadré de la fréquence cardiaque, la

@@ -536,7 +536,9 @@ Repères :
    moteur). Entre 0 et ce minimum, rien n'est accepté.
 9. `rampe` : `cible atteinte`, ou `en cours, arrivee ~m:ss`. Pendant un gel `freeze`,
    si la cible n'est ni atteinte ni nulle : `consigne maintenue, cible non atteinte`.
-10. La note sous la grille : dernier message (ici `accepte : manual_start bench (cible 0)`).
+10. La note sous la grille : dernier message (ici
+    `demarrage pris par la machine : manual_start bench (cible 0)` : la machine a
+    démarré la séance manuelle).
 11. Barre latérale : Mode `MANUEL`, Etat `running`.
 
 Règles de la cible :
@@ -920,7 +922,9 @@ Repères :
 1. Pastille verte `atteste`.
 2. Sous le bouton : `atteste par Mohamed a 7:23:00 PM (valable jusqu'au prochain redemarrage du Pi)`.
 3. Sous **Acquitter**, en rouge : `nothing is latched to acknowledge` (un essai
-   d'acquittement alors que rien n'était verrouillé : sans conséquence).
+   d'acquittement alors que rien n'était verrouillé : sans conséquence). Cette note
+   s'efface dès qu'un verdict se verrouille : elle ne reste pas sous le bouton à dire
+   que rien n'est verrouillé.
 
 ### Avec un verdict verrouillé (après un E-STOP)
 
@@ -1184,8 +1188,12 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
 2. Cliquez **Tableau de bord**.
 3. Cochez **BANC - personne a bord : NON ...**.
 4. Tapez votre nom dans **Operateur**.
-5. Cliquez **Demarrer MANUEL**. La note affiche `accepte : manual_start bench (cible 0)`,
+5. Cliquez **Demarrer MANUEL**. La note affiche
+   `demande envoyee : manual_start bench - pas encore prise par la machine`, puis, une
+   fraction de seconde plus tard, `demarrage pris par la machine : manual_start bench (cible 0)` ;
    le mode passe à `MANUEL`, la pastille de la carte à `BANC - personne a bord : NON`.
+   Si la note passe au rouge (`refus de la machine ...` ou `demarrage NON pris ...`), la
+   séance n'a pas démarré : lisez la raison, et la liste **Evenements** (§14).
 6. Composez la cible : cliquez **+1 tr/min**. Le premier clic saute au minimum
    (1,10) ; chaque clic suivant ajoute 1. Après 27 clics, le brouillon affiche
    `27.10` en orange (capture `console-07-manuel-brouillon.png`).
@@ -1648,7 +1656,11 @@ Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
    premier nom trouvé : Operateur du mode manuel, de la page Seance, ou de Securite).
    Sans nom : `an operator name is required ...`.
 4. Cliquez **Reset defaut variateur**. La note dit
-   `reset demande : fault_reset (le variateur doit le confirmer)`.
+   `demande envoyee : fault_reset - pas encore prise par la machine`, puis
+   `le variateur ne signale plus de defaut` quand le défaut a disparu (constaté 0,4 s
+   après le clic, en simulation). En rouge, `refus de la machine (...) : reset refuse : ...`
+   donne la raison d'un refus, et `le variateur signale toujours le defaut. ...` dit
+   qu'une seconde plus tard le défaut est encore là.
 5. Vérifiez que la pastille du variateur quitte `fault` (constaté : `ready`).
 6. Allez dans **Securite** et acquittez le verdict `drive_fault` (§13.6 ; la case du
    coup de poing n'est pas nécessaire ici). Constaté : `acquitte par Mohamed : drive_fault`.
@@ -1893,6 +1905,14 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `refus de la machine (<heure>) : ...` (rouge, carte Mode MANUEL) | la machine a refusé la cible, ou l'a remise à 0 ; la suite du message est celle de la liste Evenements | §13.11 |
 | `cible NON prise par la machine : la cible appliquee est ... La raison n'est pas arrivee a cet ecran.` | une seconde après l'envoi, la machine ne tient pas la cible et cet écran n'a pas reçu la raison | lire Securite, l'encadré orange et la carte Variateur ; renvoyer la cible (§13.11) |
 | `cible NON prise par la machine : la seance manuelle est terminee.` | la séance s'est terminée avant que la cible soit prise | redémarrer une séance |
+| ✔ `seconde demande refusee par la console : la cible ... attend encore la machine (une demande a la fois). Reessayer dans un instant.` (rouge) | double clic sur **Appliquer** : la console n'a qu'une place, et la première cible y attend encore | rien ; la note dit ensuite ce que devient la première cible |
+| ✔ `demande envoyee : ... - pas encore prise par la machine` (démarrage manuel, démarrage de séance, reset) | la console a reçu la demande ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
+| ✔ `demarrage pris par la machine : ...` | une donnée reçue après la demande montre la séance démarrée | continuer ; la note s'efface à la fin de la séance |
+| ✔ `refus de la machine (<heure>) : demarrage refuse : ...` ou `reset refuse : ...` (rouge, sous le bouton) | la machine a refusé le démarrage ou le reset ; la suite du message est celle de la liste Evenements | lire la raison dans ce tableau |
+| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde après la demande, aucune séance et aucun refus sur cet écran | lire **Securite**, la carte **Variateur** et la liste Evenements, puis redemander |
+| ✔ `le variateur ne signale plus de defaut` | après un reset, les données ne montrent plus de défaut | acquitter `drive_fault` (§13.9) |
+| `le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde après la demande de reset, le défaut est encore là, sans refus reçu | lire la carte **Variateur** et la liste Evenements |
+| `acquittement repris par la machine : <règle> est de nouveau verrouille, sa regle s'est declenchee de nouveau.` (rouge, sous **Acquitter**) | la console avait répondu 200, et la règle s'est verrouillée de nouveau au cycle suivant | traiter la cause ; pour `session_standstill` et `session_overrun`, la note ajoute que l'acquittement tiendra une fois **Mode** revenu à `REPOS` |
 | ✔ encadré `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE` | personne à bord : la fréquence cardiaque empêche la vitesse de monter (la raison suit) | §13.11 |
 | encadré `RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE` | personne à bord : la page ne reçoit plus cette information de la console | ne rien conclure ; lire la note après l'envoi |
 | ✔ bandeau `REPRISE AUTOMATIQUE POSSIBLE` | un avertissement non verrouillé tient ou baisse la vitesse : elle remontera seule quand il se lèvera | ne pas croire le bras arrêté pour de bon (§11, §15) |
@@ -2141,8 +2161,9 @@ demande de **déclarer** qu'il a été tiré.
 
 **L'onglet du navigateur change de nom.**
 Il porte le nom de la page affichée : `Tableau de bord - AnHeart`,
-`Securite - AnHeart`, etc. « Console du banc », dans la barre latérale, est le nom de
-la console.
+`Securite - AnHeart`, etc., et pour la page d'un capteur le titre de cette page
+(`RESP · Respiration - AnHeart`). « Console du banc », dans la barre latérale, est le
+nom de la console.
 
 ## 16. Ce qui n'est pas testé sur la vraie machine
 
@@ -2208,9 +2229,10 @@ Pour être clair sur ce que ce guide garantit :
 
 ### Annexe : liste des captures
 
-Toutes ces captures datent d'avant le 9 octobre 2026 : leur barre latérale montre six
+Ces captures datent d'avant le 9 octobre 2026 : leur barre latérale montre six
 pastilles, sans **Serveur** ni **Version**, et la barre de la vue mobile deux pastilles
-au lieu de trois. Aucune n'a été reprise depuis.
+au lieu de trois. Une seule a été reprise depuis, `console-07`, le 10 octobre 2026 : sa
+barre latérale montre les huit pastilles.
 
 | Fichier | Ce qu'il montre |
 |---|---|
@@ -2255,7 +2277,11 @@ modifient pas. Les nouveaux éléments de la page (l'encadré de la fréquence c
 les bandeaux `ARRET D'URGENCE NON CONFIRME` et `REPRISE AUTOMATIQUE POSSIBLE`, une note
 de refus) n'ont pas de capture dans ce guide.
 
-Aucune capture n'a été reprise le 10 octobre 2026 : le bandeau `STOP NON CONFIRME` et
-le nouveau texte de `ARRET D'URGENCE NON CONFIRME` n'apparaissent sur aucune, et le
-bandeau `ARRET D'URGENCE VERROUILLE` des captures `console-12`, `console-13` et
-`console-16` garde le même aspect dans les situations qu'elles montrent.
+Une capture a été reprise le 10 octobre 2026, `console-07` : la note sous la carte
+Mode MANUEL y disait `accepte : manual_start bench (cible 0)`, texte que la page
+n'écrit plus. Même nom, mêmes dimensions, même commande et même port, même procédure
+(§13.2, étapes 1 à 6) rejouée en simulation dans un navigateur sans interface. Les
+autres ne changent pas : le bandeau `STOP NON CONFIRME`, le nouveau texte de
+`ARRET D'URGENCE NON CONFIRME` et les autres notes des boutons n'apparaissent sur
+aucune, et le bandeau `ARRET D'URGENCE VERROUILLE` des captures `console-12`,
+`console-13` et `console-16` garde le même aspect dans les situations qu'elles montrent.
