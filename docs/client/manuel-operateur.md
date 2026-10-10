@@ -248,7 +248,7 @@ orange. Plusieurs peuvent être affichés en même temps.
 | « NO LIVE DATA » | L'écran ne reçoit plus de données. Les nombres affichés sont anciens : voir la [section 9.3](#93-bandeau-rouge-no-live-data). |
 | « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». S'il dit « aucune reponse de la console », la demande reste en attente : si elle aboutit, ce bandeau est remplacé par « ARRET D'URGENCE VERROUILLE ». S'il dit « la demande a echoue » et « n'est plus en attente », la demande est terminée : elle n'aboutira plus et l'écran ne la renvoie pas. Le bandeau indique alors depuis combien de temps elle a échoué, et il reste affiché jusqu'à ce que l'écran apprenne qu'un arrêt d'urgence est verrouillé, ou que la page soit rechargée. S'il dit « nouvelle demande sans reponse » et « la precedente a echoue », vous avez cliqué de nouveau après un échec : la nouvelle demande est en attente, la précédente est terminée ([section 8](#8-arrêter-la-machine)). |
 | « STOP NON CONFIRME » | Vous avez cliqué **STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable ». Il dit, avec les mêmes mots que le précédent, si une demande est encore en attente (« aucune reponse de la console », « nouvelle demande sans reponse ») ou si elle est terminée (« la demande a echoue », « n'est plus en attente »). Tant qu'il est affiché, la console n'a pas confirmé que la séance se termine. Il disparaît quand la console accepte ou refuse la demande, ou quand l'écran apprend que la séance se termine. Si la demande échoue sans réponse de la console, ou si la console répond par une erreur, il reste affiché et dit que la demande a échoué ([section 8](#8-arrêter-la-machine)). |
-| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : le bandeau reste alors affiché jusqu'au redémarrage de la console, et il peut encore rester après ce redémarrage, jusqu'au rechargement de la page. Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : sur un écran qui affichait déjà ce bandeau, il reste alors affiché jusqu'au redémarrage de la console, et il peut encore rester après ce redémarrage, jusqu'au rechargement de la page. Un écran ouvert ou rechargé pendant que **Securite** affiche « go_silent » peut ne pas l'afficher. Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
 | « REPRISE AUTOMATIQUE POSSIBLE » (orange) | La console garde ou baisse la vitesse à cause d'une alerte qui n'est pas verrouillée. Quand cette alerte disparaîtra, la vitesse remontera seule, sans aucun clic ([section 9.2](#92-la-console-agit-seule)). |
 
 ### Les pages
@@ -648,15 +648,17 @@ dater d'une version antérieure de l'écran.*
   immédiat.
 - Si une fenêtre « STOP refuse : » s'ouvre, lisez-la. Soit il n'y a rien à
   arrêter, soit un arrêt est déjà en cours, soit aucun nom d'opérateur n'est
-  saisi.
+  saisi. **Si le bras tourne et que STOP est refusé, cliquez E-STOP.**
 - Si une fenêtre annonce que « la demande d'arret (STOP) a echoue », ce n'est
   pas un refus : la console n'a pas répondu, ou a répondu par une erreur, et
   rien ne confirme que la séance s'arrête. Le bandeau rouge
   « STOP NON CONFIRME » reste alors affiché en haut de l'écran
   ([section 3](#3-lire-lécran)). Le même bandeau s'affiche, sans fenêtre,
-  quand la console ne répond pas dans les 2 secondes.
-- **Si le bras tourne et que STOP est refusé ou n'a pas abouti, cliquez
-  E-STOP.**
+  quand la console ne répond pas dans les 2 secondes. Il se termine par les
+  mots « E-STOP, ou l'arret cable ».
+
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand le bandeau « STOP NON CONFIRME » est affiché et que le bras tourne.
 
 ### E-STOP, l'arrêt d'urgence de l'écran
 

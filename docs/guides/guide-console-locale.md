@@ -1388,9 +1388,14 @@ Repères :
 > * Quand `go_silent` devient le verdict en cours (liaison perdue avec le variateur,
 >   par exemple), plus rien ne s'acquitte, et **un bandeau déjà affiché reste jusqu'au
 >   redémarrage de la console**, qu'il vienne d'un arrêt d'urgence ou du `quick_stop`
->   d'une règle. Dans ce second cas la console ne tient plus que `go_silent` (ligne
->   `e-stop verrouille` : `non`), mais le bandeau ne s'efface pas tout seul : personne
->   n'a rien acquitté. Lisez la pastille **Securite**, `go_silent` en rouge.
+>   d'une règle, et que l'écran l'ait appris par les données en continu ou, sous
+>   `NO LIVE DATA`, par l'état qu'il relit toutes les 5 s. Dans le cas d'une règle la
+>   console ne tient plus que `go_silent` (ligne `e-stop verrouille` : `non`), mais le
+>   bandeau ne s'efface pas tout seul : personne n'a rien acquitté. Lisez la pastille
+>   **Securite**, `go_silent` en rouge ; sous `NO LIVE DATA` elle est barrée, lisez
+>   alors la ligne `verdict retenu` de la page Securite. Un écran ouvert ou rechargé à
+>   ce moment n'affiche pas ce bandeau pour le `quick_stop` d'une règle : la console
+>   ne rapporte plus ce verrou.
 > * Sous `go_silent`, la console dit à chaque écran si un arrêt d'urgence est
 >   verrouillé derrière, y compris un arrêt déclenché par la caméra : le bandeau
 >   s'affiche donc aussi sur un écran ouvert ou rechargé après coup (ligne
@@ -1428,8 +1433,19 @@ Repères :
 > `quick_stop` d'une règle (`reverse_rotation`, séance manuelle de banc) : liaison au
 > variateur perdue dans la même console, le bandeau reste (relevé 12 s, acquittement
 > refusé par la console) ; console relancée puis `go_silent` pendant que l'écran était
-> coupé d'elle, le bandeau disparaît 0,1 s après le retour de l'écran (l'ancienne
-> console avait publié 69 instantanés, la nouvelle 15).
+> coupé d'elle, le bandeau disparaît à la première réponse d'état qui suit la première
+> donnée reçue de la nouvelle console (l'ancienne avait publié 69 instantanés, la
+> nouvelle 15). Compté depuis le rétablissement du lien, cela fait de 0,1 s à 1,4 s
+> selon les rejeux : ce délai comprend l'attente de l'écran avant de retenter sa
+> connexion, 1,5 s au plus. Enfin le bandeau levé par l'état seul, la liaison de
+> l'écran étant coupée (`NO LIVE DATA`) alors que ses demandes passent encore : règle
+> `reverse_rotation` verrouillée, bandeau levé au tour d'état suivant, puis liaison
+> au variateur perdue dans la même console (le compte d'instantanés continue de
+> monter, 68 puis 137) : le bandeau reste (relevé 14 s), de même quand aucune donnée
+> en continu n'a jamais été reçue ; console relancée ensuite sous `go_silent` (138
+> instantanés publiés, puis 14) : le bandeau disparaît à la première réponse d'état
+> de la nouvelle console, 0,6 s après le rétablissement du lien dans ce rejeu, et
+> 5 s au plus puisque l'écran relit l'état toutes les 5 s.
 >
 > Le bandeau **ARRET D'URGENCE NON CONFIRME** est un autre bandeau : il dit que la
 > demande E-STOP de cet écran n'a pas eu de réponse, ou qu'elle a échoué. Rejoué avec

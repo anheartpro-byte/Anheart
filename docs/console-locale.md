@@ -48,6 +48,8 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > `STOP NON CONFIRME` (sections 2, 5, 14 et 15, ajoutés le 10 octobre 2026) ont été
 > rejoués de la même façon, avant et après la correction, les réponses de la console
 > étant retenues ou coupées entre la page et elle ; jamais sur la machine réelle.
+> Le bandeau levé par le statut seul (WebSocket de l'écran coupé, ou aucune image
+> reçue) puis gardé sous `go_silent` l'a été aussi, jusqu'à la console relancée.
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -494,38 +496,62 @@ s'arrête au mode : `liaison ouverte · repos`.
   peut : `/api/status` porte `supervisor_estop`, l'arrêt d'urgence que le superviseur
   tient verrouillé, quel qu'en soit l'auteur (bouton de la page, autre écran, caméra),
   et qui reste lisible quand `go_silent` a pris la place du verdict retenu et du
-  plancher. Une réponse de statut écrite après le passage des images à `go_silent` :
+  plancher. Sous `go_silent`, que la page le lise dans les images ou, faute d'images,
+  dans le statut, seule une réponse de statut peut baisser le bandeau, et la règle est
+  la même quel que soit ce qui l'avait levé, images ou statut. Quand les images sont
+  passées à `go_silent`, la réponse doit en plus avoir été écrite après ce passage.
+  Cette réponse :
   - lève ou garde le bandeau si un arrêt d'urgence est verrouillé derrière
     `go_silent`, aussi sur un écran ouvert ou rechargé après coup. La ligne
     `e-stop verrouille` dit alors `OUI` et la pastille **Etat** est rouge. Ce bandeau
     reste jusqu'au redémarrage de la console ;
-  - le baisse si le dernier verrou montré par les images était l'arrêt d'urgence
-    lui-même (règle `operator_estop`) et qu'il n'est plus tenu : il a été acquitté
-    juste avant `go_silent`, ou la console a été relancée (un bandeau affiché avant le
-    redémarrage ne reste plus jusqu'au rechargement de la page) ;
-  - **ne le baisse pas** si le dernier verrou montré par les images était le
-    `quick_stop` verrouillé d'une règle (`reverse_rotation` par exemple) ou du
-    runtime, et que c'est la même console qui passe à `go_silent`. `go_silent` remplace
-    alors ce verdict, le statut ne montre plus que `go_silent`, personne n'a rien
-    acquitté et plus rien ne s'acquitte : le bandeau reste, avec la pastille
-    **Securite** `go_silent` en rouge, jusqu'au redémarrage de la console.
+  - le baisse si le dernier verrou montré à la page, par les images ou par le statut,
+    était l'arrêt d'urgence lui-même (règle `operator_estop`) et qu'il n'est plus
+    tenu : il a été acquitté juste avant `go_silent`, ou la console a été relancée (un
+    bandeau affiché avant le redémarrage ne reste plus jusqu'au rechargement de la
+    page) ;
+  - **ne le baisse pas** si le dernier verrou montré à la page, par les images ou par
+    le statut, était le `quick_stop` verrouillé d'une règle (`reverse_rotation` par
+    exemple) ou du runtime, et que c'est la même console qui passe à `go_silent`.
+    `go_silent` remplace alors ce verdict, le statut ne montre plus que `go_silent`,
+    personne n'a rien acquitté et plus rien ne s'acquitte : le bandeau reste, avec la
+    pastille **Securite** `go_silent` en rouge, jusqu'au redémarrage de la console.
     Jusqu'au 10 octobre 2026 il restait de la même façon.
 
   Pour ce dernier cas, la page ne baisse le bandeau sous `go_silent` que si un
-  redémarrage de la console est prouvé depuis que le WebSocket en cours a montré ce
-  verrou (un WebSocket, une console) : l'horloge de la machine est repartie de zéro,
-  ou le nombre d'instantanés publiés par la console (troisième valeur de `counters`,
-  qui ne fait que monter tant qu'elle tourne) a baissé entre deux réponses de statut
-  demandées après ce moment. Une liaison coupée puis revenue ne prouve rien, et un
-  verrou montré de nouveau sur un nouveau WebSocket est celui de la console qui est au
-  bout. Sans preuve, le bandeau reste jusqu'à une image sans verdict ou jusqu'au
-  rechargement de la page : c'est le cas d'une console arrêtée avant d'avoir répondu à
-  un statut après le verrou (moins de 5 s), ou d'une nouvelle console qui a déjà
-  publié plus d'instantanés que l'ancienne n'en avait publié.
+  redémarrage de la console est prouvé depuis que le verrou lui a été montré :
+  l'horloge de la machine est repartie de zéro, ou le nombre d'instantanés publiés par
+  la console (troisième valeur de `counters`, qui ne fait que monter tant qu'elle
+  tourne) a baissé. Pour un verrou montré par les images, retenu avec le WebSocket qui
+  l'a porté (un WebSocket, une console) : entre deux réponses de statut demandées après
+  que ce WebSocket l'a montré. Pour un verrou montré par le statut : entre la réponse
+  qui l'a montré, écrite par la console qui le tenait, et une réponse demandée après
+  elle. Deux comptes égaux ne prouvent rien (deux réponses dans le même cycle, ou une
+  boucle arrêtée). Une liaison coupée puis revenue ne prouve rien non plus, et un
+  verrou montré de nouveau, sur un nouveau WebSocket ou par une réponse de statut
+  suivante, est celui de la console qui le montre : la preuve repart de là.
 
-  Une réponse plus ancienne que le passage à `go_silent` peut lever le bandeau, jamais
-  le baisser ; le statut est redemandé tout de suite quand les images passent à
-  `go_silent`.
+  La preuve par le compte suppose une seule console derrière l'adresse que la page
+  interroge. C'est le cas tel que la console est lancée, un processus par adresse. Si
+  un intermédiaire répartissait un jour cette adresse entre deux consoles, la réponse
+  de l'autre se lirait comme un redémarrage : cette preuve ne tiendrait plus.
+
+  Sans preuve, le bandeau reste jusqu'à une image sans verdict, une réponse de statut
+  hors `go_silent` qui ne montre plus d'arrêt verrouillé, ou le rechargement de la
+  page : c'est le cas d'une console arrêtée avant d'avoir répondu à un statut après le
+  verrou (moins de 5 s), ou d'une nouvelle console qui a déjà publié plus
+  d'instantanés que l'ancienne n'en avait publié.
+
+  Une réponse plus ancienne que le passage des images à `go_silent` peut lever le
+  bandeau, jamais le baisser ; le statut est redemandé tout de suite quand les images
+  passent à `go_silent`.
+- Sans images (WebSocket de l'écran tombé alors que ses requêtes passent encore, ou
+  aucune image reçue), le bandeau suit le statut : une réponse qui montre un arrêt
+  verrouillé le lève, et une réponse suivante qui n'en montre plus, hors `go_silent`,
+  le baisse (seuls un acquittement ou un redémarrage de la console retirent un
+  `quick_stop` verrouillé sans `go_silent`). Sous `go_silent` la règle ci-dessus
+  s'applique telle quelle : le bandeau levé par le statut pour le `quick_stop` d'une
+  règle reste, à côté de `NO LIVE DATA`, tant que la même console répond.
 - Ce qui reste du côté prudent : si le WebSocket tombe sur une image qui montrait un
   arrêt verrouillé, le bandeau reste à côté de `NO LIVE DATA` jusqu'à la prochaine
   image, même si le statut dit entre-temps l'arrêt levé ; sous `go_silent`, un arrêt
@@ -1494,7 +1520,13 @@ répondu à temps. Détail dans
   un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
   d'urgence posé depuis un autre écran sous `go_silent` ; et le bandeau du `quick_stop`
   d'une règle après une console relancée puis repassée sous `go_silent`, quand le
-  redémarrage n'est pas prouvé. Des trois cas relevés avant le 10 octobre 2026, deux
+  redémarrage n'est pas prouvé, que les images ou le statut aient levé ce bandeau. De
+  même, un `quick_stop` de règle acquitté pendant que l'écran est coupé de la console,
+  suivi de `go_silent`, garde son bandeau jusqu'au rechargement de la page. À
+  l'inverse, un écran ouvert ou rechargé sous `go_silent` n'affiche pas de bandeau
+  pour le `quick_stop` d'une règle que `go_silent` a remplacé : la console ne rapporte
+  plus ce verrou (c'était déjà le cas ; à traiter côté console). Des trois cas relevés
+  avant le 10 octobre 2026, deux
   sont traités (réponse de statut tardive après un acquittement rapide, ordre de deux
   réponses de statut) ; le troisième (console relancée puis `go_silent`) l'est pour
   l'arrêt d'urgence lui-même, et pour le `quick_stop` d'une règle quand le redémarrage
