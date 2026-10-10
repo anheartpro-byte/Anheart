@@ -1210,6 +1210,15 @@ class StatusRow:
     infer them from a missing field would infer wrongly.
     """
 
+    at: float
+    """The machine's monotonic clock when this answer was written.
+
+    The clock of a snapshot's ``at`` and of the E-STOP receipt's. The page
+    orders what it is told by it: two status answers by when the machine wrote
+    them, not by when they were asked or arrived, and a status answer against
+    a frame. Display data only: nothing on the machine reads it back.
+    """
+
     run_state: str
     estop_latched: bool
     """The interface's own flag: set by its E-STOP route, by nothing else."""

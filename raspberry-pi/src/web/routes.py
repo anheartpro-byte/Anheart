@@ -362,13 +362,21 @@ def _register_reads(
         One request rather than six, because the start button's enabled state
         depends on all of them at once and a page that assembled it from
         several responses would render a moment that never existed.
+
+        ``at`` is that moment on the machine's clock, and the page orders this
+        answer by it against the frames and against its other answers. So the
+        one thing awaited, the list of serial ports, is awaited first: from
+        the clock read to the return nothing yields, and every verdict in the
+        answer is the one that stood at ``at``.
         """
+        ports = await services.ports.list_ports()
         now = services.clock.monotonic()
         ecg = hub.ecg_window(limit=0)
         attested = supervisor.require_estop_confirmed()
         accepted, refused, published = surface.counters
         pending = surface.pending
         return StatusRow(
+            at=now,
             run_state=surface.run_state.value,
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
@@ -391,7 +399,7 @@ def _register_reads(
             ecg_seq=ecg.seq,
             profile_rev=int(store.rev),
             profile_ids=tuple(profile.profile_id for profile in store.list_profiles()),
-            ports=tuple(PortRow.of(port) for port in await services.ports.list_ports()),
+            ports=tuple(PortRow.of(port) for port in ports),
             bind=BindRow.of(config),
             counters=(accepted, refused, published),
         )

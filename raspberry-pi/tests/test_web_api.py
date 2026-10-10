@@ -1005,6 +1005,78 @@ async def test_the_status_page_shows_the_stop_of_its_own_button_in_the_same_fiel
     assert cleared.supervisor_estop is None
 
 
+async def test_the_status_is_stamped_with_the_clock_of_the_frames_and_of_the_receipt(
+    client: httpx.AsyncClient, rig: Rig
+) -> None:
+    """The page orders an answer by this stamp, not by when it asked (ANH-190).
+
+    One clock for the three things the emergency-stop banner is decided from:
+    a snapshot's ``at``, the receipt's ``at``, and this. An answer written
+    before the latch and one written after it are told apart by it, whichever
+    reaches the screen first.
+    """
+    rig.clock.advance(Seconds(5.0))
+    rig.surface.publish(make_snapshot(at=rig.clock.monotonic()))
+    frame = parse(SnapshotRow, await client.get("/api/snapshot", headers=auth()))
+    before = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert before.at == pytest.approx(5.0)
+    assert before.at == pytest.approx(frame.at)
+
+    rig.clock.advance(Seconds(1.5))
+    pressed = await client.post("/api/session/estop", headers=auth(), json={"operator": OPERATOR})
+    receipt = parse(EstopRow, pressed)
+    rig.clock.advance(Seconds(0.5))
+    after = parse(StatusRow, await client.get("/api/status", headers=auth()))
+
+    assert before.at < receipt.at < after.at
+    assert after.at == pytest.approx(7.0)
+    assert before.supervisor_estop is None
+    assert after.supervisor_estop is not None
+
+
+@dataclass(slots=True)
+class LatchingPorts:
+    """A port lister during whose scan an emergency stop is latched, a second later."""
+
+    clock: ManualClock
+    supervisor: SafetySupervisor
+
+    async def list_ports(self) -> tuple[SerialPortInfo, ...]:
+        self.clock.advance(Seconds(1.0))
+        self.supervisor.latch_estop("latched while the status was being written")
+        return ()
+
+
+async def test_what_a_status_says_is_what_stood_at_its_stamp(tmp_path: Path) -> None:
+    """Nothing is read on one side of the port scan and stamped on the other.
+
+    The scan is the one thing the route awaits, on a worker thread, and it can
+    be slow. A stop latched meanwhile must not come back in an answer stamped
+    before it: the page would then take that answer for older than a frame
+    which does not show the stop yet.
+    """
+    rig = build_rig(tmp_path)
+    services = Services(
+        clock=rig.clock,
+        surface=rig.surface,
+        hub=rig.hub,
+        supervisor=rig.supervisor,
+        store=rig.store,
+        ports=LatchingPorts(clock=rig.clock, supervisor=rig.supervisor),
+        geometry=GEOMETRY,
+    )
+    app = create_app(services=services, config=rig.config)
+    rig.clock.advance(Seconds(5.0))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+        status = parse(StatusRow, await session.get("/api/status", headers=auth()))
+
+    held = status.supervisor_estop
+    assert held is not None, "a stop latched before the stamp is missing from the answer"
+    assert status.at == pytest.approx(6.0)
+    assert held.age_s == pytest.approx(0.0)
+
+
 async def test_the_ecg_endpoint_serves_only_what_is_new(
     client: httpx.AsyncClient, rig: Rig
 ) -> None:
