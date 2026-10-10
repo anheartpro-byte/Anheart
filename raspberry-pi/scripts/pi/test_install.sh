@@ -509,8 +509,8 @@ relay_user="${account%%:*}"
 [ "$relay_users" = "Uid: $relay_user $relay_user $relay_user $relay_user " ] \
     || fail "the relay of the watchdog does not run as the account anheart ($relay_user) and nothing else: '${relay_users:-no relay found}'"
 ok "the relay of the watchdog runs as the account anheart"
-expect_in "$(owned /run/anheart)" "anheart:anheart 700" "only the account enters the relay's directory"
-expect_in "$(in_machine stat --format '%U' /run/anheart/notify)" "anheart" "and the relay's socket is the account's"
+expect_in "$(owned /run/anheart/relay)" "anheart:anheart 700" "only the account enters the relay's directory"
+expect_in "$(in_machine stat --format '%U' /run/anheart/relay/notify)" "anheart" "and the relay's socket is the account's"
 
 # The unit's own processes (the Docker client is its main process), as systemd
 # reads the unit and as the kernel applies it.
@@ -661,6 +661,13 @@ for ((attempt = 0; attempt < 10; attempt++)); do
     sleep 1
 done
 expect_in "$logged" "shutdown complete: emergency zero" "the journal holds the console's own shutdown of the session"
+# systemd takes /run/anheart back, as root's, when it runs the line of the
+# stop: the relay's own directory inside it is still the account's then, and
+# the console that stops can still say so.
+case "$logged" in
+    *"notification not sent"*) fail "the console that stops could not reach its relay any more" ;;
+esac
+ok "the console that stops still reaches its relay"
 expect_in "$(in_machine cat "$record")" '"end_reason":"shutdown"' "the record of the session is closed, reason: shutdown"
 in_machine test -f "$(dirname "$record")/checksums.sha256" || fail "the closed record has no checksums"
 ok "the closed record carries its checksums"

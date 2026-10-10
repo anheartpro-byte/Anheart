@@ -51,17 +51,20 @@ Type=notify
 # `all`, and it cannot be narrower: systemd is told by the relay, which is a
 # process of this unit without being its main process (`docker run` is) nor
 # the command of one of its lines. What is narrow is who may talk to the
-# relay: its socket is the account's, in a directory only the account enters.
+# relay: its socket is the account's, in a directory only the account enters
+# (/run/anheart/relay).
 NotifyAccess=all
 WatchdogSec=10
 WatchdogSignal=SIGTERM
 TimeoutAbortSec=15
 # Until the console says it is ready: a cold SD card takes its time.
 TimeoutStartSec=300
-# /run/anheart, where the relay below listens. Made at each start, closed to
-# everybody; the start line gives it to the account.
+# /run/anheart, made at each start. systemd takes it back, as root's and with
+# this mode, every time it runs one of the lines of this unit, the line of
+# the stop included: so what is the account's is not this directory but
+# `relay` inside it, which the start line makes and which systemd leaves alone.
 RuntimeDirectory=anheart
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0755
 # For the processes of this unit themselves (the shell of each line, the
 # relay, the Docker client): no way to gain a privilege, the whole file system
 # read-only but /run/anheart, no home directory. They write nowhere else: the
@@ -115,13 +118,14 @@ ExecStartPre=-/usr/local/lib/anheart/bind-bitalino
 #
 # The first line is the watchdog relay. systemd only listens to the processes
 # of this unit, and the console is a process of the container, not of the
-# unit. So socat, which is one, listens on /run/anheart/notify (handed to the
-# console as its NOTIFY_SOCKET) and passes each datagram on to systemd as it
-# came. It adds nothing and invents nothing: a console that says nothing is
-# not heard. It runs as the account, which /run/anheart is given to first: a
-# start that cannot do that fails at once. Then the shell becomes
-# `docker run`, the unit's main process.
-ExecStart=/bin/sh -c '/bin/chown anheart:anheart /run/anheart || exit 1; /usr/bin/setpriv --reuid=anheart --regid=anheart --clear-groups /usr/bin/socat -u UNIX-RECV:/run/anheart/notify,unlink-early UNIX-SENDTO:"$$NOTIFY_SOCKET" & exec "$$@"' anheart \
+# unit. So socat, which is one, listens on /run/anheart/relay/notify (the
+# console is handed that directory, and the socket as its NOTIFY_SOCKET) and
+# passes each datagram on to systemd as it came. It adds nothing and invents
+# nothing: a console that says nothing is not heard. It runs as the account,
+# in a directory made for the account alone first: a start that cannot make
+# it fails at once. Then the shell becomes `docker run`, the unit's main
+# process.
+ExecStart=/bin/sh -c '/usr/bin/install -d -m 0700 -o anheart -g anheart /run/anheart/relay || exit 1; /usr/bin/setpriv --reuid=anheart --regid=anheart --clear-groups /usr/bin/socat -u UNIX-RECV:/run/anheart/relay/notify,unlink-early UNIX-SENDTO:"$$NOTIFY_SOCKET" & exec "$$@"' anheart \
     /usr/bin/docker run --rm --name anheart --log-driver none \
     --pull never \
     --user ${ANHEART_ACCOUNT} $ANHEART_GROUPS \
@@ -134,13 +138,19 @@ ExecStart=/bin/sh -c '/bin/chown anheart:anheart /run/anheart || exit 1; /usr/bi
     --volume /dev:/dev \
     --volume /var/lib/anheart/data:/app/data \
     --volume /var/lib/anheart/records:/app/data/records \
-    --volume /run/anheart:/run/anheart \
+    --volume /run/anheart/relay:/run/anheart \
     --env NOTIFY_SOCKET=/run/anheart/notify \
     --env-file /etc/anheart/anheart.env \
     ${ANHEART_IMAGE}
 # SIGTERM is the console's controlled stop: it zeroes the speed reference and
 # releases the drive link. 60 s for the ramp, before Docker escalates.
-ExecStop=/usr/bin/docker stop -t 60 anheart
+#
+# Then this line waits, ten seconds at most, for the unit's main process, the
+# Docker client, to end by itself: it ends with the console's exit code a
+# moment after the console is gone. systemd ends what is left of the unit as
+# soon as this line returns, and a client it had to end would report that
+# signal in place of the console's code.
+ExecStop=/bin/sh -c '/usr/bin/docker stop -t 60 anheart; stopped=$$?; waited=0; while [ "$$waited" -lt 100 ] && kill -0 "$$MAINPID" 2>/dev/null; do waited=$$((waited + 1)); /bin/sleep 0.1; done; exit "$$stopped"'
 # Whatever ended the unit, no console outlives it.
 ExecStopPost=/bin/sh -c '/usr/bin/docker container inspect anheart >/dev/null 2>&1 && /usr/bin/docker stop -t 60 anheart; exit 0'
 TimeoutStopSec=90

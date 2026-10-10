@@ -46,7 +46,7 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 >   ([Sous quel compte](#sous-quel-compte),
 >   [section 10](#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)).
 >   Vérifié dans la machine de remplacement, en simulation (job `pi-install`
->   de la PR #73, exécution 38088433186). **Pas vérifié** :
+>   de la PR #73). **Pas vérifié** :
 >   le vrai câble du variateur et le vrai BITalino sous ce compte, dont les
 >   droits ne se constatent que sur un Pi
 >   ([section 6](#essai-du-durcissement--à-faire-au-banc)). Le point d'accès,
@@ -415,7 +415,7 @@ bien plus de 10 s à charger la console ; l'unité lui laisse 300 s).
 
 **Le relais.** systemd n'écoute que les processus de l'unité, et la console est
 un processus du conteneur. L'unité lance donc `socat`, qui est un des siens : il
-écoute sur `/run/anheart/notify`, que la console reçoit comme `NOTIFY_SOCKET`,
+écoute sur `/run/anheart/relay/notify`, que la console reçoit comme `NOTIFY_SOCKET`,
 et transmet chaque datagramme à systemd tel quel (`NotifyAccess=all`). Il
 n'invente rien : une console qui ne dit rien n'est pas entendue. S'il meurt,
 systemd n'entend plus la console et l'arrête au bout de 10 s, par son arrêt
@@ -428,11 +428,19 @@ Sans `socat` ou sans `setpriv`, l'unité refuse de démarrer
 processus principal (c'est `docker run`), ni la commande d'une de ses lignes.
 Ce qui est étroit, c'est l'entrée du relais. Il tourne sous le compte
 `anheart` (`setpriv`), et non plus sous root : c'est lui qui lit ce que la
-console envoie. Son dossier `/run/anheart` est fermé à tous (mode 700) et
-donné au compte à chaque démarrage ; son socket appartient au compte. Seule la
-console, qui est ce même compte, peut donc nourrir le chien de garde. Si le
-dossier ne peut pas être donné au compte, le démarrage échoue tout de suite,
-sans lancer de console que personne n'entendrait.
+console envoie. Il écoute dans un dossier à lui, `/run/anheart/relay`, créé à
+chaque démarrage pour le compte seul (mode 700) ; son socket appartient au
+compte. Seule la console, qui est ce même compte, peut donc nourrir le chien
+de garde. Si ce dossier ne peut pas être créé, le démarrage échoue tout de
+suite, sans lancer de console que personne n'entendrait.
+
+Ce dossier n'est pas `/run/anheart` lui-même, et il y a une raison : systemd
+reprend `/run/anheart`, sous root, chaque fois qu'il lance une ligne de
+l'unité, **celle de l'arrêt comprise**. Donné au compte, il lui était retiré
+au moment précis où la console, en s'arrêtant, dit qu'elle s'arrête : elle
+ne joignait plus son relais. Vu dans la machine de remplacement, pas en
+lisant l'unité. Ce que systemd trouve tel qu'il l'attend, il n'y regarde
+pas : le dossier `relay`, à l'intérieur, reste au compte.
 
 **Un relais présent mais qui ne démarre pas** (il n'arrive pas à écouter) est
 le cas à connaître, parce que la console a alors l'air de marcher. Elle
@@ -516,6 +524,16 @@ redémarre, ne se constate que sur la machine
 `systemctl stop anheart` envoie SIGTERM à la console (`docker stop`), qui met
 la consigne à zéro et rend la liaison au variateur, puis attend 60 s avant de
 forcer. Arrêter le Pi proprement (`sudo poweroff`) passe par le même chemin.
+
+La ligne d'arrêt attend ensuite, dix secondes au plus, que le processus
+principal de l'unité, le client Docker, se termine de lui-même : il sort avec
+le code de la console un instant après elle. Dès que cette ligne rend la
+main, systemd termine ce qui reste de l'unité ; un client qu'il aurait dû
+terminer lui-même rapporterait ce signal à la place du code de la console.
+Sans cette attente le résultat dépendait de quelques millisecondes, et la
+console, dont le conteneur en lecture seule se retire plus vite qu'avant,
+perdait parfois : vu dans la machine de remplacement (l'arrêt restait propre,
+le code lu ne l'était pas).
 
 Le test de bout en bout arrête le service **pendant une séance simulée**
 (étape 4) : la console écrit elle-même `shutdown complete` dans le journal,
@@ -765,7 +783,7 @@ Le workflow `.github/workflows/pi-install.yml` lance
 | 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; `chrony` est installé, activé au démarrage, avec ses deux directives ; la console, dans son conteneur, lit l'état de l'horloge de la machine et dit la même chose que `timedatectl` ; le journal est sous `/var/log/journal` et `journald` annonce lui-même sa borne de 200 Mo ; le contrôle de santé de l'image passe à `healthy` ; systemd lit l'unité comme prévu (`Type=notify`, 10 s de chien de garde, relance à 2 s, limite de dix démarrages) ; plus de 15 s sans redémarrage ni `Watchdog timeout` : les notifications de la console arrivent à systemd par le relais ; la console se dit surveillée, sans aucun envoi manqué, et en service ; son état de redémarrage est écrit, au compte `anheart` seul, à côté des enregistrements ; le réglage du chien de garde matériel est là où systemd le lit. **Ce avec quoi la console tourne**, demandé au système en marche : dans son conteneur elle est le compte `anheart` et a le groupe `dialout` ; le conteneur n'est pas privilégié, est en lecture seule, toutes capacités retirées ; le noyau ne donne au processus aucune capacité (`CapPrm`, `CapEff`, `CapBnd` à zéro) et `NoNewPrivs` vaut 1 ; elle ne peut pas écrire dans son image, peut écrire dans `/tmp`, où rien ne s'exécute ; l'ouverture d'un périphérique de classe 188 du groupe `dialout` lui est permise (sans matériel derrière, elle n'aboutit pas), le noyau lui refuse (`EPERM`) un périphérique d'une autre classe aux mêmes droits, et un périphérique de classe 188 à root seul lui est refusé (`EACCES`) ; l'image nomme un compte qui n'est pas root. Le relais du chien de garde tourne sous le compte `anheart`, dans un dossier où lui seul entre. Les processus de l'unité ne peuvent ni gagner un privilège, ni écrire dans `/etc`, ni lire le dossier de root ; le client Docker de l'unité est root, et le test le dit. Le compte `anheart` ne peut pas lire la configuration. Les trois services de mise à jour automatique sont masqués et arrêtés, et `apt` lui-même dit qu'il ne met plus rien à jour seul, alors que le fichier de la distribution dit le contraire. Tout ce qui est sous `/var/lib/anheart` appartient au compte, fermé aux autres |
 | 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console ; le `curl` de Debian 12 envoie bien un en-tête lu sur son entrée standard ; un réglage du journal modifié fait redémarrer `journald` et pas la console, dont les lignes suivantes arrivent encore au journal ; dans la même relance, un fichier de la console rendu à root (l'état de ses redémarrages) et une configuration rendue lisible par tous sont corrigés, **sans que leur contenu change** ; le script dit qu'il n'y avait rien d'autre à protéger |
 | 3. Séance en cours | une séance manuelle simulée tourne ; son enregistrement s'écrit dans `/var/lib/anheart/records`, avec la version de l'image ; une installation qui remplacerait la console **refuse** et ne touche à rien |
-| 4. Service arrêté en pleine séance | `systemctl stop anheart` rend la main en moins de 60 s ; systemd constate un arrêt propre (code 0) ; le journal porte le `shutdown complete` de la console ; l'enregistrement est clos, raison `shutdown` ; aucun conteneur ne reste ; redémarrée, la console est au repos, sans attestation |
+| 4. Service arrêté en pleine séance | `systemctl stop anheart` rend la main en moins de 60 s ; systemd constate un arrêt propre (code 0) ; le journal porte le `shutdown complete` de la console ; l'enregistrement est clos, raison `shutdown` ; la console qui s'arrête joint encore son relais ; aucun conteneur ne reste ; redémarrée, la console est au repos, sans attestation |
 | 5. Arrêt brutal | la console est tuée en pleine séance ; systemd la relance ; elle est au repos, sans attestation |
 | 6. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
 | 7. Console que le service n'a pas lancée | un conteneur `anheart` lancé à la main tourne une séance : l'installation **refuse**, ne le touche pas, ne démarre pas le service ; ce conteneur lancé à la main ne tourne pas sous root non plus ; une fois la séance terminée, l'installation passe, l'unité arrête et retire ce conteneur puis lance le sien |
@@ -829,8 +847,8 @@ demanderait d'abord de retirer le filtre. Une conséquence à connaître :
 publie rien. Ses actions sont épinglées par commit complet, celle de checkout
 sur le même commit que `ci.yml`.
 
-**Durée.** Avec les douze étapes et la relecture des scripts (PR #73,
-exécution 38088433186) : 3 min 51 s pour le job. Avant le durcissement et le chien
+**Durée.** Avec les douze étapes et la relecture des scripts (PR #73) :
+environ 4 minutes pour le job. Avant le durcissement et le chien
 de garde, sur la PR #37 (run 37607234436) : 2 min 40 s pour le job, dont
 environ une minute pour construire l'image sur le runner arm64. Ce n'est pas la
 durée sur un Raspberry Pi, qui reste à mesurer. À l'étape 9, la console figée
@@ -985,27 +1003,35 @@ privilèges ; elle n'a ni câble ni capteur. **Ce que seul un Pi montre : que le
 vrai câble du variateur et le vrai BITalino s'ouvrent sous le compte
 `anheart`.** Compter une heure. Les constats 1 à 8 se font sur un Pi installé
 en simulation ([étapes 1 à 5](#6-installer-un-vrai-raspberry-pi)), sans rien de
-branché.
+branché. Les constats 9 à 11 se font **variateur hors tension** : le câble
+est alimenté par le Pi, la console l'ouvre, et rien ne lui répond. Ils ne
+relient donc pas un variateur en marche à la console du service, ce qui
+reste soumis à la condition écrite en
+[section 8](#8-limites-et-reste-à-faire) (le verrou du câble).
 
 | | Faire | Lire | Attendu |
 |---|---|---|---|
 | 1 | | `id anheart`, puis `sudo docker exec anheart id` | le même numéro de compte des deux côtés, différent de 0 ; le groupe `dialout` (20) des deux côtés |
 | 2 | | `sudo docker inspect --format '{{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}}' anheart` | `false true [ALL]` |
-| 3 | | `ps -o user=,args= -C socat` ; `sudo ls -ld /run/anheart` | `anheart` ; `drwx------ ... anheart anheart` |
+| 3 | | `ps -o user=,args= -C socat` ; `sudo ls -ld /run/anheart/relay` | `anheart` ; `drwx------ ... anheart anheart` |
 | 4 | | `sudo stat -c '%U:%G %a %n' /etc/anheart/anheart.env /var/lib/anheart /var/lib/anheart/records` | `root:root 600`, puis `anheart:anheart 700` deux fois |
 | 5 | une séance manuelle de banc, cible 0, puis **STOP** | `sudo find /var/lib/anheart \( ! -user anheart -o -perm /077 \)` | rien |
 | 6 | | `systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service` ; `apt-config dump \| grep Periodic` ; `systemctl list-timers --all` | `masked` trois fois ; toutes les valeurs à `"0"` ; **noter les autres minuteries de la liste**, et en particulier ce que fait `rpi-eeprom-update` sur cette image |
 | 7 | | `sudo bash scripts/harden.sh --dry-run` | `harden.sh, dry run: nothing to change` |
 | 8 | couper puis remettre l'alimentation | les constats 1 à 4 | les mêmes : la console est revenue seule, sous le même compte |
 | 9 | brancher le câble du variateur, **variateur hors tension** | `lsusb` ; `ls -l /dev/ttyUSB* /dev/bus/usb/*/*` | une ligne `16de:0003` ; le nœud du câble en `crw-rw---- root dialout` (un `ttyUSB` si le noyau a un pilote pour lui, sinon son nœud sous `/dev/bus/usb`). **Noter lequel des deux** : il décide de `MOTOR_PORT` |
-| 10 | avec le variateur, dans les conditions de la [procédure de banc](securite.md#96-essai-au-banc--procédure-non-faite) et la règle « aucun outil de banc tant que le service tourne » : `MOTOR_BACKEND=serial` et `MOTOR_PORT` dans la configuration, puis `sudo systemctl restart anheart`, console au repos | la pastille du variateur sur la page ; `journalctl -u anheart` | la liaison est établie, sans `Permission denied` ni `Access denied` dans le journal |
-| 11 | débrancher le câble, attendre, le rebrancher, **sans relancer le service** | la pastille du variateur | la liaison tombe, puis revient seule. C'est la raison pour laquelle `/dev` est monté tout entier |
+| 10 | **variateur toujours hors tension**, câble branché, aucun outil de banc : `MOTOR_BACKEND=serial` et `MOTOR_PORT` dans la configuration, puis `sudo systemctl restart anheart` | la page ; `journalctl -u anheart` | **aucune ligne `Permission denied` ni `Access denied`** : le câble s'ouvre sous le compte. Une liaison sans réponse est normale, personne ne répondant au bout du câble. Noter la ligne exacte du journal et ce que la page dit du variateur |
+| 11 | débrancher le câble, attendre une minute, le rebrancher, **sans relancer le service** | `journalctl -u anheart -f` | après le rebranchement, la console rouvre le câble seule : les mêmes lignes qu'au constat 10 reviennent, sans refus d'accès. C'est la raison pour laquelle `/dev` est monté tout entier. Noter si un redémarrage du service a été nécessaire |
 | 12 | BITalino appairé (`bash scripts/pair_device.sh <adresse>`), `ECG_SOURCE=serial`, `BITALINO_ADDRESS=/dev/rfcomm0`, `BITALINO_MAC` ; `sudo systemctl restart anheart` | `journalctl -u anheart \| grep bind-bitalino` ; `ls -l /dev/rfcomm0` ; la pastille ECG | `/dev/rfcomm0 is bound to the BITalino ...` ; `crw-rw---- root dialout` ; la liaison ECG est établie |
 | 13 | redémarrer le Pi (`sudo reboot`), capteur allumé | les mêmes | le nœud est lié de nouveau sans personne, la liaison ECG revient |
 
 Si le constat 9 ou 12 donne un autre groupe ou d'autres droits, ou si le 10 ou
 le 12 échoue sur un refus d'accès : **ne rien élargir à la main**, noter la
 sortie exacte de `ls -l` et la ligne du journal. C'est le résultat de l'essai.
+
+La liaison avec le variateur **sous tension** n'est pas dans cet essai : elle
+relève de la [procédure de banc](securite.md#96-essai-au-banc--procédure-non-faite)
+et de ses conditions.
 
 À consigner dans un commentaire du ticket ANH-151 : la référence du Pi et du
 système (`cat /etc/rpi-issue`), la version de la console, ce tableau avec ce

@@ -8,7 +8,6 @@ in ``tests/test_presence_adapter.py``.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Final, cast
@@ -681,24 +680,14 @@ def test_an_acknowledgement_must_be_named_and_must_have_something_to_clear() -> 
     assert stream.monitor.latched is not None
 
 
-def test_a_named_acknowledgement_clears_the_latch_and_restarts_nothing(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_a_named_acknowledgement_clears_the_latch_and_restarts_nothing() -> None:
     stream = Stream()
     _ready(stream, TURNING_BENCH)
     stream.frames(0.05, TURNING_BENCH, zone=person(0.9))
     stream.frames(3.0, AT_REST)
-    with caplog.at_level(logging.WARNING, logger="src.presence.monitor"):
-        record = stream.monitor.acknowledge(OPERATOR)
+    record = stream.monitor.acknowledge(OPERATOR)
     assert isinstance(record, Ok)
     assert record.value.operator == OPERATOR
-    # The name is in the record, which the console writes under the operator's
-    # alias. The journal says which latch was cleared and when, and no name (ANH-151).
-    assert OPERATOR not in caplog.text
-    assert (
-        f"presence latch {RULE_PRESENCE_INTRUSION} acknowledged at "
-        f"unix_millis={record.value.wall_clock}"
-    ) in caplog.text
     assert record.value.cleared == (RULE_PRESENCE_INTRUSION,)
     assert record.value.at == stream.now
     assert stream.monitor.latched is None

@@ -34,6 +34,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1069,7 +1070,9 @@ def test_the_unit_gives_the_console_its_configuration_and_its_two_directories() 
 
 def test_the_unit_stops_the_console_on_its_controlled_stop_and_never_loops_on_a_refusal() -> None:
     """SIGTERM with time for the ramp; a restart on failure; none on a configuration error."""
-    assert _directive("ExecStop") == ["/usr/bin/docker stop -t 60 anheart"]
+    # The controlled stop first; then the line waits for the Docker client (see
+    # test_anh151_ex4_the_stop_waits_for_the_docker_client_to_end_by_itself).
+    assert _stop_line().startswith("/usr/bin/docker stop -t 60 anheart; ")
     assert int(_directive("TimeoutStopSec")[0]) > 60
     assert _directive("Restart") == ["on-failure"]
     assert _directive("RestartPreventExitStatus") == ["2"]
@@ -1136,13 +1139,14 @@ def test_ex1_the_unit_hands_the_console_a_socket_that_a_process_of_the_unit_list
     assert _directive("RuntimeDirectory") == ["anheart"]
     script, command = _relay()
     assert script == (
-        "/bin/chown anheart:anheart /run/anheart || exit 1; "
+        "/usr/bin/install -d -m 0700 -o anheart -g anheart /run/anheart/relay || exit 1; "
         "/usr/bin/setpriv --reuid=anheart --regid=anheart --clear-groups "
-        "/usr/bin/socat -u UNIX-RECV:/run/anheart/notify,unlink-early "
+        "/usr/bin/socat -u UNIX-RECV:/run/anheart/relay/notify,unlink-early "
         'UNIX-SENDTO:"$NOTIFY_SOCKET" & exec "$@"'
     )
     pairs = set(itertools.pairwise(command))
-    assert ("--volume", "/run/anheart:/run/anheart") in pairs
+    # The console is handed the relay's directory, where it finds the socket.
+    assert ("--volume", "/run/anheart/relay:/run/anheart") in pairs
     assert ("--env", "NOTIFY_SOCKET=/run/anheart/notify") in pairs
     # A start with no relay would never be heard: it is refused at once instead.
     assert "/usr/bin/socat" in _directive("AssertFileIsExecutable")
@@ -1157,10 +1161,11 @@ DOCKER_STUB: Final[str] = """#!/bin/sh
 printf '%s\\n' "$0" "$@" > "$DOCKER_SEEN"
 exit 7
 """
-#: ``chown``, as the start line calls it: it says what it was asked, and fails when told to.
-CHOWN_STUB: Final[str] = """#!/bin/sh
-printf '%s\\n' "$@" > "$CHOWN_SEEN"
-exit "${CHOWN_EXIT:-0}"
+#: ``install``, as the start line calls it to make the relay's directory: it says what it
+#: was asked, and fails when told to.
+INSTALL_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$@" > "$INSTALL_SEEN"
+exit "${INSTALL_EXIT:-0}"
 """
 #: ``setpriv``: it says which account it was asked for, then becomes the command.
 SETPRIV_STUB: Final[str] = """#!/bin/sh
@@ -1194,15 +1199,15 @@ class StartLine:
         return None
 
 
-def _run_start_line(directory: Path, *, chown_exit: int = 0) -> StartLine:
-    """The shell line of ``ExecStart``, run for real: the relay, ``chown``, ``setpriv`` and
+def _run_start_line(directory: Path, *, install_exit: int = 0) -> StartLine:
+    """The shell line of ``ExecStart``, run for real: the relay, ``install``, ``setpriv`` and
     ``docker`` are scripts of ``directory`` that record what they were asked."""
     assert SH is not None
     script, command = _relay()
     tools = {
         "/usr/bin/socat": ("relay", RELAY_STUB),
         "/usr/bin/docker": ("docker", DOCKER_STUB),
-        "/bin/chown": ("chown", CHOWN_STUB),
+        "/usr/bin/install": ("install", INSTALL_STUB),
         "/usr/bin/setpriv": ("setpriv", SETPRIV_STUB),
     }
     for name, content in tools.values():
@@ -1222,9 +1227,9 @@ def _run_start_line(directory: Path, *, chown_exit: int = 0) -> StartLine:
             "NOTIFY_SOCKET": "/run/systemd/notify",
             "RELAY_SEEN": str(directory / "relay-seen"),
             "DOCKER_SEEN": str(directory / "docker-seen"),
-            "CHOWN_SEEN": str(directory / "chown-seen"),
+            "INSTALL_SEEN": str(directory / "install-seen"),
             "SETPRIV_SEEN": str(directory / "setpriv-seen"),
-            "CHOWN_EXIT": str(chown_exit),
+            "INSTALL_EXIT": str(install_exit),
         },
         capture_output=True,
         text=True,
@@ -1251,7 +1256,7 @@ def test_ex1_the_unit_starts_the_relay_then_becomes_the_command_it_was_given(
     assert "c 188:* rw" in seen
     assert line.seen("relay") == [
         "-u",
-        "UNIX-RECV:/run/anheart/notify,unlink-early",
+        "UNIX-RECV:/run/anheart/relay/notify,unlink-early",
         "UNIX-SENDTO:/run/systemd/notify",
     ]
 
@@ -1698,7 +1703,7 @@ def test_anh151_ex4_the_console_is_given_the_account_and_nothing_more() -> None:
         "/dev:/dev",
         "/var/lib/anheart/data:/app/data",
         "/var/lib/anheart/records:/app/data/records",
-        "/run/anheart:/run/anheart",
+        "/run/anheart/relay:/run/anheart",
     ]
 
 
@@ -1772,19 +1777,33 @@ def test_anh151_ex4_an_account_with_a_number_of_roots_is_refused_before_anything
 def test_anh151_ex4_the_relay_runs_as_the_account_in_a_directory_given_to_it(
     tmp_path: Path,
 ) -> None:
-    """The relay reads what the console sends: it is the account, not root. The directory
-    it listens in is closed to everybody else, and is given to the account first."""
-    assert _directive("RuntimeDirectoryMode") == ["0700"]
+    """The relay reads what the console sends: it is the account, not root. It listens in
+    a directory of its own, made for the account alone before anything else.
+
+    Not ``/run/anheart`` itself: systemd takes that one back, as root's, every time it runs
+    a line of the unit, the line of the stop included, and a console that stops could then
+    no longer say so. What systemd finds as it expects it, it does not look into."""
+    assert _directive("RuntimeDirectory") == ["anheart"]
+    assert _directive("RuntimeDirectoryMode") == ["0755"]
     assert sorted(_directive("AssertFileIsExecutable")) == ["/usr/bin/setpriv", "/usr/bin/socat"]
     line = _run_start_line(tmp_path)
     assert line.exit_code == 7
-    assert line.seen("chown") == ["anheart:anheart", "/run/anheart"]
+    assert line.seen("install") == [
+        "-d",
+        "-m",
+        "0700",
+        "-o",
+        "anheart",
+        "-g",
+        "anheart",
+        "/run/anheart/relay",
+    ]
     assert line.seen("setpriv") == ["--reuid=anheart", "--regid=anheart", "--clear-groups"]
     # What setpriv becomes is the relay, with the arguments the unit gave it.
     relayed = line.seen("relay")
     assert relayed is not None
     assert relayed[1:] == [
-        "UNIX-RECV:/run/anheart/notify,unlink-early",
+        "UNIX-RECV:/run/anheart/relay/notify,unlink-early",
         "UNIX-SENDTO:/run/systemd/notify",
     ]
 
@@ -1794,11 +1813,97 @@ def test_anh151_ex4_a_start_that_cannot_give_the_relay_its_directory_fails_at_on
     tmp_path: Path,
 ) -> None:
     """A relay that cannot listen is a console nobody hears: no console is started at all."""
-    line = _run_start_line(tmp_path, chown_exit=1)
+    line = _run_start_line(tmp_path, install_exit=1)
     assert line.exit_code == 1
-    assert line.seen("chown") == ["anheart:anheart", "/run/anheart"]
+    assert line.seen("install") is not None
     assert line.seen("docker") is None, "the console was started with no relay to hear it"
     assert line.seen("relay") is None
+
+
+def _stop_line() -> str:
+    """The shell line of ``ExecStop`` as ``sh`` receives it."""
+    stopped = re.fullmatch(r"/bin/sh -c '([^']*)'", _directive("ExecStop")[0])
+    assert stopped is not None, "ExecStop is no longer `/bin/sh -c '<stop>'`"
+    return stopped.group(1).replace("$$", "$")
+
+
+STOP_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$*" >> "$DOCKER_SEEN"
+exit "${DOCKER_EXIT:-0}"
+"""
+
+
+def _alive(process: int) -> bool:
+    try:
+        os.kill(process, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@needs_sh
+@pytest.mark.parametrize("stop_exit", [0, 1])
+def test_anh151_ex4_the_stop_waits_for_the_docker_client_to_end_by_itself(
+    tmp_path: Path, stop_exit: int
+) -> None:
+    """``docker stop`` returns when the console is gone; the unit's main process, the Docker
+    client, ends a moment later with the console's exit code. systemd ends what is left of
+    the unit as soon as the stop line returns: the line waits for that client, so that what
+    systemd reads is the console's code and not the signal it would have ended the client
+    with. The line itself still ends with what ``docker stop`` said."""
+    assert SH is not None
+    docker = tmp_path / "docker"
+    docker.write_text(STOP_STUB, encoding="utf-8")
+    docker.chmod(0o755)
+    script = _stop_line()
+    assert script.count("/usr/bin/docker") == 1
+    script = script.replace("/usr/bin/docker", str(docker))
+    environment = {
+        "PATH": os.environ["PATH"],
+        "DOCKER_SEEN": str(tmp_path / "docker-seen"),
+        "DOCKER_EXIT": str(stop_exit),
+    }
+    # A main process that ends by itself a second later. A thread collects it the
+    # moment it ends, as systemd does of the client: once gone, it is gone.
+    with subprocess.Popen([SH, "-c", "exec sleep 1"]) as client:  # noqa: S603  # fixed argv
+        collector = threading.Thread(target=client.wait, daemon=True)
+        collector.start()
+        assert _alive(client.pid)
+        begun = time.monotonic()
+        done = subprocess.run(  # noqa: S603  # fixed argv, a scripted docker
+            [SH, "-c", script],
+            env={**environment, "MAINPID": str(client.pid)},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        waited = time.monotonic() - begun
+        still_there = _alive(client.pid)
+        collector.join(timeout=10)
+    assert done.returncode == stop_exit, done.stderr
+    assert _read(tmp_path / "docker-seen").splitlines() == ["stop -t 60 anheart"]
+    assert not still_there, "the stop line returned while the Docker client was still there"
+    assert waited > 0.5, "the stop line did not wait for the Docker client"
+
+    # No main process left to wait for (it ended first): the line returns at once.
+    begun = time.monotonic()
+    again = subprocess.run(  # noqa: S603  # fixed argv, a scripted docker
+        [SH, "-c", script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert again.returncode == stop_exit
+    assert time.monotonic() - begun < 5
+    # Bounded: a client that never ends is not waited for longer than the unit's
+    # stop allows after the 60 s of the ramp.
+    bound = re.search(r'\[ "\$waited" -lt (\d+) \].*/bin/sleep (0\.\d+)', script)
+    assert bound is not None
+    longest = int(bound.group(1)) * float(bound.group(2))
+    assert 60 + longest < int(_directive("TimeoutStopSec")[0])
 
 
 def test_anh151_ex4_the_unit_says_what_stays_root_and_claims_nothing_else() -> None:
@@ -2429,7 +2534,10 @@ def test_anh151_ex8_the_end_to_end_test_proves_each_reduction_in_a_real_system()
         "{{.Config.User}}",
         # EX-4, the unit: the relay is the account; the client is root, and said to be.
         '"Uid: $relay_user $relay_user $relay_user $relay_user "',
-        'expect_in "$(owned /run/anheart)" "anheart:anheart 700"',
+        'expect_in "$(owned /run/anheart/relay)" "anheart:anheart 700"',
+        # A stop: the console still reaches its relay, and systemd reads its exit code.
+        "the console that stops could not reach its relay any more",
+        '"ExecMainStatus=0"',
         "NoNewPrivileges,ProtectSystem,ProtectHome",
         'nsenter --target "$main_pid" --mount',
         "the Docker client of the unit is root",

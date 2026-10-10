@@ -1477,12 +1477,8 @@ class SafetySupervisor:
         vouched for since. Re-attesting is allowed and replaces the record -
         operators hand over.
 
-        The whole point of the gate is to leave a name and a time against the
-        claim that the jumper is gone. The name is in the record this returns:
-        the console writes it, as the operator's alias, in the session record
-        or the logbook (:mod:`src.record.session`). The line logged here
-        carries both clocks and the statement, and no name: the system journal
-        is kept on the machine's disk, and holds nothing typed at the console.
+        Logged with both clocks, because the whole point of the gate is to
+        leave a name and a time against the claim that the jumper is gone.
         """
         if not operator.strip():
             return Err(
@@ -1499,7 +1495,8 @@ class SafetySupervisor:
         )
         self._attestation = attestation
         _logger.info(
-            "emergency-stop wiring attested at unix_millis=%d (monotonic=%.3f): %s",
+            "emergency-stop wiring attested by %r at unix_millis=%d (monotonic=%.3f): %s",
+            operator,
             attestation.wall_clock,
             attestation.at,
             attestation.statement,
@@ -1629,11 +1626,6 @@ class SafetySupervisor:
         raised microseconds before this call would otherwise vanish. It is
         drained on the next tick and raises the floor again, which is the
         fail-safe direction.
-
-        Who acknowledged is in the record this returns, which the console
-        writes under the operator's alias in the session record or the
-        logbook. The line logged here says what was cleared and when, and
-        carries no name: the system journal is kept on the machine's disk.
         """
         if not operator.strip():
             return Err(
@@ -1660,7 +1652,8 @@ class SafetySupervisor:
             cleared=cleared,
         )
         _logger.warning(
-            "safety latches acknowledged at unix_millis=%d: %s",
+            "safety latches acknowledged by %r at unix_millis=%d: %s",
+            operator,
             record.wall_clock,
             ", ".join(cleared),
         )

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import errno
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Final, Literal
@@ -518,40 +517,6 @@ async def test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_lo
     assert OPERATOR.encode() not in b"".join(
         path.read_bytes() for path in (recorded.root / DIRECTORY).iterdir()
     )
-
-
-async def test_anh151_who_attested_and_who_acknowledged_is_in_the_logbook_not_in_the_journal(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The console's journal is kept on the machine's disk, and holds no name typed at the
-    console: it says that the wiring was attested and a verdict acknowledged, and when.
-    Who did it stays where it already was, under the operator's alias: in the logbook."""
-    recorded = recorded_rig(tmp_path)
-    with caplog.at_level(logging.INFO):
-        async with recorded.rig.http() as http:
-            # The attestation, at rest; then a session that ends on a drive fault.
-            await start_bench(recorded, http)
-            await set_target(http, 5.0)
-            await recorded.tick(15.0)
-            recorded.rig.simulator.inject_fault(DriveFault.OVERCURRENT)
-            await recorded.tick(180.0)
-            acknowledged = await http.post(
-                "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": True}
-            )
-            assert acknowledged.status_code == 200, acknowledged.text
-            await recorded.tick(1.0)
-
-    journal = caplog.text
-    assert "emergency-stop wiring attested at unix_millis=" in journal
-    assert "safety latches acknowledged at unix_millis=" in journal
-    assert OPERATOR not in journal, "the journal carries the name typed at the console"
-
-    written = [
-        (entry["kind"], str(entry["detail"]).split(":")[0], entry["actor"], bool(entry["at"]))
-        for entry in logbook_of(recorded)
-    ]
-    assert ("operator_action", "attested", ALIAS, True) in written
-    assert ("verdict_ack", "acknowledged", ALIAS, True) in written
 
 
 async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason(

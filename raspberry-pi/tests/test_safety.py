@@ -3283,21 +3283,16 @@ def test_acknowledging_does_not_discard_a_trip_raised_from_a_thread() -> None:
 def test_the_acknowledgement_is_logged_with_a_wall_clock_stamp(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """What was cleared, and when by a clock a server can read. Who is in the record the
-    call returns, which the console writes under the operator's alias: the journal, kept on
-    the machine's disk, carries no name typed at the console (ANH-151)."""
+    """Who cleared what, and when by a clock a server can read."""
     rig = Rig()
     rig.drive_state = DriveState.FAULT
     rig.tick()
 
     with caplog.at_level(logging.WARNING, logger="src.training.safety"):
-        cleared = rig.supervisor.acknowledge("dr-mensah")
+        assert isinstance(rig.supervisor.acknowledge("dr-mensah"), Ok)
 
-    assert isinstance(cleared, Ok)
-    assert cleared.value.operator == "dr-mensah"
-    assert cleared.value.wall_clock == rig.clock.unix_millis()
-    assert "dr-mensah" not in caplog.text
-    assert f"safety latches acknowledged at unix_millis={rig.clock.unix_millis()}" in caplog.text
+    assert "dr-mensah" in caplog.text
+    assert str(rig.clock.unix_millis()) in caplog.text
     assert RULE_DRIVE_FAULT in caplog.text
 
 
@@ -3550,18 +3545,14 @@ def test_motion_is_blocked_until_the_estop_wiring_is_attested() -> None:
 
 
 def test_the_attestation_is_logged_with_a_timestamp(caplog: pytest.LogCaptureFixture) -> None:
-    """A forgotten jumper becomes a visible defect with a name and a time on it. The name is
-    in the attestation the call returns, which the console writes under the operator's alias;
-    the journal carries the time and the statement, and no name typed at the console
-    (ANH-151)."""
+    """A forgotten jumper becomes a visible defect with a name and a time on it."""
     rig = Rig()
     with caplog.at_level(logging.INFO, logger="src.training.safety"):
         result = rig.supervisor.confirm_estop_wiring("dr-mensah")
 
     assert isinstance(result, Ok)
-    assert result.value.operator == "dr-mensah"
-    assert "dr-mensah" not in caplog.text
-    assert f"attested at unix_millis={rig.clock.unix_millis()}" in caplog.text
+    assert "dr-mensah" in caplog.text
+    assert str(rig.clock.unix_millis()) in caplog.text
     assert "STO" in caplog.text
 
 

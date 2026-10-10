@@ -1622,38 +1622,32 @@ console), et les trois scripts qu'une personne lance avec `sudo`.
 * **Une personne qui a `sudo` sur le Pi peut tout.** Ce que le ticket prévoit
   pour `sudo` et pour SSH est dans le lot du pare-feu.
 
-### 10.4 Le journal du système ne porte plus le nom tapé à la console
+### 10.4 Le journal du système : ce qui en sort, ce qui y reste
 
 Depuis que le journal est gardé sur le disque
 ([pi-image.md](pi-image.md#le-journal-du-système)), ce qu'il contient y reste.
-Trois lignes y écrivaient le nom tapé par l'opérateur : l'attestation du
-câblage de l'arrêt d'urgence, l'acquittement d'un verdict, l'acquittement du
-verrou de la caméra. Elles disent maintenant ce qui a été fait et quand, sans
-nom :
 
-```text
-emergency-stop wiring attested at unix_millis=...: ...
-safety latches acknowledged at unix_millis=...: drive_fault
-presence latch presence_intrusion acknowledged at unix_millis=...
-```
-
-**Qui l'a fait n'est pas perdu.** La console l'écrivait déjà, et l'écrit
-toujours, dans l'enregistrement de la séance ou, hors séance, dans le journal
-hors séance, avec les deux horloges, sous l'alias de l'opérateur
-([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
-Un alias se recalcule à partir d'un nom : on peut vérifier que telle personne
-a attesté, sans que son nom soit écrit sur la machine. L'attestation en
-mémoire garde le nom, pour la page, jusqu'à l'arrêt de la console.
-
-Ce que cela coûte, à savoir : si l'enregistrement et le journal hors séance ne
-peuvent pas être écrits (disque plein ou en panne, ce que la page signale), il
-ne reste sur la machine que « une attestation a eu lieu à telle heure », sans
-personne en face. Avant, le journal du système gardait le nom dans ce cas.
-
-Le code d'appairage du BITalino n'est plus écrit dans le journal non plus.
-C'est le code d'usine du capteur, le même pour tous : ce n'était pas un secret
-de la machine, et ce n'est toujours pas une protection
+**Le code d'appairage du BITalino n'y est plus écrit.** C'est le code d'usine
+du capteur, le même pour tous : ce n'était pas un secret de la machine, et ce
+n'est toujours pas une protection
 ([menaces.md](menaces.md#men-15-bitalino-usurpé-ou-signal-physiologique-forgé)).
+
+**Le nom tapé par l'opérateur y est encore écrit, par trois lignes** :
+l'attestation du câblage de l'arrêt d'urgence, l'acquittement d'un verdict,
+l'acquittement du verrou de la caméra. Ce lot ne les change pas. Le choix est
+ouvert, noté dans le ticket, et attend l'avis sur les données de santé
+(ANH-172) : garder le nom dans le journal, pour savoir qui a attesté ou
+acquitté, ou n'y écrire qu'un alias.
+
+Ce qui a été vérifié pour préparer ce choix : la console écrit déjà ces mêmes
+faits ailleurs, avec les deux horloges et **sous l'alias de l'opérateur, sans
+son nom** : dans l'enregistrement de la séance quand une séance est en cours,
+sinon dans le journal hors séance
+([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
+Retirer le nom du journal du système ne ferait donc pas perdre « qui », tant
+que ces deux écritures réussissent ; il ne resterait que l'alias. Si elles
+échouent (disque plein ou en panne, ce que la page signale), le journal du
+système est aujourd'hui le seul endroit qui garde le nom.
 
 ### 10.5 Essai au banc
 
