@@ -38,9 +38,12 @@
 #      there. The shutdown is an orderly one: a power cut in the middle of a
 #      write is not simulated here;
 #   9. a console frozen in the middle of a session (SIGSTOP: it completes no
-#      tick and answers nothing) is ended by the unit's watchdog and started
-#      again by systemd, at rest; it says it started after an unclean stop
-#      and names the session record that was left open;
+#      tick) is stopped by the unit's watchdog after 10 s. That stop wakes it
+#      (systemd sends SIGTERM then SIGCONT, `docker run` relays both): it
+#      leaves by its controlled stop, closes its record, and exits in
+#      failure, because its loop had gone without a tick for too long. systemd
+#      starts another console, at rest, which says it started after an
+#      unclean stop;
 #  10. a console that dies again and again comes up out of service: it runs,
 #      says so, and arms nothing, until a named operator puts it back in
 #      service.
@@ -50,6 +53,12 @@
 # target 0 on the simulated drive. The simulated drive lives in the console's
 # own process: what a restart finds of a drive left RUNNING is not here, it
 # is tests/test_supervised_console.py, where the drive outlives the console.
+#
+# A console that answers NOTHING, not even the stop (a process blocked outside
+# its event loop), is not exercised here either: every freeze that can be
+# applied from outside (SIGSTOP, `docker pause`) is lifted by the stop itself.
+# What the unit does then (15 s, then `docker stop`, which kills after 60 s)
+# is read from the unit, not observed.
 #
 # The hardware watchdog is not exercised either: install.sh writes systemd's
 # setting for it, which this test reads back, and the stand-in's systemd is
@@ -567,36 +576,48 @@ frozen_record="$(records | tail -n 1)"
 before_id="$(container_id)"
 before_restarts="$(restarts)"
 # SIGSTOP on the console itself: every thread of it stops. It completes no
-# tick, tells systemd nothing, and answers no signal but the last one.
+# tick and tells systemd nothing.
 console_pid="$(in_machine docker inspect --format '{{.State.Pid}}' anheart)"
 begin="$(date +%s)"
 in_machine bash -c "kill -STOP $console_pid" || fail "the console could not be frozen"
 ok "the console is frozen (process $console_pid), its session record is $frozen_record"
-# 10 s for the watchdog, 15 s for the console to leave by itself, then the
-# unit's usual stop: SIGTERM, and the kill 60 s later.
+# 10 s for the watchdog. Its stop is a SIGTERM followed by a SIGCONT, both
+# relayed to the console by `docker run`: the stop itself wakes the console,
+# which then leaves by its controlled stop. Then two seconds, and a new start.
 wait_for_replacement "$before_id" 200 "after the freeze"
 elapsed=$(($(date +%s) - begin))
 [ "$elapsed" -ge 10 ] || fail "the frozen console was replaced after $elapsed s: before the watchdog's 10 s"
 ok "systemd started another console $elapsed s after the freeze"
 wait_for_console "after the freeze"
 logged="$(in_machine journalctl --unit anheart --no-pager --since "@$begin")"
-expect_in "$logged" "Watchdog timeout (limit 10s)" "the journal says the watchdog ended the frozen console"
+expect_in "$logged" "Watchdog timeout (limit 10s)" "the journal says the watchdog stopped the frozen console"
 expect_in "$logged" "Failed with result 'watchdog'" "and that the service failed on its watchdog"
+# The woken console knows its loop had stopped completing ticks, whether or
+# not one late tick ran before it handled the stop: it does not leave as if
+# nothing had happened.
+expect_in "$logged" "not a clean stop" "the woken console says its own stop is not a clean one"
+expect_in "$logged" "status=1/FAILURE" "and exits in failure"
 [ "$(restarts)" -gt "$before_restarts" ] || fail "systemd does not count a restart of the service"
 ok "systemd restarted the service by itself"
 expect_at_rest "after the restart by the watchdog"
+# It left by its own exit path: the record of the frozen session is closed.
+in_machine test -f "/var/lib/anheart/records/$frozen_record/checksums.sha256" \
+    || fail "the woken console did not close the record of its session"
+ok "the record of the frozen session is closed ($(in_machine grep -o '"end_reason":"[a-z_]*"' "/var/lib/anheart/records/$frozen_record/manifest.json"))"
 answer="$(panel)"
 expect_in "$answer" '"unclean_stop":true' "the new console says it started after an unclean stop"
-expect_in "$answer" "\"open_record\":\"$frozen_record\"" "and names the session record that was left open"
-in_machine test ! -e "/var/lib/anheart/records/$frozen_record/checksums.sha256" \
-    || fail "the record of the frozen session was closed"
+expect_in "$answer" '"open_record":null' "with no session record left open"
+case "$answer" in
+    *'"unclean_starts":0,'*) fail "the start after the freeze is not counted" ;;
+esac
+ok "and the start after the freeze is counted"
 written=""
 for ((attempt = 0; attempt < 15; attempt++)); do
     written="$(in_machine cat /var/lib/anheart/records/logbook/events.jsonl 2> /dev/null || true)"
-    case "$written" in *"enregistrement de seance $frozen_record non clos"*) break ;; esac
+    case "$written" in *'"detail":"unclean_stop: demarrage apres arret non propre"'*) break ;; esac
     sleep 1
 done
-expect_in "$written" "unclean_stop: demarrage apres arret non propre : enregistrement de seance $frozen_record non clos" \
+expect_in "$written" '"detail":"unclean_stop: demarrage apres arret non propre"' \
     "the logbook holds the warning: start after an unclean stop"
 
 # --- 10. A console that keeps dying ------------------------------------------------------
@@ -604,8 +625,9 @@ expect_in "$written" "unclean_stop: demarrage apres arret non propre : enregistr
 step "10. The console dies again and again: out of service, until a named operator puts it back"
 begin="$(date +%s)"
 deaths=0
-# Three starts after an unclean stop within ten minutes. The freeze above was
-# one; the kill of step 5 is another when this run got here in under ten minutes.
+# Three starts after an unclean stop within ten minutes. The start after the
+# freeze above was one; the one after the kill of step 5 is another when this
+# run got here in under ten minutes.
 while :; do
     case "$(panel)" in *'"out_of_service":true'*) break ;; esac
     [ "$deaths" -lt 3 ] || fail "three more deaths did not take the console out of service"
