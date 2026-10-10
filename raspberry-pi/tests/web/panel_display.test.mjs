@@ -249,6 +249,16 @@ function panelRow(overrides = {}) {
     motor_max_rpm: 300,
     software_version: "pi-0.0.0-dev",
     dashboard: { state: "not_configured", label: "non configure", detail: "", last_answer_age_s: null },
+    service: {
+      out_of_service: false,
+      unclean_starts: 0,
+      threshold: 3,
+      window_s: 600,
+      unclean_stop: false,
+      open_record: null,
+      persisted: true,
+    },
+    watchdog: { enabled: false, sent: 0, failed: 0, last_error: null },
     ...overrides,
   };
 }

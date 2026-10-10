@@ -14,7 +14,10 @@ something does not work:
 * which build this console is (``raspberry-pi/VERSION``), and how its link with
   the dashboard is doing (:mod:`src.link_state`);
 * whether a time service keeps the wall clock that dates what the console
-  writes (:mod:`src.wall_clock`).
+  writes (:mod:`src.wall_clock`);
+* whether the console is in service, what its last stop was
+  (:mod:`src.service_state`), and whether it tells the service manager it is
+  alive (:mod:`src.service_watchdog`).
 
 These are plain frozen records. The composition root
 (:mod:`src.local_panel`) builds one on request through :class:`PanelSource`;
@@ -26,12 +29,14 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Protocol
+from typing import Final, Protocol
 
 from src.bitalino_client import LinkStats
 from src.contract import SoftwareVersion
 from src.ecg_pipeline import EcgBridgeStats
 from src.link_state import LinkStatus
+from src.service_state import IN_SERVICE, ServiceStatus
+from src.service_watchdog import WatchdogStatus
 from src.training.runtime import IdleLink, RiseHold
 from src.units import BpmPerMinute, GearRatio, Metres, Monotonic, MotorRpm
 from src.wall_clock import WallClockState
@@ -90,6 +95,12 @@ class EcgLinkStatus:
     bridge: EcgBridgeStats
 
 
+NOT_SUPERVISED: Final[WatchdogStatus] = WatchdogStatus(
+    enabled=False, sent=0, failed=0, last_error=None
+)
+"""A console no service manager watches (the tests, a development machine)."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PanelStatus:
     """Everything the console's link panel shows, at one instant."""
@@ -133,6 +144,12 @@ class PanelStatus:
     wall_clock: WallClockState | None = None
     """What the wall clock is worth, as the console last read it; ``None`` on a
     console built without a probe. It dates the records, and decides nothing else."""
+
+    service: ServiceStatus = IN_SERVICE
+    """Whether the console is in service, and what its last stop was."""
+
+    watchdog: WatchdogStatus = NOT_SUPERVISED
+    """What the console has told the service manager of its control loop."""
 
 
 class PanelSource(Protocol):

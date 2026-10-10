@@ -59,6 +59,8 @@ from src.presence.monitor import (
     StartBlocked,
 )
 from src.sensors.base import Metric, SensorReading, SensorSpec
+from src.service_state import THRESHOLD, WINDOW, ServiceStatus
+from src.service_watchdog import WatchdogStatus
 from src.telemetry import EcgWindow, Payload, PayloadKind
 from src.training.plan import PhaseSpan, Program, TrainingProfile
 from src.training.runtime import IdleLink
@@ -191,6 +193,13 @@ class AckBody:
 
     operator: str
     estop_released: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreBody:
+    """Put a console that is out of service back in service, by name."""
+
+    operator: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,6 +672,71 @@ class WallClockRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ServiceRow:
+    """Whether the console is in service, and what it knows of its own restarts.
+
+    Part of ``GET /api/panel``, and the answer of ``POST /api/service/restore``.
+    """
+
+    out_of_service: bool
+    """``True``: the console arms nothing until a named operator puts it back in service."""
+
+    unclean_starts: int
+    """Starts after an unclean stop within ``window_s``, this one included."""
+
+    threshold: int
+    """How many of them take the console out of service."""
+
+    window_s: float
+
+    unclean_stop: bool
+    """Whether this start follows a stop that was not clean."""
+
+    open_record: str | None
+    """The session record that stop left open, when there is one; else null."""
+
+    persisted: bool
+    """``False``: the state could not be written; what is shown holds until the restart."""
+
+    @classmethod
+    def of(cls, status: ServiceStatus) -> ServiceRow:
+        """Render a :class:`~src.service_state.ServiceStatus`."""
+        return cls(
+            out_of_service=status.out_of_service,
+            unclean_starts=status.unclean_starts,
+            threshold=THRESHOLD,
+            window_s=float(WINDOW),
+            unclean_stop=status.unclean_stop,
+            open_record=status.open_record,
+            persisted=status.persisted,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WatchdogRow:
+    """What the control loop has told the service manager. Part of ``GET /api/panel``."""
+
+    enabled: bool
+    """``False``: no service manager watches this console (it was not started by one)."""
+
+    sent: int
+    failed: int
+    """Notifications that could not be sent; each was dropped, none was waited for."""
+
+    last_error: str | None
+
+    @classmethod
+    def of(cls, status: WatchdogStatus) -> WatchdogRow:
+        """Render a :class:`~src.service_watchdog.WatchdogStatus`."""
+        return cls(
+            enabled=status.enabled,
+            sent=status.sent,
+            failed=status.failed,
+            last_error=status.last_error,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     """The local console's link panel. ``GET /api/panel``."""
 
@@ -682,6 +756,8 @@ class PanelRow:
     """This build's version (``raspberry-pi/VERSION``); ``pi-unknown`` when it has none."""
 
     dashboard: DashboardLinkRow
+    service: ServiceRow
+    watchdog: WatchdogRow
 
     wall_clock: WallClockRow | None
     """Null on a console that does not judge its clock."""
@@ -705,6 +781,8 @@ class PanelRow:
             software_version=status.software_version,
             dashboard=DashboardLinkRow.of(status.dashboard),
             wall_clock=None if wall_clock is None else WallClockRow.of(wall_clock),
+            service=ServiceRow.of(status.service),
+            watchdog=WatchdogRow.of(status.watchdog),
         )
 
 

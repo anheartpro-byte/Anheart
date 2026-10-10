@@ -121,9 +121,11 @@ from src.web.schemas import (
     ProfileRow,
     RecordRow,
     RecordsRow,
+    RestoreBody,
     SafetyRow,
     SensorRow,
     SensorsRow,
+    ServiceRow,
     SnapshotRow,
     StartBody,
     StatusRow,
@@ -261,6 +263,38 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
     _register_records(app, services=services, auth=auth)
+    _register_service(app, services=services, auth=auth)
+
+
+def _register_service(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """Putting a console that keeps restarting back in service."""
+
+    @app.post("/api/service/restore", dependencies=auth, tags=["system"])
+    async def restore_service(body: RestoreBody) -> ServiceRow:
+        """Put the console back in service. Never automatic, and always by name.
+
+        A console that started several times in a row after an unclean stop
+        comes up out of service and arms nothing (``service`` in
+        ``GET /api/panel``). This is the only thing that lifts it, short of
+        removing its state file by hand. It starts nothing: a session still
+        takes an attestation and an explicit start.
+
+        **409** when the console is in service: there is nothing to lift.
+        """
+        restorer = services.service
+        operator = _require_operator(body.operator)
+        if restorer is None:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="this console keeps no restart state: it is in service",
+            )
+        restored = await restorer.restore(operator)
+        if isinstance(restored, Ok):
+            return ServiceRow.of(restored.value)
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail="the console is in service: there is nothing to lift",
+        )
 
 
 def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:

@@ -46,7 +46,7 @@ var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
 var LOOP_ANSWER_S = 1;          // the loop empties its mailbox every 0.2 s: past this, on its clock, no answer is coming
-var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator"];
+var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator", "service-operator"];
 
 var state = {
   token: "",
@@ -355,7 +355,7 @@ var FRAME_FED = [
   "safety-action", "run-safety-action", "phase", "manual-state",
   "console-ecg-state", "ecg-state",
 ];
-var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard", "wall-clock"];
+var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard", "wall-clock", "service-state"];
 var STATUS_FED = ["run-state", "attest-state"];
 
 function markStale(ids, stale) {
@@ -1210,6 +1210,67 @@ function renderWallClock(clock) {
   node.className = "bind" + (clock.trusted ? "" : " bind-warn");
 }
 
+/*
+  Whether the console is in service, as it says in /api/panel (`service`), and
+  what it has told the service manager that watches it (`watchdog`).
+
+  Out of service is a standing state the console keeps across its restarts: it
+  has started several times after a stop that was not clean, and it arms
+  nothing until a named operator puts it back in service. So it is said three
+  times: a chip on every page, a red banner on every page, and the form that
+  lifts it on the safety page, shown only then.
+
+  The line under the chips says what the last start found: an unclean stop, the
+  session record it left open, a state the disk did not take, notifications the
+  service manager did not get. Nothing is written when there is nothing to say.
+*/
+function renderService(service, watchdog) {
+  var out = service.out_of_service;
+  var minutes = Math.round(service.window_s / 60);
+  pill(el("service-state"), out ? "HORS SERVICE" : "en service", out ? "bad" : "good");
+  show(el("service-banner"), out);
+  show(el("service-restore"), out);
+  text(
+    el("service-banner-detail"),
+    service.threshold + " demarrages apres un arret non propre en moins de " + minutes +
+      " min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme"
+  );
+  var said = [];
+  if (service.unclean_stop) {
+    said.push(
+      "demarre apres un arret non propre" +
+        (service.open_record ? " (enregistrement " + service.open_record + " non clos)" : "")
+    );
+  }
+  if (service.unclean_starts > 0) {
+    said.push(service.unclean_starts + " sur " + service.threshold + " en " + minutes + " min avant la mise hors service");
+  }
+  if (!service.persisted) {
+    said.push("etat des redemarrages non enregistre sur le disque");
+  }
+  if (watchdog.enabled && watchdog.failed > 0) {
+    said.push("chien de garde : " + watchdog.failed + " notification(s) non envoyee(s)");
+  }
+  text(el("service-detail"), said.join(" · "));
+}
+
+function doRestoreService() {
+  api("/api/service/restore", { method: "POST", body: { operator: el("service-operator").value } })
+    .then(function (service) {
+      ok(
+        el("service-note"),
+        service.persisted
+          ? "console remise en service"
+          : "console remise en service jusqu'a son prochain redemarrage : l'etat n'a pas pu etre enregistre"
+      );
+      loadPanel();
+    })
+    .catch(function (error) {
+      problem(el("service-note"), error);
+      window.alert("remise en service refusee : " + error.message);
+    });
+}
+
 function renderPanel(panel) {
   state.panel = panel;
   state.panelAt = performance.now();
@@ -1223,6 +1284,7 @@ function renderPanel(panel) {
   if (panel.wall_clock) {
     renderWallClock(panel.wall_clock);
   }
+  renderService(panel.service, panel.watchdog);
   state.motionEnabled = panel.motion_enabled;
   state.programsEnabled = panel.programs_enabled;
   pill(el("console-mode"), panel.motion_enabled ? "mouvement actif" : "LECTURE SEULE", panel.motion_enabled ? "warn" : "good");
@@ -2762,6 +2824,7 @@ function start() {
   el("stop").onclick = doStop;
   el("estop").onclick = doEstop;
   el("ack").onclick = doAcknowledge;
+  el("service-restore-button").onclick = doRestoreService;
   el("attest").onclick = doAttest;
   el("manual-start").onclick = doManualStart;
   el("manual-apply").onclick = doManualApply;
