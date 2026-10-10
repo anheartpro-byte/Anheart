@@ -43,6 +43,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **L'état du variateur est lu, jamais supposé.** Un variateur trouvé en marche (laissé par un processus planté) est arrêté et verrouillé (`drive_precommanded`), même console au repos. | `runtime.py` |
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
 | **Le keepalive part en premier à chaque cycle.** Si la boucle cale, le variateur ne reçoit plus rien et son propre ttO l'arrête. | `drive.service()` en tête de tic |
+| **Une console figée ou plantée est relancée, et ne remet rien en mouvement.** Sur un Pi installé, systemd n'entend la console que par ses tics de contrôle terminés : un tic bloqué, une exception ou un processus figé ne disent rien, et la console est arrêtée puis relancée, au repos. La console relancée lit le variateur avant tout ordre, met à zéro et verrouille celui qu'elle trouve en marche, n'a ni attestation ni séance, et ne bouge qu'après une attestation, un acquittement nommé, un départ et une cible. Une console qui redémarre trois fois en dix minutes après un arrêt non propre revient hors service et n'arme plus rien jusqu'à ce qu'un opérateur nommé la remette en service ([section 9](#9-console-figée-ou-plantée--redémarrage-contrôlé-anh-162)). | `service_watchdog.py`, `service_state.py`, `local_panel.py`, `scripts/anheart.service` |
 | **Les écritures sont vérifiées.** LFRD est relu ; une écriture qui n'atterrit pas donne `setpoint_unconfirmed`, puis GO_SILENT si l'arbre ne suit pas non plus. | `safety.py`, `tracking.py` |
 | **Une FC n'est utilisée que si elle est fiable.** Deux traitements ECG indépendants doivent être d'accord à 5 bpm près sur la même fenêtre continue. Le premier n'extrait une FC que d'une fenêtre qu'il a notée `good` ; une fenêtre qu'il ne peut pas noter (valeur non finie, test du secteur impossible ou refusé par le filtre) vaut `no_signal`, jamais `good`. Sinon la FC est « périmée » : FREEZE à 10 s, REDUCE à 30 s, RAMP_DOWN à 60 s. | `signal_processing.py`, `ecg_pipeline.py`, règle `hr_stale` |
 | **Une FC mesurée au-dessus d'un palier reste jugée tant qu'aucune FC utilisable n'est venue dire le contraire.** Une lecture sans FC (fenêtre bruitée, dérivation plate, électrode décollée, fenêtre que le traitement ne peut pas noter, FC retenue par la confirmation) ne relance pas le délai de 5 s du palier dur et n'efface pas un dépassement mesuré : `hr_hard_max` et `hr_critical` jugent la dernière FC utilisable tant qu'elle a 10 s au plus, l'âge où `hr_stale` commence. Seule une FC utilisable sous le niveau de relâche relance le délai. Quand le signal se perd au-dessus du palier dur, la séance se termine à l'échéance des 5 s, avant le premier niveau de `hr_stale`, qui garde sa propre horloge. Toute lecture compte, y compris celle qu'une lecture sans FC a suivie avant le tic. Détail dans [raspberry-pi.md](raspberry-pi.md#52-les-18-règles-du-superviseur) ; ce que la règle ne couvre pas en [section 5](#5-le-résiduel-connu). | `safety.py` (`_level_rate`), `runtime.py` (`observe_ecg`) |
@@ -73,6 +74,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Site et Convex : vérifiés en développement seulement.** Le nouveau Convex tourne sur le déploiement de développement ; il y a été testé de bout en bout avec une console simulée (1er octobre 2026) et toutes les pages du site y ont été ouvertes à la main (2 octobre 2026). Il n'est pas en production, et ces deux vérifications datent d'avant les changements intégrés depuis. Le source a reçu depuis des tests automatisés (fonctions Convex, composants et pages du site, sans navigateur, avec un seuil de couverture en CI : [framework-de-test.md](framework-de-test.md#seuils-de-couverture-de-convex-et-du-site-anh-203)) et le nouveau traitement des clés de machine (empreinte stockée à la place de la clé, machine supprimée refusée : [menaces.md](menaces.md), MEN-01) ; ce traitement n'a d'effet sur le service rendu qu'après le redéploiement ANH-82. Les formulaires n'ont pas été soumis depuis le navigateur, et plusieurs défauts restent (séance orpheline après un arrêt de la console, textes en anglais…). | Voir [deploiement.md](deploiement.md), [convex.md](convex.md) et le [guide du tableau de bord](guides/guide-tableau-de-bord.md#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026). |
 | **Séparation des organisations : dans le source, pas en service.** Elle n'est déployée nulle part ; la migration des données existantes n'a tourné que dans les tests ; Clerk Organizations n'est pas configuré. Tant que la variable `ANHEART_ORG_ID` n'est pas définie, un jeton sans organisation agit dans l'organisation principale du compte, d'après le miroir tenu par Convex et non d'après Clerk. | Voir [convex.md](convex.md#3-règles-dautorisation) et la [procédure d'activation](convex.md#activer-le-multi-organisation). Le miroir par webhook et le site sont des lots suivants. |
 | **Déploiement du Pi jamais essayé sur un Pi.** L'image Docker et `scripts/anheart.service` lancent maintenant la console `src.local_panel`. L'image a été construite et essayée en simulation dans un conteneur ARM64, pas sur un vrai Pi, ni avec le variateur ou le BITalino réels. | Voir [deploiement.md](deploiement.md#7-le-raspberry-pi). Le premier démarrage sur la machine reste à faire. |
+| **La relance d'une console figée n'arrête pas le moteur, et n'a jamais tourné sur un Pi.** Le chien de garde du service agit 10 s après le dernier tic, la relance suit (13 s après un gel dans la machine de remplacement de la CI). Ce qui arrête le moteur entre-temps est le ttO du variateur et sa réaction à la perte de communication (SLL), qui ne sont ni relus ni réglés par le logiciel (ligne « ttO et SLL jamais relus » plus haut). Le chien de garde matériel du Pi n'a jamais été armé ni déclenché. | Si ttO est long ou si SLL vaut roue libre, un bras lancé continue ou ralentit seul pendant que la console redémarre ; la console relancée met alors la consigne à zéro et verrouille, sur la rampe du variateur, sans rien pouvoir freiner de plus. Essai au banc à faire : [9.6](#96-essai-au-banc--procédure-non-faite). |
 
 ## 4. Défauts trouvés par la simulation, et corrigés
 
@@ -1292,3 +1294,258 @@ machine ; jamais sur le matériel. « Avant » : les mesures de 8.5.
   exemple `ARRET` tant qu'il n'est pas acquitté) : la question n'est pas
   tranchée ici. Elle toucherait aussi le cas d'une séance terminée par un
   STOP, qui affiche `REPOS` depuis toujours.
+
+---
+
+## 9. Console figée ou plantée : redémarrage contrôlé (ANH-162)
+
+Ticket
+[ANH-162](https://linear.app/anheart/issue/ANH-162/pi-watchdog-materiel-et-redemarrage-sur-de-la-console),
+10 octobre 2026. Avant lui, une console dont la boucle se bloquait restait là,
+page ouverte, sans rien commander ni rien montrer de vrai, jusqu'à ce que
+quelqu'un la redémarre ; une console qui plantait était relancée 10 s plus
+tard, sans limite. Les choix décrits ici (ce que « tic sain » veut dire, les
+délais, la règle du mode hors service) sont ceux de l'auteur du changement ; la
+revue indépendante les juge.
+
+**Tout ce qui suit a tourné sur le banc logiciel et dans la machine de
+remplacement de la CI, en simulation. Rien sur un vrai Raspberry Pi, rien avec
+le vrai variateur.** L'essai au banc est écrit en
+[9.6](#96-essai-au-banc--procédure-non-faite) et n'est pas fait.
+
+### 9.1 Qui arrête quoi, et dans quel ordre
+
+| Instant | Qui | Ce qui se passe |
+|---|---|---|
+| 0 | la console | elle cesse de terminer ses tics : boucle bloquée, exception, processus figé ou mort. Plus aucune trame ne part vers le variateur (le keepalive est la première chose d'un tic) |
+| ttO | le variateur | il n'entend plus la console et applique sa réaction à la perte de communication. **C'est lui qui arrête le moteur**, et rien d'autre ne le fait plus tôt |
+| 10 s | systemd | il n'a plus de nouvelles de la console : il arrête l'unité, par l'arrêt contrôlé de la console. Cet arrêt réveille une console figée, qui sort d'elle-même ; il ne tue que celle qui ne répond toujours à rien, 75 s plus tard |
+| 2 s après la sortie de la console | systemd | il lance une nouvelle console : 13 s après le gel dans la machine de remplacement de la CI ; environ 90 s (calculé, jamais observé) pour une console qu'il a fallu tuer |
+| premier tic | la nouvelle console | elle lit le variateur, avant tout ordre. S'il est activé ou si l'arbre tourne : consigne à zéro, verrou `drive_precommanded`. Elle n'a ni attestation ni séance |
+
+Le chien de garde et la relance ne sont donc **pas une sécurité du moteur**.
+Ils servent à ce qu'une console figée ne reste pas figée : que la page
+redevienne vraie, que quelqu'un puisse de nouveau lire la machine et la
+commander. Le chien de garde matériel du Pi fait la même chose un cran plus
+bas : il redémarre le Pi quand le système entier, systemd compris, est figé.
+
+### 9.2 Le chien de garde ne peut pas être nourri par une console bloquée
+
+La console dit à systemd qu'elle est vivante sur la ligne qui suit un tic de
+contrôle revenu, et à aucun autre endroit de son code : pas de minuteur, pas
+d'autre tâche, pas de fil. Un tic qui lève une exception n'atteint pas cette
+ligne. Un tic qui ne revient pas ne l'atteint pas. Une boucle qui ne tourne
+plus ne l'exécute pas. Le silence commence donc exactement quand la boucle de
+contrôle cesse de terminer ses tics, y compris quand tout le reste du
+programme (la page, l'acquisition) tourne encore.
+
+« Sain » veut dire : le tic est allé au bout. Ce n'est pas un jugement sur la
+machine. Une console qui a verrouillé un verdict, ou qui est passée en
+`GO_SILENT`, fait toujours ses tics et reste dite vivante : la relancer
+effacerait ce qu'elle affiche, et c'est une décision d'opérateur.
+
+L'envoi ne peut pas retenir le tic : un datagramme sur un socket local non
+bloquant. S'il ne part pas, l'échec est compté et oublié ; systemd en tirera
+la conséquence. Détail :
+[raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service).
+
+### 9.3 Après le redémarrage : rien ne repart seul
+
+Une console relancée est un nouveau processus. Mesuré sur le banc logiciel,
+avec un variateur simulé qui survit à la console et dont le délai de
+communication est réglé pour **ne pas** l'arrêter (le pire cas : le filet du
+variateur ne joue pas) :
+
+| Ce qui est arrivé à la console, bras lancé | Ce que le variateur garde | Ce que fait la console relancée |
+|---|---|---|
+| Exception dans le tic | consigne mise à zéro par la console mourante, étage de sortie encore activé | verrou `drive_precommanded`, étage coupé à l'arrêt |
+| Tic bloqué, boucle vivante : systemd demande l'arrêt, la console sort d'elle-même | idem ; la console sort avec un code d'erreur, parce que sa boucle ne terminait plus de tic | idem |
+| Console figée, réveillée par l'arrêt de systemd (ce que systemd et Docker font d'un gel) : au réveil elle fait un tic en retard, qui voit le gel (`loop_stall`), met la consigne à zéro et se tait pour de bon, puis elle sort | idem ; la console sort avec un code d'erreur, parce qu'un tic est revenu trop tard | idem |
+| Console figée qui ne répond à rien, tuée | **consigne intacte, étage activé, arbre à sa vitesse** | consigne à zéro au premier tic, verrou `drive_precommanded`, descente sur la rampe du variateur, étage coupé à l'arrêt |
+
+Dans les quatre cas, ensuite, sans que personne touche à rien : arbre à 0,
+consigne à 0, étage coupé, et cela reste ainsi. Un départ demandé sans
+attestation est refusé. Après l'attestation, il est encore refusé : `verdict
+drive_precommanded a acquitter`. Il faut un acquittement nommé, puis un
+départ, et la séance ainsi armée ne commande toujours rien tant qu'une cible
+n'est pas donnée.
+
+Avec un délai de communication court (le cas prévu), le variateur simulé s'est
+arrêté seul avant le retour de la console, qui le trouve à l'arrêt et ne
+commande rien.
+
+**Une console réveillée reparle au variateur avant de sortir.** Son tic en
+retard commence, comme tout tic, par le keepalive : la consigne **déjà en
+vigueur**, écrite une fois, puis une lecture d'état. Le superviseur voit alors
+le gel, la consigne est mise à zéro, et plus aucune trame ne part. Ce
+keepalive ne peut pas monter la vitesse (c'est la valeur que le variateur
+avait déjà), et un variateur que son délai de communication a mis en défaut
+entre-temps ne repart pas sur une consigne. Mais une personne qui regarde
+l'afficheur du variateur à cet instant verra ces échanges.
+
+### 9.4 Redémarrages en boucle : hors service
+
+Chaque mort d'une console en séance est un arrêt non contrôlé de cette séance.
+Une console qui meurt toutes les quelques minutes n'est pas une machine où
+mettre quelqu'un. Au troisième démarrage après un arrêt non propre en dix
+minutes, la console démarre donc **hors service** : elle tourne, le dit sur
+toutes ses pages, lit le variateur et arrête celui qu'elle trouve en marche,
+mais refuse tout départ, manuel, programmé ou venu du tableau de bord. Seul un
+opérateur nommé la remet en service, et cela ne lance rien et n'acquitte
+rien : un verrou ou un arrêt d'urgence en place y reste.
+
+**Ce qui compte comme arrêt non propre.** Tout arrêt qui n'est pas la sortie
+de la console par son arrêt contrôlé avec le code 0 : une mort, une exception,
+et tout arrêt d'un processus dont la boucle de contrôle est restée plus de 3 s
+sans terminer de tic. Ce dernier cas est retenu pour la vie du processus : une
+console figée est réveillée par l'arrêt même qui la termine, et le tic qu'elle
+fait alors, en retard, ne rend pas cet arrêt propre
+([raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
+Sans cela, une console qui se fige et revient sans cesse ne serait jamais
+comptée.
+
+Ce mécanisme ne peut pas retenir une machine pour de bon : la remise en
+service vaut tout de suite, même si le disque refuse de l'écrire ; un fichier
+d'état absent, abîmé ou impossible à écrire n'est jamais une raison d'être
+hors service. Règles complètes en
+[raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service),
+côté systemd en [pi-image.md](pi-image.md#le-chien-de-garde).
+
+### 9.5 Ce qui a été vérifié, et ce que cela ne couvre pas
+
+| Quoi | Preuve |
+|---|---|
+| Une notification par tic terminé, aucune d'ailleurs ; un tic qui ne revient pas les arrête pendant que la boucle tourne ; un tic en erreur n'en envoie pas | `raspberry-pi/tests/test_supervised_console.py` (les trois tests `test_ex1_…`), la vraie console sur l'horloge réelle, un vrai socket local, les tics comptés du dehors de la console |
+| Un envoi que personne ne prend ne retient rien : 20 000 envois sur une file pleine en moins de 5 s, sur un socket dont le test vérifie d'abord qu'il n'attend jamais | `raspberry-pi/tests/test_service_watchdog.py` |
+| `tick_exception` et `loop_stall` finissent le processus en erreur ; au redémarrage, un variateur laissé en marche est arrêté et verrouillé ; rien ne bouge sans opérateur | `test_supervised_console.py` (`test_ex4_…`), face à un modèle de systemd |
+| Une console gelée puis réveillée par son arrêt sort en erreur et n'écrit jamais d'arrêt propre, que le tic en retard passe avant l'arrêt ou non | `test_ex4_a_console_frozen_then_woken_by_its_own_stop_leaves_as_an_unclean_stop` (les deux ordres) ; `test_ex2_a_tick_that_comes_back_late_is_remembered_whatever_completes_afterwards` |
+| Sous le vrai systemd : une console figée en pleine séance (`SIGSTOP`) est arrêtée au bout de 10 s, sort en erreur, et une autre est lancée au repos, qui compte ce démarrage ; trois morts de suite donnent une console hors service qui n'arme rien, remise en service par son nom | test d'installation de bout en bout, étapes 9 et 10 ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)). Première exécution, 38072378030 : nouvelle console 13 s après le gel ; elle a échoué ensuite sur le compte de cet arrêt, corrigé depuis |
+| Le compte des redémarrages, d'un processus au suivant, ses propriétés, la fenêtre de dix minutes et le seuil de trois | `raspberry-pi/tests/test_service_state.py` |
+| L'état sur le disque dit « en marche » pendant que la console tourne, et « arrêtée » seulement après une sortie avec le code 0 | `test_ex2_run_console_writes_running_after_its_first_tick_and_stopped_only_at_a_clean_exit`, `test_ex2_run_console_never_writes_a_failed_exit_as_a_clean_stop` |
+| Le variateur est lu avant que ce démarrage soit écrit sur le disque | `test_ex3_a_restarted_console_reads_the_drive_before_any_command_can_exist`, `test_ex3_reading_the_state_at_startup_writes_nothing` |
+| La page et les routes d'une console hors service ; la remise en service ne lève ni verrou ni arrêt d'urgence | `raspberry-pi/tests/test_out_of_service_console.py` (dont `test_ex2_restoring_lifts_neither_a_latched_verdict_nor_an_emergency_stop`), `raspberry-pi/tests/web/panel_service.test.mjs` |
+| L'avertissement « démarrage après arrêt non propre » quand le dernier enregistrement est resté ouvert, écrit une fois | `test_supervised_console.py` (`test_ex3_a_start_after_a_killed_session_…`) |
+
+**Ce que cela ne couvre pas.**
+
+- **Rien n'a tourné sur un vrai Pi ni avec le vrai variateur.** Le chien de
+  garde matériel n'a jamais été armé : seul son réglage est écrit et relu.
+- **Ce que fait le vrai variateur quand la console disparaît dépend de deux
+  de ses réglages**, que le logiciel ne lit pas : le délai de communication
+  (`TTO`, adresse Modbus 6005) et la réaction à la perte de communication
+  (`SLL`, adresse 7010), d'après le fichier de communication officiel de
+  l'ATV320. Ce fichier donne une réaction d'usine en **roue libre** ; le
+  simulateur suppose une **rampe**. Rien de cela n'est changé ici : c'est le
+  ticket ANH-76 qui fixe ces deux réglages.
+- **Une console relancée ne freine pas un arbre en roue libre.** Si elle
+  trouve l'arbre en rotation avec l'étage de sortie coupé, elle écrit la
+  consigne zéro, verrouille, et ne réactive jamais l'étage : le bras ralentit
+  seul.
+- **Une console qui ne répond réellement à rien, pas même à son arrêt, n'a été
+  exercée nulle part sous le vrai systemd.** Tout gel qu'on peut appliquer du
+  dehors (`SIGSTOP`, `docker pause`) est levé par l'arrêt lui-même. Ce que
+  l'unité fait dans ce cas (15 s d'attente, puis `docker stop`, qui tue au
+  bout de 60 s, soit une nouvelle console environ 90 s après le gel) est lu
+  dans l'unité, pas observé ; le côté console est exercé face au modèle.
+  Pendant ce temps la page ne répond pas : elle affiche `NO LIVE DATA`.
+- **Sous le vrai systemd, ni le cas « tic bloqué, boucle vivante », ni la
+  sortie sur une exception du tic, ni un relais qui ne démarre pas** n'ont
+  tourné : les deux premiers sont exercés sur le banc logiciel, le troisième
+  est lu ([pi-image.md](pi-image.md#le-chien-de-garde)).
+- **Le Pi ne redémarre pas de lui-même quand systemd n'arrive plus à relancer
+  la console** (limite de dix démarrages par demi-heure atteinte, Docker
+  bloqué) : l'unité reste en échec. Le chien de garde matériel ne joue que si
+  le système entier est figé. C'est un écart avec la phrase du ticket (« puis
+  du Pi si le processus ne repart pas »), fait pour ne pas avoir un Pi qui
+  redémarre en boucle quand la console ne peut pas démarrer ; la décision
+  revient au chef de projet
+  ([pi-image.md](pi-image.md#8-limites-et-reste-à-faire)).
+- **Le tableau de bord ne sait pas qu'une console est hors service** : le
+  champ du heartbeat est le ticket ANH-148.
+- **Une boucle lente n'est pas vue** : une console qui meurt une fois toutes
+  les cinq minutes ou plus ne passe jamais hors service, et systemd la relance
+  chaque fois.
+- **Une console morte avant son premier tic n'est pas comptée par la
+  console** : elle n'écrit son démarrage qu'après avoir lu le variateur. Seule
+  la limite de systemd arrête une console qui meurt au démarrage.
+- **Un fichier d'état abîmé remet en service une console hors service, sans
+  opérateur nommé**, et un disque qui refuse l'écriture rend la détection de
+  boucle inactive (la page le dit). Choix faits pour que ce mécanisme ne
+  retienne jamais une machine ; à valider par le chef de projet.
+- **Le chien de garde écoute le tic de contrôle, pas le reste** : une
+  acquisition bloquée est l'affaire de `hr_stale`, une page qui ne répond plus
+  celle du contrôle de santé de l'image, qui constate sans réparer.
+- **Si le relais des notifications meurt**, systemd n'entend plus une console
+  saine et l'arrête au bout de 10 s, par son arrêt contrôlé : une séance en
+  cours serait terminée sur sa rampe par une panne du relais. S'il ne démarre
+  jamais, la console est arrêtée de la même façon toutes les 300 s
+  ([pi-image.md](pi-image.md#le-chien-de-garde)).
+- **Un appel au variateur qui ne rendrait jamais la main pendant
+  l'inspection au repos** retient l'arrêt contrôlé de la console : elle est
+  alors traitée comme une console qui ne répond à rien. Le vrai pilote borne
+  chaque échange.
+
+### 9.6 Essai au banc : procédure (non faite)
+
+> **Non réalisé.** Rien de ce qui suit n'a été fait sur la machine. C'est le
+> critère d'acceptation du ticket (« essai au banc consigné »), il revient au
+> responsable produit, au banc, avec le Pi installé
+> ([pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi), étapes 1 à 8)
+> et le variateur. Les « attendus » ci-dessous viennent du banc logiciel et de
+> la machine de remplacement de la CI, pas d'une machine.
+
+**But.** Voir sur la machine qu'une console qui meurt ou se fige est relancée,
+que le moteur s'arrête par le variateur seul, et que rien ne repart.
+
+**Conditions pour les essais B à E** (les mêmes que pour la vérification des
+défauts du variateur, [raspberry-pi.md, section 6](raspberry-pi.md#6-les-défauts-du-variateur-table-lft)).
+
+* **Personne dans la capsule, personne dans la zone balayée par le bras.**
+  Aucun essai avec une personne à bord.
+* **Deux personnes, pas moins.** La première reste **au sectionneur** (ou au
+  disjoncteur) du variateur, la main dessus, du départ du bras à son arrêt
+  complet ; elle regarde le bras et l'afficheur du variateur, et coupe
+  l'alimentation sans attendre l'accord de personne dès qu'un critère
+  d'abandon ci-dessous est atteint, ou si quoi que ce soit repart. **Le STO du
+  variateur est ponté** : cette coupure est le seul moyen indépendant du
+  logiciel de retirer le couple. La seconde est à la console et au terminal du
+  Pi : elle annonce chaque geste avant de le faire, chronomètre et note.
+* **Vitesse imposée : 3 tr/min au bras**, séance manuelle `bench`.
+* Aucun outil de banc en même temps que la console
+  ([pi-image.md](pi-image.md#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
+
+**Avant de commencer : lire deux réglages au clavier du variateur, et décider.**
+Ce que le vrai variateur fait quand la console disparaît dépend d'eux, et le
+logiciel ne les lit pas.
+
+| Réglage du variateur | Relevé | Ce que cela décide |
+|---|---|---|
+| [ModbusTimeout] `ttO`, délai de perte de communication | à noter (réglage d'usine : 10,0 s ; le simulateur suppose 3 s) | c'est le temps pendant lequel le bras garde sa vitesse après la disparition de la console. Il entre dans chaque critère d'abandon ci-dessous. Au-dessus de 10 s : **ne pas faire les essais C et D**, faire d'abord fixer ce réglage (ticket ANH-76) |
+| [Modbus Error Resp] `SLL`, réaction à la perte de communication | à noter | [Ramp stop] : attendu, les essais se font. [Freewheel Stop] (réglage d'usine) : les essais se font, le bras ralentit seul, sans frein, et l'écart est noté. **[Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained] : essais C et D interdits.** Sous ces valeurs le variateur ne s'arrête pas sur la perte de la console : l'essai deviendrait l'essai C bis, sans la décision qu'il exige |
+
+Les réglages ne se corrigent pas « pour l'essai » : s'ils n'ont pas la valeur
+attendue, on le note et on s'arrête là, sauf pour l'essai C bis, qui est une
+décision écrite du chef de projet.
+
+| Essai | Geste | À lire | Attendu | **Abandon** |
+|---|---|---|---|---|
+| B. Console tuée au repos, variateur relié, moteur à l'arrêt | `sudo docker kill --signal KILL anheart` | le temps jusqu'au retour de la page (il sert aux essais suivants) ; l'afficheur du variateur ; la page | nouvelle console au repos, sans attestation ; le variateur n'a pas bougé ; `journalctl -u anheart` porte `unclean_stop` | si le bras bouge, à n'importe quel moment : couper |
+| C. Console tuée, bras à 3 tr/min | séance manuelle, cible 3 tr/min, attendre la vitesse, puis la même commande | le temps entre le geste et le début du ralentissement (c'est `ttO`) ; la façon de s'arrêter, rampe ou roue libre (c'est `SLL`) ; le temps jusqu'à l'arrêt complet ; le code du variateur (attendu : `SLF1`) ; la page au retour de la console | le bras s'arrête par le variateur seul. La console revient au repos, montre le défaut du variateur, ou le verrou `drive_precommanded` si l'arbre tournait encore à son retour, et **rien ne repart**. Un départ demande une attestation, un acquittement nommé, un départ | **si le bras ne ralentit pas dans `ttO` + 5 s après le geste : couper l'alimentation du variateur**, puis `sudo systemctl stop anheart`. Essai non conforme : noter, et ne pas recommencer avant d'avoir relu `ttO` et `SLL` |
+| D. Console figée, bras à 3 tr/min | même séance, puis `sudo kill -STOP $(sudo docker inspect --format '{{.State.Pid}}' anheart)` | comme en C ; en plus `journalctl -u anheart -f` : l'heure de `Watchdog timeout`, celle de `not a clean stop`, celle du retour de la console ; l'afficheur du variateur **au moment du réveil** | le bras s'arrête par le variateur seul, à `ttO`. 10 s après le gel, `Watchdog timeout (limit 10s)!` : l'arrêt de systemd réveille la console, qui reparle une fois au variateur (la consigne déjà en vigueur, une lecture, puis la consigne zéro : [9.3](#93-après-le-redémarrage--rien-ne-repart-seul)), écrit `not a clean stop` et sort. Nouvelle console quelques secondes plus tard (13 s après le gel dans la CI ; plus sur un Pi), au repos ; sa page écrit `demarre apres un arret non propre`. Rien ne repart | **si le bras ne ralentit pas dans `ttO` + 5 s après le gel, ou s'il accélère au réveil de la console : couper**, puis `sudo systemctl stop anheart` |
+| C bis. Variateur laissé en marche au retour de la console (le cas du ticket) | **seulement sur décision écrite du chef de projet**, après B, C et D conformes : régler `ttO`, pour cet essai, au-dessus du temps de retour mesuré en B, refaire l'essai C, puis **remettre `ttO` à sa valeur et le relire** | l'afficheur du variateur et la vitesse au moment où la page revient ; le verdict affiché ; la descente | la console revient pendant que le bras tourne encore : consigne à zéro, verrou `drive_precommanded`, descente sur la rampe du variateur, étage coupé à l'arrêt | **si la page n'est pas revenue au bout du temps mesuré en B + 10 s, ou si le bras ne ralentit pas dans les 5 s qui suivent son retour : couper.** Ne jamais attendre le `ttO` allongé |
+| E. Morts répétées, moteur à l'arrêt | l'essai B trois fois en moins de dix minutes | la page | bandeau rouge `CONSOLE HORS SERVICE` ; un départ est refusé ; page Securite, un nom, `Remettre en service` : la console est de nouveau en service et rien n'a bougé | si le bras bouge : couper |
+| A. Chien de garde matériel, **Pi seul, variateur hors tension**, en dernier | `sudo systemctl stop anheart`, `sync`, puis `sudo sh -c 'echo 1 > /proc/sys/kernel/sysrq; echo c > /proc/sysrq-trigger'` (plante le noyau) | le temps jusqu'au redémarrage du Pi ; puis les constats de l'étape 5 de l'installation | redémarrage en 15 s environ, console revenue seule, au repos | si le Pi n'a pas redémarré au bout de 60 s : le chien de garde matériel n'est pas armé ; couper et remettre son alimentation, et le noter |
+
+**L'essai A peut abîmer la carte SD** : planter le noyau interrompt les
+écritures en cours. Le faire en dernier, service arrêté et après un `sync`,
+et avoir d'abord copié la carte, ou au moins les enregistrements de
+`/var/lib/anheart/records` qu'on veut garder.
+
+**Où le noter.** Dans le ticket ANH-162, en commentaire : la date, la
+référence du Pi et la version de la console (`systemctl status anheart`),
+`ttO` et `SLL` relevés et ce qui a été décidé, puis ce tableau avec, pour
+chaque essai, les temps mesurés, le code du variateur, ce que la page a
+montré, et la sortie de `systemctl show -p Result,NRestarts anheart`. Puis
+corriger cette section et [pi-image.md](pi-image.md#8-limites-et-reste-à-faire) :
+ce qui est écrit « non fait » ou « non vérifié » ne doit le rester que pour ce
+qui l'est encore.

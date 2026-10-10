@@ -103,6 +103,27 @@ shown on the page and written in each record's manifest
 starts and the operator is told; a start with a person on board is refused
 before the runtime is asked anything.
 
+Under a service manager
+-----------------------
+
+On an installed Pi systemd starts this process, expects to hear from it, and
+restarts it when it dies or stops answering (``scripts/anheart.service``).
+Three things here are for that, and none of them can start a session:
+
+* the control task tells the service manager it is alive on the line after
+  each tick that returned (:meth:`LocalPanel.control_cycle`,
+  :mod:`src.service_watchdog`), and from nowhere else;
+* a console asked to stop while its control loop was completing no tick does
+  not report a clean exit (:meth:`LocalPanel.close`);
+* a console that keeps restarting comes up out of service: it reads the drive,
+  stops and latches one it finds running, shows why, and arms nothing until a
+  named operator puts it back in service (:mod:`src.service_state`,
+  :class:`ServiceDesk`).
+
+A restarted console is a new process: no attestation, no session, and a drive
+it finds enabled or turning is zeroed and latched. That was true before any of
+this and stays the rule.
+
 See .claude/skills/anheart-strict-python/SKILL.md and the "Console locale"
 section of README.md.
 """
@@ -111,6 +132,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import signal
@@ -178,19 +200,34 @@ from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
 from src.record.cursor import boot_identity
 from src.record.drive_tap import tap_drive
-from src.record.export import RecordExporter, RecordIo
+from src.record.export import RecordExporter, RecordIo, listing
 from src.record.journal import STOP_TIMEOUT, Activity, Journal
+from src.record.logbook import note
+from src.record.schema import EventKind
 from src.record.session import (
+    SYSTEM,
     RecordInodesLow,
     RecordJournalBusy,
     SessionRecorder,
     SessionRequest,
+    operator_alias,
     stamp_for,
     storage_gate,
 )
 from src.record_uplink import RecordSource
 from src.result import Err, Ok, Result
 from src.sensors.hub import SensorHub
+from src.service_state import (
+    IN_SERVICE,
+    THRESHOLD,
+    WINDOW,
+    NotOutOfService,
+    ServiceGuard,
+    ServiceStatus,
+    Stored,
+    store,
+)
+from src.service_watchdog import NOTIFY_SOCKET, ServiceWatchdog
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.sim.physiology import Physiology
 from src.sim.signals.base import SignalGenerator
@@ -322,6 +359,17 @@ EXIT_GRACE: Final[Seconds] = Seconds(5.0)
 process has this long to leave by itself. See :func:`bound_exit`."""
 
 ESTOP_SOURCE: Final[str] = "console web: e-stop"
+
+SERVICE_SAVE_TIMEOUT: Final[Seconds] = Seconds(5.0)
+"""How long putting the console back in service waits for the disk to take it. Past
+that the operator is told it holds until the next restart only."""
+
+OUT_OF_SERVICE: Final[str] = (
+    f"console hors service : {THRESHOLD} demarrages apres un arret non propre en moins de "
+    f"{WINDOW / 60:.0f} min. Faire verifier la machine, puis la remettre en service depuis "
+    "cette page, par un operateur nomme"
+)
+"""Why a console out of service arms nothing, and what lifts it."""
 
 type CloudTransportFactory = Callable[[CloudConfig], CloudTransport]
 """Builds the dashboard transport from the configuration; tests pass a fake."""
@@ -493,8 +541,10 @@ class PanelReporter:
         "_dashboard",
         "_ecg",
         "_runtime",
+        "_service",
         "_software_version",
         "_wall_clock",
+        "_watchdog",
     )
 
     def __init__(
@@ -506,13 +556,17 @@ class PanelReporter:
         ecg: EcgLink,
         software_version: SoftwareVersion,
         dashboard: LinkHealth | None,
+        watchdog: ServiceWatchdog,
+        service: ServiceDesk | None = None,
         wall_clock: WallClockWatch | None = None,
     ) -> None:
         """``software_version``: what this build calls itself, read once at startup.
         ``dashboard``: what the dashboard link last heard of itself, which that link
         alone writes; ``None`` on a console that has no machine key.
         ``wall_clock``: the last reading of the wall clock's standing; ``None`` on a
-        console built without a probe."""
+        console built without a probe.
+        ``watchdog``: what the control task tells the service manager.
+        ``service``: the restart state of this console; ``None`` when it keeps none."""
         self._clock: Clock = clock
         self._config: LocalConfig = config
         self._runtime: TrainingRuntime = runtime
@@ -520,6 +574,8 @@ class PanelReporter:
         self._software_version: SoftwareVersion = software_version
         self._dashboard: LinkHealth | None = dashboard
         self._wall_clock: WallClockWatch | None = wall_clock
+        self._watchdog: ServiceWatchdog = watchdog
+        self._service: ServiceDesk | None = service
 
     def panel_status(self) -> PanelStatus:
         """The link panel, now."""
@@ -528,6 +584,7 @@ class PanelReporter:
         now = self._clock.monotonic()
         dashboard = self._dashboard
         wall_clock = self._wall_clock
+        service = self._service
         return PanelStatus(
             at=now,
             motion_enabled=True,
@@ -544,6 +601,110 @@ class PanelReporter:
             software_version=self._software_version,
             dashboard=NOT_CONFIGURED if dashboard is None else dashboard.status(now),
             wall_clock=None if wall_clock is None else wall_clock.current(),
+            service=IN_SERVICE if service is None else service.status(),
+            watchdog=self._watchdog.status(),
+        )
+
+
+# =========================================================================
+# In service, or not: the restart state as the loop and the page use it
+# =========================================================================
+
+
+@final
+class ServiceDesk:
+    """The console's restart state (:mod:`src.service_state`), wired to the logbook.
+
+    Mutable through its guard, owned by the event loop thread. Nothing here
+    touches the disk on that thread: what is said goes to the journal's queue,
+    and the two writes a running console makes (:meth:`record_start`, once,
+    after the first tick; :meth:`restore`) have a thread of their own, waited
+    for a bounded time.
+    """
+
+    __slots__ = ("_clock", "_guard", "_io", "_journal")
+
+    def __init__(self, guard: ServiceGuard, journal: Journal, clock: Clock) -> None:
+        """``guard`` has already begun: its state is this run's."""
+        self._guard: ServiceGuard = guard
+        self._journal: Journal = journal
+        self._clock: Clock = clock
+        self._io: RecordIo = RecordIo(1)
+
+    @property
+    def guard(self) -> ServiceGuard:
+        """The state itself, and its file."""
+        return self._guard
+
+    def status(self) -> ServiceStatus:
+        """In service or not, and what this start found. Memory only."""
+        return self._guard.status
+
+    def refusal(self) -> str | None:
+        """Why nothing may be armed, in words for the operator; ``None`` when in service."""
+        return OUT_OF_SERVICE if self._guard.status.out_of_service else None
+
+    def announce(self) -> None:
+        """Write what this start found: to the console's journal and to the logbook.
+
+        Called once, at startup. Nothing is written for a start that follows
+        a clean stop of a console in service.
+        """
+        status = self._guard.status
+        if status.unclean_stop:
+            record = status.open_record
+            left = "" if record is None else f" : enregistrement de seance {record} non clos"
+            self._say(EventKind.WARNING, f"unclean_stop: demarrage apres arret non propre{left}")
+        if status.out_of_service:
+            self._say(EventKind.WARNING, f"out_of_service: {OUT_OF_SERVICE}")
+
+    async def record_start(self) -> None:
+        """Write this start for the next process to find. Off the loop, bounded, total.
+
+        Called once, after the first control tick: the drive has been read by
+        then, and this is the first time this start touches the disk for
+        writing. A disk that refuses or does not answer costs the count, never
+        the console: the status says the state is not kept.
+        """
+        await self._write(self._guard.stored)
+
+    async def restore(self, operator: str) -> Result[ServiceStatus, NotOutOfService]:
+        """A named operator puts the console back in service. In effect at once.
+
+        The state is then written, off the loop, for at most
+        :data:`SERVICE_SAVE_TIMEOUT`. A disk that refuses or does not answer
+        changes nothing now: the status says the state is not kept, and the
+        console comes up out of service again after its next restart.
+        """
+        restored = self._guard.restore()
+        if isinstance(restored, Err):
+            return Err(restored.error)
+        self._say(
+            EventKind.OPERATOR_ACTION,
+            "service_restored: console remise en service",
+            operator_alias(operator),
+        )
+        await self._write(restored.value)
+        return Ok(self._guard.status)
+
+    async def _write(self, stored: Stored) -> None:
+        """Hand ``stored`` to the disk on this desk's own thread, and note what it answered."""
+        write = functools.partial(store, self._guard.path, stored)
+        written = await self._io.run(write, SERVICE_SAVE_TIMEOUT)
+        self._guard.saved(written.value if isinstance(written, Ok) else Err(written.error.detail))
+
+    def _say(self, kind: EventKind, detail: str, actor: str = SYSTEM) -> None:
+        """One line in the console's journal and one in the logbook. Memory only."""
+        _logger.warning("%s", detail)
+        clock = self._clock
+        self._journal.log(
+            note(
+                wall_clock=clock.unix_millis(),
+                at=clock.monotonic(),
+                kind=kind,
+                detail=detail,
+                actor=actor,
+            )
         )
 
 
@@ -604,12 +765,16 @@ class LocalPanel:
         "_reporter",
         "_runtime",
         "_sensors",
+        "_service",
         "_services",
         "_sim_ecg",
+        "_stalled_at_stop",
         "_store",
         "_surface",
+        "_ticked",
         "_transport",
         "_wall_clock",
+        "_watchdog",
     )
 
     def __init__(
@@ -619,6 +784,7 @@ class LocalPanel:
         config: LocalConfig,
         drive: DriveSide,
         runtime: TrainingRuntime,
+        watchdog: ServiceWatchdog,
         surface: ControlSurface,
         hub: TelemetryHub,
         ecg: EcgLink,
@@ -633,8 +799,14 @@ class LocalPanel:
         transport: HttpxTransport | None = None,
         recorder: SessionRecorder | None = None,
         wall_clock: WallClockWatch | None = None,
+        service: ServiceDesk | None = None,
     ) -> None:
         self._clock: Clock = clock
+        self._watchdog: ServiceWatchdog = watchdog
+        self._service: ServiceDesk | None = service
+        self._stalled_at_stop: bool = False
+        # Set once the control loop has completed a tick, so read the drive.
+        self._ticked: asyncio.Event = asyncio.Event()
         self._recorder: SessionRecorder | None = recorder
         self._wall_clock: WallClockWatch | None = wall_clock
         self._config: LocalConfig = config
@@ -706,7 +878,37 @@ class LocalPanel:
         """The session record, or ``None`` when this console was built without one."""
         return self._recorder
 
+    @property
+    def watchdog(self) -> ServiceWatchdog:
+        """What the control task tells the service manager."""
+        return self._watchdog
+
+    @property
+    def service(self) -> ServiceDesk | None:
+        """The restart state of this console, or ``None`` when it keeps none."""
+        return self._service
+
     # --- the two periodic steps ------------------------------------------
+
+    async def control_cycle(self) -> None:
+        """What the control task repeats: one tick, then the service manager is told.
+
+        The second line is reached only when the first returned. A tick that
+        raises, that is cancelled or that never comes back tells the service
+        manager nothing, and that silence is what gets a frozen console
+        restarted (:mod:`src.service_watchdog`). No other line of the console
+        sends that notification: not a timer, not another task, not a thread.
+
+        A tick that returned is all it says. A console that has latched a
+        verdict, gone silent on the drive or is out of service still ticks,
+        and is still told alive: restarting it is an operator's decision.
+
+        The first tick that returns also lets this start be written to the
+        disk (:meth:`_record_start`): not before, the drive is read first.
+        """
+        await self.control_step()
+        self._watchdog.tick_completed(self._clock.monotonic())
+        self._ticked.set()
 
     async def control_step(self) -> TelemetrySnapshot:
         """One control tick, in the plan's order. Raises what the tick raises.
@@ -806,7 +1008,14 @@ class LocalPanel:
                 assert_never(unreachable)
 
     async def _start_manual(self, occupancy: Occupancy, operator: str) -> None:
-        """Resolve the occupancy's ceiling from the configuration, then arm, or say why not."""
+        """Resolve the occupancy's ceiling from the configuration, then arm, or say why not.
+
+        Before anything: a console out of service arms nothing.
+        """
+        out = self._service_refusal()
+        if out is not None:
+            self._surface.note_refused(operator, out)
+            return
         ceiling = self._config.ceiling_for(occupancy)
         if isinstance(ceiling, Err):
             self._surface.note_refused(operator, ceiling.error.detail)
@@ -892,7 +1101,12 @@ class LocalPanel:
             )
 
     def _admission_refusal(self, command: StartSession) -> str | None:
-        """Gate 1, from the configuration alone: programmes enabled, rider old enough."""
+        """Gate 1, before the machine is asked anything: the console is in service
+        (whether the start is typed here or comes down from the dashboard),
+        programmes are enabled, the rider is old enough."""
+        out = self._service_refusal()
+        if out is not None:
+            return out
         if not self._config.programs_enabled:
             return PROGRAMS_DISABLED
         return rider_age_refusal(command.subject_age, self._config.min_rider_age)
@@ -924,6 +1138,12 @@ class LocalPanel:
         if blocked is not None:
             return Err(blocked)
         return Ok(program)
+
+    def _service_refusal(self) -> str | None:
+        """Why a console out of service refuses every start; ``None`` when it is in service."""
+        service = self._service
+        refusal = None if service is None else service.refusal()
+        return None if refusal is None else f"demarrage refuse : {refusal}"
 
     def _refuse_programme(self, command: StartSession, detail: str) -> None:
         self._surface.note_refused(command.operator, detail)
@@ -1041,7 +1261,7 @@ class LocalPanel:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
         if self._recorder is not None:
             self._recorder.journal.start()
-        control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_step, stop))
+        control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_cycle, stop))
         observers = (
             asyncio.create_task(self._every(ECG_PERIOD, self.ecg_step, stop)),
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
@@ -1050,8 +1270,24 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
-        failed = await PanelTasks(stop, web, self.close).run(control, observers)
-        return EXIT_FAILED if failed else EXIT_OK
+        started = asyncio.create_task(self._record_start())
+        try:
+            failed = await PanelTasks(stop, web, self.close).run(control, observers)
+        finally:
+            # Not one of the console's tasks: it ends by itself, and its end
+            # stops nothing. A console that never ticked has nothing to write;
+            # one that did is waited for, so that no write of this start is
+            # still on its way when the exit writes its own.
+            if not self._ticked.is_set():
+                started.cancel()
+            await asyncio.gather(started, return_exceptions=True)
+        return EXIT_FAILED if failed or self._stalled_at_stop else EXIT_OK
+
+    async def _record_start(self) -> None:
+        """Once the first tick has read the drive: write this start, off the loop."""
+        await self._ticked.wait()
+        if self._service is not None:
+            await self._service.record_start()
 
     async def _every(
         self, period: Seconds, step: Callable[[], Awaitable[object]], stop: asyncio.Event
@@ -1077,7 +1313,25 @@ class LocalPanel:
         a disk. Its last writes are the journal thread's; this waits for that
         thread at most :data:`~src.record.journal.STOP_TIMEOUT`, without
         borrowing a thread from anybody (see :func:`journal_stopped`).
+
+        Before anything: whether the control loop went longer than the
+        supervisor's own stall bound without completing a tick, in this
+        process. It is not completing any as this stop begins, or a tick came
+        back that late earlier: a frozen console is woken by the very stop
+        that ends it, and may run one late tick before it gets here
+        (:meth:`~src.service_watchdog.ServiceWatchdog.stalled`). Either way
+        this is not a clean stop, whoever asked for it: :meth:`run` then
+        returns a failure. And the service manager is told the console is
+        stopping, so that the time the drive takes to come to rest is not
+        read as a frozen loop.
         """
+        if self._watchdog.stalled(self._clock.monotonic()):
+            self._stalled_at_stop = True
+            _logger.error(
+                "console stopped after its control loop went without a completed tick "
+                "for longer than its stall bound: not a clean stop"
+            )
+        self._watchdog.stopping()
         if not self._runtime.needs_stop_before_release:
             self._drive.release()
             detail = "runtime never started: drive link released without a write"
@@ -1254,6 +1508,8 @@ def build_panel(
     transport: CloudTransportFactory | None = None,
     journal: Journal | None = None,
     wall_clock: WallClockProbe | None = None,
+    notify_socket: str | None = None,
+    service: ServiceDesk | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -1287,6 +1543,11 @@ def build_panel(
     The build's version is read here, once (``raspberry-pi/VERSION``): startup
     I/O, with nothing turning. The page, the heartbeat and every record's
     manifest are given that one value.
+
+    ``notify_socket`` is the service manager's socket (``NOTIFY_SOCKET``), told
+    of every completed tick; ``None``: nobody is told. ``service`` is the
+    restart state of this console (:func:`open_service` in production);
+    ``None``: it keeps none and is always in service.
     """
     version = read_software_version()
     watch = None if wall_clock is None else WallClockWatch(wall_clock)
@@ -1298,6 +1559,9 @@ def build_panel(
     safety = SafetyLimits(
         hard_max_bpm=config.tiers.hard_max_bpm, critical_bpm=config.tiers.critical_bpm
     )
+    # A stop that finds no tick completed for as long as the supervisor itself
+    # goes silent on is not a clean one: the same figure, read in one place.
+    watchdog = ServiceWatchdog(notify_socket, overdue=safety.loop_stall_silent_gap)
     backend = drive.backend
     if journal is not None:
         tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
@@ -1375,6 +1639,8 @@ def build_panel(
         software_version=version,
         dashboard=link_health,
         wall_clock=watch,
+        watchdog=watchdog,
+        service=service,
     )
     services = Services(
         clock=clock,
@@ -1392,6 +1658,7 @@ def build_panel(
         presence=presence,
         camera=config.camera.value,
         records=None if journal is None else RecordExporter(journal.root, clock),
+        service=service,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
@@ -1419,6 +1686,7 @@ def build_panel(
         config=config,
         drive=drive,
         runtime=runtime,
+        watchdog=watchdog,
         surface=surface,
         hub=hub,
         ecg=ecg,
@@ -1433,7 +1701,39 @@ def build_panel(
         transport=owned,
         recorder=recorder,
         wall_clock=watch,
+        service=service,
     )
+
+
+def open_service(journal: Journal, clock: Clock) -> ServiceDesk:
+    """The restart state of this console, read and written next to the session records.
+
+    Startup I/O, with nothing turning and before any command can be taken: what
+    the previous process left is read, and the newest session record is
+    looked at (:func:`~src.record.export.listing`, which knows what a closed
+    record is). What was found is said in the console's journal and in the
+    logbook.
+
+    **Reads only.** This start is written to the disk later, once the first
+    control tick has read the drive (:meth:`LocalPanel._record_start`): the
+    write, with its flush to the device, is the one thing here that a tired SD
+    card can make slow, and it never comes before the first look at the drive.
+    What does come before it is two reads of the directory the journal has
+    just prepared (the state file, the list of records), like the other files
+    the console reads to start (its version, its limits, its profiles).
+
+    Nothing here talks to the drive, and until the first tick this console
+    sends it nothing at all: a drive left running hears no master and its own
+    communication timeout is counting. Its state is read by the first control
+    tick, as always, before the mailbox can hold anything.
+    """
+    guard = ServiceGuard(journal.root, clock)
+    records = listing(journal.root)
+    newest_open = records[0].name if records and not records[0].closed else None
+    guard.begin(boot_id=boot_identity(), open_record=newest_open)
+    desk = ServiceDesk(guard, journal, clock)
+    desk.announce()
+    return desk
 
 
 async def journal_stopped(journal: Journal) -> bool:
@@ -1812,6 +2112,7 @@ async def run_console(
     *,
     stop: asyncio.Event | None = None,
     stopped: Callable[[int], object] | None = None,
+    notify_socket: str | None = None,
 ) -> int:
     """Build the console on the real clock and run it until a signal.
 
@@ -1823,6 +2124,14 @@ async def run_console(
     The wall clock is judged where the system can be asked what it is worth
     (:func:`~src.wall_clock.system_probe`): on the Pi. Elsewhere the console
     says once that it does not judge it.
+
+    ``notify_socket``: the service manager's socket, when one started this
+    process (``NOTIFY_SOCKET``).
+
+    A stop with exit code 0 is the only clean one, and is written as such
+    last of all, once the drive is stopped, the record closed and the exit
+    deadline armed: a process that does not get that far is what the next
+    start counts as an unclean stop (:mod:`src.service_state`).
     """
     event = asyncio.Event() if stop is None else stop
     clock = RealClock()
@@ -1832,7 +2141,16 @@ async def run_console(
             "wall clock: not judged on this system (no way to ask what it is worth): "
             "nothing is warned or refused on its account, and the records say nothing of it"
         )
-    panel = build_panel(config, clock=clock, journal=open_journal(config, clock), wall_clock=probe)
+    journal = open_journal(config, clock)
+    service = open_service(journal, clock)
+    panel = build_panel(
+        config,
+        clock=clock,
+        journal=journal,
+        wall_clock=probe,
+        notify_socket=notify_socket,
+        service=service,
+    )
     undo = install_stop_signals(event)
     code = EXIT_FAILED
     try:
@@ -1841,6 +2159,8 @@ async def run_console(
         undo()
         if stopped is not None:
             stopped(code)
+    if code == EXIT_OK:
+        service.guard.stopped()
     return code
 
 
@@ -1880,7 +2200,9 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         return EXIT_CONFIG
     config = loaded.value
     _logger.warning("%s", describe_config(config))
-    return asyncio.run(run_console(config, stopped=bound_exit))
+    return asyncio.run(
+        run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
+    )
 
 
 if __name__ == "__main__":

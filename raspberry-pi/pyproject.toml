@@ -240,6 +240,12 @@ include = [
     "src/task_completion.py",
     "src/web/profile_writer.py",
     "src/panel_status.py",
+    # What the console tells the service manager of its control loop, and what
+    # it keeps of its own restarts: the first decides whether a frozen console
+    # is restarted (it must never be fed by anything but a completed tick), the
+    # second whether a console that keeps dying still arms a session.
+    "src/service_watchdog.py",
+    "src/service_state.py",
     # The dashboard link: it can submit a start and forward a stop, so every
     # branch that decides either is tested, like the rest of the console.
     "src/cloud_sync.py",
@@ -308,6 +314,8 @@ safety_chain = [
     "src/task_completion.py",
     "src/web/profile_writer.py",
     "src/panel_status.py",
+    "src/service_watchdog.py",
+    "src/service_state.py",
     "src/cloud_sync.py",
     "src/link_state.py",
     "src/record_uplink.py",

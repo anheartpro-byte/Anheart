@@ -119,6 +119,8 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/telemetry.py` | Diffusion de la télémétrie vers les navigateurs connectés. | Le nombre de clients ne ralentit pas la boucle. |
 | `src/panel_status.py` | Ce que la page montre des liaisons (variateur, BITalino), et la retenue d'une montée manuelle par la fréquence cardiaque. | Porte 100 %. |
+| `src/service_watchdog.py` | Ce que la console dit au gestionnaire de service (systemd) : prête, puis vivante, puis qu'elle s'arrête. | Une notification n'est envoyée que par la ligne qui suit un tic de contrôle revenu ; l'envoi est un datagramme local non bloquant, un échec est compté et oublié ; sans gestionnaire de service, rien n'est envoyé. Voir [3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service). Porte 100 %. |
+| `src/service_state.py` | Ce que la console garde de ses propres redémarrages, d'un processus au suivant : un fichier à côté des enregistrements. | Trois démarrages après un arrêt non propre en dix minutes mettent la console hors service ; un fichier absent ou abîmé, ou un disque qui refuse, ne le fait jamais ; la remise en service vaut tout de suite, quoi que réponde le disque (tests de propriétés). Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
 | `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
@@ -156,7 +158,11 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
 ne peut pas s'attacher au port), toutes s'arrêtent et le variateur est relâché.
-Code de sortie : 0 (normal), 1 (une tâche a échoué), 2 (configuration refusée).
+Code de sortie : 0 (normal), 1 (une tâche a échoué, ou la boucle de contrôle
+de ce processus est restée plus de 3 s sans terminer de tic, à l'instant de
+l'arrêt ou plus tôt), 2 (configuration refusée). Sur un Pi installé, systemd
+relance la console après un code 1
+([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
 `cloud_step` est la seule tâche qui avale ses exceptions : le tableau de bord
 est un observateur, un bogue de report ne doit pas arrêter une séance.
@@ -193,6 +199,10 @@ nominatif.
    que l'enregistrement a à dire à l'opérateur part vers la page comme
    événement `recording`.
 6. L'instantané est publié vers la page.
+
+Une fois le tic revenu, et seulement alors, la tâche de contrôle le dit au
+gestionnaire de service (`LocalPanel.control_cycle`,
+[3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
 ### 3.4 Un tic du runtime (`TrainingRuntime._tick`), dans cet ordre
 
@@ -273,6 +283,151 @@ fasse sous un `FREEZE` ou sans verdict : la séance se termine sur
 verrouillé dure jusqu'au RAMP_DOWN verrouillé de sa règle, qui termine alors
 la séance comme avant
 ([securite.md](securite.md#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)).
+
+### 3.6 Sous systemd : signe de vie, redémarrage, hors service
+
+Sur un Pi installé, systemd lance la console, attend de ses nouvelles et la
+relance quand elle meurt ou se tait ([pi-image.md](pi-image.md#le-chien-de-garde)).
+Ce qui suit est la part de la console. Rien ici ne lance une séance, et rien
+ici n'est le filet du moteur : une console qui ne fait plus de tic n'envoie
+plus de trame, et c'est le délai de communication du variateur (ttO) qui
+arrête le moteur, bien avant que systemd ne réagisse
+([securite.md](securite.md#9-console-figée-ou-plantée--redémarrage-contrôlé-anh-162)).
+
+**Le signe de vie : un tic revenu, et rien d'autre.** La tâche de contrôle
+répète `control_cycle` : un tic (`control_step`), puis une notification au
+gestionnaire de service (`ServiceWatchdog.tick_completed`). La seconde ligne
+n'est atteinte que si la première est revenue.
+
+| Ce qui arrive au tic | Ce que systemd entend |
+|---|---|
+| il revient (y compris console verrouillée, silencieuse sur le variateur, ou hors service) | `READY=1` au premier, puis `WATCHDOG=1` à chacun |
+| il lève une exception | rien ; la console sort avec le code 1 |
+| il ne revient pas (appel qui n'aboutit jamais, boucle bloquée, processus figé) | rien |
+| il revient en retard, plus de 3 s après le précédent (la boucle ou le processus a été figé, puis relâché) | `WATCHDOG=1`, comme pour tout tic revenu ; le processus est marqué, et son arrêt ne sera pas propre (voir « L'arrêt » plus bas) |
+
+Aucun minuteur, aucune autre tâche et aucun fil n'envoie cette notification :
+un tic bloqué ne peut pas être couvert par une boucle qui tourne encore à côté.
+« Revenu » est tout ce qu'elle dit. Une console qui a verrouillé un verdict ou
+qui est passée en `GO_SILENT` fait toujours ses tics et reste dite vivante : la
+relancer est une décision d'opérateur, pas celle du chien de garde.
+
+L'envoi est un datagramme sur un socket local non bloquant (protocole
+`sd_notify`, variable `NOTIFY_SOCKET`). Personne à l'écoute, ou une file pleine
+en face : l'appel rend la main tout de suite, l'échec est compté
+(`watchdog.failed` dans `GET /api/panel`), dit une fois dans le journal, et le
+tic suivant envoie le sien. Sans `NOTIFY_SOCKET` (poste de développement,
+tests, image lancée à la main), rien n'est envoyé et rien n'est compté.
+
+**L'arrêt, et le gel dont on se souvient.** Quand la console s'arrête
+d'elle-même, elle le dit (`STOPPING=1`) : le temps que met le variateur à
+s'arrêter n'est pas pris pour une boucle figée. Et son arrêt n'est **pas
+propre**, donc code de sortie 1 et rien d'écrit comme arrêt propre, dès que sa
+boucle de contrôle est restée plus de 3 s sans terminer de tic (le seuil où
+`loop_stall` passe en `GO_SILENT`) :
+
+* à l'instant où l'arrêt commence (un tic bloqué, par exemple) ;
+* **ou à n'importe quel moment depuis le démarrage de ce processus** : un tic
+  revenu plus de 3 s après le précédent le marque
+  (`ServiceWatchdog.tick_completed`), et rien ne l'efface.
+
+La seconde règle est un verrou gardé pour la vie du processus, et il le faut.
+Une console figée n'est pas arrêtée pendant qu'elle est figée : c'est l'arrêt
+de systemd qui la réveille (il fait suivre son signal d'arrêt d'un signal de
+reprise, et `docker run` relaie les deux). Vu dans la CI le 10 octobre 2026
+(job `pi-install`, exécution 38072378030) : console figée par `SIGSTOP`,
+`Watchdog timeout` à 10 s, réveil, **un** tic 10,09 s après le précédent
+(`loop_stall`, `GO_SILENT`), puis seulement l'arrêt, traité en 60 ms. Jugé sur
+« la boucle tourne-t-elle maintenant », cet arrêt passait pour propre, et une
+console qui se fige et revient sans cesse n'était jamais comptée. Le tic en
+retard est donc la preuve, pas son effacement.
+
+Le seuil est celui où le superviseur se tait. Les deux ne mesurent pas au
+même endroit du tic (le superviseur entre deux évaluations, ce verrou entre
+deux fins de tic) : ils s'accordent à la durée d'un tic près. Un processus qui
+porte ce verrou a donc aussi un verdict `loop_stall` verrouillé, à ce tic ou
+au suivant, et c'est `GO_SILENT` dès que le temps a été perdu entre deux tics,
+ce qui est le cas d'un processus figé. Il faut de toute façon qu'un opérateur
+regarde cette console. Que l'arrêt vienne de systemd dix secondes plus tard ou
+d'une personne le lendemain, le démarrage qui suit est compté comme suivant un
+gel. Le verrou n'envoie rien et ne retient rien : les notifications restent
+une par tic revenu, tic en retard compris. Il ne change que le code de sortie.
+
+**Les redémarrages en boucle : hors service.** Chaque redémarrage est un
+nouveau processus qui ne sait rien du précédent. Ce qui doit lui survivre est
+dans un petit fichier, `service-state.json`, à côté des enregistrements de
+séance (`src/service_state.py`).
+
+| Quoi | Règle |
+|---|---|
+| Arrêt propre | la console est sortie d'elle-même avec le code 0, et l'a écrit en dernier, variateur arrêté et enregistrement clos. Tout le reste est un arrêt **non propre** : mort, exception, boucle figée, coupure de courant |
+| Démarrage après un arrêt non propre | compté, avec son instant sur l'horloge monotone de la console |
+| Processus mort avant son premier tic | pas compté par la console : il n'a jamais écrit son démarrage (voir plus bas). Il ne s'est jamais dit prêt non plus : c'est systemd qui le compte, dans sa propre limite |
+| Hors service | au **troisième** démarrage après un arrêt non propre en **dix minutes**, pendant un même démarrage du système. Les instants d'un autre démarrage du système ne se comparent à rien et ne sont pas repris : une machine coupée au mur chaque soir n'est pas une boucle |
+| Ce que fait une console hors service | tout sauf armer : elle sert sa page, fait ses tics, lit le variateur, arrête et verrouille un variateur trouvé en marche. Un départ manuel, programmé ou venu du tableau de bord est refusé avec la raison et la marche à suivre |
+| Combien de temps | jusqu'à ce qu'un opérateur nommé la remette en service (`POST /api/service/restore`, page Securite). Ni le temps, ni un redémarrage propre, ni un redémarrage du Pi ne le lèvent |
+| Remise en service | vaut tout de suite, en mémoire. Elle est ensuite écrite sur un fil à part, 5 s au plus. Si le disque refuse, la page le dit, et la console revient hors service après son prochain redémarrage, à lever de la même façon. Elle ne lance rien : un départ demande toujours une attestation et un départ explicite |
+| Fichier absent | premier démarrage : en service |
+| Fichier illisible ou abîmé | compté comme **un** arrêt non propre, jamais comme une raison d'être hors service. Conséquence assumée, à faire valider par le chef de projet : si la console était hors service, un fichier abîmé la remet en service sans opérateur nommé |
+| Disque qui ne prend pas le fichier | rien n'est refusé ; la page dit que l'état n'est pas gardé. Chaque démarrage compte alors pour un et le compte n'atteint jamais trois : la détection de boucle est inactive tant que le disque refuse |
+| À la main | supprimer `/var/lib/anheart/records/service-state.json`, console arrêtée, revient à une remise en service |
+
+Ce mécanisme ne peut donc jamais retenir une machine pour de bon : la page qui
+dit « hors service » est celle qui le lève.
+
+**Le démarrage après un arrêt non propre (EX-3).** Au démarrage, avant que la
+boucle tourne, la console **lit** ce fichier et regarde le dernier
+enregistrement de séance (`listing` de `src/record/export.py`, qui sait ce
+qu'est un enregistrement clos). Si le processus précédent n'a pas écrit son arrêt propre,
+ou si le dernier enregistrement est resté ouvert sans qu'un démarrage l'ait
+déjà signalé, elle écrit un événement `warning` dans son journal et dans le
+journal hors séance ([15.9](#159-le-journal-hors-séance)) :
+`unclean_stop: demarrage apres arret non propre : enregistrement de seance
+<nom> non clos`. Un enregistrement resté ouvert le reste pour toujours : il est
+signalé par un démarrage, pas par tous ceux qui suivent.
+
+**Le variateur d'abord.** Rien de cela ne parle au variateur. Son état est lu
+par le premier tic, comme avant, avant que la boîte aux lettres puisse
+contenir un ordre. Ce que ce changement ajoute vient après ce premier tic :
+la console ne se dit prête à systemd qu'alors, et c'est alors seulement
+qu'elle **écrit** ce démarrage sur le disque, sur un fil à part
+(`LocalPanel._record_start`). L'écriture, avec sa synchronisation, est la
+seule opération qu'une carte SD fatiguée peut rendre lente : elle ne se place
+jamais entre un démarrage et le premier regard sur le variateur.
+
+Ce qui reste avant le premier tic est deux lectures, dans le dossier que le
+journal vient de préparer : le fichier d'état et la liste des enregistrements,
+comme les autres fichiers que la console lit pour démarrer (sa version, ses
+limites, ses profils). Leur place ne peut pas compter pour le moteur : tant
+que le premier tic n'a pas eu lieu, la console n'envoie aucune trame, donc un
+variateur laissé en marche n'entend aucun maître et son propre délai de
+communication court. Retarder la première lecture ne garde jamais un moteur
+commandé ; cela retarde seulement le second filet, la mise à zéro par la
+console, de la durée de ces lectures, à côté des secondes que met le
+programme à se charger.
+
+**Ce que le tableau de bord n'en sait pas encore.** Le heartbeat ne porte pas
+l'état « hors service » : son corps fait partie du contrat versionné avec
+Convex ([convex.md](convex.md#11-versions-et-compatibilité)), et l'y ajouter
+est le ticket ANH-148 (champs de santé du heartbeat, dont
+`health.restart_loop`). L'état existe côté console (`ServiceDesk.status()`,
+le même que `service` dans `GET /api/panel`) et n'attend que ce champ.
+
+Vérifié par `tests/test_service_watchdog.py` (le protocole, sur un vrai socket
+local, et le coût d'un envoi que personne ne prend),
+`tests/test_service_state.py` (le compte, d'un processus au suivant, et ses
+propriétés), `tests/test_supervised_console.py` (la vraie console sur l'horloge
+réelle, face à un modèle de systemd : un tic qui ne revient pas arrête les
+notifications alors que la boucle tourne ; une exception ou une boucle figée
+finit le processus ; une console gelée puis réveillée par son arrêt sort en
+erreur, qu'un tic en retard ait tourné avant l'arrêt ou non ; le démarrage
+n'est écrit qu'après la première lecture du variateur ; au redémarrage, un
+variateur laissé en marche est arrêté et verrouillé, et rien ne bouge avant
+qu'un opérateur ait attesté, acquitté, démarré et donné une cible) et
+`tests/test_out_of_service_console.py` (la page
+et les routes d'une console hors service). Avec le vrai systemd : le test
+d'installation de bout en bout ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)).
+Rien sur un vrai Pi.
 
 ---
 
@@ -1245,7 +1400,7 @@ Conséquences :
 | Programme arrivé à son retour au calme (phase COOLDOWN) | dès le premier tic de la phase, la consigne descend vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non) ; le mode reste « SEANCE ». À l'arrivée à 0, rien n'est verrouillé : la séance suit sa chronologie (RECOVERY, puis fin `programme_complete` à la durée prévue). |
 | Verdict RAMP_DOWN | consigne descendue par le logiciel (programme 15 tr/min moteur/s ; manuel aux limites de mouvement). |
 | Consigne revenue à 0 en cours de séance sans que personne l'ait demandé (`session_standstill`) | la consigne est déjà à 0 quand le verdict tombe, au tic suivant : rien de plus n'est écrit. La séance se termine comme sur tout RAMP_DOWN : marche gardée tant que l'arbre tourne, puis 7 et 6 à l'arrêt confirmé par RFRD. |
-| GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. |
+| GO_SILENT, boucle bloquée, processus tué | plus de trame : le **ttO** du variateur expire et le variateur applique sa réaction de perte de communication (SLF). Le simulateur suppose ttO = 3 s et une rampe d'arrêt. **Sur le vrai variateur, ttO et SLL ne sont pas relus** (adresses non vérifiées) : ils doivent être contrôlés au clavier avant chaque séance. Si SLL était réglé sur « roue libre » ou « ignorer », une liaison morte laisserait le moteur commandé ou en roue libre. Sur un Pi installé, systemd relance ensuite une console figée ou morte, au repos ; la console relancée ne suppose rien et arrête un variateur qu'elle trouve en marche ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)). Cette relance n'arrête pas le moteur plus tôt : seul le ttO le fait. |
 | Sortie normale du processus (`shutdown`) | LFRD = 0 synchrone, puis `close()` qui attend l'arrêt mesuré avant de retirer la marche. Si l'arrêt n'est pas confirmé, la marche reste et le ttO finit l'arrêt. |
 | Console sans séance, au repos confirmé ou liaison non acquise | libération du transport sans écriture ; l'absence de séance ne prouve pas l'arrêt physique. |
 | Console sans séance, liaison acquise mais état non confirmé | `needs_stop_before_release` impose le passage par `shutdown()` ; un état inconnu n'est pas assimilé à un arbre arrêté. |
@@ -2727,6 +2882,9 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 | réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
 | attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |
 | nouvelle du lien avec le tableau de bord | `warning` | `dashboard: …` |
+| démarrage de la console après un arrêt non propre | `warning` | `unclean_stop: demarrage apres arret non propre`, suivi de ` : enregistrement de seance <nom> non clos` quand le dernier enregistrement est resté ouvert ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)) |
+| démarrage de la console hors service | `warning` | `out_of_service: console hors service : …`, la phrase montrée à l'opérateur |
+| console remise en service | `operator_action`, sous l'alias de l'opérateur | `service_restored: console remise en service` |
 
 **Ce que ce journal peut contenir, et ce qu'on en fait.** Il n'a ni ECG, ni
 identifiant de passager, ni nom. Il garde, avec leur heure : l'alias de
@@ -2773,3 +2931,10 @@ de la séance, et pas ici.
   ne l'ouvre pas et n'en envoie rien
   ([8.1](#81-ce-qui-est-envoyé-vient-du-disque)).
   Il n'a pas de route d'export : il se lit sur le disque.
+
+Le même dossier racine porte un autre fichier qui n'est pas un enregistrement :
+`service-state.json`, ce que la console garde de ses redémarrages
+([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)). Il est privé
+(mode 600), écrit de façon atomique, ne contient ni nom ni mesure (des
+instants de démarrage, un état, le nom d'un dossier d'enregistrement), et ni
+la liste, ni l'export, ni la purge, ni la synchronisation ne le voient.

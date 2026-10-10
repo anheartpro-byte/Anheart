@@ -8,7 +8,10 @@
 # Deliberately left in place, because they are the machine's and not this
 # script's to delete: the configuration (/etc/anheart/anheart.env, with the
 # machine's API key), the data (/var/lib/anheart: profiles and session
-# records), the account `anheart`, the Docker images and the system packages.
+# records), the account `anheart`, the Docker images, the system packages, and
+# systemd's setting for the hardware watchdog of the Pi
+# (/etc/systemd/system.conf.d/10-anheart-watchdog.conf): it protects the
+# machine, not the console.
 set -euo pipefail
 
 readonly SERVICE="anheart"
@@ -26,4 +29,4 @@ rm -rf "/etc/systemd/system/$SERVICE.service.d"
 systemctl daemon-reload
 
 echo "Service removed."
-echo "Left in place: /etc/anheart/anheart.env, /var/lib/anheart, the account anheart, the Docker images."
+echo "Left in place: /etc/anheart/anheart.env, /var/lib/anheart, the account anheart, the Docker images, the hardware-watchdog setting of systemd."

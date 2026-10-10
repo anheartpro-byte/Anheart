@@ -15,9 +15,35 @@ Description=Console opérateur Anheart
 Requires=docker.service
 After=docker.service network-online.target bluetooth.target
 Wants=network-online.target
+# Watchdog relay (see ExecStart): without it the console would never be heard
+# and every start would time out. The start fails at once instead.
+AssertFileIsExecutable=/usr/bin/socat
+# The limit of restarts: an eleventh start within 30 minutes is refused and
+# the unit stays failed (`systemctl reset-failed anheart` clears it). Long
+# before that, a console that comes back at all has put itself out of service
+# (three starts after an unclean stop within ten minutes) and says so on its
+# page; this limit is for the one that does not come back.
+StartLimitIntervalSec=1800
+StartLimitBurst=10
 
 [Service]
-Type=simple
+# The console says when it is ready, then that it is alive after every control
+# tick that completed (sd_notify, src/service_watchdog.py). Ten seconds
+# without hearing it: its control loop is stuck. The unit is then stopped the
+# way it is always stopped, SIGTERM first: a console whose event loop still
+# runs leaves by its controlled stop, and one that answers nothing is ended by
+# ExecStopPost below. Either way it is started again (Restart=), at rest. The
+# motor does not wait for any of this: a console that stops ticking stops
+# talking to the drive, whose own communication timeout stops it first.
+Type=notify
+NotifyAccess=all
+WatchdogSec=10
+WatchdogSignal=SIGTERM
+TimeoutAbortSec=15
+# Until the console says it is ready: a cold SD card takes its time.
+TimeoutStartSec=300
+# /run/anheart, where the relay below listens. Made at each start.
+RuntimeDirectory=anheart
 # Replaced by the drop-in. Left as it is, the start fails on a missing image
 # rather than run a version nobody chose.
 Environment=ANHEART_IMAGE=anheart-console:not-installed
@@ -34,13 +60,23 @@ ExecStartPre=/bin/sh -c 'if /usr/bin/docker container inspect anheart >/dev/null
 # prints, so Docker keeps no second copy (--log-driver none). --pull never: an
 # image that is not on this machine fails the start at once; nothing is ever
 # fetched from a registry.
-ExecStart=/usr/bin/docker run --rm --name anheart --log-driver none \
+#
+# The first line is the watchdog relay. systemd only listens to the processes
+# of this unit, and the console is a process of the container, not of the
+# unit. So socat, which is one, listens on /run/anheart/notify (handed to the
+# console as its NOTIFY_SOCKET) and passes each datagram on to systemd as it
+# came. It adds nothing and invents nothing: a console that says nothing is
+# not heard. Then the shell becomes `docker run`, the unit's main process.
+ExecStart=/bin/sh -c '/usr/bin/socat -u UNIX-RECV:/run/anheart/notify,unlink-early UNIX-SENDTO:"$$NOTIFY_SOCKET" & exec "$$@"' anheart \
+    /usr/bin/docker run --rm --name anheart --log-driver none \
     --pull never \
     --privileged --network host \
     --volume /var/run/dbus:/var/run/dbus \
     --volume /dev:/dev \
     --volume /var/lib/anheart/data:/app/data \
     --volume /var/lib/anheart/records:/app/data/records \
+    --volume /run/anheart:/run/anheart \
+    --env NOTIFY_SOCKET=/run/anheart/notify \
     --env-file /etc/anheart/anheart.env \
     ${ANHEART_IMAGE}
 # SIGTERM is the console's controlled stop: it zeroes the speed reference and
@@ -50,10 +86,12 @@ ExecStop=/usr/bin/docker stop -t 60 anheart
 ExecStopPost=/bin/sh -c '/usr/bin/docker container inspect anheart >/dev/null 2>&1 && /usr/bin/docker stop -t 60 anheart; exit 0'
 TimeoutStopSec=90
 # Exit code 2 is a configuration error (the console lists every problem and
-# exits): restarting would only loop on it.
+# exits): restarting would only loop on it. Every other failure (a crash, a
+# kill, the watchdog) is followed by a new start two seconds later, within the
+# limit of the [Unit] section.
 Restart=on-failure
 RestartPreventExitStatus=2
-RestartSec=10
+RestartSec=2
 SyslogIdentifier=anheart
 
 [Install]

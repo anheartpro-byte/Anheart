@@ -249,6 +249,16 @@ function panelRow(overrides = {}) {
     motor_max_rpm: 300,
     software_version: "pi-0.0.0-dev",
     dashboard: { state: "not_configured", label: "non configure", detail: "", last_answer_age_s: null },
+    service: {
+      out_of_service: false,
+      unclean_starts: 0,
+      threshold: 3,
+      window_s: 600,
+      unclean_stop: false,
+      open_record: null,
+      persisted: true,
+    },
+    watchdog: { enabled: false, sent: 0, failed: 0, last_error: null },
     ...overrides,
   };
 }
@@ -2468,7 +2478,14 @@ test("a status showing the machine idle ends the doubt about STOP, unless a requ
 
 test("the STOP notice is in the stack every page shows, as an alarm, under that of the E-STOP", () => {
   const ids = banners.map((entry) => entry.id);
-  assert.deepEqual(ids, ["banner", "estop-unanswered", "stop-unanswered", "estop-banner", "resume-banner"]);
+  assert.deepEqual(ids, [
+    "banner",
+    "estop-unanswered",
+    "stop-unanswered",
+    "estop-banner",
+    "service-banner",
+    "resume-banner",
+  ]);
   assert.ok(/id="stop-unanswered" class="banner hidden" role="alert"/.test(html));
 });
 
@@ -2753,4 +2770,123 @@ test("the resume banner is part of the stack every page shows, and is not an ala
   const stackMarkup = /<div id="banners"[\s\S]*?\n<\/div>/.exec(html)[0];
   assert.ok(stackMarkup.includes('id="resume-banner"'));
   assert.ok(/id="resume-banner" class="banner banner-warn hidden"/.test(html));
+});
+
+/* ======== a console out of service and a latched stop on the same screen (ANH-162) ======== */
+
+// A console that restarts is what takes it out of service, and it is also what leaves a screen
+// holding the banner of a stop latched before the restart. The two banners are then on screen
+// together: each keeps its own place in the stack, and neither is decided by the other.
+
+const OUT = "CONSOLE HORS SERVICE";
+const LATCHED = "ARRET D'URGENCE VERROUILLE";
+
+// What /api/panel answers from a console that came up out of service.
+const outOfService = () =>
+  panelRow({
+    service: {
+      out_of_service: true,
+      unclean_starts: 3,
+      threshold: 3,
+      window_s: 600,
+      unclean_stop: true,
+      open_record: null,
+      persisted: true,
+    },
+  });
+
+test("the red banners are together in the stack, those about a stop first, and the orange notice is last", () => {
+  const ids = banners.map((entry) => entry.id);
+  assert.ok(ids.indexOf("estop-banner") < ids.indexOf("service-banner"), "out of service above a latched stop");
+  const orange = (id) => new RegExp(`id="${id}" class="banner banner-warn`).test(html);
+  assert.equal(orange("service-banner"), false);
+  assert.ok(/id="service-banner" class="banner hidden" role="alert"/.test(html));
+  const first = ids.findIndex(orange);
+  assert.ok(first > ids.indexOf("service-banner"), "the out-of-service banner is under an orange one");
+  assert.ok(ids.slice(first).every(orange), "a red banner is under an orange one");
+});
+
+test("the page makes room for the out-of-service banner when it appears, and takes it back when it goes", () => {
+  // Given a page with no ResizeObserver and nothing in its stack.
+  const { context, announced, published, stack } = panel();
+  context.renderPanel(panelRow());
+  assert.equal(announced(OUT), false);
+  // When the console says it is out of service.
+  context.renderPanel(outOfService());
+  // Then the banner is on screen and the sidebar starts under it.
+  assert.equal(announced(OUT), true);
+  assert.ok(stack() > 0);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And when it is put back in service, the room is given back.
+  context.renderPanel(panelRow());
+  assert.equal(announced(OUT), false);
+  assert.equal(published.get("--banners-h"), "0px");
+});
+
+test("a console back out of service under a stop this screen still holds latched: both banners, and room for the two", async () => {
+  // Given the latched quick stop of a rule seen in the frames only, on a screen left open.
+  const { context, frame, announced, published, stack } = panel();
+  context.api = () => Promise.resolve(status({ at: 58, counters: [0, 0, 4900] }));
+  await context.loadStatus();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  assert.equal(announced(LATCHED), true);
+  const alone = stack();
+  assert.equal(published.get("--banners-h"), alone + "px");
+  // When that console dies, comes back out of service and goes silent: nothing proves the restart
+  // to this screen, which keeps the banner of the stop.
+  context.state.stream += 1;
+  context.api = () => Promise.resolve(silenceAfter(75.1, 40));
+  frame(snapshot({ at: 75, mode: "repos", ...silent() }));
+  await settle();
+  context.renderPanel(outOfService());
+  // Then both are on screen, each with its own words, and the page makes room for the two.
+  assert.equal(announced(LATCHED), true);
+  assert.equal(announced(OUT), true);
+  assert.ok(stack() > alone);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+});
+
+test("the proof of the restart takes the banner of the old stop down, and the console is still said out of service", async () => {
+  // Given the latched quick stop of a rule, shown by the frames and by the status of a console in service.
+  const { context, frame, announced, published, stack } = panel();
+  context.renderPanel(panelRow());
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  context.api = () => Promise.resolve(ruleStopStatus(60.3, 5000));
+  await context.loadStatus();
+  assert.equal(announced(LATCHED), true);
+  assert.equal(announced(OUT), false);
+  // When the console restarts out of service and goes silent, and its status shows far fewer snapshots.
+  context.state.stream += 1;
+  context.api = () => Promise.resolve(silenceAfter(75.1, 40));
+  frame(snapshot({ at: 75, mode: "repos", ...silent() }));
+  await settle();
+  context.renderPanel(outOfService());
+  // Then the stop of the previous console is gone from the screen, and out of service is not.
+  assert.equal(announced(LATCHED), false);
+  assert.equal(announced(OUT), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+});
+
+test("putting the console back in service takes its banner down and leaves that of a latched stop", async () => {
+  // Given a console out of service, which still takes an E-STOP, and an operator who presses it.
+  const { context, frame, announced, published, stack } = panel();
+  frame(snapshot({ at: 59.9 }));
+  context.renderPanel(outOfService());
+  await pressEstop(context);
+  assert.equal(announced(OUT), true);
+  assert.equal(announced(LATCHED), true);
+  const both = stack();
+  assert.equal(published.get("--banners-h"), both + "px");
+  // When a named operator puts the console back in service: /api/panel then says so.
+  context.renderPanel(panelRow());
+  // Then that lifts nothing else: the stop is still latched and still said.
+  assert.equal(announced(OUT), false);
+  assert.equal(announced(LATCHED), true);
+  assert.ok(stack() < both);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // And an acknowledged stop leaves a console out of service said out of service.
+  context.renderPanel(outOfService());
+  frame(snapshot({ at: 70 }));
+  assert.equal(announced(LATCHED), false);
+  assert.equal(announced(OUT), true);
 });

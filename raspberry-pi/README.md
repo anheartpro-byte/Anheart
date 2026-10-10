@@ -280,6 +280,18 @@ The console that starts is at rest. Nothing starts a session at boot or after a
 restart by systemd: a start needs an operator, and the emergency-stop
 attestation is per boot.
 
+systemd also watches the console: it must hear from the control loop at least
+every 10 s (the console says so after each control tick that completed, and
+from nowhere else), and a console that freezes or dies is stopped and started
+again, at rest. A console that starts three times within ten minutes after an
+unclean stop comes up out of service: it runs, says `CONSOLE HORS SERVICE` on
+its page, and arms nothing until a named operator puts it back in service
+there. None of this stops the motor: a console that stops ticking stops
+talking to the drive, whose own communication timeout does. The uninstall
+script leaves systemd's hardware-watchdog setting
+(`/etc/systemd/system.conf.d/10-anheart-watchdog.conf`) in place. See
+`docs/pi-image.md`, "Le chien de garde".
+
 ### Control the service
 
 ```bash

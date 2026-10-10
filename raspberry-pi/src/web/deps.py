@@ -43,6 +43,7 @@ from src.presence.monitor import PresenceDecision, PresenceMonitor
 from src.record.export import RecordExporter
 from src.result import Result
 from src.sensors.base import SensorKind, SensorReading
+from src.service_state import NotOutOfService, ServiceStatus
 from src.telemetry import TelemetryHub
 from src.training.plan import ProfileStore
 from src.training.safety import SafetySupervisor
@@ -397,6 +398,18 @@ class Services:
 
     records: RecordExporter | None = None
     """The session records on disk (``GET /api/records``); ``None`` = nothing is recorded."""
+
+    service: ServiceRestorer | None = None
+    """What puts a console out of service back in service (``POST /api/service/restore``);
+    ``None`` = this console keeps no restart state and is never out of service."""
+
+
+class ServiceRestorer(Protocol):
+    """What ``/api/service/restore`` asks of the console's restart state."""
+
+    @abstractmethod
+    async def restore(self, operator: str) -> Result[ServiceStatus, NotOutOfService]:
+        """Put the console back in service, by name; or say there was nothing to lift."""
 
 
 class PresenceView(Protocol):

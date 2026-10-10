@@ -267,7 +267,11 @@ def test_the_systemd_unit_and_the_installer_start_the_console() -> None:
     started = _captures(r"^ExecStart=(.+)$", unit)
     assert len(started) == 1
     words = started[0].split()
-    assert words[:2] == ["/usr/bin/docker", "run"]
+    # A shell line starts the watchdog relay, then becomes `docker run` with every
+    # argument that follows (tests/test_pi_install.py runs that line for real).
+    run = words.index("/usr/bin/docker")
+    assert words[run : run + 2] == ["/usr/bin/docker", "run"]
+    assert words[run - 3 : run] == ["exec", '"$$@"\'', "anheart"]
     # The image is the last word: no command and no entrypoint replace the image's own.
     assert words[-1] == "${ANHEART_IMAGE}"
     assert "--entrypoint" not in words

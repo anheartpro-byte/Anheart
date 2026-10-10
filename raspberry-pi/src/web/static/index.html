@@ -80,6 +80,17 @@
     <strong>ARRET D'URGENCE VERROUILLE</strong>
     <span>surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete</span>
   </div>
+  <!--
+    The console keeps restarting after stops that were not clean: it is out of
+    service and arms nothing. A standing state from /api/panel, not an event:
+    it is on every page until a named operator lifts it (page Securite).
+    Under the alarms about a stop (a console that restarts can show both: they
+    stack, the stop first), and above the orange notice: the red ones together.
+  -->
+  <div id="service-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>CONSOLE HORS SERVICE</strong>
+    <span id="service-banner-detail">aucun depart n'est accepte</span>
+  </div>
   <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
     <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
     <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>
@@ -116,6 +127,9 @@
     not an event: a page opened an hour into an incompatibility reads it at
     once. The line under the chips says why, and how old the last answer is.
     "Version" is the build this console runs (raspberry-pi/VERSION).
+    "Service" is whether the console arms anything at all: "en service", or
+    "HORS SERVICE" once it has restarted several times after stops that were
+    not clean. The line under the chips says what its last start found.
 
     Under the chips, a line of its own says what the machine's wall clock is
     worth, as the console states it in /api/panel: kept by a time service
@@ -132,9 +146,11 @@
     <dt>Console</dt><dd><span id="console-mode" class="pill">&mdash;</span></dd>
     <dt>Serveur</dt><dd><span id="dashboard-link" class="pill">-</span></dd>
     <dt>Version</dt><dd><span id="software-version" class="pill">-</span></dd>
+    <dt>Service</dt><dd><span id="service-state" class="pill">-</span></dd>
   </dl>
   <div id="dashboard-link-detail" class="bind"></div>
   <div id="wall-clock" class="bind"></div>
+  <div id="service-detail" class="bind"></div>
   <div id="bind" class="bind">&mdash;</div>
 
   <nav class="nav">
@@ -481,6 +497,23 @@
           <button id="ack" class="btn" type="button">Acquitter</button>
         </div>
         <p id="ack-note" class="note"></p>
+        <!--
+          Out of service only. Putting the console back in service is by name
+          and never automatic, like an acknowledgement, and starts nothing: a
+          session still takes an attestation and an explicit start.
+        -->
+        <div id="service-restore" class="hidden">
+          <h3>Console hors service</h3>
+          <p class="note">
+            La console a redemarre plusieurs fois apres un arret non propre et n'accepte aucun depart.
+            Faire verifier la machine avant de la remettre en service.
+          </p>
+          <div class="ackrow">
+            <input id="service-operator" type="text" autocomplete="off" placeholder="votre nom" />
+            <button id="service-restore-button" class="btn" type="button">Remettre en service</button>
+          </div>
+        </div>
+        <p id="service-note" class="note"></p>
       </div>
 
       <!--
