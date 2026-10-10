@@ -23,7 +23,7 @@ records hold: none lost, none twice, each in the record of its session.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, override
 
@@ -31,6 +31,7 @@ import httpx
 
 from src.clock import ManualClock
 from src.motor.drive import (
+    CommTimeout,
     ControlWord,
     DriveError,
     DriveLimits,
@@ -39,12 +40,12 @@ from src.motor.drive import (
 )
 from src.motor.simulated import SimulatedDrive
 from src.record.codec import Privacy
-from src.record.journal import Cause, Journal, just_before
+from src.record.journal import DEFAULT_LIMITS, Cause, Journal, Limits, just_before
 from src.record.reader import read
 from src.record.retention import records
 from src.record.schema import EventKind, RecordError
 from src.record.session import INTERRUPTED, SessionRecorder, SessionRequest, Stamp
-from src.result import Ok, Result
+from src.result import Err, Ok, Result
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Metres, Monotonic, MotorRpm, Seconds, UnixMillis
@@ -327,16 +328,37 @@ class Told(Wrapped):
     def __init__(self, inner: SimulatedDrive) -> None:
         super().__init__(inner)
         self.clock: ManualClock | None = None
+        """Moved by ``ANSWER`` at each call; ``None``: the clock stands still within a tick."""
         self.part: str = "first"
         self.calls: list[tuple[str, str]] = []
+        self.inside: Callable[[], None] | None = None
+        """Done once, inside the call numbered ``at`` (the first call made is 1), before
+        the drive answers: the journal thread passing while that exchange is under way.
+        The tap notes a call when it returns, so this pass sees the calls before it."""
+        self.at: int = 0
+        self.limits_unreadable: bool = False
+        """The next read of the drive's limits times out, once: that arming is refused."""
 
     def _told(self, kind: str) -> None:
         self.calls.append((self.part, kind))
         if self.clock is not None:
             self.clock.advance(ANSWER)
+        passing = self.inside
+        if passing is not None and len(self.calls) == self.at:
+            self.inside = None
+            passing()
 
     def made_in(self, part: str) -> list[str]:
         return [kind for told, kind in self.calls if told == part]
+
+    def pass_inside(self, call: int, passing: Callable[[], None]) -> None:
+        """Have ``passing`` done inside the ``call``-th call made from now on (the next is 1)."""
+        self.inside = passing
+        self.at = len(self.calls) + call
+
+    def passed(self) -> bool:
+        """Whether what :meth:`pass_inside` asked for was done."""
+        return self.inside is None
 
     @override
     async def open(self) -> Result[None, DriveError]:
@@ -366,6 +388,9 @@ class Told(Wrapped):
     @override
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
         self._told("read_limits")
+        if self.limits_unreadable:
+            self.limits_unreadable = False
+            return Err(CommTimeout(after=Seconds(0.5)))
         return await self.inner.read_limits()
 
     @override
@@ -374,13 +399,24 @@ class Told(Wrapped):
         return self.inner.emergency_disable_blocking(timeout)
 
 
-def told_rig(tmp_path: Path, env: Mapping[str, str] = BENCH_ENV) -> tuple[RecordedRig, Told]:
-    """The recording console of ``record_console_support``, over a drive that tells."""
+def told_rig(
+    tmp_path: Path,
+    env: Mapping[str, str] = BENCH_ENV,
+    *,
+    answers_take_time: bool = True,
+    limits: Limits = DEFAULT_LIMITS,
+) -> tuple[RecordedRig, Told]:
+    """The recording console of ``record_console_support``, over a drive that tells.
+
+    ``answers_take_time=False``: the clock stands still within a tick, as on
+    the rig of the other tests; every exchange of a tick begins at one instant.
+    """
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
-    journal = Journal(tmp_path / "records", clock)
+    journal = Journal(tmp_path / "records", clock, limits=limits)
     rig, wrapper = make_rig(tmp_path, env=env, wrap=Told, clock=clock, journal=journal)
     assert isinstance(wrapper, Told)
-    wrapper.clock = clock
+    if answers_take_time:
+        wrapper.clock = clock
     return RecordedRig(rig=rig, journal=journal, clock=clock), wrapper
 
 

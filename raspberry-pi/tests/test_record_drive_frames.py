@@ -897,7 +897,8 @@ def test_ex2_frames_the_tap_refused_are_counted_for_the_session_and_said_in_the_
     journal.listen(waiting)
     waiting.lost = 4  # before any session: not this session's loss
     journal.drain()
-    journal.open(session(), Privacy())
+    clock.advance(Seconds(0.2))
+    journal.open(session(), Privacy(), since=clock.monotonic())
     journal.drain()
     assert journal.status(clock.monotonic()).dropped == 0
 

@@ -823,7 +823,13 @@ class SessionRecorder:
     @_total
     def refresh(self, now: Monotonic) -> None:
         """Read the journal's health. Called every tick: it runs the stall detector,
-        refreshes :attr:`degraded`, and prepares a sentence when the health changed."""
+        refreshes :attr:`degraded`, and prepares a sentence when the health changed.
+
+        ``now`` is the instant of that tick, read once its mailbox was
+        dispatched: any arming asked for before it is over. The journal is
+        told so (:meth:`Journal.dispatched`), which is how it knows which of
+        the drive's frames wait for a record and which belong to no session."""
+        self._journal.dispatched(now)
         status = self._journal.status(now)
         self._status = status
         said = (status.cause, None if status.error is None else status.error.detail)

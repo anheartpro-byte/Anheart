@@ -550,6 +550,8 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         )
         logged = journal.log(line)
         assert logged, "a line of the logbook was refused: nothing was queued at this stop"
+        # What the tick says of itself, for the frames no record claims.
+        journal.dispatched(clock.monotonic())
         status = journal.status(clock.monotonic())
         assert status.recording is recording[0]
         assert status.free_bytes == journal.storage.free_bytes

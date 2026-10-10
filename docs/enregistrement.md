@@ -364,15 +364,20 @@ rien (le simulateur), elle l'enveloppe d'une prise qui note chaque appel, avec
 le vocabulaire et les registres des observations d'appel décrites ci-dessous
 (`src/record/drive_tap.py`,
 [raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Les
-trames perdues parce que personne ne venait les prendre sont comptées dans
-l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Les lignes
-sont celles de la séance, du début de son armement à sa fin : la scrutation
-d'une console sans séance n'y est pas, ni avant ni après, même quand elle
+trames perdues faute de place (la prise pleine parce que personne ne venait,
+ou trop de trames en attente d'un enregistrement) sont comptées dans
+l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Ce nombre
+est un majorant : personne n'a lu ces trames, et quand deux séances
+recouvrent l'intervalle où elles ont pu commencer, chacun des deux
+enregistrements les compte. Les lignes sont celles de la séance, du début de
+son armement à sa fin : ce que la console demande au variateur hors séance
+(scrutation au repos, consigne nulle après une séance, départ refusé,
+réarmement de défaut) n'y est pas, ni avant ni après, même quand cela
 attendait avec les trames de la séance que le fil du journal vienne les
 prendre. Les échanges de l'armement précèdent l'ouverture de l'enregistrement
-(leur `t` est négatif) : ils y sont s'ils attendaient encore quand le fil du
-journal a ouvert l'enregistrement, donc pas ceux qu'il avait pris à un cycle
-précédent ([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
+(leur `t` est négatif) : ils y sont tous, parce que le fil du journal garde ce
+qu'il prend pendant un armement jusqu'à l'ouverture de l'enregistrement
+([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel
