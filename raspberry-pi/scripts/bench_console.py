@@ -472,7 +472,28 @@ class BusWorker(threading.Thread):
                     self.snap.last_error = f"keepalive: {describe_error(error)}"
 
     async def _main(self) -> None:
+        """Connect, cycle until asked to stop, and leave through the driver's stop.
+
+        The driver's stop is in a ``finally``: an exception raised by an action
+        or by a poll ends this thread, and it used to end it WITHOUT that stop,
+        leaving a motor that had been enabled to the drive's own ``ttO``
+        timeout alone. Now the stop sequence runs on every way out of the
+        cycle, and the exception goes on afterwards. The page is told first:
+        this thread is the only one that refreshes the snapshot, so what it
+        last showed would otherwise stay on screen as if it were current.
+        """
         await self._connect()
+        try:
+            await self._cycle()
+        except BaseException as error:
+            self.snap.armed = False
+            self._clear_live_fields()
+            self.snap.last_error = f"fil de bus arrete: {type(error).__name__}: {error}"
+            raise
+        finally:
+            await self._stop_and_release()
+
+    async def _cycle(self) -> None:
         while not self._stop_requested.is_set():
             started: Monotonic = self._clock.monotonic()
             while True:
@@ -488,9 +509,13 @@ class BusWorker(threading.Thread):
             self.snap.updated_at = self._clock.monotonic()
             spent = elapsed(started, self._clock.monotonic())
             await asyncio.sleep(max(0.05, CYCLE_S - spent))
-        # The driver's own stop: LFRD = 0, RFRD polled to standstill, only then
-        # 7 and 6 - and if standstill is not confirmed it leaves the run command
-        # and says so. Then the port is released.
+
+    async def _stop_and_release(self) -> None:
+        """The driver's own stop, then the port. What it achieved is ``exit_report``.
+
+        LFRD = 0, RFRD polled to standstill, only then 7 and 6 - and if
+        standstill is not confirmed it leaves the run command and says so.
+        """
         match await self._built.drive.close():
             case Ok():
                 self.exit_report = "arret confirme, port libere"

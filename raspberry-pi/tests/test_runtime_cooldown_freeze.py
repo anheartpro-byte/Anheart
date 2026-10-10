@@ -33,6 +33,7 @@ never the hardware.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from itertools import pairwise
 from typing import Final, Literal, assert_never
@@ -141,7 +142,8 @@ measure a hair under five seconds), so 27 shifts cover every alignment.
 MOST_AHEAD: Final[int] = 17
 """The shift at which the shipped programme's COOLDOWN begins one tick after
 the control law's last decision of HOLD, measured on this rig: its head start
-is then 3 rpm, the smallest there is."""
+is then 2 rpm, the smallest there is (one tick of the 15 rpm/s ramp in whole
+rpm, where a tick measures a hair under 0.2 s)."""
 
 SLOW_LAW: Final[RuntimeLimits] = RuntimeLimits(
     slew=RpmPerSecond(14.0), start_hysteresis_rpm=MotorRpm(10)
@@ -722,7 +724,7 @@ async def test_on_the_shipped_programme_the_descent_under_a_freeze_is_never_behi
       The head start (29 rpm) outlasts the descent, the motion limits are all
       that binds, and the two write the same setpoints, tick for tick;
     * with HOLD seventeen ticks longer the entry falls one tick after a
-      decision. The head start is 3 rpm, the ordinary cooldown goes at the
+      decision. The head start is 2 rpm, the ordinary cooldown goes at the
       control law's pace, and it reaches zero later than the frozen twin
       (88 ticks against 75 when this was measured, 2.6 s).
 
@@ -735,6 +737,7 @@ async def test_on_the_shipped_programme_the_descent_under_a_freeze_is_never_behi
     start, under, free = await _descents(witness, rig)
 
     _assert_an_ordinary_walk(start, under, SHIPPED)
+    _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
     _assert_never_behind(under, free)
     if ahead:
         assert len(free) > len(under), "at this alignment the ordinary cooldown was not the slower"
@@ -775,6 +778,7 @@ async def test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast
         start, under, free = await _descents(witness, rig)
         assert start == int(LONG.max_rpm), "the setpoint is not parked at the ceiling"
         _assert_an_ordinary_walk(start, under, walk)
+        _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
         _assert_never_behind(under, free)
         frozen.add(tuple(_setpoints(under)))
         later.append(len(free) - len(under))
@@ -782,6 +786,84 @@ async def test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast
     assert len(frozen) == 1, "the descent under the FREEZE depended on the control period"
     assert min(later) == 0, "nowhere did the head start outlast the descent: not this rig"
     assert max(later) * TICK > 2.0, "the control law's ramp never bound the ordinary cooldown"
+
+
+async def test_with_the_shipped_settings_the_descent_keeps_both_bounds_at_every_alignment() -> None:
+    """The shipped control law and the shipped motion limits, at all 27 places of a control period.
+
+    The test on the shipped programme holds the two bounds at two places, and
+    the test above walks the 27 with a law slowed to 14 rpm/s. This one is
+    the shipped settings at the 27: the console's own limits (15 rpm/s, the
+    five-second period) and the shipped motion limits, from the shipped
+    profile's ceiling of 276 motor rpm. The timeline is the rig's short one,
+    so that twenty-seven sessions cost seconds and not twenty-seven
+    half-hours: the descent reads the speed it starts from, the two sets of
+    limits and where the control period falls, and nothing else of the
+    programme. And each session is run once: its twin is a copy taken two
+    ticks before the COOLDOWN, the instant from which the two differ.
+
+    At every place:
+
+    * the descent under the FREEZE is the same walk, and counted in all from
+      its first tick it has never come down by more than the motion limits
+      pay for, with no tolerance (:func:`_assert_inside_the_motion_limits`);
+    * at every tick its setpoint is at most the ordinary cooldown's, and it
+      is at zero no later.
+
+    What this timeline does NOT show is an ordinary cooldown that arrives
+    later. The shipped law comes down ``floor(15 x dt)`` whole rpm a tick: 3
+    where a tick measures 0.2 s or a hair more, as on this clock, which is
+    above the 2.48 the motion limits pay for, so the motion limits bind both
+    descents and the two are the same at the 27 places. Where a tick measures
+    a hair less, as on the shipped programme's clock at its cooldown, it is
+    2, and the ordinary one is the slower: that is the test on the shipped
+    programme (two places, 2.6 s at the widest) and, at every place and on
+    every run, the test above with the law slowed.
+    """
+    walk = Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=float(RUNTIME_LIMITS.slew))
+    frozen: set[tuple[int, ...]] = set()
+    same: list[bool] = []
+    for shift in ALIGNMENTS:
+        profile = replace(LONG, total_duration_s=Seconds(PLANNED + shift * TICK))
+        witness = await _started(profile, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+        await _until(witness, COOLDOWN_AT + shift * TICK - 2 * TICK)
+        assert _verdict(witness) is None
+        rig = copy.deepcopy(witness)
+        start, under, free = await _descents(witness, rig)
+        assert start == int(REAL_PROFILE.max_rpm), "the setpoint is not parked at the ceiling"
+        _assert_an_ordinary_walk(start, under, walk)
+        _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
+        _assert_never_behind(under, free)
+        frozen.add(tuple(_setpoints(under)))
+        same.append(_setpoints(under) == _setpoints(free))
+
+    assert len(frozen) == 1, "the descent under the FREEZE depended on the control period"
+    assert all(same), "on this clock the shipped law's ramp was not above the motion limits"
+
+
+def _assert_inside_the_motion_limits(
+    start: int, down: list[TelemetrySnapshot], motion: MotionLimits
+) -> None:
+    """From its first tick, ``down`` has never dropped by more than the motion limits pay for.
+
+    Counted in all, and with no tolerance. :func:`_assert_an_ordinary_walk`
+    judges each step by itself and allows it the one rpm a step may carry over
+    from the one before: one rpm a step is a tolerance that could add up over
+    a walk. Here every setpoint is held against the whole time since the tick
+    before the walk began: the drop from ``start`` is at most the rate times
+    that time. The rate is the one at the setpoint reached, the largest on the
+    way down. The passage from the minimum running speed to zero is the one
+    step the limits do not pace, and is left to the other check.
+    """
+    minimum = int(motion.min_run)
+    for tick, setpoint in enumerate(_setpoints(down), start=1):
+        if setpoint < minimum:
+            continue
+        rate = motor_rate_limit(MotorRpm(setpoint), motion, GEOMETRY)
+        paid = rate * tick * TICK
+        assert start - setpoint <= paid + 1e-9, (
+            f"tick {tick}: down {start - setpoint} rpm from {start}, the limits pay for {paid:.2f}"
+        )
 
 
 async def test_on_the_accelerated_rig_the_descent_under_a_freeze_is_never_behind_either() -> None:
@@ -924,6 +1006,52 @@ async def test_a_cause_that_lasts_still_ends_the_session_on_the_later_level_of_i
     assert _end(rig) is EndReason.SAFETY_VERDICT
     assert rig.runtime.mode is RunMode.ARRET
     assert _rules_shown(after) == {standing.rule}
+
+
+async def test_a_rate_lost_across_the_cooldown_passes_its_reduce_and_still_completes() -> None:
+    """``hr_stale`` reaches its REDUCE during the programme's own descent, and ends nothing.
+
+    The other side of the test above. The level that ends a session is the
+    rule's latched RAMP_DOWN, sixty seconds without a heart rate, and no level
+    before it: "the cause ends before the rule's next level" is more cautious
+    than the code, since the level after ``hr_stale``'s FREEZE is its REDUCE.
+
+    The heart rate is lost 28 s before the entry into COOLDOWN and is back
+    45 s after it was lost. FREEZE at 10 s: the setpoint is held through the
+    end of HOLD. The programme's descent begins under that FREEZE. REDUCE at
+    30 s, two seconds into the descent, the arm still turning: it decides in
+    its own arm, as everywhere, and the setpoint goes on down without ever
+    rising. That zero is the programme's own, so nothing latches. The heart
+    rate comes back before the sixty seconds: the session ends as a programme
+    run to its end, at its planned duration, with nothing to acknowledge.
+    """
+    lost_at = COOLDOWN_AT - 28.0
+    rig = await _running_rig(profile=LONG)
+    await _until(rig, lost_at)
+    held = _applied(rig)
+    lost = await _until(rig, lost_at + 45.0, feed=False)
+    rest = await _until(rig, DEADLINE + 10.0)
+
+    descent = [snapshot for snapshot in lost if snapshot.phase is Phase.COOLDOWN]
+    reduced = [s for s in descent if s.safety_action is SafetyAction.REDUCE]
+    actions = {snapshot.safety_action for snapshot in lost}
+    assert held > 0, "the arm is not turning"
+    assert actions == {SafetyAction.NONE, SafetyAction.FREEZE, SafetyAction.REDUCE}
+    assert descent[0].safety_action is SafetyAction.FREEZE, "the descent did not begin frozen"
+    assert reduced, "the REDUCE did not arrive during the cooldown"
+    assert int(reduced[0].setpoint.motor_rpm) > 0, "the arm was already down when it arrived"
+    assert _never_rises([held, *_setpoints(lost), *_setpoints(rest)])
+    assert set(_setpoints(rest)) == {0}, "something moved after the descent"
+    assert _rules_shown(lost) == {RULES["hr_stale"][0]}
+    assert _rules_shown(rest) == set(), "the warning outlived its cause"
+    assert RULE_SESSION_STANDSTILL not in _rules_shown(rig.snapshots)
+    assert RULE_SESSION_OVERRUN not in _rules_shown(rig.snapshots)
+    assert abs(_ended_at(rest) - PLANNED) <= TICK
+    assert _end(rig) is EndReason.PROGRAMME_COMPLETE
+    assert rig.state() is RuntimeState.FINISHED
+    assert rig.runtime.mode is RunMode.REPOS
+    assert _verdict(rig) is None, "something was left to acknowledge"
+    await _a_new_programme_is_accepted(rig)
 
 
 @pytest.mark.parametrize("stronger", ["reduce", "ramp_down", "quick_stop", "go_silent"])
