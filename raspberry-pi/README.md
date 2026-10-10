@@ -209,13 +209,26 @@ With no stop asked for a FREEZE holds the setpoint as before, and every stronger
 verdict still decides first. ARRET/COOLDOWN say that the setpoint is falling or
 zero; they do not prove measured standstill.
 
-**Current limitations:** a programme's own cooldown on its timeline, with no
-stop asked for, is still held by a FREEZE until the FREEZE lifts, a stronger
-verdict arrives or `session_overrun` ends the session. Separately, an ongoing session can resume
-regulation automatically when an unlatched FREEZE/REDUCE warning disappears,
-including after REDUCE brought the setpoint to zero
-([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).
-These are current implementation limits, not a statement of a future resume policy.
+**A programme's own descent comes down too.** From the entry into its
+cooldown a programme's setpoint walks to zero at the motion limits, under a
+FREEZE exactly as with no verdict, latched or not, and it never rises again.
+The session then ends as a programme run to its end, at its planned duration,
+unless the cause of an unlatched FREEZE lasts until the latched RAMP_DOWN of
+its rule (60 s without a heart rate, 120 s without the attendant), which ends
+the session as before (ANH-189, `docs/securite.md` 7.8). A manual session has
+no descent of its own: there a FREEZE holds the setpoint until a stop or a
+target of zero.
+
+**Current limitation:** an ongoing session resumes regulation by itself when
+an unlatched FREEZE/REDUCE warning disappears while the arm is still turning.
+A stopped arm does not restart by itself: once the arm has turned in a
+session, a setpoint that comes back to zero with nobody asking for it ends the
+session on a latch (`session_standstill`,
+[ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).
+One movement still starts without a click: a programme's first step after its
+BASELINE, a warning having come and gone meanwhile (`docs/securite.md` 7.4).
+This is a current implementation limit, not a statement of a future resume
+policy.
 
 **Two kinds of training session:**
 

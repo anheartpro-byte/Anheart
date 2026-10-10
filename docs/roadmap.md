@@ -4,7 +4,7 @@
 > Ce document explique la logique de la roadmap, l'ordre des jalons, les fils de travail et comment suivre le projet.
 > Mis à jour le 2 octobre 2026 (revue chef de projet : 27 tickets ajoutés ANH-127 à ANH-153, 20 sous-tickets ANH-154 à ANH-173, 3 fermés comme remplacés, 10 fils de travail, étiquettes Fil / Taille / Qui / Matériel).
 >
-> **Deux documents Linear à lire avant de prendre un ticket :** *Processus de développement* (branches `develop` et `main`, une PR par ticket, un développeur et deux reviewers agents, CI verte, commentaire de clôture) et *File d'exécution pour les agents* (l'ordre des tickets).
+> **Deux documents Linear à lire avant de prendre un ticket :** *Processus de développement* (branches `develop` et `main`, une PR par ticket, un développeur et un avis indépendant d'agent, CI verte, commentaire de clôture) et *File d'exécution pour les agents* (l'ordre des tickets).
 >
 > **Une release** (passage de `develop` à `main`) suit [release.md](release.md) : versions `pi-X.Y.Z`, `cloud-X.Y.Z` et `web-X.Y.Z`, changelog, check-list, niveau de validation de chaque version du Pi.
 
@@ -84,7 +84,7 @@ Les jalons disent *quand* une chose est due. Un agent travaille par *fil* : une 
   - toute PR passe la CI (gates Pi, simulation, Convex, site, audit) et reçoit un avis indépendant, enregistré comme statut de commit `agent-review/R1` sur son commit de tête ;
   - toute PR qui change un comportement met à jour `docs/` ;
   - une release suit [release.md](release.md), et une machine ne reçoit qu'une version du Pi validée pour son état ;
-  - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que les deux reviewers écrivent quels invariants ils ont vérifiés ;
+  - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que l'avis indépendant écrive quels invariants il a vérifiés ;
   - le Pi décide : tout ce qui descend du cloud est revalidé par le Pi ;
   - une clé de sûreté change à deux, et sur place ;
   - une valeur `[MED]` ne change qu'avec une décision médicale écrite et signée ;
