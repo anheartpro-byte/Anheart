@@ -65,6 +65,16 @@ Boîtier d'acquisition physiologique (Bluetooth). Il fournit l'ECG, et
 d'autres voies (EDA, RESP, EMG, LUX, SpO2) affichées pour surveillance
 seulement.
 
+<a id="chien-de-garde"></a>
+**Chien de garde (watchdog)**\
+Ce qui agit quand un programme ne donne plus signe de vie. Il y en a trois,
+du plus rapide au plus lent. Le [ttO](#tto) du variateur arrête le moteur quand
+la console ne lui écrit plus : c'est le seul qui arrête quelque chose. Le
+chien de garde du service (systemd, `WatchdogSec=10`) arrête puis relance la
+console quand sa boucle de contrôle ne termine plus de tic. Le chien de garde
+matériel du Pi (`bcm2835_wdt`) redémarre le Pi quand le système entier est
+figé. Voir [pi-image.md](pi-image.md#le-chien-de-garde).
+
 **CiA402**\
 Norme de profil de variateur (machine d'états : SWITCH_ON_DISABLED,
 READY_TO_SWITCH_ON, SWITCHED_ON, OPERATION_ENABLED, FAULT…). Le logiciel
@@ -114,6 +124,15 @@ Pi, `simulation/scripts/check.sh` pour la simulation. Voir
 [framework-de-test.md](framework-de-test.md).
 
 **GO_SILENT** : voir [Niveaux d'action](#niveaux-daction).\
+
+<a id="hors-service"></a>
+**Hors service** (`src/service_state.py`)\
+État d'une console qui a démarré trois fois en dix minutes après un arrêt non
+propre (mort, exception, boucle figée). Elle tourne, affiche
+`CONSOLE HORS SERVICE`, lit le variateur et arrête celui qu'elle trouve en
+marche, mais n'arme aucune séance. Seul un opérateur nommé la remet en
+service, depuis la page Securite. Voir
+[raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service).
 
 **HSP** (registre du variateur, *High SPeed*)\
 Vitesse maximale réglée dans le variateur, en Hz (ici 50 Hz, soit 1380 tr/min

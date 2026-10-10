@@ -54,6 +54,10 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
 > été rejouées ni dans un navigateur, ni face à un déploiement Convex réel.
+> La pastille **Service**, le bandeau `CONSOLE HORS SERVICE` et la remise en service
+> (sections 2, 3, 4, 11, 13 et 14, ajoutés le 10 octobre 2026 avec ANH-162) viennent du
+> code et des tests automatiques sur la console en simulation ; ils n'ont pas été
+> rejoués dans un navigateur.
 
 ---
 
@@ -145,8 +149,8 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Quatre rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
-| Barre latérale (à gauche) | la marque, huit pastilles (six sur l'état de la machine, puis **Serveur** et **Version** sur la console elle-même), la navigation |
+| Bandeaux en haut | Cinq rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Barre latérale (à gauche) | la marque, neuf pastilles (six sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
 
@@ -160,7 +164,7 @@ seconde) et par des interrogations périodiques :
 | Source | Période | Sert à |
 |---|---|---|
 | `/ws/telemetry` | continu | instantanés, événements, tracé ECG |
-| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle, version du logiciel, état du lien avec le tableau de bord |
+| `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle, version du logiciel, état du lien avec le tableau de bord, console en service ou hors service |
 | `/api/sensors` | 1 s | pages Capteurs |
 | `/api/camera` | 1 s | carte caméra de la page Securite |
 | `/api/status` | 5 s | état, verdicts, attestation, système |
@@ -192,8 +196,8 @@ Ces règles ne sont pas cosmétiques. Elles sont écrites en tête de `app.js`.
    - la pastille **Liaison** passe à `donnees figees` ou `hors ligne`.
 
    La même règle vaut pour les deux autres sources. Sans réponse de `/api/panel`
-   depuis 3,5 s, les pastilles **Console**, **Serveur** et BITalino (`acquisition`)
-   sont barrées, comme celle de la barre mobile (`serveur …`) ;
+   depuis 3,5 s, les pastilles **Console**, **Serveur**, **Service** et BITalino
+   (`acquisition`) sont barrées, comme celle de la barre mobile (`serveur …`) ;
    sans réponse de `/api/status` depuis 12 s, **Etat** et la pastille de
    l'attestation. Le WebSocket peut tomber alors que ces deux sources répondent
    encore : leurs pastilles restent alors lisibles, à juste titre.
@@ -234,6 +238,7 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 | **Serveur** | `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure` : le lien de la console avec le tableau de bord ([détail plus bas](#pastille-serveur--le-lien-avec-le-tableau-de-bord)) | `/api/panel` (`dashboard`) |
 | **Version** | la version du logiciel de la console, par exemple `pi-0.0.0-dev` ; `pi-unknown` si le fichier `VERSION` manque ou est mal formé | `/api/panel` (`software_version`) |
+| **Service** | `en service` (vert) ou `HORS SERVICE` (rouge) : la console arme-t-elle quoi que ce soit ([détail plus bas](#pastille-service--en-service-ou-hors-service)) | `/api/panel` (`service`) |
 
 Les modes :
 
@@ -348,6 +353,41 @@ un tableau de bord qui répond 426 au milieu d'une séance, une adresse qui n'es
 tableau de bord, une séance dont rien n'arrive alors que la question d'arrêt est
 servie) et `raspberry-pi/tests/web/panel_dashboard_link.test.mjs` (la page). Pas
 rejoué dans un navigateur, ni face à un déploiement Convex réel.
+
+### Pastille Service : en service ou hors service
+
+Une console qui redémarre trois fois en dix minutes après un arrêt non propre (elle est
+morte, elle a levé une exception, sa boucle s'est figée) revient **hors service** : elle
+tourne, lit le variateur, arrête et verrouille celui qu'elle trouve en marche, mais
+n'arme aucune séance
+([raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
+C'est un état que la console garde d'un redémarrage à l'autre, pas un événement : une
+page ouverte une heure après le lit tout de suite.
+
+| Ce que dit la console | Pastille **Service** | Bandeau | Formulaire de la page Securite |
+|---|---|---|---|
+| en service | `en service`, vert | aucun | caché |
+| hors service | `HORS SERVICE`, rouge | rouge, sur toutes les pages : `CONSOLE HORS SERVICE`, puis `3 demarrages apres un arret non propre en moins de 10 min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme` | visible ([section 11](#remise-en-service-dune-console-hors-service)) |
+
+Sous les pastilles, une ligne dit ce que le dernier démarrage a trouvé. Elle est vide
+quand il n'y a rien à dire.
+
+| Texte | Sens |
+|---|---|
+| `demarre apres un arret non propre` | le processus précédent n'a pas fini par son arrêt contrôlé |
+| `(enregistrement <nom> non clos)`, à la suite | la séance coupée a laissé son enregistrement ouvert ; dit par un seul démarrage |
+| `N sur 3 en 10 min avant la mise hors service` | le compte des démarrages après un arrêt non propre |
+| `etat des redemarrages non enregistre sur le disque` | le fichier d'état n'a pas pu être écrit : ce qui est affiché vaut jusqu'au prochain redémarrage |
+| `chien de garde : N notification(s) non envoyee(s)` | la console est surveillée par systemd et N de ses signes de vie n'ont pas pu partir. Rien n'a été attendu ; si cela dure, systemd relance la console |
+
+Pendant qu'une console hors service tourne, tout le reste de la page fonctionne : les
+mesures, STOP, E-STOP, l'acquittement, l'attestation. Seuls les départs sont refusés,
+avec la phrase de la [section 13](#refus-de-la-boucle-événement-refused). Comme
+**Console**, la pastille est barrée quand `/api/panel` ne répond plus depuis 3,5 s.
+
+Vérifié par `raspberry-pi/tests/test_out_of_service_console.py` (la vraie console en
+simulation, par ses routes) et `raspberry-pi/tests/web/panel_service.test.mjs` (la page).
+Pas rejoué dans un navigateur.
 
 ### Ligne horloge : l'heure de la machine
 
@@ -1178,6 +1218,29 @@ Résultats possibles (vérifiés en simulation) :
 
 Un refus s'affiche sous le bouton et dans une boîte d'alerte `acquittement refuse : …`.
 
+### Remise en service d'une console hors service
+
+Sous l'acquittement, et seulement quand la console se dit hors service
+([section 4](#pastille-service--en-service-ou-hors-service)), la carte montre le titre
+`Console hors service`, la phrase `La console a redemarre plusieurs fois apres un arret
+non propre et n'accepte aucun depart. Faire verifier la machine avant de la remettre en
+service.`, un champ `votre nom` et le bouton `Remettre en service`
+(`POST /api/service/restore`).
+
+| Résultat | Ce que la page écrit sous le bouton |
+|---|---|
+| remise en service faite et écrite sur le disque | `console remise en service` |
+| faite, mais le disque n'a pas pris le nouvel état | `console remise en service jusqu'a son prochain redemarrage : l'etat n'a pas pu etre enregistre` |
+| nom vide | `an operator name is required: an unattributable session record is not one`, et une boîte d'alerte `remise en service refusee : …` |
+| la console est déjà en service | `the console is in service: there is nothing to lift` |
+
+La page ne change pas la pastille elle-même : elle redemande `/api/panel`, et c'est la
+réponse de la console qui fait disparaître le bandeau. La remise en service ne lance
+rien et n'acquitte rien : un départ demande toujours l'attestation de ce démarrage, les
+verdicts acquittés, puis un départ. Elle est écrite dans le journal hors séance sous
+l'alias de l'opérateur, jamais son nom. Ce n'est pas un geste de routine : une console
+qui redémarre en boucle est une machine à faire vérifier.
+
 ### Carte « Cablage de l'arret d'urgence » (l'attestation en deux cases)
 
 Avant tout mouvement, à **chaque démarrage du Pi**, une personne nommée doit attester
@@ -1310,6 +1373,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent |
+| `demarrage refuse : console hors service : 3 demarrages apres un arret non propre en moins de 10 min. Faire verifier la machine, puis la remettre en service depuis cette page, par un operateur nomme` | la console est hors service ([section 4](#pastille-service--en-service-ou-hors-service)) ; aucun départ, manuel ou programmé, n'est armé, avant toute autre porte |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
 | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | il reste des octets, mais plus assez d'inodes libres pour les fichiers d'une séance ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
@@ -1430,7 +1494,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
 | GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
-| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console | 200 |
+| GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console ; `service` (`out_of_service`, `unclean_starts`, `threshold`, `window_s`, `unclean_stop`, `open_record`, `persisted` : la console est-elle en service, et ce que son dernier démarrage a trouvé) ; `watchdog` (`enabled`, `sent`, `failed`, `last_error` : ce que la boucle de contrôle a dit au gestionnaire de service) | 200 |
 | GET | `/api/camera` | `configured`, `camera`, `state`, `detail`, `latched_rule` | 200 |
 | GET | `/api/sensors` | chaque canal acquis : fenêtre, qualité, mesures (surveillance seulement) | 200 |
 
@@ -1468,6 +1532,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 | POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` | attestation du câblage, pour ce démarrage | 200 ; 400 (une case manque, nom vide) |
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
+| POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
 

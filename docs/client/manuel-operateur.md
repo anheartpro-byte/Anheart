@@ -198,7 +198,7 @@ cartes apparaissent en majuscules à l'écran.
 
 Elles sont à gauche, sur toutes les pages. Vert : normal. Orange : quelque
 chose est en cours. Rouge : problème ou arrêt. Les six premières parlent de la
-machine, les deux dernières de la console elle-même. La capture ci-dessus peut
+machine, les trois dernières de la console elle-même. La capture ci-dessus peut
 dater d'une version antérieure de l'écran, qui n'en montrait que six.
 
 | Pastille | Ce qu'elle affiche | Ce que cela veut dire |
@@ -223,11 +223,17 @@ dater d'une version antérieure de l'écran, qui n'en montrait que six.
 | | « injoignable », « incompatible », « cle refusee », « en erreur » | La console n'échange plus normalement avec le site web. Une séance déjà en cours continue selon les règles de la console, et ses mesures restent enregistrées sur la machine. L'affichage du site peut se figer, et le site peut ne plus pouvoir demander l'arrêt ([section 7](#7-séance-lancée-depuis-le-site)). Une ligne sous les pastilles en donne le motif. |
 | | « non configure » | Cette console n'est pas reliée au site web. |
 | **Version** | par exemple « pi-0.0.0-dev » | La version du logiciel de la console. |
+| **Service** | « en service » | La console accepte de démarrer une séance, si rien d'autre ne s'y oppose. |
+| | « HORS SERVICE » | La console a redémarré plusieurs fois de suite après un arrêt anormal. Elle continue d'afficher la machine, mais elle refuse tout démarrage tant que quelqu'un ne l'a pas remise en service, avec son nom, depuis la page **Securite** (bouton **Remettre en service**). Le bandeau rouge « CONSOLE HORS SERVICE » s'affiche en même temps. Remettre la console en service ne démarre rien. |
 
 > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
 > quand **Serveur** n'affiche pas « joignable » pendant une séance ou avant
 > d'en commencer une, en particulier pour une séance lancée depuis le site
 > ([section 7](#7-séance-lancée-depuis-le-site)), et qui prévenir.
+
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand **Service** affiche « HORS SERVICE » : qui prévenir, ce qu'il faut
+> faire vérifier sur la machine, et qui a le droit de la remettre en service.
 
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
@@ -240,7 +246,7 @@ C'est **Securite** qui le dit. Pour savoir où en est la machine, lisez
 
 ### Les bandeaux en haut de l'écran
 
-Ils s'affichent tout en haut, sur toutes les pages. Quatre sont rouges, un est
+Ils s'affichent tout en haut, sur toutes les pages. Cinq sont rouges, un est
 orange. Plusieurs peuvent être affichés en même temps.
 
 | Bandeau | Ce que cela veut dire |
@@ -249,6 +255,7 @@ orange. Plusieurs peuvent être affichés en même temps.
 | « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». S'il dit « aucune reponse de la console », la demande reste en attente : si elle aboutit, ce bandeau est remplacé par « ARRET D'URGENCE VERROUILLE ». S'il dit « la demande a echoue » et « n'est plus en attente », la demande est terminée : elle n'aboutira plus et l'écran ne la renvoie pas. Le bandeau indique alors depuis combien de temps elle a échoué, et il reste affiché jusqu'à ce que l'écran apprenne qu'un arrêt d'urgence est verrouillé, ou que la page soit rechargée. S'il dit « nouvelle demande sans reponse » et « la precedente a echoue », vous avez cliqué de nouveau après un échec : la nouvelle demande est en attente, la précédente est terminée ([section 8](#8-arrêter-la-machine)). |
 | « STOP NON CONFIRME » | Vous avez cliqué **STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable ». Il dit, avec les mêmes mots que le précédent, si une demande est encore en attente (« aucune reponse de la console », « nouvelle demande sans reponse ») ou si elle est terminée (« la demande a echoue », « n'est plus en attente »). Tant qu'il est affiché, la console n'a pas confirmé que la séance se termine. Il disparaît quand la console accepte ou refuse la demande, ou quand l'écran apprend que la séance se termine. Si la demande échoue sans réponse de la console, ou si la console répond par une erreur, il reste affiché et dit que la demande a échoué ([section 8](#8-arrêter-la-machine)). |
 | « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : sur un écran qui affichait déjà ce bandeau, il reste alors affiché jusqu'au redémarrage de la console, et il peut encore rester après ce redémarrage, jusqu'au rechargement de la page. Un écran ouvert ou rechargé pendant que **Securite** affiche « go_silent » peut ne pas l'afficher. Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « CONSOLE HORS SERVICE » | La console a redémarré plusieurs fois de suite après un arrêt anormal et refuse tout démarrage : voir la pastille **Service** plus haut. |
 | « REPRISE AUTOMATIQUE POSSIBLE » (orange) | La console garde ou baisse la vitesse à cause d'une alerte qui n'est pas verrouillée. Quand cette alerte disparaîtra, la vitesse remontera seule, sans aucun clic ([section 9.2](#92-la-console-agit-seule)). |
 
 ### Les pages

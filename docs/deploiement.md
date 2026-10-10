@@ -1195,7 +1195,7 @@ lancés par aucun job : ils restent à lancer à la main.
 | Prêt | Vérifié comment |
 |---|---|
 | L'image Docker lance la **console** (`python -m src.local_panel`), et rien d'autre. | Construite pour ARM64 (la même architecture que le Pi 4 et 5) : 1,31 Go, mesuré par la CI sur un runner arm64 (job `pi-install`, run 37610353541). |
-| `scripts/anheart.service` : la même image lancée par systemd à l'allumage, périphériques, réseau de l'hôte, relance après une sortie en erreur, délai d'arrêt de 60 s. | Test de bout en bout en CI, en simulation ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) : service activé, `/healthz`, conteneur « healthy », console au repos après un arrêt du service en pleine séance, après un arrêt brutal, et après l'arrêt puis le rallumage de la machine de remplacement. La liaison avec Convex n'y est pas rejouée (clé de machine vide) ; elle l'avait été avec cette image lancée par Compose, avant ce changement (heartbeat et programmes reçus par le Convex de développement). |
+| `scripts/anheart.service` : la même image lancée par systemd à l'allumage, périphériques, réseau de l'hôte, relance 2 s après une sortie en erreur ou après 10 s sans signe de vie de la boucle de contrôle ([chien de garde](pi-image.md#le-chien-de-garde)), dans la limite de dix démarrages par demi-heure, délai d'arrêt de 60 s. | Test de bout en bout en CI, en simulation ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) : service activé, `/healthz`, conteneur « healthy », console au repos après un arrêt du service en pleine séance, après un arrêt brutal, et après l'arrêt puis le rallumage de la machine de remplacement. La liaison avec Convex n'y est pas rejouée (clé de machine vide) ; elle l'avait été avec cette image lancée par Compose, avant ce changement (heartbeat et programmes reçus par le Convex de développement). |
 | `scripts/install.sh` : installe un Pi neuf, sans rien réécrire ni redémarrer à la relance. | Même test, et `tests/test_pi_install.py` dans la gate du Pi. |
 | Arrêt propre. | `docker stop` pendant une séance manuelle simulée : la console met la consigne à zéro, rend la liaison, sort avec le code 0. |
 | Jeton d'accès quand la page n'écoute pas que sur la boucle locale. | 401 sans l'en-tête `x-anheart-token`, 200 avec. |
@@ -1348,7 +1348,10 @@ et l'ordre avec Convex
 Un redémarrage (du conteneur, du Pi) **ne relance jamais un mouvement** : la
 console revient au repos, en lecture seule. Si elle trouve le variateur activé
 au démarrage, elle commande zéro, verrouille, et attend un acquittement de
-l'opérateur.
+l'opérateur. Une console qui redémarre trois fois en dix minutes après un arrêt non
+propre revient hors service et n'arme plus rien jusqu'à ce qu'un opérateur
+nommé la remette en service depuis sa page
+([raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
 > Arrêter la console **pendant une séance** laisse la séance `active` dans
 > Convex (section 4). Terminer la séance à la console avant d'arrêter.

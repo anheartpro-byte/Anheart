@@ -17,9 +17,18 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 >   après l'arrêt puis le rallumage de la machine de remplacement
 >   ([section 5](#5-ce-que-la-ci-vérifie)). Premier passage : job `pi-install`
 >   de la PR #37, run 37607234436.
+> - **Ajouté le 10 octobre 2026, vérifié de la même façon** : systemd surveille
+>   la console et la relance quand elle se fige ou meurt
+>   ([Le chien de garde](#le-chien-de-garde)). Dans la machine de remplacement,
+>   une console figée en pleine séance est arrêtée par le chien de garde du
+>   service puis relancée au repos, et une console qui meurt trois fois de
+>   suite revient hors service (étapes 9 et 10 de la
+>   [section 5](#5-ce-que-la-ci-vérifie)).
 > - **Pas vérifié** : aucune installation sur un vrai Raspberry Pi, ni avec le
->   vrai variateur, ni avec le vrai BITalino. La liste de ce qu'une personne
->   doit faire et constater est en [section 6](#6-installer-un-vrai-raspberry-pi).
+>   vrai variateur, ni avec le vrai BITalino. Le chien de garde **matériel** du
+>   Pi n'a jamais été armé ni déclenché : seul son réglage est écrit et relu.
+>   La liste de ce qu'une personne doit faire et constater est en
+>   [section 6](#6-installer-un-vrai-raspberry-pi).
 > - **Heure et journal du système (10 octobre 2026)** : le script installe le
 >   service de temps `chrony` et règle un journal gardé sur le disque et borné ;
 >   la console dit si son horloge est tenue par ce service
@@ -115,6 +124,7 @@ la même chose.
 | BlueZ | paquet `bluez` : 5.66-1+rpt2+deb12u2 dans l'image figée (5.66-1+deb12u2 dans Debian, celui de la CI) | déjà dans l'image, vérifié par le script |
 | Service de temps | paquet `chrony` de Debian 12 (série 4.3) ; il prend la place de `systemd-timesyncd`, le service de temps de Raspberry Pi OS (à constater sur un Pi, [section 6](#6-installer-un-vrai-raspberry-pi)) | installé par `scripts/install.sh` |
 | libusb | paquet `libusb-1.0-0` : 2:1.0.26-1 dans l'image figée | déjà dans l'image, vérifié par le script |
+| socat | paquet `socat` de Debian 12 ; le script et le test de bout en bout affichent la version qu'ils trouvent | installé par `scripts/install.sh` : c'est le relais du chien de garde ([section 4](#le-chien-de-garde)) |
 | systemd | 252.39-1~deb12u2 dans l'image figée | déjà dans l'image |
 
 Le fichier se télécharge sur `downloads.raspberrypi.com`, dossier
@@ -125,9 +135,9 @@ référence de l'image (`/etc/rpi-issue`) à celle de cette page et **avertit** 
 elle diffère, sans refuser : une image plus récente de la même série reste
 Debian 12.
 
-Les paquets du système (`docker.io`, `bluez`, `libusb-1.0-0`, `chrony`) viennent
-de Debian 12 : ils sont figés par la série, qui ne reçoit que des corrections,
-pas par un numéro exact. Les numéros ci-dessus sont ceux de la série au 7 octobre
+Les paquets du système (`docker.io`, `bluez`, `libusb-1.0-0`, `chrony`, `socat`)
+viennent de Debian 12 : ils sont figés par la série, qui ne reçoit que des
+corrections, pas par un numéro exact. Les numéros ci-dessus sont ceux de la série au 7 octobre
 2026 ; le script affiche ceux qu'il trouve.
 
 ### L'image de la console
@@ -203,13 +213,14 @@ Dans l'ordre :
 | Système | refuse tout autre système que Debian 12 ; avertit si l'architecture n'est pas arm64 ou si la référence Raspberry Pi OS diffère | idem |
 | Version | lit `raspberry-pi/VERSION` ; refuse une version qui ne peut pas nommer une image | idem |
 | Console en marche | si le service tourne déjà, ou si un conteneur nommé `anheart` tourne sans lui (lancé à la main, ou resté d'une autre façon de lancer l'image), demande à la console si elle est au repos ; **refuse de continuer sinon**, y compris quand elle ne répond pas | idem |
-| Paquets | installe `docker.io`, `bluez`, `libusb-1.0-0`, `ca-certificates`, `curl`, `chrony` ; active Docker et le Bluetooth | rien à installer : `apt` n'est pas appelé |
+| Paquets | installe `docker.io`, `bluez`, `libusb-1.0-0`, `ca-certificates`, `curl`, `chrony`, `socat` ; active Docker et le Bluetooth | rien à installer : `apt` n'est pas appelé |
 | Heure | écrit `/etc/chrony/conf.d/anheart.conf`, active et démarre `chrony` ; dit si la machine a une horloge temps réel ([section 4](#lheure)) | fichier identique : `chrony` n'est pas redémarré |
 | Journal du système | écrit `/etc/systemd/journald.conf.d/anheart.conf` (`Storage=persistent`, `SystemMaxUse=200M`) et redémarre `systemd-journald` ([section 4](#le-journal-du-système)) | fichier identique : rien n'est redémarré |
 | Compte | crée le compte système `anheart` (sans connexion) | déjà là |
 | Dossiers | `/var/lib/anheart/data` (profils locaux) et `/var/lib/anheart/records` (enregistrements de séance, mode 700), propriété de `anheart` | propriétaire et mode remis |
 | Configuration | écrit `/etc/anheart/anheart.env` à partir de `.env.pi.example`, lisible par root seul (mode 600) | **le fichier existant n'est jamais réécrit ni affiché** ; propriétaire et mode remis |
 | Image | construit `anheart-console:<version>` depuis le dossier | couches en cache : même image, rien ne change |
+| Chien de garde matériel | écrit `/etc/systemd/system.conf.d/10-anheart-watchdog.conf` (`RuntimeWatchdogSec=15s`) : systemd arme et nourrit le chien de garde du Pi, pris en compte au plus tard au démarrage suivant de la machine ; avertit si `/dev/watchdog` n'existe pas | fichier identique : inchangé. Ce fichier seul ne fait jamais redémarrer la console |
 | Service | installe `anheart.service` et le fichier qui porte la version ; active le service au démarrage | fichiers identiques : inchangés |
 | Démarrage | démarre le service ; s'il tournait, ne le redémarre **que si l'image ou l'unité a changé** ; dans les deux cas, une console en marche est interrogée une seconde fois juste avant, et doit se dire au repos | console inchangée : laissée en marche |
 | Test de démarrage | attend que `GET /healthz` réponde (180 s au plus) ; si le script vient de démarrer la console, exige qu'elle se dise au repos ; vérifie que le service est activé au démarrage | idem |
@@ -254,11 +265,14 @@ matériel réel, modifier le fichier à la main
 `/app/data` et `/var/lib/anheart/records` sur `/app/data/records`, l'emplacement
 par défaut des enregistrements de séance (`RECORD_ROOT`) : aucune clé à régler.
 Docker crée pour ce montage un dossier vide `/var/lib/anheart/data/records` sur
-le Pi ; les enregistrements sont dans `/var/lib/anheart/records`.
+le Pi ; les enregistrements sont dans `/var/lib/anheart/records`. Le même
+dossier porte `service-state.json`, ce que la console garde de ses propres
+redémarrages ([Le chien de garde](#le-chien-de-garde)).
 
 **Désinstaller** : `sudo bash scripts/uninstall.sh` arrête la console et retire
 le service. La configuration, les données, le compte et les images restent, et
-les deux réglages du système aussi (le service de temps et le journal).
+les réglages du système aussi : le service de temps, le journal, et le chien de
+garde matériel, qui protège la machine et non la console.
 
 ---
 
@@ -326,9 +340,86 @@ sudo docker inspect --format '{{.State.Health.Status}}' anheart    # healthy
 `/healthz` répond sans jeton et ne dit rien de la séance. Le port est celui de
 `UI_PORT` dans `/etc/anheart/anheart.env` (8090 dans le modèle).
 
-Ce contrôle **constate**, il ne répare pas : une console qui ne répond plus
-mais dont le processus vit encore est marquée `unhealthy` par Docker et n'est
-pas redémarrée. Le chien de garde est le ticket ANH-162.
+Ce contrôle **constate**, il ne répare pas : une console dont la page ne répond
+plus est marquée `unhealthy` par Docker, et ce contrôle ne la redémarre pas. Ce
+qui relance une console figée est le chien de garde de l'unité, qui écoute la
+boucle de contrôle elle-même et non la page.
+
+### Le chien de garde
+
+Si la console se fige ou meurt, systemd la relance, **au repos**. Trois
+mécanismes, du plus rapide au plus lent, et le premier n'est pas le nôtre :
+
+| Qui | Ce qu'il surveille | Délai | Ce qu'il fait |
+|---|---|---|---|
+| Le variateur (ttO) | les trames de la console | réglé dans le variateur (3 s dans le simulateur) | arrête le moteur. **C'est le filet du moteur**, et le seul : rien de ce qui suit n'arrête quoi que ce soit plus vite |
+| systemd, sur l'unité (`WatchdogSec=10`) | les tics de contrôle terminés de la console | 10 s sans nouvelle | arrête la console par son arrêt contrôlé, puis la relance |
+| Le chien de garde matériel du Pi (`RuntimeWatchdogSec=15s`) | systemd lui-même | 15 s sans que systemd le nourrisse | redémarre le Pi : système entier figé, systemd compris |
+
+**Ce que systemd entend.** La console dit `READY=1` à son premier tic de
+contrôle terminé, puis `WATCHDOG=1` à chaque tic terminé, et de nulle part
+ailleurs dans son code
+([raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
+Le service est `Type=notify` : il n'est « démarré » qu'à ce premier tic, et le
+compte des 10 s part de là, pas du lancement de l'image (une carte SD froide met
+bien plus de 10 s à charger la console ; l'unité lui laisse 300 s).
+
+**Le relais.** systemd n'écoute que les processus de l'unité, et la console est
+un processus du conteneur. L'unité lance donc `socat`, qui est un des siens : il
+écoute sur `/run/anheart/notify`, que la console reçoit comme `NOTIFY_SOCKET`,
+et transmet chaque datagramme à systemd tel quel (`NotifyAccess=all`). Il
+n'invente rien : une console qui ne dit rien n'est pas entendue. S'il meurt,
+systemd n'entend plus la console et l'arrête au bout de 10 s, par son arrêt
+contrôlé : une panne du relais coûte un arrêt propre, jamais un arrêt brutal.
+Sans `socat`, l'unité refuse de démarrer (`AssertFileIsExecutable`).
+
+**Ce qui se passe quand la console se tait.**
+
+| Instant | Console dont la boucle tourne encore (un tic bloqué) | Console figée (elle ne répond à rien) |
+|---|---|---|
+| 0 | dernier tic terminé ; plus aucune trame vers le variateur | idem |
+| ttO du variateur | le variateur arrête le moteur | idem |
+| 10 s | systemd : `Watchdog timeout`, SIGTERM (`WatchdogSignal=SIGTERM`) | idem ; le signal reste sans effet |
+| quelques secondes | la console sort par son arrêt contrôlé, avec le code 1 | - |
+| 25 s (`TimeoutAbortSec=15`) | - | systemd abandonne et passe à l'arrêt ordinaire de l'unité : `docker stop -t 60`, qui tue au bout de 60 s |
+| + 2 s (`RestartSec=2`) | nouvelle console, au repos | nouvelle console, au repos, environ 90 s après le gel |
+
+La nouvelle console est un nouveau processus : pas d'attestation, pas de
+séance, et un variateur trouvé activé ou en rotation est mis à zéro et
+verrouillé ([Allumage et redémarrage](#allumage-et-redémarrage--rien-ne-repart-seul)).
+Si la séance coupée a laissé son enregistrement ouvert, elle écrit
+l'avertissement « démarrage après arrêt non propre » et le montre sur sa page.
+
+**La limite, et le mode hors service.**
+
+| Niveau | Règle | Ce qu'on voit | Comment en sortir |
+|---|---|---|---|
+| La console | trois démarrages après un arrêt non propre en dix minutes | la console tourne, sa page affiche `CONSOLE HORS SERVICE`, elle n'arme rien ; `journalctl -u anheart` porte `out_of_service` | un opérateur nommé la remet en service depuis la page (Securite), après avoir fait vérifier la machine |
+| systemd | un onzième démarrage en 30 minutes est refusé (`StartLimitBurst=10`, `StartLimitIntervalSec=1800`) | plus de console : la page ne répond plus, `systemctl status anheart` dit `failed (Result: start-limit-hit)` | lire `journalctl -u anheart`, corriger, puis `sudo systemctl reset-failed anheart && sudo systemctl start anheart` |
+
+La limite de systemd est pour la console qui ne revient pas du tout ; celle qui
+revient s'est mise hors service bien avant. Les démarrages faits à la main
+comptent dans les dix : plus de dix `systemctl restart` en une demi-heure
+donnent la même erreur, et la même commande la lève.
+
+```sh
+systemctl show -p Result,NRestarts anheart     # watchdog, exit-code, start-limit-hit...
+journalctl -u anheart | grep -i watchdog       # « Watchdog timeout (limit 10s)! »
+curl -s http://127.0.0.1:8090/api/panel        # "service":{"out_of_service":...}, "watchdog":{...}
+```
+
+**Le Pi lui-même.** Le chien de garde matériel (`bcm2835_wdt`, `/dev/watchdog0`)
+est armé et nourri par systemd : il redémarre le Pi quand le système entier est
+figé. Il ne redémarre **pas** le Pi quand systemd tourne mais n'arrive plus à
+relancer la console : l'unité reste alors en échec et le Pi reste joignable
+pour le diagnostic ([section 8](#8-limites-et-reste-à-faire)).
+
+**Non vérifié.** Tout ce qui précède a tourné avec le vrai systemd et le vrai
+Docker de Debian 12, dans la machine de remplacement, en simulation
+([section 5](#5-ce-que-la-ci-vérifie), étapes 1, 9 et 10). Sur un vrai Pi :
+rien. En particulier que `/dev/watchdog0` existe, que systemd l'arme, et qu'un
+Pi figé redémarre, ne se constate que sur la machine
+([section 6](#6-installer-un-vrai-raspberry-pi), étape 7).
 
 ### L'arrêt
 
@@ -406,11 +497,16 @@ Comment c'est vérifié :
 | Après l'arrêt puis le rallumage de la machine de remplacement, la console revient seule, **au repos**, sans attestation | test de bout en bout, étape 8 |
 | Le script d'installation ne remplace pas une console qui n'est pas au repos, que le service l'ait lancée ou non | `tests/test_pi_install.py` et test de bout en bout, étapes 3 et 7 |
 | Un variateur trouvé activé au démarrage est mis à zéro et verrouillé | gate du Pi (`tests/test_runtime.py` : `test_a_drive_found_already_enabled_is_stopped_latched_and_refused`, `test_a_drive_found_enabled_while_idle_is_stopped_latched_and_disabled`) |
+| Une console figée en pleine séance simulée est arrêtée par le chien de garde du service et relancée **au repos**, sans attestation | test de bout en bout, étape 9 |
+| Après une exception dans le tic, une boucle bloquée ou une console tuée, la console relancée trouve le variateur simulé **laissé en marche**, le met à zéro et verrouille ; rien ne bouge avant une attestation, un acquittement nommé, un départ et une cible | gate du Pi (`tests/test_supervised_console.py`, les quatre tests `test_ex4_…`) |
+| Une console qui redémarre en boucle revient hors service et n'arme rien | gate du Pi (`tests/test_out_of_service_console.py`) et test de bout en bout, étape 10 |
 
-Règles de redémarrage de l'unité : relance 10 s après une sortie en erreur
-(`Restart=on-failure`), jamais après une sortie avec le code 2 (configuration
-refusée : la console liste les problèmes et sort ; les lire avec
-`journalctl -u anheart`).
+Règles de redémarrage de l'unité : relance 2 s après une sortie en erreur, un
+arrêt par le chien de garde ou une mort (`Restart=on-failure`, `RestartSec=2`),
+dans la limite de dix démarrages par demi-heure
+([Le chien de garde](#le-chien-de-garde)) ; jamais après une sortie avec le
+code 2 (configuration refusée : la console liste les problèmes et sort ; les
+lire avec `journalctl -u anheart`).
 
 Non couvert : ces vérifications se font en simulation. Le comportement avec le
 vrai variateur à l'allumage reste à constater sur la machine. L'étape 8 est un
@@ -518,7 +614,7 @@ Le workflow `.github/workflows/pi-install.yml` lance
 
 | Étape | Ce qui doit être vrai |
 |---|---|
-| 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; `chrony` est installé, activé au démarrage, avec ses deux directives ; la console, dans son conteneur, lit l'état de l'horloge de la machine et dit la même chose que `timedatectl` ; le journal est sous `/var/log/journal` et `journald` annonce lui-même sa borne de 200 Mo ; le contrôle de santé de l'image passe à `healthy` |
+| 1. Première installation | service activé au démarrage et en marche ; `/healthz` répond ; console au repos, sans attestation ; `systemctl status anheart` montre la version ; l'image porte la même version et tourne sous Python 3.12 ; compte, dossiers et droits en place ; configuration en simulation, sans clé de machine ; le journal contient la ligne de démarrage de la console ; `chrony` est installé, activé au démarrage, avec ses deux directives ; la console, dans son conteneur, lit l'état de l'horloge de la machine et dit la même chose que `timedatectl` ; le journal est sous `/var/log/journal` et `journald` annonce lui-même sa borne de 200 Mo ; le contrôle de santé de l'image passe à `healthy` ; systemd lit l'unité comme prévu (`Type=notify`, 10 s de chien de garde, relance à 2 s, limite de dix démarrages) ; plus de 15 s sans redémarrage ni `Watchdog timeout` : les notifications de la console arrivent à systemd par le relais ; la console se dit surveillée, sans aucun envoi manqué, et en service ; son état de redémarrage est écrit, privé, à côté des enregistrements ; le réglage du chien de garde matériel est là où systemd le lit |
 | 2. Deuxième installation | un jeton est écrit dans la configuration ; le script ne l'affiche pas, ne réécrit pas le fichier, ne redémarre pas la console ; le `curl` de Debian 12 envoie bien un en-tête lu sur son entrée standard ; un réglage du journal modifié fait redémarrer `journald` et pas la console, dont les lignes suivantes arrivent encore au journal |
 | 3. Séance en cours | une séance manuelle simulée tourne ; son enregistrement s'écrit dans `/var/lib/anheart/records`, avec la version de l'image ; une installation qui remplacerait la console **refuse** et ne touche à rien |
 | 4. Service arrêté en pleine séance | `systemctl stop anheart` rend la main en moins de 60 s ; systemd constate un arrêt propre (code 0) ; le journal porte le `shutdown complete` de la console ; l'enregistrement est clos, raison `shutdown` ; aucun conteneur ne reste ; redémarrée, la console est au repos, sans attestation |
@@ -526,9 +622,17 @@ Le workflow `.github/workflows/pi-install.yml` lance
 | 6. Au repos | la même installation remplace la console par la nouvelle version ; l'image précédente reste sur la machine |
 | 7. Console que le service n'a pas lancée | un conteneur `anheart` lancé à la main tourne une séance : l'installation **refuse**, ne le touche pas, ne démarre pas le service ; une fois la séance terminée, l'installation passe, l'unité arrête et retire ce conteneur puis lance le sien |
 | 8. Arrêt puis rallumage | la machine de remplacement est arrêtée (arrêt ordonné) puis rallumée ; la console revient seule, au repos ; une ligne écrite dans le journal avant l'arrêt y est encore, et les lignes de la console d'avant l'arrêt aussi |
+| 9. Console figée en pleine séance | la console est figée (`SIGSTOP` : elle ne termine plus de tic et ne répond à rien) ; pas avant 10 s, systemd écrit `Watchdog timeout (limit 10s)!`, constate l'échec `watchdog` et lance une autre console ; elle est au repos, sans attestation ; elle se dit démarrée après un arrêt non propre et nomme l'enregistrement que la séance figée a laissé ouvert ; le journal hors séance porte l'avertissement |
+| 10. Console qui meurt en boucle | la console est tuée jusqu'à son troisième démarrage après un arrêt non propre en dix minutes : elle tourne, répond, se dit hors service, et le journal le porte ; un départ demandé n'est pas armé ; `POST /api/service/restore`, avec un nom, la remet en service, sans rien lancer ; une séance démarre alors ; après un redémarrage propre elle est toujours en service |
 
 Rien n'y touche du matériel ni un tableau de bord : variateur simulé, ECG
-simulé, clé de machine vide.
+simulé, clé de machine vide. Deux choses n'y sont pas. Le variateur simulé vit
+dans le processus de la console et meurt avec lui : ce qu'une console relancée
+fait d'un variateur **laissé en marche** est vérifié ailleurs, par
+`tests/test_supervised_console.py`, où le variateur simulé survit à la console.
+Et le chien de garde matériel n'est pas exercé : le systemd de la machine de
+remplacement reçoit `/dev/null` comme périphérique de chien de garde, pour ne
+jamais armer celui de la machine qui fait tourner le test.
 
 **Ce que la machine de remplacement ne montre pas de l'heure.** Elle partage
 l'horloge de la machine qui lance le test : `chrony` y est installé et activé,
@@ -567,7 +671,10 @@ sur le même commit que `ci.yml`.
 
 **Durée.** Sur la PR #37 (run 37607234436) : 2 min 40 s pour le job, dont
 environ une minute pour construire l'image sur le runner arm64. Ce n'est pas la
-durée sur un Raspberry Pi, qui reste à mesurer.
+durée sur un Raspberry Pi, qui reste à mesurer. Les étapes 9 et 10 ajoutent
+environ deux minutes et demie : la console figée n'est remplacée qu'après les
+10 s du chien de garde, les 15 s laissées à la console pour sortir et les 60 s
+de l'arrêt de l'unité.
 
 **Le lancer soi-même.** `bash raspberry-pi/scripts/pi/test_install.sh`, sur une
 machine avec Docker. La machine de remplacement y construit l'image complète de
@@ -581,14 +688,19 @@ existante gardée et secrets jamais affichés, refus sous une console qui n'est
 pas au repos (lancée par le service ou non), échec du test de démarrage. Il
 exécute aussi le script d'entrée de l'image (la version donnée aux
 enregistrements) et vérifie l'unité, les versions figées (dont cette page) et
-le workflow.
+le workflow. Pour le chien de garde : les réglages de l'unité, le fichier que
+l'installation écrit pour le chien de garde matériel (sans redémarrer la
+console pour lui), et la ligne de l'unité qui lance le relais, exécutée pour de
+bon avec un relais et un `docker` scriptés (le relais est lancé sur le socket
+de systemd, puis le shell devient `docker run` avec tous ses arguments et son
+code de sortie).
 
 ---
 
 ## 6. Installer un vrai Raspberry Pi
 
 **Non fait à ce jour.** Voici ce qu'une personne doit faire et constater, avec
-un Raspberry Pi 4 ou 5 et une carte SD. Les étapes 1 à 6 ne demandent ni
+un Raspberry Pi 4 ou 5 et une carte SD. Les étapes 1 à 7 ne demandent ni
 variateur ni BITalino.
 
 1. **Flasher l'image figée.** Télécharger
@@ -626,7 +738,23 @@ variateur ni BITalino.
    seule, au repos. **C'est le critère d'acceptation du ticket** : consigner
    dans le ticket la référence du système, la durée de construction, la sortie
    de `systemctl status anheart` et le résultat de cet essai.
-7. **Passer au matériel réel**, quand le banc est prêt (jalon M3) :
+7. **Constater le chien de garde**, toujours en simulation, rien de branché.
+   - `ls -l /dev/watchdog0` : le périphérique existe ;
+   - `systemctl show -p RuntimeWatchdogUSec` : `15s` ; et
+     `journalctl -b | grep -i watchdog` doit porter la ligne où systemd dit
+     quel chien de garde matériel il utilise (attendu : celui du BCM2835) ;
+   - `systemctl show -p WatchdogUSec,NRestarts anheart` : `10s` et `0`, et
+     `"watchdog":{"enabled":true` avec `"failed":0` dans
+     `curl -s http://127.0.0.1:8090/api/panel` ;
+   - figer la console : `sudo kill -STOP $(sudo docker inspect --format '{{.State.Pid}}' anheart)`,
+     puis `journalctl -u anheart -f`. Attendu : `Watchdog timeout (limit 10s)!`
+     après 10 s, une nouvelle console environ 90 s après le gel, au repos
+     (constats de l'étape 5). Noter les deux durées.
+
+   Le déclenchement du chien de garde **matériel** (Pi entier figé) et les
+   essais avec le variateur sont dans la procédure de banc, pas ici
+   ([securite.md](securite.md#96-essai-au-banc--procédure-non-faite)).
+8. **Passer au matériel réel**, quand le banc est prêt (jalon M3) :
    - `sudo nano /etc/anheart/anheart.env` : `MOTOR_BACKEND=serial`,
      `ECG_SOURCE=serial`, puis `MOTOR_PORT`, `BITALINO_MAC`, les rayons mesurés,
      `CONVEX_URL` et `MACHINE_API_KEY`
@@ -634,7 +762,7 @@ variateur ni BITalino.
    - appairer le BITalino : `bash scripts/pair_device.sh <adresse MAC>` ;
    - `sudo bash scripts/pi/preflight.sh` ;
    - `sudo systemctl restart anheart`, puis les constats de l'étape 5.
-8. **Avant tout outil de banc ou de diagnostic sur cette machine** (banc,
+9. **Avant tout outil de banc ou de diagnostic sur cette machine** (banc,
    mesure de latence, sonde ou balayage Modbus, SoMove) : arrêter le service et
    vérifier qu'il est arrêté. La console ne refuse pas un outil lancé hors de
    son conteneur
@@ -712,7 +840,9 @@ nouvelles versions.
 | Durée de construction de l'image sur un Pi 4 et sur un Pi 5 | idem, étape 4 |
 | Publier et signer l'image, la faire tirer par le Pi | chef de projet (registre, clé), ANH-126, ANH-168 |
 | Faire tourner la console sous le compte `anheart`, sans privilèges ; pare-feu ; système en lecture seule | ANH-151 |
-| Relancer une console qui ne répond plus (chien de garde) | ANH-162 |
+| Le chien de garde du service, la relance et le mode hors service n'ont jamais tourné sur un vrai Pi ; le chien de garde matériel n'a jamais été armé ni déclenché | une personne avec le matériel : [section 6](#6-installer-un-vrai-raspberry-pi), étape 7, puis la procédure de banc de [securite.md](securite.md#96-essai-au-banc--procédure-non-faite) |
+| Quand systemd tourne mais n'arrive plus à relancer la console (limite de dix démarrages atteinte, Docker bloqué), l'unité reste en échec et **le Pi ne redémarre pas de lui-même** : seul un système entier figé est redémarré par le chien de garde matériel. Le faire redémarrer aussi dans ce cas est une ligne de l'unité (`StartLimitAction=reboot`), au prix d'un Pi qui redémarre en boucle, donc difficile à joindre, quand la console ne peut pas démarrer du tout (image absente) | décision du chef de projet ; d'ici là, `systemctl reset-failed anheart` ou un redémarrage du Pi à la main |
+| L'état « hors service » n'est pas remonté au tableau de bord : il est sur la page de la console et dans son journal | ANH-148 (champs de santé du heartbeat) |
 | Essai de coupure secteur au banc ([section 6](#essai-de-coupure-secteur--à-faire-au-banc)) : il n'est pas fait, et lui seul montre le remplacement de `systemd-timesyncd`, la correction de l'heure au retour du réseau et ce que la coupure laisse du journal | une personne avec le matériel ; ANH-163 |
 | Horloge temps réel : aucun module n'est monté ni essayé. Le script en signale une et `chrony` la tiendrait à l'heure, mais la console ne lui fait pas confiance sans réseau ([section 4](#lheure)). Choisir un module, l'activer dans `/boot/firmware/config.txt`, puis écrire la règle de confiance | chef de projet (matériel), puis un ticket |
 | Les serveurs de temps sont ceux de Debian, sur Internet. Un site qui ferme la sortie NTP (UDP 123) laisse l'horloge « NON FIABLE » : y déclarer le serveur de temps du site (`/etc/chrony/sources.d/`) | à décider par site |

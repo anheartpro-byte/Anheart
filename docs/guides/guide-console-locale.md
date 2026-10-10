@@ -56,6 +56,11 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > L'ajout du 10 octobre 2026 (ticket ANH-78) aligne la liste des défauts du variateur
 > de §13.9 sur la documentation de l'ATV320. Il vient du code et des tests
 > automatiques. Aucun défaut n'a été provoqué sur le vrai variateur (§16).
+>
+> L'ajout du 10 octobre 2026 (ticket ANH-162) décrit une neuvième pastille,
+> **Service**, le bandeau rouge `CONSOLE HORS SERVICE` et la remise en service de la
+> page Securite (§5). Il vient du code et des tests automatiques ; il n'a pas été
+> rejoué dans un navigateur, et aucune capture ne le montre.
 
 ---
 
@@ -358,8 +363,9 @@ Repères de la capture (barre latérale, de haut en bas) :
 8. Ligne `127.0.0.1:8731 boucle locale · sans jeton` : adresse d'écoute et protection.
    Depuis le 9 octobre 2026, deux pastilles s'affichent entre les repères 7 et 8,
    **Serveur** et **Version**, suivies d'une ligne de détail sur le lien avec le
-   tableau de bord. La capture date d'avant ; elles sont décrites dans le tableau
-   ci-dessous.
+   tableau de bord ; depuis le 10 octobre 2026, une troisième, **Service**, et sa
+   propre ligne de détail. La capture date d'avant ; elles sont décrites dans le
+   tableau ci-dessous.
 9. Navigation : **Tableau de bord**, **Capteurs** (avec un point de couleur par
    capteur, et son canal `A1` à `A6`), **Seance**, **Configuration**, **Securite**.
 10. Pied de page, à gauche : `liaison ouverte · repos` (liaison et mode). Pendant une
@@ -399,6 +405,8 @@ Repères de la capture (barre latérale, de haut en bas) :
 | | `en erreur` (rouge) | le tableau de bord est là, mais depuis 25 s il ne prend rien de ce que la console envoie : il répond par des erreurs de son côté, ou seulement à la question d'arrêt d'une séance. Le réseau fonctionne ; c'est le site qui est en panne, et il ne reçoit rien de la machine pendant ce temps |
 | | `non configure` | cette console n'a pas de clé de machine : elle n'échange rien avec le tableau de bord. Normal pour un banc d'essai ou une simulation |
 | **Version** | par exemple `pi-0.0.0-dev` | la version du logiciel de cette console. C'est celle que le tableau de bord affiche pour la machine et que porte chaque enregistrement de séance. `pi-unknown` : la version n'a pas pu être lue |
+| **Service** | `en service` (vert) | la console arme une séance quand on le lui demande, si rien d'autre ne s'y oppose |
+| | `HORS SERVICE` (rouge) | la console a démarré trois fois en dix minutes après un arrêt non propre (elle est morte, elle a planté, sa boucle s'est figée et systemd l'a relancée). Elle tourne et affiche la machine, mais refuse tout départ. Le bandeau rouge `CONSOLE HORS SERVICE` s'affiche sur toutes les pages. Faire vérifier la machine, puis page **Securite** : un nom, bouton `Remettre en service`. Cela ne lance rien. Détail : [console-locale.md](../console-locale.md#pastille-service--en-service-ou-hors-service) |
 
 **Serveur n'est pas Liaison.** **Liaison** dit si *cette page* reçoit les données de
 la console. **Serveur** dit si *la console* joint le tableau de bord. Une console peut
@@ -1675,8 +1683,9 @@ Repères :
 
 1. Bandeau rouge **NO LIVE DATA** : `la liaison avec la machine est coupee - la machine tourne peut-etre encore`.
 2. Liaison `hors ligne`. Les autres pastilles de la barre latérale (Mode, Etat,
-   Rotation, Securite, Console, et Serveur depuis le 9 octobre 2026) sont **barrées
-   et grises**. Version ne l'est pas : elle ne change pas tant que la console tourne.
+   Rotation, Securite, Console, Serveur depuis le 9 octobre 2026 et Service depuis le
+   10) sont **barrées et grises**. Version ne l'est pas : elle ne change pas tant que
+   la console tourne.
 3. Grands nombres barrés (`70`, `0.00`) : ce sont les dernières valeurs connues, pas
    les valeurs actuelles.
 4. Les pastilles des cartes sont barrées et grises elles aussi : `inactif`, `good`,
