@@ -2084,6 +2084,21 @@ Jamais en même temps que la console sur le même câble. Le second programme la
 refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : fermez
 la console d'abord (voir §3.4 et §14).
 
+**Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
+Cet outil de banc finit toujours par l'arrêt du pilote (consigne à 0, arbre lu à
+l'arrêt, puis mots d'arrêt), une seule fois, avant la fin de son processus : sur
+Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la session
+SSH se ferme (SIGHUP), et sur une erreur de son fil de bus. Pendant cet arrêt, 35 s au
+plus, les signaux suivants sont ignorés, un second Ctrl+C compris : le couper le
+laisserait à moitié fait. Sa dernière ligne, `sortie: ...`, dit comment la machine a
+été laissée ; elle commence par `ATTENTION` quand l'arrêt n'a pas été confirmé.
+**Ce qu'aucun programme ne peut intercepter reste hors de portée : `kill -9`
+(SIGKILL), une coupure de courant, un plantage de l'interpréteur. Le seul filet est
+alors le délai de communication du variateur (ttO), qui arrête le moteur quand plus
+rien ne lui parle.** Vérifiez ce délai sur le clavier du variateur avant de compter
+dessus. Vérifié avec de vrais signaux envoyés à l'outil sur un pilote factice, jamais
+sur un variateur réel.
+
 **Le coup de poing a été frappé, mais la page ne le montre pas.**
 Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous
 demande de **déclarer** qu'il a été tiré.
