@@ -30,6 +30,7 @@ from __future__ import annotations
 import itertools
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -48,6 +49,9 @@ from src.service_state import THRESHOLD, WINDOW
 CONSOLE: Final[Path] = Path(__file__).resolve().parents[1]
 REPOSITORY: Final[Path] = CONSOLE.parent
 INSTALLER: Final[Path] = CONSOLE / "scripts" / "install.sh"
+HARDENER: Final[Path] = CONSOLE / "scripts" / "harden.sh"
+UNINSTALLER: Final[Path] = CONSOLE / "scripts" / "uninstall.sh"
+BIND_HELPER: Final[Path] = CONSOLE / "scripts" / "pi" / "bind-bitalino.sh"
 SERVICE_UNIT: Final[Path] = CONSOLE / "scripts" / "anheart.service"
 END_TO_END: Final[Path] = CONSOLE / "scripts" / "pi" / "test_install.sh"
 DOCKERFILE: Final[Path] = CONSOLE / "Dockerfile"
@@ -74,6 +78,11 @@ needs_sh: Final[pytest.MarkDecorator] = pytest.mark.skipif(
 MACHINE_KEY: Final[str] = "synthetic-machine-key-" + "0" * 42
 PAGE_TOKEN: Final[str] = "synthetic-page-token-0123456789"  # noqa: S105  # synthetic
 
+#: Numbers no account and no file of a test machine has.
+FOREIGN_ID: Final[int] = 424242
+#: The group of the serial devices, as the scripted ``getent`` numbers it.
+DEVICE_GID: Final[int] = 20
+
 IDLE: Final[str] = '{"run_state":"idle","estop_latched":false}'
 RUNNING: Final[str] = '{"run_state":"running","estop_latched":false}'
 HEALTHY: Final[str] = '{"status":"ok","service":"anheart-operator-interface"}'
@@ -86,7 +95,18 @@ printf '%s %s\n' "$name" "$*" >> "$STUB_STATE/calls"
 has() { [ -e "$STUB_STATE/$1" ]; }
 for last in "$@"; do :; done
 case "$name" in
-    id) cat "$STUB_STATE/uid" ;;
+    # `id -u`: who runs the script. With a name: the numbers of that account,
+    # which the tests choose (see Machine.owned_by_the_account).
+    id)
+        case "$*" in
+            "-u") cat "$STUB_STATE/uid" ;;
+            "-u anheart") has account || exit 1; cat "$STUB_STATE/account-uid" ;;
+            "-g anheart") has account || exit 1; cat "$STUB_STATE/account-gid" ;;
+            "-u root") cat "$STUB_STATE/root-uid" ;;
+            "-g root") cat "$STUB_STATE/root-gid" ;;
+            "-nG anheart") cat "$STUB_STATE/account-groups" ;;
+            *) exit 1 ;;
+        esac ;;
     dpkg) echo arm64 ;;
     dpkg-query)
         case "$*" in
@@ -95,13 +115,70 @@ case "$name" in
             *) printf '0.0-scripted' ;;
         esac ;;
     apt-get) if [ "$1" = install ]; then : > "$STUB_STATE/packages"; fi ;;
-    getent) has account ;;
-    useradd) : > "$STUB_STATE/account" ;;
-    chown | sleep | journalctl) ;;
+    getent)
+        case "$1" in
+            passwd)
+                has account || exit 2
+                printf 'anheart:x:%s:%s::/var/lib/anheart:%s\n' "$(cat "$STUB_STATE/account-uid")" \
+                    "$(cat "$STUB_STATE/account-gid")" "$(cat "$STUB_STATE/account-shell")" ;;
+            group)
+                has device-gid || exit 2
+                printf '%s:x:%s:\n' "$2" "$(cat "$STUB_STATE/device-gid")" ;;
+        esac ;;
+    useradd)
+        : > "$STUB_STATE/account"
+        groups="anheart"
+        while [ "$#" -gt 1 ]; do
+            case "$1" in
+                --shell) printf '%s' "$2" > "$STUB_STATE/account-shell" ;;
+                --groups) groups="$groups $2" ;;
+            esac
+            shift
+        done
+        printf '%s\n' "$groups" > "$STUB_STATE/account-groups" ;;
+    usermod)
+        while [ "$#" -gt 1 ]; do
+            case "$1" in
+                --shell) printf '%s' "$2" > "$STUB_STATE/account-shell" ;;
+                --groups)
+                    printf '%s %s\n' "$(cat "$STUB_STATE/account-groups")" "$2" \
+                        > "$STUB_STATE/account-groups" ;;
+            esac
+            shift
+        done ;;
+    passwd)
+        case "$1" in
+            --status)
+                printf 'anheart %s 10/10/2026 0 99999 7 -1\n' \
+                    "$(cat "$STUB_STATE/account-password")" ;;
+            --lock) printf L > "$STUB_STATE/account-password" ;;
+        esac ;;
+    # chown records what it was asked and changes nothing: no test runs as root.
+    chown | sleep | journalctl | udevadm) ;;
     systemctl)
         case "$1" in
-            is-active) has active ;;
-            is-enabled) has enabled ;;
+            # The console's unit, or another one named last (a timer of apt).
+            is-active)
+                case "$last" in
+                    anheart | anheart.service) has active ;;
+                    *) has "active.$last" ;;
+                esac ;;
+            is-enabled)
+                case "$last" in
+                    anheart.service) has enabled ;;
+                    *) if has "masked.$last"; then echo masked; exit 1; fi; echo enabled ;;
+                esac ;;
+            mask) : > "$STUB_STATE/masked.$last" ;;
+            unmask) rm -f "$STUB_STATE/masked.$last" ;;
+            stop)
+                case "$last" in
+                    anheart.service) rm -f "$STUB_STATE/active" ;;
+                    *) rm -f "$STUB_STATE/active.$last" ;;
+                esac ;;
+            disable)
+                case "$*" in *anheart.service*)
+                    rm -f "$STUB_STATE/active" "$STUB_STATE/enabled" ;;
+                esac ;;
             # The unit first stops and removes any container named anheart.
             # Another unit restarted (the system journal) is not the console.
             start | restart)
@@ -145,6 +222,9 @@ STUBBED: Final[tuple[str, ...]] = (
     "apt-get",
     "getent",
     "useradd",
+    "usermod",
+    "passwd",
+    "udevadm",
     "chown",
     "sleep",
     "journalctl",
@@ -223,6 +303,42 @@ class Machine:
         """systemd's own settings, as written by the installer: the hardware watchdog."""
         return self.root / "etc" / "systemd" / "system.conf.d" / "10-anheart-watchdog.conf"
 
+    @property
+    def account_drop_in(self) -> Path:
+        """The account the console runs under in its container, by number."""
+        return self.unit.parent / "anheart.service.d" / "20-account.conf"
+
+    @property
+    def state_dir(self) -> Path:
+        """Everything the console writes: ``/var/lib/anheart``."""
+        return self.root / "var" / "lib" / "anheart"
+
+    @property
+    def bind_helper(self) -> Path:
+        """What the unit runs on the machine before the console."""
+        return self.root / "usr" / "local" / "lib" / "anheart" / "bind-bitalino"
+
+    @property
+    def device_rule(self) -> Path:
+        return self.root / "etc" / "udev" / "rules.d" / "70-anheart-drive.rules"
+
+    @property
+    def apt_conf(self) -> Path:
+        return self.root / "etc" / "apt" / "apt.conf.d" / "99-anheart-no-automatic-updates"
+
+    def owned_by_the_account(self, *, owned: bool) -> None:
+        """Choose whose the files of the scratch root are, as the scripts will see it.
+
+        No test runs as root, so no file can really change hands. What the
+        scripts compare a file's owner with is the numbers of the account
+        ``anheart``, which ``id`` gives them: ``owned`` hands out the numbers
+        these files really have, and otherwise numbers that nothing has.
+        """
+        real = self.root.stat()
+        user, group = (real.st_uid, real.st_gid) if owned else (FOREIGN_ID, FOREIGN_ID)
+        self.set("account-uid", f"{user}\n")
+        self.set("account-gid", f"{group}\n")
+
     def set(self, name: str, text: str = "") -> None:
         """Script one answer of the stubs (see :data:`STUB`)."""
         (self.state / name).write_text(text, encoding="utf-8")
@@ -232,11 +348,23 @@ class Machine:
 
     def install(self, *arguments: str) -> Outcome:
         """Run the real ``install.sh`` of this machine's tree. Each run records its own calls."""
+        return self.run("install.sh", *arguments)
+
+    def harden(self, *arguments: str) -> Outcome:
+        """Run the real ``harden.sh`` of this machine's tree."""
+        return self.run("harden.sh", *arguments)
+
+    def uninstall(self) -> Outcome:
+        """Run the real ``uninstall.sh`` of this machine's tree."""
+        return self.run("uninstall.sh")
+
+    def run(self, script: str, *arguments: str) -> Outcome:
+        """One of the three scripts of ``scripts/``, for real, against the scratch root."""
         assert BASH is not None
         calls = self.state / "calls"
         calls.unlink(missing_ok=True)
         done = subprocess.run(  # noqa: S603  # fixed argv, no shell, scripted tools only
-            [BASH, str(self.tree / "scripts" / "install.sh"), *arguments],
+            [BASH, str(self.tree / "scripts" / script), *arguments],
             env={
                 "PATH": f"{self.tools}{os.pathsep}{os.environ['PATH']}",
                 "ANHEART_ROOT": str(self.root),
@@ -262,9 +390,10 @@ def machine(tmp_path: Path) -> Machine:
         encoding="utf-8",
     )
     tree = tmp_path / "anheart" / "raspberry-pi"
-    (tree / "scripts").mkdir(parents=True)
-    for source in (INSTALLER, SERVICE_UNIT):
+    (tree / "scripts" / "pi").mkdir(parents=True)
+    for source in (INSTALLER, HARDENER, UNINSTALLER, SERVICE_UNIT):
         shutil.copy(source, tree / "scripts" / source.name)
+    shutil.copy(BIND_HELPER, tree / "scripts" / "pi" / BIND_HELPER.name)
     for source in (ENV_TEMPLATE, VERSION_FILE):
         shutil.copy(source, tree / source.name)
     tools = tmp_path / "bin"
@@ -277,6 +406,17 @@ def machine(tmp_path: Path) -> Machine:
     state.mkdir()
     made = Machine(root=root, tree=tree, tools=tools, state=state)
     made.set("uid", "0\n")
+    # The account, once useradd made it: its files are its own, it cannot log
+    # in and has no password. What root owns is root's (the same real numbers:
+    # nothing here can be given to anybody).
+    made.owned_by_the_account(owned=True)
+    real = root.stat()
+    made.set("root-uid", f"{real.st_uid}\n")
+    made.set("root-gid", f"{real.st_gid}\n")
+    made.set("device-gid", f"{DEVICE_GID}\n")
+    made.set("account-shell", "/usr/sbin/nologin")
+    made.set("account-password", "L")
+    made.set("account-groups", "anheart dialout\n")
     made.set("source", "0001")
     made.set("status", IDLE)
     made.set("healthz", HEALTHY)
@@ -309,15 +449,22 @@ def test_a_first_install_leaves_the_account_the_directories_and_the_service(
 
     for package in ("docker.io", "bluez", "libusb-1.0-0", "socat"):
         assert first.called("apt-get install", package), package
-    assert first.called("useradd", "--system", "anheart")
+    # An account that cannot log in, in the group of the serial devices.
+    assert first.called(
+        "useradd", "--system", "--shell /usr/sbin/nologin", "--groups dialout", "anheart"
+    )
 
-    state = machine.root / "var" / "lib" / "anheart"
-    assert _mode(state / "data") == 0o750
-    assert _mode(state / "records") == 0o700, "the session records are private"
-    for directory in (state, state / "data", state / "records"):
-        assert first.called("chown anheart:anheart", str(directory)), directory
+    # Everything the console writes is the account's alone. The files of this
+    # scratch root already are its own; a tree that is not is further down.
+    state = machine.state_dir
+    for directory in (state, state / "data", state / "records", state / "data" / "records"):
+        assert _mode(directory) == 0o700, directory
+    assert "== Step: files" in first.output, "the installer runs the step that protects the files"
 
     assert _read(machine.unit) == _read(SERVICE_UNIT)
+    # What the unit runs on the machine before the console is installed with it.
+    assert _read(machine.bind_helper) == _read(BIND_HELPER)
+    assert _mode(machine.bind_helper) == 0o755
     assert first.called("docker build", f"--tag anheart-console:{version}", str(machine.tree))
     assert first.called("systemctl enable anheart.service")
     assert first.called("systemctl start anheart.service")
@@ -332,6 +479,9 @@ def test_a_first_install_leaves_the_account_the_directories_and_the_service(
         call.split(" ", 2)[1] for call in first.calls if call.startswith(("docker ", "systemctl "))
     ]
     assert order.index("build") < order.index("start")
+    # The machine is closed before the image is built: a build that fails
+    # leaves it protected all the same.
+    assert order.index("mask") < order.index("build")
 
 
 @pytest.mark.slow
@@ -367,15 +517,36 @@ def test_a_version_that_cannot_name_an_image_is_refused_before_anything(
 def test_a_second_install_changes_nothing_and_restarts_nothing(machine: Machine) -> None:
     """EX-2, idempotence: same files, no package manager, no start, no restart."""
     assert machine.install().exit_code == 0
-    kept = (machine.env_file, machine.unit, machine.drop_in, machine.manager_drop_in)
+    kept = (
+        machine.env_file,
+        machine.unit,
+        machine.drop_in,
+        machine.account_drop_in,
+        machine.manager_drop_in,
+        machine.bind_helper,
+        machine.device_rule,
+        machine.apt_conf,
+    )
     before = {path: path.read_bytes() for path in kept}
 
     second = machine.install()
     assert second.exit_code == 0, second.output
     assert {path: path.read_bytes() for path in before} == before
-    for never in ("apt-get", "useradd", "systemctl start", "systemctl restart"):
+    for never in (
+        "apt-get",
+        "useradd",
+        "usermod",
+        "passwd --lock",
+        "chown",
+        "udevadm",
+        "systemctl mask",
+        "systemctl stop",
+        "systemctl start",
+        "systemctl restart",
+    ):
         assert not second.called(never), never
     assert "nothing changed: left alone" in second.output
+    assert "harden.sh: nothing to change" in second.output
     assert second.called("systemctl is-enabled")
 
 
@@ -466,11 +637,11 @@ def test_an_existing_configuration_is_kept_and_its_secrets_are_never_shown(
     assert done.exit_code == 0, done.output
     assert _read(machine.env_file) == filled
     assert _mode(machine.env_file) == 0o600, "an existing file is made private again"
-    assert done.called("chown root:root", str(machine.env_file))
     for secret in (MACHINE_KEY, PAGE_TOKEN):
         assert secret not in done.output
         assert not any(secret in call for call in done.calls), "a secret on a command line"
-    assert done.called("systemctl restart anheart.service")
+    assert done.called("systemctl stop anheart.service")
+    assert done.called("systemctl start anheart.service")
     # The token reached curl all the same: on its standard input.
     assert f"x-anheart-token: {PAGE_TOKEN}" in _read(machine.state / "curl-stdin")
 
@@ -513,24 +684,37 @@ def test_a_session_started_during_the_build_is_not_interrupted(machine: Machine)
     refused = machine.install()
     assert refused.exit_code == 1
     assert refused.called("docker build")
-    assert not refused.called("systemctl restart")
+    for never in ("systemctl restart", "systemctl stop anheart", "systemctl start anheart"):
+        assert not refused.called(never), never
     assert "does not say it is at rest: nothing is restarted" in refused.output
 
 
 @pytest.mark.slow
 @needs_bash
 def test_a_console_at_rest_is_restarted_when_its_image_changed(machine: Machine) -> None:
+    """Asked first, then stopped, and only then started on the new image.
+
+    Stopped and started, not restarted in one go: what a console that still ran
+    as root wrote while it stopped is given to the account in between, before
+    the new console, which is no longer root, reads it.
+    """
     assert machine.install().exit_code == 0
     machine.set("source", "0002")
 
     done = machine.install()
     assert done.exit_code == 0, done.output
-    names = [call.split(" ", 2)[:2] for call in done.calls]
     asked = [index for index, call in enumerate(done.calls) if "/api/status" in call]
-    restarted = names.index(["systemctl", "restart"])
+    stopped = done.calls.index("systemctl stop anheart.service")
+    started = done.calls.index("systemctl start anheart.service")
     assert asked, "the console was never asked whether it was at rest"
-    assert any(index < restarted for index in asked)
+    assert any(index < stopped for index in asked)
+    assert stopped < started
+    assert not done.called("systemctl restart")
     assert "the console is at rest" in done.output
+    # The files are looked at twice: before the build, and between the stop and the start.
+    assert done.output.count("== Step: files") == 2
+    looked = [index for index, call in enumerate(done.calls) if call == "id -u anheart"]
+    assert any(stopped < index < started for index in looked)
 
 
 @pytest.mark.slow
@@ -861,8 +1045,13 @@ def test_the_unit_never_fetches_an_image() -> None:
     words = _directive("ExecStart")[0].split()
     assert ("--pull", "never") in set(itertools.pairwise(words))
     assert words.index("--pull") < words.index("${ANHEART_IMAGE}")
-    # The image the unit names when no version was installed exists nowhere.
-    assert _directive("Environment") == ["ANHEART_IMAGE=anheart-console:not-installed"]
+    # The image the unit names when no version was installed exists nowhere,
+    # and neither does the account: a unit installed by hand does not start.
+    assert _directive("Environment") == [
+        "ANHEART_IMAGE=anheart-console:not-installed",
+        "ANHEART_ACCOUNT=not-installed",
+        "ANHEART_GROUPS=",
+    ]
 
 
 def test_the_unit_gives_the_console_its_configuration_and_its_two_directories() -> None:
@@ -895,8 +1084,15 @@ def test_the_unit_stops_the_console_on_its_controlled_stop_and_never_loops_on_a_
     # removed by force, whatever step of the unit finds it.
     for forced in ("docker kill", "rm --force", "rm -f", "SIGKILL", "KillSignal"):
         assert forced not in unit, forced
-    for step in (*_directive("ExecStartPre"), *_directive("ExecStopPost")):
+    around = (*_directive("ExecStartPre"), *_directive("ExecStopPost"))
+    touching = [step for step in around if "docker" in step]
+    assert len(touching) == 2, "a step before the start and one after the stop find a console"
+    for step in touching:
         assert "/usr/bin/docker stop -t 60 anheart" in step
+    # The one other step binds the sensor's serial node: it never talks to Docker.
+    assert [step for step in around if step not in touching] == [
+        "-/usr/local/lib/anheart/bind-bitalino"
+    ]
 
 
 # =========================================================================
@@ -928,8 +1124,9 @@ def _relay() -> tuple[str, list[str]]:
     """The shell line of ``ExecStart`` as ``sh`` receives it: its script, then its arguments."""
     started = re.fullmatch(r"/bin/sh -c '([^']*)' (.*)", _directive("ExecStart")[0])
     assert started is not None, "ExecStart is no longer `/bin/sh -c '<relay>' <command>`"
-    # systemd turns `$$` into `$` before the shell sees the line.
-    return started.group(1).replace("$$", "$"), started.group(2).split()
+    # systemd turns `$$` into `$` before the shell sees the line, and reads a
+    # quoted argument as one word, the way a shell does.
+    return started.group(1).replace("$$", "$"), shlex.split(started.group(2))
 
 
 def test_ex1_the_unit_hands_the_console_a_socket_that_a_process_of_the_unit_listens_on() -> None:
@@ -939,6 +1136,8 @@ def test_ex1_the_unit_hands_the_console_a_socket_that_a_process_of_the_unit_list
     assert _directive("RuntimeDirectory") == ["anheart"]
     script, command = _relay()
     assert script == (
+        "/bin/chown anheart:anheart /run/anheart || exit 1; "
+        "/usr/bin/setpriv --reuid=anheart --regid=anheart --clear-groups "
         "/usr/bin/socat -u UNIX-RECV:/run/anheart/notify,unlink-early "
         'UNIX-SENDTO:"$NOTIFY_SOCKET" & exec "$@"'
     )
@@ -946,7 +1145,7 @@ def test_ex1_the_unit_hands_the_console_a_socket_that_a_process_of_the_unit_list
     assert ("--volume", "/run/anheart:/run/anheart") in pairs
     assert ("--env", "NOTIFY_SOCKET=/run/anheart/notify") in pairs
     # A start with no relay would never be heard: it is refused at once instead.
-    assert _directive("AssertFileIsExecutable") == ["/usr/bin/socat"]
+    assert "/usr/bin/socat" in _directive("AssertFileIsExecutable")
     packages = _captures(r"^readonly PACKAGES=\((.*)\)$", _read(INSTALLER))
     assert "socat" in packages[0].split()
 
@@ -958,6 +1157,81 @@ DOCKER_STUB: Final[str] = """#!/bin/sh
 printf '%s\\n' "$0" "$@" > "$DOCKER_SEEN"
 exit 7
 """
+#: ``chown``, as the start line calls it: it says what it was asked, and fails when told to.
+CHOWN_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$@" > "$CHOWN_SEEN"
+exit "${CHOWN_EXIT:-0}"
+"""
+#: ``setpriv``: it says which account it was asked for, then becomes the command.
+SETPRIV_STUB: Final[str] = """#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --*) printf '%s\\n' "$1" >> "$SETPRIV_SEEN.part"; shift ;;
+        *) break ;;
+    esac
+done
+mv "$SETPRIV_SEEN.part" "$SETPRIV_SEEN"
+exec "$@"
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class StartLine:
+    """What one run of the unit's start line did, with every tool it names scripted."""
+
+    exit_code: int
+    directory: Path
+    arguments: tuple[str, ...]
+    docker: Path
+
+    def seen(self, name: str) -> list[str] | None:
+        """What the scripted tool ``name`` was given, one argument a line; ``None``: never run."""
+        record = self.directory / f"{name}-seen"
+        for _ in range(100):
+            if record.exists() and _read(record).endswith("\n"):
+                return _read(record).splitlines()
+            time.sleep(0.02)
+        return None
+
+
+def _run_start_line(directory: Path, *, chown_exit: int = 0) -> StartLine:
+    """The shell line of ``ExecStart``, run for real: the relay, ``chown``, ``setpriv`` and
+    ``docker`` are scripts of ``directory`` that record what they were asked."""
+    assert SH is not None
+    script, command = _relay()
+    tools = {
+        "/usr/bin/socat": ("relay", RELAY_STUB),
+        "/usr/bin/docker": ("docker", DOCKER_STUB),
+        "/bin/chown": ("chown", CHOWN_STUB),
+        "/usr/bin/setpriv": ("setpriv", SETPRIV_STUB),
+    }
+    for name, content in tools.values():
+        tool = directory / name
+        tool.write_text(content, encoding="utf-8")
+        tool.chmod(0o755)
+    for real, (name, _) in tools.items():
+        if real != "/usr/bin/docker":
+            assert script.count(real) == 1, real
+            script = script.replace(real, str(directory / name))
+    assert command[:2] == ["anheart", "/usr/bin/docker"]
+    arguments = tuple(command[2:])
+    done = subprocess.run(  # noqa: S603  # fixed argv, scripted tools only
+        [SH, "-c", script, "anheart", str(directory / "docker"), *arguments],
+        env={
+            "PATH": os.environ["PATH"],
+            "NOTIFY_SOCKET": "/run/systemd/notify",
+            "RELAY_SEEN": str(directory / "relay-seen"),
+            "DOCKER_SEEN": str(directory / "docker-seen"),
+            "CHOWN_SEEN": str(directory / "chown-seen"),
+            "SETPRIV_SEEN": str(directory / "setpriv-seen"),
+            "CHOWN_EXIT": str(chown_exit),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    return StartLine(done.returncode, directory, arguments, directory / "docker")
 
 
 @needs_sh
@@ -967,46 +1241,15 @@ def test_ex1_the_unit_starts_the_relay_then_becomes_the_command_it_was_given(
     """The shell line of ``ExecStart``, run for real with a scripted relay and a scripted
     ``docker``: the relay is started on systemd's own socket, and the shell is replaced by
     ``docker run`` with every argument and with its exit code."""
-    assert SH is not None
-    script, command = _relay()
-    relay = tmp_path / "socat"
-    relay.write_text(RELAY_STUB, encoding="utf-8")
-    docker = tmp_path / "docker"
-    docker.write_text(DOCKER_STUB, encoding="utf-8")
-    for tool in (relay, docker):
-        tool.chmod(0o755)
-    assert command[:2] == ["anheart", "/usr/bin/docker"]
-    arguments = command[2:]
-    done = subprocess.run(  # noqa: S603  # fixed argv, scripted tools only
-        [
-            SH,
-            "-c",
-            script.replace("/usr/bin/socat", str(relay)),
-            "anheart",
-            str(docker),
-            *arguments,
-        ],
-        env={
-            "PATH": os.environ["PATH"],
-            "NOTIFY_SOCKET": "/run/systemd/notify",
-            "RELAY_SEEN": str(tmp_path / "relay-seen"),
-            "DOCKER_SEEN": str(tmp_path / "docker-seen"),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert done.returncode == 7, "the unit's main process ends with the console's exit code"
-    seen = _read(tmp_path / "docker-seen").splitlines()
-    assert seen == [str(docker), *arguments], "every argument reaches docker, in order"
+    line = _run_start_line(tmp_path)
+    assert line.exit_code == 7, "the unit's main process ends with the console's exit code"
+    seen = line.seen("docker")
+    assert seen is not None
+    assert seen == [str(line.docker), *line.arguments], "every argument reaches docker, in order"
     assert seen[-1] == "${ANHEART_IMAGE}"
-    heard = tmp_path / "relay-seen"
-    for _ in range(100):
-        if heard.exists() and _read(heard).count("\n") == 3:
-            break
-        time.sleep(0.05)
-    assert _read(heard).splitlines() == [
+    # An argument systemd reads as one word reaches docker as one word.
+    assert "c 188:* rw" in seen
+    assert line.seen("relay") == [
         "-u",
         "UNIX-RECV:/run/anheart/notify,unlink-early",
         "UNIX-SENDTO:/run/systemd/notify",
@@ -1398,3 +1641,834 @@ def test_the_workflow_starts_for_every_file_the_install_is_made_of() -> None:
         assert path in listed, path
     # Every push to develop runs it whatever changed: the console's sources included.
     assert re.search(r"^ {2}push:\n {4}branches: \[develop\]$", workflow, re.MULTILINE)
+
+
+# =========================================================================
+# ANH-151, lot 1: the console without the privileges it does not need
+# =========================================================================
+#
+# Two halves. What systemd runs (the relay, the Docker client) and what runs
+# in the container (the console). Each reduction is pinned here on the unit,
+# the image and the scripts, and proved in a real system by the end-to-end
+# test, whose proofs are listed at the end of this section.
+
+DOCKERFILE_USER: Final[str] = "anheart"
+#: The console's own /tmp, as the unit asks Docker for it: an option of
+#: ``docker run``, never a path of the machine that runs these tests.
+CONSOLE_TMP: Final[str] = "/tmp:rw,noexec,nosuid,nodev,size=64m"  # noqa: S108  # see above
+HARDEN_STEPS: Final[tuple[str, ...]] = ("account", "files", "updates")
+UPDATE_UNITS: Final[tuple[str, ...]] = (
+    "apt-daily.timer",
+    "apt-daily-upgrade.timer",
+    "unattended-upgrades.service",
+)
+
+
+def _run_command() -> list[str]:
+    """The arguments of the unit's ``docker run``, as docker receives them."""
+    command = _relay()[1]
+    assert command[:3] == ["anheart", "/usr/bin/docker", "run"]
+    return command[3:]
+
+
+def _options(name: str) -> list[str]:
+    """Every value the unit gives ``docker run`` for the option ``name``."""
+    command = _run_command()
+    return [value for option, value in itertools.pairwise(command) if option == name]
+
+
+def test_anh151_ex4_the_console_is_given_the_account_and_nothing_more() -> None:
+    """In its container the console is the account, with no capability, on a read-only
+    image; ``--privileged`` and the machine's D-Bus are gone."""
+    command = _run_command()
+    for gone in ("--privileged", "--cap-add", "--device", "--pid", "--ipc", "--userns"):
+        assert gone not in command, gone
+    assert not [word for word in command if "dbus" in word], "the machine's D-Bus is mounted"
+    # The account and its group, as numbers the installer writes (see below).
+    assert _options("--user") == ["${ANHEART_ACCOUNT}"]
+    assert "$ANHEART_GROUPS" in command
+    assert _options("--cap-drop") == ["ALL"]
+    assert _options("--security-opt") == ["no-new-privileges"]
+    assert "--read-only" in command
+    # Memory, bounded, and nothing in it can be executed.
+    assert _options("--tmpfs") == [CONSOLE_TMP]
+    assert _options("--network") == ["host"]
+    # Its data, the relay's socket, and the machine's device nodes: nothing else is mounted.
+    assert _options("--volume") == [
+        "/dev:/dev",
+        "/var/lib/anheart/data:/app/data",
+        "/var/lib/anheart/records:/app/data/records",
+        "/run/anheart:/run/anheart",
+    ]
+
+
+def test_anh151_ex4_the_console_may_open_three_classes_of_devices_and_no_other() -> None:
+    """The USB serial adapters, the USB devices themselves, the Bluetooth serial nodes."""
+    assert _options("--device-cgroup-rule") == ["c 188:* rw", "c 189:* rw", "c 216:* rw"]
+    # The Schneider cable has no serial driver in the kernel: a rule of the
+    # machine gives that USB device to the group the console has.
+    installer = _read(INSTALLER)
+    assert (
+        'SUBSYSTEM=="usb", ATTR{idVendor}=="16de", ATTR{idProduct}=="0003", '
+        'GROUP="$DEVICE_GROUP", MODE="0660"'
+    ) in installer
+    assert 'readonly DEVICE_GROUP="dialout"' in installer
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex4_the_installer_tells_the_unit_the_account_by_number(machine: Machine) -> None:
+    """Docker looks a name up in the image, which does not know this machine's accounts."""
+    first = machine.install()
+    assert first.exit_code == 0, first.output
+    real = machine.root.stat()
+    assert _directives(machine.account_drop_in) == [
+        "[Service]",
+        f"Environment=ANHEART_ACCOUNT={real.st_uid}:{real.st_gid}",
+        f'Environment="ANHEART_GROUPS=--group-add {DEVICE_GID}"',
+    ]
+    # Another number for the group of the serial devices: the unit is told, and
+    # the console, at rest, is started again to have it.
+    machine.set("device-gid", "113\n")
+    again = machine.install()
+    assert again.exit_code == 0, again.output
+    assert 'Environment="ANHEART_GROUPS=--group-add 113"' in _read(machine.account_drop_in)
+    assert again.called("systemctl stop anheart.service")
+    assert again.called("systemctl start anheart.service")
+    # No such group: nothing is written that would start a console without it.
+    machine.unset("device-gid")
+    before = machine.account_drop_in.read_bytes()
+    refused = machine.install()
+    assert refused.exit_code == 1
+    assert "the group dialout is missing" in refused.output
+    assert machine.account_drop_in.read_bytes() == before
+    assert not refused.called("systemctl start anheart.service")
+
+
+@needs_sh
+def test_anh151_ex4_the_relay_runs_as_the_account_in_a_directory_given_to_it(
+    tmp_path: Path,
+) -> None:
+    """The relay reads what the console sends: it is the account, not root. The directory
+    it listens in is closed to everybody else, and is given to the account first."""
+    assert _directive("RuntimeDirectoryMode") == ["0700"]
+    assert sorted(_directive("AssertFileIsExecutable")) == ["/usr/bin/setpriv", "/usr/bin/socat"]
+    line = _run_start_line(tmp_path)
+    assert line.exit_code == 7
+    assert line.seen("chown") == ["anheart:anheart", "/run/anheart"]
+    assert line.seen("setpriv") == ["--reuid=anheart", "--regid=anheart", "--clear-groups"]
+    # What setpriv becomes is the relay, with the arguments the unit gave it.
+    relayed = line.seen("relay")
+    assert relayed is not None
+    assert relayed[1:] == [
+        "UNIX-RECV:/run/anheart/notify,unlink-early",
+        "UNIX-SENDTO:/run/systemd/notify",
+    ]
+
+
+@needs_sh
+def test_anh151_ex4_a_start_that_cannot_give_the_relay_its_directory_fails_at_once(
+    tmp_path: Path,
+) -> None:
+    """A relay that cannot listen is a console nobody hears: no console is started at all."""
+    line = _run_start_line(tmp_path, chown_exit=1)
+    assert line.exit_code == 1
+    assert line.seen("chown") == ["anheart:anheart", "/run/anheart"]
+    assert line.seen("docker") is None, "the console was started with no relay to hear it"
+    assert line.seen("relay") is None
+
+
+def test_anh151_ex4_the_unit_says_what_stays_root_and_claims_nothing_else() -> None:
+    """The Docker client is root because the daemon is root's. The unit's own processes are
+    closed in, which binds the relay; nothing in the unit pretends the client is not root."""
+    assert _directive("NoNewPrivileges") == ["yes"]
+    assert _directive("ProtectSystem") == ["strict"]
+    assert _directive("ProtectHome") == ["yes"]
+    # The unit's processes write nowhere but /run/anheart: no path is opened to
+    # them, and none is needed, because the daemon mounts the console's data.
+    for absent in ("ReadWritePaths", "User", "Group", "DynamicUser", "CapabilityBoundingSet"):
+        assert _directive(absent) == [], f"{absent}= would say the Docker client is not root"
+    # Not narrower, and the reason is written next to it.
+    assert _directive("NotifyAccess") == ["all"]
+    text = _read(SERVICE_UNIT)
+    assert "The Docker daemon is root's" in text
+    assert "no option of this unit bounds that" in text
+
+
+RFCOMM_STUB: Final[str] = """#!/bin/sh
+printf '%s\\n' "$*" >> "$RFCOMM_SEEN"
+if [ "$1" = bind ]; then exit "${RFCOMM_BIND_EXIT:-0}"; fi
+exit 0
+"""
+SENSOR: Final[str] = "98:D3:91:FE:4E:9F"
+
+
+@dataclass(frozen=True, slots=True)
+class Bound:
+    """What one run of the step that binds the sensor's serial node did."""
+
+    exit_code: int
+    output: str
+    asked: tuple[str, ...]
+    """What it asked of ``rfcomm``, one call a line."""
+
+
+def _bind(directory: Path, configuration: str | None, *, bind_exit: int = 0) -> Bound:
+    """``scripts/pi/bind-bitalino.sh``, run for real against a configuration and a
+    scripted ``rfcomm``. ``configuration`` is the machine's file (``None``: no file)."""
+    assert SH is not None
+    tools = directory / "tools"
+    tools.mkdir(exist_ok=True)
+    tool = tools / "rfcomm"
+    tool.write_text(RFCOMM_STUB, encoding="utf-8")
+    tool.chmod(0o755)
+    env_file = directory / "anheart.env"
+    env_file.unlink(missing_ok=True)
+    if configuration is not None:
+        env_file.write_text(configuration, encoding="utf-8")
+    seen = directory / "rfcomm-seen"
+    seen.unlink(missing_ok=True)
+    done = subprocess.run(  # noqa: S603  # fixed argv, the script of this repository
+        [SH, str(BIND_HELPER)],
+        env={
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            "ANHEART_ENV_FILE": str(env_file),
+            "RFCOMM_SEEN": str(seen),
+            "RFCOMM_BIND_EXIT": str(bind_exit),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    asked = tuple(_read(seen).splitlines()) if seen.exists() else ()
+    return Bound(done.returncode, done.stdout + done.stderr, asked)
+
+
+@needs_sh
+def test_anh151_ex4_the_sensor_serial_node_is_bound_on_the_machine_before_the_console(
+    tmp_path: Path,
+) -> None:
+    """Binding the node takes a right over the network the console is not given: the
+    service does it, as root, on the machine, with what the configuration says."""
+    serial = f"ECG_SOURCE=serial\nBITALINO_ADDRESS=/dev/rfcomm0\nBITALINO_MAC={SENSOR}\n"
+    bound = _bind(tmp_path, serial)
+    assert bound.exit_code == 0
+    # Released first: the address may have changed since the last start.
+    assert bound.asked == ("release 0", f"bind 0 {SENSOR} 1")
+    assert f"/dev/rfcomm0 is bound to the BITalino {SENSOR}" in bound.output
+
+    # The unit runs it after it has stopped a console left behind, and before
+    # its own; a failure of this step never prevents the start.
+    before = _directive("ExecStartPre")
+    assert len(before) == 2
+    assert "/usr/bin/docker stop -t 60 anheart" in before[0]
+    assert before[1] == "-/usr/local/lib/anheart/bind-bitalino"
+    assert 'readonly BIND_HELPER="$ROOT/usr/local/lib/anheart/bind-bitalino"' in _read(INSTALLER)
+    # The image no longer tries: it has no right to.
+    entrypoint = [line.strip() for line in _read(ENTRYPOINT).splitlines()]
+    assert not [line for line in entrypoint if line.startswith("rfcomm ")]
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    ("configuration", "said"),
+    [
+        pytest.param(None, "", id="no configuration"),
+        pytest.param(f"ECG_SOURCE=sim\nBITALINO_MAC={SENSOR}\n", "", id="simulated sensor"),
+        pytest.param(
+            f"ECG_SOURCE=serial\nBITALINO_ADDRESS={SENSOR}\nBITALINO_MAC={SENSOR}\n",
+            "",
+            id="a Bluetooth address, not a node",
+        ),
+        pytest.param(
+            "ECG_SOURCE=serial\nBITALINO_ADDRESS=COM4\n", "", id="a serial port of another kind"
+        ),
+        pytest.param(
+            "ECG_SOURCE=serial\nBITALINO_ADDRESS=/dev/rfcomm0; reboot\n",
+            "",
+            id="a node name that is not one",
+        ),
+        pytest.param(
+            "ECG_SOURCE=serial\nBITALINO_ADDRESS=/dev/rfcomm0\nBITALINO_MAC=\n",
+            "BITALINO_MAC is not the address of a sensor",
+            id="no address",
+        ),
+        pytest.param(
+            "ECG_SOURCE=serial\nBITALINO_ADDRESS=/dev/rfcomm0\nBITALINO_MAC=$(reboot)\n",
+            "BITALINO_MAC is not the address of a sensor",
+            id="an address that is not one",
+        ),
+    ],
+)
+def test_anh151_ex4_nothing_is_bound_unless_the_configuration_names_a_node_and_a_sensor(
+    tmp_path: Path, configuration: str | None, said: str
+) -> None:
+    """Whatever the configuration holds reaches ``rfcomm`` as an argument or not at all."""
+    bound = _bind(tmp_path, configuration)
+    assert bound.exit_code == 0, "this step never prevents the console from starting"
+    assert bound.asked == ()
+    assert said in bound.output
+
+
+@needs_sh
+def test_anh151_ex4_a_node_that_cannot_be_bound_does_not_prevent_the_start(tmp_path: Path) -> None:
+    """No adapter, a sensor that was never paired: said, and the console starts anyway."""
+    serial = (
+        f"ECG_SOURCE=sim\nECG_SOURCE=serial\nBITALINO_ADDRESS=/dev/rfcomm3\nBITALINO_MAC={SENSOR}\n"
+    )
+    failed = _bind(tmp_path, serial, bind_exit=1)
+    assert failed.exit_code == 0
+    # The last value of a key is the one docker hands the console: the same one here.
+    assert failed.asked == ("release 3", f"bind 3 {SENSOR} 1")
+    assert f"/dev/rfcomm3 could not be bound to {SENSOR}" in failed.output
+
+
+def test_anh151_ex4_the_image_never_runs_the_console_as_root() -> None:
+    """Started by the service it is the machine's account, by number; started any other
+    way it is the image's own account. What it reads is readable by either."""
+    dockerfile = _read(DOCKERFILE).replace("\\\n", " ")
+    users = _captures(r"^USER (\S+)$", dockerfile)
+    assert users == [DOCKERFILE_USER]
+    assert dockerfile.index(f"\nUSER {DOCKERFILE_USER}\n") < dockerfile.index("\nENTRYPOINT ")
+    made = re.search(
+        r"^RUN groupadd --gid (\d+) anheart .*useradd --uid (\d+) ", dockerfile, re.MULTILINE
+    )
+    assert made is not None
+    assert int(made.group(1)) == int(made.group(2)) >= 1000, "not a number a system account has"
+    assert "chmod -R a+rX /app/src /app/config /app/VERSION" in dockerfile
+    assert "chown anheart:anheart /app/data" in dockerfile
+    # No home directory, and an image that cannot be written: the one cache
+    # the console's libraries keep goes to /tmp.
+    assert "ENV MPLCONFIGDIR=/tmp/matplotlib" in dockerfile
+
+
+@needs_sh
+def test_anh151_ex6_every_file_the_console_creates_is_the_accounts_alone(tmp_path: Path) -> None:
+    """The entrypoint closes the mask before it hands over: the local profiles, an archive
+    being exported, the lock on the drive cable. The session records set their own modes."""
+    assert SH is not None
+    made = tmp_path / "made-by-the-console"
+    done = subprocess.run(  # noqa: S603  # fixed argv, the entrypoint of this repository
+        [SH, str(ENTRYPOINT), SH, "-c", f'umask; : > "{made}"'],
+        env={
+            "PATH": os.environ["PATH"],
+            "ECG_SOURCE": "serial",
+            "BITALINO_ADDRESS": "/dev/rfcomm-not-there",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() in {"0077", "077"}
+    assert _mode(made) == 0o600
+    # A sensor node that is not there is said, and the console is started all the same.
+    assert "/dev/rfcomm-not-there is not there" in done.stderr
+
+
+# --- EX-6: owners and modes, at creation and on an existing machine ---------------------
+
+
+def _console_files(machine: Machine) -> dict[str, Path]:
+    """What a console that ran leaves under ``/var/lib/anheart``, by what it is."""
+    records = machine.state_dir / "records"
+    session = records / "2026-10-10T101010Z_bench"
+    return {
+        "the local profiles": machine.state_dir / "data" / "profiles.local.json",
+        "the restart state": records / "service-state.json",
+        "the logbook": records / "logbook" / "events.jsonl",
+        "a session record": session / "manifest.json",
+        "a block of a session record": session / "ecg_raw" / "000001.bin",
+    }
+
+
+def _write_console_files(machine: Machine, *, directory: int, file: int) -> dict[str, bytes]:
+    """Write them with these modes, as an older console did; what each holds."""
+    held: dict[str, bytes] = {}
+    for name, path in _console_files(machine).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"content of {name}\n".encode())
+        path.chmod(file)
+        held[name] = path.read_bytes()
+    for path in _console_files(machine).values():
+        for parent in path.relative_to(machine.state_dir).parents:
+            (machine.state_dir / parent).chmod(directory)
+    return held
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex6_the_configuration_and_the_data_are_created_private(machine: Machine) -> None:
+    """A new machine: the configuration is root's alone, the data the account's alone."""
+    done = machine.install()
+    assert done.exit_code == 0, done.output
+    assert _mode(machine.env_file) == 0o600
+    assert _mode(machine.env_file.parent) == 0o755
+    for directory in ("", "data", "records", "data/records"):
+        assert _mode(machine.state_dir / directory) == 0o700, directory
+    # The configuration stays root's: the account that runs the console can
+    # neither read the machine's key there nor rewrite the limits it applies.
+    hardener = _read(HARDENER)
+    assert 'owner_of root:root "$root_ids" "$ENV_FILE"' in hardener
+    assert 'mode_of 0600 "$ENV_FILE"' in hardener
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex6_an_existing_machine_is_corrected_and_no_content_is_touched(
+    machine: Machine,
+) -> None:
+    """Records written with open modes by an older console, a configuration anybody can
+    read: the installer closes each of them, and reads or writes none."""
+    assert machine.install().exit_code == 0
+    held = _write_console_files(machine, directory=0o755, file=0o644)
+    machine.env_file.chmod(0o644)
+    machine.env_file.parent.chmod(0o777)
+    configuration = machine.env_file.read_bytes()
+
+    done = machine.install()
+    assert done.exit_code == 0, done.output
+    for name, path in _console_files(machine).items():
+        assert _mode(path) == 0o600, name
+        assert path.read_bytes() == held[name], f"the content of {name} was touched"
+        for parent in path.relative_to(machine.state_dir).parents:
+            assert _mode(machine.state_dir / parent) == 0o700, f"{name}: {parent}"
+    assert _mode(machine.env_file) == 0o600
+    assert _mode(machine.env_file.parent) == 0o755
+    assert machine.env_file.read_bytes() == configuration
+    # The console that was running is not restarted for it.
+    assert "nothing changed: left alone" in done.output
+    for never in ("systemctl stop", "systemctl start", "systemctl restart"):
+        assert not done.called(never), never
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex6_what_the_owner_may_do_is_left_as_it_is(machine: Machine) -> None:
+    """Only what is open to others is closed: a record made read-only stays read-only, and
+    the three directories the installer makes get their whole mode back."""
+    assert machine.install().exit_code == 0
+    _write_console_files(machine, directory=0o755, file=0o644)
+    sealed = _console_files(machine)["a session record"]
+    sealed.chmod(0o444)
+    (machine.state_dir / "records").chmod(0o500)
+
+    done = machine.harden("files")
+    assert done.exit_code == 0, done.output
+    assert _mode(sealed) == 0o400
+    assert _mode(machine.state_dir / "records") == 0o700
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex6_what_is_not_the_accounts_is_given_to_it(machine: Machine) -> None:
+    """A machine installed before the console stopped running as root: everything it wrote
+    is root's. Each entry is named by a dry run and handed to ``chown`` by a run."""
+    assert machine.install().exit_code == 0
+    _write_console_files(machine, directory=0o700, file=0o600)
+    machine.owned_by_the_account(owned=False)
+    wanted = [machine.state_dir, *_console_files(machine).values()]
+
+    dry = machine.harden("--dry-run", "files")
+    assert dry.exit_code == 0, dry.output
+    for path in wanted:
+        assert f"   would give to anheart:anheart: {path}\n" in dry.output, path
+    assert not dry.called("chown")
+
+    # The scripted chown changes nothing. The run hands it every entry, a link
+    # as a link, then looks again: what is still not the account's is said,
+    # and the script ends in failure rather than say it protected the files.
+    done = machine.harden("files")
+    for path in wanted:
+        assert done.called("chown -h anheart:anheart", str(path)), path
+    assert done.exit_code == 1
+    assert "WARNING: could not give what is under" in done.output
+    assert "could not be made" in done.output
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex6_a_link_in_the_data_is_never_followed(machine: Machine, tmp_path: Path) -> None:
+    """The console's account can plant a link in its own directories: what root then does
+    there never reaches what the link points to."""
+    assert machine.install().exit_code == 0
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "a-file-of-the-system"
+    victim.write_text("not the console's\n", encoding="utf-8")
+    victim.chmod(0o644)
+    outside.chmod(0o755)
+    records = machine.state_dir / "records"
+    (records / "to-a-file").symlink_to(victim)
+    (records / "to-a-directory").symlink_to(outside, target_is_directory=True)
+
+    done = machine.harden("files")
+    assert done.exit_code == 0, done.output
+    assert _mode(victim) == 0o644
+    assert _mode(outside) == 0o755
+
+    # Not the account's: the links themselves are named, never what is behind them.
+    machine.owned_by_the_account(owned=False)
+    dry = machine.harden("--dry-run", "files")
+    assert f"would give to anheart:anheart: {records / 'to-a-directory'}\n" in dry.output
+    assert str(victim) not in dry.output
+    assert f"{records / 'to-a-directory'}/" not in dry.output
+    # In the script itself: no chown that follows a link, no find that does.
+    code = "\n".join(
+        line for line in _read(HARDENER).splitlines() if not line.lstrip().startswith("#")
+    )
+    assert _captures(r"\bchown (\S+)", code) == ["-h", "-h"]
+    assert set(_captures(r"\bfind (\S+)", code)) == {"-P", '"${look[@]}"'}
+    assert code.count('-P "$tree"') == 2, "the two passes over a tree start with find -P"
+
+
+# --- EX-7: no automatic update --------------------------------------------------------
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex7_the_install_turns_off_every_automatic_package_update(
+    machine: Machine,
+) -> None:
+    """apt's periodic jobs are off in the file apt reads last, and the three units that run
+    them are masked: a package installed later cannot turn its own job back on."""
+    machine.set("active.apt-daily.timer")
+    first = machine.install()
+    assert first.exit_code == 0, first.output
+    assert [line for line in _directives(machine.apt_conf) if not line.startswith("//")] == [
+        'APT::Periodic::Enable "0";',
+        'APT::Periodic::Update-Package-Lists "0";',
+        'APT::Periodic::Download-Upgradeable-Packages "0";',
+        'APT::Periodic::Unattended-Upgrade "0";',
+        'APT::Periodic::AutocleanInterval "0";',
+    ]
+    assert _mode(machine.apt_conf) == 0o644
+    # apt reads the files of its directory in order: this one comes after the
+    # distribution's (10periodic, 20auto-upgrades), and its name is one apt accepts.
+    assert re.fullmatch(r"99[a-z0-9-]+", machine.apt_conf.name)
+    for unit in UPDATE_UNITS:
+        assert first.called(f"systemctl mask {unit}"), unit
+    # A timer that was running is stopped; a job in progress is left to end.
+    assert first.called("systemctl stop apt-daily.timer")
+    assert not first.called("systemctl stop apt-daily.service")
+    assert not first.called("apt-get remove")
+    assert not first.called("apt-get purge")
+
+    second = machine.install()
+    assert second.exit_code == 0, second.output
+    assert not second.called("systemctl mask")
+    # Turned back on by hand, or by a package: the next install turns it off again.
+    machine.unset("masked.unattended-upgrades.service")
+    machine.apt_conf.write_text('APT::Periodic::Unattended-Upgrade "1";\n', encoding="utf-8")
+    third = machine.install()
+    assert third.exit_code == 0, third.output
+    assert third.called("systemctl mask unattended-upgrades.service")
+    assert 'APT::Periodic::Unattended-Upgrade "0";' in _read(machine.apt_conf)
+    assert "nothing changed: left alone" in third.output, "the console is not restarted for it"
+
+
+# --- EX-8: harden.sh, its dry run, its steps, and the uninstall ---------------------------
+
+
+def _drift(machine: Machine) -> None:
+    """Undo by hand, on an installed machine, one thing of each step."""
+    machine.env_file.chmod(0o644)
+    (machine.state_dir / "records").chmod(0o755)
+    machine.set("account-shell", "/bin/bash")
+    machine.set("account-password", "P")
+    machine.set("account-groups", "anheart\n")
+    machine.unset("masked.apt-daily.timer")
+    machine.apt_conf.unlink()
+
+
+def _snapshot(machine: Machine) -> dict[str, str]:
+    """Everything a run of ``harden.sh`` could change: modes, and the scripted system."""
+    seen = {
+        str(path): oct(_mode(path))
+        for path in (machine.env_file, machine.state_dir, *machine.state_dir.rglob("*"))
+    }
+    seen["apt"] = _read(machine.apt_conf) if machine.apt_conf.exists() else "<absent>"
+    for state in sorted(machine.state.iterdir()):
+        if state.name != "calls":
+            seen[f"system:{state.name}"] = _read(state)
+    return seen
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex8_a_dry_run_says_exactly_what_a_run_would_do_and_does_nothing(
+    machine: Machine,
+) -> None:
+    assert machine.install().exit_code == 0
+    _drift(machine)
+    before = _snapshot(machine)
+
+    dry = machine.harden("--dry-run")
+    assert dry.exit_code == 0, dry.output
+    announced = [line.strip() for line in dry.output.splitlines() if line.startswith("   would ")]
+    assert announced == [
+        "would give the account anheart the shell /usr/sbin/nologin in place of /bin/bash",
+        "would lock the password of the account anheart",
+        "would add the account anheart to the group dialout",
+        f"would set the mode of {machine.env_file} to 0600",
+        f"would set the mode of {machine.state_dir / 'records'} to 0700",
+        f"would write {machine.apt_conf} (the periodic jobs of apt are off)",
+        "would mask apt-daily.timer",
+    ]
+    assert "harden.sh, dry run: 7 change(s) would be made, none was" in dry.output
+    assert _snapshot(machine) == before, "the dry run changed something"
+    for never in ("usermod", "passwd --lock", "chown", "systemctl mask", "systemctl stop"):
+        assert not dry.called(never), never
+
+    done = machine.harden()
+    assert done.exit_code == 0, done.output
+    made = [line.strip() for line in done.output.splitlines() if line.startswith("   done: ")]
+    assert made == [line.replace("would ", "done: ", 1) for line in announced]
+    assert "harden.sh: 7 change(s) made" in done.output
+    assert done.called("usermod --shell /usr/sbin/nologin anheart")
+    assert done.called("passwd --lock anheart")
+    assert done.called("usermod --append --groups dialout anheart")
+    assert done.called("systemctl mask apt-daily.timer")
+    assert _mode(machine.env_file) == 0o600
+    assert _mode(machine.state_dir / "records") == 0o700
+    # It closes the machine around the console and never touches the console.
+    for never in ("docker", "curl", "apt-get", "systemctl restart", "systemctl daemon-reload"):
+        assert not done.called(never), never
+    assert not done.called("systemctl", "anheart")
+
+    again = machine.harden("--dry-run")
+    assert again.exit_code == 0, again.output
+    assert "harden.sh, dry run: nothing to change" in again.output
+    assert "would " not in again.output
+    idle = machine.harden()
+    assert idle.exit_code == 0, idle.output
+    assert "harden.sh: nothing to change" in idle.output
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex8_harden_runs_the_steps_it_is_asked_in_its_own_order(machine: Machine) -> None:
+    assert machine.install().exit_code == 0
+    _drift(machine)
+    # Named backwards: they run in the order of the script all the same.
+    done = machine.harden("updates", "files")
+    assert done.exit_code == 0, done.output
+    steps = [line for line in done.output.splitlines() if line.startswith("== Step: ")]
+    assert steps == ["== Step: files", "== Step: updates"]
+    assert not done.called("usermod"), "a step that was not asked for ran"
+    assert "harden.sh: 4 change(s) made" in done.output
+
+    # The steps, without root and without touching anything.
+    machine.set("uid", "1000\n")
+    listed = machine.harden("--list")
+    assert listed.exit_code == 0, listed.output
+    assert [line.split()[0] for line in listed.output.splitlines()] == list(HARDEN_STEPS)
+    assert listed.calls == ()
+    refused = machine.harden("--dry-run")
+    assert refused.exit_code == 1
+    assert "sudo bash scripts/harden.sh" in refused.output
+    machine.set("uid", "0\n")
+    for unknown in ("firewall", "--force"):
+        wrong = machine.harden(unknown)
+        assert wrong.exit_code == 2, unknown
+        assert "usage:" in wrong.output
+        assert not wrong.called("systemctl")
+    assert machine.harden("--help").exit_code == 0
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex8_harden_refuses_a_machine_the_console_is_not_installed_on(
+    machine: Machine,
+) -> None:
+    """Before ``install.sh``: no account to give anything to. Said, and nothing is changed."""
+    for step in ("account", "files"):
+        refused = machine.harden(step)
+        assert refused.exit_code == 1, step
+        assert "sudo bash scripts/install.sh creates it" in refused.output
+        for never in ("usermod", "chown", "passwd --lock"):
+            assert not refused.called(never), never
+
+
+def test_anh151_ex8_harden_is_written_to_take_the_steps_of_the_next_lots() -> None:
+    """One name in ``STEPS`` and three functions a step: the network, the firewall, the
+    certificate and the read-only root are added the same way."""
+    hardener = _read(HARDENER)
+    steps = _captures(r"^readonly STEPS=\((.*)\)$", hardener)
+    assert len(steps) == 1
+    assert tuple(steps[0].split()) == HARDEN_STEPS
+    for step in HARDEN_STEPS:
+        for function in ("describe", "step", "undo"):
+            assert re.search(rf"^{function}_{step}\(\) \{{$", hardener, re.MULTILINE), (
+                f"{function}_{step}"
+            )
+    # The installer runs the steps of this lot at every install, by name: a
+    # step added later is not run by an install unless it is named there too.
+    assert 'bash "$HARDEN" account files updates' in _read(INSTALLER)
+    assert 'bash "$HARDEN" --undo' in _read(UNINSTALLER)
+    # Run as root on a machine: nothing is evaluated, fetched or installed.
+    for script in (HARDENER, UNINSTALLER, BIND_HELPER):
+        code = "\n".join(
+            line for line in _read(script).splitlines() if not line.lstrip().startswith("#")
+        )
+        for banned in ("eval ", "curl", "wget", "apt-get", "pip ", "docker pull"):
+            assert banned not in code, f"{script.name}: {banned}"
+        assert "set -u" in code or "set -euo pipefail" in code, script.name
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex8_an_uninstall_takes_back_what_the_install_and_the_hardening_set(
+    machine: Machine,
+) -> None:
+    """Every setting written for the console goes; the configuration, the data and the
+    account stay, as private as they were; the install can be run again."""
+    assert machine.install().exit_code == 0
+    held = _write_console_files(machine, directory=0o700, file=0o600)
+    configuration = machine.env_file.read_bytes()
+    taken = (
+        machine.unit,
+        machine.drop_in.parent,
+        machine.bind_helper.parent,
+        machine.chrony_conf,
+        machine.journald_conf,
+        machine.manager_drop_in,
+        machine.device_rule,
+        machine.apt_conf,
+    )
+    for path in taken:
+        assert path.exists(), f"{path} was never installed: nothing to take back"
+
+    done = machine.uninstall()
+    assert done.exit_code == 0, done.output
+    for path in taken:
+        assert not path.exists(), f"{path} is still there"
+    # The console is stopped by its controlled stop before its unit goes.
+    assert done.calls.index("systemctl disable --now anheart.service") < done.calls.index(
+        "systemctl daemon-reload"
+    )
+    assert done.called("systemctl try-restart chrony.service")
+    assert done.called("systemctl restart systemd-journald.service")
+    for unit in UPDATE_UNITS:
+        assert done.called(f"systemctl unmask {unit}"), unit
+    # Left on purpose: the machine's key, its data, its account, its images, its packages.
+    assert machine.env_file.read_bytes() == configuration
+    assert _mode(machine.env_file) == 0o600
+    for name, path in _console_files(machine).items():
+        assert path.read_bytes() == held[name], name
+        assert _mode(path) == 0o600, name
+    assert _mode(machine.state_dir) == 0o700
+    for never in ("userdel", "apt-get", "docker", "chown", "systemctl disable chrony"):
+        assert not done.called(never), never
+
+    # What is already gone is not an error.
+    again = machine.uninstall()
+    assert again.exit_code == 0, again.output
+    assert "the unit was not installed" in again.output
+    assert not again.called("systemctl unmask")
+
+    back = machine.install()
+    assert back.exit_code == 0, back.output
+    for path in taken:
+        assert path.exists(), f"{path} did not come back"
+    assert machine.env_file.read_bytes() == configuration
+
+
+@pytest.mark.slow
+@needs_bash
+def test_anh151_ex8_only_root_uninstalls(machine: Machine) -> None:
+    assert machine.install().exit_code == 0
+    machine.set("uid", "1000\n")
+    refused = machine.uninstall()
+    assert refused.exit_code == 1
+    assert "sudo bash scripts/uninstall.sh" in refused.output
+    assert machine.unit.exists()
+    assert not refused.called("systemctl")
+
+
+def test_anh151_ex8_the_end_to_end_test_proves_each_reduction_in_a_real_system() -> None:
+    """What the scripted commands above cannot show is asked of a real systemd, a real
+    Docker and a real kernel, as root, by the CI's install test."""
+    script = _read(END_TO_END)
+    for proof in (
+        # EX-4, the container: who the console is, and what the kernel gives it.
+        '[ "$(in_console id -u):$(in_console id -g)" = "$account" ]',
+        "{{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}}",
+        '"false true [ALL] [no-new-privileges]"',
+        "CapPrm: 0000000000000000 CapEff: 0000000000000000 CapBnd: 0000000000000000",
+        "NoNewPrivs: 1",
+        ": > /app/written-by-the-install-test",
+        "mknod -m 0660 /dev/ttyUSB7 c 188 7",
+        'expect_in "$(what_opening /dev/anheart-test-refused)" "EPERM"',
+        'expect_in "$(what_opening /dev/anheart-test-other)" "EACCES"',
+        "{{.Config.User}}",
+        # EX-4, the unit: the relay is the account; the client is root, and said to be.
+        '"Uid: $relay_user $relay_user $relay_user $relay_user "',
+        'expect_in "$(owned /run/anheart)" "anheart:anheart 700"',
+        "NoNewPrivileges,ProtectSystem,ProtectHome",
+        'nsenter --target "$main_pid" --mount',
+        "the Docker client of the unit is root",
+        # EX-6: created private, corrected on a machine that is not, content untouched.
+        'expect_in "$(owned "$ENV_FILE")" "root:root 600"',
+        'expect_in "$(owned /var/lib/anheart/records/service-state.json)" "anheart:anheart 600"',
+        "in_machine chown root:root /var/lib/anheart/records/service-state.json",
+        'expect_in "$(owned "$logbook")" "anheart:anheart 600"',
+        "-perm /077",
+        "neither content was touched",
+        # EX-7: apt itself says what it applies.
+        "apt-config dump",
+        'APT::Periodic::Unattended-Upgrade "0";',
+        "is-enabled",
+        # EX-8: a dry run, a real run, a second dry run; then the uninstall.
+        "harden --dry-run",
+        "change(s) would be made, none was",
+        '"harden.sh: 9 change(s) made"',
+        '"harden.sh, dry run: nothing to change"',
+        'in_machine bash "$COPY/scripts/uninstall.sh"',
+        "install.sh failed after an uninstall",
+    ):
+        assert proof in script, proof
+    # Steps 1 to 10 of the tickets before this one still run, in that order, after it.
+    steps = _captures(r'^step "(\d+)\. ', script)
+    assert steps == [str(number) for number in range(1, 13)]
+
+
+def test_anh151_ex8_the_workflow_lints_every_script_that_runs_on_a_pi() -> None:
+    """ShellCheck, before the install test: a warning or an error fails the job."""
+    workflow = _workflow(WORKFLOW)
+    listed = set(_captures(r"^ {6}- '([^']+)'$", workflow))
+    for path in (
+        "raspberry-pi/scripts/harden.sh",
+        "raspberry-pi/scripts/uninstall.sh",
+        "raspberry-pi/scripts/pi/bind-bitalino.sh",
+    ):
+        assert path in listed, f"a change of {path} would not start the install test"
+    lint = workflow.index("shellcheck --severity=warning")
+    assert lint < workflow.index("bash raspberry-pi/scripts/pi/test_install.sh")
+    linted = set(_captures(r"^ {12}(raspberry-pi/\S+\.sh)(?: \\)?$", workflow))
+    assert linted >= {
+        "raspberry-pi/scripts/install.sh",
+        "raspberry-pi/scripts/harden.sh",
+        "raspberry-pi/scripts/uninstall.sh",
+        "raspberry-pi/scripts/pi/bind-bitalino.sh",
+        "raspberry-pi/scripts/pi/test_install.sh",
+        "raspberry-pi/docker/entrypoint.sh",
+    }
+    for path in linted:
+        assert (REPOSITORY / path).is_file(), path
+
+
+def test_anh151_ex8_the_page_of_the_image_carries_the_check_list() -> None:
+    """``docs/pi-image.md``: one line of the check-list for each step of ``harden.sh``, and
+    the lots that are not written yet are said not to be."""
+    page = _read(VERSIONS_PAGE)
+    section = page.partition("\n## 10. Durcissement")[2]
+    assert section, "the page has no section on the hardening"
+    for step in HARDEN_STEPS:
+        assert f"`{step}`" in section, step
+    for later in ("point d'accès", "pare-feu", "tls", "lecture seule"):
+        assert later in section.casefold(), later
+    assert section.count("**non fait**") >= 4, "a lot that is not written is said not to be"
+    assert "`sudo bash scripts/harden.sh --dry-run`" in section

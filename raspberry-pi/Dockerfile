@@ -63,13 +63,33 @@ COPY config/ ./config/
 # in the heartbeat and written in the manifest of every session record.
 COPY VERSION ./VERSION
 COPY docker/entrypoint.sh /usr/local/bin/anheart-entrypoint
-RUN chmod +x /usr/local/bin/anheart-entrypoint
 
-# Create data directory (profiles.local.json)
-RUN mkdir -p /app/data
+# The console never runs as root (docs/pi-image.md, "Sous quel compte").
+#
+# On an installed Pi the service names the account by NUMBER (--user, in
+# scripts/anheart.service): the machine's own account `anheart`, which owns
+# the data it mounts, and which this image cannot know. So everything the
+# console reads here is readable by any account, whatever the permissions of
+# the directory the image was built from.
+#
+# The account below is for an image started any other way (by hand, a test):
+# it then runs as this one, never as root. /app/data is its own, for a run with
+# no directory mounted there.
+RUN groupadd --gid 10001 anheart \
+    && useradd --uid 10001 --gid 10001 --home-dir /app --no-create-home \
+        --shell /usr/sbin/nologin anheart \
+    && chmod -R a+rX /app/src /app/config /app/VERSION \
+    && chmod 0755 /usr/local/bin/anheart-entrypoint \
+    && mkdir -p /app/data \
+    && chown anheart:anheart /app/data
 
 # Environment variables (override with docker-compose or -e flag)
 ENV PYTHONUNBUFFERED=1
+# The image is mounted read-only by the service and the account has no home:
+# matplotlib (imported by BioSPPy) keeps its cache in /tmp, which is memory.
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
+USER anheart
 
 # /healthz answers without a token and says nothing about the session.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

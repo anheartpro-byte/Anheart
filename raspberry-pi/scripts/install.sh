@@ -14,6 +14,10 @@
 #
 #   * an existing /etc/anheart/anheart.env is never rewritten and never shown:
 #     it holds the machine's API key. Only its owner and mode are set again.
+#   * the console runs as the account `anheart`, never as root, and what it
+#     wrote stays its own: on a machine installed before that was so, the
+#     owner and the modes of what is under /var/lib/anheart are corrected, and
+#     no content is touched (scripts/harden.sh, which this script runs).
 #   * a console that is running is restarted only when its image or its unit
 #     changed, and only when it says it is at rest. Replacing the software of a
 #     machine that turns is not something a script decides. That holds for a
@@ -32,6 +36,10 @@ set -euo pipefail
 
 readonly SERVICE="anheart"
 readonly ACCOUNT="anheart"
+# The group of the serial devices on Debian: the USB-RS485 adapter of the drive
+# (ttyUSB*, or the USB device itself, see install_device_rule) and the
+# BITalino's Bluetooth serial node (rfcomm*).
+readonly DEVICE_GROUP="dialout"
 readonly IMAGE_NAME="anheart-console"
 readonly CONTAINER="anheart"
 
@@ -50,6 +58,10 @@ readonly UNIT_DIR="$ROOT/etc/systemd/system"
 readonly UNIT_FILE="$UNIT_DIR/$SERVICE.service"
 readonly DROP_IN_DIR="$UNIT_DIR/$SERVICE.service.d"
 readonly DROP_IN="$DROP_IN_DIR/10-version.conf"
+readonly ACCOUNT_DROP_IN="$DROP_IN_DIR/20-account.conf"
+# What the unit runs on the machine itself before the console (ExecStartPre).
+readonly BIND_HELPER="$ROOT/usr/local/lib/anheart/bind-bitalino"
+readonly DEVICE_RULE="$ROOT/etc/udev/rules.d/70-anheart-drive.rules"
 readonly CHRONY_CONF="$ROOT/etc/chrony/conf.d/anheart.conf"
 readonly JOURNALD_CONF="$ROOT/etc/systemd/journald.conf.d/anheart.conf"
 # Where the kernel lists the real-time clocks it found, if any.
@@ -64,6 +76,8 @@ readonly HEALTH_PERIOD_S=2
 
 TREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly TREE
+# The steps that close the machine, and the only place they are written.
+readonly HARDEN="$TREE/scripts/harden.sh"
 
 simulation=false
 # Whether the image or the unit differs from what was installed before.
@@ -214,14 +228,15 @@ install_packages() {
         || warn "the bluetooth service did not start (no adapter?)"
 }
 
-# system_file TARGET: its content is read on standard input. The file is
-# replaced only when the content differs, and the exit status says which: 0
-# written, 1 unchanged. It never touches `changed`: that one is about the
-# console's image and unit, and decides whether the console is restarted.
+# system_file TARGET [MODE]: its content is read on standard input. The file
+# is replaced only when the content differs, and the exit status says which: 0
+# written, 1 unchanged. MODE is 0644 unless given. It never touches `changed`:
+# that one is about the console's image and unit, and decides whether the
+# console is restarted.
 # Called as the condition of an `if`, where a failing command does not stop
 # the script by itself: each step that can fail says so and stops it.
 system_file() {
-    local target="$1" directory draft
+    local target="$1" mode="${2:-0644}" directory draft
     directory="$(dirname "$target")"
     mkdir -p "$directory" || die "cannot create $directory"
     draft="$(mktemp "$directory/.anheart.XXXXXX")" || die "cannot write under $directory"
@@ -231,7 +246,7 @@ system_file() {
         note "$target unchanged"
         return 1
     fi
-    chmod 0644 "$draft" && mv "$draft" "$target" || die "cannot write $target"
+    chmod "$mode" "$draft" && mv "$draft" "$target" || die "cannot write $target"
     note "$target written"
 }
 
@@ -296,26 +311,19 @@ create_account() {
         note "account $ACCOUNT exists"
     else
         useradd --system --user-group --home-dir /var/lib/anheart --no-create-home \
-            --shell /usr/sbin/nologin "$ACCOUNT"
-        note "account $ACCOUNT created (system account, no login)"
+            --shell /usr/sbin/nologin --groups "$DEVICE_GROUP" "$ACCOUNT"
+        note "account $ACCOUNT created (system account, no login, group $DEVICE_GROUP for the serial devices)"
     fi
 }
 
-# directory MODE PATH OWNER: created if missing, owner and mode set every time.
-directory() {
-    mkdir -p "$2"
-    chown "$3" "$2"
-    chmod "$1" "$2"
-    note "$2 ($3, mode $1)"
-}
-
+# Made here; given to the account and closed by scripts/harden.sh (protect).
+#   data          local profiles (profiles.local.json)
+#   records       session records, the logbook, the console's restart state
+#   data/records  where the unit mounts `records` inside `data`: made here so
+#                 that it is the account's, and not root's as Docker makes it
 create_directories() {
-    directory 0750 "$STATE_DIR" "$ACCOUNT:$ACCOUNT"
-    # Local profiles (profiles.local.json).
-    directory 0750 "$STATE_DIR/data" "$ACCOUNT:$ACCOUNT"
-    # Session records: private, like the console creates them.
-    directory 0700 "$STATE_DIR/records" "$ACCOUNT:$ACCOUNT"
-    directory 0755 "$CONFIG_DIR" "root:root"
+    mkdir -p "$STATE_DIR/data/records" "$STATE_DIR/records" "$CONFIG_DIR"
+    note "$STATE_DIR/data, $STATE_DIR/records, $CONFIG_DIR"
 }
 
 write_env() {
@@ -343,10 +351,10 @@ write_env() {
             note "fill it in (MACHINE_API_KEY, MOTOR_PORT, BITALINO_MAC, measured radii), then: sudo systemctl restart $SERVICE"
         fi
     fi
-    # The file holds the machine's API key: readable by root only, every run.
-    chown root:root "$ENV_FILE"
-    chmod 0600 "$ENV_FILE"
-    note "$ENV_FILE (root:root, mode 0600)"
+    # The file holds the machine's API key and the limits the console applies.
+    # It is root's, mode 0600, and scripts/harden.sh puts that back at every
+    # run (protect): root's Docker client reads it for the console, which can
+    # neither read it on the machine nor rewrite its own limits there.
     # `docker run --env-file` hands the console everything after the `=`: a
     # quote or a trailing comment would be part of the value. Keys only are
     # named here, never a value.
@@ -356,6 +364,40 @@ write_env() {
     if [ -n "$odd" ]; then
         warn "quotes or a trailing comment are read as part of the value of: ${odd}(write KEY=value and nothing else on the line)"
     fi
+}
+
+# The Schneider USB-RS485 cable (VID 16de, PID 0003) has no serial driver in the
+# kernel: the console then opens the USB device itself, through pyftdi
+# (MOTOR_PORT=ftdi://schneider:rs485/1). A USB device belongs to root and
+# nobody else may write to it; this rule gives that one cable to the group of
+# the serial devices, like a ttyUSB node. udev reads it when a cable is plugged
+# in; one already plugged in is asked again here.
+install_device_rule() {
+    say "Drive cable"
+    if system_file "$DEVICE_RULE" <<EOF
+# Written by scripts/install.sh (docs/pi-image.md, "Sous quel compte").
+# The Schneider USB-RS485 cable of the drive, for the console's account.
+SUBSYSTEM=="usb", ATTR{idVendor}=="16de", ATTR{idProduct}=="0003", GROUP="$DEVICE_GROUP", MODE="0660"
+EOF
+    then
+        if command -v udevadm > /dev/null 2>&1; then
+            udevadm control --reload \
+                || warn "udev did not read its rules again: the cable is the group's at the next start of the machine"
+            udevadm trigger --subsystem-match=usb --attr-match=idVendor=16de \
+                || warn "the cable already plugged in was not asked again: unplug it and plug it back"
+        else
+            note "no udevadm on this machine: the rule is read at its next start"
+        fi
+    fi
+}
+
+# The account as it must be, what belongs to whom and who may read it, and no
+# package update that nobody asked for: the steps of scripts/harden.sh that
+# every install applies. Each looks first and changes only what differs.
+protect() {
+    say "Protection (scripts/harden.sh)"
+    [ -r "$HARDEN" ] || die "$HARDEN is missing: this copy of the sources is incomplete"
+    bash "$HARDEN" account files updates
 }
 
 image_id() { docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true; }
@@ -423,8 +465,21 @@ EOF
     fi
 }
 
+# A number of this machine, or nothing: never a name, never a sign.
+number() {
+    case "$1" in
+        '' | *[!0-9]*) return 1 ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 install_unit() {
     say "Service $SERVICE"
+    # What the unit runs on the machine before the console. Read at the next
+    # start of the console: writing it restarts nothing.
+    local helper="$TREE/scripts/pi/bind-bitalino.sh"
+    [ -r "$helper" ] || die "$helper is missing: this copy of the sources is incomplete"
+    system_file "$BIND_HELPER" 0755 < "$helper" || true
     mkdir -p "$DROP_IN_DIR"
     install_file "$TREE/scripts/$SERVICE.service" "$UNIT_FILE"
     local draft
@@ -440,6 +495,26 @@ Environment=ANHEART_IMAGE=$image
 EOF
     install_file "$draft" "$DROP_IN"
     rm -f "$draft"
+    # The console's account, as numbers: Docker looks a name up in the image,
+    # which does not know the accounts of this machine.
+    local user group devices
+    user="$(number "$(id -u "$ACCOUNT")")" \
+        || die "the account $ACCOUNT has no number on this machine"
+    group="$(number "$(id -g "$ACCOUNT")")" \
+        || die "the account $ACCOUNT has no group on this machine"
+    devices="$(number "$(getent group "$DEVICE_GROUP" | cut -d: -f3)")" \
+        || die "the group $DEVICE_GROUP is missing: the console could open no serial device"
+    draft="$(mktemp "$DROP_IN_DIR/.account.XXXXXX")"
+    cat > "$draft" <<EOF
+# Written by scripts/install.sh. The account the console runs under in its
+# container ($ACCOUNT), and the group of the serial devices ($DEVICE_GROUP),
+# as the numbers they have on this machine.
+[Service]
+Environment=ANHEART_ACCOUNT=$user:$group
+Environment="ANHEART_GROUPS=--group-add $devices"
+EOF
+    install_file "$draft" "$ACCOUNT_DROP_IN"
+    rm -f "$draft"
     systemctl daemon-reload
     systemctl enable "$SERVICE.service"
 }
@@ -454,8 +529,15 @@ start_service() {
         require_idle_console
     fi
     if service_active; then
+        # Stopped, then started, and not restarted in one go: a console
+        # installed before it stopped running as root writes its last file as
+        # root while it stops. What it left is given to the account before the
+        # new one, which is no longer root, starts and reads it.
         note "restarting $SERVICE on the new image or unit"
-        systemctl restart "$SERVICE.service"
+        systemctl stop "$SERVICE.service"
+        bash "$HARDEN" files \
+            || warn "the console's files could not be checked again: sudo bash scripts/harden.sh files"
+        systemctl start "$SERVICE.service"
     else
         # The unit first stops and removes a container named $CONTAINER, if one
         # is there: the console that was just found at rest.
@@ -518,6 +600,8 @@ configure_journal
 create_account
 create_directories
 write_env
+install_device_rule
+protect
 build_image
 install_watchdog
 install_unit

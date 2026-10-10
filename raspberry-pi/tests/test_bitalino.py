@@ -513,7 +513,7 @@ def test_an_already_paired_device_is_left_alone() -> None:
 
 
 @pytest.mark.parametrize("pairs", [True, False])
-def test_an_unpaired_device_is_paired_once(pairs: bool) -> None:
+def test_an_unpaired_device_is_paired_once(pairs: bool, caplog: pytest.LogCaptureFixture) -> None:
     answers = deque(["Paired: no", "", "Paired: yes" if pairs else "Paired: no"])
     calls: list[list[str]] = []
 
@@ -521,9 +521,16 @@ def test_an_unpaired_device_is_paired_once(pairs: bool) -> None:
         calls.append(list(argv))
         return answers.popleft()
 
-    assert ensure_paired(MAC, "1234", runner) is pairs
+    code = "8317"
+    with caplog.at_level(logging.DEBUG, logger="src.bitalino_client"):
+        paired = ensure_paired(MAC, code, runner)
+    assert paired is pairs
     assert calls[1][:2] == [sys.executable, "-c"]
-    assert calls[1][-2:] == [MAC, "1234"]  # through argv, never interpolated
+    assert calls[1][-2:] == [MAC, code]  # through argv, never interpolated
+    # The pairing code reaches bluetoothctl and nothing else: the journal, kept
+    # on the machine's disk, says which device is being paired, never with what.
+    assert f"Pairing with {MAC}..." in caplog.text
+    assert code not in caplog.text
 
 
 def test_a_missing_bluetoothctl_is_not_a_crash() -> None:

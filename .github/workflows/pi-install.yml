@@ -12,8 +12,11 @@ on:
       - 'raspberry-pi/docker/**'
       - 'raspberry-pi/requirements*.txt'
       - 'raspberry-pi/scripts/anheart.service'
+      - 'raspberry-pi/scripts/harden.sh'
       - 'raspberry-pi/scripts/install.sh'
+      - 'raspberry-pi/scripts/pi/bind-bitalino.sh'
       - 'raspberry-pi/scripts/pi/test_install.sh'
+      - 'raspberry-pi/scripts/uninstall.sh'
   push:
     branches: [develop]
   workflow_dispatch:
@@ -40,9 +43,16 @@ defaults:
 # architecture of the Pi 4 and 5, a stand-in machine (Debian 12, systemd) is
 # started as a container; the real raspberry-pi/scripts/install.sh is run in
 # it as root and must leave the console enabled at boot, running in
-# simulation, answering GET /healthz and at rest. The script that does it,
+# simulation, answering GET /healthz and at rest, as an account that is not
+# root. scripts/harden.sh is then run there dry, then for good, and
+# scripts/uninstall.sh after it. The script that does it,
 # raspberry-pi/scripts/pi/test_install.sh, can be run on any machine with
 # Docker.
+#
+# Before that, the scripts that run as root on a Pi, and the test itself, are
+# read by ShellCheck: a warning or an error fails the job. Its notes of style
+# (a `$` meant for another shell inside single quotes, `A && B || C` where C
+# ends the script) are not findings.
 #
 # Not a gate. The job below is not a required check: a pull request is filtered
 # by path, and a workflow that does not start would leave a required check
@@ -62,6 +72,23 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+      - name: Lint the shell scripts of the Raspberry Pi
+        run: |
+          if ! command -v shellcheck > /dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends shellcheck
+          fi
+          shellcheck --version
+          shellcheck --severity=warning \
+            raspberry-pi/scripts/install.sh \
+            raspberry-pi/scripts/harden.sh \
+            raspberry-pi/scripts/uninstall.sh \
+            raspberry-pi/scripts/pair_device.sh \
+            raspberry-pi/scripts/pi/bind-bitalino.sh \
+            raspberry-pi/scripts/pi/deploy.sh \
+            raspberry-pi/scripts/pi/preflight.sh \
+            raspberry-pi/scripts/pi/test_install.sh \
+            raspberry-pi/docker/entrypoint.sh
       - name: Install the console on a stand-in Raspberry Pi
         run: |
           echo "Runner: $(uname -m), $(nproc) CPUs, $(docker --version)"

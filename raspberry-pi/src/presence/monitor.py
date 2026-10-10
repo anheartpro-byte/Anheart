@@ -555,6 +555,9 @@ class PresenceMonitor:
         rule re-fires at the next evaluation with motion possible, and at rest
         the start gate keeps refusing on the live evidence. What an
         acknowledgement never does is restart anything.
+
+        Who acknowledged is in the record this returns (the console writes it
+        under the operator's alias); the line logged here carries no name.
         """
         if not operator.strip():
             return Err(
@@ -573,7 +576,9 @@ class PresenceMonitor:
             wall_clock=self._clock.unix_millis(),
             cleared=(floor.rule,),
         )
-        _logger.warning("presence latch %s acknowledged by %r", floor.rule, operator)
+        _logger.warning(
+            "presence latch %s acknowledged at unix_millis=%d", floor.rule, record.wall_clock
+        )
         return Ok(record)
 
     # --- evidence --------------------------------------------------------

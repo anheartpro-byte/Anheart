@@ -46,7 +46,23 @@
 #      unclean stop;
 #  10. a console that dies again and again comes up out of service: it runs,
 #      says so, and arms nothing, until a named operator puts it back in
-#      service.
+#      service;
+#  11. on a machine that drifted (a file of the console given back to root, a
+#      mode widened, the account given a shell, an automatic update turned back
+#      on), `harden.sh --dry-run` names each change and makes none, then
+#      `harden.sh` makes them without touching a content or the console, and a
+#      second dry run finds nothing left;
+#  12. `uninstall.sh` takes back what the install and the hardening set in the
+#      system, keeps the configuration, the data and the account, and the same
+#      install then brings the console back.
+#
+# What the console runs with is checked from step 1 on (docs/pi-image.md, "Sous
+# quel compte"): in its container it is the account anheart, with no
+# capability, on a read-only image, and may open the device classes of the
+# drive cable and of the sensor and no other; the relay of the watchdog is the
+# account too; the configuration is root's alone and everything under
+# /var/lib/anheart the account's alone; nothing updates the packages by itself.
+# Steps 1 to 10 then run under exactly that.
 #
 # Nothing here touches hardware or a dashboard: the drive is the simulator and
 # MACHINE_API_KEY stays empty. Every session is a manual bench session at
@@ -88,6 +104,8 @@ step() { printf '\n== %s\n' "$1"; }
 ok()   { printf '  ok    %s\n' "$1"; }
 
 in_machine() { docker exec "$MACHINE" "$@"; }
+# In the console's own container, as the account the console runs under.
+in_console() { docker exec "$MACHINE" docker exec anheart "$@"; }
 
 diagnose() {
     printf '\n---- diagnosis ----\n' >&2
@@ -96,6 +114,8 @@ diagnose() {
     in_machine journalctl --unit anheart --no-pager --lines 80 >&2 || true
     in_machine journalctl --unit docker --no-pager --lines 30 >&2 || true
     in_machine docker ps --all >&2 || true
+    in_machine sh -c 'cat /etc/systemd/system/anheart.service.d/*.conf' >&2 || true
+    in_machine sh -c 'ls -ln /run/anheart /var/lib/anheart /var/lib/anheart/records' >&2 || true
 }
 
 fail() {
@@ -211,6 +231,58 @@ expect_at_rest() {
 }
 
 install() { in_machine bash "$COPY/scripts/install.sh" --simulation; }
+harden()  { in_machine bash "$COPY/scripts/harden.sh" "$@"; }
+
+# owned PATH: its owner, its group and its mode, as `user:group mode`.
+owned() { in_machine stat --format '%U:%G %a' "$1"; }
+
+# What in the console's directories is not the account's, or is open to a
+# group or to anybody else. Nothing, on a machine as it must be.
+not_private() {
+    in_machine find /var/lib/anheart \( ! -user anheart -o ! -group anheart -o -perm /077 \) -print \
+        2> /dev/null || true
+}
+
+expect_private() {
+    local found
+    found="$(not_private)"
+    [ -z "$found" ] || fail "$1: not the account's alone under /var/lib/anheart: $found"
+    ok "$1: everything under /var/lib/anheart is the account's alone"
+}
+
+# The three services that update the packages of a Debian system by themselves.
+readonly UPDATE_UNITS="apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service"
+
+expect_no_automatic_update() {
+    local unit settings
+    for unit in $UPDATE_UNITS; do
+        [ "$(in_machine systemctl is-enabled "$unit" 2> /dev/null || true)" = "masked" ] \
+            || fail "$1: $unit is not masked"
+        [ "$(in_machine systemctl is-active "$unit" 2> /dev/null || true)" != "active" ] \
+            || fail "$1: $unit is running"
+    done
+    ok "$1: $UPDATE_UNITS are masked and none runs"
+    # apt itself, asked what it applies: the distribution's file says 1.
+    settings="$(in_machine apt-config dump)"
+    expect_in "$settings" 'APT::Periodic::Update-Package-Lists "0";' "$1: apt no longer refreshes its lists by itself"
+    expect_in "$settings" 'APT::Periodic::Unattended-Upgrade "0";' "$1: apt no longer upgrades by itself"
+}
+
+# what_opening PATH: what the console gets when it opens a device, in one word:
+# `opened`, or the name of the error (EACCES: the file's own permissions;
+# EPERM: a device class the container may not open; ENXIO or ENODEV: allowed,
+# and no hardware behind the node).
+what_opening() {
+    in_console python -c '
+import errno, os, sys
+try:
+    os.close(os.open(sys.argv[1], os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY))
+except OSError as error:
+    print(errno.errorcode.get(error.errno, str(error.errno)))
+else:
+    print("opened")
+' "$1"
+}
 
 # --- The stand-in ---------------------------------------------------------------
 
@@ -248,6 +320,24 @@ tar -C "$tree" --exclude=.env --exclude=.venv --exclude=__pycache__ \
 version="$(tr -d '[:space:]' < "$tree/VERSION")"
 ok "this directory is copied to $COPY (version $version)"
 
+# A system that updates its packages by itself, as the package
+# unattended-upgrades sets it: the install must turn that off.
+in_machine sh -c 'printf "%s\n" "APT::Periodic::Update-Package-Lists \"1\";" "APT::Periodic::Unattended-Upgrade \"1\";" > /etc/apt/apt.conf.d/20auto-upgrades'
+expect_in "$(in_machine apt-config dump)" 'APT::Periodic::Unattended-Upgrade "1";' \
+    "before the install, this system upgrades its packages by itself"
+
+# Three device nodes with no hardware behind them, to ask the console later
+# what it may open. They are in the stand-in's own /dev, which is not the one
+# of the machine this test runs on.
+#   ttyUSB7                a USB serial adapter (class 188), as udev makes one: group dialout
+#   anheart-test-refused   a serial port of another class (4), same owner and mode
+#   anheart-test-other     class 188, but root's alone
+in_machine sh -c '
+    mknod -m 0660 /dev/ttyUSB7 c 188 7 && chgrp dialout /dev/ttyUSB7 &&
+    mknod -m 0660 /dev/anheart-test-refused c 4 71 && chgrp dialout /dev/anheart-test-refused &&
+    mknod -m 0600 /dev/anheart-test-other c 188 8' \
+    || fail "the stand-in could not make the test's device nodes"
+
 # --- 1. First install ----------------------------------------------------------------
 
 step "1. First install"
@@ -273,9 +363,16 @@ expect_in "$(in_machine docker exec anheart cat /app/VERSION)" "$version" "the i
 expect_in "$(in_machine docker exec anheart python --version)" "Python 3.12." "the console runs on Python 3.12"
 
 expect_in "$(in_machine id anheart)" "(anheart)" "the account anheart exists"
-expect_in "$(in_machine stat --format '%U:%G %a' /var/lib/anheart/data)" "anheart:anheart 750" "/var/lib/anheart/data belongs to anheart"
-expect_in "$(in_machine stat --format '%U:%G %a' /var/lib/anheart/records)" "anheart:anheart 700" "/var/lib/anheart/records is private to anheart"
-expect_in "$(in_machine stat --format '%U:%G %a' "$ENV_FILE")" "root:root 600" "$ENV_FILE is readable by root only"
+expect_in "$(in_machine getent passwd anheart)" ":/usr/sbin/nologin" "the account anheart cannot log in"
+expect_in "$(in_machine passwd --status anheart)" "anheart L " "the account anheart has no usable password"
+expect_in " $(in_machine id -nG anheart) " " dialout " "the account anheart is in the group of the serial devices"
+for directory in /var/lib/anheart /var/lib/anheart/data /var/lib/anheart/records; do
+    expect_in "$(owned "$directory")" "anheart:anheart 700" "$directory is the account's alone"
+done
+expect_in "$(owned "$ENV_FILE")" "root:root 600" "$ENV_FILE is readable by root only"
+in_machine setpriv --reuid=anheart --regid=anheart --clear-groups cat "$ENV_FILE" > /dev/null 2>&1 \
+    && fail "the account anheart can read the configuration, where the machine's key and the console's limits are"
+ok "the account anheart cannot read the configuration, and so cannot rewrite its own limits"
 expect_in "$(in_machine grep -c -E '^(MOTOR_BACKEND|ECG_SOURCE)=sim$' "$ENV_FILE")" "2" "the configuration is the simulation"
 [ -z "$(in_machine sed -n 's/^MACHINE_API_KEY=//p' "$ENV_FILE")" ] || fail "the generated configuration carries a machine key"
 ok "the generated configuration carries no machine key: no dashboard is contacted"
@@ -358,15 +455,91 @@ case "$(in_machine journalctl --unit anheart --no-pager)" in
     *"Watchdog timeout"*) fail "the watchdog ended a healthy console" ;;
 esac
 ok "more than 15 s without a restart: the watchdog is fed by the console"
+case "$(in_machine journalctl --unit anheart --no-pager)" in
+    *"notification not sent"*) fail "a notification of the console did not reach its relay" ;;
+esac
+ok "every notification of the console reached its relay"
 answer="$(panel)"
 expect_in "$answer" '"watchdog":{"enabled":true' "the console says a service manager watches it"
 expect_in "$answer" '"failed":0,' "and that every notification left"
 expect_in "$answer" '"service":{"out_of_service":false,"unclean_starts":0,' "a first start is in service"
-expect_in "$(in_machine stat --format '%U:%G %a' /var/lib/anheart/records/service-state.json)" "root:root 600" \
-    "the restart state is kept next to the records, private"
+expect_in "$(owned /var/lib/anheart/records/service-state.json)" "anheart:anheart 600" \
+    "the restart state is kept next to the records, the account's alone"
 # systemd's own setting for the hardware watchdog, where systemd reads it.
 expect_in "$(in_machine systemd-analyze cat-config systemd/system.conf)" "RuntimeWatchdogSec=15s" \
     "systemd is told to arm the hardware watchdog (15 s)"
+
+# What the console runs with: asked of the running system, not read from the unit.
+account="$(in_machine id -u anheart):$(in_machine id -g anheart)"
+case "$account" in 0:* | *:0 | :) fail "the account anheart has the numbers of root ($account)" ;; esac
+[ "$(in_console id -u):$(in_console id -g)" = "$account" ] \
+    || fail "the console runs as $(in_console id -u):$(in_console id -g), not as the account anheart ($account)"
+ok "in its container the console is the account anheart ($account), not root"
+expect_in " $(in_console id -G) " " $(in_machine getent group dialout | cut -d: -f3) " \
+    "and it has the group of the serial devices"
+expect_in "$(in_machine docker inspect --format '{{.HostConfig.Privileged}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}' anheart)" \
+    "false true [ALL] [no-new-privileges]" "its container is not privileged, read-only, with every capability dropped"
+console_pid="$(in_machine docker inspect --format '{{.State.Pid}}' anheart)"
+rights="$(in_machine grep -E '^(CapPrm|CapEff|CapBnd|NoNewPrivs):' "/proc/$console_pid/status" | tr -s '[:space:]' ' ')"
+expect_in "$rights" "CapPrm: 0000000000000000 CapEff: 0000000000000000 CapBnd: 0000000000000000" \
+    "the kernel gives the console's process no capability, and none it could regain"
+expect_in "$rights" "NoNewPrivs: 1" "and no way to gain a privilege"
+in_console sh -c ': > /app/written-by-the-install-test' 2> /dev/null \
+    && fail "the console can write in its own image"
+ok "the console cannot write in its image"
+in_console sh -c ': > /tmp/written-by-the-install-test' || fail "the console cannot write in /tmp"
+expect_in "$(in_console grep ' /tmp ' /proc/mounts)" "noexec" "/tmp is memory, where nothing can be executed"
+# The devices: the class of the drive cable with the group udev gives it, and nothing else.
+case "$(what_opening /dev/ttyUSB7)" in
+    opened | ENXIO | ENODEV) ok "the console may open a USB serial adapter of the group dialout (no hardware behind this one)" ;;
+    *) fail "the console may not open a USB serial adapter: $(what_opening /dev/ttyUSB7)" ;;
+esac
+expect_in "$(what_opening /dev/anheart-test-refused)" "EPERM" \
+    "a device of a class it was not given is refused by the kernel, whatever the file's permissions"
+expect_in "$(what_opening /dev/anheart-test-other)" "EACCES" \
+    "a USB serial adapter that is root's alone is refused: the group is needed too"
+expect_in "$(in_machine docker image inspect --format '{{.Config.User}}' "anheart-console:$version")" "anheart" \
+    "the image itself names an account that is not root"
+
+# The relay of the watchdog: the account, in a directory only the account enters.
+# Its real, effective, saved and file-system user, as the kernel has them.
+relay_users="$(in_machine sh -c "grep -l '^socat\$' /proc/[0-9]*/comm 2> /dev/null | sed 's|/comm\$|/status|' | xargs -r grep -h '^Uid:'" \
+    | tr -s '[:space:]' ' ' || true)"
+relay_user="${account%%:*}"
+[ "$relay_users" = "Uid: $relay_user $relay_user $relay_user $relay_user " ] \
+    || fail "the relay of the watchdog does not run as the account anheart ($relay_user) and nothing else: '${relay_users:-no relay found}'"
+ok "the relay of the watchdog runs as the account anheart"
+expect_in "$(owned /run/anheart)" "anheart:anheart 700" "only the account enters the relay's directory"
+expect_in "$(in_machine stat --format '%U' /run/anheart/notify)" "anheart" "and the relay's socket is the account's"
+
+# The unit's own processes (the Docker client is its main process), as systemd
+# reads the unit and as the kernel applies it.
+unit="$(in_machine systemctl show --property NoNewPrivileges,ProtectSystem,ProtectHome anheart)"
+expect_in "$unit" "NoNewPrivileges=yes" "the unit's own processes can gain no privilege"
+expect_in "$unit" "ProtectSystem=strict" "and see the file system read-only"
+expect_in "$unit" "ProtectHome=yes" "and no home directory"
+main_pid="$(in_machine systemctl show --property MainPID --value anheart)"
+in_machine nsenter --target "$main_pid" --mount -- sh -c ': > /etc/written-by-the-install-test' 2> /dev/null \
+    && fail "where the unit's processes run, /etc can be written"
+ok "where the unit's processes run, /etc cannot be written, even by root"
+in_machine sh -c 'ls -A /root/ | grep -q .' || fail "root's home directory is empty in the stand-in: nothing to hide"
+in_machine nsenter --target "$main_pid" --mount -- sh -c 'ls -A /root/ 2> /dev/null | grep -q .' \
+    && fail "where the unit's processes run, root's home directory can be read"
+ok "and root's home directory shows nothing there"
+# Said plainly: the Docker client is root. What it may ask of the daemon is not bounded.
+expect_in "$(in_machine stat --format '%U' "/proc/$main_pid")" "root" \
+    "the Docker client of the unit is root (the daemon is root's): this is not reduced"
+
+# The step before the console: the sensor's serial node is bound on the machine.
+expect_in "$(owned /usr/local/lib/anheart/bind-bitalino)" "root:root 755" \
+    "what binds the sensor's serial node is installed, root's"
+expect_in "$(in_machine systemctl show --property ExecStartPre anheart)" "/usr/local/lib/anheart/bind-bitalino" \
+    "and the unit runs it before the console"
+expect_in "$(in_machine cat /etc/udev/rules.d/70-anheart-drive.rules)" 'ATTR{idVendor}=="16de", ATTR{idProduct}=="0003", GROUP="dialout", MODE="0660"' \
+    "the drive's USB cable is given to the group of the serial devices"
+
+expect_no_automatic_update "after the install"
+expect_private "after the first start"
 
 # --- 2. Second install: nothing changes ------------------------------------------------
 
@@ -394,14 +567,27 @@ expect_in "$(in_machine stat --format '%U:%G %a' "$ENV_FILE")" "root:root 600" "
 [ "$(container_id)" = "$before_id" ] || fail "the console was restarted although nothing changed"
 ok "the console was not restarted"
 expect_in "$output" "nothing changed: left alone" "install.sh says it left the console alone"
+expect_in "$output" "harden.sh: nothing to change" "and that nothing was left to protect"
 
 # The journal's settings changed under a running console: journald is restarted
 # to read them, the console is not, and it goes on writing to the journal.
+# In the same run, what an older install left of the console's files (its
+# restart state written by root, a configuration anybody can read) is
+# corrected, and no content is touched.
 in_machine sh -c 'printf "# changed by the install test\n" >> /etc/systemd/journald.conf.d/anheart.conf'
+in_machine chown root:root /var/lib/anheart/records/service-state.json
+in_machine chmod 0644 "$ENV_FILE"
+before_sums="$(in_machine sha256sum "$ENV_FILE" /var/lib/anheart/records/service-state.json)"
 before_id="$(container_id)"
 begin="$(date +%s)"
 output="$(install 2>&1)" || { printf '%s\n' "$output"; fail "the install failed after a change of the journal's settings"; }
 expect_in "$output" "/etc/systemd/journald.conf.d/anheart.conf written" "install.sh puts the journal's settings back"
+expect_in "$(owned /var/lib/anheart/records/service-state.json)" "anheart:anheart 600" \
+    "a file of the console that root owned is given back to the account"
+expect_in "$(owned "$ENV_FILE")" "root:root 600" "a configuration anybody could read is closed again"
+[ "$(in_machine sha256sum "$ENV_FILE" /var/lib/anheart/records/service-state.json)" = "$before_sums" ] \
+    || fail "the install changed the content of a file it only had to protect"
+ok "neither content was touched"
 [ "$(container_id)" = "$before_id" ] || fail "the console was restarted by a change of the journal's settings"
 expect_in "$(in_machine systemctl show --property NRestarts anheart)" "NRestarts=0" \
     "the console was not restarted by the restart of journald"
@@ -518,6 +704,7 @@ in_machine docker run --detach --name anheart --network host --env-file "$ENV_FI
     "anheart-console:$NEXT_VERSION" > /dev/null || fail "the console could not be started by hand"
 wait_for_console "started by hand"
 foreign_id="$(container_id)"
+expect_in "$(in_console id -un)" "anheart" "started by hand, with no account named, the image does not run as root either"
 start_session "manual bench session on the console started by hand"
 ok "it runs a session; the service is $(in_machine systemctl is-active anheart || true)"
 in_machine bash -c "printf '%s\n' '$THIRD_VERSION' > '$COPY/VERSION'"
@@ -676,6 +863,122 @@ in_machine systemctl restart anheart || fail "systemctl restart anheart failed"
 wait_for_console "after a restart by hand"
 expect_in "$(panel)" '"out_of_service":false' "still in service after a clean restart"
 expect_at_rest "after the restart of the console back in service"
+# Sessions, stops, kills, a freeze, a power-on: all of it was written by the
+# console as the account, and none of it is open to anybody else.
+expect_private "after every step above"
+
+# --- 11. A machine that drifted --------------------------------------------------------
+
+step "11. A machine that drifted: harden.sh says what it would change, changes nothing, then does it"
+# What an older install, or a hand, can leave behind. The console is at rest:
+# it reads its restart state at a start only, and a wider mode takes nothing
+# from it.
+left_over="/var/lib/anheart/data/left-by-an-older-install.json"
+restart_state="/var/lib/anheart/records/service-state.json"
+logbook="/var/lib/anheart/records/logbook/events.jsonl"
+in_machine sh -c "
+    printf '%s\n' '{}' > '$left_over' && chmod 0644 '$left_over' &&
+    chown root:root '$restart_state' &&
+    chmod 0644 '$logbook' &&
+    chmod 0755 /var/lib/anheart/records &&
+    chmod 0644 '$ENV_FILE' &&
+    usermod --shell /bin/bash anheart &&
+    systemctl unmask apt-daily.timer &&
+    rm /etc/apt/apt.conf.d/99-anheart-no-automatic-updates" > /dev/null 2>&1 \
+    || fail "the test could not make the machine drift"
+# Owners, modes and contents of what was changed by hand, and the rest of the drift.
+drifted() {
+    in_machine sh -c "stat --format '%n %U:%G %a' '$left_over' '$restart_state' '$logbook' /var/lib/anheart/records '$ENV_FILE'; sha256sum '$left_over' '$restart_state' '$logbook' '$ENV_FILE'; getent passwd anheart; systemctl is-enabled apt-daily.timer; ls /etc/apt/apt.conf.d" 2>&1 || true
+}
+contents() { in_machine sha256sum "$left_over" "$restart_state" "$logbook" "$ENV_FILE"; }
+before_state="$(drifted)"
+before_id="$(container_id)"
+output="$(harden --dry-run 2>&1)" || { printf '%s\n' "$output"; fail "harden.sh --dry-run failed"; }
+printf '%s\n' "$output"
+for expected in \
+    "would give to anheart:anheart: $left_over" \
+    "would give to anheart:anheart: $restart_state" \
+    "would close to its group and to everybody else: $left_over" \
+    "would close to its group and to everybody else: $logbook" \
+    "would set the mode of /var/lib/anheart/records to 0700" \
+    "would set the mode of $ENV_FILE to 0600" \
+    "would give the account anheart the shell /usr/sbin/nologin in place of /bin/bash" \
+    "would mask apt-daily.timer" \
+    "would write /etc/apt/apt.conf.d/99-anheart-no-automatic-updates"; do
+    expect_in "$output" "$expected" "the dry run says: $expected"
+done
+# Nine lines above, nine changes counted: no more than what was done by hand.
+announced="$(printf '%s\n' "$output" | sed -n 's/^harden.sh, dry run: \([0-9]*\) change(s) would be made, none was$/\1/p')"
+[ "$announced" = "9" ] || fail "the dry run announces '${announced:-no}' change(s), 9 are expected"
+[ "$(printf '%s\n' "$output" | grep -c '^   would ')" = "9" ] \
+    || fail "the dry run does not print one line for each change it counts"
+ok "the dry run announces these 9 changes and no other, one line each, and says none was made"
+[ "$(drifted)" = "$before_state" ] || fail "the dry run changed something: $(drifted)"
+ok "the dry run changed nothing"
+before_sums="$(contents)"
+output="$(harden 2>&1)" || { printf '%s\n' "$output"; fail "harden.sh failed"; }
+printf '%s\n' "$output"
+expect_in "$output" "harden.sh: 9 change(s) made" "the run makes the changes the dry run announced, and no other"
+expect_in "$(owned "$left_over")" "anheart:anheart 600" "a file root left in the data is the account's alone"
+expect_in "$(owned "$restart_state")" "anheart:anheart 600" "the restart state is the account's again"
+expect_in "$(owned "$logbook")" "anheart:anheart 600" "the logbook is closed again"
+expect_in "$(owned /var/lib/anheart/records)" "anheart:anheart 700" "the records are closed again"
+expect_in "$(owned "$ENV_FILE")" "root:root 600" "the configuration is root's alone again"
+expect_in "$(in_machine getent passwd anheart)" ":/usr/sbin/nologin" "the account cannot log in again"
+expect_no_automatic_update "after harden.sh"
+expect_private "after harden.sh"
+[ "$(contents)" = "$before_sums" ] || fail "harden.sh changed the content of a file it only had to protect"
+ok "no content was touched"
+[ "$(container_id)" = "$before_id" ] || fail "harden.sh restarted the console"
+expect_at_rest "harden.sh left the console running"
+output="$(harden --dry-run 2>&1)" || { printf '%s\n' "$output"; fail "the second dry run failed"; }
+expect_in "$output" "harden.sh, dry run: nothing to change" "a second dry run finds nothing left to change"
+expect_in "$(in_machine bash "$COPY/scripts/harden.sh" --list)" "updates" "harden.sh lists its steps"
+
+# --- 12. Uninstall, then install again -------------------------------------------------
+
+step "12. Uninstall takes back what was set in the system and keeps the machine's own; the install can be run again"
+kept() { in_machine sh -c "sha256sum '$ENV_FILE' '$left_over'; ls /var/lib/anheart/records; id anheart" 2>&1 || true; }
+kept_before="$(kept)"
+in_machine bash "$COPY/scripts/uninstall.sh" || fail "uninstall.sh failed"
+[ "$(in_machine systemctl is-active anheart 2> /dev/null || true)" != "active" ] || fail "the service still runs"
+[ -z "$(in_machine docker ps --all --quiet)" ] || fail "a console container outlived the uninstall"
+ok "no console runs"
+for taken in \
+    /etc/systemd/system/anheart.service \
+    /etc/systemd/system/anheart.service.d \
+    /usr/local/lib/anheart \
+    /etc/chrony/conf.d/anheart.conf \
+    /etc/systemd/journald.conf.d/anheart.conf \
+    /etc/systemd/system.conf.d/10-anheart-watchdog.conf \
+    /etc/udev/rules.d/70-anheart-drive.rules \
+    /etc/apt/apt.conf.d/99-anheart-no-automatic-updates; do
+    in_machine test ! -e "$taken" || fail "uninstall.sh left $taken"
+done
+ok "the unit, what it ran, and every setting written for the console are gone"
+for unit in $UPDATE_UNITS; do
+    [ "$(in_machine systemctl is-enabled "$unit" 2> /dev/null || true)" != "masked" ] || fail "$unit is still masked"
+done
+expect_in "$(in_machine apt-config dump)" 'APT::Periodic::Unattended-Upgrade "1";' \
+    "the system updates its packages by itself again, as before the install"
+case "$(in_machine systemd-analyze cat-config systemd/system.conf)" in
+    *RuntimeWatchdogSec=15s*) fail "systemd is still told to arm the hardware watchdog" ;;
+esac
+ok "systemd is no longer told to arm the hardware watchdog"
+[ "$(kept)" = "$kept_before" ] \
+    || fail "uninstall.sh touched the configuration, the records or the account"
+ok "the configuration, the records and the account are as they were"
+expect_in "$(owned "$ENV_FILE")" "root:root 600" "the configuration is still root's alone"
+expect_private "after the uninstall"
+expect_in "$(in_machine docker image ls --format '{{.Repository}}:{{.Tag}}')" "anheart-console:$THIRD_VERSION" \
+    "the image is still on the machine"
+[ "$(in_machine systemctl is-enabled chrony)" = "enabled" ] || fail "the machine was left without its time service"
+ok "the time service is still installed and enabled"
+install || fail "install.sh failed after an uninstall"
+wait_for_console "after the install that follows an uninstall"
+expect_at_rest "installed again"
+expect_no_automatic_update "installed again"
+expect_private "installed again"
 
 step "Versions seen in this run"
 in_machine dpkg-query --show --showformat='  ${Package} ${Version}\n' docker.io bluez libusb-1.0-0 socat systemd chrony
