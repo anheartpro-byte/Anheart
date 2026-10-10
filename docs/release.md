@@ -67,7 +67,9 @@ Les fichiers `VERSION` contiennent le tag entier (`pi-0.1.0`). `package.json`
 contient la version sans préfixe (`0.1.0`), parce que npm l'exige ; le site
 ajoute `web-`.
 
-Tant qu'un composant n'a jamais été publié, sa version vaut `0.0.0-dev`.
+Tant qu'aucune release d'un composant n'a été préparée, sa version vaut
+`0.0.0-dev`. Une version est **préparée** quand le script l'a écrite dans ces
+fichiers et dans le changelog, et **publiée** quand son tag est posé sur `main`.
 
 Quel chiffre augmenter :
 
@@ -700,7 +702,7 @@ pour une première release.
 | Gates vertes | le lien du run CI du candidat. Le script l'a déjà vérifié, la case le rend lisible. |
 | Docs à jour | pour chaque ligne du changelog, la page de `docs/` modifiée par sa PR, ou « aucun changement de comportement ». Chaque fichier est nommé par son chemin depuis la racine du dépôt : seul un fichier sous `docs/` compte comme page de `docs/`. Le `README.md` de la racine ou d'un composant, si la PR le modifie, se cite à part et n'en tient pas lieu. |
 | Menaces revues | la [check-list de revue des menaces](release-threat-review.md) remplie : reviewer indépendant, date, SHA, verdict. |
-| Matrice de compatibilité | la section « Versions et compatibilité » (créée par ANH-133) cite les versions publiées. |
+| Matrice de compatibilité | la section « Versions et compatibilité » (créée par ANH-133) cite les versions que cette release prépare. |
 | Rapport de simulation | la commande et ses options sont décrites dans [framework-de-test.md](framework-de-test.md#6-verdicts-instantanés--simulationquick). La CI nocturne produit le même rapport. L'empreinte de `report.json` ne se compare pas d'un lancement à l'autre : le fichier porte la durée mesurée de la batterie et celle de chaque exécution (`wall_s`). Ce qui se compare est `counts` et, pour chaque exécution, `name`, `group`, `status`, `end`, `violations` et `known_defect` : la preuve donne ces compteurs et le résultat de chaque exécution, pas une empreinte du fichier. |
 | Rejeu des séances réelles | `python -m simulation.run <fichier> --out <dossier>` pour chaque fichier de `simulation/scenarios/real/`. |
 | Valeurs `[MED]` | les deux commandes de [Lister les fichiers qui portent le marqueur](#lister-les-fichiers-qui-portent-le-marqueur) : la première liste chaque fichier du dépôt qui porte `[MED]` à l'un des deux bouts de la release, la seconde montre ce qui y a changé. |

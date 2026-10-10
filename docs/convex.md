@@ -1543,11 +1543,12 @@ mineure : Convex d'abord
 Cette matrice est tenue à jour à chaque release (check-list de
 [release.md](release.md)) : une ligne par version du Pi préparée pour une
 release. Une version est **préparée** quand ses fichiers de version et son
-changelog sont écrits, et **publiée** quand la pipeline de release a posé son
-tag ([release.md](release.md#la-pipeline-de-release)). La première,
-`pi-1.0.0` avec `cloud-1.0.0`, a été fusionnée dans `main` le 10 octobre 2026 ;
-aucun tag n'était posé à cette date : elle est préparée, pas publiée. La ligne
-de développement reste pour les consoles construites avant elle.
+changelog sont écrits, et **publiée** quand son tag est posé sur `main`, ce que
+fait la pipeline de release ([release.md](release.md#la-pipeline-de-release)).
+La première, `pi-1.0.0` avec `cloud-1.0.0`, a été fusionnée dans `main` le
+10 octobre 2026 ; aucun tag n'était posé à cette date : elle est préparée, pas
+publiée. La ligne de développement reste pour les consoles construites avant
+elle.
 
 Limites à connaître :
 
