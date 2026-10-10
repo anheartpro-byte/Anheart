@@ -442,6 +442,19 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
   immédiat : le coup de poing câblé, et **E-STOP** (§13.5).
 * S'il n'y a rien à arrêter, ou si un arrêt est déjà en cours, une fenêtre d'alerte
   s'ouvre : `STOP refuse : ...` (voir §14).
+* Si la console ne répond pas (console bloquée, réseau muet), la demande reste en
+  attente. Deux secondes après le clic, un bandeau rouge s'affiche en haut :
+  **STOP NON CONFIRME**, suivi de
+  `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`.
+  La demande n'est pas retirée : si elle finit par passer, le bandeau disparaît. Il
+  disparaît aussi dès que le mode passe à `ARRET`, quelle que soit la façon dont
+  l'arrêt est venu.
+* Si la demande échoue (console injoignable), le même bandeau dit tout de suite
+  `la demande a echoue il y a N s et n'est plus en attente : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`,
+  et une alerte dit `la demande d'arret (STOP) a echoue : ...`. Une demande échouée
+  n'est pas renvoyée par la page : recliquer **STOP** en envoie une nouvelle.
+* **Tant que ce bandeau est affiché, rien ne dit que la séance s'arrête.** Regardez
+  **Mode**, **Vitesse mesuree** et le bras ; pour arrêter sans attendre, voir §13.5.
 
 ### E-STOP : l'arrêt d'urgence logiciel
 
@@ -457,9 +470,15 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
   coup de poing.** La demande n'est pas retirée : si elle finit par passer, ce bandeau
   est remplacé par **ARRET D'URGENCE VERROUILLE**.
 * Si la demande échoue (console injoignable), le même bandeau dit tout de suite
-  `la demande a echoue : ... - UTILISEZ L'ARRET CABLE` et reste affiché, et une alerte
-  dit : `la demande d'arret d'urgence a echoue : ... - UTILISEZ L'ARRET CABLE`. Dans ce
-  cas aussi, **frappez le coup de poing**.
+  `la demande a echoue il y a N s et n'est plus en attente : ... - UTILISEZ L'ARRET CABLE`,
+  et une alerte dit :
+  `la demande d'arret d'urgence a echoue : ... - UTILISEZ L'ARRET CABLE`. Dans ce cas
+  aussi, **frappez le coup de poing**. Une demande échouée est terminée : elle ne
+  passera plus, et la page ne la renvoie pas. Le bandeau reste, avec l'âge de l'échec
+  tenu à jour, jusqu'à un E-STOP qui aboutit, un arrêt d'urgence vu verrouillé, ou un
+  rechargement de la page. Si vous recliquez **E-STOP** et que la console ne répond
+  toujours pas, il dit
+  `nouvelle demande sans reponse depuis N s, la precedente a echoue : ... - UTILISEZ L'ARRET CABLE`.
 
 > Rappel : le vrai arrêt de sécurité est le coup de poing câblé. Utilisez-le dès que la
 > situation l'exige ; l'E-STOP de la page est une commodité.
@@ -1354,7 +1373,7 @@ Repères :
 > verrouillé : par son propre clic sur E-STOP, par les données qu'il reçoit en continu,
 > ou par l'état qu'il relit toutes les 5 s. Il s'affiche donc aussi sur un écran qui
 > n'a pas cliqué, et après un arrêt déclenché par la caméra. Il reste, sur toutes les
-> pages de cet écran, tant qu'une donnée plus récente n'a pas montré le verdict levé ;
+> pages de cet écran, tant qu'une donnée plus récente n'a pas montré l'arrêt levé ;
 > dans le doute, il reste. Il disparaît après l'acquittement (§13.6).
 >
 > Il ne dit pas que la machine est arrêtée : seule la vitesse **mesurée** le dit.
@@ -1366,28 +1385,51 @@ Repères :
 >   `e-stop verrouille` dit `non` et l'acquittement ne demande pas la case du coup de
 >   poing : lisez la ligne `regle`.
 > * Quand `go_silent` devient le verdict en cours (liaison perdue avec le variateur,
->   par exemple), plus rien ne s'acquitte : un bandeau déjà affiché le reste jusqu'au
->   redémarrage de la console.
-> * Un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict en cours
->   affiche lui aussi le bandeau quand un arrêt d'urgence est verrouillé derrière, y
->   compris un arrêt déclenché par la caméra : la console le lui dit. La ligne
->   `e-stop verrouille` dit alors `OUI` et la pastille Etat est rouge.
-> * Limites qui restent : après un redémarrage de la console suivi de `go_silent`, un
->   bandeau affiché avant le redémarrage reste jusqu'au rechargement de la page ; et
->   après un acquittement très rapide, il peut revenir quelques secondes (5 au plus)
->   avant de disparaître.
+>   par exemple), plus rien ne s'acquitte. La console dit alors à chaque écran si un
+>   arrêt d'urgence est verrouillé derrière, y compris un arrêt déclenché par la
+>   caméra, et le bandeau suit sa réponse : il reste, ou s'affiche sur un écran ouvert
+>   ou rechargé après coup, tant qu'un arrêt d'urgence est tenu, jusqu'au redémarrage
+>   de la console (la ligne `e-stop verrouille` dit `OUI`, la pastille Etat est
+>   rouge) ; il disparaît si plus aucun ne l'est. C'est le cas d'une console relancée
+>   qui repasse sous `go_silent`, ou d'un `quick_stop` de règle que `go_silent` a
+>   remplacé : la pastille **Securite** dit `go_silent` en rouge, et c'est elle qu'il
+>   faut lire.
+> * « Plus récent » se juge à l'horloge de la machine, pas à l'ordre d'arrivée sur
+>   l'écran. Une réponse en retard, demandée avant un acquittement et arrivée après,
+>   ne fait plus revenir le bandeau ; et de deux réponses croisées, l'écran garde
+>   celle que la machine a écrite en dernier.
+> * Limites qui restent, du côté prudent : si la liaison tombe (`NO LIVE DATA`) sur
+>   un arrêt verrouillé, le bandeau reste jusqu'au retour des données, même si l'arrêt
+>   a été acquitté entre-temps ; et sous `go_silent`, un arrêt d'urgence posé depuis
+>   un autre écran peut mettre jusqu'à 5 s à s'afficher ici.
 >
 > Rejoué en simulation : E-STOP de la page, second écran, arrêt caméra, et perte de la
 > liaison au variateur au moment du clic (deux écrans). Le cas d'une règle
 > (`reverse_rotation`) a été rejoué lors de la revue de cette correction. Le cas de la
 > page ouverte après un arrêt caméra suivi d'une perte de la liaison au variateur l'a
-> été le 7 octobre 2026.
+> été le 7 octobre 2026. Le 10 octobre 2026, dans un navigateur sans interface, avant
+> et après la correction : console relancée puis `go_silent` pendant que l'écran était
+> coupé d'elle (le bandeau restait ; il disparaît moins de 0,1 s après la première
+> donnée reçue de la nouvelle console) ;
+> réponse d'état retenue pendant un acquittement (le bandeau revenait 4,5 s ; il ne
+> revient plus) ; deux réponses d'état croisées, sans données en continu (le bandeau
+> manquait 4,8 s dans un ordre d'arrivée et tombait 4,7 s dans l'autre, alors que
+> l'arrêt était verrouillé ; il est levé tout de suite et reste).
 >
 > Le bandeau **ARRET D'URGENCE NON CONFIRME** est un autre bandeau : il dit que la
-> demande E-STOP de cet écran n'a pas eu de réponse. Rejoué avec une console suspendue
-> (elle ne répond plus, ses connexions restent ouvertes) : il est apparu 2 s après le
-> clic, sous `NO LIVE DATA`, et a été remplacé par **ARRET D'URGENCE VERROUILLE** dès
-> que la console a repris.
+> demande E-STOP de cet écran n'a pas eu de réponse, ou qu'elle a échoué. Rejoué avec
+> une console suspendue (elle ne répond plus, ses connexions restent ouvertes) : il est
+> apparu 2 s après le clic, sous `NO LIVE DATA`, et a été remplacé par
+> **ARRET D'URGENCE VERROUILLE** dès que la console a repris. Rejoué le 10 octobre 2026
+> avec une demande coupée avant la console : il dit l'échec et son âge, seconde après
+> seconde, puis `nouvelle demande sans reponse depuis N s, la precedente a echoue` dès
+> un second clic resté sans réponse, et il est remplacé par
+> **ARRET D'URGENCE VERROUILLE** quand un troisième clic aboutit.
+>
+> **STOP NON CONFIRME** est le même bandeau pour STOP (§5). Rejoué le 10 octobre 2026,
+> séance manuelle de banc à 5 tr/min : console suspendue, il apparaît 2,0 s après le
+> clic et disparaît à la reprise, le mode passant à `ARRET` ; demande coupée, il
+> apparaît tout de suite et disparaît 0,2 s après un STOP donné depuis un autre écran.
 
 ### 13.6 Acquitter un verdict de sécurité
 
@@ -1798,9 +1840,13 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `the emergency stop is still latched: confirm the mushroom has been pulled back out (estop_released) before acknowledging` | case du coup de poing non cochée | tirer le coup de poing, cocher, acquitter |
 | `... demanded GO_SILENT, which is one-way: ...` | verdict définitif pour ce processus | vérifier l'arrêt, redémarrer la console |
 | `a valid x-anheart-token header is required` | jeton absent ou faux | page Configuration, saisir le bon jeton |
-| `la demande d'arret d'urgence a echoue : ... - UTILISEZ L'ARRET CABLE` | l'E-STOP n'a pas atteint la console | **coup de poing** |
+| ✔ `la demande d'arret d'urgence a echoue : ... - UTILISEZ L'ARRET CABLE` | l'E-STOP n'a pas atteint la console | **coup de poing** |
 | ✔ bandeau `ARRET D'URGENCE NON CONFIRME`, `aucune reponse de la console depuis N s - UTILISEZ L'ARRET CABLE` | la demande E-STOP de cet écran est partie et rien n'est revenu depuis 2 s ou plus | **coup de poing** ; la demande reste en attente et peut encore passer |
-| bandeau `ARRET D'URGENCE NON CONFIRME`, `la demande a echoue : ... - UTILISEZ L'ARRET CABLE` | la demande E-STOP a échoué ; le bandeau reste après la fenêtre d'alerte | **coup de poing** |
+| ✔ bandeau `ARRET D'URGENCE NON CONFIRME`, `la demande a echoue il y a N s et n'est plus en attente : ... - UTILISEZ L'ARRET CABLE` | la demande E-STOP a échoué il y a N secondes (puis N minutes) ; elle est terminée et ne passera plus. Le bandeau reste après la fenêtre d'alerte, jusqu'à un E-STOP qui aboutit, un arrêt d'urgence vu verrouillé ou un rechargement | **coup de poing** |
+| ✔ bandeau `ARRET D'URGENCE NON CONFIRME`, `nouvelle demande sans reponse depuis N s, la precedente a echoue : ... - UTILISEZ L'ARRET CABLE` | une demande E-STOP a échoué, vous avez recliqué, et la nouvelle demande n'a pas de réponse | **coup de poing** ; la nouvelle demande peut encore passer |
+| ✔ bandeau `STOP NON CONFIRME`, `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | la demande STOP de cet écran est partie et rien n'est revenu depuis 2 s ou plus ; elle reste en attente et peut encore passer | regarder **Mode**, **Vitesse mesuree** et le bras ; pour arrêter sans attendre, §13.5 |
+| ✔ bandeau `STOP NON CONFIRME`, `la demande a echoue il y a N s et n'est plus en attente : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | la demande STOP a échoué (console injoignable, ou erreur de la console) ; elle est terminée. Le bandeau reste jusqu'à une réponse à un nouveau STOP, ou jusqu'à ce que la séance soit vue en train de s'arrêter | recliquer **STOP** si la console répond de nouveau ; pour arrêter sans attendre, §13.5 |
+| ✔ `la demande d'arret (STOP) a echoue : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | fenêtre d'alerte du cas précédent (jusqu'au 10 octobre 2026 : `STOP refuse : Failed to fetch`) | la fermer, lire le bandeau |
 | ✔ `cible envoyee : ... - pas encore prise par la machine` | la console a reçu la cible ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
 | ✔ `cible prise par la machine : ... (suivie aux limites de mouvement)` | la machine tient cette cible, et la vitesse va vers elle à cet instant | surveiller **Vitesse mesuree** |
 | `cible prise par la machine : ...` (sans `(suivie aux limites de mouvement)`) | la machine tient cette cible mais la vitesse n'y va pas à cet instant : une alerte la tient ou la baisse (`freeze` avec une cible autre que 0, `reduce`), ou la fréquence cardiaque retient une montée | lire **Securite** et l'encadré orange ; la ligne `rampe` dit `consigne maintenue, cible non atteinte` sous un gel. La vitesse ira vers la cible sans nouveau clic quand plus rien ne la retiendra (§11) |
@@ -2049,9 +2095,16 @@ Pour être clair sur ce que ce guide garantit :
   programmée n'ont pas été rejoués dans un navigateur. La fréquence réelle des refus
   liés à la fréquence cardiaque n'a pas été mesurée sur un vrai ECG, ni le délai réel
   entre une vitesse commandée à 0 et l'arrêt mesuré du bras.
-* **Console bloquée ou réseau muet** (bandeau `ARRET D'URGENCE NON CONFIRME`) : rejoué
-  en suspendant le processus de la console en simulation. Ni une vraie coupure de
-  réseau, ni un Pi réellement bloqué n'ont été essayés.
+* **Console bloquée ou réseau muet** (bandeaux `ARRET D'URGENCE NON CONFIRME` et
+  `STOP NON CONFIRME`) : rejoué en suspendant le processus de la console en
+  simulation, et en coupant la demande entre le navigateur et la console. Ni une vraie
+  coupure de réseau, ni un Pi réellement bloqué n'ont été essayés.
+* **Réponses en retard, réponses croisées, console relancée** (bandeau
+  `ARRET D'URGENCE VERROUILLE`, §13.5) : rejoué le 10 octobre 2026 dans un navigateur
+  sans interface, les réponses de la console étant retenues puis relâchées dans un
+  ordre choisi, et l'écran coupé de la console pendant son redémarrage. Un vrai
+  redémarrage du Pi (son horloge repart de zéro) n'a pas été essayé : ce cas n'est
+  tenu que par les tests automatiques de la page.
 * **Règle `session_overrun`** (§11) : le repos sans verdict après une séance, le départ
   suivant sans redémarrage, la fin de séance ouverte tard qui ne laisse plus de
   verdict, et l'E-STOP ou le défaut du variateur au repos qui ne relance plus de
@@ -2119,3 +2172,8 @@ sans interface. Les autres captures montrent des écrans que ces changements ne
 modifient pas. Les nouveaux éléments de la page (l'encadré de la fréquence cardiaque,
 les bandeaux `ARRET D'URGENCE NON CONFIRME` et `REPRISE AUTOMATIQUE POSSIBLE`, une note
 de refus) n'ont pas de capture dans ce guide.
+
+Aucune capture n'a été reprise le 10 octobre 2026 : le bandeau `STOP NON CONFIRME` et
+le nouveau texte de `ARRET D'URGENCE NON CONFIRME` n'apparaissent sur aucune, et le
+bandeau `ARRET D'URGENCE VERROUILLE` des captures `console-12`, `console-13` et
+`console-16` garde le même aspect dans les situations qu'elles montrent.

@@ -42,6 +42,12 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > pastilles barrées sous `NO LIVE DATA`, `perime` en orange) a été rejoué dans un
 > navigateur sans interface, sur la console en simulation, avec une personne à bord
 > déclarée par l'API pour ce qui dépend de la fréquence cardiaque.
+> Les règles du bandeau `ARRET D'URGENCE VERROUILLE` face à une réponse de statut en
+> retard, à deux réponses croisées et à une console relancée, le texte du bandeau
+> `ARRET D'URGENCE NON CONFIRME` après une demande échouée et le bandeau
+> `STOP NON CONFIRME` (sections 2, 5, 14 et 15, ajoutés le 10 octobre 2026) ont été
+> rejoués de la même façon, avant et après la correction, les réponses de la console
+> étant retenues ou coupées entre la page et elle ; jamais sur la machine réelle.
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -137,7 +143,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Trois rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Bandeaux en haut | Quatre rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, huit pastilles (six sur l'état de la machine, puis **Serveur** et **Version** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages |
@@ -426,7 +432,28 @@ s'arrête au mode : `liaison ouverte · repos`.
   acquitter l'arrêt d'urgence ou le verdict qui a terminé la séance, et lui seul.
 - Refus : une boîte d'alerte `STOP refuse : …` (par exemple
   `the machine is already stopping` si un arrêt est déjà en cours, ou
-  `there is no session to end (the machine is idle)`).
+  `there is no session to end (the machine is idle)`). Un refus est une réponse de la
+  console (code 4xx) : il ne laisse aucun bandeau.
+- **Une demande STOP restée sans réponse est dite**, comme celle d'un E-STOP (plus
+  bas). Deux secondes après le plus ancien clic encore sans réponse, un bandeau rouge
+  s'affiche : `STOP NON CONFIRME` suivi de
+  `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`.
+  La requête n'est jamais retirée. Le bandeau se baisse sur la réponse de la console
+  (acceptation ou refus), sur une image qui montre le mode `ARRET`, ou sur une réponse
+  de statut demandée après le clic qui montre l'état `stopping` ou `idle`. Une image au
+  mode `REPOS` ne le baisse pas (un démarrage peut attendre derrière), ni une réponse
+  de statut demandée avant le clic.
+- Si la requête STOP échoue sans réponse de la console (console injoignable), ou sur
+  une erreur de la console elle-même (code 5xx), le bandeau dit tout de suite
+  `la demande a echoue il y a N s et n'est plus en attente : … - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`,
+  et la boîte d'alerte dit
+  `la demande d'arret (STOP) a echoue : … - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`.
+  Jusqu'au 10 octobre 2026 l'alerte disait `STOP refuse : Failed to fetch` et rien ne
+  restait à l'écran. La page ne renvoie pas la demande ; le bandeau reste jusqu'à l'une
+  des preuves ci-dessus.
+  Rejoué dans un navigateur : console suspendue en séance manuelle, bandeau affiché
+  2,0 s après le clic et baissé à la reprise de la console ; requête coupée, bandeau
+  affiché tout de suite, baissé 0,2 s après un STOP donné depuis un autre écran.
 
 ### E-STOP : « verrouille immediatement »
 
@@ -444,17 +471,46 @@ s'arrête au mode : `liaison ouverte · repos`.
   apparaît donc aussi sur un écran qui n'a pas cliqué, après un arrêt posé par la
   caméra, et pour le `quick_stop` verrouillé d'une règle de sécurité
   (`reverse_rotation` par exemple ; la ligne `e-stop verrouille` dit alors `non`).
-- Il ne se baisse que sur une donnée plus récente qui montre le verdict levé ; dans le
-  doute il reste, sur toutes les pages. Un verdict `go_silent` prend la place d'un arrêt
-  d'urgence comme verdict retenu et refuse tout acquittement : un bandeau déjà affiché
-  reste alors jusqu'au redémarrage de la console. Si le WebSocket tombe, il reste à
-  côté de `NO LIVE DATA`.
-- Un écran ouvert ou rechargé alors que `go_silent` est déjà le verdict retenu affiche
-  lui aussi le bandeau quand un arrêt d'urgence est verrouillé derrière : `/api/status`
-  porte `supervisor_estop`, l'arrêt d'urgence que le superviseur tient verrouillé, quel
-  qu'en soit l'auteur (bouton de la page, autre écran, caméra), et qui reste lisible
-  quand `go_silent` a pris la place du verdict retenu et du plancher. La ligne
-  `e-stop verrouille` dit alors `OUI` et la pastille **Etat** est rouge.
+- Il ne se baisse que sur une donnée qui montre l'arrêt levé et que rien de plus récent
+  ne contredit ; dans le doute il reste, sur toutes les pages. « Plus récent » se juge
+  à l'horloge de la machine, que portent les images (`at`), le reçu du clic (`at`) et,
+  depuis le 10 octobre 2026, chaque réponse de `/api/status` (`at`) :
+  - une image qui montre un arrêt verrouillé lève le bandeau, quoi que dise le statut ;
+  - quand les images montrent l'arrêt levé, le bandeau suit la plus récente des deux,
+    l'image ou la réponse de statut. Une réponse de statut qui dit « verrouillé » mais
+    a été écrite avant l'image affichée ne fait donc plus revenir le bandeau (elle a
+    été demandée avant un acquittement et arrive après lui) ; le statut est alors
+    redemandé tout de suite, pour que la ligne `e-stop verrouille` et la pastille
+    **Etat** ne restent pas en retard jusqu'au tour suivant ;
+  - de deux réponses de statut, la page garde celle que la machine a écrite en dernier,
+    quel que soit l'ordre des demandes et l'ordre d'arrivée.
+- Sous `go_silent`, les images ne peuvent rien dire de l'arrêt d'urgence : ce verdict
+  prend sa place comme verdict retenu, et refuse tout acquittement. Le statut, lui, le
+  peut : `/api/status` porte `supervisor_estop`, l'arrêt d'urgence que le superviseur
+  tient verrouillé, quel qu'en soit l'auteur (bouton de la page, autre écran, caméra),
+  et qui reste lisible quand `go_silent` a pris la place du verdict retenu et du
+  plancher. Une réponse de statut écrite après le passage des images à `go_silent`
+  décide donc seule :
+  - elle lève ou garde le bandeau si un arrêt d'urgence est verrouillé derrière
+    `go_silent`, aussi sur un écran ouvert ou rechargé après coup. La ligne
+    `e-stop verrouille` dit alors `OUI` et la pastille **Etat** est rouge. Ce bandeau
+    reste jusqu'au redémarrage de la console ;
+  - elle le baisse si plus aucun arrêt d'urgence n'est tenu : la console a été
+    relancée (un bandeau affiché avant le redémarrage ne reste plus jusqu'au
+    rechargement de la page), ou `go_silent` a remplacé le `quick_stop` verrouillé
+    d'une règle. La pastille **Securite** dit `go_silent` en rouge.
+
+  Une réponse plus ancienne que ce passage peut lever le bandeau, jamais le baisser ;
+  le statut est redemandé tout de suite quand les images passent à `go_silent`.
+- Ce qui reste du côté prudent : si le WebSocket tombe sur une image qui montrait un
+  arrêt verrouillé, le bandeau reste à côté de `NO LIVE DATA` jusqu'à la prochaine
+  image, même si le statut dit entre-temps l'arrêt levé ; et sous `go_silent`, un arrêt
+  d'urgence posé depuis un autre écran n'apparaît ici qu'au tour de statut suivant
+  (5 s au plus).
+- Si l'horloge de la machine repart de zéro (redémarrage du Pi), la page le voit : une
+  image, ou une réponse demandée après celle qu'elle affiche, porte une heure plus
+  ancienne. Ce qui arrive après ce redémarrage est alors tenu pour plus récent que ce
+  qui est arrivé avant, quelles que soient les deux heures.
 - Ce que l'E-STOP web **n'est pas** : un arrêt de sécurité. Il dépend du navigateur,
   du réseau, du serveur web et du processus. Le STO est ponté sur cette machine : même
   l'arrêt d'urgence le plus rapide est une rampe (voir [securite.md](securite.md)).
@@ -464,17 +520,24 @@ s'arrête au mode : `liaison ouverte · repos`.
   réponse, un bandeau rouge propre à ce cas s'affiche :
   `ARRET D'URGENCE NON CONFIRME` suivi de
   `aucune reponse de la console depuis N s - UTILISEZ L'ARRET CABLE`. Le compte court
-  depuis le premier clic sans réponse, pas depuis le dernier. La requête n'est jamais
-  retirée : si elle finit par passer, sa réponse baisse ce bandeau et lève
-  `ARRET D'URGENCE VERROUILLE`. Une image ou une réponse de statut, arrivée après le
-  clic, qui montre un arrêt verrouillé le baisse aussi ; sous `go_silent` il reste.
+  depuis le plus ancien clic encore sans réponse, pas depuis le dernier. La requête
+  n'est jamais retirée : si elle finit par passer, sa réponse baisse ce bandeau et lève
+  `ARRET D'URGENCE VERROUILLE`. Une image arrivée après le clic, ou une réponse de
+  statut demandée après le clic, qui montre un arrêt verrouillé le baisse aussi. Une
+  image sous `go_silent` ne le baisse pas, ni une réponse de statut demandée avant le
+  clic.
   Rejoué dans un navigateur, console suspendue (processus arrêté par un signal, ses
   connexions ouvertes) : bandeau affiché 2,07 s après le clic, puis remplacé par
   `ARRET D'URGENCE VERROUILLE` moins de 0,1 s après la reprise de la console.
 - Si la requête échoue : le même bandeau dit tout de suite
-  `la demande a echoue : … - UTILISEZ L'ARRET CABLE` et reste affiché ; la boîte
-  d'alerte `la demande d'arret d'urgence a echoue : … - UTILISEZ L'ARRET CABLE`
-  s'ouvre comme avant.
+  `la demande a echoue il y a N s et n'est plus en attente : … - UTILISEZ L'ARRET CABLE` ;
+  la boîte d'alerte `la demande d'arret d'urgence a echoue : … - UTILISEZ L'ARRET CABLE`
+  s'ouvre comme avant. Une demande échouée est terminée : la page ne la renvoie pas, et
+  l'âge de l'échec (`N s`, puis `N min`) est tenu à jour. Le bandeau reste jusqu'à un
+  E-STOP qui aboutit, un arrêt vu verrouillé (image, ou statut demandé après le clic) ou
+  un rechargement de la page. Un nouveau clic resté sans réponse change tout de suite
+  le texte en
+  `nouvelle demande sans reponse depuis N s, la precedente a echoue : … - UTILISEZ L'ARRET CABLE`.
 - Un E-STOP reste verrouillé jusqu'à un **acquittement nommé** (page Securite), avec la
   case « coup de poing déverrouillé » cochée.
 
@@ -1311,7 +1374,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/api/status` | tout ce que la mise en route demande : `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
+| GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
 | GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
 | GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console | 200 |
@@ -1401,11 +1464,11 @@ répondu à temps. Détail dans
 - Un acquittement de `session_standstill` (ou de `session_overrun`) donné avant le
   retour du mode à `REPOS` répond 200 puis est repris, sans que la page dise quand il
   tiendra (section 11).
-- Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas limites : après un
-  redémarrage de la console suivi de `go_silent`, un bandeau affiché avant le
-  redémarrage reste jusqu'au rechargement de la page ; après un acquittement très
-  rapide, une réponse de statut tardive peut le faire revenir 5 s au plus ; l'ordre de
-  deux réponses de statut est jugé à l'envoi des demandes, pas à leur traitement.
+- Le bandeau `ARRET D'URGENCE VERROUILLE` garde deux cas, du côté prudent (section 5) :
+  un WebSocket tombé sur une image qui montrait un arrêt verrouillé, et un arrêt
+  d'urgence posé depuis un autre écran sous `go_silent`. Les trois cas relevés avant le
+  10 octobre 2026 (console relancée puis `go_silent`, réponse de statut tardive après
+  un acquittement rapide, ordre de deux réponses de statut) sont traités.
 - La note `nothing is latched to acknowledge` reste sous le bouton Acquitter après un
   nouveau verrou ; l'onglet de la page d'un capteur porte le type seul (`RESP -
   AnHeart`) alors que la page titre `RESP · Respiration` ; la hauteur du pied de page
