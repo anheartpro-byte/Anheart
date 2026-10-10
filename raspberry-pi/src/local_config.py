@@ -50,6 +50,14 @@ manifest carries is not a key: it is a fact about the build, read from
 same value the console shows and announces to the dashboard. The key that
 used to set it is listed in :data:`RETIRED_KEYS`.
 
+How the page is carried has three keys: ``UI_TLS_CERT`` and ``UI_TLS_KEY`` (the
+console's certificate and its private key, PEM: both or neither) and
+``UI_TLS_NAMES`` (the addresses and names a tablet opens the console at, the
+ones the certificate carries). All three are optional on loopback. Off
+loopback the first two are required: there the console serves TLS or does not
+start, as it does not start without ``UI_TOKEN``. Only the two paths are read
+here; the files are opened when the console starts (:mod:`src.web.tls`).
+
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
 module is testable with a dict.
 """
@@ -86,7 +94,14 @@ from src.training.plan import (
 )
 from src.training.types import Occupancy, OccupancyRefused
 from src.units import Bpm, GearRatio, Metres, MotorRpm, ResultantG, Seconds
-from src.web.deps import DEFAULT_HOST, DEFAULT_PORT, WebConfig
+from src.web.deps import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    TlsFiles,
+    WebConfig,
+    clear_http_refusal,
+    token_refusal,
+)
 
 # --- Keys ----------------------------------------------------------------
 KEY_MOTOR_BACKEND: Final[str] = "MOTOR_BACKEND"
@@ -104,6 +119,9 @@ KEY_GEAR_RATIO: Final[str] = "GEAR_RATIO"
 KEY_UI_HOST: Final[str] = "UI_HOST"
 KEY_UI_PORT: Final[str] = "UI_PORT"
 KEY_UI_TOKEN: Final[str] = "UI_TOKEN"  # noqa: S105  # a key NAME, not a secret
+KEY_UI_TLS_CERT: Final[str] = "UI_TLS_CERT"
+KEY_UI_TLS_KEY: Final[str] = "UI_TLS_KEY"
+KEY_UI_TLS_NAMES: Final[str] = "UI_TLS_NAMES"
 KEY_OCCUPIED_ENABLED: Final[str] = "OCCUPANCY_OCCUPIED_ENABLED"
 KEY_MOTION_LIMITS_PATH: Final[str] = "MOTION_LIMITS_PATH"
 KEY_PROGRAMS_ENABLED: Final[str] = "PROGRAMS_ENABLED"
@@ -157,6 +175,12 @@ UNASSIGNED: Final[str] = "unassigned"
 
 RECORD_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,128}")
 """An opaque, path-safe identifier: the record format refuses anything else."""
+
+TLS_NAME: Final[re.Pattern[str]] = re.compile(
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+)
+"""An IPv4 address or a host name, in lower case: what a tablet types before
+the port, and nothing else (no scheme, no port, no path)."""
 
 OCCUPIED_INITIAL_RESULTANT_G: Final[ResultantG] = ResultantG(1.2)
 """First-trial ceiling with a person on board, about 990 motor rpm at 1.5 m.
@@ -716,7 +740,7 @@ def _record(env: Mapping[str, str]) -> Result[RecordConfig, tuple[ConfigProblem,
     )
 
 
-def _web(env: Mapping[str, str]) -> Result[WebConfig, ConfigProblem]:
+def _port(env: Mapping[str, str]) -> Result[int, ConfigProblem]:
     port = _int(_text(env, KEY_UI_PORT, str(DEFAULT_PORT)), KEY_UI_PORT)
     if isinstance(port, Err):
         return port
@@ -724,13 +748,89 @@ def _web(env: Mapping[str, str]) -> Result[WebConfig, ConfigProblem]:
         return Err(
             ConfigProblem(KEY_UI_PORT, f"{port.value} est le port de scripts/bench_console.py")
         )
+    return port
+
+
+def _tls(env: Mapping[str, str]) -> Result[TlsFiles | None, ConfigProblem]:
+    """The certificate and its key: both, or neither. The files are not opened here."""
+    certificate_path = _text(env, KEY_UI_TLS_CERT, "")
+    key_path = _text(env, KEY_UI_TLS_KEY, "")
+    if not certificate_path and not key_path:
+        return Ok(None)
+    if not certificate_path or not key_path:
+        present, absent = (
+            (KEY_UI_TLS_CERT, KEY_UI_TLS_KEY)
+            if certificate_path
+            else (KEY_UI_TLS_KEY, KEY_UI_TLS_CERT)
+        )
+        return Err(
+            ConfigProblem(
+                absent,
+                f"obligatoire avec {present} : le certificat de la console et sa cle privee "
+                "vont ensemble",
+            )
+        )
+    return Ok(TlsFiles(certificate_path=Path(certificate_path), key_path=Path(key_path)))
+
+
+def _tls_names(env: Mapping[str, str], *, served: bool) -> Result[tuple[str, ...], ConfigProblem]:
+    """``UI_TLS_NAMES=10.42.0.1,anheart.internal``: IPv4 addresses and host names."""
+    names: list[str] = []
+    for part in (part.strip().lower() for part in _text(env, KEY_UI_TLS_NAMES, "").split(",")):
+        if not part or part in names:
+            continue
+        if TLS_NAME.fullmatch(part) is None:
+            return Err(
+                ConfigProblem(
+                    KEY_UI_TLS_NAMES,
+                    f"{part!r} : attendu une adresse IPv4 ou un nom d'hote, ceux que porte "
+                    "le certificat, separes par des virgules",
+                )
+            )
+        names.append(part)
+    if names and not served:
+        return Err(
+            ConfigProblem(
+                KEY_UI_TLS_NAMES,
+                f"sans effet sans certificat : renseigner {KEY_UI_TLS_CERT} et "
+                f"{KEY_UI_TLS_KEY}, ou vider cette cle",
+            )
+        )
+    return Ok(tuple(names))
+
+
+def _web(env: Mapping[str, str]) -> Result[WebConfig, tuple[ConfigProblem, ...]]:
+    """Where the page listens and how it is carried. Every problem, not only the first."""
+    host = _text(env, KEY_UI_HOST, DEFAULT_HOST)
     token = _text(env, KEY_UI_TOKEN, "") or None
+    port = _port(env)
+    tls = _tls(env)
+    # Half a certificate is said once, as that: the names are not blamed for it.
+    names = _tls_names(env, served=isinstance(tls, Err) or tls.value is not None)
+    refusals = [
+        ConfigProblem(key, refusal)
+        for key, refusal in (
+            (f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", token_refusal(host, token)),
+            (
+                f"{KEY_UI_HOST}/{KEY_UI_TLS_CERT}/{KEY_UI_TLS_KEY}",
+                clear_http_refusal(host, tls.value) if isinstance(tls, Ok) else None,
+            ),
+        )
+        if refusal is not None
+    ]
+    if isinstance(port, Err) or isinstance(tls, Err) or isinstance(names, Err) or refusals:
+        return Err(
+            (
+                *(result.error for result in (port, tls, names) if isinstance(result, Err)),
+                *refusals,
+            )
+        )
     try:
         return Ok(
-            WebConfig(host=_text(env, KEY_UI_HOST, DEFAULT_HOST), port=port.value, token=token)
+            WebConfig(host=host, port=port.value, token=token, tls=tls.value, names=names.value)
         )
     except ValueError as error:
-        return Err(ConfigProblem(f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", str(error)))
+        return Err((ConfigProblem(f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", str(error)),))
 
 
 def retired_keys(env: Mapping[str, str]) -> tuple[str, ...]:
@@ -764,28 +864,31 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
     leg_tip = _leg_tip(env, radius.value if isinstance(radius, Ok) else None)
     record = _record(env)
 
-    problems = tuple(
-        result.error
-        for result in (
-            backend,
-            link,
-            source,
-            address,
-            radius,
-            ratio,
-            max_rpm,
-            occupied,
-            web,
-            programs,
-            tiers,
-            cloud,
-            sensors,
-            presence,
-            min_age,
-            leg_tip,
+    problems = (
+        tuple(
+            result.error
+            for result in (
+                backend,
+                link,
+                source,
+                address,
+                radius,
+                ratio,
+                max_rpm,
+                occupied,
+                programs,
+                tiers,
+                cloud,
+                sensors,
+                presence,
+                min_age,
+                leg_tip,
+            )
+            if isinstance(result, Err)
         )
-        if isinstance(result, Err)
-    ) + (record.error if isinstance(record, Err) else ())
+        + (web.error if isinstance(web, Err) else ())
+        + (record.error if isinstance(record, Err) else ())
+    )
     if (
         problems
         or isinstance(record, Err)
