@@ -1535,9 +1535,14 @@ complète des codes est dans [raspberry-pi.md](../raspberry-pi.md).
 
 **Réarmer ou pas ?** La console classe chaque défaut :
 
-| Réarmables depuis la console (22) | Non réarmables : couper l'alimentation du variateur et inspecter (40) |
+| Réarmables depuis la console (22 défauts) | Non réarmables : couper l'alimentation du variateur et inspecter (38 défauts, et tout code inconnu) |
 |---|---|
 | `SLF1`, `SLF2`, `SLF3` (liaison perdue), `CnF`, `EPF1`, `EPF2`, `OHF` (surchauffe variateur), `OLF` (surcharge moteur), `ObF` (surtension au freinage), `OSF`, `PHF` (perte de phase), `USF` (sous tension), `COF`, `SSF`, `PtFL`, `OtFL`, `tJF`, `LFF3`, `dLF`, `CSF`, `ULF`, `OLC` | `OCF` (surintensité), `SOF` (survitesse), `AnF` (glissement de charge), `SCF1`, `SCF3`, `SCF4`, `SCF5` (courts circuits), `InF1` et les autres `InF`, `EEF1`, `EEF2`, `CFF`, `CFI`, `CFI2`, `ILF`, `CrF1`, `SPF`, `OPF1`, `OPF2`, `tnF`, `bLF`, `brF`, `FCF1`, `FCF2`, `LCF`, `HdF`, `HCF`, `ASF`, `SAFF`, `FbE`, `FbES` (blocs fonction du variateur), tout code inconnu |
+
+Les deux nombres comptent les 60 défauts de la table, comme dans
+[securite.md](../securite.md) : 22 et 38. Ni `nOF` (« aucun défaut mémorisé », qui
+n'est pas un défaut) ni le code inconnu ne sont comptés ; le code inconnu est cité à
+part, et lui non plus ne se réarme pas depuis la console.
 
 Depuis le 10 octobre 2026, cette liste suit la documentation de l'ATV320 lui-même
 (60 défauts) : sources, codes ajoutés ou retirés et raisons dans

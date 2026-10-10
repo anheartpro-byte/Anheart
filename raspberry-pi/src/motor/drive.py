@@ -1038,13 +1038,12 @@ not from memory and no longer from the ATV32's; the bench observation
 "LFT = 5 after a Modbus loss" agrees with it (SLF1 = 5), where the provisional
 table this replaced had SLF at 19 (really OSF, mains overvoltage).
 
-Seven values of the ATV32 enumeration that this table held until then are in
-neither ATV320 document, and are no longer named here: 1 (InF), 31 (SCF2),
-43 (ECF), 46 (PrF), 57 (SrF), 61 (AI2F) and 66 (dCF). Read off this drive they
-would have been named, and two of them offered for a reset, on another drive's
-word. They now read as any code this table does not know: the same stop, the
-same latch, :data:`DriveFault.UNKNOWN` with the number, and no reset from the
-console.
+The table names only what the ATV320's own documents list. A value they do not
+list reads as any code this table does not know: the same stop, the same latch,
+:data:`DriveFault.UNKNOWN` with the number, and no reset from the console. That
+holds for the seven values the ATV32 enumeration has and the ATV320 documents
+have not: 1 (InF), 31 (SCF2), 43 (ECF), 46 (PrF), 57 (SrF), 61 (AI2F) and
+66 (dCF).
 """
 
 

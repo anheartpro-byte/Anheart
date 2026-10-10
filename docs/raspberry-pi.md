@@ -937,14 +937,13 @@ Pourquoi les retirer : aucune des sept n'est dans la liste LFT de NVE41316 V3.5,
 et aucun de ces sept noms n'est un code d'erreur du manuel NVE41295.06 (`InF`,
 `SCF2`, `ECF`, `PrF` et `SrF` n'y figurent nulle part ; `AI2F` et `dCF` n'y
 sont que les codes de réglages sans rapport : un filtre d'entrée analogique,
-un diviseur de rampe, un menu d'affichage). Les garder revenait à nommer un
-défaut de l'ATV320 d'après un autre variateur, et à en proposer deux au
-réarmement sur cette seule foi.
-Lue sur ce variateur, chacune de ces valeurs est maintenant un code inconnu :
-même arrêt, même verrouillage, le numéro affiché, le renvoi à l'afficheur du
-variateur et à son manuel, aucun réarmement depuis la console. Si l'une d'elles
-est un jour relevée au banc, la noter avec le mnémonique affiché par le
-variateur : ce sera une donnée que les documents ne donnent pas.
+un diviseur de rampe, un menu d'affichage). La règle de la table est simple :
+elle ne nomme que ce que les documents de l'ATV320 listent, et une valeur qui
+n'y est pas, ces sept comprises, se lit comme un code inconnu. Même arrêt, même
+verrouillage, le numéro affiché, le renvoi à l'afficheur du variateur et à son
+manuel, aucun réarmement depuis la console. Si l'une d'elles est un jour
+relevée au banc, la noter avec le mnémonique affiché par le variateur : ce sera
+une donnée que les documents ne donnent pas.
 
 ### 6.3 Réarmement : jamais plus permissif que le manuel
 
@@ -962,11 +961,13 @@ vérifie code par code.
 
 Trois remarques tirées du même manuel :
 
-* Il se contredit sur quelques codes : les fiches de `ASF`, `brF`, `SOF` et
-  `SPF` les disent réarmables alors que le tableau de la page 403 les range
-  sous « coupure d'alimentation », et la page 327 cite `InF9`, `InFA` et `InFb`
-  parmi les défauts effaçables à la main. La console retient chaque fois la
-  lecture la plus stricte : non réarmable.
+* Il ne dit pas partout la même chose de quelques codes. Le tableau de la
+  page 403 range `ASF`, `brF`, `SOF` et `SPF` sous « coupure d'alimentation »
+  tout en notant qu'ils s'effacent aussi par l'entrée de reset, comme `tnF`, et
+  leurs fiches les disent réarmables. La page 327 cite `InF9`, `InFA` et `InFb`
+  parmi les défauts effaçables à la main, alors que leurs fiches exigent une
+  coupure. La console retient chaque fois la lecture la plus stricte : non
+  réarmable.
 * Neuf défauts s'effacent seuls, dont `USF` (sous-tension) et `PHF` (perte de
   phase). Le variateur quitte alors l'état FAULT sans que personne ne le
   demande. Cela ne relance rien : le verdict `drive_fault` est celui de la
@@ -991,25 +992,35 @@ chacun le code lu, l'arrêt, le verrouillage et le message de l'opérateur.
 **Conditions pour les trois essais.**
 
 * **Personne dans la capsule, personne dans la zone balayée par le bras.**
-* Séance manuelle de banc à basse vitesse (procédure 13.2 du
-  [guide de la console](guides/guide-console-locale.md#132-séance-manuelle-de-banc-à-27-trmin)),
-  cible de 3 tr/min au bras par exemple, plafond `MOTOR_MAX_RPM` laissé à sa
-  valeur par défaut.
-* Une personne garde la main sur le sectionneur ou le disjoncteur du
-  variateur pendant tout l'essai. **Le STO du variateur est ponté** : couper
-  son alimentation est le seul moyen indépendant du logiciel de retirer le
-  couple. Si le bras ne ralentit pas dans le délai prévu, couper.
+* **Deux personnes, pas moins.**
+  * La première reste **au sectionneur** (ou au disjoncteur) du variateur, la
+    main dessus, du départ du bras à son arrêt complet. Elle regarde le bras et
+    l'afficheur du variateur. Elle coupe l'alimentation sans attendre l'accord
+    de personne si le bras ne ralentit pas dans le délai prévu, ou si quoi que
+    ce soit repart. **Le STO du variateur est ponté** : cette coupure est le
+    seul moyen indépendant du logiciel de retirer le couple.
+  * La seconde est **à la console**. Elle conduit la séance, annonce à voix
+    haute chaque geste avant de le faire, provoque le défaut des essais 1 et 3,
+    chronomètre et remplit les tableaux. À l'essai 2, c'est la première qui
+    provoque le défaut, sur l'annonce de la seconde.
+* **Vitesse imposée : 3 tr/min au bras, pour les trois essais.** La séance se
+  lance comme la
+  [séance manuelle de banc du guide de la console (§13.2)](guides/guide-console-locale.md#132-séance-manuelle-de-banc-à-27-trmin).
+  Le guide l'écrit pour 27 tr/min : ici la cible est 3 tr/min (trois clics sur
+  **+1 tr/min** donnent 3,10) et le plafond `MOTOR_MAX_RPM` reste à sa valeur
+  par défaut.
 * Aucun outil de banc en même temps que la console
   ([pi-image.md](pi-image.md#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)).
 * Avant de commencer, relever au clavier du variateur et noter dans le tableau
   des réglages ci-dessous. Un réglage qui n'a pas la valeur attendue arrête la
-  campagne : on ne le corrige pas « pour l'essai » sans le noter.
+  campagne, à la seule exception écrite dans la ligne `SLL` : on ne le corrige
+  pas « pour l'essai » sans le noter.
 
 | Réglage du variateur (menu) | Attendu | Relevé |
 |---|---|---|
-| Version du logiciel du variateur, menu [Identification] `OID-` | à comparer à V3.5, la version des documents utilisés | |
+| Version du logiciel du variateur, menu [Identification] `OID-` | à comparer à V3.5, la version des documents utilisés. Ce menu n'est accessible que sur le **terminal graphique** (manuel, page 26) : ce terminal est nécessaire. Sans lui, écrire « non relevée » : NVE41316 liste bien un paramètre en lecture seule, `VDP` (« Drive software version », adresse logique 16#0CE6 = 3302), mais aucun outil du dépôt ne le lit et son codage n'y est pas décrit | |
 | [ModbusTimeout] `ttO`, délai de perte Modbus | la valeur de mise en service (réglage d'usine : 10,0 s ; le simulateur suppose 3 s) | |
-| [Modbus Error Resp] `SLL`, réaction à la perte Modbus | un arrêt qui déclenche le défaut ; jamais [Ignore] | |
+| [Modbus Error Resp] `SLL`, réaction à la perte Modbus | attendu : [Ramp stop], la rampe sur laquelle compte la [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt). [Freewheel Stop], le réglage d'usine, déclenche aussi `SLF1` : s'il est trouvé, l'essai 1 se fait et l'écart est noté. **Essai 1 interdit** sous [Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained] | |
 | [Auto Fault Reset] `ATR`, redémarrage automatique | [No] (réglage d'usine) | |
 | [Fault Reset Assign] `RSF`, entrée de reset de défaut | à noter (réglage d'usine : [No]) | |
 | [Extended Fault Reset] `HRFC`, reset étendu | [No] (réglage d'usine) | |
@@ -1018,47 +1029,85 @@ chacun le code lu, l'arrêt, le verrouillage et le message de l'opérateur.
 
 **Essai 1 : perte de la liaison Modbus (`SLF1`, LFT 5).**
 
-1. Bras à 3 tr/min. Débrancher le câble de la liaison **du côté de la
-   console** (l'adaptateur USB du Pi), jamais dans l'armoire. Lancer un
-   chronomètre.
+**Précondition.** `SLL` a été lu au clavier **avant** l'essai (tableau
+ci-dessus). L'essai ne se fait sous **aucune** de ces quatre valeurs : [Ignore],
+[Configured Stop], [Fallback Speed], [Speed maintained]. D'après le manuel
+(pages 349 et 350), sous aucune d'elles le variateur ne s'arrête sur le défaut
+`SLF1` : la première ne surveille plus la liaison ; sous la deuxième, il
+s'arrête sans défaut et se tient prêt à repartir dès que la communication
+revient ; sous les deux dernières, la perte ne déclenche aucun arrêt, et il
+garde une vitesse tant que l'ordre de marche est là.
+
+**Réaction attendue : une rampe** (`SLL` sur [Ramp stop]), celle que demande la
+[section 7](#7-ce-qui-se-passe-physiquement-à-larrêt) et que suppose le
+simulateur. Une **roue libre** peut pourtant être rencontrée au banc : c'est le
+réglage d'usine de `SLL`, le logiciel ne relit pas ce réglage, et le dépôt ne
+dit pas la valeur de mise en service. Elle déclenche `SLF1` elle aussi et,
+capsule vide à 3 tr/min, elle est sans danger à observer : l'essai se fait, et
+l'écart avec la section 7 s'écrit dans le tableau de résultats. Ce que la
+section 7 exige avant une séance ne change pas.
+
+1. Bras à 3 tr/min. La personne à la console annonce, puis débranche le câble
+   de la liaison **du côté de la console** (l'adaptateur USB du Pi), jamais
+   dans l'armoire, et lance le chronomètre.
 2. Console, après trois échanges ratés d'affilée : carte **Variateur**
    `comm_lost`, barre latérale Securite `go_silent` (règle `comms_lost`). La
    console n'écrit plus rien : c'est voulu, et définitif pour ce processus.
 3. Variateur : il garde sa dernière consigne jusqu'à l'expiration de `ttO`,
    puis affiche `SLF1` et applique `SLL`. Noter le délai entre le
    débranchement et `SLF1` (attendu : `ttO`), puis le temps d'arrêt et sa forme
-   (rampe ou roue libre). **Si le bras ne ralentit pas dans `ttO` + 5 s, couper
-   l'alimentation du variateur.**
-4. Bras à l'arrêt complet : rebrancher le câble. Vérifier que **rien ne
-   repart**.
-5. Arrêter la console et la relancer (un `go_silent` ne s'acquitte pas),
+   (rampe attendue ; roue libre si `SLL` est resté au réglage d'usine).
+4. **Si `SLF1` ne s'affiche pas, ou si le bras ne ralentit pas dans
+   `ttO` + 5 s : la personne au sectionneur coupe l'alimentation du variateur,
+   AVANT de rebrancher la liaison et AVANT de relancer la console.** Sans
+   défaut déclenché, le variateur peut avoir gardé l'ordre de marche et sa
+   consigne : le retour de la liaison, ou le redémarrage de la console,
+   pourrait remettre le bras en mouvement. L'essai s'arrête là, non conforme :
+   noter ce qui a été vu, et ne pas recommencer avant d'avoir relu `SLL` et
+   `ttO` et compris l'écart.
+5. `SLF1` affiché et bras à l'arrêt complet : rebrancher le câble. Vérifier
+   que **rien ne repart**.
+6. Arrêter la console et la relancer (un `go_silent` ne s'acquitte pas),
    recharger la page, refaire l'attestation.
-6. Console attendue : carte **Variateur** `fault`, `LFT brut 5`, encadré
+7. Console attendue : carte **Variateur** `fault`, `LFT brut 5`, encadré
    `DEFAUT SLF1 (LFT brut 5) : perte de communication Modbus : ...`, Securite
    `ramp_down` (règle `drive_fault`, verrouillée). Un départ est refusé tant
    que ce verdict tient (`a latched safety verdict stands (drive_fault) ...`).
-7. **Reset defaut variateur** : accepté (`SLF1` est réarmable), la pastille du
+8. **Reset defaut variateur** : accepté (`SLF1` est réarmable), la pastille du
    variateur quitte `fault` ; acquitter ensuite `drive_fault`. Le bras ne
    bouge pas.
 
 **Essai 2 : sous-tension (`USF`, LFT 22).**
 
-1. Bras à 3 tr/min. Ouvrir le sectionneur ou le disjoncteur **du variateur
-   seul** : le Pi doit rester alimenté pour que la console observe. Si les deux
+1. Bras à 3 tr/min. Sur l'annonce de la personne à la console, la personne au
+   sectionneur ouvre le sectionneur ou le disjoncteur **du variateur seul** :
+   le Pi doit rester alimenté pour que la console observe. Si les deux
    partagent la même protection, l'essai devient celui de la coupure secteur
    complète : le noter. Ne rien débrancher à la main, ne pas ouvrir l'armoire :
    le bus continu reste chargé après la coupure.
 2. Le variateur n'a plus de puissance : le bras s'arrête en **roue libre**.
    Noter le temps d'arrêt.
-3. Console, deux issues possibles, à noter : soit elle lit le défaut avant que
-   le variateur ne s'éteigne (carte **Variateur** `fault`, `LFT brut 22`,
-   encadré `DEFAUT USF (LFT brut 22) : sous-tension secteur : ...`, règle
-   `drive_fault`), soit elle ne voit que la perte de liaison (`comm_lost`,
-   `go_silent`). Dans les deux cas la séance est terminée et verrouillée.
+3. Regarder la console et noter laquelle des deux branches s'est produite. Les
+   deux sont conformes, avec chacune ses critères. Dans les deux, la séance est
+   terminée et un verdict reste verrouillé.
+   * **Branche A : la console lit le défaut avant que le variateur ne
+     s'éteigne.** Critères : carte **Variateur** `fault`, `LFT brut 22`,
+     encadré `DEFAUT USF (LFT brut 22) : sous-tension secteur : ...`, Securite
+     `ramp_down` (règle `drive_fault`, verrouillée). La liaison tombe ensuite
+     avec le variateur : `comm_lost` puis `go_silent` sont alors attendus
+     aussi.
+   * **Branche B : la liaison tombe d'abord.** La console ne lit aucun code et
+     aucun n'est attendu d'elle : le critère « code lu » ne s'applique pas.
+     Critères : carte **Variateur** `comm_lost`, Securite `go_silent` (règle
+     `comms_lost`), aucun encadré `DEFAUT`. Écrire « non lu » dans la ligne
+     `LFT brut` du tableau de résultats. Le code ne peut alors être relevé que
+     sur le variateur, à l'étape 4.
 4. Attendre l'extinction complète de l'afficheur du variateur, puis remettre
-   sous tension. **Rien ne doit repartir.** D'après le manuel, `USF` s'efface
-   de lui-même au retour de la tension : noter ce qu'affiche le variateur et
-   son dernier défaut mémorisé (attendu : `USF`).
+   sous tension. **Rien ne doit repartir.** Noter ce qu'affiche le variateur.
+   Deux attentes **à confirmer**, tirées du manuel et jamais observées sur
+   cette machine : `USF` s'efface de lui-même au retour de la tension, et le
+   dernier défaut mémorisé par le variateur est `USF`. Relever ce dernier
+   défaut si le terminal le montre ; sinon écrire « non relevé ».
 5. Relancer la console si elle était en `go_silent`, refaire l'attestation,
    noter l'état de la carte **Variateur** (attendu : pas de défaut en cours ;
    `LFT brut` peut afficher `aucun`, la console ne lisant LFT que sous un mot
@@ -1078,39 +1127,51 @@ seul qui demande de modifier la configuration du variateur.
    choisir [Ignore], [Configured Stop], [Fallback Speed] ni [Speed
    maintained] : d'après le manuel, ces réponses ne déclenchent pas le défaut
    ou laissent le moteur tourner. Le logiciel n'écrit jamais ces réglages.
-3. Bras à 3 tr/min. Actionner le contact.
+3. Bras à 3 tr/min. La personne à la console annonce, puis actionne le
+   contact.
 4. Variateur : `EPF1`, arrêt en roue libre. Console attendue : carte
    **Variateur** `fault`, `LFT brut 8`, encadré
    `DEFAUT EPF1 (LFT brut 8) : defaut externe signale par une entree logique ou un bit : ...`,
    Securite `ramp_down` (règle `drive_fault`, verrouillée), séance terminée.
-5. Contact encore actionné : **Reset defaut variateur**. Noter si le variateur
-   garde le défaut tant que le contact reste actionné (le manuel dit qu'un
-   reset n'efface qu'un défaut dont la cause a disparu).
-6. Relâcher le contact, bras à l'arrêt : **Reset defaut variateur**, puis
-   acquitter `drive_fault`. Le bras ne bouge pas.
+5. **Relâcher le contact d'abord, avant tout reset**, et attendre l'arrêt
+   complet du bras. Sous [Active high], le manuel dit le défaut déclenché sur
+   le front montant de l'entrée et présent tant qu'elle est à 1 ; il dit aussi
+   qu'un reset n'efface qu'un défaut dont la cause a disparu. Ne pas demander
+   de reset tant que le contact est actionné : ce que le variateur en ferait
+   n'est pas établi.
+6. Contact relâché, bras à l'arrêt : **Reset defaut variateur**. Deux issues,
+   à noter. Accepté : la pastille du variateur quitte `fault`. Refusé par la
+   console avec `reset refuse : aucun defaut a acquitter (...)` : le variateur
+   avait déjà quitté le défaut, il n'y a rien à réarmer. Dans les deux cas,
+   acquitter ensuite `drive_fault`. Le bras ne bouge pas. Si la pastille reste
+   `fault` après un reset accepté, ne pas insister : vérifier que le contact
+   est bien relâché, et noter.
 7. **Remettre `ETF`, `LET` et `EPL` à leurs valeurs relevées avant l'essai**, et
    le noter.
 
 **Critères de réussite, pour chaque essai.** Le bras s'arrête sans que personne
 n'ait eu à couper l'alimentation du variateur (hors essai 2, où c'est l'essai) ;
 le code lu par la console est celui attendu et le mnémonique affiché par le
-variateur est le même ; la séance est terminée et un verdict reste verrouillé ;
-rien ne repart quand la cause disparaît (câble rebranché, tension revenue,
-contact relâché) ; le message affiché est celui de la table.
+variateur est le même (à l'essai 2, branche B, la console ne lit aucun code :
+voir les critères de cette branche) ; la séance est terminée et un verdict
+reste verrouillé ; rien ne repart quand la cause disparaît (câble rebranché,
+tension revenue, contact relâché) ; le message affiché est celui de la table.
 
 **Tableau de résultats (vide : essais non réalisés).**
 
 | | Essai 1, `SLF1` | Essai 2, `USF` | Essai 3, `EPF1` |
 |---|---|---|---|
-| Date, opérateur | | | |
+| Date ; personne au sectionneur ; personne à la console | | | |
 | Version de la console (pastille Version) | | | |
-| Vitesse du bras avant le défaut (tr/min) | | | |
+| Vitesse du bras avant le défaut (imposée : 3 tr/min) | | | |
 | Mnémonique affiché par le variateur | | | |
-| `LFT brut` lu par la console (attendu : 5, 22, 8) | | | |
+| `LFT brut` lu par la console (attendu : 5, 22, 8 ; « non lu » à l'essai 2, branche B) | | | |
+| Essai 2 : branche A ou B | sans objet | | sans objet |
 | Encadré `DEFAUT ...` affiché (texte exact) | | | |
 | Verdict de Securite (règle, action, verrouillé) | | | |
 | Délai entre la cause et le défaut (s) | | | |
-| Temps d'arrêt (s), rampe ou roue libre | | | |
+| Temps d'arrêt (s), rampe ou roue libre (essai 1 : rampe attendue, roue libre = écart avec la section 7) | | | |
+| Essai 2 : dernier défaut mémorisé par le variateur (attente à confirmer : `USF`) | sans objet | | sans objet |
 | Le bras est-il reparti seul quand la cause a disparu ? | | | |
 | Reset depuis la console : accepté ou refusé, message | | | |
 | Nom de l'enregistrement de séance | | | |
