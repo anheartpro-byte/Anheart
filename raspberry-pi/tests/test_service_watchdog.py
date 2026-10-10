@@ -29,6 +29,7 @@ from src.service_watchdog import (
     READY,
     STOPPING,
     ServiceWatchdog,
+    datagram_socket,
     destination,
 )
 from src.units import Monotonic, Seconds, elapsed
@@ -100,9 +101,29 @@ def test_ex1_a_notification_nobody_listens_to_is_dropped_counted_and_never_raise
     assert caplog.text.count("sent again") == 1
 
 
+def test_ex1_the_socket_the_notifications_leave_by_never_waits() -> None:
+    """Said of the socket itself, so that one that would wait fails here, by name, and
+    not as a test that hangs (Linux) or passes all the same (macOS drops instead)."""
+    made = datagram_socket()
+    try:
+        assert made.getblocking() is False, "a blocking socket would hold the control tick"
+        assert made.type == socket.SOCK_DGRAM
+        assert made.family == socket.AF_UNIX
+    finally:
+        made.close()
+
+
 def test_ex1_a_listener_that_reads_nothing_never_makes_the_tick_wait(listener: Listener) -> None:
     """The receiver's queue fills: the send returns at once, and what does not fit is dropped."""
-    watchdog = ServiceWatchdog(str(listener.path), overdue=OVERDUE)
+    used: list[socket.socket] = []
+
+    def remembered() -> socket.socket:
+        used.append(datagram_socket())
+        return used[0]
+
+    watchdog = ServiceWatchdog(str(listener.path), overdue=OVERDUE, factory=remembered)
+    # Before a single send: on a socket that waits, the loop below would not come back.
+    assert used[0].getblocking() is False, "the watchdog's socket would hold the control tick"
     clock = RealClock()
     began = clock.monotonic()
     attempts = 20_000
@@ -171,5 +192,44 @@ def test_ex1_a_loop_is_stalled_past_the_bound_since_its_last_completed_tick() ->
     assert not watchdog.stalled(Monotonic(10.2))
     assert not watchdog.stalled(Monotonic(13.0)), "the bound itself is not past the bound"
     assert watchdog.stalled(Monotonic(13.1))
-    watchdog.tick_completed(Monotonic(13.2))
-    assert not watchdog.stalled(Monotonic(13.4)), "a tick that completes ends the stall"
+    # A tick that comes back AT the bound is on time: nothing is remembered.
+    watchdog.tick_completed(Monotonic(13.0))
+    assert not watchdog.stalled(Monotonic(13.2))
+
+
+def test_ex2_a_tick_that_comes_back_late_is_remembered_whatever_completes_afterwards(
+    listener: Listener, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The freeze that the stop itself ends: the loop wakes, one tick completes, and only
+    then is the stop handled. That tick must not make the stop look like a clean one."""
+    watchdog = ServiceWatchdog(str(listener.path), overdue=OVERDUE)
+    watchdog.tick_completed(Monotonic(10.0))
+    watchdog.tick_completed(Monotonic(10.2))
+    with caplog.at_level(logging.ERROR):
+        watchdog.tick_completed(Monotonic(20.29))  # 10.09 s later: the process was frozen
+    assert watchdog.stalled(Monotonic(20.3)), "the late tick is the evidence, not its erasure"
+    assert "10.09 s between two completed ticks" in caplog.text
+    assert "will not leave as a clean stop" in caplog.text
+    # It is a completed tick all the same, and was notified as one: the feed does not lie.
+    assert listener.heard() == [READY, ALIVE, ALIVE]
+    # Healthy ticks afterwards, for as long as one likes: nothing unsays it.
+    for tick in range(1, 3_000):
+        watchdog.tick_completed(Monotonic(20.29 + 0.2 * tick))
+        assert listener.heard() == [ALIVE], "and each of them is notified, as before"
+    assert watchdog.stalled(Monotonic(20.29 + 0.2 * 3_000))
+    assert watchdog.status().failed == 0
+    # Said once per freeze that is longer than any before it, not at every tick.
+    assert caplog.text.count("between two completed ticks") == 1
+    with caplog.at_level(logging.ERROR):
+        watchdog.tick_completed(Monotonic(700.0))  # another freeze, longer than the first
+        watchdog.tick_completed(Monotonic(1_000.0))  # a longer one: 300 s
+        watchdog.tick_completed(Monotonic(1_004.0))  # 4 s: late, and shorter than both
+    assert caplog.text.count("between two completed ticks") == 3
+    assert watchdog.stalled(Monotonic(1_004.2))
+
+
+def test_ex2_ticks_that_come_back_on_time_are_never_remembered_as_late() -> None:
+    watchdog = ServiceWatchdog(None, overdue=OVERDUE)
+    for tick in range(5_000):
+        watchdog.tick_completed(Monotonic(10.0 + 2.9 * tick))  # slow, and inside the bound
+    assert not watchdog.stalled(Monotonic(10.0 + 2.9 * 4_999 + 2.9))

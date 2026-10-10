@@ -33,8 +33,34 @@ retries, sleeps, or raises.
 
 Without ``NOTIFY_SOCKET`` (a development machine, the tests, an image run by
 hand) nothing is sent and nothing is counted as a failure. The time of the last
-completed tick is kept all the same: :meth:`ServiceWatchdog.stalled` is how
-the console's exit knows it was asked to stop while its loop was not turning.
+completed tick is kept all the same.
+
+A loop that stopped completing ticks is remembered
+--------------------------------------------------
+:meth:`ServiceWatchdog.stalled` is how the console's exit knows its control
+loop went longer than the bound without completing a tick: it is not turning
+now, OR a tick came back late at some point since this process started.
+
+The second half is a latch, kept for the life of the process, and it has to
+be. A frozen process is not ended while it is frozen: the service manager's
+stop is what wakes it (systemd follows its stop signal with a continue, and
+``docker run`` relays both), and the woken loop may well run one tick before
+it handles the stop. That late tick is a completed tick like any other; judged
+on "is the loop turning now", the stop would look clean, and a console that
+freezes and comes back again and again would never be counted. So the tick
+that comes back late says so here, once, and nothing unsays it.
+
+The bound is the supervisor's own for a stall it goes silent on. The two do
+not measure at the same point of a tick (the supervisor between two
+evaluations, this between two completions), so they agree to within the length
+of one tick: a process that carries the latch is one whose supervisor latches
+``loop_stall`` too, in that tick or in the next, and as ``GO_SILENT`` whenever
+the time was lost between two ticks, which is what a frozen process is. An
+operator has to look at such a console anyway, and its next start follows a
+stall, whoever asks for the stop and whenever.
+
+The latch sends nothing and withholds nothing: the notifications stay one per
+completed tick. It changes one thing, the exit code of this process.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -82,7 +108,7 @@ class WatchdogStatus:
     """The last failure, as the system named it; ``None`` when there was none."""
 
 
-def _datagram_socket() -> socket.socket:
+def datagram_socket() -> socket.socket:
     """A local datagram socket that never waits. Raises ``OSError``."""
     made = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     made.setblocking(False)
@@ -116,6 +142,7 @@ class ServiceWatchdog:
     __slots__ = (
         "_failed",
         "_failing",
+        "_lapsed",
         "_last_error",
         "_last_tick",
         "_link",
@@ -129,7 +156,7 @@ class ServiceWatchdog:
         address: str | None,
         *,
         overdue: Seconds,
-        factory: SocketFactory = _datagram_socket,
+        factory: SocketFactory = datagram_socket,
     ) -> None:
         """``address``: the value of ``NOTIFY_SOCKET``, or ``None``.
 
@@ -138,6 +165,9 @@ class ServiceWatchdog:
         figure for a stall it goes silent on.
         """
         self._overdue: Seconds = overdue
+        # The longest time between two completed ticks that passed the bound,
+        # once one did. Never cleared: see the module docstring.
+        self._lapsed: Seconds | None = None
         # The socket and where it sends, together or not at all.
         self._link: tuple[socket.socket, str | bytes] | None = None
         self._last_error: str | None = None
@@ -164,8 +194,23 @@ class ServiceWatchdog:
         The only place a liveness notification is sent from. The first one
         that gets through also says the console is ready; until one does, it
         is said again at each tick.
+
+        A tick that comes back later than the bound after the one before is
+        still a completed tick, and is notified like any other. It is also
+        remembered, for good (:meth:`stalled`).
         """
+        last = self._last_tick
         self._last_tick = now
+        if last is not None:
+            gap = elapsed(last, now)
+            if gap > self._overdue and (self._lapsed is None or gap > self._lapsed):
+                self._lapsed = gap
+                _logger.error(
+                    "control loop: %.2f s between two completed ticks (bound %.2f s): "
+                    "this process will not leave as a clean stop",
+                    gap,
+                    self._overdue,
+                )
         if self._send(ALIVE if self._ready else READY):
             self._ready = True
 
@@ -174,13 +219,17 @@ class ServiceWatchdog:
         self._send(STOPPING)
 
     def stalled(self, now: Monotonic) -> bool:
-        """Whether no tick has completed for longer than the stall bound.
+        """Whether the control loop went longer than the bound without completing a tick.
+
+        Now (no tick for that long at ``now``), or at any time since this
+        process started (a tick came back that late): the second is a latch,
+        which a tick that completes afterwards does not undo.
 
         ``False`` before the first tick: a console that is still starting has
         not stalled.
         """
         last = self._last_tick
-        return last is not None and elapsed(last, now) > self._overdue
+        return self._lapsed is not None or (last is not None and elapsed(last, now) > self._overdue)
 
     def status(self) -> WatchdogStatus:
         """What was sent and what was not."""

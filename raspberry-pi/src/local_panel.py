@@ -224,6 +224,7 @@ from src.service_state import (
     NotOutOfService,
     ServiceGuard,
     ServiceStatus,
+    Stored,
     store,
 )
 from src.service_watchdog import NOTIFY_SOCKET, ServiceWatchdog
@@ -616,8 +617,9 @@ class ServiceDesk:
 
     Mutable through its guard, owned by the event loop thread. Nothing here
     touches the disk on that thread: what is said goes to the journal's queue,
-    and the one write a running console makes (:meth:`restore`) has a thread
-    of its own, waited for a bounded time.
+    and the two writes a running console makes (:meth:`record_start`, once,
+    after the first tick; :meth:`restore`) have a thread of their own, waited
+    for a bounded time.
     """
 
     __slots__ = ("_clock", "_guard", "_io", "_journal")
@@ -656,6 +658,16 @@ class ServiceDesk:
         if status.out_of_service:
             self._say(EventKind.WARNING, f"out_of_service: {OUT_OF_SERVICE}")
 
+    async def record_start(self) -> None:
+        """Write this start for the next process to find. Off the loop, bounded, total.
+
+        Called once, after the first control tick: the drive has been read by
+        then, and this is the first time this start touches the disk for
+        writing. A disk that refuses or does not answer costs the count, never
+        the console: the status says the state is not kept.
+        """
+        await self._write(self._guard.stored)
+
     async def restore(self, operator: str) -> Result[ServiceStatus, NotOutOfService]:
         """A named operator puts the console back in service. In effect at once.
 
@@ -672,10 +684,14 @@ class ServiceDesk:
             "service_restored: console remise en service",
             operator_alias(operator),
         )
-        write = functools.partial(store, self._guard.path, restored.value)
+        await self._write(restored.value)
+        return Ok(self._guard.status)
+
+    async def _write(self, stored: Stored) -> None:
+        """Hand ``stored`` to the disk on this desk's own thread, and note what it answered."""
+        write = functools.partial(store, self._guard.path, stored)
         written = await self._io.run(write, SERVICE_SAVE_TIMEOUT)
         self._guard.saved(written.value if isinstance(written, Ok) else Err(written.error.detail))
-        return Ok(self._guard.status)
 
     def _say(self, kind: EventKind, detail: str, actor: str = SYSTEM) -> None:
         """One line in the console's journal and one in the logbook. Memory only."""
@@ -755,6 +771,7 @@ class LocalPanel:
         "_stalled_at_stop",
         "_store",
         "_surface",
+        "_ticked",
         "_transport",
         "_wall_clock",
         "_watchdog",
@@ -788,6 +805,8 @@ class LocalPanel:
         self._watchdog: ServiceWatchdog = watchdog
         self._service: ServiceDesk | None = service
         self._stalled_at_stop: bool = False
+        # Set once the control loop has completed a tick, so read the drive.
+        self._ticked: asyncio.Event = asyncio.Event()
         self._recorder: SessionRecorder | None = recorder
         self._wall_clock: WallClockWatch | None = wall_clock
         self._config: LocalConfig = config
@@ -883,9 +902,13 @@ class LocalPanel:
         A tick that returned is all it says. A console that has latched a
         verdict, gone silent on the drive or is out of service still ticks,
         and is still told alive: restarting it is an operator's decision.
+
+        The first tick that returns also lets this start be written to the
+        disk (:meth:`_record_start`): not before, the drive is read first.
         """
         await self.control_step()
         self._watchdog.tick_completed(self._clock.monotonic())
+        self._ticked.set()
 
     async def control_step(self) -> TelemetrySnapshot:
         """One control tick, in the plan's order. Raises what the tick raises.
@@ -1247,8 +1270,24 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
-        failed = await PanelTasks(stop, web, self.close).run(control, observers)
+        started = asyncio.create_task(self._record_start())
+        try:
+            failed = await PanelTasks(stop, web, self.close).run(control, observers)
+        finally:
+            # Not one of the console's tasks: it ends by itself, and its end
+            # stops nothing. A console that never ticked has nothing to write;
+            # one that did is waited for, so that no write of this start is
+            # still on its way when the exit writes its own.
+            if not self._ticked.is_set():
+                started.cancel()
+            await asyncio.gather(started, return_exceptions=True)
         return EXIT_FAILED if failed or self._stalled_at_stop else EXIT_OK
+
+    async def _record_start(self) -> None:
+        """Once the first tick has read the drive: write this start, off the loop."""
+        await self._ticked.wait()
+        if self._service is not None:
+            await self._service.record_start()
 
     async def _every(
         self, period: Seconds, step: Callable[[], Awaitable[object]], stop: asyncio.Event
@@ -1275,17 +1314,22 @@ class LocalPanel:
         thread at most :data:`~src.record.journal.STOP_TIMEOUT`, without
         borrowing a thread from anybody (see :func:`journal_stopped`).
 
-        Before anything: whether the control loop was still completing ticks
-        when this stop began. One that was not (no tick for longer than the
-        supervisor's own stall bound) is not a clean stop, whoever asked for
-        it: :meth:`run` then returns a failure. And the service manager is
-        told the console is stopping, so that the time the drive takes to come
-        to rest is not read as a frozen loop.
+        Before anything: whether the control loop went longer than the
+        supervisor's own stall bound without completing a tick, in this
+        process. It is not completing any as this stop begins, or a tick came
+        back that late earlier: a frozen console is woken by the very stop
+        that ends it, and may run one late tick before it gets here
+        (:meth:`~src.service_watchdog.ServiceWatchdog.stalled`). Either way
+        this is not a clean stop, whoever asked for it: :meth:`run` then
+        returns a failure. And the service manager is told the console is
+        stopping, so that the time the drive takes to come to rest is not
+        read as a frozen loop.
         """
         if self._watchdog.stalled(self._clock.monotonic()):
             self._stalled_at_stop = True
             _logger.error(
-                "console stopped while its control loop was completing no tick: not a clean stop"
+                "console stopped after its control loop went without a completed tick "
+                "for longer than its stall bound: not a clean stop"
             )
         self._watchdog.stopping()
         if not self._runtime.needs_stop_before_release:
@@ -1665,12 +1709,22 @@ def open_service(journal: Journal, clock: Clock) -> ServiceDesk:
     """The restart state of this console, read and written next to the session records.
 
     Startup I/O, with nothing turning and before any command can be taken: what
-    the previous process left is read, this start is written, and the newest
-    session record is looked at (:func:`~src.record.export.listing`, which
-    knows what a closed record is). What was found is said in the console's
-    journal and in the logbook.
+    the previous process left is read, and the newest session record is
+    looked at (:func:`~src.record.export.listing`, which knows what a closed
+    record is). What was found is said in the console's journal and in the
+    logbook.
 
-    Nothing here talks to the drive. Its state is read by the first control
+    **Reads only.** This start is written to the disk later, once the first
+    control tick has read the drive (:meth:`LocalPanel._record_start`): the
+    write, with its flush to the device, is the one thing here that a tired SD
+    card can make slow, and it never comes before the first look at the drive.
+    What does come before it is two reads of the directory the journal has
+    just prepared (the state file, the list of records), like the other files
+    the console reads to start (its version, its limits, its profiles).
+
+    Nothing here talks to the drive, and until the first tick this console
+    sends it nothing at all: a drive left running hears no master and its own
+    communication timeout is counting. Its state is read by the first control
     tick, as always, before the mailbox can hold anything.
     """
     guard = ServiceGuard(journal.root, clock)

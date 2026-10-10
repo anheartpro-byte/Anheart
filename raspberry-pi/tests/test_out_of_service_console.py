@@ -36,7 +36,7 @@ from src.training.runtime import RuntimeState
 from src.units import Monotonic, UnixMillis
 from src.web.app import create_app
 from src.web.deps import WebConfig
-from src.web.schemas import PanelRow, ServiceRow
+from src.web.schemas import PanelRow, ServiceRow, StatusRow
 from tests.test_failure_rig import (
     BENCH_ENV,
     ENERGISED,
@@ -48,6 +48,7 @@ from tests.test_failure_rig import (
     attest,
     config_of,
     no_dsp,
+    precommanded,
 )
 from tests.test_web_api import TOKEN, auth, detail, parse
 
@@ -65,22 +66,29 @@ def console(
     programmes: bool = False,
     recorded: bool = True,
     monkeypatch: pytest.MonkeyPatch,
+    clock: ManualClock | None = None,
+    simulator: SimulatedDrive | None = None,
 ) -> Rig:
     """The console as it starts after ``deaths`` unclean stops in a row.
 
     The state the dead processes left is written as they would have: every
     one of them started (``running``) and none said it stopped.
+    ``simulator``: the drive as those processes left it, on ``clock``.
     """
     monkeypatch.setattr(local_panel, "boot_identity", lambda: BOOT)
     tmp_path.mkdir(parents=True, exist_ok=True)
-    clock = ManualClock(Monotonic(100.0), UnixMillis(1_700_000_000_000))
+    clock = ManualClock(Monotonic(100.0), UnixMillis(1_700_000_000_000)) if clock is None else clock
     records = tmp_path / "records"
     journal = Journal(records, clock) if recorded else None
     if deaths:
         earlier = tuple(100.0 - 10.0 * age for age in range(deaths - 1, 0, -1))
         left = Stored(boot_id=BOOT, unclean_starts=earlier, running=True)
         assert store(records / STATE_NAME, left) == Ok(None)
-    sim = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+    sim = (
+        SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+        if simulator is None
+        else simulator
+    )
     defaults = tmp_path / "defaults.json"
     defaults.write_text(SHORT_STORE, encoding="utf-8")
     config = config_of(PROGRAMME_ENV if programmes else BENCH_ENV)
@@ -111,6 +119,13 @@ def refusals(rig: Rig) -> list[str]:
 
 async def restore(session: httpx.AsyncClient, operator: str = OPERATOR) -> httpx.Response:
     return await session.post("/api/service/restore", json={"operator": operator})
+
+
+async def start_written(rig: Rig) -> None:
+    """What the console does once its first tick has read the drive: write this start."""
+    service = rig.panel.service
+    assert service is not None
+    await service.record_start()
 
 
 # =========================================================================
@@ -305,6 +320,7 @@ async def test_ex2_restoring_holds_when_the_disk_refuses_the_new_state_and_the_p
 ) -> None:
     """The mechanism never holds the machine: in service now, out again after a restart."""
     rig = console(tmp_path, deaths=THRESHOLD, monkeypatch=monkeypatch)
+    await start_written(rig)
 
     def refused(_path: Path, _stored: Stored) -> Ok[None]:
         raise OSError(30, "read-only file system")
@@ -320,6 +336,58 @@ async def test_ex2_restoring_holds_when_the_disk_refuses_the_new_state_and_the_p
     on_disk = load(tmp_path / "records" / STATE_NAME)
     assert isinstance(on_disk, Stored)
     assert on_disk.out_of_service, "the next start is out of service again, and lifted the same way"
+
+
+async def test_ex2_restoring_lifts_neither_a_latched_verdict_nor_an_emergency_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Out of service, AND a drive found running, AND an emergency stop: putting the
+    console back in service is about the restarts and about nothing else. Every latch
+    is still there afterwards, to be acknowledged by name like any other day."""
+    clock = ManualClock(Monotonic(100.0), UnixMillis(1_700_000_000_000))
+    left_running = await precommanded(clock, 300)
+    rig = console(
+        tmp_path,
+        deaths=THRESHOLD,
+        monkeypatch=monkeypatch,
+        clock=clock,
+        simulator=left_running,
+    )
+    await rig.tick(1.0)
+    found = rig.panel.runtime.snapshot().safety
+    assert found is not None
+    assert found.rule == "drive_precommanded"
+    assert found.latched
+    async with rig.http() as session:
+        pressed = await session.post(
+            "/api/session/estop", json={"operator": OPERATOR, "reason": "restore test"}
+        )
+        assert pressed.status_code < HTTPStatus.BAD_REQUEST, pressed.text
+        await rig.tick(1.0)
+        before = parse(StatusRow, await session.get("/api/status"))
+        assert before.estop_latched
+        assert before.supervisor_estop is not None
+
+        row = parse(ServiceRow, await restore(session))
+        assert not row.out_of_service
+        await rig.tick(1.0)
+
+        after = parse(StatusRow, await session.get("/api/status"))
+        assert after.estop_latched, "the emergency stop is still latched"
+        assert after.supervisor_estop is not None
+        assert after.supervisor_estop.rule == before.supervisor_estop.rule
+        standing = rig.panel.runtime.standing
+        assert standing is not None, "the verdict of the drive found running still stands"
+        assert standing.latched
+        # In service again, and a start is still refused: by the latches, as it must be.
+        await attest(session)
+        asked = await session.post(
+            "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+        )
+        assert asked.status_code == HTTPStatus.CONFLICT, asked.text
+        assert "latched safety verdict" in detail(asked)
+    assert state_of(rig) is not RuntimeState.RUNNING
+    assert rig.simulator.commanded_setpoint == 0
 
 
 # =========================================================================

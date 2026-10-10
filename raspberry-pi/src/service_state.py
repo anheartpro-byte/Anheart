@@ -49,10 +49,23 @@ names the last session record when it was left open (no checksums: its session
 was cut). An open record is reported once: it stays open for ever, and the
 starts after it are not all starts after an unclean stop.
 
-Everything here that touches the disk (:meth:`ServiceGuard.begin`,
-:meth:`ServiceGuard.stopped`, :func:`store`) is blocking: it runs at startup
-before anything turns, at exit after the drive is stopped, or on a thread of
-its own. Never on the event loop while the console runs.
+When the disk is touched
+-----------------------
+Everything here that touches the disk is blocking, and none of it runs on the
+event loop while the console runs:
+
+* :meth:`ServiceGuard.begin` only READS, at startup, before anything turns:
+  the state file, a few hundred bytes. What it decides is kept in memory;
+* that start is WRITTEN (:func:`store`, with its flush to the device) only
+  once the first control tick has completed, so after the drive was read, and
+  on a thread of its own: the one write that could be slow never stands
+  between a start and the first look at the drive;
+* :meth:`ServiceGuard.stopped` writes last of all, at exit, after the drive
+  is stopped.
+
+A process that dies before its start is written leaves the file as the one
+before it left it: that start is not counted. It is a process that never
+completed a tick, which the service manager counts for itself.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -261,9 +274,11 @@ def next_start(
 class ServiceGuard:
     """The state of this run, and the file it is kept in. See the module docstring.
 
-    Mutable. :meth:`begin` and :meth:`stopped` are the console's first and last
-    disk accesses; in between, the event loop thread reads :attr:`status` and
-    calls :meth:`restore` and :meth:`saved`, which touch memory only.
+    Mutable. :meth:`begin` reads the disk at startup and :meth:`stopped` writes
+    it at exit; in between, the event loop thread reads :attr:`status` and
+    :attr:`stored` and calls :meth:`restore` and :meth:`saved`, which touch
+    memory only. The writes of a running console are :func:`store`, called on
+    another thread with a value this object handed out.
     """
 
     __slots__ = ("_clock", "_path", "_status", "_stored")
@@ -285,11 +300,17 @@ class ServiceGuard:
         """What this run says of itself. Memory only."""
         return self._status
 
-    def begin(self, *, boot_id: str | None, open_record: str | None) -> ServiceStatus:
-        """This process starts: read what the previous one left, decide, write. Blocking.
+    @property
+    def stored(self) -> Stored:
+        """This run's state as it is to be written. Memory only."""
+        return self._stored
 
-        Startup I/O, before anything turns. A state that cannot be written is
-        not a reason to refuse anything: the console says so and carries on.
+    def begin(self, *, boot_id: str | None, open_record: str | None) -> ServiceStatus:
+        """This process starts: read what the previous one left, and decide. Blocking.
+
+        Startup I/O, before anything turns: one small read. Nothing is written
+        here: :attr:`stored` is what the caller writes once the drive has been
+        read (see the module docstring).
         """
         previous = load(self._path)
         if isinstance(previous, Unreadable):
@@ -302,7 +323,6 @@ class ServiceGuard:
         )
         self._stored = stored
         self._status = status
-        self.saved(store(self._path, stored))
         return self._status
 
     def restore(self) -> Result[Stored, NotOutOfService]:

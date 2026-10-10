@@ -38,20 +38,25 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event as ThreadEvent
 from typing import Final, override
 
 import pytest
 
+from src import local_panel
 from src.clock import RealClock
 from src.control_surface import EventKind
+from src.local_config import LocalConfig
 from src.local_panel import (
     EXIT_FAILED,
     EXIT_OK,
     OUT_OF_SERVICE,
     DriveSide,
     LocalPanel,
+    ServiceDesk,
     build_panel,
     open_service,
+    run_console,
 )
 from src.motor.drive import (
     CommTimeout,
@@ -63,10 +68,11 @@ from src.motor.drive import (
 )
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
 from src.record import logbook
+from src.record.cursor import boot_identity
 from src.record.export import listing
 from src.record.journal import Journal
 from src.result import Err, Ok, Result
-from src.service_state import STATE_NAME, THRESHOLD, Stored, load
+from src.service_state import STATE_NAME, THRESHOLD, ServiceGuard, Stored, load
 from src.service_watchdog import ALIVE, READY, STOPPING
 from src.telemetry import TelemetryClient
 from src.training.runtime import EndReason, RuntimeState
@@ -91,6 +97,10 @@ the drive's own safety net does not stop the motor a dead console left turning."
 
 WATCHDOG: Final[float] = 1.0
 """The model's ``WatchdogSec``. The unit's is 10 s; nothing below depends on the figure."""
+
+FREEZE: Final[float] = 3.4
+"""How long a console is frozen whole in these tests: past its own stall bound (3 s),
+as the 10 s of the unit's watchdog are."""
 
 STALL_WATCHDOG: Final[float] = 3.3
 """Longer than the console's own stall bound (3 s): a stop that arrives after it is
@@ -661,25 +671,107 @@ async def test_ex4_when_the_drive_stopped_itself_the_restart_finds_it_stopped_an
     await end(second)
 
 
+def freeze_the_process(seconds: float) -> None:
+    """SIGSTOP, as far as a process can do it to itself: its event loop runs nothing.
+
+    Called from the test's own coroutine, which is on the console's loop: for
+    ``seconds`` no task of the console is given a turn. Not a control tick,
+    not a signal handler, not a timer. (Its other threads go on, which a real
+    SIGSTOP would stop too; none of them ticks or notifies.)
+    """
+    ThreadEvent().wait(seconds)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "late_tick",
+    [True, False],
+    ids=["one-late-tick-runs-before-the-stop", "the-stop-is-handled-first"],
+)
+async def test_ex4_a_console_frozen_then_woken_by_its_own_stop_leaves_as_an_unclean_stop(
+    machine: Machine, late_tick: bool
+) -> None:
+    """What systemd and Docker really do to a frozen console, replayed.
+
+    The watchdog's stop is a SIGTERM followed by a SIGCONT, and ``docker run``
+    relays both: the stop itself wakes the console. In the run that showed it
+    (workflow ``pi-install``, step 9) the woken loop completed ONE tick, 10.09 s
+    after the one before, and only then handled the stop. That tick must not
+    make the stop a clean one: exit code 1, nothing written as clean, and the
+    next start counts it. Whichever of the tick and the stop comes first.
+    """
+    records = machine.root / "records"
+    machine.records = records
+    manager = ServiceManager(machine)
+    first = machine.boot()
+    await at_speed(first)
+    manager.listen()
+    ticks = machine.ticks
+    completed = ticks.completed
+
+    freeze_the_process(FREEZE)
+
+    assert manager.listen() == [], "a frozen console told the service manager nothing"
+    assert ticks.completed == completed
+    if late_tick:
+        # The thaw. The loop runs again, and one tick comes back before the stop is handled.
+        await until(lambda: ticks.completed > completed, 10.0, "the tick that comes back late")
+        assert first.panel.runtime.silent, "that tick saw the stall and went silent for good"
+        assert ALIVE in manager.listen(), "it is a completed tick, and is notified as one"
+    code = await end(first)
+    assert code == EXIT_FAILED, "a stop that follows a freeze is never a clean exit"
+    left = load(records / STATE_NAME)
+    assert isinstance(left, Stored)
+    assert left.running, "and it is never written as a clean stop"
+
+    second = machine.boot()
+    service = second.panel.service
+    assert service is not None
+    status = service.status()
+    assert status.unclean_stop
+    assert status.unclean_starts == 1, "the restart after a freeze is counted"
+    # The console left by its own exit path: it closed its record on the way.
+    assert status.open_record is None
+    if late_tick:
+        await assert_found_running_stopped_latched_and_inert(machine, second)
+    assert await end(second) == EXIT_OK
+
+
 # =========================================================================
 # EX-3: the drive first, and the warning after an unclean stop
 # =========================================================================
 
 
 async def test_ex3_a_restarted_console_reads_the_drive_before_any_command_can_exist(
-    machine: Machine,
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """What the restart path adds (the restart state, the notifications) comes before the
-    loop or after the tick: the first thing the control task does is still read the drive."""
+    """What the restart path adds comes after the drive was read: the notification that
+    the console is ready, and the write of this start to the disk. Before the first tick
+    the restart state was only read."""
     records = machine.root / "records"
     machine.records = records
+    seen: list[tuple[int, bool]] = []
+    real = ServiceDesk.record_start
+
+    async def record_start(desk: ServiceDesk) -> None:
+        # What was true at the instant this start is handed to the disk.
+        seen.append((console.panel.runtime.idle_link.reads, state_at(records) is None))
+        await real(desk)
+
+    monkeypatch.setattr(ServiceDesk, "record_start", record_start)
     console = machine.boot()
     surface = console.panel.surface
     assert surface.pending is None
     assert console.panel.runtime.idle_link.reads == 0, "building the console read nothing"
     assert machine.listener.heard() == [], "and it has not said it is ready"
+    assert state_at(records) is None, "and nothing of this start is on the disk yet"
     await first_tick(console)
     assert console.panel.runtime.idle_link.reads >= 1, "ready is said after the drive was read"
+    await until(lambda: state_at(records) is not None, 10.0, "the start written to the disk")
+    assert len(seen) == 1, "this start is written once"
+    reads, unwritten = seen[0]
+    assert reads >= 1, "the drive was read before this start was written"
+    assert unwritten
     assert await end(console) == EXIT_OK
 
 
@@ -735,6 +827,68 @@ async def test_ex3_a_start_after_a_killed_session_writes_a_warning_naming_the_op
     assert not third_service.status().unclean_stop
     assert await end(third) == EXIT_OK
     assert len(warnings_in(records)) == 1
+
+
+# =========================================================================
+# EX-2: what the real entry point writes of a start and of a stop
+# =========================================================================
+
+
+def recording_config(records: Path) -> LocalConfig:
+    return config_of({**BENCH_ENV, "RECORD_ROOT": str(records)})
+
+
+def state_at(records: Path) -> Stored | None:
+    """The state on disk, when there is one that reads."""
+    found = load(records / STATE_NAME)
+    return found if isinstance(found, Stored) else None
+
+
+async def test_ex2_run_console_writes_running_after_its_first_tick_and_stopped_only_at_a_clean_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``run_console`` itself, on the real clock, with a web server that serves nothing."""
+    records = tmp_path / "records"
+    webs: list[FakeWeb] = []
+
+    def web(_services: object, _config: object) -> FakeWeb:
+        webs.append(FakeWeb(None))
+        return webs[0]
+
+    monkeypatch.setattr(local_panel, "UvicornRunner", web)
+    stop = asyncio.Event()
+    run = asyncio.create_task(run_console(recording_config(records), stop=stop))
+    await until(lambda: state_at(records) is not None, 20.0, "the start written to the disk")
+    while_running = state_at(records)
+    assert while_running is not None
+    assert while_running.running, "a console that is running is written as running"
+    assert not while_running.out_of_service
+    stop.set()
+    assert await asyncio.wait_for(run, 30.0) == EXIT_OK
+    after = state_at(records)
+    assert after is not None
+    assert not after.running, "its clean stop is written, last"
+
+
+async def test_ex2_run_console_never_writes_a_failed_exit_as_a_clean_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = tmp_path / "records"
+
+    def web(_services: object, _config: object) -> FakeWeb:
+        return FakeWeb(1.0)  # the web server dies a second in: the console stops, in failure
+
+    monkeypatch.setattr(local_panel, "UvicornRunner", web)
+    code = await asyncio.wait_for(run_console(recording_config(records)), 30.0)
+    assert code == EXIT_FAILED
+    left = state_at(records)
+    assert left is not None, "it ticked: its start was written"
+    assert left.running, "an exit in failure leaves the state saying running"
+    # And the next start counts it.
+    again = ServiceGuard(records, RealClock())
+    found = again.begin(boot_id=boot_identity(), open_record=None)
+    assert found.unclean_stop
+    assert found.unclean_starts == 1
 
 
 # =========================================================================

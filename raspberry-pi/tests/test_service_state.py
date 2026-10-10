@@ -67,10 +67,12 @@ class Machine:
         root.mkdir(parents=True, exist_ok=True)
 
     def start(self, *, after: float = 5.0, open_record: str | None = None) -> ServiceGuard:
-        """A new process, ``after`` seconds later."""
+        """A new process, ``after`` seconds later, that got as far as its first tick:
+        it read what the one before left, then wrote its own start."""
         self.clock.advance(Seconds(after))
         guard = ServiceGuard(self.root, self.clock)
         guard.begin(boot_id=self.boot_id, open_record=open_record)
+        guard.saved(store(guard.path, guard.stored))
         return guard
 
     def crash(self, *, after: float = 5.0, open_record: str | None = None) -> ServiceGuard:
@@ -97,7 +99,43 @@ def test_ex2_a_first_start_is_in_service_and_follows_no_unclean_stop(tmp_path: P
     written = load(guard.path)
     assert isinstance(written, Stored)
     assert written.running, "a process that dies from here on is found running by the next"
+    assert written == guard.stored
     assert not (tmp_path / "records" / TEMPORARY_NAME).exists()
+
+
+def test_ex3_reading_the_state_at_startup_writes_nothing(tmp_path: Path) -> None:
+    """The start is written once the drive has been read, never before: ``begin`` only reads."""
+    root = tmp_path / "records"
+    root.mkdir()
+    guard = ServiceGuard(root, clock_at(100.0))
+    status = guard.begin(boot_id=BOOT, open_record=None)
+    assert status == IN_SERVICE
+    assert list(root.iterdir()) == [], "nothing is created by reading"
+    assert guard.stored.running, "what will be written says this process is running"
+    # And over a state that is there: it is read, and left exactly as it was.
+    left = Stored(boot_id=BOOT, unclean_starts=(90.0,), running=True)
+    assert store(root / STATE_NAME, left) == Ok(None)
+    before = (root / STATE_NAME).read_bytes()
+    again = ServiceGuard(root, clock_at(105.0))
+    found = again.begin(boot_id=BOOT, open_record=None)
+    assert found.unclean_starts == 2
+    assert (root / STATE_NAME).read_bytes() == before
+
+
+def test_ex2_a_process_that_dies_before_its_first_tick_is_not_counted_by_the_console(
+    tmp_path: Path,
+) -> None:
+    """It never wrote its start: the file still says what the process before it left.
+    Such a process never said it was ready either: the service manager counts it."""
+    machine = Machine(tmp_path / "records")
+    machine.crash()  # written: running
+    for _ in range(5):
+        machine.clock.advance(Seconds(5.0))
+        dead = ServiceGuard(machine.root, machine.clock)
+        dead.begin(boot_id=BOOT, open_record=None)  # and nothing more
+    survivor = machine.start()
+    assert survivor.status.unclean_starts == 1
+    assert not survivor.status.out_of_service
 
 
 def test_ex2_a_start_after_a_clean_stop_is_not_counted(tmp_path: Path) -> None:
@@ -126,6 +164,31 @@ def test_ex2_the_third_unclean_start_within_the_window_takes_the_console_out_of_
     assert third.status.unclean_starts == THRESHOLD == 3
     assert third.status.out_of_service
     assert third.status.persisted
+
+
+def test_ex2_the_window_is_ten_minutes_and_the_threshold_three() -> None:
+    """The two figures the operator is told (the banner, the refusal), pinned."""
+    assert THRESHOLD == 3
+    assert WINDOW == 600.0
+
+
+def test_ex2_three_unclean_starts_inside_ten_minutes_count_and_outside_do_not(
+    tmp_path: Path,
+) -> None:
+    inside = Machine(tmp_path / "inside")
+    inside.crash()
+    inside.crash(after=1.0)  # unclean start 1
+    inside.crash(after=299.0)  # 2
+    third = inside.start(after=299.0)  # 3, 598 s after the first
+    assert third.status.unclean_starts == 3
+    assert third.status.out_of_service
+    outside = Machine(tmp_path / "outside")
+    outside.crash()
+    outside.crash(after=1.0)  # unclean start 1
+    outside.crash(after=301.0)  # 2
+    late = outside.start(after=301.0)  # 602 s after the first: it no longer counts
+    assert late.status.unclean_starts == 2
+    assert not late.status.out_of_service
 
 
 def test_ex2_unclean_starts_spread_over_more_than_the_window_never_add_up(
@@ -244,7 +307,9 @@ def test_ex2_a_disk_that_takes_nothing_never_holds_the_machine(tmp_path: Path) -
         guard = ServiceGuard(blocked, clock)
         status = guard.begin(boot_id=BOOT, open_record=None)
         assert not status.out_of_service
-        assert not status.persisted, "the page says the count is not kept"
+        guard.saved(store(guard.path, guard.stored))
+        assert not guard.status.persisted, "the page says the count is not kept"
+        assert not guard.status.out_of_service
         guard.stopped()
         assert not guard.status.persisted
 
