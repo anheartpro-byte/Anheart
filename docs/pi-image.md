@@ -39,6 +39,7 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 6. [Installer un vrai Raspberry Pi](#6-installer-un-vrai-raspberry-pi)
 7. [Mettre à jour, changer une version figée](#7-mettre-à-jour-changer-une-version-figée)
 8. [Limites et reste à faire](#8-limites-et-reste-à-faire)
+9. [Endurance : deux heures en simulation sur le Pi, puis une journée au banc](#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc)
 
 ---
 
@@ -707,6 +708,7 @@ nouvelles versions.
 | Quoi | Qui ou quel ticket |
 |---|---|
 | Installer un vrai Pi et constater le démarrage à l'allumage ([section 6](#6-installer-un-vrai-raspberry-pi)) | une personne avec le matériel |
+| Endurance sur le Pi : deux heures en simulation, puis une journée au banc, capsule vide ([section 9](#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc)) | une personne avec le matériel, ANH-164 |
 | Durée de construction de l'image sur un Pi 4 et sur un Pi 5 | idem, étape 4 |
 | Publier et signer l'image, la faire tirer par le Pi | chef de projet (registre, clé), ANH-126, ANH-168 |
 | Faire tourner la console sous le compte `anheart`, sans privilèges ; pare-feu ; système en lecture seule | ANH-151 |
@@ -721,3 +723,167 @@ nouvelles versions.
 | Une coupure franche de l'alimentation n'est pas simulée par la CI (l'étape 8 est un arrêt ordonné) | une personne avec le matériel, [section 6](#6-installer-un-vrai-raspberry-pi), étape 6 |
 | Raspberry Pi OS 12 est la série « Legacy » ; la série courante est Debian 13. En changer se fait en [section 7](#7-mettre-à-jour-changer-une-version-figée) | décision du chef de projet |
 | Figer les outils de développement (`requirements-dev.txt`) | ticket d'hygiène de la CI (ANH-183) |
+
+---
+
+## 9. Endurance : deux heures en simulation sur le Pi, puis une journée au banc
+
+**Non fait à ce jour : aucun Raspberry Pi n'a servi.** Cette section prépare les
+deux essais du ticket ANH-164 qui demandent le matériel. Leur partie sans
+matériel, 24 heures simulées de la console entière, tourne chaque nuit en CI ;
+le scénario, ses mesures et ses seuils sont décrits dans
+[framework-de-test.md, section 17](framework-de-test.md#17-endurance-de-la-console).
+
+Les deux essais relèvent les mêmes quatre choses : la mémoire résidente de la
+console, la durée ou la régularité de son tic, ses descripteurs de fichiers
+ouverts, la taille de son dossier de données.
+
+### 9.1 Deux heures en temps réel, en simulation
+
+Sans variateur ni BITalino : variateur et ECG simulés. La console tourne pour
+de bon, sur l'horloge réelle, avec son serveur web, son fil d'écriture et son
+traitement du signal, dans **l'image installée** (même Python, mêmes paquets,
+même code que le service). C'est cet essai qui mesure la **durée du tic sur un
+Pi**.
+
+Prérequis : le Pi est installé ([section 6](#6-installer-un-vrai-raspberry-pi),
+étapes 1 à 5). L'image ne contient que la console : le scénario et la doublure
+du tableau de bord sont copiés à part.
+
+1. **Copier le scénario.** Depuis le poste de développement, à la racine du
+   dépôt, sur le commit installé sur le Pi :
+
+   ```sh
+   git archive --format=tar HEAD \
+       simulation/__init__.py simulation/endurance.py simulation/endurance_measures.py \
+       raspberry-pi/tests/__init__.py raspberry-pi/tests/fake_dashboard.py \
+     | ssh <utilisateur>@<pi> 'mkdir -p anheart-endurance && tar -xf - -C anheart-endurance'
+   ```
+
+2. **Arrêter le service**, console au repos : l'essai et le service se
+   disputeraient le processeur.
+
+   ```sh
+   sudo systemctl stop anheart
+   systemctl is-active anheart     # doit répondre : inactive
+   ```
+
+3. **Lancer l'essai** dans l'image installée. Aucun port n'est publié, aucun
+   périphérique n'est monté, aucun réseau n'est utilisé : le tableau de bord est
+   une doublure en mémoire.
+
+   ```sh
+   IMAGE=$(sed -n 's/^Environment=ANHEART_IMAGE=//p' /etc/systemd/system/anheart.service.d/10-version.conf)
+   echo "$IMAGE"                   # anheart-console:<version>
+   sudo docker run --rm --name anheart-endurance --pull never --no-healthcheck --network none \
+       --volume "$HOME/anheart-endurance:/endurance" \
+       --env PYTHONPATH=/endurance:/endurance/raspberry-pi \
+       "$IMAGE" python -m simulation.endurance real-time --minutes 120 --out /endurance/out
+   echo "code de sortie : $?"
+   ```
+
+   Deux heures et quelques minutes. Code de sortie 0 : tous les seuils sont
+   tenus (`PASS`, ou `XFAIL` pour le défaut connu `rotation`).
+
+4. **Relever.** Le résumé est affiché à la fin et écrit dans
+   `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
+   que la console a dit dans `console.log` ; fichiers de root).
+
+   ```sh
+   sudo cat ~/anheart-endurance/out/endurance.md
+   cat /proc/device-tree/model; echo; uname -r
+   ```
+
+5. **Relancer le service** : `sudo systemctl start anheart`, puis les constats
+   de la [section 6](#6-installer-un-vrai-raspberry-pi), étape 5.
+
+À noter dans le ticket : le modèle du Pi, la version de l'image, le tableau des
+seuils, la ligne « Écart entre deux tics », le code de sortie.
+
+Pour mesurer aussi ce que **coûte** un tic sur le Pi, sans attendre deux
+heures : la même commande avec `simulated --hours 1` à la place de
+`real-time --minutes 120` joue une heure simulée, chaque tic chronométré.
+
+Cette commande n'a été lancée ni sur un Pi ni dans l'image : sur le poste de
+développement, la même commande Python a tourné hors Docker, avec ces cinq
+fichiers seulement à côté de la console
+([framework-de-test.md, section 17.6](framework-de-test.md#176-mesures-relevées)).
+
+### 9.2 Une journée au banc, capsule vide
+
+Avec le vrai variateur, le service `anheart` en marche, une personne à la
+console qui lance et arrête ses séances manuelles comme d'habitude. **Rien
+n'est lancé à la place du service et rien ne pilote la machine** : le suivi se
+fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
+
+1. **Avant la première séance**, noter la place et les inodes libres, et
+   démarrer le relevé (une ligne toutes les cinq minutes ; parcourir le dossier
+   des enregistrements plus souvent chargerait la carte SD) :
+
+   ```sh
+   df -h /var/lib/anheart/records; df -i /var/lib/anheart/records
+   PID=$(sudo docker inspect --format '{{.State.Pid}}' anheart)
+   echo "epoch_s,rss_kb,descriptors,data_kb,data_inodes" > ~/endurance-banc.csv
+   while sudo test -d "/proc/$PID"; do
+       printf '%s,%s,%s,%s,%s\n' "$(date +%s)" \
+           "$(sudo awk '/^VmRSS:/ {print $2}' "/proc/$PID/status")" \
+           "$(sudo ls "/proc/$PID/fd" | wc -l)" \
+           "$(sudo du -sk /var/lib/anheart/records | cut -f1)" \
+           "$(sudo find /var/lib/anheart/records | wc -l)" >> ~/endurance-banc.csv
+       sleep 300
+   done
+   ```
+
+   `$PID` est le processus de la console (le script d'entrée de l'image lui
+   passe la main). La boucle s'arrête d'elle-même si ce processus disparaît :
+   un redémarrage de la console pendant la journée est à noter, avec l'heure.
+
+2. **Pendant la journée** : les séances du protocole de banc, sans rien changer
+   à la façon de travailler. Noter l'heure de début, le nombre de séances, et
+   tout message inattendu de la console.
+
+3. **En fin de journée**, arrêter la boucle (Ctrl-C), puis relever la
+   régularité du tic dans les enregistrements du jour. La console ne publie pas
+   la durée de son tic ; ses enregistrements portent l'instant de chaque tic et
+   le verdict en vigueur. Remplacer `2026-10-15` par la date du jour (UTC) :
+
+   ```sh
+   JOUR=2026-10-15
+   # Écart entre deux tics, en secondes : médiane, 99e centile, maximum (0.2 attendu).
+   sudo sh -c "for f in /var/lib/anheart/records/${JOUR}T*/ticks.csv; do awk -F, 'NR>2 {print \$1-p} {p=\$1}' \"\$f\"; done" \
+     | sort -n | awk '{v[NR]=$1} END {print "tics", NR, "p50", v[int(NR*0.5)], "p99", v[int(NR*0.99)], "max", v[NR]}'
+   # Tics passés sous un verdict loop_stall, par enregistrement : 0 partout.
+   sudo sh -c "grep -c loop_stall /var/lib/anheart/records/${JOUR}T*/ticks.csv"
+   df -h /var/lib/anheart/records; df -i /var/lib/anheart/records
+   ```
+
+4. **Juger le relevé**, sur le poste de développement, avec les seuils de
+   l'essai simulé (mémoire stable à 10 % près après la première heure, aucun
+   descripteur qui fuit) :
+
+   ```sh
+   scp <utilisateur>@<pi>:endurance-banc.csv .
+   PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.endurance judge endurance-banc.csv --out simulation/out/banc
+   ```
+
+Ce que cet essai ne mesure pas : la **durée** du tic avec le vrai variateur. De
+l'extérieur on ne lit que l'écart entre deux tics, qui reste à 200 ms tant
+qu'un tic tient dans sa période ; le seuil « 99e centile sous 150 ms » se lit
+donc sur l'essai 9.1, en simulation. Mesurer la durée au banc demanderait que
+la console la publie elle-même, ce qu'aucun ticket ne prévoit à ce jour.
+
+À surveiller : **le dossier des enregistrements n'est pas borné aujourd'hui**
+(aucun dépôt hors machine n'existe, donc aucune purge). Une heure de séance
+ajoute environ 18 000 fichiers ; la console refuse d'armer une séance sous
+36 016 inodes libres ou 500 Mo libres. Les deux `df` de la journée donnent
+l'autonomie réelle de la carte.
+
+### 9.3 Où consigner les résultats
+
+Dans le ticket ANH-164 (un commentaire par essai, avec `endurance.md` ou le
+résumé de `judge` en pièce jointe), et dans le tableau ci-dessous.
+
+| Essai | Date | Pi, version de l'image | Durée, séances | Mémoire résidente (min, max) | Descripteurs (max) | Tic | Données (Mo, fichiers, inodes libres avant et après) | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 9.1, deux heures en simulation | à faire | | | | | durée p50, p99 ; écart p50, p99, max | | |
+| 9.2, journée au banc | à faire | | | | | écart p50, p99, max ; tics sous `loop_stall` | | |

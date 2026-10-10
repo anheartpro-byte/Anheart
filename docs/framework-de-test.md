@@ -28,6 +28,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 14. [Pièges connus](#14-pièges-connus)
 15. [CI](#15-ci)
 16. [Rejouer une séance enregistrée](#16-rejouer-une-séance-enregistrée)
+17. [Endurance de la console](#17-endurance-de-la-console)
 
 ---
 
@@ -120,7 +121,9 @@ Autres éléments :
   (`tests/test_record_endurance.py`, ANH-128), sautée tant que
   `ANHEART_ENDURANCE_HOURS` n'est pas définie. La même boucle tourne quelques
   minutes simulées dans la gate, à chaque run ; la journée simulée entière est
-  l'étape nocturne de la CI ([section 15](#15-ci)).
+  l'étape nocturne de la CI ([section 15](#15-ci)). L'endurance de la console
+  entière, acquisition et synchronisation comprises, est un scénario de la
+  simulation ([section 17](#17-endurance-de-la-console)).
 * `tests/typing_fixtures/` contient des modules volontairement faux, sur
   lesquels `test_typing_contract.py` lance les vérificateurs de types pour
   prouver qu'ils détectent bien l'erreur.
@@ -221,7 +224,9 @@ fichier au lieu d'un total.)
 
 Le tableau est l'instantané du 1er octobre 2026. Les tests du rejeu
 (`test_replay*.py`, `test_real_records.py`) sont venus après : ils sont
-décrits en [section 16](#16-rejouer-une-séance-enregistrée).
+décrits en [section 16](#16-rejouer-une-séance-enregistrée). Ceux de
+l'endurance (`test_endurance.py`, `test_endurance_measures.py`) le sont en
+[section 17](#17-endurance-de-la-console).
 
 ### 4.2 Commandes
 
@@ -991,7 +996,11 @@ Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
 * **aucun** xfail dans `raspberry-pi/tests/` (les commentaires « was a strict
   xfail » y marquent d'anciens défauts corrigés) ;
 * **un seul** reste : le couple de cohorte **S07 × jog AUTO**
-  (`KNOWN_VASOVAGAL_ONSET` dans `simulation/cohort/battery.py`).
+  (`KNOWN_VASOVAGAL_ONSET` dans `simulation/cohort/battery.py`) ;
+* hors pytest, le scénario d'endurance porte un défaut connu de la même sorte :
+  son seuil `rotation` (`KNOWN_UNBOUNDED_DATA` dans
+  `simulation/endurance_measures.py`, [section 17.4](#174-seuils)). Son rapport
+  l'affiche `XFAIL`, et `FIXED?` le jour où il ne tient plus.
 
 ### 12.3 Le cas résiduel S07
 
@@ -1102,7 +1111,7 @@ par un commit de fusion
 | `pi (tests 1)`, `pi (tests 2)` | dans chacun : ruff, basedpyright et mypy sur la console et sur les scripts de la gate, puis quatre des huit parts des tests du Pi, un processus pytest indépendant par part (voir [Gate Pi répartie sur deux jobs](#gate-pi-répartie-sur-deux-jobs-anh-183)) ; artefacts `pi-evidence-*` (ce que chaque part a collecté, exécuté et mesuré). Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus dans `pi (tests 1)` : l'endurance de l'enregistrement de séance, une journée simulée de séances avec l'écrivain actif (`tests/test_record_endurance.py -m slow`, `ANHEART_ENDURANCE_HOURS=24`, ANH-128) |
 | `pi-gate` | la vérification obligatoire : exige la réussite des deux jobs précédents, lance les tests du lanceur, puis prouve que chaque test du Pi a tourné une fois et une seule, fusionne les mesures et applique une seule fois, au total, le seuil de 100 % de branches sur la chaîne de sécurité ; `coverage.xml` |
 | `simulation (cohort)`, `simulation (battery 1)` à `simulation (battery 3)` | dans chacun : reproductibilité CAO via Git LFS et l'extracteur OCCT, ruff, basedpyright, mypy, puis ses parts de la batterie de scénarios, un processus pytest par part ; artefacts `simulation-evidence-*` (ce que chaque part a collecté, exécuté et mesuré) |
-| `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report` |
+| `simulation (report)` | `simulation.quick --all` ; artefact `simulation-report`. Sur le déclenchement nocturne seulement (`github.event_name == 'schedule'`), une étape de plus : l'endurance de la console entière, 24 heures simulées (`python -m simulation.endurance simulated --hours 24`, ANH-164, [section 17](#17-endurance-de-la-console)) ; son rapport rejoint le même artefact |
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
@@ -1211,9 +1220,10 @@ batterie, à chaque exécution (voir [16.5](#165-la-bibliothèque-simulationscen
 Budgets d'exécution : 60 minutes pour chacun des deux jobs `pi (tests …)` (dont,
 la nuit, 35 minutes au plus pour l'étape d'endurance de l'enregistrement, dans
 `pi (tests 1)`), 15 minutes pour `pi-gate`, 45 minutes pour chaque job de
-la batterie de simulation, 90 minutes pour `simulation (report)` (le budget de
-l'ancien job unique, gardé pour le rapport nocturne avec `--dsp`) et 15 minutes
-pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
+la batterie de simulation, 330 minutes pour `simulation (report)` (90 pour le
+rapport synthétique, le budget de l'ancien job unique, gardé pour le rapport
+nocturne avec `--dsp` ; et, la nuit, 240 au plus pour l'étape d'endurance de la
+console) et 15 minutes pour `simulation-gate`. Ces budgets concernent les jobs CI, pas les délais de
 sûreté du moteur. Aucun scénario, seuil de couverture ou contrôle n'est
 retiré ; la génération et la publication du rapport restent obligatoires :
 `simulation-gate` échoue si `simulation (report)` échoue.
@@ -3462,10 +3472,14 @@ Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
 local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
 sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
 [convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
-acquisition comprise, reste ANH-164 : aucun job vide ne la simule. L'étape
-nocturne de `pi (tests 1)` ne juge que l'enregistrement de séance (ANH-128) : une
-journée simulée de séances avec l'écrivain actif, sans le calcul de
-l'acquisition. Les règles MEN restent ANH-136 jusqu'à la définition des menaces.
+acquisition et synchronisation comprises, est l'étape nocturne de
+`simulation (report)` (ANH-164, [section 17](#17-endurance-de-la-console)) ; sa
+partie au banc, sur le vrai Pi, reste à faire par une personne
+([pi-image.md, section 9](pi-image.md#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc)).
+L'étape nocturne de `pi (tests 1)` reste : elle ne juge que l'enregistrement de
+séance (ANH-128), une journée simulée de séances avec l'écrivain actif, sans le
+calcul de l'acquisition, sur le tas Python séance par séance. Les règles MEN
+restent ANH-136 jusqu'à la définition des menaces.
 Cette infrastructure préalable à ANH-71 ne clôt donc pas à elle seule ANH-72 ni
 ces tickets dépendants.
 
@@ -3837,3 +3851,294 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
 | `test_record_console_parity.py` | écrit pour ANH-128 (même structure sur la console et en simulation) ; il vérifie aussi que le rejeu refuse l'enregistrement de la console en donnant ses raisons, et que `t_received` est la seule clé d'en-tête de bloc que la simulation écrit en plus |
+
+## 17. Endurance de la console
+
+### 17.1 Ce que c'est
+
+`simulation/endurance.py` fait vivre la **vraie** console pendant des heures
+(`build_panel` : le runtime, le variateur et le BITalino simulés, l'acquisition,
+l'enregistrement de séance sur un vrai disque, le lien avec le tableau de
+bord), en enchaînant des séances manuelles au banc et des séances programmées,
+séparées par des repos. Pendant ce temps il relève quatre choses du processus :
+sa mémoire résidente, la durée du tic de contrôle, ses descripteurs de fichiers
+ouverts, la taille de son dossier de données. Puis il juge l'essai sur les
+seuils du ticket ANH-164 et écrit un rapport.
+
+Rien n'est ajouté à la console pour cela. Les commandes de l'opérateur passent
+par son API HTTP (attestation, départ, cibles, arrêt, présence), et les mesures
+sont prises à côté d'elle (`simulation/endurance_measures.py`).
+
+Le tableau de bord est `raspberry-pi/tests/fake_dashboard.py`, la doublure en
+mémoire du test d'acceptation de la synchronisation
+([Synchronisation par relecture du journal local](#synchronisation-par-relecture-du-journal-local-anh-129)),
+donnée à la console à la place de son transport HTTP. **Aucun déploiement
+Convex n'est contacté**, quoi que dise `CONVEX_URL`. La doublure vit dans le
+processus dont on juge la mémoire : le scénario la vide de chaque séance close,
+après avoir vérifié qu'elle la détenait entière.
+
+Un cycle, avec les réglages par défaut de l'essai simulé :
+
+| Étape | Durée | Ce qui se passe |
+|---|---|---|
+| Séance manuelle au banc | 15 min aux cibles, puis la descente | cibles de 8, 12 puis 5 tr/min de sortie, un tiers du temps chacune ; arrêt demandé par l'opérateur |
+| Repos | 5 min | la séance doit être arrivée entière au tableau de bord simulé avant la suivante |
+| Séance programmée | 400 s | le programme `endurance_court` (toutes les phases), que le passager simulé termine ; la fréquence cardiaque vient du vrai traitement du signal |
+| Repos | 5 min | idem |
+
+Soit environ 32 minutes par cycle : 45 cycles et 90 séances en 24 heures, bien
+plus qu'une journée réelle, pour ouvrir et clore autant d'enregistrements que
+possible.
+
+### 17.2 Commandes
+
+```sh
+export PYTHONPATH=.:raspberry-pi; PY=raspberry-pi/.venv/bin/python
+
+$PY -m simulation.endurance simulated                  # 24 heures simulées
+$PY -m simulation.endurance simulated --hours 2
+$PY -m simulation.endurance real-time --minutes 120    # la même console, sur l'horloge réelle
+$PY -m simulation.endurance judge releve.csv           # un relevé pris au banc
+```
+
+| Mode | Ce qui tourne |
+|---|---|
+| `simulated` | une `ManualClock` avancée de 200 ms en 200 ms. Chaque seconde simulée joue ce que les tâches de la console font en une seconde réelle : cinq pas d'acquisition, cinq tics de contrôle (chacun chronométré), le journal écrit entre deux tics, une mise à jour des indicateurs des capteurs, un pas du lien avec le tableau de bord, un signe de présence de l'opérateur |
+| `real-time` | `LocalPanel.run` lui-même, sur l'horloge réelle : les tâches de la console, son serveur web sur un port libre de `127.0.0.1`, son fil d'écriture, son traitement du signal sur des fils de travail. Le scénario attend, commande par HTTP et relève depuis un fil à part |
+| `judge` | rien ne tourne : les seuils de mémoire et de descripteurs sont appliqués à un relevé pris de l'extérieur d'une console (la journée au banc, [pi-image.md, section 9](pi-image.md#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc)) |
+
+| Option | Effet |
+|---|---|
+| `--hours H` (`simulated`), `--minutes M` (`real-time`) | durée demandée ; 24 heures et 120 minutes par défaut. La séance en cours à l'échéance est arrêtée par l'opérateur, descend et est livrée : l'essai couvre donc un peu plus |
+| `--manual S`, `--rest S` | secondes aux cibles d'une séance manuelle, secondes de repos (900 et 300 en simulé ; 120 et 45 en temps réel, soit un cycle d'environ onze minutes) |
+| `--sample-every S` | secondes entre deux relevés (300 en simulé, 30 en temps réel) |
+| `--dsp programmes` ou `always` (`simulated`) | quand le traitement du signal cardiaque tourne : autour des séances programmées seulement (défaut), ou toute la journée |
+| `--out DIR` | où écrire le rapport (défaut `simulation/out/endurance/`) |
+| `--keep-data` | laisse en place le dossier de données de la console, retiré sinon une fois mesuré |
+
+**Pourquoi le traitement du signal ne tourne pas toute la journée simulée.**
+Le calcul de la fréquence cardiaque (BioSPPy, puis sa confirmation) coûte une
+vingtaine de millisecondes par tic, quatre fois le reste de la console. Une
+séance manuelle au banc ne surveille aucune fréquence cardiaque. Par défaut il
+tourne donc pendant les séances programmées et les vingt secondes qui les
+précèdent, soit un peu plus d'un cinquième de la journée. Le reste du temps
+l'acquisition tourne quand même : le BITalino simulé, l'enregistrement brut,
+les indicateurs des capteurs. `--dsp always` le fait tourner sans interruption,
+pour environ trois fois le temps de calcul (estimé sur quatorze minutes
+simulées ; cette forme n'a pas été lancée sur 24 heures).
+
+### 17.3 Mesures
+
+| Mesure | Comment elle est prise |
+|---|---|
+| Mémoire résidente | `VmRSS` de `/proc/self/status` sous Linux. Sur macOS, l'empreinte physique du processus (`footprint`), qui compte aussi les pages compressées : la taille résidente que donne `ps` y baisse de moitié dès que le système compresse les pages d'un processus, sans qu'il ait rien libéré (relevé sur ce scénario : de 165 Mo à 71 Mo en vingt minutes simulées). `ps` n'est que le dernier recours |
+| Blocs alloués par l'interpréteur | `sys.getallocatedblocks()`, relevé à titre d'indication : ce que pèsent les objets Python, quoi que le système fasse des pages du processus |
+| Durée du tic | en simulé : le temps de `control_step`, chronométré autour de l'appel. En temps réel : de l'instant que le tic lit à l'arrivée de son instantané chez un abonné du hub de télémétrie, ce qui **majore** la durée du tic ; l'écart entre deux tics est relevé aussi, c'est ce que juge la règle `loop_stall` |
+| Descripteurs ouverts | les entrées de `/proc/self/fd`, ou de `/dev/fd` |
+| Dossier de données | octets alloués par le système de fichiers et nombre de fichiers et dossiers (les inodes), enregistrement par enregistrement. Un enregistrement clos ne change plus : il est mesuré une fois |
+
+Les durées vont dans un histogramme de taille fixe (350 classes, 4,7 % d'écart
+entre deux bornes) : l'instrument ne grandit pas avec l'essai. Un centile
+annoncé est la borne haute de sa classe, jamais en dessous de la valeur vraie.
+
+Chaque relevé (`samples` du rapport) porte les quatre mesures et les centiles
+des tics écoulés depuis le relevé précédent : une dérive du tic se lit en
+comparant les premiers relevés aux derniers.
+
+### 17.4 Seuils
+
+| Seuil | Règle | Vient de |
+|---|---|---|
+| `rss` | après la période de chauffe, chaque relevé reste à ±10 % du premier | ticket |
+| `tick` | 99e centile de la durée du tic sous 150 ms, sur tout l'essai | ticket |
+| `descriptors` | le maximum de la seconde moitié de l'essai ne dépasse pas celui de la première : un descripteur qui fuit monte sans fin, des descripteurs qui vont et viennent avec les séances non | ticket (« aucun descripteur qui fuit ») |
+| `data` | ce que le code garantit aujourd'hui : voir ci-dessous | ticket, ramené à ce qui est vrai |
+| `rotation` | le dossier est borné par la rotation : **défaut connu**, voir ci-dessous | ticket |
+| `sessions` | chaque séance finit comme prévu (arrêt de l'opérateur, ou fin du programme) et arrive entière au tableau de bord simulé ; aucun point refusé, rien de dû à la fin, rien d'inattendu | ajouté : un essai dont les séances ne tournent plus ne prouve rien |
+
+La **période de chauffe** est la première heure ; pour un essai de moins de
+deux heures, son premier quart. Un essai trop court pour laisser quatre relevés
+après elle échoue sur `rss` et `descriptors` : il ne passe pas par défaut.
+
+**Le dossier de données n'est pas borné aujourd'hui.** Le ticket demande un
+dossier « borné par la rotation ». La rétention ne retire un enregistrement
+qu'une fois son dépôt hors machine **confirmé**
+(`src/record/retention.py`), et rien ne confirme un dépôt : le dépôt n'existe
+pas encore. Tout enregistrement reste donc sur le disque, quel que soit son âge.
+Ce qui borne le dossier, c'est le refus d'armer : la console refuse un départ
+sous 500 Mo ou 36 016 inodes libres. Le scénario le dit de deux façons :
+
+* `data` vérifie ce que ce refus suppose, et qui est vrai : un enregistrement ne
+  prend pas plus de fichiers que l'armement n'en prévoit (cinq blocs bruts par
+  seconde, plus huit), ni plus d'octets par seconde que la réserve de
+  l'armement divisée par la plus longue séance (136 Kio par seconde) ; le
+  journal hors séance tient dans ses deux fichiers ; rien d'autre n'est laissé à
+  côté des enregistrements que leurs curseurs et la liste de la
+  synchronisation ;
+* `rotation` est un **défaut connu**, au sens de la
+  [section 12](#12-les--xfail-strict--et-le-cas-résiduel-s07) : le rapport
+  l'affiche `XFAIL`, avec le nombre d'enregistrements clos et zéro dépôt
+  confirmé, et l'essai reste vert. Le jour où un dépôt est confirmé ou un
+  enregistrement purgé pendant l'essai, la ligne passe à `FIXED?` et l'essai
+  échoue : il faut alors écrire la vraie borne et retirer
+  `KNOWN_UNBOUNDED_DATA`.
+
+Ce qui grandit, mesuré : 82,1 Mo alloués par le système de fichiers (16,2 Mo de contenu) et 18 021 fichiers par heure de séance. Les fichiers sont presque tous des
+blocs d'acquisition brute, un toutes les 200 ms. Sur une carte de 32 Go
+formatée par défaut (un inode pour 16 Kio, environ 1,9 million d'inodes), ce
+sont les **inodes** qui manquent les premiers : de l'ordre de cent heures de
+séance avant le refus d'armer, à vérifier sur la carte réelle avec `df -i`.
+
+### 17.5 Lire le rapport
+
+`endurance.md` (affiché aussi à la fin de la commande) : le verdict, une ligne
+par seuil avec ce qui était attendu et ce qui a été mesuré, une douzaine de
+relevés répartis sur l'essai, et les limites de l'essai. `endurance.json` : la
+même chose en entier.
+
+| Clé de `endurance.json` | Contenu |
+|---|---|
+| `verdict`, `checks` | `PASS` si chaque seuil est `PASS` ou `XFAIL` ; chaque seuil avec son statut, sa règle et sa mesure |
+| `requested_s`, `covered_s`, `wall_s`, `cpu_s` | durée demandée, durée couverte sur l'horloge du mode, temps d'horloge murale, temps de processeur du processus |
+| `tick_ms`, `tick_period_ms` | nombre de tics, médiane, 99e centile, maximum ; l'écart entre deux tics en temps réel seulement |
+| `samples` | chaque relevé : instant, mémoire résidente, descripteurs, octets et fichiers du dossier de données, blocs alloués, centiles du tic depuis le relevé précédent |
+| `sessions` | chaque séance : sorte, durée, fin, livrée ou non, points 1 Hz reçus, taille de son enregistrement |
+| `sync` | heartbeats envoyés, points livrés, points refusés, doublons, envois encore dus à la fin |
+| `data` | taille totale, par heure de séance, journal hors séance, fichiers inattendus, dépôts confirmés, enregistrements purgés |
+| `anomaly` | ce qui a arrêté le scénario avant la fin, s'il y a lieu : un départ que la console n'a pas pris, une séance qui ne finit pas, une commande refusée |
+| `notes` | ce qui n'était pas actif ou pas mesuré |
+
+`console.log`, à côté, garde ce que la console a écrit dans son journal.
+
+Code de sortie : 0 si le verdict est `PASS`, 1 sinon.
+
+### 17.6 Mesures relevées
+
+Relevées le 10 octobre 2026 sur un poste de développement (Mac Apple silicon,
+8 cœurs, macOS-27.0.1-arm64-arm-64bit, Python 3.12.13). **Aucune ne vient
+d'un Raspberry Pi ni d'un runner de CI.** Le poste était partagé avec d'autres
+travaux pendant les essais (charge moyenne de 10 à 80 pour 8 cœurs) : les temps
+d'horloge murale sont majorés, le temps de processeur est le plus juste.
+
+**24 heures simulées** (`simulated --hours 24`, réglages par défaut) :
+
+| Mesure | Relevé |
+|---|---|
+| Durée couverte | 24 h 00 pour 24 h 00 demandées ; 90 séances (45 manuelles, 45 programmées), soit 16,5 h de séance enregistrée ; 90 finies comme prévu, 90 livrées entières au tableau de bord simulé |
+| Temps de l'essai | 69 min d'horloge murale, 60 min de processeur |
+| Mémoire (empreinte physique du processus) | 135,3 Mo au premier relevé, 149,6 Mo à 1 h 00 ; ensuite de 144,0 Mo à 153,5 Mo, 146,1 Mo à la fin : écart maximal 3,7 % |
+| Blocs alloués par l'interpréteur | 820 680 à 1 h 00, de 799 905 à 831 325 ensuite, 822 508 à la fin |
+| Durée du tic | médiane 0,115 ms, 99e centile 2,63 ms, maximum 223,8 ms sur 432 000 tics. Première heure : médiane 0,14 ms, pire 99e centile d'un relevé 4,57 ms ; dernière heure : 0,08 ms et 9,12 ms |
+| Descripteurs ouverts | au plus 8 dans la première moitié, 8 dans la seconde, 8 à la fin |
+| Dossier de données | 1355,6 Mo alloués (267,3 Mo de contenu) et 297 664 fichiers et dossiers pour 90 enregistrements ; journal hors séance 12 466 octets ; aucun fichier inattendu ; 0 dépôt confirmé, 0 enregistrement purgé |
+| Par heure de séance | 82,1 Mo alloués (16,2 Mo de contenu), 18 021 fichiers |
+| Synchronisation | 59 445 points 1 Hz livrés, 8 093 heartbeats, 0 point refusé, 0 doublon, 0 envoi dû à la fin |
+| Verdict | **PASS** : `rss` PASS, `tick` PASS, `descriptors` PASS, `data` PASS, `rotation` XFAIL, `sessions` PASS |
+
+Le maximum du tic est un tic isolé : onze relevés sur 288 comptent un tic de
+plus de 50 ms. Leur cause n'a pas été cherchée. Sur une horloge simulée, la
+durée d'un tic comprend le temps que le système donne à d'autres travaux, et le
+poste était chargé ; un passage complet du ramasse-miettes de l'interpréteur
+pendant un tic pèserait aussi. À relire sur un runner de CI, puis en temps réel
+sur le Pi. Les blocs alloués ne montrent aucune tendance sur la journée.
+
+**12 minutes en temps réel** (`real-time --minutes 12`). La console a été
+lancée depuis un dossier ne contenant que ses sources (`src/`, `config/`), avec
+à côté les cinq fichiers que la
+[section 9.1 de pi-image.md](pi-image.md#91-deux-heures-en-temps-réel-en-simulation)
+copie sur le Pi : c'est la commande Python de l'essai du Pi, hors Docker. Les
+24 heures simulées tournaient en même temps sur le même poste. La dernière
+séance manuelle est celle que l'échéance a coupée.
+
+| Mesure | Relevé |
+|---|---|
+| Durée couverte | 12,7 min pour 12 demandées ; 3 séances : manuelle, arrêtée par l'opérateur (140 s) ; programmée, menée à son terme (401 s) ; manuelle, arrêtée par l'opérateur (128 s) |
+| Temps de l'essai | 12,7 min d'horloge murale, 108 s de processeur |
+| Mémoire (empreinte physique du processus) | 140,9 Mo au premier relevé, 141,8 Mo à 3,5 min ; ensuite de 141,8 Mo à 147,9 Mo, 147,9 Mo à la fin : écart maximal 4,3 % |
+| Durée du tic (majorée) | médiane 1,05 ms, 99e centile 18,20 ms, maximum 114,7 ms sur 3 752 tics |
+| Écart entre deux tics | médiane 208,9 ms, 99e centile 229,1 ms, maximum 517,0 ms |
+| Descripteurs ouverts | 11 à chaque relevé |
+| Dossier de données | 15,1 Mo et 3 361 fichiers pour 3 enregistrements |
+| Synchronisation | 668 points livrés, 76 heartbeats, 0 refusé, 0 dû |
+| Verdict | **PASS** : `rss` PASS, `tick` PASS, `descriptors` PASS, `data` PASS, `rotation` XFAIL, `sessions` PASS |
+
+L'écart maximal entre deux tics est à rapprocher du gel `loop_stall`, à
+600 ms : sur ce poste chargé, il s'en est approché sans l'atteindre, et aucune
+séance n'a été perturbée.
+
+**L'essai de 24 heures de l'enregistrement seul** (ANH-128,
+`ANHEART_ENDURANCE_HOURS=24 pytest tests/test_record_endurance.py -m slow -s`,
+depuis `raspberry-pi/`), lancé une fois le même jour sur le même poste, passe en
+22 minutes d'horloge murale. Sa propre ligne de mesure :
+
+```text
+95 sessions, 436525 ticks; heap 3.93 MB after warm-up, 3.99 MB at the end, median growth 622 B per session; tracked objects 182266 after warm-up, 182266 at the end (highest 182266); tick 218 us at first, 214 us at the end
+```
+
+### 17.7 En CI
+
+* **À chaque exécution** : `simulation/tests/test_endurance.py` joue le même
+  scénario quelques minutes simulées dans la batterie (une séance manuelle, un
+  programme mené à son terme, une seconde séance coupée par l'échéance), puis
+  la même console quelques secondes en temps réel sur un port de `127.0.0.1`.
+  C'est la forme courte : elle fait partie de `simulation-gate`.
+* **La nuit seulement** (`github.event_name == 'schedule'`) : une étape du job
+  `simulation (report)` lance les 24 heures simulées, 240 minutes au plus. Un
+  seuil non tenu fait échouer ce job, donc `simulation-gate`. Le rapport rejoint
+  l'artefact `simulation-report` (`endurance/endurance.json`,
+  `endurance/endurance.md`, `endurance/console.log`), gardé 14 jours, que
+  l'essai passe ou non. `scripts/ci/ci-workflow.test.mjs` tient ces points.
+  Sur le poste des mesures, les 24 heures simulées coûtent une heure de
+  processeur ; un runner est plus lent, et la durée réelle de l'étape reste à
+  relever sur sa première nuit.
+* **L'autre étape nocturne d'endurance reste**, dans `pi (tests 1)`
+  (`raspberry-pi/tests/test_record_endurance.py`, ANH-128). Les deux ne mesurent
+  pas la même chose, et aucune ne remplace l'autre aujourd'hui :
+
+  | | Enregistrement seul (ANH-128) | Console entière (ANH-164) |
+  |---|---|---|
+  | Ce qui tourne | le runtime et l'écrivain ; l'acquisition est remplacée par des lots tout faits, pas de traitement du signal, pas de lien avec le tableau de bord | toute la console : acquisition, traitement du signal pendant les programmes, indicateurs des capteurs, synchronisation, API HTTP |
+  | Séances | manuelles au banc seulement | manuelles et programmées |
+  | Enregistrements | retirés après chaque séance | gardés, comme sur la machine |
+  | Ce qui est jugé | tas Python (`tracemalloc`) et objets suivis, séance par séance : moins de 5 Ko par séance ; premier décile du coût du tic | mémoire du processus à 10 % près, 99e centile du tic, descripteurs, dossier de données, séances livrées |
+  | Finesse sur une fuite de l'écrivain | quelques kilo-octets par séance | quelques méga-octets sur la journée |
+  | Coût | une vingtaine de minutes sur un poste, environ trente en CI (limite de l'étape : 35) | voir 17.6 ; limite de l'étape : 240 minutes |
+
+  Les deux étapes tournent dans deux jobs en parallèle : la nuit dure ce que
+  dure la plus longue.
+
+Le critère d'acceptation du ticket, « job nocturne vert pendant 7 nuits
+consécutives », **n'est pas établi** : le déclenchement nocturne ne tourne que
+sur la branche par défaut, où cette étape n'est pas encore arrivée. Il se lira
+sur les exécutions nocturnes de `ci.yml`, sept nuits de suite, une fois l'étape
+sur `main`.
+
+### 17.8 Limites
+
+* **Santé de la machine** : le ticket demande un essai « santé active ». Le
+  heartbeat ne porte pas encore d'objet de santé (ANH-148 non fait). Les
+  heartbeats partent toutes les dix secondes et sont comptés ; rien de plus.
+* **Tableau de bord** : une doublure en mémoire, tenue au vrai par la trace
+  rejouée du test d'acceptation de la synchronisation. Aucun réseau, donc
+  aucune lenteur ni coupure de réseau dans cet essai.
+* **Matériel** : variateur et BITalino simulés, pas de caméra, pas de navigateur
+  (un abonné du hub de télémétrie lit ce que la page lirait). Le disque est
+  celui de la machine qui lance l'essai, pas une carte SD.
+* **Horloge simulée** : la durée d'un tic est celle de son calcul, le journal
+  étant écrit entre deux tics et non par son fil. Ce que coûte la concurrence
+  (le fil d'écriture, le traitement du signal sur ses fils) ne se voit qu'en
+  temps réel.
+* **Mémoire sur macOS** : le seuil `rss` y est appliqué à l'empreinte physique
+  du processus, pas à sa mémoire résidente au sens strict (section 17.3). Les
+  chiffres d'un poste macOS et ceux d'un Linux (la CI, le Pi) ne se comparent
+  donc pas entre eux ; chacun se lit par rapport à lui-même.
+* **Sur un Pi** : rien n'a tourné sur un Raspberry Pi. Les deux heures en temps
+  réel et la journée au banc sont préparées dans
+  [pi-image.md, section 9](pi-image.md#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc).
+
+### 17.9 Les tests
+
+| Fichier | Ce qu'il vérifie |
+|---|---|
+| `test_endurance.py` | le scénario : une journée simulée courte (séance manuelle, programme mené à son terme, seconde séance coupée par l'échéance) où chaque séance finit comme prévu et arrive entière au tableau de bord simulé, chaque tic est chronométré, chaque relevé porte les quatre mesures, le dossier grandit comme l'armement le prévoit et rien ne le borne ; un programme en cours à l'échéance arrêté par l'opérateur ; la même console en temps réel sur un port de `127.0.0.1`, arrêtée proprement, sans rien laisser ; la ligne de commande dans ses trois modes ; ce que le scénario doit remarquer au lieu d'y survivre : une séance qui ne finit pas, un départ qui n'est pas pris, un tableau de bord qui ne répond plus (séance non livrée, envoi dû), une console sans lien ou mal configurée ; la page qui lit le hub, et le chronomètre du tic qui s'arrête quand elle est évincée |
+| `test_endurance_measures.py` | l'instrument et le jugement : l'histogramme ne sous-estime jamais un centile ; la mémoire et les descripteurs lus dans `/proc` et, à défaut, par `ps` et `/dev/fd`, puis pour de bon sur la machine des tests ; le dossier de données mesuré enregistrement par enregistrement, un enregistrement clos une seule fois, un fichier qui disparaît pendant la mesure, ce qui traîne à côté des enregistrements, un dépôt confirmé, un enregistrement purgé ; chaque seuil sur un essai qui le tient et sur un essai qui le viole (mémoire qui monte ou qui baisse de plus de 10 %, tic à 150 ms, descripteur qui fuit, enregistrement trop gros, journal trop long, fichier inattendu, fin imprévue, séance non livrée) ; le défaut connu `rotation`, `XFAIL` aujourd'hui et `FIXED?` dès qu'un dépôt est confirmé ; le rapport, et un relevé de banc lu puis jugé, ou refusé avec le numéro de la ligne fautive |
