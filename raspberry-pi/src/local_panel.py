@@ -1024,11 +1024,15 @@ class LocalPanel:
         if blocked is not None:
             self._surface.note_refused(operator, blocked)
             return
+        # Read before the drive is touched: the record's frames start with the arming.
+        asked = self._clock.monotonic()
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
             self._surface.note_refused(operator, describe_start_refusal(started.error))
             return
-        self._begin_record(SessionRequest(occupancy=occupancy, operator=operator))
+        self._begin_record(
+            SessionRequest(occupancy=occupancy, operator=operator, arming_began=asked)
+        )
         untrusted = self._untrusted_clock()
         if untrusted is not None:
             # Nobody on board (a person on board was refused above): the session
@@ -1075,6 +1079,8 @@ class LocalPanel:
             return
         program = prepared.value
         subject = Subject(subject_id=command.subject_id, operator=operator)
+        # Read before the drive is touched: the record's frames start with the arming.
+        asked = self._clock.monotonic()
         started = await self._runtime.start(program, subject)
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
@@ -1086,6 +1092,7 @@ class LocalPanel:
                 program=program,
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
+                arming_began=asked,
             )
         )
         if self._listener is not None:

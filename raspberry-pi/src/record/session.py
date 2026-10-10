@@ -78,6 +78,7 @@ from src.record.journal import (
     JournalStatus,
     RawBatch,
     Sensors,
+    just_before,
 )
 from src.record.logbook import note
 from src.record.rows import JsonValue, Row
@@ -286,6 +287,10 @@ class SessionRequest:
 
     subject_id: str = LOCAL_SUBJECT
     cloud_session_id: str | None = None
+    arming_began: Monotonic | None = None
+    """The console's clock just before the runtime was asked to arm: the drive's
+    exchanges of the arming come after it, an idle console's polling before.
+    ``None``: not known, and the record takes the drive's frames from its own start."""
 
 
 def manifest_for(
@@ -593,12 +598,17 @@ class SessionRecorder:
         clock = self._clock
         # A new record: what the recorder itself got wrong was about the previous one.
         self._faults = 0
+        origin = clock.monotonic()
+        since = origin if request.arming_began is None else request.arming_began
         if self._live is not None:
-            # The previous session's end was never observed; close what is open.
-            self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None))
-        live = _Live(origin=clock.monotonic(), names=names_of(request.operator))
+            # The previous session's end was never observed; close what is open. The
+            # drive's frames are its own up to the arming of this one, and no further.
+            self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None, just_before(since)))
+        live = _Live(origin=origin, names=names_of(request.operator))
         self._live = live
-        self._journal.open(manifest_for(self._stamp, request, clock, self._wall_trusted()), _EMAILS)
+        self._journal.open(
+            manifest_for(self._stamp, request, clock, self._wall_trusted()), _EMAILS, since=since
+        )
         kind = "manual" if request.program is None else "auto"
         self._event(
             live,
@@ -678,6 +688,9 @@ class SessionRecorder:
                     stop_reason=None if stop is None else self._text(live, stop),
                     shutdown_detail=None if detail is None else self._text(live, detail),
                 ),
+                # Read now, not ``now``: the exchanges of this last tick began after the
+                # tick's own instant, and they are the session's. The next ones are not.
+                until=self._clock.monotonic(),
             )
         )
         self._live = None
@@ -810,7 +823,13 @@ class SessionRecorder:
     @_total
     def refresh(self, now: Monotonic) -> None:
         """Read the journal's health. Called every tick: it runs the stall detector,
-        refreshes :attr:`degraded`, and prepares a sentence when the health changed."""
+        refreshes :attr:`degraded`, and prepares a sentence when the health changed.
+
+        ``now`` is the instant of that tick, read once its mailbox was
+        dispatched: any arming asked for before it is over. The journal is
+        told so (:meth:`Journal.dispatched`), which is how it knows which of
+        the drive's frames wait for a record and which belong to no session."""
+        self._journal.dispatched(now)
         status = self._journal.status(now)
         self._status = status
         said = (status.cause, None if status.error is None else status.error.detail)

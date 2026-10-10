@@ -16,7 +16,8 @@ Five angles on the one safety requirement of the black box:
   then, too rarely for a median, has no line to hide behind (ANH-183). Since
   ANH-191 the thread also takes the drive's frames and writes the logbook,
   and a tick also notes each drive call and each console event: both sides
-  are in that test;
+  are in that test. Since ANH-215 the call of an arming, ``Journal.open``, is
+  made at every one of those points too;
 * **structural**: while a recorded session ticks, the thread that runs the
   loop opens, creates, renames, truncates and flushes NOTHING under the
   records directory. Every one of those is the journal thread's;
@@ -80,6 +81,7 @@ from tests.record_journal_support import (
     count_fsync,
     journal_threads,
     session,
+    skip_fsync,
     wait_for,
     watch_tree,
 )
@@ -446,6 +448,10 @@ def stepped() -> Generator[Stepper]:
         watchdog.join(WAITED)
 
 
+def lines_of(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines()
+
+
 def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -457,8 +463,16 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
     the drive, the native driver notes each exchange (on its worker, which the
     tick awaits), and a console event becomes a line for the logbook: each of
     the three is made at every stop, and must return at once like the others.
+
+    ANH-215 EX-4: so is ``Journal.open``, what the tick that arms a session
+    asks of the journal. It was only called between two stops of the scenario,
+    never while the thread was held: a lock it alone shared with that thread
+    would not have been seen. Every stop now arms a session, so the scenario
+    makes a record per stop, thousands of them: their flushes to the device,
+    which this test judges nothing about, are skipped.
     """
     monkeypatch.setattr(journal_module, "STALL_AFTER", Seconds(1e9))
+    skip_fsync(monkeypatch)
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_791_195_000_000))
     roomy = Limits(entries=1_000_000, samples=100_000_000)
     journal = Journal(
@@ -488,13 +502,30 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
     monkeypatch.setattr(Scribe, "cycle", counted)
     recording = [False]
     stops: list[Stop] = []
+    armed = [0]
+    rows_queued = [0]
+
+    def arm() -> None:
+        """What the loop asks of the journal when a session is armed: the record of one more."""
+        armed[0] += 1
+        journal.open(session(armed[0]), Privacy())
+
+    def queue_a_row() -> None:
+        queued = journal.submit(row())
+        assert queued, "a value was refused: nothing was queued at this stop"
+        rows_queued[0] += 1
 
     def calls_of_a_tick() -> None:
-        """What the loop asks of the journal in a tick. Either way in, a value is queued."""
+        """What the loop asks of the journal in a tick. Either way in, a value is queued.
+
+        A tick that arms a session first: over the record the stop before left open,
+        or with none open.
+        """
+        arm()
         if recording[0]:
-            assert journal.submit(row()), "a value was refused: nothing was queued at this stop"
+            queue_a_row()
         else:
-            journal.close(closing())  # never refused; with no record open the thread drops it
+            journal.close(closing())  # never refused: the record just asked for is closed
         # A call to the drive, through the tap that notes it for the record.
         drive_calls.run_until_complete(tap.read_status())
         # An exchange of the native driver, at the one entry every one of them goes through.
@@ -519,6 +550,8 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         )
         logged = journal.log(line)
         assert logged, "a line of the logbook was refused: nothing was queued at this stop"
+        # What the tick says of itself, for the frames no record claims.
+        journal.dispatched(clock.monotonic())
         status = journal.status(clock.monotonic())
         assert status.recording is recording[0]
         assert status.free_bytes == journal.storage.free_bytes
@@ -557,21 +590,21 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
                     )
 
             def opened_and_written_to() -> None:
-                journal.open(session(1), Privacy())
-                assert journal.submit(row())
+                arm()
+                queue_a_row()
                 assert journal.submit(batch(0))
                 assert journal.submit(RecordEvent(t=0.2, kind=RecordEventKind.PHASE, detail="hold"))
                 journal.start()
 
             def later() -> None:
                 clock.advance(Seconds(6.0))
-                assert journal.submit(row())
+                queue_a_row()
 
             def opened_over_one_left_open() -> None:
-                journal.open(session(2), Privacy())
-                assert journal.submit(row())
-                journal.open(session(3), Privacy())
-                assert journal.submit(row())
+                arm()
+                queue_a_row()
+                arm()
+                queue_a_row()
 
             # A record is opened and written to: a row, raw samples, an event.
             step = "a record opened and written to"
@@ -636,18 +669,36 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
     for file, function in (("drive_tap.py", "take"), ("observation.py", "drain")):
         inside = [stop for stop in stops if (stop.file, stop.function) == (file, function)]
         assert len(inside) > 3, f"{file}: the journal thread was held {len(inside)} times in it"
-    # And it was writing: the three records are there, the first with a row for each of the
-    # stops made while it was open, and closed the way the loop asked.
+    # A session was armed at every stop, and each has its record, closed: none of those
+    # openings was lost, refused or left half made behind a thread that was held.
+    sessions = armed[0]
+    assert sessions > len(stops), "an arming at each stop, besides those of the scenario"
     found = records(journal.root)
-    assert [path.name.rpartition("_")[2] for path in found] == ["local-1", "local-2", "local-3"]
-    first = read(found[0])
-    assert isinstance(first, Ok)
-    assert first.value.manifest.end_reason == "operator_stop"
-    assert len(first.value.rows) > 500, "the rows queued while the thread was held were not written"
-    # The frames noted and the lines logged at each stop were taken and written as well.
-    kinds = {frame.kind for frame in first.value.frames}
+    names = {path.name.rpartition("_")[2] for path in found}
+    assert names == {f"local-{index}" for index in range(1, sessions + 1)}
+    assert all((path / "checksums.sha256").is_file() for path in found), "the last file written"
+    # And the thread was writing: together the records hold each row queued at a stop, once,
+    # and the frames noted at each stop were taken and written as well.
+    assert rows_queued[0] > 500
+    assert sum(len(lines_of(path / "ticks.csv")) - 1 for path in found) == rows_queued[0], (
+        "the rows queued while the thread was held were not written"
+    )
+    with_frames = [path for path in found if lines_of(path / "drive_frames.jsonl")]
+    frame_lines = sum(len(lines_of(path / "drive_frames.jsonl")) for path in with_frames)
+    assert frame_lines > 1000, "a drive call and an exchange per stop"
+    # The records that were handed frames (those open when the thread came back) and one in
+    # fifty of the others are read whole, which checks every file against its sum: closed
+    # the way the loop asked or by the arming that followed, and nothing unexpected in them.
+    kinds: set[str] = set()
+    endings: set[str | None] = set()
+    for path in (*with_frames, *found[::50]):
+        loaded = read(path)
+        assert isinstance(loaded, Ok), loaded
+        assert loaded.value.warnings == (), path.name
+        kinds.update(frame.kind for frame in loaded.value.frames)
+        endings.add(loaded.value.manifest.end_reason)
     assert kinds == {"read_failed", "modbus_read"}, kinds
-    assert len(first.value.frames) > 1000, "a drive call and an exchange per stop"
+    assert endings == {"operator_stop", "superseded"}, endings
     logged_lines = (journal.root / LOGBOOK / LOGBOOK_FILE).read_text(encoding="utf-8").splitlines()
     assert len(logged_lines) > 1000, "a line of the logbook per stop"
     assert not journal.status(clock.monotonic()).degraded

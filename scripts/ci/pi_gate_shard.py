@@ -88,13 +88,6 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     "tests/test_cooldown_freeze_console.py": {
         "test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 41,
     },
-    "tests/test_exit_deadline.py": {
-        "test_ex7_measured_without_the_deadline_a_send_stuck_on_the_disk_holds_the_exit": 14,
-        (
-            "test_ex7_with_the_deadline_the_process_leaves_within_the_grace_once_the_drive_"
-            "is_stopped"
-        ): 12,
-    },
     "tests/test_failure_drive.py": {
         "test_comms_loss_at_every_programme_phase_goes_silent[recovery]": 37,
         "test_comms_loss_at_every_programme_phase_goes_silent[cooldown]": 31,
@@ -117,6 +110,9 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
         "test_gapped_samples_never_yield_a_false_good_heart_rate": 12,
         "test_a_transient_disconnect_reconnects_and_the_session_carries_on": 10,
     },
+    "tests/test_failure_ecg_grade.py": {
+        "test_a_quality_grade_that_cannot_be_computed_ends_on_hr_stale": 13,
+    },
     "tests/test_local_panel_e2e.py": {
         "test_manual_0_300_150_0_ramps_conform_then_stop_zeroes_the_target": 32,
         "test_a_comms_loss_goes_silent_and_nothing_resumes": 23,
@@ -130,31 +126,28 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
     },
     "tests/test_record_drive_frames.py": {
         "test_ex2_acceptance_a_drive_fault_injected_in_a_simulated_session_is_in_drive_frames": 21,
-        "test_ex2_the_sdk_frames_switch_on_the_real_driver_both_positions_measured": 12,
-        "test_ex2_measured_what_the_frames_add_to_a_minute_of_record": 10,
     },
     "tests/test_record_endurance.py": {
         "test_ex10_a_few_sessions_show_no_accumulation_and_no_drift": 20,
     },
     "tests/test_record_inodes.py": {
-        "test_ex1_acceptance_a_start_is_refused_before_the_record_becomes_impossible": 13,
+        "test_ex1_acceptance_a_start_is_refused_before_the_record_becomes_impossible": 14,
     },
     "tests/test_record_logbook.py": {
         "test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_logbook": 21,
     },
     "tests/test_record_session.py": {
         "test_a_drive_fault_is_an_event_with_its_mnemonic_and_its_code": 24,
+        "test_ex3_a_full_disk_never_stops_the_session_and_the_operator_is_told": 10,
     },
     "tests/test_record_tick_isolation.py": {
         "test_ex2_the_tick_takes_the_same_time_with_the_writer_active": 44,
         "test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupied_session": 27,
+        "test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stands": 18,
         "test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loop": 15,
     },
     "tests/test_link_indicator.py": {
-        # Not measured on CI yet: taken from its time on a workstation and from what
-        # the acceptance test below costs on both.
-        "test_b2_a_session_of_which_nothing_arrives_stops_reading_joignable_on_the_console": 32,
-        "test_acceptance_a_dashboard_answers_426_in_the_middle_of_a_session": 13,
+        "test_b2_a_session_of_which_nothing_arrives_stops_reading_joignable_on_the_console": 15,
     },
     "tests/test_runtime.py": {
         "test_a_whole_session_actually_holds_the_occupant_in_the_zone": 20,
@@ -171,8 +164,17 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
         "test_whenever_a_freeze_is_latched_the_programme_ends_on_time_and_never_rises": 29,
         "test_the_shipped_programme_frozen_on_its_plateau_comes_down_and_ends_on_time": 20,
     },
+    "tests/test_runtime_ending_alerts.py": {
+        "test_an_ending_opened_late_in_the_shipped_programme_latches_no_overrun": 37,
+        "test_a_stop_on_an_arm_that_is_not_coming_down_buys_its_own_descent_and_no_more": 21,
+        (
+            "test_a_manual_session_that_reaches_its_limit_at_speed_latches_no_overrun"
+            "[the capsule empty, the nameplate speed, the real hour]"
+        ): 15,
+    },
     "tests/test_runtime_session_overrun.py": {
         "test_the_shipped_programme_then_twice_its_length_at_rest_and_a_new_start": 26,
+        "test_whatever_ends_a_session_and_whenever_the_rest_latches_nothing_more": 21,
     },
     "tests/test_runtime_standstill.py": {
         "test_a_heart_rate_drifting_above_the_zone_until_standstill_ends_the_session": 12,
@@ -191,7 +193,7 @@ PI_SLOW_SECONDS: Final[Mapping[str, Mapping[str, int]]] = {
         "test_a_clean_generator_is_graded_good_nearly_always": 11,
     },
     "tests/test_session_overrun_console.py": {
-        "test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_takes_a_start": 60,
+        "test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_takes_a_start": 15,
     },
     "tests/test_standstill_console.py": {
         "test_after_a_standstill_the_console_restarts_nothing_and_refuses_every_start": 18,
@@ -207,12 +209,34 @@ a name with one is that case alone, for the tests whose cases differ: a
 programme cut short at its last phase runs for six times as long as one cut
 at its first.
 
-The seven lines of ANH-191 (``test_exit_deadline.py``, ``test_record_drive_frames.py``,
-``test_record_inodes.py``, ``test_record_logbook.py``) were written before any
-run had measured those tests: their seconds are the times of a developer's
-machine at the ratio the measured neighbours show (about five; the two exit
-tests wait 7 s and 5 s on a real clock, plus a process to start). Replace them
-with measured ones at the next refresh.
+Nine lines had been written before any run measured their tests: seven for
+ANH-191 and two for ANH-210, from the times of a developer's machine. They
+were measured on 10 October 2026 (ANH-215), on two runs of ``develop``
+(38062342869 and 38057681312), and brought to the seconds of this table: in
+each run the seconds of the slower runner to the faster one (1.36 and 1.59
+times slower, on the 115 and 113 parametrized cases both ran), then to this
+table by what the 118 listed cases show (that faster runner took 1.34 and 0.99
+times the seconds written here), and the two runs averaged. Four keep a line:
+the acceptance tests of the drive's frames (21), of the inodes (14) and of the
+logbook (21), and the session of which nothing arrives (15, where 32 was
+written). The five others take less than ten seconds and are gone from the
+table: the two exit tests (8 and 7), the minute of frames (9.5), the SDK
+switch (1) and the 426 in the middle of a session (7).
+``test_the_indicator_hears_every_exchange_of_a_session_started_at_the_machine``
+(ANH-210) takes 15 s on the slowest runner met, 8 in these seconds: it has no
+line either. The same two runs showed one line four times too high (the
+programme launched from the site: 15, where 60 was written) and six tests of
+ten seconds or more with no line (three of ``test_runtime_ending_alerts.py``,
+and one each of ``test_runtime_session_overrun.py``,
+``test_failure_ecg_grade.py`` and ``test_record_session.py``): corrected and
+added. Every other line was left as it was. Most agree with both runs within a
+tenth; five measure 2 to 7 seconds less in both (the ``nan_values`` signal,
+the disk that never answers, the regulation of a turning arm, the isolated
+outliers, the clean EMG generator), too little to move the dealing. One line
+came with that work itself: the test that holds the journal thread before each
+of its instructions now arms a session at every stop, and takes 18 of these
+seconds where it took 2 (measured on the first run that carried it,
+38069458014, whose faster runner took 0.95 times the seconds written here).
 
 The 52 lines measured then named 119 of the 4267 tests and two thirds of their
 time; three of them named tests that were rewritten since (ANH-185) and are
