@@ -2,7 +2,13 @@
 
 Started by ``tests/test_bench_console_exit.py``, which sends it real signals:
 
-    python tests/bench_console_exit_worker.py <report file> <seconds the stop takes>
+    python tests/bench_console_exit_worker.py <report file> <stop> [<wait>]
+
+``<stop>`` is how long the driver's stop takes, in seconds, or ``stuck`` for a
+stop that never returns: an exchange blocked in a thread of an executor, as a
+driver transaction on a dead link would be, which is a thread the interpreter
+waits for on its way out. ``<wait>``, when given, replaces the time the script
+waits for the stop before it gives up (35 s on the bench).
 
 Only the drive is a stand-in. The argument parsing, the signal handlers, the
 bus thread, the web server and the exit are the script's own, in a process of
@@ -12,15 +18,16 @@ that runs the tests. The stand-in opens no port and holds no lock.
 The parent cannot look into this process, so the stand-in writes one word a
 line to the report file: ``open`` when the bus thread has connected,
 ``serving`` when the web server has started (its signal handlers are in place
-by then), ``stopping`` when the driver's stop begins and ``stopped`` when it
-has finished. The web server listens on a port the system picks: nothing here
-needs to reach it.
+by then), ``served`` when it has closed what it serves, ``stopping`` when the
+driver's stop begins and ``stopped`` when it has finished. The web server
+listens on a port the system picks: nothing here needs to reach it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from pathlib import Path
 from typing import Final, cast
 
@@ -38,6 +45,9 @@ from src.units import Seconds
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
 
+STUCK: Final[str] = "stuck"
+"""The ``<stop>`` argument of a stop that never returns."""
+
 
 class _Report:
     """The words this process leaves for its parent, appended one a line."""
@@ -53,10 +63,10 @@ class _Report:
 class _Drive:
     """What the bus thread asks of the driver, answered from memory. Its stop takes a while."""
 
-    def __init__(self, report: _Report, stop_takes: float) -> None:
+    def __init__(self, report: _Report, stop: str) -> None:
         self.link_lost: bool = False
         self._report: _Report = report
-        self._stop_takes: float = stop_takes
+        self._stop: str = stop
 
     async def open(self) -> Result[None, DriveError]:
         self._report.note("open")
@@ -70,7 +80,11 @@ class _Drive:
 
     async def close(self) -> Result[None, DriveError]:
         self._report.note("stopping")
-        await asyncio.sleep(self._stop_takes)
+        if self._stop == STUCK:
+            never = threading.Event()
+            await asyncio.get_running_loop().run_in_executor(None, never.wait)
+        else:
+            await asyncio.sleep(float(self._stop))
         self._report.note("stopped")
         return Ok(None)
 
@@ -82,16 +96,23 @@ class _Built:
 
 def main() -> int:
     report = _Report(Path(sys.argv[1]))
-    drive = _Drive(report, float(sys.argv[2]))
+    drive = _Drive(report, sys.argv[2])
+    patch = pytest.MonkeyPatch()
 
     def build(_link: DriveLink, _clock: Clock) -> BuiltDrive:
-        return cast("BuiltDrive", _Built(drive))
+        return cast(BuiltDrive, _Built(drive))
 
     def serving() -> None:
         report.note("serving")
 
-    pytest.MonkeyPatch().setattr(bench, "build_drive", build)
+    def served() -> None:
+        report.note("served")
+
+    patch.setattr(bench, "build_drive", build)
+    if len(sys.argv) > 3:
+        patch.setattr(bench, "SHUTDOWN_JOIN_S", float(sys.argv[3]))
     bench.app.router.on_startup.append(serving)
+    bench.app.router.on_shutdown.append(served)
     sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", "0"]
     return bench.main()
 

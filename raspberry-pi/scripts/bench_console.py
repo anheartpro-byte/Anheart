@@ -55,9 +55,10 @@ the operator arms again -- no automatic resumption of motion, anywhere.
 
 ## How this process ends
 
-Every way out that Python gets to see ends in ONE thing, the driver's own stop
-(``ATV320Drive.close``: LFRD = 0, the shaft read at standstill, then the stop
-words), run once by the bus thread before the process dies:
+Every way out that Python gets to see asks for ONE thing, the driver's own
+stop (``ATV320Drive.close``: LFRD = 0, the shaft read at standstill, then the
+stop words), run once by the bus thread, and waits for it before the process
+ends:
 
 * Ctrl+C in the terminal (SIGINT);
 * ``kill <pid>``, a service manager or a container being stopped (SIGTERM);
@@ -67,16 +68,31 @@ words), run once by the bus thread before the process dies:
 SIGTERM and SIGHUP used to end the process with NO stop: the web server takes
 the signal, shuts itself down, then hands the signal back to whatever handled
 it before, and by default that is the end of the process on the spot, before
-any ``finally``. SIGHUP it does not take at all. Both now leave through
-``main``'s ``finally``. Nothing in that path can do anything but stop: it sets
+any ``finally``. SIGHUP it does not take at all. All three now have one
+handler, this script's, and leave through ``main``'s ``finally``. Nothing in that path can do anything but stop: it sets
 one flag, and the bus thread answers it with the driver's stop and nothing
-else. While that stop runs (35 s at most) further signals are ignored, a
-second Ctrl+C included: cutting it short would leave the stop half done.
+else.
 
-What nothing here can cover: SIGKILL (``kill -9``), the power going, the
-interpreter itself crashing. No code runs then. THE NET IS THE DRIVE'S OWN
-COMMUNICATION TIMEOUT (ttO): the keepalive stops with the process and the
-drive stops the motor by itself. Check ttO on the keypad before relying on it.
+The wait is bounded: 35 s (``SHUTDOWN_JOIN_S``). During it further signals are
+ignored, a second Ctrl+C included: cutting the stop short would leave it half
+done. The last line printed, ``sortie: ...``, says how the machine was left:
+
+* ``arret confirme, port libere``: the stop finished and read the shaft at
+  standstill;
+* ``ATTENTION: ...``: the stop finished without being able to confirm, or it
+  raised, or IT HAD NOT FINISHED WHEN THE WAIT ENDED. In that last case the
+  process ends at once all the same, by itself, so that it can never be left
+  hanging on a stuck exchange with signals ignored: its end is what gives the
+  port and the lock on the drive cable back. A stop asked for from the page
+  just before (up to 25 s) followed by the driver's own stop can outlast the
+  35 s on a shaft that is slow to come to rest.
+
+What stops the motor whenever the stop was not confirmed, and what nothing
+here can cover at all: SIGKILL (``kill -9``), the power going, the interpreter
+itself crashing. No code runs then. THE NET IS THE DRIVE'S OWN COMMUNICATION
+TIMEOUT (ttO): the keepalive stops with the process and the drive stops the
+motor by itself. Check ttO on the keypad before relying on it, and check on
+the drive that the motor is at rest before starting the tool again.
 
 ## If the link is unstable, suspect the physical layer first
 Partial frames are an electrical symptom, not a software one. Check the common
@@ -95,6 +111,7 @@ import signal
 import sys
 import threading
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import FrameType
 from typing import Annotated, Final, Literal, assert_never, override
@@ -804,41 +821,61 @@ setInterval(tick,500); tick();
 
 
 EXIT_HELP: Final[str] = (
-    "Sortie: Ctrl+C, SIGTERM (kill, arret d'un service) et SIGHUP (terminal ferme) passent "
-    "tous par l'arret du pilote (consigne a 0, arbre lu a l'arret, puis mots d'arret), une "
-    "seule fois, avant la fin du processus. SIGKILL (kill -9), une coupure de courant ou un "
-    "plantage de l'interpreteur ne peuvent pas etre interceptes: le seul filet est alors le "
-    "delai de communication du variateur (ttO), a verifier sur son clavier."
+    "Sortie: Ctrl+C, SIGTERM (kill, arret d'un service) et SIGHUP (terminal ferme) lancent "
+    "tous l'arret du pilote (consigne a 0, arbre lu a l'arret, puis mots d'arret), une seule "
+    f"fois, et l'attendent {SHUTDOWN_JOIN_S:.0f} s au plus avant la fin du processus; pendant "
+    "cette attente les signaux sont ignores. Si l'arret n'a pas fini a temps, la derniere "
+    "ligne le dit (sortie: ATTENTION ...) et le processus se termine quand meme. SIGKILL "
+    "(kill -9), une coupure de courant ou un plantage de l'interpreteur ne peuvent pas etre "
+    "interceptes. Dans tous ces cas le seul filet est le delai de communication du variateur "
+    "(ttO), a verifier sur son clavier."
 )
+
+EXIT_STOP_UNFINISHED: Final[int] = 1
+"""The exit status when the process ends without having seen the driver's stop finish."""
+
+#: What ``signal.signal`` hands back: the handler a signal had before.
+type _Handler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
+
+
+def _exit_signals() -> tuple[signal.Signals, ...]:
+    """The signals that end this process and that Python can catch. Windows has no SIGHUP."""
+    if sys.platform == "win32":
+        return (signal.SIGINT, signal.SIGTERM)
+    return (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def _leave(signum: int, _frame: FrameType | None) -> None:
-    """SIGTERM: out of whatever the main thread is doing, through ``main``'s ``finally``.
+    """An exit signal: out of whatever the main thread is doing, through ``main``'s ``finally``.
+
+    The shield goes up FIRST, here, before the exception: two signals that
+    arrive together are two handlers, and the second one raising inside the
+    ``finally`` the first one led to would end the process before the stop.
+    Once this has run no other exit signal has a handler left, and one that
+    was already pending is dropped.
 
     An exception and not a flag, because the main thread may be anywhere: in
-    the start-up wait, or in the web server just after it has shut itself
-    down and handed the signal back. The exit status is the one a shell gives
-    a process ended by that signal, 128 plus its number.
+    the start-up wait, in the web server's loop (SIGHUP, which the web server
+    does not take: its loop is cancelled and it closes what it serves on the
+    way out), or in the web server just after it has shut itself down and
+    handed the signal back (Ctrl+C and SIGTERM, which it does take). Ctrl+C
+    stays the interruption it always was. SIGTERM and SIGHUP leave with the
+    status a shell gives a process ended by them, 128 plus the signal's
+    number.
     """
+    _let_nothing_cut_the_stop()
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
     raise SystemExit(128 + signum)
 
 
-def _hang_up(_signum: int, _frame: FrameType | None) -> None:
-    """SIGHUP, the terminal or the session gone: the same exit as SIGTERM, by the same road.
+def _leave_through_the_stop() -> Mapping[signal.Signals, _Handler]:
+    """From here Ctrl+C, SIGTERM and SIGHUP are exits through ``main``'s ``finally``.
 
-    Handed on as a SIGTERM rather than raised from here. While the web server
-    runs it holds SIGTERM: it shuts itself down in order, then hands the
-    signal back to :func:`_leave`. Outside the web server :func:`_leave`
-    answers at once.
+    Main thread only. Returns what each signal did before, to be given back
+    once the stop is over (:func:`_give_the_signals_back`).
     """
-    signal.raise_signal(signal.SIGTERM)
-
-
-def _leave_through_the_stop() -> None:
-    """From here SIGTERM and SIGHUP are exits through ``main``'s ``finally``. Main thread only."""
-    signal.signal(signal.SIGTERM, _leave)
-    if sys.platform != "win32":
-        signal.signal(signal.SIGHUP, _hang_up)
+    return {wanted: signal.signal(wanted, _leave) for wanted in _exit_signals()}
 
 
 def _let_nothing_cut_the_stop() -> None:
@@ -847,12 +884,61 @@ def _let_nothing_cut_the_stop() -> None:
     A second ``kill``, a terminal closed after a Ctrl+C, an impatient second
     Ctrl+C: each would otherwise end the process while the bus thread is in
     the middle of the stop sequence. The wait they would cut is bounded
-    (:data:`SHUTDOWN_JOIN_S`), and the process ends right after it.
+    (:data:`SHUTDOWN_JOIN_S`), and the shield comes down when it is over
+    (:func:`_give_the_signals_back`): it never outlives the stop.
     """
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    if sys.platform != "win32":
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    for unwanted in _exit_signals():
+        signal.signal(unwanted, signal.SIG_IGN)
+
+
+def _give_the_signals_back(before: Mapping[signal.Signals, _Handler]) -> None:
+    """The wait for the stop is over: each signal does again what it did before ``main``.
+
+    For a console started from a terminal that is the default: Ctrl+C
+    interrupts, SIGTERM and SIGHUP end the process. Whatever the interpreter
+    still waits for on its way out, the process can be ended by ordinary
+    means.
+    """
+    for restored, handler in before.items():
+        signal.signal(restored, signal.SIG_DFL if handler is None else handler)
+
+
+def _stop_and_report(started: BusWorker, before: Mapping[signal.Signals, _Handler]) -> None:
+    """Ask the bus thread for the driver's stop, wait for it within bounds, say how it went.
+
+    The bus thread's exit runs the driver's stop sequence; it is waited for
+    rather than left to die mid-stop with the process. The wait is bounded,
+    and a stop that has not finished when it ends is not passed over in
+    silence: the last line says ATTENTION, that nothing was confirmed, and
+    what is left to stop the motor. Then the process ENDS, by itself. A stop
+    that is stuck is stuck in a thread the interpreter would otherwise wait
+    for on its way out, with no limit, holding the port and the lock on the
+    drive cable; ending the process is what gives both back, and it is why
+    the tool can never be left for the operator to kill by force.
+
+    The report starts on a line of its own: the signal that brought the
+    process here may have cut a line that was being printed.
+    """
+    started.shutdown()
+    if started.ident is None:
+        report = "fil de bus jamais demarre: rien n'a ete ouvert, rien n'a ete commande"
+    else:
+        started.join(timeout=SHUTDOWN_JOIN_S)
+        report = started.exit_report
+    unfinished = started.is_alive()
+    if unfinished:
+        report = (
+            f"ATTENTION: l'arret du pilote n'a pas fini en {SHUTDOWN_JOIN_S:.0f} s. Arret NON "
+            "confirme. Le port et le verrou du cable, encore tenus, sont rendus par la fin de "
+            "ce processus, qui se termine maintenant. Seul le delai de communication du "
+            "variateur (ttO) arrete le moteur: verifier sur le variateur qu'il est a l'arret "
+            "avant de relancer."
+        )
+    print(f"\nsortie: {report}", flush=True)
+    _give_the_signals_back(before)
+    if unfinished:
+        sys.stderr.flush()
+        os._exit(EXIT_STOP_UNFINISHED)
 
 
 def main() -> int:
@@ -875,9 +961,10 @@ def main() -> int:
         ap.error(f"--max-rpm={max_rpm} doit etre dans 0..{NOMINAL_RPM}")
 
     worker = BusWorker(link, max_rpm)
-    # Before the bus thread exists, and the `try` before it starts: from here
-    # no exit that Python gets to see goes round the `finally` below.
-    _leave_through_the_stop()
+    # In this order: the exit signals first, then the `try`, then the bus
+    # thread. A signal that arrives once the thread exists must find both its
+    # handler and the `finally` below.
+    before = _leave_through_the_stop()
     try:
         worker.start()
         print(f"lien: {link.describe()}")
@@ -896,13 +983,14 @@ def main() -> int:
         print("Rien ne tourne avant que VOUS armiez et cliquiez.")
         uvicorn.run(app, host=host, port=http_port, log_level="warning")
     finally:
-        # The worker's exit runs the driver's stop sequence; wait for it rather
-        # than letting a daemon thread die mid-stop with the process.
-        _let_nothing_cut_the_stop()
-        worker.shutdown()
-        if worker.ident is not None:
-            worker.join(timeout=SHUTDOWN_JOIN_S)
-        print(f"sortie: {worker.exit_report}")
+        # An exit that no signal asked for (the web server returning, an
+        # exception) gets here with the handlers still armed. A signal that
+        # lands at that instant raises from inside this block: the stop is
+        # in a `finally` of its own so that it runs all the same.
+        try:
+            _let_nothing_cut_the_stop()
+        finally:
+            _stop_and_report(worker, before)
     return 0
 
 

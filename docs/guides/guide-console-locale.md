@@ -2085,19 +2085,31 @@ refusé (`drive cable already owned`) et n'a aucune liaison avec le variateur : 
 la console d'abord (voir §3.4 et §14).
 
 **Comment `scripts/bench_console.py` s'arrête, et ce qu'il ne peut pas couvrir.**
-Cet outil de banc finit toujours par l'arrêt du pilote (consigne à 0, arbre lu à
-l'arrêt, puis mots d'arrêt), une seule fois, avant la fin de son processus : sur
-Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la session
-SSH se ferme (SIGHUP), et sur une erreur de son fil de bus. Pendant cet arrêt, 35 s au
-plus, les signaux suivants sont ignorés, un second Ctrl+C compris : le couper le
-laisserait à moitié fait. Sa dernière ligne, `sortie: ...`, dit comment la machine a
-été laissée ; elle commence par `ATTENTION` quand l'arrêt n'a pas été confirmé.
-**Ce qu'aucun programme ne peut intercepter reste hors de portée : `kill -9`
-(SIGKILL), une coupure de courant, un plantage de l'interpréteur. Le seul filet est
-alors le délai de communication du variateur (ttO), qui arrête le moteur quand plus
-rien ne lui parle.** Vérifiez ce délai sur le clavier du variateur avant de compter
-dessus. Vérifié avec de vrais signaux envoyés à l'outil sur un pilote factice, jamais
-sur un variateur réel.
+Sur Ctrl+C, sur `kill` ou l'arrêt d'un service (SIGTERM), quand le terminal ou la
+session SSH se ferme (SIGHUP), et sur une erreur de son fil de bus, cet outil de banc
+lance l'arrêt du pilote (consigne à 0, arbre lu à l'arrêt, puis mots d'arrêt), une
+seule fois, et l'attend **35 s au plus** avant de se terminer. Pendant cette attente
+les signaux suivants sont ignorés, un second Ctrl+C compris : couper l'arrêt le
+laisserait à moitié fait. L'attente finie, les signaux retrouvent leur effet habituel.
+
+Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
+
+- `sortie: arret confirme, port libere` : l'arrêt a fini et l'arbre a été lu à l'arrêt ;
+- `sortie: ATTENTION: ...` : l'arrêt a fini sans pouvoir être confirmé, ou il a levé une
+  erreur, ou **il n'avait pas fini au bout des 35 s**
+  (`ATTENTION: l'arret du pilote n'a pas fini en 35 s`). Dans ce dernier cas l'outil se
+  termine quand même, de lui-même et tout de suite : il ne reste jamais suspendu à un
+  échange bloqué, et c'est sa fin qui rend le port et le verrou du câble. Cela peut
+  arriver sans panne : un arrêt demandé depuis la page juste avant (jusqu'à 25 s),
+  suivi de l'arrêt du pilote, peut dépasser 35 s sur un arbre qui tarde à s'arrêter.
+
+**Chaque fois que l'arrêt n'est pas confirmé, et dans les cas qu'aucun programme ne
+peut intercepter (`kill -9`, c'est-à-dire SIGKILL, une coupure de courant, un plantage
+de l'interpréteur), le seul filet est le délai de communication du variateur (ttO),
+qui arrête le moteur quand plus rien ne lui parle.** Vérifiez ce délai sur le clavier
+du variateur avant de compter dessus, et après une sortie `ATTENTION` vérifiez sur le
+variateur que le moteur est à l'arrêt avant de relancer l'outil. Vérifié avec de vrais
+signaux envoyés à l'outil sur un pilote factice, jamais sur un variateur réel.
 
 **Le coup de poing a été frappé, mais la page ne le montre pas.**
 Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous
