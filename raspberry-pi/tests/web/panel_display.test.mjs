@@ -81,6 +81,8 @@ function panel() {
     performance: { now: () => clock.now },
   });
   vm.runInContext(source, context, { filename: fileURLToPath(new URL("app.js", assets)) });
+  // The page's own request code, for a test that answers at the network instead (`context.fetch`).
+  const send = context.api;
   // A machine that answers nothing until the test says what it answers.
   context.api = () => new Promise(() => undefined);
   // A page whose socket is open and delivering frames.
@@ -108,6 +110,7 @@ function panel() {
   }
   return {
     context,
+    send,
     clock,
     node,
     published,
@@ -188,8 +191,11 @@ function verdict(action, rule, latched = true) {
   return { safety: row, safety_action: action, safety_rank: row.rank };
 }
 
+// One /api/status answer. `at` is the machine's clock when it was written, the clock of a frame's
+// `at`: like a frame's, it is the instant of the default frame unless the test says another.
 function status(overrides = {}) {
   return {
+    at: 50,
     run_state: "idle",
     estop_latched: false,
     supervisor_estop: null,
@@ -250,6 +256,20 @@ function panelRow(overrides = {}) {
 const receipt = { operator: "", reason: "", at: 60, wall_clock: 0, action: "quick_stop", rule: "operator_estop", detail: "" };
 
 const silent = () => verdict("go_silent", "comms_lost");
+
+// What /api/status answers when the camera latched a stop and the link to the drive was then lost:
+// go_silent is the standing verdict and the floor, and the stop shows in the supervisor's slot alone.
+const cameraStopBehindSilence = (at = 50) =>
+  status({
+    at,
+    estop_latched: false,
+    supervisor_estop: verdict("quick_stop", "operator_estop").safety,
+    standing: silent().safety,
+    floor: silent().safety,
+  });
+
+// What it answers under go_silent with no emergency stop held behind it.
+const silenceAlone = (at = 50) => status({ at, standing: silent().safety, floor: silent().safety });
 
 // The operator presses E-STOP and the machine latches it. The status the page then asks for is
 // answered with `statusAnswer`, or not at all.
@@ -333,7 +353,8 @@ test("go_silent standing in front of a latched e-stop does not hide it", async (
   frame(snapshot({ ...silent() }));
   assert.equal(shown("estop-banner"), false);
   // When /api/status reports the e-stop latched behind it.
-  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true, standing: silent().safety }));
+  context.api = () =>
+    Promise.resolve(status({ at: 50.1, run_state: "stopping", estop_latched: true, standing: silent().safety }));
   await context.loadStatus();
   // Then the banner is shown as soon as that answer is in, and the next frame does not take it down.
   assert.equal(shown("estop-banner"), true);
@@ -393,7 +414,7 @@ for (const outcome of ["slow", "failed"]) {
     }
     // Then the answer, when it comes or fails, does not take the banner down either.
     if (outcome === "slow") {
-      answer.resolve(status({ run_state: "stopping", estop_latched: true, standing: silent().safety }));
+      answer.resolve(status({ at: 62.1, run_state: "stopping", estop_latched: true, standing: silent().safety }));
     } else {
       answer.reject(new Error("unreachable"));
     }
@@ -406,15 +427,17 @@ for (const outcome of ["slow", "failed"]) {
   });
 }
 
-test("a stop latched by the camera stays announced once go_silent stands, whatever the status then says", async () => {
+test("a stop latched by the camera stays announced once go_silent stands: the status still carries it", async () => {
   // Given a stop latched by the camera: the frames show it, the interface's own flag stays false.
   const { context, frame, shown } = panel();
   frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
   assert.equal(shown("estop-banner"), true);
-  // When go_silent takes over, and a fresh status can only repeat go_silent with the flag still false.
-  context.api = () => Promise.resolve(status({ estop_latched: false, standing: silent().safety }));
+  // When go_silent takes over: the status asked at once, and those after it, show the stop in the
+  // supervisor's own slot, with the flag still false.
+  context.api = () => Promise.resolve(cameraStopBehindSilence(61.1));
   frame(snapshot({ at: 61, mode: "arret", ...silent() }));
   await settle();
+  context.api = () => Promise.resolve(cameraStopBehindSilence(61.6));
   await context.loadStatus();
   // Then the banner stays: go_silent refuses every acknowledgement, so the stop is still latched.
   for (let tick = 1; tick <= 5; tick += 1) {
@@ -427,12 +450,12 @@ test("a latched e-stop reported by the status alone raises the banner, and a lat
   // Given a page that has not received a single frame yet.
   const { context, shown } = panel();
   // When the status says an emergency stop is latched.
-  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  context.api = () => Promise.resolve(status({ at: 60, run_state: "stopping", estop_latched: true }));
   await context.loadStatus();
   // Then the banner does not wait for a frame.
   assert.equal(shown("estop-banner"), true);
   // And with still no frame, only a later status saying it is released takes it down.
-  context.api = () => Promise.resolve(status());
+  context.api = () => Promise.resolve(status({ at: 65 }));
   await context.loadStatus();
   assert.equal(shown("estop-banner"), false);
 });
@@ -447,12 +470,13 @@ test("with the socket down, a status that reports a latched e-stop raises the ba
   assert.equal(shown("banner"), true);
   assert.equal(shown("estop-banner"), false);
   // When HTTP still answers, and says a stop latched by the camera is the standing verdict.
-  context.api = () => Promise.resolve(status({ standing: verdict("quick_stop", "operator_estop").safety }));
+  const stop = verdict("quick_stop", "operator_estop").safety;
+  context.api = () => Promise.resolve(status({ at: 55, supervisor_estop: stop, standing: stop }));
   await context.loadStatus();
-  // Then the banner is raised under NO LIVE DATA.
+  // Then the banner is raised under NO LIVE DATA: that answer is newer than the last frame.
   assert.equal(shown("estop-banner"), true);
-  // And a later answer where go_silent has taken over cannot say it was released: the banner stays.
-  context.api = () => Promise.resolve(status({ standing: silent().safety }));
+  // And a later answer where go_silent has taken over still carries the stop: the banner stays.
+  context.api = () => Promise.resolve(cameraStopBehindSilence(60));
   await context.loadStatus();
   assert.equal(shown("estop-banner"), true);
 });
@@ -468,7 +492,7 @@ test("with no frame to say so, a status asked after the click speaks for the rec
   await pressEstop(context, answer.promise);
   assert.equal(shown("estop-banner"), true);
   // When the status asked after the click says the latch is gone: acknowledged from another screen.
-  answer.resolve(status());
+  answer.resolve(status({ at: 62 }));
   await settle();
   // Then that answer is newer than the receipt, and the banner follows it.
   assert.equal(shown("estop-banner"), false);
@@ -486,20 +510,31 @@ test("a status asked before the click does not take over from the receipt", asyn
   const asked = context.loadStatus();
   await pressEstop(context);
   // When that request is answered after the receipt, with what the machine said before the latch.
-  early.resolve(status());
+  early.resolve(status({ at: 59.95 }));
   await asked;
   // Then it is older than the latch: the receipt keeps the banner up.
   assert.equal(shown("estop-banner"), true);
   assert.notEqual(context.state.estopReceipt, null);
 });
 
-test("a frame saying released against a status saying latched asks again instead of deciding", async () => {
+/* ------ a frame and a status that disagree: the one the machine wrote last ------ */
+
+const latchedStatus = (at) =>
+  status({
+    at,
+    run_state: "stopping",
+    estop_latched: true,
+    supervisor_estop: verdict("quick_stop", "operator_estop").safety,
+    standing: verdict("quick_stop", "operator_estop").safety,
+  });
+
+test("a frame that shows the stop released outdates an older status that said latched", async () => {
   // Given a latched stop known from the frames and from the status.
-  const { context, frame, shown } = panel();
-  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  const { context, frame, node, shown } = panel();
+  context.api = () => Promise.resolve(latchedStatus(60.1));
   await context.loadStatus();
   frame(snapshot({ at: 60.2, ...verdict("quick_stop", "operator_estop") }));
-  // When a frame shows it released: acknowledged elsewhere, or a frame older than that status.
+  // When a frame taken after that status shows it released: acknowledged on another screen.
   const answer = deferred();
   const asked = [];
   context.api = (path) => {
@@ -507,33 +542,269 @@ test("a frame saying released against a status saying latched asks again instead
     return answer.promise;
   };
   frame(snapshot({ at: 61 }));
-  // Then the banner stays while the two disagree, and the status is asked at once.
-  assert.equal(shown("estop-banner"), true);
-  assert.deepEqual(asked, ["/api/status"]);
-  // And it goes when the status agrees.
-  answer.resolve(status());
-  await settle();
+  // Then the banner goes with the frame, which is the newer of the two.
   assert.equal(shown("estop-banner"), false);
+  // And the status is asked at once, not at its next turn: the lines it feeds still say latched.
+  assert.deepEqual(asked, ["/api/status"]);
+  assert.equal(rows(node("verdicts-grid"))["e-stop verrouille"].textContent, "OUI");
+  answer.resolve(status({ at: 61.1 }));
+  await settle();
+  assert.equal(rows(node("verdicts-grid"))["e-stop verrouille"].textContent, "non");
+  // Once for that turn of the frames, not once a frame.
+  frame(snapshot({ at: 61.2 }));
+  assert.deepEqual(asked, ["/api/status"]);
 });
 
-test("a status answer older than the one on screen is not applied", async () => {
-  // Given two status requests in flight: one sent before a stop was latched, one after.
-  const { context, node, shown } = panel();
-  const before = deferred();
-  const after = deferred();
-  const answers = [before.promise, after.promise];
+test("a status written after the frame on screen and saying latched raises the banner over it", async () => {
+  // Given a live page whose latest frame shows no stop.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 60 }));
+  // When a status written after that frame says a stop is latched: the frame is the older of the two.
+  const asked = [];
+  context.api = (path) => {
+    asked.push(path);
+    return Promise.resolve(latchedStatus(60.1));
+  };
+  await context.loadStatus();
+  // Then the banner is up, and nothing is asked again: the next frame will say it too.
+  assert.equal(shown("estop-banner"), true);
+  assert.deepEqual(asked, ["/api/status"]);
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("a status saying latched and a frame saying released at the same instant: the banner is up", async () => {
+  // Neither is the older one. The prudent reading stands until the next frame settles it.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 60 }));
+  context.api = () => Promise.resolve(latchedStatus(60));
+  await context.loadStatus();
+  assert.equal(shown("estop-banner"), true);
+});
+
+/* ------ EX-1, a status answer that arrives late, after a quick acknowledgement ------ */
+
+test("a status asked before a quick acknowledgement and arriving after it does not bring the banner back", async () => {
+  // Given a screen whose last status predates the stop, and a stop latched from another screen.
+  const { context, frame, node, shown } = panel();
+  context.api = () => Promise.resolve(status({ at: 58 }));
+  await context.loadStatus();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // And a periodic status asked while it is latched, whose answer is slow to come back.
+  const late = deferred();
+  context.api = () => late.promise;
+  const periodic = context.loadStatus();
+  // When the stop is acknowledged at once, and the frames show it released.
+  frame(snapshot({ at: 61 }));
+  assert.equal(shown("estop-banner"), false);
+  // And that answer, written while the stop was latched, reaches the screen only now.
+  const again = deferred();
+  const asked = [];
+  context.api = (path) => {
+    asked.push(path);
+    return again.promise;
+  };
+  late.resolve(latchedStatus(60.6));
+  await periodic;
+  // Then the banner stays down: on the machine's clock the frame on screen is the newer one.
+  assert.equal(shown("estop-banner"), false);
+  for (let tick = 1; tick <= 5; tick += 1) {
+    frame(snapshot({ at: 61 + tick * 0.2 }));
+    assert.equal(shown("estop-banner"), false, `back after ${tick} frames`);
+  }
+  // And the lines that answer feeds are not left to say "latched" until the next turn: asked again, once.
+  assert.deepEqual(asked, ["/api/status"]);
+  again.resolve(status({ at: 62.1 }));
+  await settle();
+  assert.equal(rows(node("verdicts-grid"))["e-stop verrouille"].textContent, "non");
+  assert.equal(node("run-state").classes.has("pill-bad"), false);
+});
+
+/* ------ EX-1, two status answers: ordered by when the machine wrote them ------ */
+
+// Two status requests in flight together, on a page that receives no frame: `first` was asked before `second`.
+function crossedStatuses(context) {
+  const one = deferred();
+  const two = deferred();
+  const answers = [one.promise, two.promise];
   context.api = () => answers.shift();
   const first = context.loadStatus();
   const second = context.loadStatus();
+  return { one, two, first, second };
+}
+
+test("a status asked first but written last by the machine is the one kept", async () => {
+  // Given two requests that crossed: the machine answered the second, a stop was latched, then it
+  // answered the first.
+  const { context, node, shown } = panel();
+  const { one, two, first, second } = crossedStatuses(context);
+  // When the answers come back in the order the machine wrote them.
+  two.resolve(status({ at: 60 }));
+  await second;
+  assert.equal(shown("estop-banner"), false);
+  one.resolve(latchedStatus(60.4));
+  await first;
+  // Then the stop is announced: the answer asked first is the newer one, and it is not dropped.
+  assert.equal(shown("estop-banner"), true);
+  assert.equal(node("run-state").textContent, "stopping");
+});
+
+test("a status asked last but written first by the machine does not replace the newer one", async () => {
+  // Given the same two requests, and the same stop latched between the two answers.
+  const { context, node, shown } = panel();
+  const { one, two, first, second } = crossedStatuses(context);
+  // When the newer answer arrives first.
+  one.resolve(latchedStatus(60.4));
+  await first;
+  assert.equal(shown("estop-banner"), true);
+  // And the older one, asked after it and written before the stop, arrives last.
+  two.resolve(status({ at: 60 }));
+  await second;
+  // Then the banner is not taken down by it, and nothing of it is on screen.
+  assert.equal(shown("estop-banner"), true);
+  assert.equal(node("run-state").textContent, "stopping");
+  assert.equal(rows(node("verdicts-grid"))["e-stop verrouille"].textContent, "OUI");
+});
+
+test("a status asked first, written first and arriving last is not applied", async () => {
+  // Given two status requests in flight: one answered before a stop was latched, one after.
+  const { context, node, shown } = panel();
+  const { one, two, first, second } = crossedStatuses(context);
   // When the later one answers first.
-  after.resolve(status({ run_state: "stopping", estop_latched: true }));
+  two.resolve(latchedStatus(60.4));
   await second;
   assert.equal(shown("estop-banner"), true);
   // Then the earlier one, arriving late, changes nothing.
-  before.resolve(status());
+  one.resolve(status({ at: 60 }));
   await first;
   assert.equal(shown("estop-banner"), true);
   assert.equal(node("run-state").textContent, "stopping");
+});
+
+test("after the machine's clock restarts, its answers are not dropped as older than the one on screen", async () => {
+  // Given a status on screen from a machine that has been up for hours, and a last frame from it.
+  const { context, clock, frame, node, shown } = panel();
+  frame(snapshot({ at: 19999, mode: "manuel", phase: "hold" }));
+  context.state.connected = false;
+  clock.now += 5000;
+  context.refreshLiveness();
+  context.api = () => Promise.resolve(status({ at: 20000, run_state: "running" }));
+  await context.loadStatus();
+  assert.equal(node("run-state").textContent, "running");
+  // When the Pi reboots: the next request, sent once that answer was in, is answered on a clock
+  // that started again from zero.
+  context.api = () => Promise.resolve(latchedStatus(42));
+  await context.loadStatus();
+  // Then that answer is the present, whatever its clock reads: it is not dropped, and the frame of
+  // before the reboot, whose clock reads later, does not outdate the stop it reports.
+  assert.equal(node("run-state").textContent, "stopping");
+  assert.equal(shown("estop-banner"), true);
+  // And so are the ones after it.
+  context.api = () => Promise.resolve(status({ at: 47 }));
+  await context.loadStatus();
+  assert.equal(node("run-state").textContent, "idle");
+  assert.equal(shown("estop-banner"), false);
+});
+
+/* ------ EX-1, a console restarted, then go_silent again ------ */
+
+test("a banner from before a restart of the console goes once the status says no stop is held behind go_silent", async () => {
+  // Given a latched stop on screen, from the frames of a console that is then restarted.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(latchedStatus(60.3));
+  await context.loadStatus();
+  frame(snapshot({ at: 60.4, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // When the new console has gone silent before this screen saw one frame without a verdict: its
+  // frames cannot say whether a stop is latched. A restarted console holds none.
+  const answer = deferred();
+  const asked = [];
+  context.api = (path) => {
+    asked.push(path);
+    return answer.promise;
+  };
+  frame(snapshot({ at: 75, mode: "repos", ...silent() }));
+  // Then the status is asked at once, and until it answers the banner stays: unknown is not released.
+  assert.deepEqual(asked, ["/api/status"]);
+  frame(snapshot({ at: 75.2, mode: "repos", ...silent() }));
+  assert.equal(shown("estop-banner"), true);
+  // And it goes with the answer written under that go_silent: no emergency stop is held behind it.
+  // Written after the first of those frames, it need not be newer than the latest one.
+  answer.resolve(silenceAlone(75.1));
+  await settle();
+  assert.equal(shown("estop-banner"), false);
+  for (let tick = 2; tick <= 6; tick += 1) {
+    frame(snapshot({ at: 75 + tick * 0.2, mode: "repos", ...silent() }));
+    assert.equal(shown("estop-banner"), false, `back after ${tick} frames`);
+  }
+});
+
+test("a banner raised by the status of a console since restarted goes with the first status of the new one", async () => {
+  // Given a page opened under go_silent, told by the status that a stop is latched behind it.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(cameraStopBehindSilence(70.1));
+  frame(snapshot({ at: 70, mode: "arret", ...silent() }));
+  await settle();
+  assert.equal(shown("estop-banner"), true);
+  // When the console is restarted and goes silent again: the frames say the same as before.
+  context.api = () => new Promise(() => undefined);
+  frame(snapshot({ at: 90, mode: "repos", ...silent() }));
+  assert.equal(shown("estop-banner"), true);
+  // Then the next status, from the new console, takes the banner down.
+  context.api = () => Promise.resolve(silenceAlone(92));
+  await context.loadStatus();
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("under go_silent a status written before the frames turned to it cannot take the banner down", async () => {
+  // Given a stop latched by the camera, shown by the frames, then go_silent standing in front of it.
+  const { context, frame, shown } = panel();
+  const early = deferred();
+  context.api = () => early.promise;
+  const asked = context.loadStatus();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  context.api = () => new Promise(() => undefined);
+  frame(snapshot({ at: 61, mode: "arret", ...silent() }));
+  assert.equal(shown("estop-banner"), true);
+  // When a status written before the stop was latched arrives only now, saying nothing is latched.
+  early.resolve(status({ at: 60.1 }));
+  await asked;
+  // Then the banner stays: that answer has not seen what the frames showed.
+  assert.equal(shown("estop-banner"), true);
+  frame(snapshot({ at: 61.2, mode: "arret", ...silent() }));
+  assert.equal(shown("estop-banner"), true);
+});
+
+test("go_silent replacing the quick stop of a rule: the banner follows what the status then holds", async () => {
+  // Given the latched quick stop of a rule, shown by the frames: no emergency stop is latched.
+  const { context, frame, shown } = panel();
+  frame(snapshot({ at: 60.2, mode: "arret", ...verdict("quick_stop", "reverse_rotation") }));
+  assert.equal(shown("estop-banner"), true);
+  // When go_silent replaces it, and the status written under go_silent holds no emergency stop.
+  context.api = () => Promise.resolve(silenceAlone(61.1));
+  frame(snapshot({ at: 61, mode: "arret", ...silent() }));
+  await settle();
+  // Then the page shows what the machine reports: go_silent, and no latched emergency stop.
+  assert.equal(shown("estop-banner"), false);
+});
+
+test("a status from before a restart of the machine's clock does not speak for the frames after it", async () => {
+  // Given a latched stop on screen from the frames, and an older status that said nothing was latched.
+  const { context, frame, shown } = panel();
+  context.api = () => Promise.resolve(status({ at: 20000 }));
+  await context.loadStatus();
+  frame(snapshot({ at: 20001, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(shown("estop-banner"), true);
+  // When the Pi reboots and its console goes silent: the frames come back on a clock that restarted.
+  context.api = () => new Promise(() => undefined);
+  frame(snapshot({ at: 31, mode: "repos", ...silent() }));
+  // Then the status of before the reboot, whose clock reads later, is not taken for a newer one.
+  assert.equal(shown("estop-banner"), true);
+  // And the status of after it decides.
+  context.api = () => Promise.resolve(silenceAlone(33));
+  await context.loadStatus();
+  assert.equal(shown("estop-banner"), false);
 });
 
 test("losing the machine keeps the last latched stop on screen, next to NO LIVE DATA", () => {
@@ -1219,20 +1490,10 @@ test("with nobody on board the heart rate holds nothing, answered or not", () =>
 
 /* ============ a stop the camera latched, on a page opened once go_silent stands ============ */
 
-// What /api/status answers when the camera latched a stop and the link to the drive was then lost:
-// go_silent is the standing verdict and the floor, and the stop shows in the supervisor's slot alone.
-const cameraStopBehindSilence = () =>
-  status({
-    estop_latched: false,
-    supervisor_estop: verdict("quick_stop", "operator_estop").safety,
-    standing: silent().safety,
-    floor: silent().safety,
-  });
-
 test("a page opened once go_silent stands announces the stop the camera latched behind it", async () => {
   // Given a page just opened: it never saw the stop latched, and every frame it gets says go_silent.
   const { context, frame, shown } = panel();
-  context.api = () => Promise.resolve(cameraStopBehindSilence());
+  context.api = () => Promise.resolve(cameraStopBehindSilence(70.1));
   frame(snapshot({ at: 70, mode: "arret", ...silent() }));
   await settle();
   // Then the banner is up, from the status alone, and the frames that follow do not take it down.
@@ -1245,7 +1506,7 @@ test("a page opened once go_silent stands announces the stop the camera latched 
 
 test("go_silent with no stop latched behind it raises no emergency-stop banner", async () => {
   const { context, frame, shown } = panel();
-  context.api = () => Promise.resolve(status({ standing: silent().safety, floor: silent().safety }));
+  context.api = () => Promise.resolve(silenceAlone(70.1));
   frame(snapshot({ at: 70, mode: "arret", ...silent() }));
   await settle();
   assert.equal(shown("estop-banner"), false);
@@ -1387,7 +1648,7 @@ test("a status answer that shows the stop latched ends the doubt as well", async
   wait(2000);
   assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
   // When HTTP answers a status in which the stop is latched.
-  context.api = () => Promise.resolve(status({ run_state: "stopping", estop_latched: true }));
+  context.api = () => Promise.resolve(status({ at: 62, run_state: "stopping", estop_latched: true }));
   await context.loadStatus();
   clock.now += 100;
   context.refreshLiveness();
@@ -1408,12 +1669,132 @@ test("a failed E-STOP request is said at once and stays on screen after its aler
   assert.equal(alerts.length, 1);
   assert.ok(alerts[0].includes("UTILISEZ L'ARRET CABLE"));
   assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
-  assert.equal(announced("la demande a echoue : Failed to fetch - UTILISEZ L'ARRET CABLE"), true);
+  assert.equal(announced("Failed to fetch - UTILISEZ L'ARRET CABLE"), true);
   for (let tick = 1; tick <= 10; tick += 1) {
     frame(snapshot({ at: 60 + tick * 0.2 }));
   }
   wait(3000);
-  assert.equal(announced("la demande a echoue : Failed to fetch"), true);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("Failed to fetch - UTILISEZ L'ARRET CABLE"), true);
+});
+
+/* ------ EX-2, a failed E-STOP request: what the banner says is what is true of it ------ */
+
+test("a failed E-STOP request is said to have failed, how long ago, and to be pending no more", async () => {
+  // Given a console that cannot be reached, and an E-STOP that failed.
+  const { context, clock, frame, announced, published, stack, wait } = panel();
+  context.window.alert = () => undefined;
+  frame(snapshot({ at: 59.9, mode: "manuel", phase: "hold" }));
+  context.api = () => Promise.reject(new Error("Failed to fetch"));
+  context.doEstop();
+  await settle();
+  // Then the banner says so, in full: the request is over, nothing is waiting for an answer.
+  assert.equal(
+    announced("la demande a echoue il y a 0 s et n'est plus en attente : Failed to fetch - UTILISEZ L'ARRET CABLE"),
+    true,
+  );
+  assert.equal(announced("aucune reponse de la console"), false);
+  // And it does not go on reading as the news of this instant: its age is kept current.
+  wait(4000);
+  context.refreshLiveness();
+  assert.equal(announced("la demande a echoue il y a 4 s et n'est plus en attente"), true);
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  clock.now += 176000;
+  context.refreshLiveness();
+  assert.equal(announced("la demande a echoue il y a 3 min et n'est plus en attente"), true);
+  // It claims no latch, and frames with no stop in them do not take it down.
+  frame(snapshot({ at: 240, mode: "manuel", phase: "hold" }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), false);
+});
+
+test("an E-STOP asked again after a failure says that a request is out again, and that the other failed", async () => {
+  // Given an E-STOP that failed, then a second click the console does not answer.
+  const { context, frame, announced, wait } = panel();
+  context.window.alert = () => undefined;
+  frame(snapshot({ at: 59.9 }));
+  context.api = () => Promise.reject(new Error("Failed to fetch"));
+  context.doEstop();
+  await settle();
+  wait(5000);
+  const { request } = pressUnanswered(context);
+  await settle();
+  // Then the banner does not wait two seconds to say the new one is out, nor forget the failure.
+  assert.equal(
+    announced("nouvelle demande sans reponse depuis 0 s, la precedente a echoue : Failed to fetch - UTILISEZ L'ARRET CABLE"),
+    true,
+  );
+  assert.equal(announced("n'est plus en attente"), false);
+  wait(3000);
+  context.refreshLiveness();
+  assert.equal(announced("nouvelle demande sans reponse depuis 3 s"), true);
+  // And when that one fails as well, nothing is said to be pending any more.
+  request.reject(new Error("Load failed"));
+  await settle();
+  assert.equal(announced("la demande a echoue il y a 0 s et n'est plus en attente : Load failed"), true);
+});
+
+test("an E-STOP that gets through after a failure takes the notice down and raises the latched banner", async () => {
+  const { context, frame, announced } = panel();
+  context.window.alert = () => undefined;
+  frame(snapshot({ at: 59.9 }));
+  context.api = () => Promise.reject(new Error("Failed to fetch"));
+  context.doEstop();
+  await settle();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  await pressEstop(context);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+});
+
+test("the failure of a request left behind says nothing about a doubt opened since", async () => {
+  // Given an E-STOP left unanswered, then a frame showing a stop latched: that doubt is over.
+  const { context, frame, announced, wait } = panel();
+  context.window.alert = () => undefined;
+  frame(snapshot({ at: 59.9 }));
+  const old = pressUnanswered(context);
+  wait(2000);
+  frame(snapshot({ at: 62.4, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  // When the request left behind fails at last: nothing is in doubt, the stop is latched and shown so.
+  old.request.reject(new Error("Failed to fetch"));
+  await settle();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+  assert.equal(announced("ARRET D'URGENCE VERROUILLE"), true);
+  // And when it fails after a later click of its own, once the stop was acknowledged.
+  const earlier = pressUnanswered(context);
+  frame(snapshot({ at: 70, mode: "arret", ...verdict("quick_stop", "operator_estop") }));
+  frame(snapshot({ at: 80 }));
+  pressUnanswered(context);
+  wait(2000);
+  earlier.request.reject(new Error("Failed to fetch"));
+  await settle();
+  // Then the notice of that later click still says its request is out: it is, and it has not failed.
+  assert.equal(announced("aucune reponse de la console depuis 2 s - UTILISEZ L'ARRET CABLE"), true);
+});
+
+test("a status asked before the click does not end the doubt of an unanswered E-STOP", async () => {
+  // Given a stop latched from another screen, a status asked while it is latched and slow to answer,
+  // then that stop acknowledged: nothing is latched any more.
+  const { context, clock, frame, announced, wait } = panel();
+  frame(snapshot({ at: 59.9, mode: "manuel", phase: "hold" }));
+  const late = deferred();
+  context.api = () => late.promise;
+  const periodic = context.loadStatus();
+  // When the operator presses E-STOP, the console does not answer, and the old status arrives.
+  pressUnanswered(context);
+  wait(2000);
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  late.resolve(latchedStatus(55));
+  await periodic;
+  clock.now += 100;
+  context.refreshLiveness();
+  // Then the doubt stands: that answer was written before the click and proves nothing about it.
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), true);
+  // A status asked after the click, showing a stop latched, does end it.
+  context.api = () => Promise.resolve(latchedStatus(63));
+  await context.loadStatus();
+  assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
 });
 
 test("an E-STOP answered in time never shows the unanswered notice", async () => {
@@ -1424,6 +1805,204 @@ test("an E-STOP answered in time never shows the unanswered notice", async () =>
   wait(5000);
   context.refreshLiveness();
   assert.equal(announced("ARRET D'URGENCE NON CONFIRME"), false);
+});
+
+/* ================== EX-3, a STOP the console does not answer ================== */
+
+// A manual session under way at 200 tr/min moteur, as one frame shows it.
+const turningFrame = (at, overrides = {}) =>
+  snapshot({ at, mode: "manuel", phase: "hold", setpoint: turning(200), measured: turning(200), ...overrides });
+
+// The operator presses STOP, and the request leaves through the page's own request code: `request`
+// is what the network then does with it, an answer of the console or none, when the test says so.
+function pressStop({ context, send }) {
+  const request = deferred();
+  const sent = [];
+  const alerts = [];
+  context.window.alert = (message) => alerts.push(message);
+  context.api = send;
+  context.fetch = (path) => {
+    sent.push(path);
+    return path === "/api/session/stop" ? request.promise : new Promise(() => undefined);
+  };
+  context.doStop();
+  return { request, sent, alerts };
+}
+
+// An answer of the console as the browser hands it over: accepted with a body, or refused with a reason.
+const answered = (code, body) => ({
+  ok: code < 400,
+  status: code,
+  statusText: "",
+  json: () => Promise.resolve(body),
+});
+const stopTaken = (at) => answered(202, { kind: "end", detail: "", at });
+
+test("a STOP the console does not answer is said so after two seconds, with the stops that remain named", async () => {
+  // Given a session under way, and a console that takes the request and answers nothing.
+  const page = panel();
+  const { context, frame, announced, published, stack, wait } = page;
+  frame(turningFrame(59.9));
+  const { sent } = pressStop(page);
+  await settle();
+  assert.deepEqual(sent, ["/api/session/stop"], "the request did not leave on the first click");
+  // While an answer can still be on its way, the page does not cry wolf.
+  wait(1900);
+  assert.equal(announced("STOP NON CONFIRME"), false);
+  // When two seconds have gone by with nothing back.
+  wait(100);
+  // Then a banner says the stop is not confirmed, for how long, and what remains.
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  assert.equal(
+    announced("aucune reponse de la console depuis 2 s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable"),
+    true,
+  );
+  assert.equal(published.get("--banners-h"), stack() + "px");
+  // It keeps counting while the session runs on, and a second click does not start the count again.
+  context.doStop();
+  for (let tick = 1; tick <= 10; tick += 1) {
+    frame(turningFrame(60 + tick * 0.2));
+  }
+  assert.equal(announced("aucune reponse de la console depuis 4 s"), true);
+  // And it says nothing of an emergency stop: none was asked for, none is latched.
+  assert.equal(announced("ARRET D'URGENCE"), false);
+});
+
+test("the notice of an unanswered STOP appears even in a browser whose timer never fires", () => {
+  const page = panel();
+  const { context, clock, announced } = page;
+  pressStop(page);
+  clock.now += 2500;
+  context.refreshLiveness();
+  assert.equal(announced("STOP NON CONFIRME"), true);
+});
+
+test("a STOP answered in time shows no notice, and a late answer takes the notice down", async () => {
+  const page = panel();
+  const { context, frame, announced, wait } = page;
+  frame(turningFrame(59.9));
+  const quick = pressStop(page);
+  quick.request.resolve(stopTaken(60));
+  await settle();
+  wait(5000);
+  context.refreshLiveness();
+  assert.equal(announced("STOP NON CONFIRME"), false);
+  // A request the console takes its time over: said after two seconds, withdrawn by the answer.
+  const slow = pressStop(page);
+  wait(2000);
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  slow.request.resolve(stopTaken(68));
+  await settle();
+  assert.equal(announced("STOP NON CONFIRME"), false);
+  assert.deepEqual(slow.alerts, []);
+});
+
+test("a STOP the console refuses is answered: its refusal is said as before, and no notice stays", async () => {
+  // Given a STOP the console is slow to answer, so that the notice is up.
+  const page = panel();
+  const { frame, announced, wait } = page;
+  frame(turningFrame(59.9));
+  const { request, alerts } = pressStop(page);
+  wait(2000);
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // When the console answers that a stop is already under way.
+  request.resolve(answered(409, { detail: "the machine is already stopping" }));
+  await settle();
+  // Then the alert says so in the words it always used, and nothing is left unanswered.
+  assert.deepEqual(alerts, ["STOP refuse : the machine is already stopping"]);
+  assert.equal(announced("STOP NON CONFIRME"), false);
+});
+
+test("a failed STOP request is said at once, with its age, and stays on screen after its alert", async () => {
+  // Given a console that cannot be reached at all.
+  const page = panel();
+  const { context, frame, announced, wait } = page;
+  frame(turningFrame(59.9));
+  const { request, alerts } = pressStop(page);
+  request.reject(new TypeError("Failed to fetch"));
+  await settle();
+  // Then the alert no longer calls a request that got no answer a refusal.
+  assert.deepEqual(alerts, [
+    "la demande d'arret (STOP) a echoue : Failed to fetch - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable",
+  ]);
+  // And the banner stays once the alert is dismissed, saying the request is over and when it failed.
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  assert.equal(announced("la demande a echoue il y a 0 s et n'est plus en attente : Failed to fetch"), true);
+  for (let tick = 1; tick <= 15; tick += 1) {
+    frame(turningFrame(60 + tick * 0.2));
+  }
+  assert.equal(announced("la demande a echoue il y a 3 s et n'est plus en attente : Failed to fetch"), true);
+  wait(60000);
+  context.refreshLiveness();
+  assert.equal(announced("STOP NON CONFIRME"), true);
+});
+
+test("an error of the console's own is not a refusal: the STOP stays unconfirmed", async () => {
+  const page = panel();
+  const { frame, announced } = page;
+  frame(turningFrame(59.9));
+  const { request, alerts } = pressStop(page);
+  request.resolve(answered(500, null));
+  await settle();
+  assert.equal(alerts.length, 1);
+  assert.ok(alerts[0].startsWith("la demande d'arret (STOP) a echoue : 500"), alerts[0]);
+  assert.equal(announced("STOP NON CONFIRME"), true);
+});
+
+test("a frame showing the session ending ends the doubt about STOP; a frame at rest does not", async () => {
+  // Given a STOP left unanswered, with the notice up.
+  const page = panel();
+  const { context, frame, announced, wait } = page;
+  frame(turningFrame(59.9));
+  pressStop(page);
+  wait(2000);
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // A machine at rest may have a start waiting behind it: that frame proves no stop.
+  frame(snapshot({ at: 62.2, mode: "repos" }));
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // When a frame shows the session ending, whichever way the stop came.
+  frame(turningFrame(62.4, { mode: "arret", phase: "cooldown" }));
+  // Then the stop is under way and the notice goes. It says nothing about the shaft, and neither
+  // does its going: the measured speed does.
+  assert.equal(announced("STOP NON CONFIRME"), false);
+  wait(5000);
+  context.refreshLiveness();
+  assert.equal(announced("STOP NON CONFIRME"), false);
+});
+
+test("a status asked after the click and showing no session running ends the doubt about STOP; one asked before does not", async () => {
+  // Given frames that have stopped, a status request in flight, then a STOP left unanswered.
+  const page = panel();
+  const { context, clock, frame, announced, wait } = page;
+  frame(turningFrame(59.9));
+  context.state.connected = false;
+  const early = deferred();
+  context.api = () => early.promise;
+  const asked = context.loadStatus();
+  pressStop(page);
+  wait(2000);
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // When the request sent before the click is answered: it says what stood before the session began.
+  early.resolve(status({ at: 40 }));
+  await asked;
+  clock.now += 100;
+  context.refreshLiveness();
+  // Then the notice stays: that answer proves nothing about a click it did not see.
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // A status asked after the click that still shows the session running leaves it up too.
+  context.api = () => Promise.resolve(status({ at: 62.5, run_state: "running" }));
+  await context.loadStatus();
+  assert.equal(announced("STOP NON CONFIRME"), true);
+  // And one that shows the machine stopping takes it down.
+  context.api = () => Promise.resolve(status({ at: 63, run_state: "stopping" }));
+  await context.loadStatus();
+  assert.equal(announced("STOP NON CONFIRME"), false);
+});
+
+test("the STOP notice is in the stack every page shows, as an alarm, under that of the E-STOP", () => {
+  const ids = banners.map((entry) => entry.id);
+  assert.deepEqual(ids, ["banner", "estop-unanswered", "stop-unanswered", "estop-banner", "resume-banner"]);
+  assert.ok(/id="stop-unanswered" class="banner hidden" role="alert"/.test(html));
 });
 
 /* ================= a speed that can come back up with nobody clicking ================= */

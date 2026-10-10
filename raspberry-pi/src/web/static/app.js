@@ -34,6 +34,7 @@
 var STALE_FRAME_MS = 2000;      // no frame for this long: the screen is not live
 var RECONNECT_MS = 1500;        // socket retry interval
 var ESTOP_ANSWER_MS = 2000;     // an E-STOP request with no answer for this long is said so, loudly
+var STOP_ANSWER_MS = 2000;      // and so is a STOP request
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
 var STATUS_STALE_MS = 12000;    // two refreshes missed: what the status last said is not the present
@@ -66,12 +67,15 @@ var state = {
   status: null,          // the last /api/status answer
   statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
-  statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
+  statusShownSent: 0,    // statusSent when `status` arrived: a request sent later is answered after it
+  statusBoot: 0,         // machineBoot when `status` arrived
+  machineBoot: 0,        // restarts of the machine's clock seen so far: a later one outdates an earlier one
   estopReceipt: null,    // this page's own E-STOP, until a frame or a status taken after it takes over
   estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
   estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
-  estopFrame: null,      // what the last frame said about it: "latched", "clear" or "silent"
-  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: {at, failed}
+  estopFrame: null,      // what the frames say about it, and since when: {says, since, at, boot, asked}
+  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: a doubt (see openDoubt)
+  stopAsked: null,       // this page's STOP with no answer and no proof it was taken: a doubt as well
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
@@ -220,7 +224,10 @@ function api(path, options) {
     }).then(function (body) {
       if (!response.ok) {
         var detail = body && body.detail ? body.detail : response.status + " " + response.statusText;
-        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        var refusal = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        // The console answered. A request that got no answer at all throws with no status.
+        refusal.status = response.status;
+        throw refusal;
       }
       return body;
     });
@@ -376,6 +383,7 @@ function refreshLiveness() {
   // After its text: the banner is measured as it reads, not as it read last time.
   showBanner(el("banner"), !fresh, reworded);
   renderEstopUnanswered();
+  renderStopUnanswered();
   markStale(FRAME_FED, !fresh);
   markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
   markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
@@ -395,110 +403,244 @@ function refreshLiveness() {
 }
 
 /*
-  What one report, a frame or a /api/status answer, says about a latched
-  emergency stop: "latched", "clear", or "silent" when it cannot say.
+  What one frame says about a latched emergency stop: "latched", "clear", or
+  "silent" when it cannot say.
 
-  go_silent outranks an emergency stop and takes its place as the standing
-  verdict, so a report whose standing verdict is go_silent hides any stop
-  latched behind it. It also refuses every acknowledgement: a stop that was
-  latched when go_silent took over is still latched, and no report can say
-  otherwise for as long as go_silent stands. Two fields of /api/status still
-  show through it, and a page opened at that moment has nothing else to go
-  by: the supervisor's own emergency-stop slot (`supervisor_estop`, whoever
-  latched it, the camera included) and the interface's flag (`estop_latched`).
+  go_silent outranks an emergency stop and takes its place as the verdict a
+  frame carries, so a frame under go_silent hides any stop latched behind it.
+  It also refuses every acknowledgement: a stop that was latched when
+  go_silent took over stays latched for as long as that console runs.
 */
-function estopOpinion(standing, flagged) {
-  if (flagged || (standing && standing.latched && standing.action === "quick_stop")) {
+function frameOpinion(snapshot) {
+  var standing = snapshot.safety;
+  if (standing && standing.latched && standing.action === "quick_stop") {
     return "latched";
   }
   return standing && standing.action === "go_silent" ? "silent" : "clear";
 }
 
 /*
-  A latched emergency stop has its own banner, for as long as it is latched.
-  It is decided here and nowhere else, from three sources: the standing
-  verdict of the latest frame, the latest /api/status answer, and the receipt
-  of this page's own E-STOP.
+  What a /api/status answer says about it: "latched" or "clear". An answer can
+  always say, go_silent or not: it carries the latch itself, whoever set it
+  (`supervisor_estop`, and the interface's flag `estop_latched`). Under
+  go_silent an answer that shows neither says that no emergency stop is held
+  behind it.
+*/
+function statusOpinion(status) {
+  var standing = status.standing;
+  var stopped = Boolean(standing && standing.latched && standing.action === "quick_stop");
+  return estopLatched(status) || stopped ? "latched" : "clear";
+}
 
-  - It is RAISED by any of them reporting a latched stop, whoever latched it
-    (this page, another screen, the camera, a rule), frames or no frames.
-  - It is LOWERED only by a report that can say the stop is released: a frame
-    that says so and is not older than the receipt, with no status answer
-    saying otherwise, or a status answer alone when no frame has ever come.
-  - In every other case it KEEPS what it shows. Under go_silent nothing can
-    say "released", so a banner that was up stays up; unknown is never read
-    as released.
+/*
+  What the frames say about a latched emergency stop, kept with the machine's
+  own clock: `at` is the instant of the latest frame, `since` that of the
+  first frame saying the same. Frames arrive in the order they were taken, so
+  a clock that has gone back is a machine that restarted (machineBoot).
+
+  A frame also releases the receipt of this page's own E-STOP, once one taken
+  after the latch can speak. Only a frame that has just arrived does: the last
+  one of a socket that has gone quiet proves nothing about a stop latched
+  since.
+*/
+function noteEstopFrame(snapshot) {
+  var last = state.estopFrame;
+  if (last && last.boot === state.machineBoot && snapshot.at < last.at) {
+    state.machineBoot += 1;
+  }
+  var says = frameOpinion(snapshot);
+  var same = Boolean(last) && last.says === says && last.boot === state.machineBoot;
+  state.estopFrame = {
+    says: says,
+    since: same ? last.since : snapshot.at,
+    at: snapshot.at,
+    boot: state.machineBoot,
+    asked: same && last.asked,
+  };
+  if (state.estopReceipt && says !== "silent" && snapshot.at >= state.estopReceipt.at) {
+    state.estopReceipt = null;
+  }
+}
+
+/*
+  Which of the latest frame and the status on screen the machine wrote last.
+  Both carry its clock: a frame the instant its tick began (its verdict is
+  read at the end of that tick, so it is never older than `at`), a status
+  answer the instant it was written. What arrived after a restart of that
+  clock is newer than what arrived before it, whatever the two clocks read.
+*/
+function frameOutdatesStatus(frame) {
+  return frame.boot > state.statusBoot || (frame.boot === state.statusBoot && frame.at > state.status.at);
+}
+
+/*
+  Whether the status on screen was written once the frames had turned to what
+  they say now. `since` is a tick that began after the last frame saying
+  anything else had read its verdict, so such an answer has seen everything
+  those earlier frames showed.
+*/
+function statusCoversFrames(frame) {
+  return state.statusBoot > frame.boot || (state.statusBoot === frame.boot && state.status.at >= frame.since);
+}
+
+/*
+  A latched emergency stop has its own banner, for as long as it is latched.
+  It is decided here and nowhere else, from three sources: the frames, the
+  latest /api/status answer, and the receipt of this page's own E-STOP. The
+  screen must never look safer than what the machine reports: the banner goes
+  only on a report that says the stop is released and that nothing newer
+  denies.
+
+  - The receipt, and a frame showing a latched stop, RAISE it, whoever latched
+    the stop (this page, another screen, the camera, a rule).
+  - Frames saying "released": the banner follows whichever the machine wrote
+    last, those frames or the status. A status answer that says "latched" and
+    is older than the frame on screen does not bring the banner back: it was
+    asked before an acknowledgement and arrived after it.
+  - Frames under go_silent cannot say. The status can, and decides alone once
+    it was written after the frames turned to go_silent: it raises the banner
+    for a stop latched behind go_silent, and it takes down a banner nothing
+    holds any more (a console that was restarted, a rule's quick stop that
+    go_silent replaced). An older answer may raise it, never lower it.
+  - No frame yet: the status alone. No status yet: the frames alone.
+  - In every other case it KEEPS what it shows; unknown is never read as
+    released. So does a socket that goes quiet on a frame showing a latched
+    stop: only a later frame takes that banner down.
 
   The receipt holds the banner from the click until a frame taken after the
   latch can speak, or a status asked after it answers: the banner neither
   waits for a frame nor drops on one that was already on its way.
 
-  When the frames change their mind in a way they cannot settle alone, the
-  status is asked at once rather than at its next 5 s turn: go_silent may hide
-  a stop this page never saw latched, and a frame saying "released" against a
-  status saying "latched" may simply be the older of the two.
-
   The banner says "latched", never "stopped": the measured speed alone speaks
   about the shaft.
 */
 function renderEstopBanner() {
-  var snapshot = state.snapshot;
-  var status = state.status;
-  var frame = snapshot ? estopOpinion(snapshot.safety, false) : null;
-  var polled = status ? estopOpinion(status.standing, estopLatched(status)) : null;
-  if (state.estopReceipt && snapshot && frame !== "silent" && snapshot.at >= state.estopReceipt.at) {
-    state.estopReceipt = null;
-  }
-  if (frame === "latched" || polled === "latched" || state.estopReceipt) {
+  var frame = state.estopFrame;
+  var said = frame ? frame.says : null;
+  var polled = state.status ? statusOpinion(state.status) : null;
+  if (state.estopReceipt || said === "latched") {
     state.estopShown = true;
-  } else if (polled !== "silent" && (frame === "clear" || (frame === null && polled === "clear"))) {
+  } else if (polled === null) {
+    if (said === "clear") {
+      state.estopShown = false;
+    }
+  } else if (said === null) {
+    state.estopShown = polled === "latched";
+  } else if (said === "clear") {
+    state.estopShown = polled === "latched" && !frameOutdatesStatus(frame);
+  } else if (polled === "latched") {
+    state.estopShown = true;
+  } else if (statusCoversFrames(frame)) {
     state.estopShown = false;
   }
   showBanner(el("estop-banner"), state.estopShown);
+  askStatusIfUnsettled();
+}
 
-  if (frame !== state.estopFrame) {
-    state.estopFrame = frame;
-    if (frame === "silent" || (frame === "clear" && polled !== null && polled !== "clear")) {
-      loadStatus().catch(function () {
-        /* the banner keeps its state; the periodic refresh asks again */
-      });
-    }
+/*
+  When the frames have turned to something the status on screen does not
+  settle, the status is asked at once rather than at its next 5 s turn, once
+  for each turn of the frames:
+
+  - frames under go_silent, and no status written since: a stop may be latched
+    behind it that this page never saw, or the one it shows may be gone;
+  - frames saying "released" after a status that said "latched": that answer
+    is out of date, and so are the lines of the page it feeds.
+*/
+function askStatusIfUnsettled() {
+  var frame = state.estopFrame;
+  if (!frame || frame.asked) {
+    return;
+  }
+  var status = state.status;
+  var unsettled = frame.says === "silent"
+    ? !(status && statusCoversFrames(frame))
+    : frame.says === "clear" && Boolean(status) && statusOpinion(status) === "latched" && frameOutdatesStatus(frame);
+  if (unsettled) {
+    frame.asked = true;
+    loadStatus().catch(function () {
+      /* the banner keeps its state; the periodic refresh asks again */
+    });
   }
 }
 
 /*
-  An E-STOP this page asked for and has no proof of. The request is answered
-  in a few milliseconds when everything works; when the console is stuck or
-  the network is mute it simply stays out, and nothing used to tell the
-  operator, who was left waiting for an answer that was not coming.
+  A stop this page asked for, STOP or E-STOP, and has neither an answer to nor
+  proof of: a doubt. `pending` holds the instant of each request still out,
+  oldest first; `failed` is what the last one to fail said, and `failedAt`
+  when. `sent` counts the status requests sent when the doubt began: one sent
+  later was answered after the click.
 
-  ESTOP_ANSWER_MS after the first click left unanswered, a banner says so and
-  names the wired stop. A request that failed says so at once. The request
-  itself is never withdrawn: it may still get through, and then its receipt
-  takes the notice down. So does a frame or a status answer, arriving after
-  the click, that shows a stop latched: the machine has it, whichever way it
-  came. A report under go_silent shows nothing either way and leaves the
-  notice up.
+  A request is answered in a few milliseconds when everything works. When the
+  console is stuck or the network is mute it simply stays out, and nothing
+  used to tell the operator, who was left waiting for an answer that was not
+  coming. So a doubt is said in a banner of its own, and the banner says
+  exactly where the request stands:
 
-  The count runs from the first unanswered click, however many follow it: a
-  second click must not make the page look reassured for two more seconds.
+  - still out: for how long, counted from the oldest request still out,
+    however many clicks follow it. A second click must not make the page look
+    reassured for two more seconds;
+  - failed, with nothing still out: that it failed, how long ago, and that it
+    is no longer pending. A failed request is over. The page does not send it
+    again, and the banner stays until there is proof of a stop;
+  - failed, then asked again: both.
+
+  A request still out is never withdrawn: it may still get through.
 */
-function renderEstopUnanswered() {
-  var asked = state.estopAsked;
-  var waited = asked ? performance.now() - asked.at : 0;
-  var overdue = Boolean(asked) && (asked.failed !== null || waited >= ESTOP_ANSWER_MS);
+function openDoubt(doubt, clicked) {
+  var asked = doubt || { pending: [], failed: null, failedAt: 0, sent: state.statusSent };
+  asked.pending.push(clicked);
+  return asked;
+}
+
+/** The request sent at `clicked` ended with no answer, or with an error: it is no longer out. */
+function failDoubt(asked, clicked, message) {
+  asked.pending.splice(asked.pending.indexOf(clicked), 1);
+  asked.failed = message;
+  asked.failedAt = performance.now();
+}
+
+function doubtNotice(asked, use) {
+  var now = performance.now();
+  if (!asked.pending.length) {
+    return "la demande a echoue il y a " + answerAge((now - asked.failedAt) / 1000) +
+      " et n'est plus en attente : " + asked.failed + " - " + use;
+  }
+  var waited = Math.round((now - asked.pending[0]) / 1000) + " s";
+  if (asked.failed === null) {
+    return "aucune reponse de la console depuis " + waited + " - " + use;
+  }
+  return "nouvelle demande sans reponse depuis " + waited + ", la precedente a echoue : " + asked.failed +
+    " - " + use;
+}
+
+/*
+  One doubt, in its banner: shown at once when a request has failed, and
+  `limit` after the oldest request still out otherwise. The text is written
+  before the banner is measured, like the other banners.
+*/
+function renderDoubt(asked, limit, banner, detail, use) {
+  var overdue = Boolean(asked) && (asked.failed !== null || performance.now() - asked.pending[0] >= limit);
   var reworded = false;
   if (overdue) {
-    var detail = el("estop-unanswered-detail");
-    var notice = (asked.failed !== null
-      ? "la demande a echoue : " + asked.failed
-      : "aucune reponse de la console depuis " + Math.round(waited / 1000) + " s") +
-      " - UTILISEZ L'ARRET CABLE";
+    var notice = doubtNotice(asked, use);
     reworded = detail.textContent !== notice;
     text(detail, notice);
   }
-  // After its text, like the other banners: measured as it reads.
-  showBanner(el("estop-unanswered"), overdue, reworded);
+  showBanner(banner, overdue, reworded);
+}
+
+/*
+  The E-STOP in doubt. Its receipt takes the notice down, and so does a frame,
+  or a status asked after the click, that shows a stop latched: the machine
+  has it, whichever way it came. A frame under go_silent shows nothing either
+  way and leaves the notice up. The notice names the wired stop.
+*/
+function renderEstopUnanswered() {
+  renderDoubt(
+    state.estopAsked, ESTOP_ANSWER_MS, el("estop-unanswered"), el("estop-unanswered-detail"),
+    "UTILISEZ L'ARRET CABLE"
+  );
 }
 
 /** A report that has just arrived shows a stop latched: this page's E-STOP is no longer in doubt. */
@@ -506,6 +648,31 @@ function estopSeenLatched(opinion) {
   if (opinion === "latched" && state.estopAsked) {
     state.estopAsked = null;
     renderEstopUnanswered();
+  }
+}
+
+/*
+  The STOP in doubt, treated as the E-STOP is. An answer takes the notice
+  down, acceptance or refusal: a refusal is said in its own alert, as before.
+  So does a frame showing the session ending, or a status asked after the
+  click showing no session running: the stop is under way, whichever way it
+  came. A frame at rest is not that proof: a start may be waiting behind it.
+  The notice names the two stops that remain.
+*/
+var STOP_DOUBT_USE = "rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable";
+
+function renderStopUnanswered() {
+  renderDoubt(
+    state.stopAsked, STOP_ANSWER_MS, el("stop-unanswered"), el("stop-unanswered-detail"),
+    STOP_DOUBT_USE
+  );
+}
+
+/** This page's STOP is no longer in doubt: it was answered, or the session is seen ending. */
+function stopSettled() {
+  if (state.stopAsked) {
+    state.stopAsked = null;
+    renderStopUnanswered();
   }
 }
 
@@ -715,7 +882,11 @@ function renderSnapshot(snapshot) {
   renderManual(snapshot);
   settleManualTarget(snapshot);
   renderManualHold();
-  estopSeenLatched(estopOpinion(snapshot.safety, false));
+  noteEstopFrame(snapshot);
+  estopSeenLatched(state.estopFrame.says);
+  if (snapshot.mode === "arret") {
+    stopSettled();
+  }
   renderEstopBanner();
   renderResumeBanner(snapshot);
 
@@ -2001,21 +2172,47 @@ function estopLatched(status) {
     Boolean(standing && standing.latched && standing.rule === "operator_estop");
 }
 
+/*
+  One /api/status answer, applied unless the one on screen is newer.
+
+  Newer means written later by the machine, and the machine says when it
+  wrote each answer (`at`, its own clock). Two requests in flight together can
+  be answered in either order and arrive in either order: neither the order
+  they were sent in nor the order they come back in says which is the present.
+
+  One case the clock cannot settle alone. A request sent after the answer on
+  screen had arrived was answered after it, whatever the clock reads: if its
+  `at` is earlier, the machine's clock restarted (the Pi rebooted), and the
+  answer is the newer one. Without that, every answer after a reboot would be
+  dropped until the new clock caught up with the old one.
+*/
 function loadStatus() {
   var sent = (state.statusSent += 1);
   return api("/api/status").then(function (status) {
-    if (sent < state.statusShown) {
-      // Asked before the answer already on screen: it can only say something older.
-      return status;
+    if (state.status && status.at < state.status.at) {
+      if (sent <= state.statusShownSent) {
+        // In flight when the answer on screen arrived, and written before it: it can only say something older.
+        return status;
+      }
+      if (state.statusBoot === state.machineBoot) {
+        state.machineBoot += 1;
+      }
     }
-    state.statusShown = sent;
+    state.statusShownSent = state.statusSent;
+    state.statusBoot = state.machineBoot;
     state.status = status;
     state.statusAt = performance.now();
     if (state.estopReceipt && sent > state.estopReceiptSent) {
       // Asked after the E-STOP was latched: this answer carries it from here on.
       state.estopReceipt = null;
     }
-    estopSeenLatched(estopOpinion(status.standing, estopLatched(status)));
+    // An answer asked before a click says nothing about that click, even when it arrives after it.
+    if (state.estopAsked && sent > state.estopAsked.sent) {
+      estopSeenLatched(statusOpinion(status));
+    }
+    if (state.stopAsked && sent > state.stopAsked.sent && (status.run_state === "stopping" || status.run_state === "idle")) {
+      stopSettled();
+    }
     renderEstopBanner();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
@@ -2241,18 +2438,51 @@ function doStart() {
     });
 }
 
+/*
+  STOP. Like the emergency stop, it does not wait in silence for its answer:
+  see renderStopUnanswered().
+
+  The console can refuse a STOP (nothing to end, a stop already under way, no
+  operator name): that is an answer, said in an alert as it always was. A
+  request that got no answer, or an error of the console's own, is something
+  else: nothing says the session is ending, and the page says exactly that.
+*/
 function doStop() {
   state.manualDraft = null;
+  var clicked = performance.now();
+  var asked = (state.stopAsked = openDoubt(state.stopAsked, clicked));
+  renderStopUnanswered();
+  window.setTimeout(renderStopUnanswered, STOP_ANSWER_MS);
   api("/api/session/stop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed STOP" },
-  })
-    .then(function () {
-      loadStatus();
-    })
-    .catch(function (error) {
-      window.alert("STOP refuse : " + error.message);
-    });
+  }).then(
+    function () {
+      // Accepted. A doubt that proof has ended since, and a later one, are left alone.
+      if (state.stopAsked === asked) {
+        stopSettled();
+      }
+      loadStatus().catch(function () {
+        /* the frames show the session ending; the periodic refresh asks again */
+      });
+    },
+    function (error) {
+      var refused = error.status >= 400 && error.status < 500;
+      if (state.stopAsked === asked) {
+        if (refused) {
+          stopSettled();
+        } else {
+          failDoubt(asked, clicked, error.message);
+          renderStopUnanswered();
+        }
+      }
+      window.alert(
+        refused
+          ? "STOP refuse : " + error.message
+          : "la demande d'arret (STOP) a echoue : " + error.message + " - " + STOP_DOUBT_USE
+      );
+    }
+  );
 }
 
 /*
@@ -2270,9 +2500,10 @@ function doStop() {
 */
 function doEstop() {
   state.manualDraft = null;
-  if (!state.estopAsked) {
-    state.estopAsked = { at: performance.now(), failed: null };
-  }
+  var clicked = performance.now();
+  var asked = (state.estopAsked = openDoubt(state.estopAsked, clicked));
+  // At once: a notice already up for a request that failed must not go on saying nothing is pending.
+  renderEstopUnanswered();
   window.setTimeout(renderEstopUnanswered, ESTOP_ANSWER_MS);
   api("/api/session/estop", {
     method: "POST",
@@ -2289,8 +2520,9 @@ function doEstop() {
       });
     })
     .catch(function (error) {
-      if (state.estopAsked) {
-        state.estopAsked.failed = error.message;
+      // A doubt that proof has ended since is not reopened by an old request failing.
+      if (state.estopAsked === asked) {
+        failDoubt(asked, clicked, error.message);
       }
       renderEstopUnanswered();
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
