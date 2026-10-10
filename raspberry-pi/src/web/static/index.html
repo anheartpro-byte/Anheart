@@ -80,18 +80,20 @@
     <strong>ARRET D'URGENCE VERROUILLE</strong>
     <span>surveillez la vitesse MESUREE : verrouille ne veut pas dire arrete</span>
   </div>
-  <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
-    <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
-    <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>
-  </div>
   <!--
     The console keeps restarting after stops that were not clean: it is out of
     service and arms nothing. A standing state from /api/panel, not an event:
     it is on every page until a named operator lifts it (page Securite).
+    Under the alarms about a stop (a console that restarts can show both: they
+    stack, the stop first), and above the orange notice: the red ones together.
   -->
   <div id="service-banner" class="banner hidden" role="alert" aria-live="assertive">
     <strong>CONSOLE HORS SERVICE</strong>
     <span id="service-banner-detail">aucun depart n'est accepte</span>
+  </div>
+  <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
+    <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
+    <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>
   </div>
 </div>
 

@@ -369,6 +369,14 @@ page ouverte une heure après le lit tout de suite.
 | en service | `en service`, vert | aucun | caché |
 | hors service | `HORS SERVICE`, rouge | rouge, sur toutes les pages : `CONSOLE HORS SERVICE`, puis `3 demarrages apres un arret non propre en moins de 10 min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme` | visible ([section 11](#remise-en-service-dune-console-hors-service)) |
 
+Le bandeau a sa place dans la pile des bandeaux : sous ceux d'un arrêt (`ARRET D'URGENCE
+NON CONFIRME`, `STOP NON CONFIRME`, `ARRET D'URGENCE VERROUILLE`), au-dessus du bandeau
+orange. Une console qui redémarre est aussi ce qui laisse à l'écran le bandeau d'un arrêt
+verrouillé avant le redémarrage (section 5) : les deux peuvent donc être affichés
+ensemble. Aucun ne cache l'autre et aucun ne décide de l'autre : la page fait de la place
+aux deux, la remise en service ne fait pas tomber le bandeau d'un arrêt, et un arrêt
+acquitté laisse la console dite hors service.
+
 Sous les pastilles, une ligne dit ce que le dernier démarrage a trouvé. Elle est vide
 quand il n'y a rien à dire.
 
@@ -386,8 +394,9 @@ avec la phrase de la [section 13](#refus-de-la-boucle-événement-refused). Comm
 **Console**, la pastille est barrée quand `/api/panel` ne répond plus depuis 3,5 s.
 
 Vérifié par `raspberry-pi/tests/test_out_of_service_console.py` (la vraie console en
-simulation, par ses routes) et `raspberry-pi/tests/web/panel_service.test.mjs` (la page).
-Pas rejoué dans un navigateur.
+simulation, par ses routes), `raspberry-pi/tests/web/panel_service.test.mjs` (la page) et
+`raspberry-pi/tests/web/panel_display.test.mjs` (les deux bandeaux ensemble, leur ordre,
+la place que la page leur fait). Pas rejoué dans un navigateur.
 
 ### Ligne horloge : l'heure de la machine
 

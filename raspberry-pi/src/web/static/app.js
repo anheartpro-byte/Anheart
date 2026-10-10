@@ -1228,13 +1228,14 @@ function renderService(service, watchdog) {
   var out = service.out_of_service;
   var minutes = Math.round(service.window_s / 60);
   pill(el("service-state"), out ? "HORS SERVICE" : "en service", out ? "bad" : "good");
-  show(el("service-banner"), out);
   show(el("service-restore"), out);
-  text(
-    el("service-banner-detail"),
-    service.threshold + " demarrages apres un arret non propre en moins de " + minutes +
-      " min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme"
-  );
+  var detail = el("service-banner-detail");
+  var notice = service.threshold + " demarrages apres un arret non propre en moins de " + minutes +
+    " min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme";
+  var reworded = detail.textContent !== notice;
+  text(detail, notice);
+  // In the stack with the other banners: the page makes room for it as for them.
+  showBanner(el("service-banner"), out, reworded);
   var said = [];
   if (service.unclean_stop) {
     said.push(
