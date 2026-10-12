@@ -71,6 +71,7 @@ usage() {
     cat <<'EOF'
 usage: sudo bash scripts/harden.sh [--dry-run] [--undo] [STEP ...]
        bash scripts/harden.sh --list
+       sudo bash scripts/harden.sh network [--dry-run] [--activate] [--undo]
 
   --dry-run   print what would change, change nothing
   --undo      take back what the steps set in the system (scripts/uninstall.sh)
@@ -371,6 +372,10 @@ list() {
 
 # The steps named on the command line, each between two spaces. Empty: all.
 named=""
+if [ "${1:-}" = network ]; then
+    shift
+    exec bash "$(dirname "$0")/pi/configure_network.sh" "$@"
+fi
 for argument in "$@"; do
     case "$argument" in
         --dry-run) dry_run=true ;;

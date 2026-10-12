@@ -219,7 +219,7 @@ n'impose pas au navigateur de refuser définitivement (pas d'en-tête HSTS) : le
 navigateur garde son moyen de passer l'avertissement d'un certificat expiré, à
 n'employer que pour arrêter une machine. L'arrêt câblé, lui, ne dépend ni de
 la tablette ni du certificat. Ce qui est prouvé et ce qui ne l'est pas est en
-[securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
+[securite.md, section 11](securite.md#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
 
 ---
 

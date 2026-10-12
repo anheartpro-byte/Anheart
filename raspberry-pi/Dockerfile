@@ -93,7 +93,7 @@ USER anheart
 
 # /healthz answers without a token and says nothing about the session.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('UI_PORT', '8080') + '/healthz', timeout=3)"
+    CMD python -m src.health_probe
 
 ENTRYPOINT ["anheart-entrypoint"]
 CMD ["python", "-m", "src.local_panel"]

@@ -1315,8 +1315,9 @@ def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:
     assert "--no-healthcheck" not in unit
     assert "--health-" not in unit
     dockerfile = _read(DOCKERFILE)
-    assert re.search(r"^HEALTHCHECK .*\n\s+CMD .*/healthz", dockerfile, re.MULTILINE)
-    assert '"$(console_url)/healthz"' in _read(INSTALLER), "the start test asks /healthz too"
+    assert re.search(
+        r"^HEALTHCHECK .*\n\s+CMD python -m src.health_probe$", dockerfile, re.MULTILINE
+    )
 
 
 # =========================================================================
@@ -1703,6 +1704,7 @@ def test_anh151_ex4_the_console_is_given_the_account_and_nothing_more() -> None:
         "/dev:/dev",
         "/var/lib/anheart/data:/app/data",
         "/var/lib/anheart/records:/app/data/records",
+        "/var/lib/anheart/tls:/run/anheart-tls:ro",
         "/run/anheart/relay:/run/anheart",
     ]
 

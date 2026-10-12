@@ -2240,7 +2240,7 @@ expiré ferait d'un renouvellement en retard une machine que plus personne ne
 peut joindre, et parierait cela sur l'horloge d'un Pi sans pile. Ce qui
 prévient de l'échéance est `scripts/pi/make_console_tls.sh --check`
 ([pi-image.md](pi-image.md#renouveler)). Ce que cela donne pour une séance en
-cours est en [securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
+cours est en [securite.md, section 11](securite.md#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
 
 **La WebSocket.** Elle passe par le même port, donc en TLS (`wss`), avec les
 deux mêmes contrôles qu'avant, faits avant l'acceptation : le jeton et

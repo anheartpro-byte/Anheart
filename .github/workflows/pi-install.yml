@@ -15,6 +15,10 @@ on:
       - 'raspberry-pi/scripts/harden.sh'
       - 'raspberry-pi/scripts/install.sh'
       - 'raspberry-pi/scripts/pi/bind-bitalino.sh'
+      - 'raspberry-pi/scripts/pi/configure_network.sh'
+      - 'raspberry-pi/scripts/pi/test_network.sh'
+      - 'raspberry-pi/scripts/pi/test_network_packets.py'
+      - 'raspberry-pi/scripts/pi/network-test.Dockerfile'
       - 'raspberry-pi/scripts/pi/test_install.sh'
       - 'raspberry-pi/scripts/uninstall.sh'
   push:
@@ -85,6 +89,8 @@ jobs:
             raspberry-pi/scripts/uninstall.sh \
             raspberry-pi/scripts/pair_device.sh \
             raspberry-pi/scripts/pi/bind-bitalino.sh \
+            raspberry-pi/scripts/pi/configure_network.sh \
+            raspberry-pi/scripts/pi/test_network.sh \
             raspberry-pi/scripts/pi/deploy.sh \
             raspberry-pi/scripts/pi/preflight.sh \
             raspberry-pi/scripts/pi/test_install.sh \
@@ -93,3 +99,9 @@ jobs:
         run: |
           echo "Runner: $(uname -m), $(nproc) CPUs, $(docker --version)"
           bash raspberry-pi/scripts/pi/test_install.sh
+      - name: Validate network configuration and kernel isolation
+        run: |
+          docker build -t anheart-network-test -f raspberry-pi/scripts/pi/network-test.Dockerfile raspberry-pi/scripts/pi
+          docker run --rm --privileged --network none \
+            --volume "$GITHUB_WORKSPACE/raspberry-pi:/repo:ro" \
+            anheart-network-test bash /repo/scripts/pi/test_network.sh
