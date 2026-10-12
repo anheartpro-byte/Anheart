@@ -2663,8 +2663,7 @@ est fait de deux comptes :
   dure, le compte va jusqu'à la première prise du cycle en cours. Rien n'est
   ajouté aux autres tics ;
 - **ce que le fil a lâché lui-même au-delà de 8192, et ce que la prise a
-  refusé quand son compte n'a pas pu être lu au début de l'armement ou à la fin
-  de la séance : un
+  refusé quand son compte n'a pas pu être lu au début de l'armement : un
   majorant.** De ces trames on ne sait que le nombre et entre quels instants
   elles ont commencé (ce que la prise refuse est ce qu'elle a reçu de plus
   récent, donc après la dernière trame qu'elle a gardée). Un enregistrement
@@ -2675,6 +2674,11 @@ est fait de deux comptes :
   de 8192 échanges en attente sans enregistrement ouvert : il n'a été produit
   que dans des tests, sur le journal seul ou en réduisant la borne, jamais
   sur la console avec ses bornes.
+- **Lecture de fin manquante, lecture d'armement présente : un majorant par
+  différence de compteurs.** Le fil utilise son dernier compte cumulatif,
+  lu en vidant la prise pour cette fermeture, moins le compte d'armement.
+  La lecture du fil vient après la fin et peut inclure des refus au repos
+  survenus depuis. Ce cas n'utilise pas le recouvrement d'intervalles.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -2998,9 +3002,11 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   comptes restent des majorants, comptés pour chaque séance dont l'intervalle
   les recouvre et non partagés entre elles : les trames que le fil du journal
   lâche lui-même au-delà de 8192 ; et tout ce que la prise a refusé quand son
-  compte n'a pas pu être lu au début de l'armement ou à la fin de la séance
-  (une faute de ce qui écoute le variateur, journalisée : ni le départ ni
-  l'arrêt ne sont retenus). Le compte exact
+  compte n'a pas pu être lu au début de l'armement. Si seul le compte de fin
+  manque, un troisième majorant utilise la différence entre le dernier
+  compte lu par le fil et le compte d'armement : des refus au repos après la
+  séance peuvent y être inclus, sans recouvrement d'intervalles. Une faute de
+  lecture est journalisée ; ni le départ ni l'arrêt ne sont retenus. Le compte exact
   sépare les refus par l'ordre dans lequel la boucle les fait : si un échange
   était un jour fait par un autre fil que la boucle à l'instant même où une
   séance commence ou finit, il pourrait être compté du mauvais côté, à une

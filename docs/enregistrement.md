@@ -377,12 +377,17 @@ de trames du variateur manquent à cet enregistrement.
   console lit le compte des refus au début de l'armement et à la fin de la
   séance, et l'enregistrement compte la différence. Ce qu'une console au repos
   s'est vu refuser avant ou après la séance n'y est pas.
-- Il reste un **majorant**, jamais inférieur à la perte réelle, dans deux
+- Il reste un **majorant**, jamais inférieur à la perte réelle, dans trois
   cas : les trames que le fil du journal a lâchées lui-même faute de place ;
   et tout refus de la prise quand son compte n'a pas pu être lu au début de
-  l'armement ou à la fin de la séance. Ces trames sont comptées pour chaque séance dont l'intervalle
+  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
   recouvre celui où elles ont pu commencer, donc par deux enregistrements
   quand deux séances le recouvrent.
+- Si seul le compte de fin manque, le fil soustrait le compte d'armement du
+  dernier compte qu'il a lu en vidant la prise pour cette fermeture. Cette
+  lecture arrive après la fin : elle peut inclure des refus au repos après
+  la séance. C'est donc aussi un majorant, mais calculé par différence de
+  compteurs, sans attribution par recouvrement d'intervalles.
 
 La ligne ne dit pas elle-même lequel des deux comptes a servi. Sur la console,
 le premier est le seul attendu : le second n'a été obtenu qu'en test (une
