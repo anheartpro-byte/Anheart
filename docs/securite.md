@@ -44,6 +44,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Aucun chemin de sortie ne laisse le moteur commandé** : fin normale, arrêt distant, perte du BITalino, exception, SIGTERM, perte de liaison. Après chaque sortie : arbre à 0, pas de couple, LFRD à 0 là où une trame peut passer. | tests d'invariants, simulation |
 | **Le keepalive part en premier à chaque cycle.** Si la boucle cale, le variateur ne reçoit plus rien et son propre ttO l'arrête. | `drive.service()` en tête de tic |
 | **Une console figée ou plantée est relancée, et ne remet rien en mouvement.** Sur un Pi installé, systemd n'entend la console que par ses tics de contrôle terminés : un tic bloqué, une exception ou un processus figé ne disent rien, et la console est arrêtée puis relancée, au repos. La console relancée lit le variateur avant tout ordre, met à zéro et verrouille celui qu'elle trouve en marche, n'a ni attestation ni séance, et ne bouge qu'après une attestation, un acquittement nommé, un départ et une cible. Une console qui redémarre trois fois en dix minutes après un arrêt non propre revient hors service et n'arme plus rien jusqu'à ce qu'un opérateur nommé la remette en service ([section 9](#9-console-figée-ou-plantée--redémarrage-contrôlé-anh-162)). | `service_watchdog.py`, `service_state.py`, `local_panel.py`, `scripts/anheart.service` |
+| **Sur un Pi installé, la console ne tourne pas sous root.** Dans son conteneur elle est le compte `anheart`, sans aucune capacité, sur une image en lecture seule, et n'ouvre que les classes de périphériques du câble et du capteur ; elle ne peut ni lire ni réécrire sa propre configuration, où sont ses limites ; ce qu'elle écrit lui appartient et n'est lisible par personne d'autre. Le client Docker qui la lance reste root : c'est dit, pas masqué ([section 10](#10-le-pi-comme-appareil-fermé--premier-lot-anh-151)). | `scripts/anheart.service`, `scripts/install.sh`, `scripts/harden.sh`, `Dockerfile` |
 | **Les écritures sont vérifiées.** LFRD est relu ; une écriture qui n'atterrit pas donne `setpoint_unconfirmed`, puis GO_SILENT si l'arbre ne suit pas non plus. | `safety.py`, `tracking.py` |
 | **Une FC n'est utilisée que si elle est fiable.** Deux traitements ECG indépendants doivent être d'accord à 5 bpm près sur la même fenêtre continue. Le premier n'extrait une FC que d'une fenêtre qu'il a notée `good` ; une fenêtre qu'il ne peut pas noter (valeur non finie, test du secteur impossible ou refusé par le filtre) vaut `no_signal`, jamais `good`. Sinon la FC est « périmée » : FREEZE à 10 s, REDUCE à 30 s, RAMP_DOWN à 60 s. | `signal_processing.py`, `ecg_pipeline.py`, règle `hr_stale` |
 | **Une FC mesurée au-dessus d'un palier reste jugée tant qu'aucune FC utilisable n'est venue dire le contraire.** Une lecture sans FC (fenêtre bruitée, dérivation plate, électrode décollée, fenêtre que le traitement ne peut pas noter, FC retenue par la confirmation) ne relance pas le délai de 5 s du palier dur et n'efface pas un dépassement mesuré : `hr_hard_max` et `hr_critical` jugent la dernière FC utilisable tant qu'elle a 10 s au plus, l'âge où `hr_stale` commence. Seule une FC utilisable sous le niveau de relâche relance le délai. Quand le signal se perd au-dessus du palier dur, la séance se termine à l'échéance des 5 s, avant le premier niveau de `hr_stale`, qui garde sa propre horloge. Toute lecture compte, y compris celle qu'une lecture sans FC a suivie avant le tic. Détail dans [raspberry-pi.md](raspberry-pi.md#52-les-18-règles-du-superviseur) ; ce que la règle ne couvre pas en [section 5](#5-le-résiduel-connu). | `safety.py` (`_level_rate`), `runtime.py` (`observe_ecg`) |
@@ -1549,3 +1550,113 @@ montré, et la sortie de `systemctl show -p Result,NRestarts anheart`. Puis
 corriger cette section et [pi-image.md](pi-image.md#8-limites-et-reste-à-faire) :
 ce qui est écrit « non fait » ou « non vérifié » ne doit le rester que pour ce
 qui l'est encore.
+
+---
+
+## 10. Le Pi comme appareil fermé : premier lot (ANH-151)
+
+Ticket
+[ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu),
+10 octobre 2026. Le ticket veut un Pi fermé : une console joignable seulement
+depuis le réseau que le Pi crée, rien d'autre qui écoute, pas de service sous
+root, un système qu'une coupure ne peut pas abîmer, des secrets et des données
+protégés. Il est coupé en quatre lots. **Cette section décrit le premier, et
+lui seul : le service et ses fichiers.** Le point d'accès et le pare-feu, TLS,
+puis le système en lecture seule sont les trois autres, et **ne sont pas
+faits**.
+
+**Tout ce qui suit a tourné dans la machine de remplacement de la CI, en
+simulation. Rien sur un vrai Raspberry Pi, rien avec le vrai câble du
+variateur, rien avec le vrai BITalino.**
+
+### 10.1 Ce que ce lot change
+
+| Avant | Maintenant | Preuve |
+|---|---|---|
+| La console tournait sous root, dans un conteneur privilégié qui voyait tout `/dev` et le D-Bus de la machine | Dans son conteneur elle est le compte `anheart`, sans aucune capacité et sans moyen d'en gagner, sur une image en lecture seule. Elle ne peut ouvrir que trois classes de périphériques : les adaptateurs série USB, les périphériques USB eux-mêmes (le câble Schneider), les nœuds série Bluetooth. Le D-Bus n'est plus monté | test de bout en bout, étape 1 : le noyau ne lui donne aucune capacité, lui refuse un périphérique d'une autre classe, et un périphérique permis qui n'est pas de son groupe |
+| Le relais du chien de garde tournait sous root, et tout processus root pouvait lui parler | Il tourne sous le compte `anheart`, dans un dossier où ce compte seul entre | même étape ; gate du Pi, la ligne de démarrage de l'unité exécutée pour de bon |
+| Les fichiers écrits par la console appartenaient à root ; le dossier des données était ouvert au groupe | Tout ce qui est sous `/var/lib/anheart` appartient au compte `anheart` seul, fermé au groupe et aux autres : enregistrements, journal hors séance, état des redémarrages, profils. L'installation corrige une machine qui n'est pas ainsi, sans lire ni écrire un contenu | test de bout en bout, étapes 1, 2, 10 et 11 ; gate du Pi |
+| La configuration (clé de la machine, jeton, limites) : root, mode 600 | Inchangé, et c'est voulu : **elle reste à root, pas au compte de la console**. Le compte qui fait tourner la console ne peut ni lire la clé sur la machine, ni réécrire les limites que la console applique | test de bout en bout, étape 1 : le compte `anheart` ne peut pas la lire |
+| Le système mettait ses paquets à jour seul (tâches périodiques d'`apt`) | Plus aucune mise à jour sans qu'une personne lance `apt` | test de bout en bout, étapes 1 et 11 : `apt` le dit lui-même |
+| Un service lancé sous root pouvait lier le nœud série du capteur depuis le conteneur | La console n'en a plus le droit : le service le lie sur le Pi, avant elle, par une commande | gate du Pi, script exécuté avec un `rfcomm` scripté. **Jamais avec le capteur** |
+
+Le détail, besoin par besoin, est dans
+[pi-image.md](pi-image.md#sous-quel-compte) ; le script, son essai à blanc et
+la check-list de l'image sont en
+[section 10 de la même page](pi-image.md#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage).
+
+### 10.2 Ce qui reste sous root
+
+**Le client Docker de l'unité.** Le démon Docker est à root, et qui peut lui
+demander un conteneur peut tout lui demander : le processus `docker run` que
+systemd lance est donc root, de fait. Les options posées sur l'unité ferment
+ses propres processus (aucun gain de privilège, système de fichiers en lecture
+seule, pas de dossier personnel) et contraignent le relais. Elles ne bornent
+pas ce que le client peut demander au démon, et cette page ne le prétend pas.
+Ce client ne reçoit rien de la console, sinon ce qu'elle affiche.
+
+S'y ajoutent l'étape qui lie le nœud du capteur (une commande, avant la
+console), et les trois scripts qu'une personne lance avec `sudo`.
+
+### 10.3 Ce que ce lot ne protège pas
+
+* **Rien ne change sur le réseau.** La console écoute comme avant, en HTTP,
+  derrière son jeton quand elle n'est pas sur la boucle locale. Un appareil
+  hostile sur le réseau de la console peut tenter ce qu'il pouvait tenter hier
+  ([menaces.md](menaces.md#men-05-appareil-hostile-sur-le-réseau-de-la-console)).
+  Ce qui change est ce qu'il gagne s'il prend la main sur le processus de la
+  console : un compte sans droits, dans une image qu'il ne peut pas écrire, et
+  non plus root sur le Pi.
+* **Une console compromise commande toujours le variateur** : c'est son rôle,
+  et le câble est le sien. Ce lot ne retire rien à cela. Les protections du
+  moteur qui ne dépendent pas de la console restent celles de la
+  [section 3](#3-ce-que-le-logiciel-ne-garantit-pas) : il n'y en a pas
+  d'indépendante du logiciel et du variateur.
+* **Le conteneur voit le nom de tous les périphériques de la machine**, parce
+  que les nœuds du câble et du capteur vont et viennent ; il n'en ouvre que
+  trois classes. Dans ces classes, tout adaptateur série USB du groupe
+  `dialout` lui est ouvert, pas seulement celui du variateur.
+* **Les enregistrements ne sont toujours pas chiffrés** : les droits de
+  fichiers ne valent que sur la machine en marche
+  ([menaces.md](menaces.md#men-18-enregistrements-de-séance-non-chiffrés-sur-le-disque-du-pi)).
+* **Une personne qui a `sudo` sur le Pi peut tout.** Ce que le ticket prévoit
+  pour `sudo` et pour SSH est dans le lot du pare-feu.
+
+### 10.4 Le journal du système : ce qui en sort, ce qui y reste
+
+Depuis que le journal est gardé sur le disque
+([pi-image.md](pi-image.md#le-journal-du-système)), ce qu'il contient y reste.
+
+**Le code d'appairage du BITalino n'y est plus écrit**, y compris quand la
+commande dépasse son délai ou échoue : le journal donne le type d'erreur,
+jamais la commande ni ses arguments. C'est le code d'usine
+du capteur, le même pour tous : ce n'était pas un secret de la machine, et ce
+n'est toujours pas une protection
+([menaces.md](menaces.md#men-15-bitalino-usurpé-ou-signal-physiologique-forgé)).
+
+**Le nom tapé par l'opérateur y est encore écrit, par trois lignes** :
+l'attestation du câblage de l'arrêt d'urgence, l'acquittement d'un verdict,
+l'acquittement du verrou de la caméra. Ce lot ne les change pas. Le choix est
+ouvert, noté dans le ticket, et attend l'avis sur les données de santé
+(ANH-172) : garder le nom dans le journal, pour savoir qui a attesté ou
+acquitté, ou n'y écrire qu'un alias.
+
+Ce qui a été vérifié pour préparer ce choix : la console écrit déjà ces mêmes
+faits ailleurs, avec les deux horloges et **sous l'alias de l'opérateur, sans
+son nom** : dans l'enregistrement de la séance quand une séance est en cours,
+sinon dans le journal hors séance
+([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
+Retirer le nom du journal du système ne ferait donc pas perdre « qui », tant
+que ces deux écritures réussissent ; il ne resterait que l'alias. Si elles
+échouent (disque plein ou en panne, ce que la page signale), le journal du
+système est aujourd'hui le seul endroit qui garde le nom.
+
+### 10.5 Essai au banc
+
+Non fait. Ce que seul un Pi montre, et que la machine de remplacement ne peut
+pas montrer : que le vrai câble du variateur et le vrai BITalino s'ouvrent
+sous un compte sans droits. La procédure, treize constats dont huit sans rien
+brancher, est dans
+[pi-image.md](pi-image.md#essai-du-durcissement--à-faire-au-banc). **Tant
+qu'elle n'est pas faite, une console installée par ce lot n'a jamais parlé à
+un variateur ni à un capteur.**

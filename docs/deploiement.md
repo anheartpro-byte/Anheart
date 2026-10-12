@@ -1195,7 +1195,7 @@ lancés par aucun job : ils restent à lancer à la main.
 | Prêt | Vérifié comment |
 |---|---|
 | L'image Docker lance la **console** (`python -m src.local_panel`), et rien d'autre. | Construite pour ARM64 (la même architecture que le Pi 4 et 5) : 1,31 Go, mesuré par la CI sur un runner arm64 (job `pi-install`, run 37610353541). |
-| `scripts/anheart.service` : la même image lancée par systemd à l'allumage, périphériques, réseau de l'hôte, relance 2 s après une sortie en erreur ou après 10 s sans signe de vie de la boucle de contrôle ([chien de garde](pi-image.md#le-chien-de-garde)), dans la limite de dix démarrages par demi-heure, délai d'arrêt de 60 s. | Test de bout en bout en CI, en simulation ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) : service activé, `/healthz`, conteneur « healthy », console au repos après un arrêt du service en pleine séance, après un arrêt brutal, et après l'arrêt puis le rallumage de la machine de remplacement. La liaison avec Convex n'y est pas rejouée (clé de machine vide) ; elle l'avait été avec cette image lancée par Compose, avant ce changement (heartbeat et programmes reçus par le Convex de développement). |
+| `scripts/anheart.service` : la même image lancée par systemd à l'allumage, sous le compte `anheart` et sans privilèges ([pi-image.md](pi-image.md#sous-quel-compte)), avec les seules classes de périphériques du câble et du capteur, réseau de l'hôte, relance 2 s après une sortie en erreur ou après 10 s sans signe de vie de la boucle de contrôle ([chien de garde](pi-image.md#le-chien-de-garde)), dans la limite de dix démarrages par demi-heure, délai d'arrêt de 60 s. | Test de bout en bout en CI, en simulation ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) : service activé, `/healthz`, conteneur « healthy », console au repos après un arrêt du service en pleine séance, après un arrêt brutal, et après l'arrêt puis le rallumage de la machine de remplacement. La liaison avec Convex n'y est pas rejouée (clé de machine vide) ; elle l'avait été avec cette image lancée par Compose, avant ce changement (heartbeat et programmes reçus par le Convex de développement). |
 | `scripts/install.sh` : installe un Pi neuf, sans rien réécrire ni redémarrer à la relance. | Même test, et `tests/test_pi_install.py` dans la gate du Pi. |
 | Arrêt propre. | `docker stop` pendant une séance manuelle simulée : la console met la consigne à zéro, rend la liaison, sort avec le code 0. |
 | Jeton d'accès quand la page n'écoute pas que sur la boucle locale. | 401 sans l'en-tête `x-anheart-token`, 200 avec. |
@@ -1203,8 +1203,8 @@ lancés par aucun job : ils restent à lancer à la main.
 
 | Pas vérifié | Pourquoi |
 |---|---|
-| Le variateur réel depuis le conteneur (`/dev/ttyUSB0` ou `ftdi://`). | Pas de Pi ni de variateur sous la main. |
-| Le BITalino réel depuis le conteneur (liaison `rfcomm`). | Idem. Le script d'entrée tente `rfcomm bind` ; sans Bluetooth il échoue avec un message clair et la console démarre quand même. |
+| Le variateur réel depuis le conteneur (`/dev/ttyUSB0` ou `ftdi://`), sous le compte `anheart`. | Pas de Pi ni de variateur sous la main. Les droits du câble ne se constatent que là ([essai du durcissement](pi-image.md#essai-du-durcissement--à-faire-au-banc)). |
+| Le BITalino réel depuis le conteneur (liaison `rfcomm`). | Idem. Le service lie le nœud sur le Pi avant de lancer la console (`bind-bitalino`) ; sans Bluetooth ou sans capteur appairé il le dit et la console démarre quand même. |
 | Le navigateur en plein écran au démarrage du Pi. | Le fichier est fourni, il n'a jamais été essayé. |
 | Le temps de construction de l'image sur un Pi. | Construit sur un Mac, et sur un runner arm64 de la CI. |
 | L'installation par `scripts/install.sh` sur un vrai Pi, et le démarrage à l'allumage. | Exécutée seulement dans la machine de remplacement de la CI ([pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi)). |
@@ -1243,8 +1243,9 @@ sudo bash scripts/install.sh
 ```
 
 `install.sh` installe Docker, crée le compte `anheart` et ses dossiers, écrit la
-configuration si elle n'existe pas, construit l'image, installe et démarre le
-service `anheart`, puis vérifie que la console répond. Il peut être relancé
+configuration si elle n'existe pas, ferme la configuration et les données,
+éteint les mises à jour automatiques des paquets, construit l'image, installe
+et démarre le service `anheart`, puis vérifie que la console répond. Il peut être relancé
 sans risque : détail et versions figées dans [pi-image.md](pi-image.md).
 
 ### 7.4 Configurer
@@ -1266,7 +1267,7 @@ fin de ligne.
 | `CONVEX_URL` | L'hôte **`.convex.site`** du déploiement visé (section 1). |
 | `MACHINE_API_KEY` | La clé de 64 caractères affichée **une seule fois** à la création de la machine sur le site (admin). Vide = aucune liaison au tableau de bord. |
 | `MOTOR_PORT` | `/dev/ttyUSB0`, ou `ftdi://schneider:rs485/1` si le noyau ne reconnaît pas le câble Schneider. |
-| `BITALINO_MAC` | L'adresse du BITalino appairé. Le conteneur lie `/dev/rfcomm0` à cette adresse au démarrage. |
+| `BITALINO_MAC` | L'adresse du BITalino appairé. Le service lie `/dev/rfcomm0` à cette adresse, sur le Pi, avant chaque démarrage de la console. |
 | `ARM_RADIUS_M`, `LEG_TIP_RADIUS_M` | **À mesurer** sur la machine. Tous les g affichés en dépendent. |
 | `MOTOR_MAX_RPM` | Le plafond de banc. 300 par défaut (environ 6 tr/min au bras). |
 

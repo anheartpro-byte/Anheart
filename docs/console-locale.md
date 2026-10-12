@@ -1899,10 +1899,11 @@ ralentie). Les autres enregistrements s'exportent par l'API
 
 **Qui peut lire.** Le dossier est réservé au compte qui lance la console
 (mode 700), et chaque dossier et fichier que la console y crée l'est aussi
-(700 et 600) ; les enregistrements écrits avant ce changement gardent leurs
-modes, sous ce même dossier. Sur un Pi installé, la console tourne sous
-`root` : les dossiers de séance n'y sont lisibles que par `root`, plus par le
-compte `anheart`. Un technicien les lit par l'export ci-dessus, ou sur le Pi
+(700 et 600) ; la console ne retouche pas les enregistrements écrits avant ce
+changement, que l'installation du Pi referme. Sur un Pi installé, la console
+tourne sous le compte `anheart`, qui ne peut pas ouvrir de session : les
+dossiers de séance lui appartiennent, et à lui seul. Un technicien les lit par
+l'export ci-dessus, ou sur le Pi
 avec `sudo` ([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
 Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
 elle contient l'ECG brut de la séance et doit être traitée comme une donnée de

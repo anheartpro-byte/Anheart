@@ -70,7 +70,7 @@ RETIRED_REFERENCE: Final[re.Pattern[str]] = re.compile(
 
 #: Keys of the ``.env`` templates that no Python module reads, and who does.
 KEYS_READ_OUTSIDE_PYTHON: Final[Mapping[str, str]] = {
-    "BITALINO_MAC": "docker/entrypoint.sh binds the RFCOMM node to it",
+    "BITALINO_MAC": "scripts/pi/bind-bitalino.sh binds the RFCOMM node to it, on the machine",
     "MPLBACKEND": "matplotlib, imported by BioSPPy",
 }
 

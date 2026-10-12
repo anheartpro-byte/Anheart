@@ -276,6 +276,17 @@ enables the unit, starts it and waits for `GET /healthz`. It is safe to run
 again: nothing that is in place is changed, and a running console is restarted
 only when its image or unit changed and only when it says it is at rest.
 
+The console does not run as root. In its container it is the account
+`anheart`, with no capability, on a read-only image, and may open the device
+classes of the drive cable and of the sensor and no other. Everything under
+`/var/lib/anheart` is that account's alone (read it with `sudo`), the
+configuration is root's alone, and nothing updates the system's packages by
+itself any more. `install.sh` sets all of that through `scripts/harden.sh`,
+which can be run on its own: `sudo bash scripts/harden.sh --dry-run` says what
+it would change and changes nothing. The Docker client of the unit is still
+root, because the Docker daemon is. See `docs/pi-image.md`, "Sous quel
+compte" and section 10.
+
 The console that starts is at rest. Nothing starts a session at boot or after a
 restart by systemd: a start needs an operator, and the emergency-stop
 attestation is per boot.
@@ -287,9 +298,7 @@ again, at rest. A console that starts three times within ten minutes after an
 unclean stop comes up out of service: it runs, says `CONSOLE HORS SERVICE` on
 its page, and arms nothing until a named operator puts it back in service
 there. None of this stops the motor: a console that stops ticking stops
-talking to the drive, whose own communication timeout does. The uninstall
-script leaves systemd's hardware-watchdog setting
-(`/etc/systemd/system.conf.d/10-anheart-watchdog.conf`) in place. See
+talking to the drive, whose own communication timeout does. See
 `docs/pi-image.md`, "Le chien de garde".
 
 ### Control the service
@@ -301,7 +310,8 @@ sudo systemctl stop anheart       # controlled stop: reference zeroed, link rele
 sudo systemctl restart anheart    # at rest only, e.g. after editing /etc/anheart/anheart.env
 curl -fsS http://127.0.0.1:8090/healthz
 sudo bash scripts/pi/preflight.sh # read-only checks of the configuration and links
-sudo bash scripts/uninstall.sh    # removes the service; keeps configuration and data
+sudo bash scripts/harden.sh --dry-run   # what is not as closed as it must be; changes nothing
+sudo bash scripts/uninstall.sh    # removes the service and every system setting written for it; keeps configuration, data and account
 ```
 
 In `/etc/anheart/anheart.env` a line is `KEY=value` and nothing else: Docker
