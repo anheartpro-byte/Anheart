@@ -67,13 +67,15 @@ RuntimeDirectory=anheart
 RuntimeDirectoryMode=0755
 # For the processes of this unit themselves (the shell of each line, the
 # relay, the Docker client): no way to gain a privilege, the whole file system
-# read-only but /run/anheart, no home directory. They write nowhere else: the
+# read-only but /run/anheart and the shared drive lock, no home directory.
+# They write nowhere else: the
 # console's data are mounted by the Docker daemon, not by them. This binds the
 # relay, which reads what the console sends. It does not bind what root's
 # Docker client may ask of the daemon.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+ReadWritePaths=/tmp/anheart-drive.lock
 # Replaced by the drop-ins. Left as they are, the start fails on a missing
 # image and an unknown account rather than run a version nobody chose, or run
 # it as root.
@@ -92,6 +94,7 @@ ExecStartPre=/bin/sh -c 'if /usr/bin/docker container inspect anheart >/dev/null
 # have. Best effort: with no sensor configured it does nothing, and a failure
 # never prevents the start (the console then shows the ECG link as down).
 ExecStartPre=-/usr/local/lib/anheart/bind-bitalino
+ExecStartPre=/usr/bin/python3 /usr/local/lib/anheart/prepare-drive-lock.py
 # What the console is given, and nothing more.
 #
 #   --user, --group-add       the account `anheart` and the group of the
@@ -131,6 +134,7 @@ ExecStart=/bin/sh -c '/usr/bin/install -d -m 0700 -o anheart -g anheart /run/anh
     --user ${ANHEART_ACCOUNT} $ANHEART_GROUPS \
     --cap-drop ALL --security-opt no-new-privileges \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+    --mount type=bind,source=/tmp/anheart-drive.lock,target=/tmp/anheart-drive.lock \
     --network host \
     --device-cgroup-rule "c 188:* rw" \
     --device-cgroup-rule "c 189:* rw" \

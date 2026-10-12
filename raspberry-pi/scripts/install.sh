@@ -48,7 +48,7 @@ readonly OS_CODENAME="bookworm"
 readonly OS_REFERENCE="2026-10-06"
 # chrony: the one time service of the machine (docs/pi-image.md, "L'heure").
 # socat: the relay of the unit's watchdog (docs/pi-image.md, "Le chien de garde").
-readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl chrony socat)
+readonly PACKAGES=(docker.io bluez libusb-1.0-0 ca-certificates curl chrony socat python3)
 
 readonly ROOT="${ANHEART_ROOT:-}"
 readonly CONFIG_DIR="$ROOT/etc/anheart"
@@ -489,6 +489,14 @@ install_unit() {
     local helper="$TREE/scripts/pi/bind-bitalino.sh"
     [ -r "$helper" ] || die "$helper is missing: this copy of the sources is incomplete"
     system_file "$BIND_HELPER" 0755 < "$helper" || true
+    helper="$TREE/scripts/pi/prepare_drive_lock.py"
+    [ -r "$helper" ] || die "$helper is missing: this copy of the sources is incomplete"
+    system_file "$ROOT/usr/local/lib/anheart/prepare-drive-lock.py" 0644 < "$helper" || true
+    system_file "$ROOT/etc/tmpfiles.d/anheart-drive.conf" <<'EOF' || true
+f /tmp/anheart-drive.lock 0660 anheart dialout -
+x /tmp/anheart-drive.lock - - - -
+EOF
+    systemd-tmpfiles --create "$ROOT/etc/tmpfiles.d/anheart-drive.conf"
     mkdir -p "$DROP_IN_DIR"
     install_file "$TREE/scripts/$SERVICE.service" "$UNIT_FILE"
     local draft

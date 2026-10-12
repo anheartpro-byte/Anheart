@@ -72,6 +72,7 @@ usage() {
 usage: sudo bash scripts/harden.sh [--dry-run] [--undo] [STEP ...]
        bash scripts/harden.sh --list
        sudo bash scripts/harden.sh network [--dry-run] [--activate] [--undo]
+       sudo bash scripts/harden.sh storage [--dry-run]
 
   --dry-run   print what would change, change nothing
   --undo      take back what the steps set in the system (scripts/uninstall.sh)
@@ -375,6 +376,10 @@ named=""
 if [ "${1:-}" = network ]; then
     shift
     exec bash "$(dirname "$0")/pi/configure_network.sh" "$@"
+fi
+if [ "${1:-}" = storage ]; then
+    shift
+    exec bash "$(dirname "$0")/pi/configure_storage.sh" "$@"
 fi
 for argument in "$@"; do
     case "$argument" in
