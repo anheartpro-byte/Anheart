@@ -716,6 +716,8 @@ async def test_installed_health_probe_does_not_fall_back_to_clear_http(served: S
 @pytest.mark.parametrize("host", ["invalid host", "127.0.0.1/path", "[::1]"])
 def test_installed_health_probe_refuses_invalid_host(host: str) -> None:
     assert not healthy({"UI_HOST": host})
+
+
 def handshake(port: int, client: ssl.SSLContext, name: str | None) -> str:
     """Open a TLS connection to the console as ``name``; the protocol version agreed."""
     with (
