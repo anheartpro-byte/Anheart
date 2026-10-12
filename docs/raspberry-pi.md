@@ -2648,7 +2648,8 @@ n'a gardées. Un enregistrement dit combien il lui en manque
 (`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`), et ce nombre
 est fait de deux comptes :
 
-- **ce que la prise a refusé à cette séance : exactement.** La prise ne date
+- **ce que la prise a refusé à cette séance : exactement si les deux lectures
+  de frontière réussissent.** La prise ne date
   pas ce qu'elle refuse, elle le compte. La boucle lit ce compte à l'instant
   où elle demande l'armement, puis à l'instant où elle ferme l'enregistrement
   (`Journal.frames_refused` : un entier lu en mémoire, sans verrou ni attente,
@@ -2662,7 +2663,8 @@ est fait de deux comptes :
   dure, le compte va jusqu'à la première prise du cycle en cours. Rien n'est
   ajouté aux autres tics ;
 - **ce que le fil a lâché lui-même au-delà de 8192, et ce que la prise a
-  refusé quand son compte n'a pas pu être lu au début de l'armement : un
+  refusé quand son compte n'a pas pu être lu au début de l'armement ou à la fin
+  de la séance : un
   majorant.** De ces trames on ne sait que le nombre et entre quels instants
   elles ont commencé (ce que la prise refuse est ce qu'elle a reçu de plus
   récent, donc après la dernière trame qu'elle a gardée). Un enregistrement
@@ -2991,12 +2993,14 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   fil lâche lui-même au-delà de 8192 en attente d'un enregistrement. Elles
   sont comptées, et l'enregistrement le dit (15.2).
 - **Ce que `drive_frames_lost` ne dit pas exactement.** Ce que la prise a
-  refusé à une séance est compté pour elle seule, exactement (15.2). Deux
+  refusé à une séance est compté pour elle seule, exactement quand les deux
+  lectures de frontière réussissent (15.2). Deux
   comptes restent des majorants, comptés pour chaque séance dont l'intervalle
   les recouvre et non partagés entre elles : les trames que le fil du journal
   lâche lui-même au-delà de 8192 ; et tout ce que la prise a refusé quand son
-  compte n'a pas pu être lu au début de l'armement (une faute de ce qui écoute
-  le variateur, journalisée : le départ a lieu quand même). Le compte exact
+  compte n'a pas pu être lu au début de l'armement ou à la fin de la séance
+  (une faute de ce qui écoute le variateur, journalisée : ni le départ ni
+  l'arrêt ne sont retenus). Le compte exact
   sépare les refus par l'ordre dans lequel la boucle les fait : si un échange
   était un jour fait par un autre fil que la boucle à l'instant même où une
   séance commence ou finit, il pourrait être compté du mauvais côté, à une

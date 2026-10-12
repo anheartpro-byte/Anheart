@@ -372,14 +372,15 @@ ou trop de trames en attente d'un enregistrement) sont comptées dans
 l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`) : combien
 de trames du variateur manquent à cet enregistrement.
 
-- Pour les trames que la prise a refusées, ce nombre est **exact** : la
+- Pour les trames que la prise a refusées, ce nombre est **exact si les deux
+  lectures de frontière réussissent** : la
   console lit le compte des refus au début de l'armement et à la fin de la
   séance, et l'enregistrement compte la différence. Ce qu'une console au repos
   s'est vu refuser avant ou après la séance n'y est pas.
 - Il reste un **majorant**, jamais inférieur à la perte réelle, dans deux
   cas : les trames que le fil du journal a lâchées lui-même faute de place ;
   et tout refus de la prise quand son compte n'a pas pu être lu au début de
-  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
+  l'armement ou à la fin de la séance. Ces trames sont comptées pour chaque séance dont l'intervalle
   recouvre celui où elles ont pu commencer, donc par deux enregistrements
   quand deux séances le recouvrent.
 
