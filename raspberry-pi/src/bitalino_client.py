@@ -430,7 +430,8 @@ def ensure_paired(mac: str, pin: str = BITALINO_PIN, run: CommandRunner = run_co
         run([sys.executable, "-c", _PAIR_SCRIPT, mac, pin], PAIR_TIMEOUT_S)
         paired = _is_paired(mac, run)
     except (OSError, subprocess.SubprocessError) as error:
-        logger.warning("Could not run bluetoothctl to pair %s: %s", mac, error)
+        # Subprocess errors include argv, which carries the pairing code.
+        logger.warning("Could not run bluetoothctl to pair %s: %s", mac, type(error).__name__)
         return False
     if not paired:
         logger.warning("%s is still not paired; run scripts/pair_device.sh once by hand", mac)

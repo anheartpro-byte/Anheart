@@ -1627,7 +1627,9 @@ console), et les trois scripts qu'une personne lance avec `sudo`.
 Depuis que le journal est gardé sur le disque
 ([pi-image.md](pi-image.md#le-journal-du-système)), ce qu'il contient y reste.
 
-**Le code d'appairage du BITalino n'y est plus écrit.** C'est le code d'usine
+**Le code d'appairage du BITalino n'y est plus écrit**, y compris quand la
+commande dépasse son délai ou échoue : le journal donne le type d'erreur,
+jamais la commande ni ses arguments. C'est le code d'usine
 du capteur, le même pour tous : ce n'était pas un secret de la machine, et ce
 n'est toujours pas une protection
 ([menaces.md](menaces.md#men-15-bitalino-usurpé-ou-signal-physiologique-forgé)).

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import sys
 import threading
 import time
@@ -538,6 +539,26 @@ def test_a_missing_bluetoothctl_is_not_a_crash() -> None:
         raise FileNotFoundError(argv[0])
 
     assert not ensure_paired(MAC, run=runner)
+
+
+@pytest.mark.parametrize("timed_out", [True, False])
+def test_failed_pairing_never_logs_the_pin(
+    timed_out: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    code = "8317"
+
+    def runner(argv: Sequence[str], timeout: float) -> str:
+        if argv[0] == "bluetoothctl":
+            return "Paired: no"
+        if timed_out:
+            raise subprocess.TimeoutExpired(list(argv), timeout)
+        raise subprocess.CalledProcessError(1, list(argv), output=code, stderr=code)
+
+    with caplog.at_level(logging.WARNING, logger="src.bitalino_client"):
+        assert not ensure_paired(MAC, code, runner)
+    assert caplog.records
+    assert MAC in caplog.text
+    assert code not in caplog.text
 
 
 def test_the_real_command_runner_returns_stdout() -> None:
