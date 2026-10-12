@@ -52,6 +52,11 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 >   ([section 6](#essai-du-durcissement--à-faire-au-banc)). Le point d'accès,
 >   le pare-feu, TLS et le système en lecture seule sont les lots suivants :
 >   **non faits**.
+> - **TLS de la console (10 octobre 2026)** : la console sait servir sa page en
+>   TLS et un script fait son certificat sur le Pi. Écrit et testé dans la gate
+>   du Pi ; **pas actif sur un Pi installé**, où la page reste sur la boucle
+>   locale, et jamais essayé avec une tablette
+>   ([section 4](#le-certificat-de-la-console)).
 > - **Pas fait** : l'image n'est ni publiée dans un registre ni signée
 >   ([section 1](#ce-qui-reste-pour-une-image-construite-et-signée-par-la-ci)).
 
@@ -765,6 +770,131 @@ Dit sans détour, parce qu'aucune option de l'unité ne le change :
 En sortir demanderait un Docker sans root, ou de lancer la console sans
 Docker : ni l'un ni l'autre n'est prévu par un ticket.
 
+### Le certificat de la console
+
+Hors de la boucle locale, la console ne sert sa page qu'en TLS, ou ne démarre
+pas ([raspberry-pi.md, 12.5](raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)).
+Le certificat qu'elle présente est fait **sur le Pi**, à la mise en service,
+par `scripts/pi/make_console_tls.sh`.
+
+> **État réel au 10 octobre 2026.** La console et le script sont écrits et
+> testés (gate du Pi, sur la boucle locale d'une machine de test). **Sur un Pi
+> installé, rien de ceci n'est encore actif** : la page y écoute sur la boucle
+> locale, en clair, comme avant ; l'unité ne monte pas le dossier du
+> certificat dans le conteneur et `scripts/install.sh` n'appelle pas le
+> script. Ouvrir la console au réseau que le Pi crée (point d'accès, pare-feu,
+> compte non privilégié) est le reste d'ANH-151. Aucune tablette réelle n'a
+> installé d'autorité ni ouvert la page en TLS : la liste de ce qui reste à
+> essayer est [plus bas](#ce-qui-reste-à-décider-et-à-essayer).
+
+#### Ce qui a été décidé, et pourquoi
+
+| Décision | Raison |
+|---|---|
+| Une autorité de certification **par Pi**, créée sur ce Pi | Une autorité commune à toutes les machines, dont la clé privée serait sur chaque Pi ou dans ce dépôt public, permettrait à quiconque tient un Pi de fabriquer un certificat accepté par les tablettes de toutes les autres. Ici l'autorité d'une machine ne reconnaît que cette machine, et le dépôt ne contient ni certificat ni clé |
+| La clé privée de l'autorité **n'est pas gardée** | Elle signe un seul certificat, celui de la console, puis disparaît : elle n'existe que dans la mémoire du script, passe à `openssl` par son entrée standard, et n'est écrite dans aucun fichier ni sur aucune ligne de commande. Ce qu'une tablette accepte en installant l'autorité se réduit donc à **un certificat qui existe déjà**. Gardée sur le Pi, même lisible par root seul, elle aurait été une clé au repos avec laquelle signer, aux yeux de la tablette, un certificat pour n'importe quel site ; et tant que la console tourne sous root ([plus haut](#sous-quel-compte)), « root seul » ne la protège pas de la console |
+| Le prix : renouveler, c'est changer d'autorité | Un nouveau certificat vient avec une nouvelle autorité, que chaque tablette installe de nouveau. D'où la durée la plus longue que les tablettes acceptent, et un renouvellement qui se prépare ([plus bas](#renouveler)) |
+| Durée : 825 jours | La limite d'iOS et de macOS pour tout certificat de serveur, quelle que soit l'autorité qui l'a signé. L'autorité vit un jour de plus que le certificat |
+| Algorithmes : ECDSA P-256, SHA-256 | Acceptés par OpenSSL 3.0 (Debian 12) et par les navigateurs actuels. C'est aussi la signature la moins coûteuse pour un Pi, et la poignée de main TLS tourne sur la boucle de la console |
+| Noms portés par le certificat | Ceux que la tablette tape : l'adresse fixe du point d'accès et un nom local, donnés au script par `--name`. Par défaut `10.42.0.1` (l'adresse que NetworkManager donne à un Pi qui partage sa connexion en point d'accès) et `anheart.internal` (une zone réservée aux usages privés). **Ces deux valeurs sont des hypothèses tant que le point d'accès n'est pas fait.** `127.0.0.1` et `localhost` sont toujours ajoutés : une console qui écoute sur toutes les adresses peut ainsi être vérifiée depuis le Pi lui-même |
+| Fichiers, dans `/etc/anheart/tls/` (mode 750) | `authority.crt` : le certificat de l'autorité, **public**, le seul fichier qu'une tablette installe. `console.crt` : le certificat de la console, public. `console.key` : sa clé privée, mode 600, qui ne quitte jamais le Pi. Le dossier et les fichiers appartiennent au compte donné par `--owner` (celui sous lequel tourne la console) ; sans cette option, à celui qui lance le script |
+
+Le script s'arrête sans rien écrire si l'horloge du Pi n'a jamais été réglée
+(une date d'avant octobre 2026) : un certificat daté d'une telle horloge serait
+refusé par les tablettes. Vérifier l'heure d'abord ([L'heure](#lheure)).
+
+#### Faire le certificat
+
+Sur le Pi, console au repos :
+
+```bash
+date                                   # l'heure du Pi doit être la bonne
+sudo bash scripts/pi/make_console_tls.sh --dry-run --name 10.42.0.1 --name anheart.internal
+sudo bash scripts/pi/make_console_tls.sh --name 10.42.0.1 --name anheart.internal
+```
+
+Le script écrit les trois fichiers, puis affiche les noms, les dates de
+validité, **l'empreinte SHA-256 de l'autorité** (à noter sur la fiche de mise
+en service) et les trois lignes à mettre dans la configuration de la console
+(`UI_TLS_CERT`, `UI_TLS_KEY`, `UI_TLS_NAMES`). Il ne modifie aucune
+configuration et ne redémarre rien : la console lit son certificat une fois,
+à son démarrage.
+
+Le relancer ne change rien à ce qui est en place et encore bon (code 0). Ce
+qui est en place et ne l'est plus (expiré, autre nom, clé qui ne correspond
+pas) n'est **jamais** remplacé sans `--force`, parce que le remplacer change
+l'autorité et donne donc quelque chose à faire sur chaque tablette.
+`--check` juge sans rien écrire et sort en code 1 si le certificat manque, est
+inutilisable, ou expire dans moins de `--min-days` jours (30 par défaut).
+
+#### Mettre l'autorité sur la tablette
+
+`authority.crt` est un fichier public :
+ce qui compte n'est pas qu'il reste secret, mais que la tablette installe bien
+celui de ce Pi.
+
+1. Sortir le fichier du Pi par un chemin tenu par la personne qui met en
+   service : une clé USB branchée sur le Pi
+   (`sudo cp /etc/anheart/tls/authority.crt /media/<clé>/`), ou une copie par
+   SSH vers son poste.
+2. L'apporter à la tablette : la clé USB, un câble, ou l'outil de gestion des
+   appareils de l'établissement, qui est la voie normale pour des tablettes
+   gérées.
+3. **Avant de lui faire confiance, comparer l'empreinte SHA-256** que la
+   tablette affiche pour ce certificat avec celle notée à l'étape précédente.
+   C'est cette comparaison, et elle seule, qui dit que le fichier est celui
+   du Pi, quel que soit le chemin qu'il a pris.
+
+Ce qu'il ne faut pas faire : le télécharger depuis le réseau de la console
+sans comparer l'empreinte, ni passer l'avertissement du navigateur « pour cette
+fois » à la place de l'installation. Tant que l'autorité n'est pas installée,
+rien ne distingue la console d'un autre appareil qui répondrait à sa place ;
+c'est précisément ce que l'installation règle. La console elle-même ne
+distribue pas son autorité.
+
+#### Renouveler
+
+`sudo bash scripts/pi/make_console_tls.sh --check --min-days 90` dit si le
+certificat tient encore 90 jours, et affiche ses dates. Pour renouveler sans qu'aucune tablette ne
+perde la console :
+
+1. faire le nouveau certificat **à côté** de l'ancien :
+   `sudo bash scripts/pi/make_console_tls.sh --dir /etc/anheart/tls-suivant --name ...` ;
+2. installer la nouvelle autorité sur chaque tablette (elles ont alors les
+   deux) ;
+3. séance terminée, pointer `UI_TLS_CERT` et `UI_TLS_KEY` vers le nouveau
+   dossier et redémarrer la console, au repos ;
+4. retirer l'ancienne autorité de chaque tablette et supprimer l'ancien
+   dossier du Pi.
+
+Remplacer sur place (`--force`) est possible aussi : le script affiche alors
+l'empreinte de l'autorité remplacée, à retirer des tablettes, et celles-ci
+voient l'avertissement du navigateur jusqu'à ce que la nouvelle soit
+installée.
+
+#### Une tablette perdue ou volée
+
+Elle ne détient, pour TLS, que le certificat
+public de l'autorité : rien à révoquer de ce côté. Elle connaît en revanche ce
+qu'on lui a saisi : changer le jeton de la console (`UI_TOKEN`) et, le jour où
+il existera, le mot de passe du point d'accès. **Un Pi ou une carte SD perdus**
+emportent la clé privée de la console : faire un certificat neuf sur la
+machine de remplacement et **retirer l'ancienne autorité de chaque tablette**.
+Il n'existe pas d'autre révocation que ce retrait.
+
+#### Ce qui reste à décider et à essayer
+
+| Quoi | Qui |
+|---|---|
+| Installer l'autorité sur une vraie tablette et ouvrir la page, **WebSocket comprise** (la ligne d'état doit vivre, pas seulement la page s'afficher). Attendu, non essayé : sur iOS, l'installation du profil puis, à part, l'activation de la confiance totale pour cette autorité dans les réglages de confiance des certificats ; sur Android, l'installation comme « certificat CA », avec l'avertissement du système qui reste affiché ensuite. Chrome et Safari suivent les autorités installées par l'utilisateur ; Firefox pour Android ne les suit pas sans réglage. Un certificat seulement « accepté pour cette fois » dans le navigateur ne vaut pas installation : selon le navigateur, la WebSocket reste refusée | une personne avec le matériel |
+| Que l'empreinte SHA-256 soit bien lisible sur la tablette avant d'accorder la confiance, et où | une personne avec le matériel |
+| L'adresse du point d'accès et le nom local, et que la tablette résolve ce nom sur un réseau sans accès à Internet. L'adresse est l'URL sûre ; le nom dépend du DNS du point d'accès | lot « point d'accès » d'ANH-151, puis une personne avec le matériel |
+| La procédure de renouvellement : sa période (le certificat dure 825 jours), qui la fait, et où l'échéance est suivie. Rien ne prévient aujourd'hui de l'échéance en dehors de `--check` | chef de projet ; ANH-115 pour la fiche de mise en service |
+| Monter `/etc/anheart/tls` en lecture seule dans le conteneur, donner le dossier au compte de la console, appeler le script à la mise en service | lots « service » et « durcissement » d'ANH-151 |
+| Quand la page quitte la boucle locale, **tout** ce qui interroge la console depuis le Pi parle TLS aussi : la question « au repos ? » de `scripts/install.sh`, le contrôle de santé de l'image, `scripts/pi/test_install.sh`, la page en plein écran. Le certificat porte `127.0.0.1` pour cela (`curl --cacert /etc/anheart/tls/authority.crt https://127.0.0.1:<port>/healthz`) | le lot qui ouvre la console au réseau |
+| Choisir l'adresse d'écoute. Une adresse précise qui n'existe pas encore au démarrage (interface du point d'accès pas montée) empêche le serveur de la page de démarrer, et la console sort : écouter sur toutes les adresses et laisser le pare-feu choisir l'interface n'a pas ce défaut | lot « point d'accès » d'ANH-151 |
+| Combien de connexions un même appareil du réseau peut tenir ouvertes : rien ne le borne dans la console, à dessein ([securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151)) | lot « pare-feu » d'ANH-151 |
+
 ---
 
 ## 5. Ce que la CI vérifie
@@ -1082,6 +1212,7 @@ nouvelles versions.
 | Le client Docker de l'unité est root, parce que le démon Docker l'est ([ce qui reste sous root](#ce-qui-reste-sous-root)) | aucun ticket : il faudrait un Docker sans root, ou une console lancée sans Docker |
 | Le conteneur voit le nom de tous les périphériques de la machine (`/dev` est monté), même s'il n'en ouvre que trois classes | limite assumée : les nœuds du câble et du capteur vont et viennent |
 | `rpi-eeprom-update` n'est pas touché : il applique au démarrage une mise à jour du micrologiciel du Pi **déjà installée par un paquet**, donc seulement après un `apt` lancé par une personne | à constater sur un Pi ([essai du durcissement](#essai-du-durcissement--à-faire-au-banc)) ; à décider par le chef de projet |
+| Servir la page en TLS sur un Pi installé : la console et le script du certificat sont écrits et testés, l'installation ne s'en sert pas encore, et aucune tablette n'a été essayée ([Le certificat de la console](#le-certificat-de-la-console), avec la liste de ce qui reste) | ANH-151, puis une personne avec le matériel |
 | Une console qui ne répond réellement à rien, pas même à son arrêt, n'a été exercée nulle part sous systemd : tout gel appliqué du dehors est levé par l'arrêt. Ce que l'unité fait alors (15 s, puis `docker stop`, qui tue au bout de 60 s) est lu, pas observé | à observer le jour où le cas se présente ; aucun essai sûr ne le produit |
 | Le chien de garde du service, la relance et le mode hors service n'ont jamais tourné sur un vrai Pi ; le chien de garde matériel n'a jamais été armé ni déclenché | une personne avec le matériel : [section 6](#6-installer-un-vrai-raspberry-pi), étape 7, puis la procédure de banc de [securite.md](securite.md#96-essai-au-banc--procédure-non-faite) |
 | Quand systemd tourne mais n'arrive plus à relancer la console (limite de dix démarrages atteinte, Docker bloqué), l'unité reste en échec et **le Pi ne redémarre pas de lui-même** : seul un système entier figé est redémarré par le chien de garde matériel. Le faire redémarrer aussi dans ce cas est une ligne de l'unité (`StartLimitAction=reboot`), au prix d'un Pi qui redémarre en boucle, donc difficile à joindre, quand la console ne peut pas démarrer du tout (image absente) | décision du chef de projet ; d'ici là, `systemctl reset-failed anheart` ou un redémarrage du Pi à la main |
