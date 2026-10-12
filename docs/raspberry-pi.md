@@ -122,7 +122,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/service_watchdog.py` | Ce que la console dit au gestionnaire de service (systemd) : prête, puis vivante, puis qu'elle s'arrête. | Une notification n'est envoyée que par la ligne qui suit un tic de contrôle revenu ; l'envoi est un datagramme local non bloquant, un échec est compté et oublié ; sans gestionnaire de service, rien n'est envoyé. Voir [3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service). Porte 100 %. |
 | `src/service_state.py` | Ce que la console garde de ses propres redémarrages, d'un processus au suivant : un fichier à côté des enregistrements. | Trois démarrages après un arrêt non propre en dix minutes mettent la console hors service ; un fichier absent ou abîmé, ou un disque qui refuse, ne le fait jamais ; la remise en service vaut tout de suite, quoi que réponde le disque (tests de propriétés). Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
-| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
+| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`), et le certificat de la console (`tls.py`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum **et** un certificat sont exigés : la page n'y est servie qu'en TLS ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)). Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
 
 ### 2.6 L'enregistrement de séance (`src/record/`)
@@ -2012,9 +2012,12 @@ sort avec le code 2.
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
-| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` obligatoire |
+| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
+| `UI_TLS_CERT` | aucun | chemin du certificat de la console (PEM), tel que la console le voit | va avec `UI_TLS_KEY` : les deux, ou aucun. Obligatoire hors boucle locale. Renseigné, la console sert en TLS partout où elle écoute, boucle locale comprise |
+| `UI_TLS_KEY` | aucun | chemin de sa clé privée (PEM, **sans phrase secrète**) | va avec `UI_TLS_CERT`. Un fichier absent, illisible, qui n'est pas la clé du certificat, ou protégé par une phrase secrète : la console refuse de démarrer et dit lequel (code 2) |
+| `UI_TLS_NAMES` | aucun | adresses IPv4 et noms sous lesquels une tablette ouvre la console, ceux que porte le certificat, séparés par des virgules (`10.42.0.1,anheart.internal`) | chacun donne une origine acceptée par la WebSocket, en `https`, au port de la page. Refusée sans certificat (elle serait sans effet), et si une valeur n'est ni une adresse IPv4 ni un nom d'hôte |
 | `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
 | `HR_HARD_MAX_BPM` | `148` | palier dur du superviseur | 100..220 |
@@ -2054,7 +2057,7 @@ Deux clés des fichiers `.env` ne sont pas lues par `src/local_config.py` :
 
 | Clé | Lue par | Rôle |
 |---|---|---|
-| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
+| `BITALINO_MAC` | `scripts/pi/bind-bitalino.sh` (lancé par le service du Pi), `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; sur le Pi, le service lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse avant chaque démarrage de la console, qui n'a pas le droit de le faire elle-même ([pi-image.md](pi-image.md#sous-quel-compte)) |
 | `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Le `Dockerfile` la fixe lui-même ; sur le Pi, le service la transmet aussi depuis `/etc/anheart/anheart.env` |
 
 Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
@@ -2185,6 +2188,88 @@ l'enregistrement, lui, remplace par un alias. Une exception imprévue est
 journalisée avec son texte, quel qu'il soit. La voie sans signal est encore
 nommée (`Channel ... has no analog signal`), sans les deux mesures que cette
 ligne portait.
+
+### 12.5 La page en TLS hors de la boucle locale
+
+Ticket ANH-151, lot TLS, 10 octobre 2026. **Écrit et testé dans la gate du Pi ;
+pas actif sur un Pi installé**, où la page écoute sur la boucle locale
+([pi-image.md](pi-image.md#le-certificat-de-la-console)). Aucune tablette
+réelle n'a ouvert la page en TLS.
+
+**La règle.** Hors de la boucle locale, la page, les commandes et le jeton
+traversent un réseau, et ils le traversent en TLS ou pas du tout :
+
+| `UI_HOST` | `UI_TLS_CERT` et `UI_TLS_KEY` | Ce que fait la console |
+|---|---|---|
+| boucle locale (`127.0.0.1`, `::1`, `localhost`) | absents | HTTP en clair, comme avant : développement, simulateur, tests, écran du Pi |
+| boucle locale | présents | TLS, sur la boucle locale aussi |
+| toute autre adresse | présents | TLS |
+| toute autre adresse | absents | **refuse de démarrer**, code 2 : `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '…' in clear HTTP: …` |
+
+Il y a **un seul port et un seul transport**. Une console qui a un certificat
+ne parle que TLS sur `UI_PORT` : aucun second port en clair n'existe à côté,
+et rien ne répond à une requête en clair par une redirection. Un client qui
+parle HTTP en clair à ce port échoue à la poignée de main et sa connexion est
+fermée, sans réponse HTTP et sans ligne dans le journal
+(`tests/test_console_tls.py`). La console n'envoie pas non plus l'en-tête
+`Strict-Transport-Security` : il retirerait à l'opérateur, le jour où le
+certificat a expiré et où il faut arrêter la machine, le moyen de passer
+l'avertissement du navigateur.
+
+**Le certificat est lu une fois, au démarrage.** Le point d'entrée ouvre les
+deux fichiers avant de construire quoi que ce soit de la console : un
+certificat qu'elle ne peut pas servir est une erreur de configuration comme
+les autres, dite avec le fichier en cause, et la console sort avec le code 2,
+sur lequel le service ne la relance pas. Les messages (clé
+`UI_TLS_CERT/UI_TLS_KEY`) :
+
+| Message | Cause |
+|---|---|
+| `the certificate <chemin> is not a file the console can see` (ou `the private key …`) | fichier absent, ou dossier non monté dans le conteneur |
+| `the private key <chemin> cannot be read: Permission denied` | droits du fichier, compte de la console |
+| `<chemin> holds no PEM certificate` / `holds no PEM private key` | les deux chemins inversés, ou un autre fichier |
+| `the private key <chemin> is not the one of the certificate <chemin>` | clé et certificat de deux générations différentes |
+| `the private key <chemin> is protected by a passphrase: …` | la console démarre sans personne : une clé à phrase secrète est refusée, jamais demandée au terminal |
+| `the TLS library refuses <certificat> with <clé>: …` | fichier abîmé |
+
+Aucun de ces messages ne cite le contenu d'un fichier. Ensuite la console garde
+son certificat en mémoire : rien, sur le fil de la boucle de contrôle, n'attend
+jamais ces fichiers, et les remplacer ou les supprimer sous une console qui
+tourne ne change rien avant son prochain démarrage.
+
+**Les dates ne sont pas jugées par la console.** Un certificat expiré est servi
+comme un autre : c'est la tablette qui le juge, avec sa propre horloge. Une
+console qui refuserait de démarrer ou de servir parce que son certificat a
+expiré ferait d'un renouvellement en retard une machine que plus personne ne
+peut joindre, et parierait cela sur l'horloge d'un Pi sans pile. Ce qui
+prévient de l'échéance est `scripts/pi/make_console_tls.sh --check`
+([pi-image.md](pi-image.md#renouveler)). Ce que cela donne pour une séance en
+cours est en [securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
+
+**La WebSocket.** Elle passe par le même port, donc en TLS (`wss`), avec les
+deux mêmes contrôles qu'avant, faits avant l'acceptation : le jeton et
+l'en-tête `Origin`. Une console qui sert son certificat n'accepte que des
+origines `https` : celle de `UI_HOST` et celles de `UI_TLS_NAMES`, au port de
+la page (sans le port quand c'est 443, comme l'écrit un navigateur). L'origine
+`http` de sa propre adresse est refusée comme celle d'un inconnu. Une console
+en clair, donc en boucle locale, garde les origines qu'elle acceptait.
+
+**Le jeton dans l'URL de la WebSocket.** Un navigateur ne peut pas poser
+d'en-tête sur une WebSocket : le jeton y voyage en paramètre `?token=`. Hors de
+la boucle locale, cette URL ne circule qu'à l'intérieur de TLS, et la console
+ne tient pas de journal d'accès : le jeton n'est lisible ni sur le réseau ni
+dans le journal du service. Il reste visible sur la tablette elle-même (outils
+du navigateur), comme tout ce que la page détient.
+
+**Réglages TLS.** TLS 1.2 au minimum, suites par défaut de la bibliothèque,
+aucun certificat demandé au client : qui a le droit de parler à la console
+reste l'affaire du jeton, et demain de l'authentification de l'opérateur.
+`UI_HOST` peut être l'adresse du point d'accès ou `0.0.0.0` ; dans le second
+cas, `UI_TLS_NAMES` est nécessaire pour que la page ouverte à l'adresse du
+point d'accès voie sa WebSocket acceptée.
+
+`scripts/pi/preflight.sh` dit avant le démarrage ce que la console dirait :
+`UI_HOST=… needs UI_TLS_CERT and UI_TLS_KEY`.
 
 ---
 
@@ -2944,23 +3029,30 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   séance, archive temporaire d'un export). Le mode est donné à l'appel qui
   crée le fichier : il n'y a pas d'instant où il est lisible par d'autres, et
   le `umask` du processus ne peut que restreindre. Lancée à la main, la
-  console crée le tout sous le compte qui la lance. **Les enregistrements déjà
-  sur le disque ne sont pas modifiés** : ils gardent leurs modes 755 / 644,
-  sous la racine en 700 qui les protégeait déjà. La console ne les réécrit ni
-  au démarrage ni plus tard (ce serait parcourir des milliers de fichiers de
-  sa propre initiative) ; les resserrer est un geste manuel, machine au
-  repos : `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
+  console crée le tout sous le compte qui la lance. **La console ne modifie
+  pas les enregistrements déjà sur le disque** : elle ne les réécrit ni au
+  démarrage ni plus tard (ce serait parcourir des milliers de fichiers de sa
+  propre initiative). Ceux qu'une console plus ancienne avait écrits en
+  755 / 644 sont refermés **par l'installation**, sur le Pi : chaque
+  `sudo bash scripts/install.sh` (et `sudo bash scripts/harden.sh files`)
+  retire au groupe et aux autres tout droit sur ce qui est sous
+  `/var/lib/anheart`, sans lire ni écrire aucun contenu
+  ([pi-image.md](pi-image.md#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)).
+  Sur un poste de développement, ou pour un dossier racine placé ailleurs par
+  `RECORD_ROOT`, cela reste un geste manuel, machine au repos :
+  `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
   repos** ([menaces.md](menaces.md), MEN-18). C'est la règle d'attente du
   ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
   HDS / RGPD (ANH-172).
-- **Sur un Pi installé, la console tourne sous `root`**
-  ([pi-image.md](pi-image.md#sous-quel-compte)). Le dossier racine,
-  `/var/lib/anheart/records`, appartient au compte `anheart` (mode 700), mais
-  tout ce que la console y crée appartient à `root` : chaque dossier de
-  séance, ses fichiers, et le journal hors séance. Avec les modes 700 / 600,
-  **ils ne sont donc lisibles que par `root`, et plus par le compte
-  `anheart`**, qui les lisait tant qu'ils étaient en 755 / 644. Le compte
-  `anheart` voit encore les noms des dossiers, pas leur contenu. Pour lire un
+- **Sur un Pi installé, la console tourne sous le compte `anheart`**, sans
+  privilèges ([pi-image.md](pi-image.md#sous-quel-compte)), et tout ce qu'elle
+  crée lui appartient : le dossier racine `/var/lib/anheart/records`, chaque
+  dossier de séance, ses fichiers, le journal hors séance, l'état des
+  redémarrages. Le script d'entrée de l'image ferme en plus le masque de
+  création (`umask 077`) : ce que la console crée sans donner de mode (les
+  profils locaux, le verrou du câble) est privé aussi. Ce qu'une console
+  antérieure avait écrit sous `root` est rendu au compte par l'installation.
+  Le compte `anheart` ne peut pas ouvrir de session sur le Pi : pour lire un
   enregistrement, un technicien a deux moyens :
   1. **par la console**, machine au repos, sans compte sur le Pi : le bouton
      « Exporter l'enregistrement » de la page Configuration pour le plus
@@ -2973,9 +3065,10 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
      `sudo less /var/lib/anheart/records/logbook/events.jsonl`.
 
   Ne pas changer le propriétaire ni les modes des dossiers pour les lire : un
-  enregistrement contient l'ECG brut de la séance. Cela changera quand la
-  console tournera sous le compte `anheart`, sans privilèges (ANH-151) : les
-  nouveaux enregistrements appartiendront alors à ce compte.
+  enregistrement contient l'ECG brut de la séance, et la console, qui n'est
+  plus `root`, ne pourrait plus écrire dans un dossier qui ne serait plus le
+  sien. Une copie faite avec `sudo` appartient à `root` : la laisser hors de
+  `/var/lib/anheart`.
 - `config_hash` et `medical_parameters_version` sont des SHA-256 de la
   configuration appliquée (géométrie, plafonds, paliers cardiaques et autres
   limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni

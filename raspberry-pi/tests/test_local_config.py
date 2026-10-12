@@ -129,6 +129,10 @@ def test_paths_and_a_token_can_be_set() -> None:
             MOTION_LIMITS_PATH="/etc/anheart/motion.json",
             UI_HOST="0.0.0.0",  # noqa: S104  # the refusal path is the next test's
             UI_TOKEN="a-sixteen-char-token",  # noqa: S106  # a test value
+            # Off loopback the console serves TLS or does not start (ANH-151):
+            # two paths, which this module does not open.
+            UI_TLS_CERT="/etc/anheart/tls/console.crt",
+            UI_TLS_KEY="/etc/anheart/tls/console.key",
         )
     )
     assert config.motion_limits_path == Path("/etc/anheart/motion.json")
@@ -310,7 +314,9 @@ def test_a_non_numeric_port_is_refused() -> None:
 
 def test_a_network_bind_without_a_token_is_refused() -> None:
     keys = _keys(_with(SIM_ENV, UI_HOST="0.0.0.0"))  # noqa: S104  # the refusal is the point
-    assert keys == {"UI_HOST/UI_PORT/UI_TOKEN"}
+    # And, since ANH-151, without a certificate: both are said at once
+    # (tests/test_console_tls.py has the certificate's own tests).
+    assert keys == {"UI_HOST/UI_PORT/UI_TOKEN", "UI_HOST/UI_TLS_CERT/UI_TLS_KEY"}
 
 
 def test_every_problem_is_reported_at_once() -> None:

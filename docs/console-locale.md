@@ -77,6 +77,11 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > (sections 2, 3, 4, 11, 13 et 14, ajoutés le 10 octobre 2026 avec ANH-162) viennent du
 > code et des tests automatiques sur la console en simulation ; ils n'ont pas été
 > rejoués dans un navigateur.
+> La page servie en TLS hors de la boucle locale (sections 1, 10 et 14, ajoutés le
+> 10 octobre 2026 avec ANH-151) vient du code et des tests automatiques, avec un client
+> TLS de test sur la boucle locale d'une machine de test ; rien n'a été rejoué dans un
+> navigateur ni sur une tablette, et ce que le navigateur affiche face à un certificat
+> qu'il refuse est donné comme attendu.
 
 ---
 
@@ -127,8 +132,12 @@ Au démarrage, le terminal affiche une ligne de résumé (vérifiée) :
 
 ```
 {"ts": "2026-10-10T16:21:03.870Z", "level": "WARNING", "logger": "__main__", "event": "Console du banc sur http://127.0.0.1:8090/ - MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm) - variateur: simulateur - ECG (sim): simulateur - rayon 1.5 m, i = 49.79 - tableau de bord: aucun"}
-{"ts": "2026-10-10T16:21:04.512Z", "level": "INFO", "logger": "src.web.app", "event": "operator interface serving 25 routes on 127.0.0.1:8090 (loopback=True, token=none)"}
+{"ts": "2026-10-10T16:21:04.512Z", "level": "INFO", "logger": "src.web.app", "event": "operator interface serving 28 routes on 127.0.0.1:8090 (loopback=True, token=none, tls=off)"}
 ```
+
+La seconde ligne dit aussi, depuis le 10 octobre 2026, si la page est servie en
+TLS (`tls=on`) ou en clair (`tls=off`) ; la première écrit alors `https://` au
+lieu de `http://`.
 
 Depuis le 10 octobre 2026, chaque ligne du journal de la console est un objet JSON
 (champs `ts`, `level`, `logger`, `event`) : la phrase vérifiée ci-dessus est dans
@@ -158,6 +167,59 @@ Points à savoir :
   (`standard_30_min`, `standard_45_min`) sans écrire de fichier.
 
 Toutes les clés `.env` sont décrites dans [raspberry-pi.md](raspberry-pi.md).
+
+### Depuis une tablette : la page en TLS
+
+> **État réel au 10 octobre 2026.** Ce qui suit vient du code et des tests
+> automatiques (`raspberry-pi/tests/test_console_tls.py`, sur la boucle locale
+> d'une machine de test). **Aucune tablette n'a encore ouvert la page ainsi**, et
+> sur un Pi installé la page écoute toujours sur la boucle locale
+> ([pi-image.md](pi-image.md#le-certificat-de-la-console)). Ce que le
+> navigateur affiche est donné comme attendu, pas comme constaté.
+
+Dès que la console écoute ailleurs que sur la boucle locale, elle ne sert sa
+page qu'en TLS, avec le certificat fait sur le Pi à la mise en service
+([raspberry-pi.md, 12.5](raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)).
+La tablette, connectée au réseau de la console, ouvre :
+
+```
+https://<adresse de la console>:<UI_PORT>/
+```
+
+L'adresse est l'une de celles que porte le certificat (`UI_TLS_NAMES`).
+`http://` à la même adresse ne donne rien : la connexion est fermée sans
+réponse, et rien ne redirige vers `https://`. Le jeton se saisit ensuite comme
+d'habitude (page **Configuration**, carte **Acces**).
+
+**Une fois par tablette**, l'autorité de ce Pi doit être installée sur la
+tablette, en comparant son empreinte
+([pi-image.md](pi-image.md#mettre-lautorité-sur-la-tablette)). Après quoi le
+navigateur ouvre la page sans avertissement.
+
+Ce que l'opérateur voit quand ce n'est pas le cas : **une page d'avertissement
+du navigateur, à la place de la console**. La console n'y est pour rien et ne
+peut rien y afficher.
+
+| Ce que dit le navigateur | Ce que cela veut dire | Quoi faire |
+|---|---|---|
+| certificat ou autorité **non reconnus** (Chrome : `NET::ERR_CERT_AUTHORITY_INVALID`) | l'autorité de ce Pi n'est pas installée sur cette tablette (sur iOS : installée mais confiance non activée) ; ou le certificat a été refait depuis ; ou ce n'est pas la console qui répond | installer l'autorité. **Ne pas passer l'avertissement** : tant qu'il est là, rien ne distingue la console d'un autre appareil du réseau, et le jeton saisi irait à qui répond |
+| le **nom** ne correspond pas (`NET::ERR_CERT_COMMON_NAME_INVALID`) | l'adresse tapée n'est pas l'une de celles du certificat | ouvrir l'adresse notée à la mise en service |
+| certificat **expiré**, ou pas encore valable (`NET::ERR_CERT_DATE_INVALID`) | le certificat a dépassé sa durée (825 jours), ou l'horloge de la tablette est fausse | vérifier l'heure de la tablette ; sinon renouveler le certificat ([pi-image.md](pi-image.md#renouveler)) |
+
+**Un certificat qui expire n'arrête rien et n'empêche pas d'arrêter.** La
+console ne juge pas ses propres dates : elle continue de servir, et une séance
+en cours continue (prouvé par test, sur la console en simulation). TLS ne
+rejuge jamais un certificat sur une connexion déjà ouverte : c'est une
+connexion **nouvelle** (page rechargée, autre onglet, autre tablette) qui
+reçoit l'avertissement. Une page déjà ouverte interroge la console chaque
+seconde, ce qui doit garder ses connexions ouvertes et y faire passer **STOP**
+et **E-STOP** ; ce point-là dépend du navigateur et **n'a pas été constaté sur
+une tablette**. Pour le cas où il faut une connexion nouvelle, la console
+n'impose pas au navigateur de refuser définitivement (pas d'en-tête HSTS) : le
+navigateur garde son moyen de passer l'avertissement d'un certificat expiré, à
+n'employer que pour arrêter une machine. L'arrêt câblé, lui, ne dépend ni de
+la tablette ni du certificat. Ce qui est prouvé et ce qui ne l'est pas est en
+[securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
 
 ---
 
@@ -1144,6 +1206,11 @@ Champ `Jeton partage` et bouton `Utiliser ce jeton`. Le jeton est gardé dans le
 - Hors boucle locale, la console **refuse de démarrer** sans `UI_TOKEN` d'au moins
   16 caractères (message vérifié :
   `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback`).
+- Hors boucle locale, elle refuse aussi de démarrer **sans certificat** : la page,
+  les commandes et le jeton n'y circulent qu'en TLS
+  ([section 1](#depuis-une-tablette--la-page-en-tls) ; message :
+  `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '0.0.0.0' in clear HTTP: ...`).
+  Les deux refus sont dits ensemble quand les deux manquent.
 - Si `UI_TOKEN` est défini, toute route `/api/*` sans le bon jeton répond 401
   `a valid x-anheart-token header is required`.
 
@@ -1740,11 +1807,17 @@ répondu à temps. Détail dans
 
 ### WebSocket `/ws/telemetry`
 
-- Paramètre `?token=<jeton>` si `UI_TOKEN` est défini.
+- Paramètre `?token=<jeton>` si `UI_TOKEN` est défini. Hors boucle locale, cette URL ne
+  circule qu'à l'intérieur de TLS (`wss://`), et la console ne tient pas de journal
+  d'accès : le jeton n'est lisible ni sur le réseau ni dans le journal du service.
 - La poignée de main est refusée **avant** acceptation (code 1008) si l'en-tête `Origin`
-  n'est pas dans la liste autorisée (l'adresse d'écoute, et `localhost` / `127.0.0.1` en
-  boucle locale, en `http` et `https`), ou si le jeton est faux. Un client sans `Origin`
-  (outil, test) est admis, mais reste soumis au jeton.
+  n'est pas dans la liste autorisée, ou si le jeton est faux. La liste : l'adresse
+  d'écoute, `localhost` et `127.0.0.1` en boucle locale, et chaque nom de
+  `UI_TLS_NAMES`, au port de la page. Une console en clair (boucle locale) les accepte
+  en `http` et en `https` ; une console qui sert son certificat, donc toute console
+  hors boucle locale, **en `https` seulement** : l'origine `http` de sa propre adresse
+  y est refusée. Un client sans `Origin` (outil, test) est admis, mais reste soumis au
+  jeton.
 - Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés), `{"kind": "event"}`
   (chaque événement ; depuis le 7 octobre 2026, un événement de type `recording` porte
   les messages de l'enregistrement de séance), `{"kind": "ecg"}` (tranche de l'anneau ECG après chaque instantané,
@@ -1899,10 +1972,11 @@ ralentie). Les autres enregistrements s'exportent par l'API
 
 **Qui peut lire.** Le dossier est réservé au compte qui lance la console
 (mode 700), et chaque dossier et fichier que la console y crée l'est aussi
-(700 et 600) ; les enregistrements écrits avant ce changement gardent leurs
-modes, sous ce même dossier. Sur un Pi installé, la console tourne sous
-`root` : les dossiers de séance n'y sont lisibles que par `root`, plus par le
-compte `anheart`. Un technicien les lit par l'export ci-dessus, ou sur le Pi
+(700 et 600) ; la console ne retouche pas les enregistrements écrits avant ce
+changement, que l'installation du Pi referme. Sur un Pi installé, la console
+tourne sous le compte `anheart`, qui ne peut pas ouvrir de session : les
+dossiers de séance lui appartiennent, et à lui seul. Un technicien les lit par
+l'export ci-dessus, ou sur le Pi
 avec `sudo` ([raspberry-pi.md](raspberry-pi.md#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)).
 Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
 elle contient l'ECG brut de la séance et doit être traitée comme une donnée de

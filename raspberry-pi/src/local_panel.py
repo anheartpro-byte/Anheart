@@ -179,9 +179,12 @@ from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     DEFAULT_HR_CRITICAL_BPM,
     DEFAULT_HR_HARD_MAX_BPM,
+    KEY_UI_TLS_CERT,
+    KEY_UI_TLS_KEY,
     RETIRED_KEYS,
     CameraSource,
     CloudConfig,
+    ConfigProblem,
     EcgSource,
     LocalConfig,
     MotorBackend,
@@ -287,6 +290,7 @@ from src.wall_clock import (
 )
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
+from src.web.tls import server_context
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
 
@@ -2199,13 +2203,31 @@ def describe_config(config: LocalConfig) -> str:
     tiers = config.tiers
     dashboard = "aucun" if config.cloud is None else config.cloud.url
     return (
-        f"Console du banc sur http://{web.host}:{web.port}/ - {modes} "
+        f"Console du banc sur {web.scheme}://{web.host}:{web.port}/ - {modes} "
         f"(plafond {config.motor_max_rpm} tr/min moteur; paliers "
         f"{tiers.hard_max_bpm}/{tiers.critical_bpm} bpm) - "
         f"variateur: {drive} - ECG ({config.ecg_source.value}): {ecg} - "
         f"rayon {config.geometry.radius} m, i = {config.geometry.ratio} - "
         f"tableau de bord: {dashboard}"
     )
+
+
+def tls_problem(config: LocalConfig) -> ConfigProblem | None:
+    """Why the console's certificate cannot be served; ``None`` when it can, or there is none.
+
+    The two files are opened here, before anything of the console is built: a
+    certificate that cannot be served is a configuration error like the
+    others, said with its reason and left with the exit code the service does
+    not restart on. It is not judged on its dates: an expired certificate is
+    served, and the tablet says so (:mod:`src.web.tls`).
+    """
+    files = config.web.tls
+    if files is None:
+        return None
+    loaded = server_context(files)
+    if isinstance(loaded, Err):
+        return ConfigProblem(f"{KEY_UI_TLS_CERT}/{KEY_UI_TLS_KEY}", loaded.error.detail)
+    return None
 
 
 def main(environ: Mapping[str, str] | None = None) -> int:
@@ -2224,6 +2246,10 @@ def main(environ: Mapping[str, str] | None = None) -> int:
             _logger.error("configuration: %s: %s", problem.key, problem.detail)
         return EXIT_CONFIG
     config = loaded.value
+    unserved = tls_problem(config)
+    if unserved is not None:
+        _logger.error("configuration: %s: %s", unserved.key, unserved.detail)
+        return EXIT_CONFIG
     _logger.warning("%s", describe_config(config))
     return asyncio.run(
         run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
