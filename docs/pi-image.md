@@ -783,7 +783,7 @@ par `scripts/pi/make_console_tls.sh`.
 > locale, en clair, comme avant ; l'unité ne monte pas le dossier du
 > certificat dans le conteneur et `scripts/install.sh` n'appelle pas le
 > script. Ouvrir la console au réseau que le Pi crée (point d'accès, pare-feu,
-> compte non privilégié) est le reste d'ANH-151. Aucune tablette réelle n'a
+> intégration du certificat au service) est le reste d'ANH-151. Le compte non privilégié est déjà en place. Aucune tablette réelle n'a
 > installé d'autorité ni ouvert la page en TLS : la liste de ce qui reste à
 > essayer est [plus bas](#ce-qui-reste-à-décider-et-à-essayer).
 
@@ -792,7 +792,7 @@ par `scripts/pi/make_console_tls.sh`.
 | Décision | Raison |
 |---|---|
 | Une autorité de certification **par Pi**, créée sur ce Pi | Une autorité commune à toutes les machines, dont la clé privée serait sur chaque Pi ou dans ce dépôt public, permettrait à quiconque tient un Pi de fabriquer un certificat accepté par les tablettes de toutes les autres. Ici l'autorité d'une machine ne reconnaît que cette machine, et le dépôt ne contient ni certificat ni clé |
-| La clé privée de l'autorité **n'est pas gardée** | Elle signe un seul certificat, celui de la console, puis disparaît : elle n'existe que dans la mémoire du script, passe à `openssl` par son entrée standard, et n'est écrite dans aucun fichier ni sur aucune ligne de commande. Ce qu'une tablette accepte en installant l'autorité se réduit donc à **un certificat qui existe déjà**. Gardée sur le Pi, même lisible par root seul, elle aurait été une clé au repos avec laquelle signer, aux yeux de la tablette, un certificat pour n'importe quel site ; et tant que la console tourne sous root ([plus haut](#sous-quel-compte)), « root seul » ne la protège pas de la console |
+| La clé privée de l'autorité **n'est pas gardée** | Elle signe un seul certificat, celui de la console, puis disparaît : elle n'existe que dans la mémoire du script, passe à `openssl` par son entrée standard, et n'est écrite dans aucun fichier ni sur aucune ligne de commande. Ce qu'une tablette accepte en installant l'autorité se réduit donc à **un certificat qui existe déjà**. Gardée sur le Pi, même lisible par root seul, elle aurait été une clé au repos avec laquelle signer, aux yeux de la tablette, un certificat pour n'importe quel site ; la console ne tourne plus sous root ([plus haut](#sous-quel-compte)), mais une compromission de root donnerait encore accès à une clé conservée |
 | Le prix : renouveler, c'est changer d'autorité | Un nouveau certificat vient avec une nouvelle autorité, que chaque tablette installe de nouveau. D'où la durée la plus longue que les tablettes acceptent, et un renouvellement qui se prépare ([plus bas](#renouveler)) |
 | Durée : 825 jours | La limite d'iOS et de macOS pour tout certificat de serveur, quelle que soit l'autorité qui l'a signé. L'autorité vit un jour de plus que le certificat |
 | Algorithmes : ECDSA P-256, SHA-256 | Acceptés par OpenSSL 3.0 (Debian 12) et par les navigateurs actuels. C'est aussi la signature la moins coûteuse pour un Pi, et la poignée de main TLS tourne sur la boucle de la console |
