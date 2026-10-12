@@ -2053,7 +2053,7 @@ Deux clés des fichiers `.env` ne sont pas lues par `src/local_config.py` :
 
 | Clé | Lue par | Rôle |
 |---|---|---|
-| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
+| `BITALINO_MAC` | `scripts/pi/bind-bitalino.sh` (lancé par le service du Pi), `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; sur le Pi, le service lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse avant chaque démarrage de la console, qui n'a pas le droit de le faire elle-même ([pi-image.md](pi-image.md#sous-quel-compte)) |
 | `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Le `Dockerfile` la fixe lui-même ; sur le Pi, le service la transmet aussi depuis `/etc/anheart/anheart.env` |
 
 Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
@@ -2981,23 +2981,30 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   séance, archive temporaire d'un export). Le mode est donné à l'appel qui
   crée le fichier : il n'y a pas d'instant où il est lisible par d'autres, et
   le `umask` du processus ne peut que restreindre. Lancée à la main, la
-  console crée le tout sous le compte qui la lance. **Les enregistrements déjà
-  sur le disque ne sont pas modifiés** : ils gardent leurs modes 755 / 644,
-  sous la racine en 700 qui les protégeait déjà. La console ne les réécrit ni
-  au démarrage ni plus tard (ce serait parcourir des milliers de fichiers de
-  sa propre initiative) ; les resserrer est un geste manuel, machine au
-  repos : `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
+  console crée le tout sous le compte qui la lance. **La console ne modifie
+  pas les enregistrements déjà sur le disque** : elle ne les réécrit ni au
+  démarrage ni plus tard (ce serait parcourir des milliers de fichiers de sa
+  propre initiative). Ceux qu'une console plus ancienne avait écrits en
+  755 / 644 sont refermés **par l'installation**, sur le Pi : chaque
+  `sudo bash scripts/install.sh` (et `sudo bash scripts/harden.sh files`)
+  retire au groupe et aux autres tout droit sur ce qui est sous
+  `/var/lib/anheart`, sans lire ni écrire aucun contenu
+  ([pi-image.md](pi-image.md#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)).
+  Sur un poste de développement, ou pour un dossier racine placé ailleurs par
+  `RECORD_ROOT`, cela reste un geste manuel, machine au repos :
+  `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
   repos** ([menaces.md](menaces.md), MEN-18). C'est la règle d'attente du
   ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
   HDS / RGPD (ANH-172).
-- **Sur un Pi installé, la console tourne sous `root`**
-  ([pi-image.md](pi-image.md#sous-quel-compte)). Le dossier racine,
-  `/var/lib/anheart/records`, appartient au compte `anheart` (mode 700), mais
-  tout ce que la console y crée appartient à `root` : chaque dossier de
-  séance, ses fichiers, et le journal hors séance. Avec les modes 700 / 600,
-  **ils ne sont donc lisibles que par `root`, et plus par le compte
-  `anheart`**, qui les lisait tant qu'ils étaient en 755 / 644. Le compte
-  `anheart` voit encore les noms des dossiers, pas leur contenu. Pour lire un
+- **Sur un Pi installé, la console tourne sous le compte `anheart`**, sans
+  privilèges ([pi-image.md](pi-image.md#sous-quel-compte)), et tout ce qu'elle
+  crée lui appartient : le dossier racine `/var/lib/anheart/records`, chaque
+  dossier de séance, ses fichiers, le journal hors séance, l'état des
+  redémarrages. Le script d'entrée de l'image ferme en plus le masque de
+  création (`umask 077`) : ce que la console crée sans donner de mode (les
+  profils locaux, le verrou du câble) est privé aussi. Ce qu'une console
+  antérieure avait écrit sous `root` est rendu au compte par l'installation.
+  Le compte `anheart` ne peut pas ouvrir de session sur le Pi : pour lire un
   enregistrement, un technicien a deux moyens :
   1. **par la console**, machine au repos, sans compte sur le Pi : le bouton
      « Exporter l'enregistrement » de la page Configuration pour le plus
@@ -3010,9 +3017,10 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
      `sudo less /var/lib/anheart/records/logbook/events.jsonl`.
 
   Ne pas changer le propriétaire ni les modes des dossiers pour les lire : un
-  enregistrement contient l'ECG brut de la séance. Cela changera quand la
-  console tournera sous le compte `anheart`, sans privilèges (ANH-151) : les
-  nouveaux enregistrements appartiendront alors à ce compte.
+  enregistrement contient l'ECG brut de la séance, et la console, qui n'est
+  plus `root`, ne pourrait plus écrire dans un dossier qui ne serait plus le
+  sien. Une copie faite avec `sudo` appartient à `root` : la laisser hors de
+  `/var/lib/anheart`.
 - `config_hash` et `medical_parameters_version` sont des SHA-256 de la
   configuration appliquée (géométrie, plafonds, paliers cardiaques et autres
   limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni
