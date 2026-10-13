@@ -418,12 +418,12 @@ commandé ; cela retarde seulement le second filet, la mise à zéro par la
 console, de la durée de ces lectures, à côté des secondes que met le
 programme à se charger.
 
-**Ce que le tableau de bord n'en sait pas encore.** Le heartbeat ne porte pas
-l'état « hors service » : son corps fait partie du contrat versionné avec
-Convex ([convex.md](convex.md#11-versions-et-compatibilité)), et l'y ajouter
-est le ticket ANH-148 (champs de santé du heartbeat, dont
-`health.restart_loop`). L'état existe côté console (`ServiceDesk.status()`,
-le même que `service` dans `GET /api/panel`) et n'attend que ce champ.
+**État transmis au tableau de bord (ANH-148).** Le heartbeat porte maintenant
+`health.restart_loop`, lu depuis `ServiceDesk.status().out_of_service`, le
+même état que `service` dans `GET /api/panel`. Sans ServiceDesk, la valeur
+est inconnue (`null`). Le diagnostic est présenté dans la carte de santé
+du tableau de bord avec la date du rapport, et ne remplace aucune décision
+locale de sécurité.
 
 Vérifié par `tests/test_service_watchdog.py` (le protocole, sur un vrai socket
 local, et le coût d'un envoi que personne ne prend),
@@ -1525,6 +1525,21 @@ d'accoupler le bras** (clavier d'abord, puis le code).
 ---
 
 ## 8. La synchronisation avec le tableau de bord
+
+**Santé machine (ANH-148).** `src/health.py` ajoute `health` au heartbeat toutes
+les dix secondes. `health_system.py` lit les sources Linux et l'espace libre
+du volume des enregistrements; une source absente ou illisible donne `null`.
+La collecte et la sauvegarde des compteurs passent par un worker dédié avec
+une attente maximale d'une seconde, hors boucle de contrôle et hors pool ECG.
+Les compteurs sont mis à jour en mémoire à chaque tic et sauvegardés à chaque
+collecte dans `health-counters.json`; une coupure peut perdre les observations
+depuis la dernière sauvegarde réussie. Un fichier de compteurs corrompu reste
+inconnu. Les enregistrements restent en attente jusqu'à leur dépôt confirmé.
+
+Convex conserve le dernier rapport et un historique minimum/maximum/dernière
+valeur par cinq minutes. Le site indique l'ancienneté et les sources inconnues;
+voir [la carte de santé](tableau-de-bord.md#détail-dune-machine-frdashboardmachinesid)
+et [les champs et durées de conservation](convex.md#santé-machine-anh-148).
 
 `src/cloud_sync.py` et `src/record_uplink.py`. Actif seulement si
 `MACHINE_API_KEY` est renseignée (et `CONVEX_URL` en `https://…convex.site`,

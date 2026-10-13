@@ -948,7 +948,7 @@ n'est pas lu.
 
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
-| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
+| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs |
@@ -1396,7 +1396,7 @@ régressions locales exécutables.
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
 | 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG, pas de résumé et pas de rapport pour une séance auto/manuelle : le résumé et le rapport viendront de l'enregistrement de séance (ANH-89). |
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
-| 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
+| 9 | **Corrigé par ANH-148 : historique borné.** | Heartbeats conservés 24 h, santé agrégée par 5 min conservée 90 jours. Purge quotidienne et par machine active, sans purge de télémétrie. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
 | 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |
 
