@@ -1538,7 +1538,7 @@ inconnu. Les enregistrements restent en attente jusqu'à leur dépôt confirmé.
 
 Convex conserve le dernier rapport et un historique minimum/maximum/dernière
 valeur par cinq minutes. Le site indique l'ancienneté et les sources inconnues;
-voir [la carte de santé](tableau-de-bord.md#détail-dune-machine-frdashboardmachinesid)
+voir [la carte de santé du tableau de bord](tableau-de-bord.md)
 et [les champs et durées de conservation](convex.md#santé-machine-anh-148).
 
 `src/cloud_sync.py` et `src/record_uplink.py`. Actif seulement si
