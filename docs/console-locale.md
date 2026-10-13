@@ -65,10 +65,19 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 > **Appliquer** reçu pendant que la demande d'un autre écran attendait ; et deux
 > clics sur **Demarrer MANUEL**, de deux écrans, acceptés tous deux dans le même
 > cycle (variateur simulé dont la lecture d'état est retardée de 70 ms, hors dépôt,
-> sans toucher à la console : obtenu au deuxième essai). La règle de la section 6 sur
-> « pris par la machine » est en outre tenue par un test de la page qui joue toutes
-> les suites de trois demandes au plus sur trois cycles face à un modèle de la boîte
-> de la console (17 976 suites, 5 097 histoires d'écran distinctes).
+> sans toucher à la console : obtenu au deuxième essai).
+> Depuis le 11 octobre 2026 la console donne un identifiant à chaque demande et dit
+> elle-même ce que chacune est devenue (sections 6, 9, 13, 14 et 15). Rejoué avec
+> deux écrans réels, avant et après, sur la console en simulation et le même
+> variateur simulé ralenti hors dépôt : les deux clics sur **Demarrer MANUEL** du
+> même cycle (le second reçoit maintenant 409, le premier écran lit `pris`) ; le
+> reset suivi de deux démarrages de séance ; un démarrage qu'un STOP d'un autre
+> écran déplace avant la boucle ; et, avec un écran, un démarrage demandé liaison
+> coupée, puis une cible prise, une cible refusée et un reset. Les durées sont en
+> section 6. La règle des notes est en outre tenue par un test de la page qui joue
+> toutes les suites de trois demandes au plus face à un modèle de la boîte de la
+> console (65 643 suites, 13 491 histoires d'écran distinctes). Rien de cela n'a été
+> joué sur un vrai variateur ni sur la machine.
 > Les pastilles **Serveur** et **Version** (sections 2, 3, 4, 13 et 14, ajoutées le
 > 9 octobre 2026 avec ANH-210) viennent du code et des tests automatiques, sur le lien
 > réel face à un tableau de bord factice et sur la console en simulation ; elles n'ont
@@ -334,8 +343,8 @@ Les états `run_state` (vue « intention » de la surface de commande) :
 
 | État | Signification |
 |---|---|
-| `idle` | rien de demandé. Seul état où un démarrage est accepté |
-| `starting` | un démarrage est accepté, la boucle ne l'a peut-être pas encore pris |
+| `idle` | rien de demandé. Seul état où un démarrage est accepté, et seulement si la boîte aux lettres est vide (section 14) |
+| `starting` | un démarrage est accepté : il attend dans la boîte, ou la boucle l'arme. L'état le dit jusqu'à la réponse de la boucle, y compris à la fin d'un cycle qui n'a pas vu la demande ; tout autre démarrage est refusé (409 `start_pending`) |
 | `running` | la boucle a confirmé une séance, et personne n'a demandé sa fin ni un E-STOP depuis la page. L'état reste `running` pendant tout le mode `ARRET` d'une fin de séance que la console décide elle-même (un verdict d'arrêt, un arrêt posé par la caméra, la règle `session_standstill`) : il ne dit donc pas que la séance avance encore. Lire **Mode** |
 | `stopping` | une fin ou un E-STOP est accepté ; un E-STOP garde cet état jusqu'à l'acquittement |
 
@@ -577,8 +586,9 @@ s'arrête au mode : `liaison ouverte · repos`.
   de statut demandée après le clic qui montre l'état `stopping`, ou l'état `idle` sans
   aucune demande en attente (`pending` vide). Ne le baissent pas : une image au mode
   `REPOS` (un démarrage peut attendre derrière), une réponse de statut demandée avant
-  le clic, ni un statut `idle` dont `pending` porte encore une demande (un démarrage
-  accepté pendant un cycle attend le suivant, et l'état dit `idle` entre-temps).
+  le clic, ni un statut `idle` dont `pending` porte encore une demande (un reset au
+  repos, par exemple ; depuis le 11 octobre 2026 l'état ne dit plus `idle` pendant
+  qu'un démarrage accepté attend, il dit `starting`).
 - Si la requête STOP échoue sans réponse de la console (console injoignable), ou sur
   une erreur de la console elle-même (code 5xx), le bandeau dit tout de suite
   `la demande a echoue il y a N s et n'est plus en attente : … - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable`,
@@ -809,28 +819,58 @@ Règles de la cible :
   messages sont en section 13, la règle et ses mesures dans
   [securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178).
 - **Ce que la page montre dans ce cas.** Le refus et la remise à 0 arrivent comme
-  événements `refused` : ils sont listés dans **Evenements** (page Seance) et écrits,
-  en rouge et mot pour mot, dans la note sous la carte (voir ci-dessous).
+  événements `refused` : ils sont listés dans **Evenements** (page Seance). Le refus
+  est écrit, en rouge et mot pour mot, dans la note sous la carte de l'écran qui a
+  envoyé la cible ; la remise à 0, que personne n'a demandée, l'est sur tous les
+  écrans qui montrent la séance (voir ci-dessous).
   `cible appliquee` reste ou revient à `0.00`, le brouillon reste affiché en orange, et
   `rampe` dit `cible atteinte`.
 
-**La note sous la carte dit ce que la boucle a fait de la cible.** `Appliquer` reçoit
-une réponse 202 dès que la boîte aux lettres a pris la cible ; la boucle la juge au
-cycle suivant. La note suit ce que la machine rapporte :
+**La note sous un bouton dit ce que la console a répondu à la demande de cet écran.**
+`Demarrer MANUEL`, `Appliquer`, `Demarrer la seance` (section 9) et
+`Reset defaut variateur` reçoivent une réponse 202 dès que la boîte aux lettres de la
+console a pris la demande ; la boucle la juge au cycle suivant. Depuis le
+11 octobre 2026 la console donne à chaque demande qu'elle accepte un **identifiant**
+(`request_id`, rendu dans le 202), et dit elle-même ce que la demande est devenue,
+une fois, par un événement qui porte cet identifiant :
+
+| Événement | Sens |
+|---|---|
+| `taken` | la boucle a pris la demande dans la boîte et l'a exécutée : séance armée, cible tenue, reset écrit au variateur, arrêt engagé |
+| `refused` | la boucle a pris la demande et l'a refusée ; le détail est sa raison (section 13) |
+| `cancelled` | un STOP a pris la place de la demande dans la boîte avant que la boucle la voie : `un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` |
+
+La page reconnaît à cet identifiant les réponses faites à ses propres demandes, et
+n'écrit sous un bouton que celles-là. Elle ne déduit plus rien d'une image : une
+séance à l'écran, ou une cible appliquée égale à celle envoyée, ne prouve pas que la
+boucle a pris la demande de **cet** écran, et la page ne dit pas `pris` pour cela.
+La réponse faite à un autre écran porte un autre identifiant : elle est listée dans
+**Evenements** et n'est écrite sous aucun bouton de cet écran. Une seule réponse ne
+porte aucun identifiant, la cible manuelle que la machine remet d'elle-même à 0 :
+personne ne l'a demandée, et tout écran qui montre la séance manuelle l'écrit sous la
+carte.
+
+Une réponse peut arriver à l'écran avant le 202 de la demande à laquelle elle
+répond : la page garde les 32 dernières réponses de la console et les relit au 202.
+
+La note d'une cible :
 
 | Note | Quand | Sens |
 |---|---|---|
 | `cible envoyee : 5.10 output rpm - pas encore prise par la machine` | à la réponse 202 | la console a reçu la demande ; la boucle n'a rien dit encore |
-| `cible prise par la machine : 5.10 output rpm (suivie aux limites de mouvement)` | à la première image prise après la demande dont la `cible appliquee` est la cible envoyée (au tr/min moteur près) | la machine tient cette cible et y mène la consigne. La note est effacée dès que la machine ne tient plus la cible (STOP, verdict, cible d'un autre écran) |
-| `cible prise par la machine : 5.10 output rpm` (sans la parenthèse) | même instant, puis image après image tant que cela dure | la machine tient cette cible mais ne la suit pas à cet instant : un verdict tient ou baisse la consigne (un `freeze` avec une cible non nulle, un `reduce`), ou, sans verdict, la fréquence cardiaque retient une montée vers une cible plus haute (encadré ci-dessous). Sous un `freeze`, une cible de 0 est un arrêt demandé : elle est suivie, et la parenthèse est écrite. La parenthèse revient dès que plus rien ne retient la consigne |
-| `refus de la machine (<heure>) : <message>` (rouge) | à l'événement `refused` de la boucle | la cible a été refusée, ou remise à 0 : le message est celui de la section 13. Avec une séance manuelle à l'écran, un écran qui n'a pas cliqué l'affiche aussi, et tout autre refus de la boucle s'y écrit de la même façon (un reset de défaut refusé pendant l'arrêt de la séance, par exemple) : le message dit lui-même ce qui est refusé |
-| `cible NON prise par la machine : la cible appliquee est <x> tr/min de sortie. La raison n'est pas arrivee a cet ecran.` (rouge) | une seconde de l'horloge de la machine après la demande, sans refus reçu ni cible appliquée | la cible n'a pas été prise et l'événement s'est perdu (un WebSocket qui se reconnecte perd ses événements) |
-| `cible NON prise par la machine : la seance manuelle est terminee.` (rouge) | même délai, la séance étant finie | la séance s'est terminée avant que la cible soit prise |
+| `cible prise par la machine : 5.10 output rpm`, puis `cible prise par la machine : 5.10 output rpm (suivie aux limites de mouvement)` | à l'événement `taken` de cette demande ; la parenthèse à la première image prise après cette réponse | la machine tient cette cible et y mène la consigne. La note est effacée dès qu'une image prise après la réponse montre que la machine ne tient plus la cible (STOP, verdict, cible d'un autre écran) |
+| `cible prise par la machine : 5.10 output rpm` (sans la parenthèse) | image après image tant que cela dure | la machine tient cette cible mais ne la suit pas à cet instant : un verdict tient ou baisse la consigne (un `freeze` avec une cible non nulle, un `reduce`), ou, sans verdict, la fréquence cardiaque retient une montée vers une cible plus haute (encadré ci-dessous). Sous un `freeze`, une cible de 0 est un arrêt demandé : elle est suivie, et la parenthèse est écrite. La parenthèse revient dès que plus rien ne retient la consigne |
+| `refus de la machine (<heure>) : <message>` (rouge) | à l'événement `refused` de cette demande | la boucle a refusé la cible de cet écran : le message est celui de la section 13 |
+| `refus de la machine (<heure>) : cible de <n> tr/min moteur remise a 0 : …` (rouge) | à l'événement `refused` sans identifiant, séance manuelle à l'écran | la machine a repris d'elle-même une cible qu'elle tenait. Écrit sur tous les écrans qui montrent la séance, qu'ils aient cliqué ou non |
+| `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` (rouge) | à l'événement `cancelled` de cette demande | un STOP, de cet écran ou d'un autre, a pris la place de la cible dans la boîte : la boucle ne l'a jamais vue |
+| `cet ecran ne sait pas ce que la machine a fait de sa cible : sa liaison a ete coupee.` (rouge) | la réponse n'est pas arrivée à cet écran (voir « Liaison coupée » plus bas) | la page demande alors le sort de sa demande à la console, et la note devient ce sort |
 
-Un refus arrivé avant la réponse 202 n'est pas écrasé par elle. Rejoué dans un
-navigateur sur la console en simulation : après le clic, `cible envoyee …` à 49 ms,
-puis `cible prise par la machine …` à 231 ms ; pour une cible refusée, `cible
-envoyee …` à 67 ms puis `refus de la machine …` à 152 ms.
+Un cas reste dit par les images seules : un STOP demandé juste après qu'une cible a
+été prise remet la cible à 0, et la note `cible prise par la machine` s'efface à
+l'image qui le montre. Rejoué dans un navigateur sur la console en simulation, le
+11 octobre 2026 : après le clic, `cible envoyee …` à 2 ms, puis `cible prise par la
+machine … (suivie aux limites de mouvement)` à 173 ms ; pour une cible hors domaine,
+`cible envoyee …` à 11 ms puis `refus de la machine …` à 80 ms.
 
 **L'encadré `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE`.** Avec une personne à bord, la
 fréquence cardiaque retient toute montée de la consigne sans qu'aucun verdict ne
@@ -857,115 +897,108 @@ avant tout verdict ; une cible envoyée alors est refusée pour cette raison. Su
 fréquence cardiaque simulée, la raison `baisse trop vite` s'allume et s'éteint d'une
 seconde à l'autre : la garde est sensible ([securite.md](securite.md#76-aucune-cible-manuelle-nattend-sur-un-bras-à-larrêt-anh-178)).
 
-**La note d'un démarrage manuel suit elle aussi la réponse de la boucle** (depuis le
-10 octobre 2026 ; avant, elle disait `accepte : manual_start bench (cible 0)` dès la
-réponse 202, même pour un démarrage que la boucle refusait ensuite) :
+**La note d'un démarrage manuel** suit la même règle (jusqu'au 10 octobre 2026 elle
+disait `accepte : manual_start bench (cible 0)` dès la réponse 202 ; du 10 au
+11 octobre elle déduisait `pris` des images et d'une règle de deux secondes, que
+l'identifiant rend inutile) :
 
-| Note | Sens |
-|---|---|
-| `demande envoyee : manual_start bench - pas encore prise par la machine` | la console a mis la demande dans sa boîte ; la boucle ne l'a pas encore jugée |
-| `demarrage pris par la machine : manual_start bench (cible 0)` | sur une liaison restée ouverte depuis le clic, une image prise après la demande montre la séance manuelle, aucun refus n'est arrivé, et la demande de cet écran était seule (règle ci-dessous : aucune autre demande de démarrage dans les deux secondes qui la précèdent ni après elle). La note n'est gardée que tant que rien de ce que la liaison porte ne la contredit. `(cible 0)` n'est écrit que tant que les images montrent une cible appliquée de 0 : la mention disparaît dès qu'un autre écran en applique une, et revient si la cible revient à 0. La note s'efface quand la séance n'est plus affichée |
-| `refus de la machine (<heure>) : demarrage refuse : …` (rouge) | la boucle a refusé ; le texte est celui de l'événement `refused` |
-| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | sur une liaison restée ouverte depuis le clic, une seconde de l'horloge de la machine sans séance ni refus sur cet écran |
-| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` (rouge) | une image montre une séance manuelle, mais la liaison de cet écran a été coupée depuis le clic (ou l'était au moment du clic). La note s'efface quand la séance n'est plus affichée |
-| `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | même coupure, et une seconde après la demande les images ne montrent pas de séance manuelle : elle a pu ne pas démarrer, ou démarrer et finir sans que cet écran le voie |
-| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.` (rouge) | la liaison est restée ouverte, une image montre une séance manuelle, mais la liaison a porté une autre demande de démarrage proche de celle de cet écran (règle ci-dessous) : la page ne dit pas laquelle la boucle a prise. La même note remplace `demarrage pris par la machine` quand une autre demande de démarrage arrive ensuite. Elle s'efface quand la séance n'est plus affichée, ou à l'événement `session_idle` |
-| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison venait de s'ouvrir.` (rouge) | la liaison de cet écran livrait des images depuis moins de deux secondes quand la demande est partie (page tout juste ouverte, liaison tout juste revenue) : elle n'a pas pu voir si un autre écran venait de demander |
-| `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : il n'a pas recu l'evenement de sa propre demande.` (rouge) | la liaison est restée ouverte mais n'a pas porté l'événement `start_requested` de cette demande : la page n'a donc pas tout vu. Cas de garde, que la console telle qu'elle est ne produit pas |
+| Note | Quand | Sens |
+|---|---|---|
+| `demande envoyee : manual_start bench - pas encore prise par la machine` | à la réponse 202 | la console a mis la demande dans sa boîte ; la boucle ne l'a pas encore jugée |
+| `demarrage pris par la machine : manual_start bench`, puis `demarrage pris par la machine : manual_start bench (cible 0)` | à l'événement `taken` de cette demande ; `(cible 0)` à la première image prise après | la boucle a armé la séance que cet écran a demandée. `(cible 0)` n'est écrit que tant que les images montrent une cible appliquée de 0 : la mention disparaît dès qu'un autre écran en applique une, et revient si la cible revient à 0. La note s'efface à la fin de cette séance : à l'événement `session_idle`, ou à une image prise après la réponse qui ne montre plus la séance manuelle |
+| `refus de la machine (<heure>) : demarrage refuse : …` (rouge) | à l'événement `refused` de cette demande | la boucle a refusé le démarrage de cet écran ; le texte est sa raison |
+| `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` (rouge) | à l'événement `cancelled` de cette demande | un STOP est arrivé pendant que le démarrage attendait encore dans la boîte : rien n'a été armé. Un nouveau démarrage est possible dès que **Etat** revient à `idle` (la machine affiche `ARRET` quelques secondes) |
+| une phrase de la console, en rouge, par exemple `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | à une réponse 4xx | la console a refusé le clic tout de suite : rien n'est entré dans la boîte (voir « Refus immédiat » plus bas) |
+| `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | la réponse n'est pas arrivée à cet écran | voir « Liaison coupée » ci-dessous |
+| `la machine a pris le demarrage demande par cet ecran (manual_start bench), mais sa liaison a ete coupee depuis : cet ecran ne sait pas si la seance en cours est encore celle-la.` (rouge) | la note disait `pris`, puis la liaison de l'écran a été coupée et rétablie | voir « Liaison coupée » ci-dessous |
 
-**Quand la page dit « pris ».** Un événement `refused` ne dit pas à quelle demande il
-répond, et la console ne renvoie pas à un écran les événements publiés pendant que sa
-liaison était coupée. Un démarrage refusé pendant une coupure, suivi du démarrage d'un
-autre écran, montre donc à cet écran une séance et aucun refus. La page n'écrit
-`demarrage pris par la machine`, avec les mots de sa propre demande, que si le
-WebSocket ouvert au moment du clic est encore celui qui livre l'image montrant la
-séance : sur une même liaison, tout événement publié entre-temps est arrivé avant
-cette image, un refus compris. Sinon elle dit seulement ce que les images montrent
-(une séance est en cours, ou n'est pas affichée) et que la réponse à sa demande ne lui
-est pas parvenue, sans reprendre les mots de la demande : ils se liraient comme ceux
-de la séance affichée. La règle est la même pour **Demarrer la seance** (section 9).
-Elle a été rejouée avec deux écrans (encadré du début de page).
+La règle est la même pour **Demarrer la seance** (section 9) et pour
+**Reset defaut variateur** (carte Variateur).
 
-**Une liaison ininterrompue ne suffit pas.** La boîte de la console n'a qu'une place.
-Un démarrage accepté pendant qu'un autre y attend encore prend cette place, sans
-qu'aucun refus soit publié ; un démarrage accepté pendant que la boucle arme une
-séance est refusé un cycle plus tard. Deux écrans peuvent donc recevoir 202 pour une
-seule séance. Cela arrive quand deux clics tombent dans le même cycle ou dans deux
-cycles voisins, sur une machine dont les échanges avec le variateur laissent la main
-à la console pendant le cycle (relevé avec un variateur simulé dont la lecture d'état
-dure 70 ms ; un variateur sur liaison série fait de même). La page ne peut pas voir
-quel cycle a vidé la boîte : l'instant d'une image est pris après que la boucle a
-jugé la commande, si bien qu'une demande datée avant une image peut encore attendre.
-Elle ne cherche donc pas à reconstituer ce que la boucle a fait. Ce qu'elle voit,
-c'est chaque démarrage que la console accepte, publié comme un événement
-`start_requested` daté de l'instant que porte le 202. La règle, qui dit plutôt
-« ne sait pas » une fois de trop qu'une fois de moins :
+**Liaison coupée : ce qu'un écran ne peut pas savoir seul, et comment il le
+redemande.** La console ne renvoie pas à un écran les événements publiés pendant que
+son WebSocket était coupé. Un écran dont la liaison tombe entre son clic et la
+réponse de la boucle n'a donc pas reçu cette réponse. La page le sait dans deux cas :
+à la première donnée (image ou événement) d'un WebSocket qui n'est pas celui qui
+était ouvert au clic, et quand une image est prise plus d'une seconde de l'horloge
+de la machine après la demande sans qu'aucune réponse soit arrivée (sur une même
+liaison la réponse précède toujours une telle image). Elle écrit alors, en rouge,
+qu'elle ne sait pas ce que la machine a fait de sa demande, et rien d'autre : rien
+de ce que les images montrent. Et elle le demande à la console : `/api/status`
+liste, dans `requests`, ce que sont devenues les 16 dernières demandes, par
+identifiant, avec les mots de l'événement. Dès que la réponse arrive, la note dit
+ce sort : `pris`, `refus de la machine`, ou `demande annulee`. Elle continue de
+dire que l'écran ne sait pas tant que la console ne répond pas, ou si la console ne
+connaît plus la demande (console relancée, ou plus de 16 demandes depuis).
 
-La page n'écrit `demarrage pris par la machine` que si la demande de cet écran
-était **seule** : (1) la liaison livrait déjà des images deux secondes avant la
-demande ; (2) elle a porté une fois, et une seule, l'événement de cette demande,
-reconnu à son instant exact (le nom de l'opérateur et les mots d'une demande ne
-distinguent pas deux écrans) ; (3) elle n'a porté aucune autre demande de démarrage
-datée moins de deux secondes avant celle-ci, quoi qu'il soit arrivé à cette autre ;
-(4) sur cette liaison, toute autre demande de démarrage, plus ancienne ou plus
-récente, a été vue résolue, par un refus daté après elle ou par une séance commencée
-puis terminée après elle (le refus qui résout une demande plus récente est aussi,
-pour la page, celui de la demande de cet écran : la note devient ce refus, ou
-s'efface si une séance s'affiche). Deux secondes font dix cycles de la boucle (0,2 s), et
-trois fois le plus long cycle que le superviseur laisse passer sans verdict
-`loop_stall` (0,6 s par défaut). Sinon la page écrit qu'une séance est en cours et
-qu'une autre demande de démarrage est aussi arrivée à la machine, sans les mots de
-sa propre demande, pour le premier écran comme pour le second.
+**Après `pris`, la séance à l'écran est-elle encore celle de cet écran ?** Tant que
+la liaison reste la même, oui : la fin de la séance arrive toujours comme événement
+`session_idle`, même quand les images de l'arrêt n'ont pas été livrées à cet écran.
+Après un changement de WebSocket la page ne peut plus l'affirmer : sa séance a pu
+finir, et une autre commencer, sans qu'elle le voie. Elle remplace `pris` par la
+phrase de la dernière ligne du tableau, et demande le statut : `session_request` y
+est l'identifiant du démarrage dont vient la séance en cours (de son acceptation au
+retour à `idle`). Si c'est le démarrage de cet écran, la note redit `demarrage pris
+par la machine …` ; sinon elle s'efface. Seule compte une réponse de statut
+demandée **après** la première donnée du nouveau WebSocket : une réponse plus
+ancienne a pu être écrite avant une fin de séance que cet écran a manquée. Une image
+qui ne montre plus la séance efface la note sans attendre la console.
 
-Et `demarrage pris par la machine` n'est gardé que tant que rien de ce que la liaison
-porte ne le contredit. Une autre demande de démarrage, un refus daté après la
-demande, la fin de la séance (événement `session_idle`, qui arrive même quand les
-images de l'arrêt n'ont pas été livrées à cet écran) et un nouveau WebSocket le
-retirent chacun : la note devient « ne sait pas », le refus, ou s'efface.
+Rejoué avec deux écrans réels sur la console en simulation, le 11 octobre 2026, avant
+et après ce changement (variateur simulé ralenti hors dépôt, sans toucher à la
+console) :
 
-Cette règle est tenue par un test qui joue, contre le code de la page, toutes les
-suites de trois demandes au plus (démarrages de trois écrans au plus, resets, cibles,
-arrêts) sur trois cycles, face à un modèle de la boîte de la console : jamais une
-note ne dit « pris » d'une séance qui n'est pas celle que son écran a demandée. Les
-deux courses relevées ont été rejouées avec deux écrans réels (encadré du début de
-page).
+| Suite | Avant | Après |
+|---|---|---|
+| Deux clics sur **Demarrer MANUEL**, écran B 85 ms après écran A, lecture d'état du variateur simulé retardée de 70 ms | au troisième essai les deux reçoivent 202, un `session_idle` est publié entre les deux demandes, une séance tourne ; les deux écrans écrivent en rouge `… Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.`, 341 ms et 249 ms après leur clic | aux mêmes instants, A reçoit 202 et B reçoit 409 (`start_pending`, avec l'identifiant de la demande de A) ; l'écran B lit la phrase de la console 10 ms après son clic ; l'écran A lit `demarrage pris par la machine : manual_start bench` à 260 ms, puis `(cible 0)` à 329 ms ; aucun `session_idle` |
+| Un reset, le démarrage de séance de A pendant l'écriture du reset, celui de B (45 min) pendant l'armement de A (lecture 40 ms, écriture 90 ms, limites 60 ms) | les trois reçoivent 202 ; `refused [ecran B] demarrage refuse : la machine est deja running` un cycle plus tard ; les deux écrans écrivent « ne sait pas », à 569 ms et 338 ms | reset 202, A 202, B 409 (`start_pending`) ; l'écran A lit `demarrage pris par la machine : start standard_30_min` à 530 ms ; l'écran B la phrase de la console à 10 ms ; événements : `taken` du reset, `taken` de A, `session_running` |
+| **Demarrer MANUEL** sur l'écran A, STOP de l'écran B dès la réponse, avant la boucle | les deux reçoivent 202 ; l'écran A écrit `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` 1,2 s après, et son démarrage suivant, sept secondes plus tard, dit « ne sait pas » | l'écran A lit `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` 14 ms après son clic ; son démarrage suivant dit `pris` à 240 ms |
+| Un écran, WebSocket coupé (ses requêtes passent), **Demarrer MANUEL**, la boucle prend la demande, WebSocket rétabli | `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.`, jusqu'à la fin de la séance | au retour de la liaison, `demarrage pris par la machine : manual_start bench (cible 0)` : le statut a répondu entre deux relevés de la note, pris toutes les 10 ms |
 
-Pour un démarrage, tout refus daté après la demande compte tant que la demande est
-attendue, même si la boucle l'a jugée plus d'une seconde après ; le premier reste, un
-second ne le remplace pas. Pour un reset, qui continue de surveiller son défaut, un
-refus ne compte que dans la seconde qui suit la demande. Un refus daté après la
-demande peut répondre à la demande d'un autre écran prise dans le même cycle. Si une
-séance manuelle s'affiche ensuite, la page ne peut pas dire à qui elle est : la note
-s'efface, la carte montre la séance et la liste **Evenements** le refus.
+**Ce que tient le test de la page.** Un modèle de la boîte de la console (une place,
+un identifiant par demande, un démarrage refusé tout de suite tant qu'un autre
+attend ou est armé, un STOP qui déplace ce qui attend, `idle` seulement quand plus
+rien d'accepté n'attend) est joué pour toutes les suites de trois demandes au plus
+(démarrages de trois écrans au plus, resets, cibles, arrêts) sur trois cycles, dans
+chacune des trois positions d'un cycle où une demande peut arriver. Chaque histoire
+d'écran est jouée sur le code réel de la page, et après **chaque** message la note
+est comparée à ce que le modèle sait, sans passer par les identifiants : elle dit
+`pris`, avec les mots de la demande de cet écran, si et seulement si la boucle a
+pris cette demande et que rien de livré depuis ne montre sa séance finie ; `refus
+de la machine` si et seulement si la boucle l'a refusée ; `demande annulee` si et
+seulement si un STOP l'a déplacée ; la phrase de la console après un refus
+immédiat ; et jamais « ne sait pas », la liaison étant restée ouverte. Les suites
+sont jouées aussi avec une image non livrée, une image livrée après les événements
+du cycle suivant (la console envoie d'abord les événements), une boucle qui refuse
+un reset au repos, une boucle qui refuse les démarrages d'un écran pour une raison
+à elle, et un quatrième cycle : 65 643 suites, 13 491 histoires d'écran distinctes,
+dans deux fichiers que le lanceur joue côte à côte (environ 6 s en local).
+`raspberry-pi/tests/web/request_family.mjs` porte le modèle et l'invariant.
 
-L'erreur d'une réponse HTTP (403, 412, et les 409 qui ne nomment aucune demande en
-attente) s'affiche telle que la console l'écrit. Une exception : quand la boîte de la
-console est déjà prise par une autre demande, celle d'un autre écran ou une
-précédente de celui-ci, la console répond 409 et écrit dans sa réponse la demande en
-attente telle qu'elle la tient (`… (pending: …)`, avec le nom de l'autre opérateur et
-une heure de son horloge). La page n'affiche jamais ce texte. Sous **Demarrer
-MANUEL**, **Appliquer**, **Demarrer la seance** et **Reset defaut variateur**, elle
-écrit à la place, en rouge :
-`demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.`
+**Refus immédiat : la console répond 4xx et rien n'entre dans la boîte.** La note
+est alors la phrase de la console, telle quelle. Deux de ces phrases disent qu'une
+autre demande est en travers ; la réponse porte un `code` stable et, dans
+`waiting_request_id`, l'identifiant de cette autre demande, et rien d'autre d'elle
+(ni le nom de l'autre opérateur, ni l'heure, ni l'âge du passager, que la console
+écrivait dans cette réponse jusqu'au 11 octobre 2026) :
 
-Trois précisions sur la note d'une cible, de la même date :
+| `code` | Phrase | Quand |
+|---|---|---|
+| `start_pending` | `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | un démarrage, ou un reset, pendant qu'un démarrage accepté attend dans la boîte ou que la boucle l'arme |
+| `request_waiting` | `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | une cible ou un reset pendant qu'une autre demande attend ; un démarrage au repos pendant qu'un reset attend |
 
-- un refus daté après la cible n'est pas toujours le sien (celui d'un autre écran, ou
-  d'une première cible que la machine reprend pendant qu'une seconde attend). La note
-  dit alors `refus de la machine …`, puis `cible prise par la machine : …` dès qu'une
-  image montre que la machine tient la cible envoyée par cet écran. Le cas inverse
-  reste : un refus répondu à un autre écran **après** que la cible de celui-ci a été
-  prise remplace la note, alors que la machine tient toujours cette cible (la note en
-  dit moins que la machine, section 15) ;
-- un second clic sur **Appliquer** dans le cycle du premier reçoit ce même 409 : la
-  demande en attente est la première cible de cet écran, tant qu'aucune image prise
-  après elle n'est arrivée. La note dit alors
-  `seconde demande refusee par la console : la cible … attend encore la machine (une demande a la fois). Reessayer dans un instant.`,
-  puis ce que devient la première cible. Un 409 sans demande en attente (séance
-  terminée, par exemple) s'affiche tel que la console l'a écrit ;
-- avec une personne à bord, quand l'encadré de la fréquence cardiaque dit `INCONNUE`,
-  la note d'une cible plus haute que la consigne ne dit plus
-  `(suivie aux limites de mouvement)` : la page ne sait pas si la montée est retenue.
+Les autres codes sont en section 14. Un second clic sur **Appliquer** avant que la
+boucle ait pris la première cible reçoit `request_waiting`, et la demande en travers
+est la première cible de cet écran (son identifiant est celui que la page tient).
+La note dit alors
+`seconde demande refusee par la console : la cible … attend encore la machine (une demande a la fois). Reessayer dans un instant.`,
+puis ce que devient la première cible. Si la demande en travers est celle d'un autre
+écran, la note est la phrase de la console. Dans tous les cas la demande déjà
+acceptée de cet écran reste suivie : sa réponse, quand elle arrive, remplace la note.
+
+Avec une personne à bord, quand l'encadré de la fréquence cardiaque dit `INCONNUE`,
+la note d'une cible plus haute que la consigne ne dit plus
+`(suivie aux limites de mouvement)` : la page ne sait pas si la montée est retenue.
 
 ### Carte « Frequence cardiaque (regulation) »
 
@@ -1009,20 +1042,27 @@ Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
 sauf si la machine est au repos, que tout autre verdict est acquitté et que le variateur
 montre l'arbre arrêté. Certains défauts ne sont **pas réarmables** depuis la console
 (`reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter`).
-La note sous le bouton suit la réponse de la boucle, comme celle d'un démarrage
-(jusqu'au 10 octobre 2026 : `reset demande : fault_reset (le variateur doit le confirmer)`
-dès la réponse 202, même quand la boucle refusait) :
-`demande envoyee : fault_reset - pas encore prise par la machine` ; puis
-`refus de la machine (<heure>) : reset refuse : …` en rouge, ou
-`le variateur ne signale plus de defaut` dès qu'une image prise après la demande ne
-montre plus de défaut. La note ne dit pas qui a levé le défaut, seulement ce que les
-images montrent, que la liaison de l'écran ait été coupée ou non ; elle s'efface si un
-défaut revient. Si le défaut est encore là une seconde plus tard sans refus sur cet
-écran :
-`le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.`,
-corrigée quand le défaut disparaît, sauf si autre chose a été écrit sous le bouton
-entre-temps. Passé cette seconde, un refus de la boucle, quel qu'il soit, n'est plus
-écrit sous ce bouton : il ne répond pas à cette demande.
+La note sous le bouton suit la réponse de la console à la demande de cet écran,
+comme celle d'un démarrage (jusqu'au 10 octobre 2026 :
+`reset demande : fault_reset (le variateur doit le confirmer)` dès la réponse 202,
+même quand la boucle refusait) :
+
+| Note | Quand |
+|---|---|
+| `demande envoyee : fault_reset - pas encore prise par la machine` | à la réponse 202 |
+| `reset pris par la machine` | à l'événement `taken` de cette demande : la boucle a écrit le reset au variateur |
+| `reset pris par la machine : le variateur ne signale plus de defaut` | dès qu'une image prise après cette réponse ne montre plus de défaut. La note s'efface si un défaut revient ensuite : c'est un autre défaut |
+| `reset pris par la machine : le variateur signale encore le defaut` (rouge) | une image prise plus d'une seconde après la réponse montre encore le défaut ; corrigée quand il disparaît |
+| `refus de la machine (<heure>) : reset refuse : …` (rouge) | à l'événement `refused` de cette demande |
+| `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` (rouge) | à l'événement `cancelled` de cette demande |
+| `cet ecran ne sait pas ce que la machine a fait de sa demande de reset : sa liaison a ete coupee.` (rouge) | la réponse n'est pas arrivée à cet écran ; la page la demande à la console (section « Mode MANUEL », « Liaison coupée ») |
+
+Un défaut qui disparaît sans que la console ait dit `taken` ne change pas la note :
+la page ne dit pas que le reset de cet écran a été pris parce qu'une image ne montre
+plus de défaut. Le refus d'un reset demandé par un autre écran n'est pas écrit sous
+ce bouton. Rejoué dans un navigateur sur la console en simulation, le
+11 octobre 2026 : `demande envoyee …` 9 ms après le clic, puis
+`reset pris par la machine : le variateur ne signale plus de defaut` à 158 ms.
 
 ### Reprise automatique de la liaison variateur
 
@@ -1126,7 +1166,7 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Operateur` | obligatoire |
 | `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
 | `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
-| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la boucle, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` quand une image montre le mode `SEANCE`, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge, ou `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` après une seconde sans l'un ni l'autre. `pris` et `NON pris` ne sont écrits que si la liaison de l'écran est restée ouverte depuis le clic, et `pris` seulement si la demande de cet écran était seule, au sens de la section 6 (sinon, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.`, ou `… : sa liaison venait de s'ouvrir.`) ; liaison coupée, en rouge, `une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` quand une image montre le mode `SEANCE`, ou `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` une seconde après la demande. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Une boîte déjà prise par une autre demande : même phrase que sous **Demarrer MANUEL** (section 6). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
+| `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la console à la demande de cet écran, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` à l'événement `taken` de cette demande, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge à son événement `refused`, ou `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` en rouge à son événement `cancelled`. `pris` s'efface à la fin de la séance. Liaison coupée entre le clic et la réponse : en rouge, `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.`, jusqu'à ce que la console ait redit le sort de la demande ; liaison coupée après `pris` : en rouge, `la machine a pris le demarrage demande par cet ecran (start <profil>), mais sa liaison a ete coupee depuis : cet ecran ne sait pas si la seance en cours est encore celle-la.`, jusqu'à la réponse du statut. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Un démarrage refusé tout de suite par la console (un autre démarrage attend, un reset attend) : la phrase de la console, en rouge (section 6, « Refus immédiat »). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
@@ -1180,13 +1220,19 @@ zone sur le sujet modélisé (constat 7 de `simulation/README.md`).
 
 Types d'événements : `start_requested`, `fault_reset_requested`, `end_requested`,
 `emergency_stop`, `acknowledged`, `attested`, `session_running`, `session_idle`,
-`refused`, `dashboard`. Les refus de la boucle (cible hors domaine, cible refusée sur un bras à
-l'arrêt, reset refusé, démarrage refusé) arrivent comme événements `refused` : la
-route HTTP a déjà répondu 202. Une cible manuelle que la machine a remise à 0 arrive de
-la même façon, sans nom d'opérateur : personne ne l'a demandé. Tant qu'une séance
-manuelle est à l'écran, ces refus sont aussi écrits dans la note de la carte Mode
-MANUEL (section 6). Hors séance manuelle, un démarrage ou un reset refusé par la
-boucle n'apparaît que dans cette liste.
+`taken`, `refused`, `cancelled`, `dashboard`, `recording`. La liste montre l'heure,
+le type, l'opérateur et le détail ; l'identifiant de la demande (`request_id`) n'y
+est pas affiché. Depuis le 11 octobre 2026, ce que la boucle fait d'une demande est
+toujours dit : `taken` quand elle l'a prise (le détail redit ce qui était demandé :
+`manuel bench`, `start <profil>`, `cible 5.00 tr/min de sortie`, `reset defaut`, ou le
+motif d'un arrêt), `refused` quand elle l'a refusée (cible hors domaine, cible refusée
+sur un bras à l'arrêt, reset refusé, démarrage refusé : la route HTTP a déjà répondu
+202), `cancelled` quand un STOP a pris sa place dans la boîte avant la boucle. Une
+cible manuelle que la machine a remise à 0 arrive comme `refused`, sans nom
+d'opérateur ni identifiant : personne ne l'a demandé. Sous un bouton, un écran
+n'écrit que les réponses à ses propres demandes (section 6) ; les réponses faites
+aux autres écrans ne sont que dans cette liste. Seule la remise à 0 d'une cible est
+écrite dans la note de la carte Mode MANUEL de tous les écrans qui montrent la séance.
 Un tableau de bord d'un autre contrat arrive sous son propre type, `dashboard`,
 sans nom d'opérateur (section « Lien avec le tableau de bord » plus bas) : ce
 n'est pas une réponse de la boucle, et il n'est jamais écrit dans la note de la
@@ -1569,7 +1615,8 @@ Rejoué en simulation, dans cet ordre :
 1. **Securite** → cocher les deux cases, saisir un nom, `Enregistrer l'attestation`.
 2. **Tableau de bord** → cocher `BANC - personne a bord : NON`, saisir `Operateur`,
    `Demarrer MANUEL`. La note dit `demande envoyee : manual_start bench - pas encore prise par la machine`,
-   puis `demarrage pris par la machine : manual_start bench (cible 0)`.
+   puis `demarrage pris par la machine : manual_start bench (cible 0)` (44 ms après le
+   clic sur le variateur simulé).
 3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
    `RAMPE EN COURS` s'affiche jusqu'à l'arrivée.
 4. Surveiller **Vitesse mesuree** (pas la consigne).
@@ -1584,9 +1631,10 @@ Rejoué en simulation, dans cet ordre :
 ## 13. Messages d'erreur typiques
 
 Les réponses HTTP (codes 4xx) s'affichent sous le bouton concerné. Les refus de la boucle
-arrivent comme événements `refused` dans la liste **Evenements** (page Seance). Tant
-qu'une séance manuelle est à l'écran, ils sont aussi écrits dans la note sous la carte
-Mode MANUEL, précédés de `refus de la machine (<heure>) :` (section 6).
+arrivent comme événements `refused` dans la liste **Evenements** (page Seance), et
+sous le bouton de l'écran qui a fait la demande, précédés de
+`refus de la machine (<heure>) :` (section 6). Une cible que la machine remet à 0 est
+écrite sous la carte Mode MANUEL de tous les écrans qui montrent la séance.
 
 ### Refus immédiats (réponse HTTP)
 
@@ -1595,8 +1643,10 @@ Mode MANUEL, précédés de `refus de la machine (<heure>) :` (section 6).
 | `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
 | `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
 | `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | un verdict verrouillé attend un acquittement |
-| `the machine is starting, not idle (pending: …)` | 409 | double clic : une commande attend déjà dans la boîte aux lettres (une seule place) |
-| `the machine is running, not idle` | 409 | une séance tourne déjà |
+| `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | 409 | `start_pending` : un démarrage ou un reset pendant qu'un démarrage accepté attend ou est armé (double clic, ou un autre écran). Jusqu'au 11 octobre 2026 : `the machine is starting, not idle (pending: …)`, avec la demande en attente imprimée |
+| `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | 409 | `request_waiting` : la boîte aux lettres (une seule place) tient une autre demande jusqu'au prochain cycle |
+| `the machine is running, not idle` | 409 | `machine_running` : une séance tourne déjà |
+| `the machine is stopping, not idle` | 409 | `machine_stopping` : un arrêt est en cours, ou un arrêt d'urgence est verrouillé |
 | `no manual session is running (the machine is idle)` | 409 | cible envoyée sans séance manuelle |
 | `the machine is already stopping` | 409 | STOP pendant un arrêt |
 | `there is no session to end (the machine is idle)` | 409 | STOP sans séance |
@@ -1724,13 +1774,13 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | Code | Sens |
 |---|---|
 | 200 | réponse lue, ou E-STOP **déjà** verrouillé |
-| 202 | intention acceptée dans la boîte aux lettres ; la boucle n'a pas encore agi. Un refus de la boucle arrive ensuite comme événement `refused` |
+| 202 | intention acceptée dans la boîte aux lettres ; la boucle n'a pas encore agi. Le corps porte `request_id`, l'identifiant de la demande ; ce que la boucle en fait arrive ensuite comme événement `taken`, `refused` ou `cancelled` portant le même identifiant |
 | 400 | requête mal formée : nom vide, attestation incomplète, profil incohérent |
 | 401 | jeton absent ou faux |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
-| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance) |
-| 412 | arrêt d'urgence non attesté depuis ce démarrage |
+| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Pour un démarrage, un arrêt, une cible ou un reset, le corps est `{"detail", "code", "waiting_request_id"}` (voir « La boîte aux lettres » plus bas) |
+| 412 | arrêt d'urgence non attesté depuis ce démarrage (même corps, `code` `estop_unattested`) |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
 | 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
 | 503 | lecture des enregistrements déjà en cours (deux au plus à la fois) |
@@ -1749,7 +1799,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending`, `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
+| GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending` (la demande qui attend dans la boîte, avec son `request_id`), `requests` (ce que sont devenues les 16 dernières demandes auxquelles la console a répondu, la plus ancienne d'abord : `request_id`, `fate` parmi `taken`, `refused`, `cancelled`, `detail`, `at`, `wall_clock` ; aucun nom d'opérateur), `session_request` (l'identifiant du démarrage dont vient la séance en cours, de son acceptation au retour à `idle` ; `null` au repos), `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
 | GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
 | GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console ; `service` (`out_of_service`, `unclean_starts`, `threshold`, `window_s`, `unclean_stop`, `open_record`, `persisted` : la console est-elle en service, et ce que son dernier démarrage a trouvé) ; `watchdog` (`enabled`, `sent`, `failed`, `last_error` : ce que la boucle de contrôle a dit au gestionnaire de service) | 200 |
@@ -1771,17 +1821,56 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 ; 412 |
-| POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 ; 400 ; 409 |
+| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 ; 412 |
+| POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |
 | POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 
 ### Manuel et variateur
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 ; 412 |
-| POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 ; 422 (négatif, non fini) ; 400 ; 409 |
-| POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 ; 400 ; 409 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 ; 412 |
+| POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
+| POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
+
+### La boîte aux lettres : une demande, un sort, et la console le dit
+
+La boîte entre la page et la boucle a **une** place (`src/control_surface.py`). La
+boucle attend le variateur pendant son cycle, et le serveur web répond pendant ce
+temps : deux demandes peuvent se rencontrer dans un même cycle. Depuis le
+11 octobre 2026, aucune ne remplace l'autre en silence. Ce que trouve une demande
+qui arrive :
+
+| Arrive | Acceptée quand | Sinon | Remplace ce qui attend ? |
+|---|---|---|---|
+| un démarrage (séance ou manuel) | attestation faite, aucun verdict verrouillé, **Etat** `idle` et boîte vide | 412 `estop_unattested` ; 409 `verdict_latched` ; 409 `start_pending` si un autre démarrage attend ou est armé ; 409 `machine_running` ou `machine_stopping` ; 409 `request_waiting` si un reset attend au repos | jamais |
+| une cible | une séance tourne et la boîte est vide | 409 `no_manual_session` ; 409 `request_waiting` | jamais |
+| un reset | boîte vide et aucun démarrage en cours | 409 `request_waiting` ; 409 `start_pending` | jamais |
+| un STOP | une séance démarre ou tourne, **quoi qui attende dans la boîte** | 409 `nothing_running` (rien à arrêter) ; 409 `already_stopping` (un arrêt est déjà en cours) | oui : il prend la place d'un démarrage, d'une cible ou d'un reset qui attend, et la demande déplacée reçoit l'événement `cancelled` |
+| un E-STOP | toujours ; il ne passe pas par la boîte | jamais refusé | non : ce qui attend reste, et la boucle le juge sous l'arrêt verrouillé (un démarrage est alors refusé par un événement `refused`) |
+
+Un STOP n'est donc jamais refusé ni retardé par un démarrage en attente. Avant le
+11 octobre 2026, un démarrage accepté pendant qu'un cycle était en cours était
+oublié à la fin de ce cycle (**Etat** relisait `idle`, et un `session_idle` était
+publié à tort) : un second démarrage était accepté par-dessus, sans rien publier
+pour le premier. Un démarrage au repos prenait de même la place d'un reset en
+attente. **Etat** garde maintenant `starting` tant qu'un démarrage accepté attend
+ou est armé, et `stopping` tant qu'un arrêt accepté attend ; `session_idle` n'est
+publié qu'une fois, quand plus rien d'accepté n'attend.
+
+Chaque demande acceptée finit d'une seule façon, publiée une fois : `taken`,
+`refused` ou `cancelled`. L'identifiant est fabriqué par la console (quelques
+caractères tirés au hasard à chaque lancement, puis un compteur : `3eaa763d-5`), il
+est opaque, ne dépend pas du nom de l'opérateur, et n'est qu'une donnée
+d'affichage : aucune décision de la boucle n'en dépend, et il n'est pas écrit dans
+l'enregistrement de séance. Tenu par `raspberry-pi/tests/test_request_fates.py`
+(la table, chaque paire de demandes, et les courses rejouées avec un variateur
+simulé dont un échange attend là où le test le décide).
+
+Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
+`request_waiting`, `machine_running`, `machine_stopping`, `nothing_running`,
+`already_stopping`, `no_manual_session`, `verdict_latched`, `estop_unattested`.
+`waiting_request_id` n'est renseigné que pour les deux premiers.
 
 ### Sécurité
 
@@ -1819,11 +1908,17 @@ répondu à temps. Détail dans
   y est refusée. Un client sans `Origin` (outil, test) est admis, mais reste soumis au
   jeton.
 - Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés), `{"kind": "event"}`
-  (chaque événement ; depuis le 7 octobre 2026, un événement de type `recording` porte
+  (chaque événement : `kind`, `at`, `wall_clock`, `operator`, `detail`, et depuis le
+  11 octobre 2026 `request_id`, l'identifiant de la demande dont l'événement parle,
+  `null` sinon ; pour `session_running` et `session_idle`, celui du démarrage dont
+  vient la séance ; depuis le 7 octobre 2026, un événement de type `recording` porte
   les messages de l'enregistrement de séance), `{"kind": "ecg"}` (tranche de l'anneau ECG après chaque instantané,
   jusqu'à 1500 échantillons à la connexion), `{"kind": "resync"}` quand l'écran a pris du
   retard ; le serveur ferme alors avec le code 1013
   (`this screen fell behind and was disconnected; reload to resync`).
+- Un écran reçoit d'abord les événements qui l'attendent, puis l'instantané le plus
+  récent : une image peut donc lui arriver après un événement plus récent qu'elle. La
+  page écarte, pour ce qu'elle dit d'une demande, toute image prise avant la réponse.
 - Observé en simulation sur 14 s : environ 5 instantanés et 5 trames ECG par seconde.
 
 ---
@@ -1870,25 +1965,35 @@ répondu à temps. Détail dans
   (`RESP · Respiration - AnHeart`) ; la place gardée pour le pied de page, mesurée au
   lieu d'être déclarée (elle valait 88 px pour un pied de page de 103 px, 92 px sur un
   écran étroit).
-- Ce que ces notes ne peuvent pas dire, faute d'un repère dans ce que la console
-  publie. Un événement `refused` ne porte pas l'identifiant de la demande à laquelle
-  il répond : un refus daté dans la seconde qui suit une demande de cet écran est
-  affiché comme sa réponse, même s'il répond à un autre écran ; et un refus répondu à
-  un autre écran après que la cible de celui-ci a été prise remplace la note
-  `cible prise par la machine`, alors que la machine tient toujours cette cible. Après
-  une coupure de sa liaison, un écran ne sait pas ce que la machine a fait de sa
-  demande de démarrage, et le dit (section 6) : la console ne lui renvoie pas les
-  événements manqués. Quand deux demandes de démarrage sont acceptées dans le même
-  cycle ou dans deux cycles voisins, la seconde remplace la première dans la boîte
-  sans refus publié, ou est refusée un cycle plus tard. **La page ne peut pas être
-  certaine de la demande que la machine a prise tant que la console ne donne pas un
-  identifiant à chaque demande. D'ici là, elle dit « ne sait pas » chaque fois
-  qu'une autre demande de démarrage est passée près de la sienne (section 6), y
-  compris quand la séance est bien la sienne.** La console, elle, le sait ; elle
-  devrait refuser la seconde demande, ou dire laquelle elle a prise. Enfin
-  le 409 d'une boîte déjà prise contient la demande en attente telle que la console
-  la tient, que la page n'affiche pas : la console ne devrait pas l'envoyer. Ces
-  quatre points se traitent côté console.
+- Traités le 11 octobre 2026, côté console : chaque demande a un identifiant et un
+  seul sort, que la console publie (section 14) ; un second démarrage n'est plus
+  accepté par-dessus un premier ; le 409 d'une boîte prise ne contient plus la demande
+  en attente ; un démarrage déplacé par un STOP reçoit sa réponse. La page n'a donc
+  plus à deviner : le refus fait à un autre écran n'est plus écrit sous un bouton de
+  celui-ci, la note `cible prise par la machine` n'est plus remplacée par ce refus,
+  et la règle des deux secondes a disparu (section 6).
+- Ce que la page ne peut toujours pas savoir, et pourquoi. (1) Une demande dont la
+  réponse HTTP elle-même n'est pas arrivée (requête envoyée, 202 perdu) : l'écran n'a
+  pas reçu l'identifiant, et ne peut reconnaître aucune réponse ; la note montre
+  l'échec de la requête, alors que la console a pu accepter la demande. (2) Après une
+  coupure de liaison, le sort d'une demande que la console ne liste plus : elle a été
+  relancée, ou a répondu à plus de 16 demandes depuis ; la note dit alors que l'écran
+  ne sait pas, et le reste. (3) Après une coupure, tant que `/api/status` ne répond
+  pas, ni le sort d'une demande ni si la séance en cours est encore celle de cet
+  écran. (4) Liaison coupée, la note `pris` déjà écrite reste telle quelle jusqu'à la
+  première donnée du WebSocket suivant : le bandeau `NO LIVE DATA` dit alors que
+  rien à l'écran n'est à jour. (5) La note d'une cible ne suit que les images pour
+  savoir si la machine la tient encore : après une coupure, une cible égale appliquée
+  par un autre écran garde la note `cible prise par la machine`. (6) Un STOP n'a pas
+  de note : son sort (`taken`) n'est lu que dans **Evenements**, et le bandeau
+  `STOP NON CONFIRME` (section 5) reste tenu par la réponse 202 et les images.
+  (7) Une page rechargée ne sait plus quelles demandes étaient les siennes : les
+  identifiants ne sont gardés que dans la page ouverte, et ses notes repartent vides.
+- La console affiche `ARRET` pendant quelques secondes après un STOP qui a déplacé
+  un démarrage, alors que rien n'a été armé : le runtime ouvre une fin de séance sur
+  une machine au repos, puis revient à `REPOS` (22 cycles, soit 4,4 s, sur le variateur simulé).
+  Pendant ce temps un démarrage reçoit 409 `machine_stopping`. C'était déjà le cas
+  avant le 11 octobre 2026 ; relevé, non traité ici.
 - Ces points relèvent de la page. Ils viennent du ticket
   [ANH-182](https://linear.app/anheart/issue/ANH-182/console-locale-suites-daffichage-apres-anh-124-anh-176-et-anh-178),
   qui a traité la note de la cible manuelle, l'encadré de la fréquence cardiaque, la

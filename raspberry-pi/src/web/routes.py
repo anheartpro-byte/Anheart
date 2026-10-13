@@ -26,7 +26,11 @@ Status codes that mean something
   before this response was written.
 * **409** for "the machine is not in a state for that", **412** for "the
   emergency-stop wiring has not been attested this boot", **422** for a profile
-  that is not a usable programme.
+  that is not a usable programme. A start, a stop, a target or a reset that
+  the console turns down at once is answered with a stable ``code`` next to its
+  sentence (:class:`Refusal`), and when another request is in its way, with
+  that request's identifier and nothing else of it: never its content, which
+  may be another operator's.
 * **403** for any request for motion while motion is disabled in this build
   (:attr:`~src.web.deps.Services.motion_enabled`, the local console's read-only
   milestone). Checked before anything else, so a disabled console never even
@@ -47,7 +51,7 @@ from pathlib import Path
 from typing import Final, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Request, params
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from src.control_surface import (
@@ -121,6 +125,7 @@ from src.web.schemas import (
     ProfileRow,
     RecordRow,
     RecordsRow,
+    RequestRow,
     RestoreBody,
     SafetyRow,
     SensorRow,
@@ -151,8 +156,74 @@ _INDEX: Final[str] = "index.html"
 
 def register_routes(app: FastAPI, *, services: Services, config: WebConfig) -> None:
     """Register every HTTP route on ``app``. Called once, from ``create_app``."""
+    app.add_exception_handler(Refusal, answer_refusal)
     _register_public(app, config=config)
     _register_api(app, services=services, config=config)
+
+
+# =========================================================================
+# A request the console turns down at once
+# =========================================================================
+
+
+class Refusal(HTTPException):
+    """A start, a stop, a target or a reset refused before it reached the mailbox.
+
+    Answered as ``{"detail", "code", "waiting_request_id"}``. ``detail`` is a
+    fixed sentence for an operator; ``code`` is one of the constants below and
+    does not change when a sentence is reworded: the page decides by it.
+    ``waiting_request_id`` is the identifier of the request found in the way,
+    when there is one. A screen that holds that identifier knows the request
+    is its own; nothing else about it is sent, because the request in the way
+    may be another operator's, with their name and, for a programme, the
+    rider's age.
+    """
+
+    def __init__(
+        self, status_code: HTTPStatus, *, code: str, detail: str, waiting: str | None = None
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code: str = code
+        self.waiting: str | None = waiting
+
+
+async def answer_refusal(_request: Request, raised: Exception) -> JSONResponse:
+    """The body of a :class:`Refusal`: its sentence, its code, and what was in the way."""
+    if not isinstance(raised, Refusal):
+        raise raised
+    return JSONResponse(
+        status_code=raised.status_code,
+        content={
+            "detail": raised.detail,
+            "code": raised.code,
+            "waiting_request_id": raised.waiting,
+        },
+    )
+
+
+START_PENDING: Final[str] = "start_pending"
+"""A start was accepted and the loop has not answered for it yet: it waits, or is being armed."""
+
+REQUEST_WAITING: Final[str] = "request_waiting"
+"""Another request holds the one place of the mailbox until the loop's next tick."""
+
+MACHINE_RUNNING: Final[str] = "machine_running"
+MACHINE_STOPPING: Final[str] = "machine_stopping"
+NOTHING_RUNNING: Final[str] = "nothing_running"
+ALREADY_STOPPING: Final[str] = "already_stopping"
+NO_MANUAL_SESSION: Final[str] = "no_manual_session"
+VERDICT_LATCHED: Final[str] = "verdict_latched"
+ESTOP_UNATTESTED: Final[str] = "estop_unattested"
+
+START_PENDING_DETAIL: Final[str] = (
+    "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas "
+    "encore pris ou est en train de l'armer. Rien n'a ete envoye."
+)
+
+REQUEST_WAITING_DETAIL: Final[str] = (
+    "demande refusee par la console : une autre demande attend encore la machine "
+    "(une demande a la fois), rien n'a ete envoye. Reessayer dans un instant."
+)
 
 
 # =========================================================================
@@ -426,6 +497,8 @@ def _register_reads(
             ),
             retained_hr_samples=supervisor.retained_samples,
             pending=None if pending is None else CommandRow.of(pending),
+            requests=tuple(RequestRow.of(fate) for fate in surface.fates),
+            session_request=surface.session_request,
             attendant_last_seen=surface.attendant_last_seen,
             clients=hub.client_count,
             evictions=hub.evictions,
@@ -785,66 +858,103 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
 # status code yet - which is the whole reason they are closed unions.
 
 
-def _start_failure(refusal: StartRefusal) -> HTTPException:
+def _start_failure(refusal: StartRefusal) -> Refusal:
     """Map a start refusal. See :data:`~src.control_surface.StartRefusal`."""
     match refusal:
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the machine is {refusal.state.value}, not idle"
-                    + (f" (pending: {refusal.pending})" if refusal.pending is not None else "")
-                ),
-            )
+            return _busy_start(refusal)
         case SafetyHolding():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=VERDICT_LATCHED,
                 detail=(
                     f"a latched safety verdict stands ({refusal.verdict.rule}): "
                     f"{refusal.verdict.detail} - it must be acknowledged by name first"
                 ),
             )
         case EstopUnattested():
-            return HTTPException(
-                status_code=HTTPStatus.PRECONDITION_FAILED,
+            return Refusal(
+                HTTPStatus.PRECONDITION_FAILED,
+                code=ESTOP_UNATTESTED,
                 detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
             )
     raise assert_never(refusal)
 
 
-def _end_failure(refusal: EndRefusal) -> HTTPException:
+def _busy_start(refusal: SurfaceBusy) -> Refusal:
+    """A start that found the console busy: with what, never the content of it."""
+    state = refusal.state
+    match state:
+        case RunState.STARTING:
+            return _start_pending(refusal)
+        case RunState.IDLE:
+            # At rest, and a reset or a target still waits for the loop's next tick.
+            return _request_waiting(refusal)
+        case RunState.RUNNING:
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=MACHINE_RUNNING,
+                detail="the machine is running, not idle",
+            )
+        case RunState.STOPPING:
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=MACHINE_STOPPING,
+                detail="the machine is stopping, not idle",
+            )
+    raise assert_never(state)
+
+
+def _start_pending(refusal: SurfaceBusy) -> Refusal:
+    return Refusal(
+        HTTPStatus.CONFLICT,
+        code=START_PENDING,
+        detail=START_PENDING_DETAIL,
+        waiting=refusal.in_the_way,
+    )
+
+
+def _request_waiting(refusal: SurfaceBusy) -> Refusal:
+    return Refusal(
+        HTTPStatus.CONFLICT,
+        code=REQUEST_WAITING,
+        detail=REQUEST_WAITING_DETAIL,
+        waiting=refusal.in_the_way,
+    )
+
+
+def _end_failure(refusal: EndRefusal) -> Refusal:
     """Map an end refusal. See :data:`~src.control_surface.EndRefusal`."""
     match refusal:
         case NothingRunning():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=NOTHING_RUNNING,
                 detail=f"there is no session to end (the machine is {refusal.state.value})",
             )
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=ALREADY_STOPPING,
                 detail=f"the machine is already {refusal.state.value}",
             )
     raise assert_never(refusal)
 
 
-def _command_failure(refusal: CommandRefusal) -> HTTPException:
+def _command_failure(refusal: CommandRefusal) -> Refusal:
     """Map a target or fault-reset refusal. See :data:`~src.control_surface.CommandRefusal`."""
     match refusal:
         case NothingRunning():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=NO_MANUAL_SESSION,
                 detail=f"no manual session is running (the machine is {refusal.state.value})",
             )
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the machine is {refusal.state.value}"
-                    + (f" (pending: {refusal.pending})" if refusal.pending is not None else "")
-                    + "; try again in a moment"
-                ),
-            )
+            if refusal.pending is None:
+                # A reset while the loop arms a start it has already taken.
+                return _start_pending(refusal)
+            return _request_waiting(refusal)
     raise assert_never(refusal)
 
 

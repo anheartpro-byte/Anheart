@@ -380,7 +380,7 @@ async def test_ex1_the_page_reads_every_event_and_remembers_what_the_console_ref
 ) -> None:
     console, clock = console_on_a_manual_clock(tmp_path)
     screen = Screen(console.panel.hub.subscribe())
-    console.panel.surface.note_refused("endurance", "demarrage refuse : essai")
+    console.panel.surface.note_withdrawn("demarrage refuse : essai")
     clock.advance(Seconds(0.2))
     published = await console.panel.control_step()
 
@@ -404,7 +404,7 @@ async def test_ex1_the_tick_meter_times_what_the_page_is_shown_and_ends_when_the
         await asyncio.sleep(0.01)
     # Nine events the page does not read: the hub evicts it, as it would a browser left behind.
     for index in range(9):
-        console.panel.surface.note_refused("endurance", f"refus {index}")
+        console.panel.surface.note_withdrawn(f"refus {index}")
 
     await asyncio.wait_for(meter, 5.0)
 

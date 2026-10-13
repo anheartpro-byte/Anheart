@@ -43,6 +43,7 @@ from src.control_surface import (
     EndSession,
     EstopReceipt,
     FaultReset,
+    RequestFate,
     SessionEvent,
     SetManualTarget,
     StartManual,
@@ -929,13 +930,19 @@ class CameraRow:
 
 @dataclass(frozen=True, slots=True)
 class EventRow:
-    """One session event."""
+    """One session event.
+
+    ``request_id`` is the identifier of the request the event speaks of, the
+    one its 202 gave to the screen that asked; ``null`` for an event about no
+    request. A screen recognises the events of its own requests by it.
+    """
 
     kind: str
     at: float
     wall_clock: int
     operator: str
     detail: str
+    request_id: str | None
 
     @classmethod
     def of(cls, event: SessionEvent) -> EventRow:
@@ -946,6 +953,7 @@ class EventRow:
             wall_clock=event.wall_clock,
             operator=event.operator,
             detail=event.detail,
+            request_id=event.request_id,
         )
 
 
@@ -1119,12 +1127,18 @@ class ProfileListRow:
 
 @dataclass(frozen=True, slots=True)
 class CommandRow:
-    """What was accepted into the mailbox."""
+    """What was accepted into the mailbox.
+
+    ``request_id`` is the identifier the console gave this request: every
+    event that speaks of it carries the same one, and so does its line in
+    ``requests`` of ``GET /api/status`` once the loop has answered.
+    """
 
     kind: str
     operator: str
     detail: str
     at: float
+    request_id: str
 
     @classmethod
     def of(cls, command: Command) -> CommandRow:
@@ -1137,28 +1151,55 @@ class CommandRow:
                     if override is None
                     else f"{command.profile_id} over {override:.0f} s"
                 )
-                return cls(kind="start", operator=command.operator, detail=detail, at=command.at)
+                return cls._row("start", command, detail)
             case EndSession():
-                return cls(
-                    kind="end", operator=command.operator, detail=command.reason, at=command.at
-                )
+                return cls._row("end", command, command.reason)
             case StartManual():
-                return cls(
-                    kind="manual_start",
-                    operator=command.operator,
-                    detail=command.occupancy.value,
-                    at=command.at,
-                )
+                return cls._row("manual_start", command, command.occupancy.value)
             case SetManualTarget():
-                return cls(
-                    kind="manual_target",
-                    operator=command.operator,
-                    detail=f"{command.output_rpm:.2f} output rpm",
-                    at=command.at,
-                )
+                return cls._row("manual_target", command, f"{command.output_rpm:.2f} output rpm")
             case FaultReset():
-                return cls(kind="fault_reset", operator=command.operator, detail="", at=command.at)
+                return cls._row("fault_reset", command, "")
         raise assert_never(command)
+
+    @classmethod
+    def _row(cls, kind: str, command: Command, detail: str) -> CommandRow:
+        return cls(
+            kind=kind,
+            operator=command.operator,
+            detail=detail,
+            at=command.at,
+            request_id=command.request_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RequestRow:
+    """What became of one request the console had accepted.
+
+    ``fate`` is ``taken`` (the loop acted on it), ``refused`` (the loop could
+    not, and ``detail`` is its reason) or ``cancelled`` (a stop took its place
+    before the loop saw it). The same words, the same instant and the same
+    identifier as the event that said it: this is that event, kept for a
+    screen that was not listening. No operator is named.
+    """
+
+    request_id: str
+    fate: str
+    detail: str
+    at: float
+    wall_clock: int
+
+    @classmethod
+    def of(cls, fate: RequestFate) -> RequestRow:
+        """Render one fate."""
+        return cls(
+            request_id=fate.request_id,
+            fate=fate.fate.value,
+            detail=fate.detail,
+            at=fate.at,
+            wall_clock=fate.wall_clock,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1317,6 +1358,22 @@ class StatusRow:
     live: tuple[SafetyRow, ...]
     retained_hr_samples: int
     pending: CommandRow | None
+    requests: tuple[RequestRow, ...]
+    """What became of the last requests the loop answered or a stop displaced, oldest first.
+
+    A screen whose socket was down when the event of its request went out
+    finds the answer here, under the identifier its 202 gave it. A request
+    still in ``pending``, or that the loop is acting on, is not in it yet.
+    """
+
+    session_request: str | None
+    """The identifier of the start the session in progress came from, or ``None`` at rest.
+
+    Set from the moment that start is accepted until the console is idle
+    again. A screen that lost its socket after its start was taken reads here
+    whether the session on screen is still the one it asked for.
+    """
+
     attendant_last_seen: float | None
     clients: int
     evictions: int
