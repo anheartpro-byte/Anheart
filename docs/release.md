@@ -397,6 +397,13 @@ crée rien. Une branche `release/…` restée dans le clone sans être sur `orig
 (créée à la main, ou laissée par une version antérieure du script) fait
 refuser : le script donne la commande qui la supprime.
 
+`TERM` et `HUP` reçus pendant la préparation déclenchent ce même nettoyage,
+après la fin de la commande Git en cours. `SIGKILL` ne peut pas être intercepté :
+attendre la fin d'un éventuel processus Git restant, lire `git status`, préserver
+les fichiers ou commits utiles, puis quitter la branche avec `git switch develop`
+avant de la supprimer avec `git branch -D release/…`. Ne pas supprimer une
+branche dont le travail n'a pas été examiné.
+
 ### L'avis indépendant sur une release
 
 `main` exige `agent-review/R1` réussi sur le commit de tête de la PR de
@@ -470,6 +477,8 @@ ne change plus de titre ; pour sortir du refus :
    titre que GitHub propose** (`Revert "Revert "ANH-10 : …""` ; `git revert`
    écrit `Reapply "ANH-10 : …"`, que le script lit de même). Les deux commits
    se neutralisent : le script ne refuse plus, et rien n'est parti sans ligne.
+   Cette neutralisation est vérifiée composant par composant : rétablir seulement
+   le Pi ne lève pas un refus qui concerne Convex.
 2. **Refaire l'annulation** dans une PR intitulée `ANH-n : annuler …`.
 3. **Relancer `prepare` avec les mêmes versions** : il ajoute la ligne de cette
    PR à la section, comme pour toute PR de ticket fusionnée pendant la release.
@@ -477,6 +486,18 @@ ne change plus de titre ; pour sortir du refus :
 Ce que le script ne voit pas : un revert fusionné sous un titre écrit à la
 main qui n'est ni celui d'un ticket ni celui que GitHub propose. Il est alors
 ignoré, comme tout commit sans titre de ticket.
+
+La PR de release rappelle que les lignes des tickets annulés restent à côté de
+celles de leurs reverts. Le lecteur doit examiner les deux ; le script ne déduit
+pas l'effet exact d'une annulation partielle à partir de son titre.
+
+Avant de poser les tags, `tag` exige une fusion à deux parents dont le second
+est le candidat de `develop` vérifié. Un correctif arrivé sur `main` depuis une
+autre branche n'est pas une release prise en charge par cet outil.
+Un tag existant doit désigner une fusion de `develop` sur la chaîne principale
+de `main`, portant cette version, et être présent sur `origin`. Le script affiche la cible vérifiée ; une autre
+cible, ou un tag uniquement local, fait refuser avant la création des autres tags.
+Un tag déjà publié ne doit jamais être déplacé pour contourner ce refus.
 
 ---
 
@@ -543,6 +564,11 @@ sortes de statuts comptent ici :
 - ceux d'un service de déploiement. Vercel en posait à chaque push ; il n'en
   pose plus pour un commit qui contient `vercel.json`
   ([deploiement.md, section 5.1](deploiement.md#51-comment-il-se-déploie)).
+
+Pour lever un statut bloquant, son émetteur doit publier un nouveau statut
+`success` après avoir corrigé et vérifié sa cause, sous le même nom de contexte et sur le même SHA.
+Relancer un job de CI d'un autre nom ne remplace pas ce statut. Un avis indépendant
+ne devient réussi qu'après une nouvelle revue concluante du commit concerné.
 
 Le nom du statut exigé est écrit en tête du script (`REQUIRED_STATUSES`), à
 côté de la liste des gates ; `npm run test:release` échoue s'il s'écarte de ce
