@@ -68,8 +68,8 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > elle-même ce que chaque demande est devenue, et un second démarrage n'est plus
 > accepté pendant qu'un premier attend. Il a été rejoué dans un navigateur sans
 > interface, avec un et deux écrans, sur la console en simulation. Aucune capture n'a
-> été reprise : celles de ce guide peuvent montrer une note d'avant.
-
+> été reprise pour ces notes : certaines captures peuvent montrer une note d'avant.
+>
 > L'ajout du 11 octobre 2026 (ticket ANH-190) décrit le bandeau rouge
 > `VARIATEUR EN DEFAUT` et le refus d'un démarrage pendant un défaut (§6, §13.9), la
 > ligne `verrouille derriere go_silent` (§10, §11), ce que fait le bandeau
