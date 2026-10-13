@@ -42,6 +42,9 @@ vi.mock("@/components/training/MachineLiveCard", async () => ({
     "MachineLiveCard",
   ),
 }));
+vi.mock("@/components/machines/MachineHealthCard", async () => ({
+  MachineHealthCard:(await import("@/test-support/pages")).standIn("MachineHealthCard"),
+}));
 vi.mock("@/components/training/ProfileList", async (original) => ({
   ...(await original<typeof import("@/components/training/ProfileList")>()),
   MachineProgramsCard: (await import("@/test-support/pages")).standIn(
@@ -251,6 +254,14 @@ describe("machine page: which machine it shows", () => {
 });
 
 describe("machine page: what each role may do", () => {
+  it.each(["admin","gestionnaire","org_admin"] as const)("shows health to the authorized %s",async(role)=>{
+    await open(role);
+    expect(propsOf("MachineHealthCard")).toEqual({machineId});
+  });
+  it("keeps machine maintenance health out of the patient page",async()=>{
+    await open("user");
+    expect(wasMounted("MachineHealthCard")).toBe(false);
+  });
   it("lets an admin launch, edit, renew the key, delete, and grant rights as an admin", async () => {
     await open("admin");
 

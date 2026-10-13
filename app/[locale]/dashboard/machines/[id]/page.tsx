@@ -311,7 +311,7 @@ export default function MachineDetailPage({
       )}
 
       {/* Launch rights - admins and gestionnaires of this machine */}
-      {canManage && !machine.isDeleted && (
+      {(canManage || user?.role === "org_admin") && !machine.isDeleted && (
         <MachineHealthCard machineId={machineId} />
       )}
       {canManage && !machine.isDeleted && (
