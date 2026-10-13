@@ -280,6 +280,12 @@ describe("ANH-130 verified session deposits", () => {
       )?.record,
     ).toBe("rejected");
     expect(
+      await w.t.mutation(internal.recordStorage.requestUpload, {
+        ...uploadRequest.parse(good),
+        machineId: w.machine,
+      }),
+    ).toHaveProperty("rejected", true);
+    expect(
       await w.t.run(async (ctx) => (await ctx.storage.get(wrong)) !== null),
     ).toBe(false);
     expect(

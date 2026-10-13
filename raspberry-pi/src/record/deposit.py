@@ -19,6 +19,7 @@ from src.record.deposit_files import (
     next_record,
     payload,
     remember,
+    revoke,
 )
 from src.record.export import RecordIo
 from src.record.rows import JsonValue
@@ -77,6 +78,7 @@ class RecordDeposit:
         self._next: Monotonic = clock.monotonic()
         self._backoff: Seconds = MIN_BACKOFF
         self._record_path: Path | None = None
+        self._after: Path | None = None
         self._verified: dict[str, str] = {}
 
     def pause(self) -> None:
@@ -99,11 +101,13 @@ class RecordDeposit:
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await task
+                await asyncio.gather(task)
             self._active = None
 
     async def step(self) -> None:
         succeeded = await self._attempt()
+        if not succeeded:
+            self._after = self._record_path
         self._backoff = MIN_BACKOFF if succeeded else Seconds(min(MAX_BACKOFF, self._backoff * 2))
         delay = SUCCESS_DELAY if succeeded else self._backoff
         self._next = Monotonic(self._clock.monotonic() + delay)
@@ -113,7 +117,7 @@ class RecordDeposit:
             return await self._io.run(work, IO_TIMEOUT)
 
     async def _attempt(self) -> bool:
-        listed = await self._work(functools.partial(next_record, self._root))
+        listed = await self._work(functools.partial(next_record, self._root, self._after))
         if isinstance(listed, Err) or isinstance(listed.value, Err):
             return False
         record = listed.value.value
@@ -135,6 +139,7 @@ class RecordDeposit:
 
     async def _reported(self, record: DepositRecord, remote: RemoteStatus) -> bool:
         if remote.deleted:
+            await self._work(functools.partial(revoke, record))
             return False
         self._verified.update({file.path: file.sha256 for file in remote.files if file.verified})
         verified = self._verified
@@ -215,7 +220,9 @@ class RecordDeposit:
             self._verified[name] = file.sha256
             return True
         if not isinstance(storage_id, str):
-            storage_id = None if rejected else file.storage_id
+            storage_id = (
+                None if rejected or reserved.value.get("rejected") is True else file.storage_id
+            )
         if storage_id is None:
             storage_id = await self._uploaded(record, file, reserved.value)
         if storage_id is None:

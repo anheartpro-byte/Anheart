@@ -651,6 +651,13 @@ réutilise ces reçus et le statut serveur. Le balayage serveur toutes les cinq
 minutes retrouve aussi un fichier envoyé dont la réponse a été perdue, et
 retire ses doublons. Il ne traite que les objets portant une réservation connue.
 
+Un enregistrement local illisible ou en échec ne bloque pas les suivants :
+la sélection continue après lui et réessaie ensuite. Une suppression cloud
+est conservée dans le curseur comme révocation, y compris après redémarrage ;
+les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
+La réservation signale un fichier rejeté même s'il n'est pas dans la page de
+statut courante, afin de remplacer son ancien reçu Storage supprimé.
+
 Limites : 20 000 fichiers, 16 MiB par fichier, 1 MiB pour le manifeste et
 512 KiB pour son inventaire JSON. Les chemins sont relatifs, ASCII, sans `..`,
 et longs de 160 caractères au plus. Le serveur conserve l'inventaire par pages

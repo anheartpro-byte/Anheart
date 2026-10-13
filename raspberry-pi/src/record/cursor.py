@@ -132,6 +132,7 @@ class Cursor:
     """Requests the dashboard refused for good; what they carried was passed over."""
 
     record_uploads: Mapping[str, str] = field(default_factory=dict[str, str])
+    record_deposit_revoked: bool = False
 
     def __post_init__(self) -> None:
         """Refuse a cursor no sending can have written: it is read as unusable."""

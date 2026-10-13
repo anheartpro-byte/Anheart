@@ -113,14 +113,17 @@ class DepositServer:
         return Ok({"storageId": storage_id})
 
 
-def ready_record(root: Path) -> Path:
-    record = closed_record(root)
+def ready_record(root: Path, index: int = 1) -> Path:
+    record = closed_record(root, index)
     manifest = MANIFEST.validate_json((record / "manifest.json").read_bytes())
     assert isinstance(
         store(
             record,
             Cursor(
-                local_ref=manifest.local_ref, session_id="session-1", end="sent", state="complete"
+                local_ref=manifest.local_ref,
+                session_id=f"session-{index}",
+                end="sent",
+                state="complete",
             ),
         ),
         Ok,
@@ -162,7 +165,6 @@ async def test_arming_cancels_a_held_upload_and_can_resume_later(tmp_path: Path)
     await asyncio.sleep(0)
     assert server.uploads_sent == 0
     assert confirmed_deposit(record) is None
-    assert server.hold_upload is not None
     assert server.hold_upload is not None
     server.hold_upload.set()
     deposit.schedule()
@@ -338,7 +340,10 @@ async def test_transport_failure_and_invalid_origin_are_retryable() -> None:
             Err,
         )
         assert isinstance(
-            await transport.upload("http://[broken", "application/octet-stream", b""), Err
+            await transport.upload(
+                "https://test.convex.cloud/\x00", "application/octet-stream", b""
+            ),
+            Err,
         )
     finally:
         await transport.close()
@@ -379,10 +384,6 @@ class ScriptedDepositServer(DepositServer):
     ("stage", "reply"),
     [
         ("status", Ok[Document]({})),
-        (
-            "status",
-            Ok[Document]({"record": "partial", "expectedCount": 0, "files": [], "deleted": True}),
-        ),
         ("reservation", Err(Unreachable("offline"))),
         ("reservation", Ok[Document]({})),
         ("upload", Err(Unreachable("offline"))),
@@ -560,7 +561,8 @@ async def test_many_files_are_sent_in_bounded_batches_without_losing_cursor_rece
             ),
             Ok,
         )
-    assert isinstance(writer.close(ManualClock(), "operator_stop"), Ok)
+    closed = writer.close(ManualClock(), "operator_stop")
+    assert isinstance(closed, Ok)
     assert isinstance(
         store(
             writer.path,
@@ -782,3 +784,127 @@ async def test_custom_storage_origin_and_malformed_upload_url() -> None:
         assert seen[0].content == b""
     finally:
         await transport.close()
+
+
+@dataclass
+class MultiRecordServer:
+    sessions: dict[str, DepositServer] = field(default_factory=dict[str, DepositServer])
+    deleted: set[str] = field(default_factory=set[str])
+    asked: list[str] = field(default_factory=list[str])
+
+    async def get(
+        self, path: str, params: Mapping[str, str] | None = None
+    ) -> Result[Document, CloudError]:
+        assert params is not None
+        session_id = params["sessionId"]
+        self.asked.append(session_id)
+        if session_id in self.deleted:
+            return Ok({"record": "none", "expectedCount": 0, "files": [], "deleted": True})
+        return await self.sessions[session_id].get(path, {"sessionId": "session-1"})
+
+    async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        session_id = body["sessionId"]
+        assert isinstance(session_id, str)
+        reply = await self.sessions[session_id].post(path, body)
+        if isinstance(reply, Ok) and "uploadUrl" in reply.value:
+            return Ok({**reply.value, "uploadUrl": f"https://test.convex.cloud/{session_id}"})
+        return reply
+
+    async def upload(
+        self, url: str, content_type: str, content: bytes
+    ) -> Result[Document, CloudError]:
+        return await self.sessions[url.rsplit("/", 1)[1]].upload(
+            "https://test.convex.cloud/upload", content_type, content
+        )
+
+
+@pytest.mark.parametrize(
+    "problem", ["deleted", "manifest", "checksums", "oversize", "changed", "offline"]
+)
+async def test_one_bad_record_never_blocks_later_sessions_or_authorizes_its_purge(
+    tmp_path: Path, problem: str
+) -> None:
+    first = ready_record(tmp_path / "records", 1)
+    later = ready_record(first.parent, 2)
+    server = MultiRecordServer(
+        sessions={"session-1": DepositServer(), "session-2": DepositServer()}
+    )
+    if problem == "deleted":
+        server.deleted.add("session-1")
+    elif problem == "manifest":
+        (first / "manifest.json").write_text("invalid")
+    elif problem == "checksums":
+        (first / "checksums.sha256").write_text("invalid")
+    elif problem == "oversize":
+        with (first / "ticks.csv").open("wb") as handle:
+            handle.truncate(MAX_FILE_BYTES + 1)
+    elif problem == "changed":
+        (first / "ticks.csv").write_text("altered")
+    else:
+        server.sessions["session-1"].offline = True
+    for _ in range(2):
+        deposit = RecordDeposit(first.parent, ManualClock(), server, server.upload)
+        for _ in range(8):
+            await deposit.step()
+        await deposit.close()
+    assert confirmed_deposit(later) is not None
+    assert confirmed_deposit(first) is None
+    assert first.is_dir()
+    if problem == "deleted":
+        assert server.asked.count("session-1") == 1
+        cursor = load(first)
+        assert isinstance(cursor, Cursor)
+        assert cursor.record_deposit_revoked
+
+
+def test_revocation_keeps_bytes_if_the_cursor_cannot_be_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = ready_record(tmp_path / "records")
+    selected = next_record(path.parent)
+    assert isinstance(selected, Ok)
+    assert selected.value is not None
+
+    def fail(_path: Path, _cursor: Cursor) -> Result[None, CursorError]:
+        return Err(CursorError("read-only disk"))
+
+    monkeypatch.setattr(deposit_files, "store", fail)
+    assert isinstance(deposit_files.revoke(selected.value), Err)
+    assert confirmed_deposit(path) is None
+    path.with_name(path.name + ".sync.json").write_text("invalid")
+    assert isinstance(deposit_files.revoke(selected.value), Err)
+
+
+async def test_off_page_rejection_replaces_the_saved_receipt_from_the_reservation(
+    tmp_path: Path,
+) -> None:
+    path = ready_record(tmp_path / "records")
+    server = DepositServer()
+    deposit = RecordDeposit(path.parent, ManualClock(), server, server.upload)
+    await deposit.step()
+    await deposit.close()
+    cursor = load(path)
+    assert isinstance(cursor, Cursor)
+    assert isinstance(
+        store(path, replace(cursor, record_uploads={"ticks.csv": "deleted-blob"})), Ok
+    )
+    retry = ScriptedDepositServer(
+        uploads=server.uploads,
+        files=server.files,
+        expected=server.expected,
+        uploads_sent=server.uploads_sent,
+        reservation_reply=Ok(
+            {
+                "uploadUrl": "https://test.convex.cloud/upload",
+                "contentType": "application/octet-stream",
+                "rejected": True,
+            }
+        ),
+    )
+    restarted = RecordDeposit(path.parent, ManualClock(), retry, retry.upload)
+    await restarted.step()
+    assert retry.files["ticks.csv"][0] != "deleted-blob"
+    assert retry.uploads_sent > server.uploads_sent
+    await restarted.step()
+    assert confirmed_deposit(path) is not None
+    await restarted.close()

@@ -177,7 +177,11 @@ export const requestUpload = internalMutation({
   args: requestArgs,
   returns: v.union(
     failure,
-    v.object({ uploadUrl: v.string(), contentType: v.string() }),
+    v.object({
+      uploadUrl: v.string(),
+      contentType: v.string(),
+      rejected: v.boolean(),
+    }),
     v.object({ storageId: v.id("_storage"), verified: v.boolean() }),
   ),
   handler: async (ctx, args) => {
@@ -248,6 +252,7 @@ export const requestUpload = internalMutation({
     return {
       uploadUrl: await ctx.storage.generateUploadUrl(),
       contentType: uploadMediaType(nonce),
+      rejected: previous?.rejection !== undefined,
     };
   },
 });

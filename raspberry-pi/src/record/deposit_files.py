@@ -42,38 +42,74 @@ class FilePayload:
     storage_id: str | None
 
 
-def next_record(root: Path) -> Result[DepositRecord | None, RecordError]:
+def next_record(root: Path, after: Path | None = None) -> Result[DepositRecord | None, RecordError]:
     try:
-        for path in records(root):
-            if confirmed_deposit(path) is not None:
-                continue
-            cursor = load(path)
-            if not isinstance(cursor, Cursor) or cursor.state != "complete":
-                continue
-            if cursor.session_id is None or cursor.end != "sent":
-                continue
-            manifest = MANIFEST.validate_json((path / "manifest.json").read_bytes())
-            if manifest.local_ref != cursor.local_ref or manifest.ended_at is None:
-                continue
-            files = manifest.files
-            if files is None or not files or len(files) > MAX_FILES:
-                continue
-            if len(set(files)) != len(files) or any(
-                len(name) > MAX_PATH_LENGTH or SAFE_PATH.fullmatch(name) is None for name in files
-            ):
-                return Err(RecordError("read", "invalid_deposit_manifest"))
-            checksums: dict[str, Sha256] = {}
-            for line in (path / "checksums.sha256").read_text(encoding="ascii").splitlines():
-                digest, name = line.split("  ", 1)
-                if not re.fullmatch(r"[a-f0-9]{64}", digest) or name in checksums:
-                    return Err(RecordError("read", "invalid_checksums"))
-                checksums[name] = Sha256(digest)
-            if set(checksums) != set(files) - {"checksums.sha256"}:
-                return Err(RecordError("read", "incomplete_checksums"))
-            return Ok(DepositRecord(path, cursor.session_id, files, checksums))
+        paths = records(root)
+    except OSError as error:
+        return Err(RecordError("read", describe_failure(error)))
+    ordered = (
+        paths
+        if after is None
+        else [path for path in paths if path > after] + [path for path in paths if path <= after]
+    )
+    failure: RecordError | None = None
+    for path in ordered:
+        selected = eligible_record(path)
+        if isinstance(selected, Err):
+            failure = selected.error
+        elif selected.value is not None:
+            return selected
+    return Ok(None) if failure is None else Err(failure)
+
+
+def eligible_record(path: Path) -> Result[DepositRecord | None, RecordError]:
+    try:
+        if confirmed_deposit(path) is not None:
+            return Ok(None)
+        cursor = load(path)
+        if (
+            not isinstance(cursor, Cursor)
+            or cursor.state != "complete"
+            or cursor.record_deposit_revoked
+            or cursor.session_id is None
+            or cursor.end != "sent"
+        ):
+            return Ok(None)
+        manifest = MANIFEST.validate_json((path / "manifest.json").read_bytes())
+        if manifest.local_ref != cursor.local_ref or manifest.ended_at is None:
+            return Ok(None)
+        files = manifest.files
+        if files is None or not files or len(files) > MAX_FILES:
+            return Ok(None)
+        return inventory(path, cursor.session_id, files)
     except (OSError, ValueError) as error:
         return Err(RecordError("read", describe_failure(error)))
-    return Ok(None)
+
+
+def inventory(
+    path: Path, session_id: str, files: tuple[str, ...]
+) -> Result[DepositRecord, RecordError]:
+    if len(set(files)) != len(files) or any(
+        len(name) > MAX_PATH_LENGTH or SAFE_PATH.fullmatch(name) is None for name in files
+    ):
+        return Err(RecordError("read", "invalid_deposit_manifest"))
+    checksums: dict[str, Sha256] = {}
+    for line in (path / "checksums.sha256").read_text(encoding="ascii").splitlines():
+        digest, name = line.split("  ", 1)
+        if not re.fullmatch(r"[a-f0-9]{64}", digest) or name in checksums:
+            return Err(RecordError("read", "invalid_checksums"))
+        checksums[name] = Sha256(digest)
+    if set(checksums) != set(files) - {"checksums.sha256"}:
+        return Err(RecordError("read", "incomplete_checksums"))
+    return Ok(DepositRecord(path, session_id, files, checksums))
+
+
+def revoke(record: DepositRecord) -> Result[None, RecordError]:
+    cursor = load(record.path)
+    if not isinstance(cursor, Cursor) or cursor.session_id != record.session_id:
+        return Err(RecordError("read", "deposit_cursor_unavailable"))
+    saved = store(record.path, replace(cursor, record_deposit_revoked=True, record_uploads={}))
+    return Err(RecordError("sync", saved.error.detail)) if isinstance(saved, Err) else Ok(None)
 
 
 def payload(record: DepositRecord, name: str) -> Result[FilePayload, RecordError]:
