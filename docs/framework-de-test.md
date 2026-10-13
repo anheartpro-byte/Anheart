@@ -4243,16 +4243,17 @@ depuis `raspberry-pi/`), lancé une fois le même jour sur le même poste, passe
   dure la plus longue.
 
 Le critère d'acceptation du ticket, « job nocturne vert pendant 7 nuits
-consécutives », **n'est pas établi** : le déclenchement nocturne ne tourne que
-sur la branche par défaut, où cette étape n'est pas encore arrivée. Il se lira
-sur les exécutions nocturnes de `ci.yml`, sept nuits de suite, une fois l'étape
-sur `main`.
+consécutives », **n'est pas établi**. Il se vérifiera sur sept exécutions
+nocturnes consécutives de `ci.yml`, sur la branche par défaut, après
+l'intégration de cette étape dans `main`. Un lancement manuel ou une journée
+simulée ne remplace pas ces sept nuits.
 
 ### 17.8 Limites
 
-* **Santé de la machine** : le ticket demande un essai « santé active ». Le
-  heartbeat ne porte pas encore d'objet de santé (ANH-148 non fait). Les
-  heartbeats partent toutes les dix secondes et sont comptés ; rien de plus.
+* **Santé de la machine** : active dans le heartbeat depuis ANH-148, avec
+  contrôle du nombre de rapports et de leur intervalle dans l'endurance.
+  Les sources matérielles indisponibles restent inconnues ; leur exactitude
+  sur un Pi installé relève des essais matériels.
 * **Tableau de bord** : une doublure en mémoire, tenue au vrai par la trace
   rejouée du test d'acceptation de la synchronisation. Aucun réseau, donc
   aucune lenteur ni coupure de réseau dans cet essai.
