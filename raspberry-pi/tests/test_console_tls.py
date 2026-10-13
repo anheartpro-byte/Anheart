@@ -33,6 +33,7 @@ import logging
 import os
 import socket
 import ssl
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -711,6 +712,33 @@ async def test_installed_health_probe_does_not_fall_back_to_clear_http(served: S
     assert not await anyio.to_thread.run_sync(
         healthy, {"UI_HOST": "127.0.0.1", "UI_PORT": str(served.port)}
     )
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+async def test_healthcheck_command_uses_the_configured_port_and_authority(
+    served: Served, tmp_path: Path, trusted: bool
+) -> None:
+    certificate = tmp_path / "tls" / "console.crt"
+    if not trusted:
+        certificate = make_material(tmp_path / "other", "localhost").certificate
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "src.health_probe",
+        env=dict(os.environ)
+        | {
+            "UI_HOST": "127.0.0.1",
+            "UI_PORT": str(served.port),
+            "UI_TLS_CERT": str(certificate),
+        },
+    )
+    try:
+        result = await asyncio.wait_for(process.wait(), timeout=10)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert result == (0 if trusted else 1)
 
 
 @pytest.mark.parametrize("host", ["invalid host", "127.0.0.1/path", "[::1]"])

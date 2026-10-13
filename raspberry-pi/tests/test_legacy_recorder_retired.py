@@ -254,9 +254,7 @@ def test_the_image_runs_the_console_through_the_entrypoint() -> None:
 
 def test_the_container_health_check_asks_the_console_healthz() -> None:
     command = _healthcheck_command()
-    assert command[:2] == ["python", "-c"]
-    assert "/healthz" in command[2]
-    assert "UI_PORT" in command[2], "the check must follow the port the console listens on"
+    assert command == ["python", "-m", "src.health_probe"]
     # The unit that runs the image leaves that check in place (tests/test_pi_install.py).
     assert "health" not in SERVICE_UNIT.read_text(encoding="utf-8").lower()
 

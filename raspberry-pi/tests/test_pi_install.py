@@ -2594,8 +2594,6 @@ def test_anh151_ex8_the_workflow_lints_every_script_that_runs_on_a_pi() -> None:
 
 
 def test_anh151_ex8_the_page_of_the_image_carries_the_check_list() -> None:
-    """``docs/pi-image.md``: one line of the check-list for each step of ``harden.sh``, and
-    the lots that are not written yet are said not to be."""
     page = _read(VERSIONS_PAGE)
     section = page.partition("\n## 10. Durcissement")[2]
     assert section, "the page has no section on the hardening"
@@ -2603,5 +2601,6 @@ def test_anh151_ex8_the_page_of_the_image_carries_the_check_list() -> None:
         assert f"`{step}`" in section, step
     for later in ("point d'accès", "pare-feu", "tls", "lecture seule"):
         assert later in section.casefold(), later
-    assert section.count("**non fait**") >= 4, "a lot that is not written is said not to be"
+    assert "| Essai final sur un Pi réel | **non fait** |" in section
+    assert "[procédure](pi-reseau.md)" in section
     assert "`sudo bash scripts/harden.sh --dry-run`" in section
