@@ -112,7 +112,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | Module | Rôle | Garanties |
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
-| `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
+| `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -191,7 +191,12 @@ nominatif.
    de présence de la page est transmis (`note_presence`).
 2. La boîte aux lettres est vidée et son ordre donné au runtime (départ
    manuel, départ programmé, cible manuelle, réarmement de défaut, fin de
-   séance). Un refus revient à la page comme événement.
+   séance). Ce que le runtime en a fait revient à la page comme événement,
+   sous l'identifiant de la demande : `taken` s'il l'a pris, `refused` avec la
+   raison sinon. L'identifiant retourne à la boîte tel qu'il en est venu : le
+   runtime ne le voit pas. Le variateur est attendu pendant ce pas et pendant
+   le pas 4, et le serveur web répond entre-temps : une demande acceptée
+   pendant un tic est prise par le tic suivant, et la boîte lui garde sa place.
 3. En simulation, le variateur simulé avance, et le sujet simulé reçoit la
    vitesse mesurée.
 4. Le runtime fait son tic.
@@ -469,7 +474,13 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
 6. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
-   défaut : refus (`DriveInFault`), **sans réarmement automatique**.
+   défaut : refus (`DriveInFault`), **sans réarmement automatique**. Depuis le
+   11 octobre 2026, la console refuse ce départ plus tôt quand elle le peut :
+   si le dernier relevé publié par la boucle, vieux de 2 s au plus, montre le
+   variateur en défaut, la route de démarrage répond 409 sans rien déposer
+   ([console-locale.md, section 6](console-locale.md#6-page--tableau-de-bord-)).
+   Cette porte-ci reste la seule qui compte : la route ne la remplace pas, et
+   un lancement venu du tableau de bord distant ne passe que par elle.
 7. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
@@ -661,8 +672,12 @@ scénarios de simulation. La console copie les profils livrés dans
   runtime sur ce qu'il a lui-même écrit ou décidé (la consigne est en rampe ;
   la consigne est revenue à 0 sans que personne l'ait demandé, champ
   `stopped_by` ; la séance est finie, champ `session_over` ; une fin de
-  séance est ouverte, champ `ending`). Aucun de ces
+  séance est ouverte, champ `ending` ; en séance manuelle, le bras est à
+  l'arrêt et aucune cible n'attend, champ `nothing_waits`). Aucun de ces
   champs n'est une demande, et `stopped_by` ne peut qu'ajouter un verdict.
+  `nothing_waits` (11 octobre 2026) n'est lu par aucune règle : il ne sert
+  qu'à la phrase affichée (voir « non verrouillé » plus bas), et le même
+  verdict, même règle, même action, même verrou, sort avec ou sans lui.
   `session_over` ne fait taire qu'une règle, `session_overrun` : il réunit
   deux faits (la séance a atteint la phase `DONE` depuis son départ, et la
   consigne en vigueur est 0) et vaut « non » par défaut. `ending` ne peut que
@@ -689,7 +704,9 @@ scénarios de simulation. La console copie les profils livrés dans
     régulation ou la cible**, sans geste de l'opérateur : c'est voulu tant que
     la vitesse a seulement été maintenue ou baissée, et la phrase du verdict le
     dit à l'écran (`SELF_CLEARING` : « NOT LATCHED: it lifts by itself… »)
-    tant que la séance peut encore prendre de la vitesse. Cela s'arrête à
+    tant que la séance peut encore prendre de la vitesse. Elle n'est pas
+    ajoutée sur un bras manuel à l'arrêt dont la cible vaut 0
+    (`nothing_waits`) : rien n'y remontera. Cela s'arrête à
     l'arrêt : une fois que le bras a tourné dans une séance, une consigne qui
     revient à 0 sans que personne l'ait demandé, amenée par un REDUCE ou par la
     régulation cardiaque elle-même, termine la séance sur le verrou
@@ -946,6 +963,15 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
+
+Ces verrous vivent dans le runtime, pas dans le plancher du superviseur.
+Depuis le 11 octobre 2026, `GET /api/status` les rapporte comme ceux du
+superviseur : `standing` et `floor` y sont ceux du runtime
+(`TrainingRuntime.standing`, `.floor`), le plus sévère des deux auteurs, et
+`silenced` nomme le verdict verrouillé qu'un `GO_SILENT` a remplacé, quel
+qu'en soit l'auteur (`SafetySupervisor.silenced`, `TrainingRuntime.silenced`).
+Ces lectures ne décident rien : la boucle ne lit ni `silenced` ni `floor`.
+Détail des champs : [console-locale.md, section 14](console-locale.md#14-référence-des-routes-http-et-websocket).
 
 Les règles `presence_*` de la caméra sont décrites en [section 10](#10-la-caméra-présence).
 
@@ -2416,9 +2442,9 @@ Ce que fait la console :
 L'affichage sur la console est un événement de type `dashboard`, sans nom
 d'opérateur, dans la liste **Evenements** (voir
 [console-locale.md](console-locale.md)). Ce n'est pas un événement `refused` :
-la page lit un `refused` comme la réponse de la machine à propos de la cible
-manuelle à l'écran et l'écrit dans la carte Mode MANUEL, ce que cette nouvelle
-du lien n'est jamais. Il est
+la page lit un `refused` sans identifiant de demande comme une cible manuelle
+que la machine a reprise et l'écrit dans la carte Mode MANUEL, ce que cette
+nouvelle du lien n'est jamais. Il est
 émis pour chaque lancement refusé, quand la phrase change, et sinon rappelé
 toutes les 60 s tant que l'incompatibilité dure (`INCOMPATIBLE_REPEAT`) : la
 liste n'est envoyée qu'aux écrans connectés à ce moment-là, et une page ouverte
@@ -3132,6 +3158,8 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 |---|---|---|
 | départ demandé | `operator_action` (`remote_command` depuis le tableau de bord) | `start_requested`, sans ses mots : ils nomment un programme par son identifiant |
 | départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur, sans l'identifiant du programme ni l'âge du passager qu'elle cite (`[redacted]`) |
+| départ, consigne ou réarmement qu'un STOP a déplacé avant que la boucle le prenne | `refusal` | `cancelled: un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` |
+| demande prise par la boucle (événement `taken` de la console) | aucune ligne | ce qu'elle a produit se lit dans les tics ; l'identifiant d'une demande n'est écrit nulle part |
 | acquittement | `verdict_ack` | `acknowledged: …` |
 | réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
 | attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |

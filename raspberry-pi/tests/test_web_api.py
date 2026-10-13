@@ -558,8 +558,11 @@ async def test_a_second_start_is_refused(client: httpx.AsyncClient, rig: Rig) ->
 
     second = await client.post("/api/session/start", headers=auth(), json=body)
     assert second.status_code == HTTPStatus.CONFLICT
-    assert RunState.STARTING.value in detail(second)
-    assert isinstance(rig.surface.pending, StartSession)
+    assert second.json()["code"] == "start_pending"
+    assert "un demarrage est deja demande" in detail(second)
+    waiting = rig.surface.pending
+    assert isinstance(waiting, StartSession)
+    assert waiting.request_id == first.json()["request_id"], "the first start keeps its place"
 
 
 async def test_a_stop_with_nothing_running_is_refused(client: httpx.AsyncClient) -> None:
@@ -1633,10 +1636,15 @@ def test_the_run_state_is_pessimistic_while_stopping() -> None:
         surface.submit_start(profile_id=PROFILE_ID, operator=OPERATOR, total_duration_s=None), Ok
     )
     assert state_of(surface) is RunState.STARTING
+    assert surface.take_command() is not None
     surface.note_running()
     assert state_of(surface) is RunState.RUNNING
     assert isinstance(surface.submit_end(operator=OPERATOR, reason="done"), Ok)
     assert state_of(surface) is RunState.STOPPING
+    # The loop reports itself at rest before it has taken the stop: still stopping.
+    surface.note_idle()
+    assert state_of(surface) is RunState.STOPPING
+    assert surface.take_command() is not None
     surface.note_idle()
     assert state_of(surface) is RunState.IDLE
 

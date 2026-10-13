@@ -105,7 +105,7 @@ async def test_a_double_start_before_the_loop_ticks_is_refused(tmp_path: Path) -
         )
     assert first.status_code == httpx.codes.ACCEPTED
     assert second.status_code == httpx.codes.CONFLICT
-    assert "starting" in detail_of(second)
+    assert "un demarrage est deja demande" in detail_of(second)
     await rig.tick(2.0)
     assert rig.panel.runtime.state is RuntimeState.RUNNING
     await finish(rig)

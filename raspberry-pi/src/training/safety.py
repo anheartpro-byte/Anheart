@@ -229,8 +229,10 @@ the arm. It is not: an unlatched advisory disappears with its evidence and the
 runtime then follows the controller, or the manual target, again (see the
 module docstring). Appended in one place, :func:`_announced`, so that a rule
 added later cannot forget it, and only in a phase that can still be asked for
-speed (:data:`CAN_STILL_MOVE`) of a session that has not stopped by itself: on
-a session that is ending the sentence would be untrue, so it is left off.
+speed (:data:`CAN_STILL_MOVE`) of a session that has not stopped by itself and
+that has something to follow (:attr:`SafetyObservation.nothing_waits`): on a
+session that is ending, or over a manual arm at rest whose target is zero, the
+sentence would be untrue, so it is left off.
 
 A stopgap, and not the answer to "the console says so clearly and permanently":
 it is English, it comes at the end of a long sentence, and the page shows a
@@ -1023,6 +1025,29 @@ class SafetyObservation:
     field existed.
     """
 
+    nothing_waits: bool = False
+    """Whether nothing in this session waits to be followed upwards once a warning lifts.
+
+    The runtime's statement, like :attr:`stopped_by`, of two facts about a
+    MANUAL session, together: the setpoint in force is zero, and so is the
+    operator's target. From there a warning that lifts is followed by nothing.
+    While any verdict stands over a setpoint of zero the runtime refuses a
+    non-zero manual target and takes back one that was waiting (ANH-178), so
+    the target is still zero when the warning goes, and the operator has to
+    ask again.
+
+    **No rule reads it, and no verdict depends on it.** It reaches one place,
+    the sentence an unlatched verdict is given for the operator
+    (:func:`_announced`): :data:`SELF_CLEARING` says that the speed then
+    follows the manual target again, upwards too, with nobody clicking, and
+    over such an arm that is untrue. The action, the rule, the latch and the
+    instant of every verdict are the same whatever this says; a property test
+    holds that. Not a demand either: it says that nothing is asked for.
+
+    Defaults to ``False``: an observation built without saying so is worded
+    exactly as before this field existed.
+    """
+
 
 # =========================================================================
 # Out-of-band inputs and operator records
@@ -1343,8 +1368,12 @@ def _announced(verdict: SafetyVerdict, *, resumable: bool) -> SafetyVerdict:
     it stands until a named operator clears it, and nothing resumes behind it.
     So is an unlatched one when the session is not ``resumable``: its own
     cooldown, an ending under way, a session that is over or that has just
-    stopped by itself. The speed follows nothing upwards from there. See
-    :data:`SELF_CLEARING`.
+    stopped by itself, a manual arm at rest with a target of zero
+    (:attr:`SafetyObservation.nothing_waits`). The speed follows nothing
+    upwards from there. See :data:`SELF_CLEARING`.
+
+    The sentence is all this changes: the verdict returned has the action, the
+    rule, the latch and the instant of the one it was given.
     """
     if verdict.latched or not resumable:
         return verdict
@@ -1382,7 +1411,9 @@ class SafetySupervisor:
     * the **floor**: the most severe latched verdict so far. This is the
       no-automatic-resumption rule made concrete - nothing but
       :meth:`acknowledge` lowers it, and :class:`GoSilentIsTerminal` means
-      even that cannot always.
+      even that cannot always. Beside it, what the floor held when
+      ``GO_SILENT`` took its place (:attr:`silenced`): kept for the screen,
+      read by no rule.
     * the **operator e-stop** slot, written synchronously by
       :meth:`latch_estop` from outside the control loop.
     * a bounded queue of **trips from other threads** (:meth:`trip_from_thread`).
@@ -1426,6 +1457,7 @@ class SafetySupervisor:
         "_last_tick_at",
         "_limits",
         "_live",
+        "_silenced",
         "_thread_trips",
         "_tick_gap",
         "_trackers",
@@ -1438,6 +1470,9 @@ class SafetySupervisor:
         self._attestation: EstopAttestation | None = None
         self._estop: SafetyVerdict | None = None
         self._floor: SafetyVerdict | None = None
+        # What the floor held when GO_SILENT took its place, for the screen
+        # alone: written by _raise_floor, read by the `silenced` property.
+        self._silenced: SafetyVerdict | None = None
         self._live: tuple[SafetyVerdict, ...] = ()
         self._thread_trips: deque[ThreadTrip] = deque(maxlen=THREAD_TRIP_LIMIT)
         self._history: deque[_HrPoint] = deque(maxlen=HISTORY_LIMIT)
@@ -1714,6 +1749,27 @@ class SafetySupervisor:
         return self._estop
 
     @property
+    def silenced(self) -> SafetyVerdict | None:
+        """The latched verdict the floor held when ``GO_SILENT`` took its place, or ``None``.
+
+        The floor keeps one verdict, the most severe. When ``GO_SILENT``
+        replaces a latched stop there, nobody has acknowledged that stop, and
+        nothing can be acknowledged from then on: it is still latched, behind
+        a verdict that hides it. :attr:`standing` and :attr:`floor` then show
+        ``GO_SILENT`` alone, and a screen opened at that moment would announce
+        no stop at all. This is what they no longer show.
+
+        For the screen, and for nothing else: no rule and no method of this
+        class reads it, and :attr:`standing` is what it was. Written once at
+        most: ``GO_SILENT`` is the most severe action, so nothing replaces it,
+        and :meth:`acknowledge` refuses to clear it. So it is never cleared
+        either, and it lasts as long as the process. ``None`` while the floor
+        is not ``GO_SILENT``, and when ``GO_SILENT`` found the floor empty.
+        Pure.
+        """
+        return self._silenced
+
+    @property
     def live(self) -> tuple[SafetyVerdict, ...]:
         """Every rule that was firing at the last :meth:`evaluate`, latched or not.
 
@@ -1859,6 +1915,9 @@ class SafetySupervisor:
         current = self._floor
         if current is not None and verdict.action <= current.action:
             return
+        if verdict.action is SafetyAction.GO_SILENT:
+            # Kept for the screen (see `silenced`): what GO_SILENT stands over.
+            self._silenced = current
         self._floor = verdict
         _logger.error(
             "safety floor raised to %s by rule %s",
@@ -1914,7 +1973,11 @@ class SafetySupervisor:
             self._rule_setpoint_unconfirmed(observation),
             self._rule_session_standstill(observation),
         )
-        resumable = observation.phase in CAN_STILL_MOVE and observation.stopped_by is None
+        resumable = (
+            observation.phase in CAN_STILL_MOVE
+            and observation.stopped_by is None
+            and not observation.nothing_waits
+        )
         return tuple(
             _announced(verdict, resumable=resumable)
             for verdict in candidates

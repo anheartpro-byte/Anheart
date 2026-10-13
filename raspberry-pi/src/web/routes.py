@@ -26,7 +26,11 @@ Status codes that mean something
   before this response was written.
 * **409** for "the machine is not in a state for that", **412** for "the
   emergency-stop wiring has not been attested this boot", **422** for a profile
-  that is not a usable programme.
+  that is not a usable programme. A start, a stop, a target or a reset that
+  the console turns down at once is answered with a stable ``code`` next to its
+  sentence (:class:`Refusal`), and when another request is in its way, with
+  that request's identifier and nothing else of it: never its content, which
+  may be another operator's.
 * **403** for any request for motion while motion is disabled in this build
   (:attr:`~src.web.deps.Services.motion_enabled`, the local console's read-only
   milestone). Checked before anything else, so a disabled console never even
@@ -47,7 +51,7 @@ from pathlib import Path
 from typing import Final, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Request, params
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from src.control_surface import (
@@ -60,6 +64,7 @@ from src.control_surface import (
     SurfaceBusy,
 )
 from src.geometry import MachineGeometry
+from src.motor.drive import DriveState, FaultReport
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.result import Err, Ok
@@ -91,9 +96,9 @@ from src.training.safety import (
     NothingLatched,
     Unattributed,
 )
-from src.training.types import Occupancy
-from src.units import OutputRpm, Seconds
-from src.web.deps import TOKEN_HEADER, Services, WebConfig
+from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
+from src.units import Monotonic, OutputRpm, Seconds, elapsed
+from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
 from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
@@ -108,6 +113,7 @@ from src.web.schemas import (
     EstopBody,
     EstopRow,
     FaultResetBody,
+    FaultRow,
     HealthRow,
     ManualStartBody,
     ManualTargetBody,
@@ -121,6 +127,7 @@ from src.web.schemas import (
     ProfileRow,
     RecordRow,
     RecordsRow,
+    RequestRow,
     RestoreBody,
     SafetyRow,
     SensorRow,
@@ -151,8 +158,74 @@ _INDEX: Final[str] = "index.html"
 
 def register_routes(app: FastAPI, *, services: Services, config: WebConfig) -> None:
     """Register every HTTP route on ``app``. Called once, from ``create_app``."""
+    app.add_exception_handler(Refusal, answer_refusal)
     _register_public(app, config=config)
     _register_api(app, services=services, config=config)
+
+
+# =========================================================================
+# A request the console turns down at once
+# =========================================================================
+
+
+class Refusal(HTTPException):
+    """A start, a stop, a target or a reset refused before it reached the mailbox.
+
+    Answered as ``{"detail", "code", "waiting_request_id"}``. ``detail`` is a
+    fixed sentence for an operator; ``code`` is one of the constants below and
+    does not change when a sentence is reworded: the page decides by it.
+    ``waiting_request_id`` is the identifier of the request found in the way,
+    when there is one. A screen that holds that identifier knows the request
+    is its own; nothing else about it is sent, because the request in the way
+    may be another operator's, with their name and, for a programme, the
+    rider's age.
+    """
+
+    def __init__(
+        self, status_code: HTTPStatus, *, code: str, detail: str, waiting: str | None = None
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code: str = code
+        self.waiting: str | None = waiting
+
+
+async def answer_refusal(_request: Request, raised: Exception) -> JSONResponse:
+    """The body of a :class:`Refusal`: its sentence, its code, and what was in the way."""
+    if not isinstance(raised, Refusal):
+        raise raised
+    return JSONResponse(
+        status_code=raised.status_code,
+        content={
+            "detail": raised.detail,
+            "code": raised.code,
+            "waiting_request_id": raised.waiting,
+        },
+    )
+
+
+START_PENDING: Final[str] = "start_pending"
+"""A start was accepted and the loop has not answered for it yet: it waits, or is being armed."""
+
+REQUEST_WAITING: Final[str] = "request_waiting"
+"""Another request holds the one place of the mailbox until the loop's next tick."""
+
+MACHINE_RUNNING: Final[str] = "machine_running"
+MACHINE_STOPPING: Final[str] = "machine_stopping"
+NOTHING_RUNNING: Final[str] = "nothing_running"
+ALREADY_STOPPING: Final[str] = "already_stopping"
+NO_MANUAL_SESSION: Final[str] = "no_manual_session"
+VERDICT_LATCHED: Final[str] = "verdict_latched"
+ESTOP_UNATTESTED: Final[str] = "estop_unattested"
+
+START_PENDING_DETAIL: Final[str] = (
+    "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas "
+    "encore pris ou est en train de l'armer. Rien n'a ete envoye."
+)
+
+REQUEST_WAITING_DETAIL: Final[str] = (
+    "demande refusee par la console : une autre demande attend encore la machine "
+    "(une demande a la fois), rien n'a ete envoye. Reessayer dans un instant."
+)
 
 
 # =========================================================================
@@ -388,6 +461,7 @@ def _register_reads(
     hub = services.hub
     supervisor = services.supervisor
     store = services.store
+    verdicts: VerdictSource = supervisor if services.verdicts is None else services.verdicts
 
     @app.get("/api/status", dependencies=auth, tags=["system"])
     async def read_status() -> StatusRow:
@@ -402,6 +476,12 @@ def _register_reads(
         one thing awaited, the list of serial ports, is awaited first: from
         the clock read to the return nothing yields, and every verdict in the
         answer is the one that stood at ``at``.
+
+        The verdicts are read where every latch is seen
+        (:class:`~src.web.deps.VerdictSource`): the runtime on the console,
+        which also holds the ones it latched itself, and what ``GO_SILENT``
+        replaced. The drive's state is the last tick's, for as long as that
+        is evidence (:func:`_drive_seen`).
         """
         ports = await services.ports.list_ports()
         now = services.clock.monotonic()
@@ -409,16 +489,21 @@ def _register_reads(
         attested = supervisor.require_estop_confirmed()
         accepted, refused, published = surface.counters
         pending = surface.pending
+        drive_state, drive_fault = _drive_seen(surface.latest, now)
         return StatusRow(
             at=now,
+            instance=services.instance,
             run_state=surface.run_state.value,
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
             attestation=AttestationRow.of(attested.value) if isinstance(attested, Ok) else None,
             attestation_statement=ESTOP_ATTESTATION,
-            standing=SafetyRow.of(supervisor.standing, now),
-            floor=SafetyRow.of(supervisor.floor, now),
+            standing=SafetyRow.of(verdicts.standing, now),
+            floor=SafetyRow.of(verdicts.floor, now),
+            silenced=SafetyRow.of(verdicts.silenced, now),
+            drive_state=drive_state.name.lower(),
+            drive_fault=FaultRow.of(drive_fault),
             live=tuple(
                 row
                 for row in (SafetyRow.of(verdict, now) for verdict in supervisor.live)
@@ -426,6 +511,8 @@ def _register_reads(
             ),
             retained_hr_samples=supervisor.retained_samples,
             pending=None if pending is None else CommandRow.of(pending),
+            requests=tuple(RequestRow.of(fate) for fate in surface.fates),
+            session_request=surface.session_request,
             attendant_last_seen=surface.attendant_last_seen,
             clients=hub.client_count,
             evictions=hub.evictions,
@@ -448,7 +535,7 @@ def _register_reads(
         numbers rather than frozen ones.
         """
         snapshot = surface.latest
-        return None if snapshot is None else SnapshotRow.of(snapshot)
+        return None if snapshot is None else SnapshotRow.of(snapshot, services.instance)
 
     @app.get("/api/ecg", dependencies=auth, tags=["session"])
     async def read_ecg(after: int | None = None, limit: int | None = None) -> EcgRow:
@@ -584,6 +671,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         _require_programs_enabled(services)
         operator = _require_operator(body.operator)
         _require_known_profile(services, body.profile_id, body.total_duration_s)
+        _require_drive_not_faulted(services)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
@@ -663,6 +751,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         operator = _require_operator(body.operator)
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
+        _require_drive_not_faulted(services)
         submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
@@ -785,66 +874,103 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
 # status code yet - which is the whole reason they are closed unions.
 
 
-def _start_failure(refusal: StartRefusal) -> HTTPException:
+def _start_failure(refusal: StartRefusal) -> Refusal:
     """Map a start refusal. See :data:`~src.control_surface.StartRefusal`."""
     match refusal:
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the machine is {refusal.state.value}, not idle"
-                    + (f" (pending: {refusal.pending})" if refusal.pending is not None else "")
-                ),
-            )
+            return _busy_start(refusal)
         case SafetyHolding():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=VERDICT_LATCHED,
                 detail=(
                     f"a latched safety verdict stands ({refusal.verdict.rule}): "
                     f"{refusal.verdict.detail} - it must be acknowledged by name first"
                 ),
             )
         case EstopUnattested():
-            return HTTPException(
-                status_code=HTTPStatus.PRECONDITION_FAILED,
+            return Refusal(
+                HTTPStatus.PRECONDITION_FAILED,
+                code=ESTOP_UNATTESTED,
                 detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
             )
     raise assert_never(refusal)
 
 
-def _end_failure(refusal: EndRefusal) -> HTTPException:
+def _busy_start(refusal: SurfaceBusy) -> Refusal:
+    """A start that found the console busy: with what, never the content of it."""
+    state = refusal.state
+    match state:
+        case RunState.STARTING:
+            return _start_pending(refusal)
+        case RunState.IDLE:
+            # At rest, and a reset or a target still waits for the loop's next tick.
+            return _request_waiting(refusal)
+        case RunState.RUNNING:
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=MACHINE_RUNNING,
+                detail="the machine is running, not idle",
+            )
+        case RunState.STOPPING:
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=MACHINE_STOPPING,
+                detail="the machine is stopping, not idle",
+            )
+    raise assert_never(state)
+
+
+def _start_pending(refusal: SurfaceBusy) -> Refusal:
+    return Refusal(
+        HTTPStatus.CONFLICT,
+        code=START_PENDING,
+        detail=START_PENDING_DETAIL,
+        waiting=refusal.in_the_way,
+    )
+
+
+def _request_waiting(refusal: SurfaceBusy) -> Refusal:
+    return Refusal(
+        HTTPStatus.CONFLICT,
+        code=REQUEST_WAITING,
+        detail=REQUEST_WAITING_DETAIL,
+        waiting=refusal.in_the_way,
+    )
+
+
+def _end_failure(refusal: EndRefusal) -> Refusal:
     """Map an end refusal. See :data:`~src.control_surface.EndRefusal`."""
     match refusal:
         case NothingRunning():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=NOTHING_RUNNING,
                 detail=f"there is no session to end (the machine is {refusal.state.value})",
             )
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=ALREADY_STOPPING,
                 detail=f"the machine is already {refusal.state.value}",
             )
     raise assert_never(refusal)
 
 
-def _command_failure(refusal: CommandRefusal) -> HTTPException:
+def _command_failure(refusal: CommandRefusal) -> Refusal:
     """Map a target or fault-reset refusal. See :data:`~src.control_surface.CommandRefusal`."""
     match refusal:
         case NothingRunning():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
+            return Refusal(
+                HTTPStatus.CONFLICT,
+                code=NO_MANUAL_SESSION,
                 detail=f"no manual session is running (the machine is {refusal.state.value})",
             )
         case SurfaceBusy():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the machine is {refusal.state.value}"
-                    + (f" (pending: {refusal.pending})" if refusal.pending is not None else "")
-                    + "; try again in a moment"
-                ),
-            )
+            if refusal.pending is None:
+                # A reset while the loop arms a start it has already taken.
+                return _start_pending(refusal)
+            return _request_waiting(refusal)
     raise assert_never(refusal)
 
 
@@ -976,6 +1102,63 @@ def _require_programs_enabled(services: Services) -> None:
     """Refuse a programmed session with a 403 while this build has none."""
     if not services.programs_enabled:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=PROGRAMS_DISABLED_DETAIL)
+
+
+def _drive_seen(
+    latest: TelemetrySnapshot | None, now: Monotonic
+) -> tuple[DriveState, FaultReport | None]:
+    """The drive as the control loop last read it, for as long as that is evidence at ``now``.
+
+    The newest snapshot's own reading, which is the idle poll's while nothing
+    was ever armed (two reads a second) and the session's afterwards. A
+    snapshot is as old as its tick, and stops being renewed when the loop
+    stops: so the reading is aged by the time since that snapshot, and past
+    :data:`~src.training.types.DRIVE_STATUS_STALE_AFTER` the answer is
+    ``COMM_LOST``. Unknown, never a fault, and never a healthy state, that
+    nobody has read lately. ``COMM_LOST`` too before the first tick.
+    """
+    if latest is None:
+        return DriveState.COMM_LOST, None
+    age = latest.drive_status_age
+    if age is None or age + elapsed(latest.at, now) > DRIVE_STATUS_STALE_AFTER:
+        return DriveState.COMM_LOST, None
+    return latest.drive_state, latest.fault
+
+
+DRIVE_FAULT_DETAIL: Final[str] = (
+    "demarrage refuse : variateur en defaut ({code}). Rien n'a ete envoye a la machine : "
+    "traiter le defaut (carte Variateur), puis redemander."
+)
+"""What a start is answered while the drive shows a fault. ``{code}``: mnemonic and LFT.
+
+It opens with the words the loop itself uses for the same refusal, so the
+operator reads one sentence for one cause whichever of the two answered.
+"""
+
+
+def _require_drive_not_faulted(services: Services) -> None:
+    """Refuse a start with a 409 while the loop's last reading shows the drive in fault.
+
+    A fault that appears on a console that has armed nothing raises no
+    verdict: the idle console reads the drive and judges only whether it
+    turns. A start was then accepted here (202) and refused a tick later by
+    the loop, which reads the drive before arming. The same test is applied
+    here, on the reading the page is shown (:func:`_drive_seen`), so the
+    answer comes with the click and nothing is put in the mailbox. No rule is
+    added, and nothing latches: once the drive no longer shows the fault, the
+    next reading says so and the next start is taken.
+
+    Only a reading that says FAULT, and is fresh, refuses. A healthy drive is
+    never refused here, and neither is one whose state is unknown: the loop
+    reads it itself before arming, as it always has.
+    """
+    state, fault = _drive_seen(services.surface.latest, services.clock.monotonic())
+    if state is not DriveState.FAULT:
+        return
+    code = "?" if fault is None else f"{fault.fault.mnemonic}, LFT {fault.raw_code}"
+    raise HTTPException(
+        status_code=HTTPStatus.CONFLICT, detail=DRIVE_FAULT_DETAIL.format(code=code)
+    )
 
 
 def _require_occupancy(value: str) -> Occupancy:
