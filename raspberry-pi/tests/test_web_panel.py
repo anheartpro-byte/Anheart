@@ -345,7 +345,10 @@ async def test_a_manual_session_is_started_targeted_and_its_fault_reset_submitte
             "/api/manual/target", headers=auth(), json={"output_rpm": 3.0, "operator": OPERATOR}
         )
         assert busy.status_code == HTTPStatus.CONFLICT
-        assert "try again" in busy.json()["detail"]
+        assert busy.json()["code"] == "request_waiting"
+        # The request in the way is named by its identifier, and by nothing else.
+        assert busy.json()["waiting_request_id"] == target.json()["request_id"]
+        assert OPERATOR not in busy.text
         busy_reset = await session.post(
             "/api/drive/fault-reset", headers=auth(), json={"operator": OPERATOR}
         )

@@ -43,6 +43,7 @@ from src.control_surface import (
     EndSession,
     EstopReceipt,
     FaultReset,
+    RequestFate,
     SessionEvent,
     SetManualTarget,
     StartManual,
@@ -316,7 +317,8 @@ class ManualRow:
     """The manual session: target, ceiling and the ramp still to come.
 
     ``ramping`` is what lights the "do not move your head" banner: the
-    setpoint is still on its way to the target.
+    setpoint is being walked somewhere. ``ramp_to`` says where: the target,
+    or zero while a ``reduce`` lowers the speed whatever the target is.
     """
 
     occupancy: str
@@ -326,12 +328,15 @@ class ManualRow:
     min_run: SpeedRow
     ramping: bool
     ramp_eta_s: float | None
+    ramp_to: SpeedRow | None
+    """Where the setpoint is being walked to; null when a ``freeze`` holds it."""
 
     @classmethod
     def of(cls, view: ManualView | None) -> ManualRow | None:
         """Render the manual view, or ``None`` outside a manual session."""
         if view is None:
             return None
+        heading = view.ramp_to
         return cls(
             occupancy=view.occupancy.value,
             occupancy_label=view.occupancy.label,
@@ -340,6 +345,7 @@ class ManualRow:
             min_run=SpeedRow.of(view.min_run),
             ramping=view.ramping,
             ramp_eta_s=_finite(view.ramp_eta),
+            ramp_to=None if heading is None else SpeedRow.of(heading),
         )
 
 
@@ -475,10 +481,19 @@ class SnapshotRow:
 
     manual: ManualRow | None
 
+    instance: str = ""
+    """Which run of the console wrote this (:attr:`~src.web.deps.Services.instance`).
+
+    Added here, at the wire, and not part of the snapshot itself: the runtime
+    that takes a snapshot does not know which process serves it. Empty when
+    nobody said.
+    """
+
     @classmethod
-    def of(cls, snapshot: TelemetrySnapshot) -> SnapshotRow:
-        """Render a snapshot for the wire."""
+    def of(cls, snapshot: TelemetrySnapshot, instance: str = "") -> SnapshotRow:
+        """Render a snapshot for the wire, as written by the run ``instance``."""
         return cls(
+            instance=instance,
             at=snapshot.at,
             wall_clock=snapshot.wall_clock,
             phase=snapshot.phase.value,
@@ -929,13 +944,19 @@ class CameraRow:
 
 @dataclass(frozen=True, slots=True)
 class EventRow:
-    """One session event."""
+    """One session event.
+
+    ``request_id`` is the identifier of the request the event speaks of, the
+    one its 202 gave to the screen that asked; ``null`` for an event about no
+    request. A screen recognises the events of its own requests by it.
+    """
 
     kind: str
     at: float
     wall_clock: int
     operator: str
     detail: str
+    request_id: str | None
 
     @classmethod
     def of(cls, event: SessionEvent) -> EventRow:
@@ -946,6 +967,7 @@ class EventRow:
             wall_clock=event.wall_clock,
             operator=event.operator,
             detail=event.detail,
+            request_id=event.request_id,
         )
 
 
@@ -1119,12 +1141,18 @@ class ProfileListRow:
 
 @dataclass(frozen=True, slots=True)
 class CommandRow:
-    """What was accepted into the mailbox."""
+    """What was accepted into the mailbox.
+
+    ``request_id`` is the identifier the console gave this request: every
+    event that speaks of it carries the same one, and so does its line in
+    ``requests`` of ``GET /api/status`` once the loop has answered.
+    """
 
     kind: str
     operator: str
     detail: str
     at: float
+    request_id: str
 
     @classmethod
     def of(cls, command: Command) -> CommandRow:
@@ -1137,28 +1165,55 @@ class CommandRow:
                     if override is None
                     else f"{command.profile_id} over {override:.0f} s"
                 )
-                return cls(kind="start", operator=command.operator, detail=detail, at=command.at)
+                return cls._row("start", command, detail)
             case EndSession():
-                return cls(
-                    kind="end", operator=command.operator, detail=command.reason, at=command.at
-                )
+                return cls._row("end", command, command.reason)
             case StartManual():
-                return cls(
-                    kind="manual_start",
-                    operator=command.operator,
-                    detail=command.occupancy.value,
-                    at=command.at,
-                )
+                return cls._row("manual_start", command, command.occupancy.value)
             case SetManualTarget():
-                return cls(
-                    kind="manual_target",
-                    operator=command.operator,
-                    detail=f"{command.output_rpm:.2f} output rpm",
-                    at=command.at,
-                )
+                return cls._row("manual_target", command, f"{command.output_rpm:.2f} output rpm")
             case FaultReset():
-                return cls(kind="fault_reset", operator=command.operator, detail="", at=command.at)
+                return cls._row("fault_reset", command, "")
         raise assert_never(command)
+
+    @classmethod
+    def _row(cls, kind: str, command: Command, detail: str) -> CommandRow:
+        return cls(
+            kind=kind,
+            operator=command.operator,
+            detail=detail,
+            at=command.at,
+            request_id=command.request_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RequestRow:
+    """What became of one request the console had accepted.
+
+    ``fate`` is ``taken`` (the loop acted on it), ``refused`` (the loop could
+    not, and ``detail`` is its reason) or ``cancelled`` (a stop took its place
+    before the loop saw it). The same words, the same instant and the same
+    identifier as the event that said it: this is that event, kept for a
+    screen that was not listening. No operator is named.
+    """
+
+    request_id: str
+    fate: str
+    detail: str
+    at: float
+    wall_clock: int
+
+    @classmethod
+    def of(cls, fate: RequestFate) -> RequestRow:
+        """Render one fate."""
+        return cls(
+            request_id=fate.request_id,
+            fate=fate.fate.value,
+            detail=fate.detail,
+            at=fate.at,
+            wall_clock=fate.wall_clock,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1297,6 +1352,15 @@ class StatusRow:
     a frame. Display data only: nothing on the machine reads it back.
     """
 
+    instance: str
+    """Which run of the console wrote this answer (:attr:`~src.web.deps.Services.instance`).
+
+    The value every telemetry frame of this run carries, and another after any
+    restart of the console. Two values that differ are two consoles, and the
+    later one holds nothing of what the earlier one had latched: with it the
+    page no longer has to infer a restart from the clock or from a count.
+    """
+
     run_state: str
     estop_latched: bool
     """The interface's own flag: set by its E-STOP route, by nothing else."""
@@ -1313,10 +1377,58 @@ class StatusRow:
     attestation: AttestationRow | None
     attestation_statement: str
     standing: SafetyRow | None
+    """The verdict in force, WHOEVER latched it: the supervisor, or the runtime itself.
+
+    The verdict a frame taken at this instant would carry. It used to be the
+    supervisor's alone, which showed nothing under a verdict the runtime had
+    latched on its own behalf (:class:`~src.web.deps.VerdictSource`).
+    """
+
     floor: SafetyRow | None
+    """The most severe latched verdict, whoever holds it, the emergency stop apart."""
+
+    silenced: SafetyRow | None
+    """The latched verdict ``GO_SILENT`` stands over, or ``None``.
+
+    ``GO_SILENT`` replaces whatever was latched before it and refuses every
+    acknowledgement: that verdict is still latched, and ``standing`` and
+    ``floor`` no longer show it. A page opened at that moment announces a stop
+    from this field, as one that watched the sequence does from what it saw.
+    The emergency stop is apart, in ``supervisor_estop``.
+    """
+
+    drive_state: str
+    """The drive's state as the control loop last read it, by name.
+
+    The ``drive_state`` of the newest snapshot, for a screen that receives no
+    frame; ``comm_lost`` (unknown) before the first tick and once that reading
+    is too old to be evidence now. A drive in ``fault`` is refused every start
+    by the routes, with the reason: this is where a screen learns it before
+    anybody clicks.
+    """
+
+    drive_fault: FaultRow | None
+    """The fault that goes with ``drive_state``, when one was read; else ``None``."""
+
     live: tuple[SafetyRow, ...]
     retained_hr_samples: int
     pending: CommandRow | None
+    requests: tuple[RequestRow, ...]
+    """What became of the last requests the loop answered or a stop displaced, oldest first.
+
+    A screen whose socket was down when the event of its request went out
+    finds the answer here, under the identifier its 202 gave it. A request
+    still in ``pending``, or that the loop is acting on, is not in it yet.
+    """
+
+    session_request: str | None
+    """The identifier of the start the session in progress came from, or ``None`` at rest.
+
+    Set from the moment that start is accepted until the console is idle
+    again. A screen that lost its socket after its start was taken reads here
+    whether the session on screen is still the one it asked for.
+    """
+
     attendant_last_seen: float | None
     clients: int
     evictions: int
@@ -1375,13 +1487,17 @@ class WsEnvelope:
     notice: str = ""
 
     @classmethod
-    def of(cls, payload: Payload) -> WsEnvelope:
-        """Render one hub payload. Total over :class:`~src.telemetry.PayloadKind`."""
+    def of(cls, payload: Payload, instance: str = "") -> WsEnvelope:
+        """Render one hub payload. Total over :class:`~src.telemetry.PayloadKind`.
+
+        ``instance`` is the run of the console that serves the socket: a
+        snapshot leaves with it.
+        """
         snapshot = payload.snapshot
         event = payload.event
         return cls(
             kind=payload.kind.value,
-            snapshot=None if snapshot is None else SnapshotRow.of(snapshot),
+            snapshot=None if snapshot is None else SnapshotRow.of(snapshot, instance),
             event=None if event is None else EventRow.of(event),
             ecg=None,
             notice=payload.notice,

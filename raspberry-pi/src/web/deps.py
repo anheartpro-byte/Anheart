@@ -43,6 +43,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Protocol, final, runtime_checkable
+from uuid import uuid4
 
 from src.clock import Clock
 from src.control_surface import ControlSurface
@@ -56,7 +57,7 @@ from src.service_state import NotOutOfService, ServiceStatus
 from src.telemetry import TelemetryHub
 from src.training.plan import ProfileStore
 from src.training.safety import SafetySupervisor
-from src.training.types import Occupancy, OccupancyRefused
+from src.training.types import Occupancy, OccupancyRefused, SafetyVerdict
 from src.units import MotorRpm
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -458,6 +459,48 @@ def _resolve(link: Path) -> str:
 # =========================================================================
 
 
+class VerdictSource(Protocol):
+    """What ``/api/status`` reads about the verdicts, whoever latched them.
+
+    The supervisor holds its own verdicts. The runtime can latch one on its
+    own behalf (a drive found running, an enable that was not confirmed, a link
+    it gave up on), which the supervisor never sees: a status read from the
+    supervisor alone said "nothing latched" under such a verdict, on a screen
+    that had no live frame to correct it. The console hands in the runtime,
+    whose three reads below cover both. :class:`~src.training.safety.SafetySupervisor`
+    has the same three, about itself alone, and is what is read when nothing
+    else was handed in.
+
+    Reads only, synchronous, no I/O: a request handler calls them between two
+    ticks.
+    """
+
+    @property
+    @abstractmethod
+    def standing(self) -> SafetyVerdict | None:
+        """The verdict in force, or ``None`` when nothing asks for anything."""
+
+    @property
+    @abstractmethod
+    def floor(self) -> SafetyVerdict | None:
+        """The most severe latched verdict, or ``None``."""
+
+    @property
+    @abstractmethod
+    def silenced(self) -> SafetyVerdict | None:
+        """The latched verdict ``GO_SILENT`` stands over, or ``None``."""
+
+
+def new_instance() -> str:
+    """A name for one run of the console: 32 hexadecimal digits, drawn at random.
+
+    Drawn, not derived. A process identifier comes back after a reboot (a
+    service started in the same order gets the same one), and the Pi has no
+    clock that survives one. Nothing but chance tells two runs apart.
+    """
+    return uuid4().hex
+
+
 @dataclass(frozen=True, slots=True)
 class Services:
     """Everything the route handlers are allowed to touch, in one frozen record.
@@ -522,6 +565,24 @@ class Services:
     service: ServiceRestorer | None = None
     """What puts a console out of service back in service (``POST /api/service/restore``);
     ``None`` = this console keeps no restart state and is never out of service."""
+
+    verdicts: VerdictSource | None = None
+    """Where ``/api/status`` reads the verdicts in force, whoever latched them.
+
+    The runtime on the console. ``None``: the supervisor alone is read, which
+    is everything there is when nothing else can latch.
+    """
+
+    instance: str = field(default_factory=new_instance)
+    """What this run of the console calls itself (:func:`new_instance`).
+
+    The same in every ``/api/status`` answer and every telemetry frame for as
+    long as this process lives, and another after any restart: it is how a
+    screen knows that the console it is talking to is not the one that showed
+    it something a moment ago. A restarted console holds nothing of what the
+    previous one had latched. Display data: nothing on the machine reads it
+    back, and it identifies nothing but this run.
+    """
 
 
 class ServiceRestorer(Protocol):
