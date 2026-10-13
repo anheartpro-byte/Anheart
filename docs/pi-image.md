@@ -1404,8 +1404,8 @@ Le Pi doit devenir un appareil fermé (ticket ANH-151) : la console joignable
 seulement depuis le réseau que le Pi crée, rien d'autre qui écoute, pas de
 service sous root là où c'est évitable, un système qu'une coupure ne peut pas
 abîmer, des secrets et des données protégés. Le ticket est coupé en quatre
-lots. Les lots service, TLS et réseau sont implémentés et testés sans Pi.
-Le stockage et les essais matériels sont distingués dans la check-list ci-dessous.
+lots. Les lots service, TLS, réseau et stockage sont implémentés et testés
+sans Pi. Les essais matériels restent distingués dans la check-list ci-dessous.
 
 `scripts/install.sh` installe la console ; `scripts/harden.sh` ferme la
 machine autour d'elle. Le ticket le nommait `scripts/harden.sh` : il est avec
@@ -1487,9 +1487,9 @@ Trois choses à savoir avant d'en écrire une :
   doit pas partir à chaque mise à jour de la console : elle se lance à la
   main, à la mise en service, et `install.sh` n'a pas à la connaître ;
 * **le test de bout en bout lance `harden.sh` sans nom d'étape** (étapes 11
-  et 12), donc les trois étapes par défaut. `network` est explicite et possède
-  son propre test Linux : il ne doit pas couper le réseau lors d'une simple
-  réinstallation ;
+  et 12), donc les trois étapes par défaut. `network` et `storage` sont
+  explicites et possèdent leurs propres tests Linux : ils ne doivent pas
+  couper le réseau ni préparer les montages lors d'une simple réinstallation ;
 * **la console tourne sous un compte sans droits** : ce qu'une étape lui
   donne à lire (un certificat, une clé) doit être lisible par le compte
   `anheart` **et** monté dans son conteneur par l'unité, dont l'image est en
