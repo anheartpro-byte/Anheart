@@ -738,8 +738,9 @@ async def test_a_second_start_gets_a_code_a_fixed_sentence_and_nothing_of_the_fi
         detail=START_PENDING_DETAIL, code=START_PENDING, waiting_request_id=request_of(first)
     )
     # Nothing of the request in the way: not who asked, not when, not the rider's age.
+    body_without_opaque_id = second.text.replace(f'"{request_of(first)}"', '""')
     for leaked in (ALICE, "alice", "StartSession", "subject_age", "41", "at="):
-        assert leaked not in second.text, leaked
+        assert leaked not in body_without_opaque_id, leaked
     waiting = web.surface.pending
     assert isinstance(waiting, StartSession)
     assert waiting.operator == ALICE
