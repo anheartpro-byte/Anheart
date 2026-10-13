@@ -1147,14 +1147,21 @@ export const registerLocalSession = internalMutation({
     const claimedRider = args.userId
       ? ctx.db.normalizeId("users", args.userId)
       : null;
-    // The rider the machine names is kept only if they are an active member
-    // of the machine's organisation; the session is recorded either way.
     const userId =
       claimedRider &&
+      (await ctx.db.get(claimedRider)) !== null &&
       (await organizationRoleOf(ctx, claimedRider, machine.organizationId)) !==
-        null
+        null &&
+      (await hasLaunchRight(ctx, args.machineId, claimedRider))
         ? claimedRider
         : null;
+    const unassigned = args.userId !== undefined && userId === null;
+    const notes = [
+      ...(args.occupancy ? [`Occupancy: ${args.occupancy}`] : []),
+      ...(unassigned
+        ? ["Passenger attribution unavailable at registration"]
+        : []),
+    ];
     const start = startFromAge(
       Date.now(),
       args.sessionAgeMs,
@@ -1168,7 +1175,7 @@ export const registerLocalSession = internalMutation({
       startedAt: start ?? args.startedAt,
       machineStartedAt: start === null ? undefined : args.startedAt,
       channels: ["ECG"],
-      notes: args.occupancy ? `Occupancy: ${args.occupancy}` : undefined,
+      notes: notes.length > 0 ? notes.join("; ") : undefined,
       kind: args.kind,
       origin: "local",
       localRef: args.localRef,
@@ -1178,7 +1185,7 @@ export const registerLocalSession = internalMutation({
       zoneHighBpm: args.zoneHighBpm,
       totalDurationS: args.totalDurationS,
       subjectHrMax: args.subjectHrMax,
-      subjectLabel: args.subjectLabel,
+      subjectLabel: unassigned ? undefined : args.subjectLabel,
       operatorName: args.operatorName,
     });
     await ctx.db.patch(args.machineId, { status: "in_session" });

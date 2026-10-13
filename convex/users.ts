@@ -415,7 +415,9 @@ export const createPatient = mutation({
       (u) => u.email.toLowerCase() === args.email.toLowerCase(),
     );
     if (conflictingUser) {
-      // The account is named only to a caller of its own organisation
+      if (!(await canAccessUser(ctx, conflictingUser._id, currentUser))) {
+        throw new Error("Email already in use");
+      }
       const conflictingRole =
         currentUser.role === "admin"
           ? conflictingUser.role
