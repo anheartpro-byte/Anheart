@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SCRIPT = join(ROOT, "scripts", "release.sh");
+const SCRIPT = process.env.ANHEART_RELEASE_SCRIPT_TEST ?? join(ROOT, "scripts", "release.sh");
 const TEMPLATE = ".github/PULL_REQUEST_TEMPLATE/release.md";
 const MARKER = "<!-- release.sh : nouvelles sections sous cette ligne -->";
 const DATE = "2026-10-07";
@@ -1479,7 +1479,7 @@ test("ANH-195 EX-8 a branch deleted on origin is not taken for a pushed one, and
 
   refuses(
     fx.run(["prepare", ...ALL]),
-    /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 existe déjà dans ce clone sans être sur origin : la supprimer \(git branch -D release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0\), puis relancer/,
+    /la branche release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0 existe déjà dans ce clone sans être sur origin : vérifier git status et préserver tout travail utile ; quitter cette branche \(git switch develop\), puis la supprimer \(git branch -D release\/pi-0\.1\.0_cloud-0\.1\.0_web-0\.1\.0\) et relancer/,
   );
   git(fx.work, "branch", "--quiet", "-D", BRANCH);
   const again = fx.run(["prepare", ...ALL]);
@@ -1675,6 +1675,96 @@ function checklist(text) {
   }
   return items;
 }
+
+for (const signal of ["TERM", "HUP"]) {
+  test(`ANH-212 prepare restores the clone after ${signal} reaches only its shell`, (t) => {
+    const fx = fixture(t);
+    const before = fx.state();
+    const hook = join(fx.work, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, `#!/bin/sh\nparent=$(ps -o ppid= -p "$PPID" | tr -d ' ')\nkill -${signal} "$parent"\n`);
+    chmodSync(hook, 0o755);
+    const result = fx.run(["prepare", ...ALL]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /clone est rendu tel qu'il était/);
+    assertCloneAsBefore(fx, before);
+  });
+}
+
+test("ANH-212 a checked-out abandoned preparation gives usable recovery instructions", (t) => {
+  const fx = fixture(t);
+  git(fx.work, "switch", "--quiet", "-c", BRANCH);
+  const result = fx.run(["prepare", ...ALL]);
+  refuses(result, /git switch develop[\s\S]*git branch -D release\//);
+  assert.match(result.stderr, /préserver tout travail utile/);
+});
+
+test("ANH-212 tag refuses a later main merge whose second parent is not its reviewed develop candidate", (t) => {
+  const fx = prepared(t);
+  fx.mergeIntoMain();
+  git(fx.work, "switch", "--quiet", "-c", "hotfix", "main");
+  commit(fx.work, "ANH-90: hotfix", { "docs/hotfix.md": "hotfix\n" });
+  git(fx.work, "switch", "--quiet", "main");
+  git(fx.work, "merge", "--quiet", "--no-ff", "hotfix", "-m", "Merge hotfix");
+  git(fx.work, "push", "--quiet", "origin", "main");
+  refuses(fx.run(["tag"]), /second parent est le candidat vérifié/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+});
+
+for (const remote of [false, true]) {
+  test(`ANH-212 tag checks an existing version target, remote=${remote}`, (t) => {
+    const fx = prepared(t);
+    const wrong = git(fx.work, "rev-parse", "develop");
+    fx.mergeIntoMain();
+    git(fx.work, "tag", "pi-0.1.0", wrong);
+    if (remote) git(fx.work, "push", "--quiet", "origin", "pi-0.1.0");
+    refuses(fx.run(["tag"]), /tag pi-0\.1\.0 désigne .*pas un commit de release vérifié/);
+    assert.equal(git(fx.work, "tag", "-l"), "pi-0.1.0");
+    assert.equal(git(fx.origin, "tag", "-l"), remote ? "pi-0.1.0" : "");
+  });
+}
+
+test("ANH-212 a correctly placed local tag is not reported as published", (t) => {
+  const fx = prepared(t);
+  fx.mergeIntoMain();
+  git(fx.work, "tag", "pi-0.1.0", "origin/main");
+  refuses(fx.run(["tag"]), /existe seulement dans ce clone/);
+  assert.equal(git(fx.origin, "tag", "-l"), "");
+});
+
+test("ANH-212 a release merged twice before publication keeps verifiable tags", (t) => {
+  const fx = prepared(t);
+  fx.mergeIntoMain();
+  fx.mergeTicket("ANH-212: update release documentation", { "docs/note.md": "QA\n" });
+  fx.mergeIntoMain();
+  const result = fx.run(["tag"]);
+  assert.equal(result.status, 0, result.stderr);
+  const again = fx.run(["tag", "--dry-run"]);
+  refuses(again, /aucune version.*attend son tag/);
+  assert.match(again.stdout, /Tag existant vérifié : pi-0.1.0/);
+});
+
+test("ANH-212 a partial reapply only cancels a revert for its own component", (t) => {
+  const original = 'ANH-70: shared change';
+  const reverted = `Revert "${original}"`;
+  const fx = fixture(t, [...HISTORY,
+    [original, { [RAMP]: "ramp = 2\n", "convex/shared.ts": "export const x = 2;\n" }],
+    [reverted, { [RAMP]: "ramp = 1\n", "convex/shared.ts": "export const x = 1;\n" }],
+    [`Revert "${reverted}"`, { [RAMP]: "ramp = 2\n" }],
+  ]);
+  refuses(fx.run(["prepare", "--cloud", "0.1.0", "--dry-run"]), /revert sans titre de ticket touche cloud/);
+  assert.equal(fx.run(["prepare", "--pi", "0.1.0", "--pi-validation", "bench", "--dry-run"]).status, 0);
+});
+
+test("ANH-212 the release PR explains how ticket reverts remain in the changelog", (t) => {
+  const fx = prepared(t);
+  assert.match(fx.run(["pr"]).body, /tickets annulés restent dans le changelog à côté des lignes de leurs reverts/);
+});
+
+test("ANH-212 the status recovery procedure requires a new result on the same context and SHA", () => {
+  const doc = real("docs/release.md");
+  assert.match(doc, /même nom de contexte.*même SHA/);
+  assert.match(doc, /nouveau statut\s+`success`/);
+});
 
 test("EX-1 each component of this repository carries a prefixed semantic version", () => {
   const version = /^\d+\.\d+\.\d+(-dev)?$/;

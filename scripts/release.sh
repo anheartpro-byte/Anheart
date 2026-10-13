@@ -356,7 +356,7 @@ untitled_reverts() { # composant intervalle
       # Range le revert en cours : il annule un revert encore ouvert, qui sort
       # alors de la liste avec lui, ou il en ouvre un.
       function flush(   i) {
-        if (bare == "") return
+        if (bare == "" || !hit) return
         for (i = n; i >= 1; i--) {
           if (shown[i] != "" && (quoted == full[i] || quoted == stripped[i])) {
             shown[i] = ""
@@ -615,6 +615,7 @@ release_pr_body() { # candidat avis
     die "$TEMPLATE absent de $REMOTE/$DEVELOP"
   fill_template "$TMP/versions.md" "$TMP/sections.md" <"$TMP/template.md" >"$TMP/pr-release.md" ||
     die "$TEMPLATE n'a plus ses deux emplacements release.sh"
+  printf '\nLes lignes de tickets annulés restent dans le changelog à côté des lignes de leurs reverts : vérifier ensemble les deux lignes avant validation.\n' >>"$TMP/pr-release.md"
 }
 
 tag_message() { # composant version
@@ -680,7 +681,7 @@ open_prepare_pr() { # branche titre
 # changement de branche, tout ce qu'il porte de plus vient donc de ce script.
 cleanup() {
   local status=$?
-  trap - EXIT
+  trap - EXIT TERM HUP
   if [ "$status" -ne 0 ] && [ -n "$PREP_BRANCH" ]; then
     git reset --quiet --hard >/dev/null 2>&1 || true
     # shellcheck disable=SC2086
@@ -903,12 +904,14 @@ cmd_prepare() {
   git diff --quiet && git diff --cached --quiet ||
     die "l'arbre de travail a des modifications : les valider ou les retirer d'abord"
   ! git rev-parse -q --verify "refs/heads/$branch" >/dev/null ||
-    die "la branche $branch existe déjà dans ce clone sans être sur $REMOTE : la supprimer (git branch -D $branch), puis relancer"
+    die "la branche $branch existe déjà dans ce clone sans être sur $REMOTE : vérifier git status et préserver tout travail utile ; quitter cette branche (git switch $DEVELOP), puis la supprimer (git branch -D $branch) et relancer"
   # Où revenir si la suite échoue : la branche courante, ou son commit.
   PREP_BACK="$(git symbolic-ref -q --short HEAD)" ||
     PREP_BACK="--detach $(git rev-parse HEAD)"
-  git switch --quiet --no-track -c "$branch" "$ref"
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   PREP_BRANCH="$branch"
+  git switch --quiet --no-track -c "$branch" "$ref"
   # shellcheck disable=SC2086
   for c in CHANGELOG.md $files; do
     cp "$TMP/out/$c" "$c" || die "écriture de $c impossible"
@@ -962,7 +965,7 @@ drop_local_tags() {
 }
 
 cmd_tag() {
-  local ref sha c v level refs now prepared tip
+  local ref sha c v level refs now prepared tip target published
   start tag
   ref="$REMOTE/$MAIN"
   sha="$(sha_of "$ref")"
@@ -970,6 +973,21 @@ cmd_tag() {
   # les tags iraient sur un commit qu'elle n'a pas testé.
   [ -z "$EXPECT_COMMIT" ] || [ "$sha" = "$EXPECT_COMMIT" ] ||
     die "$ref est au commit $sha, pas au commit attendu ($EXPECT_COMMIT) : $MAIN a bougé depuis le lancement. Aucun tag n'est posé."
+  for c in $COMPONENTS; do
+    v="$(current_version "$c" "$ref")"
+    if tag_exists "$c-$v"; then
+      target="$(sha_of "$c-$v")"
+      tip="$(develop_tip_in "$target")" || tip=""
+      { git rev-list --first-parent "$ref" | grep -Fx "$target" >/dev/null; } &&
+        [ "$(current_version "$c" "$target")" = "$v" ] &&
+        [ "$(git rev-list --parents -n 1 "$target" | awk '{print NF}')" -eq 3 ] &&
+        [ "$(git rev-parse "$target^2")" = "$tip" ] ||
+        die "le tag $c-$v désigne $target, pas un commit de release vérifié de $MAIN portant cette version. Aucun autre tag n'est posé."
+      published="$(git ls-remote "$REMOTE" "refs/tags/$c-$v")" || die "lecture du tag $c-$v sur $REMOTE impossible"
+      [ -n "$published" ] || die "le tag $c-$v désigne $target mais existe seulement dans ce clone : il n'est pas publié. Aucun autre tag n'est posé."
+      printf 'Tag existant vérifié : %s-%s @ %s sur %s\n' "$c" "$v" "$target" "$REMOTE"
+    fi
+  done
   collect_pending "$ref"
   # Une fusion en squash couperait main de l'historique de develop : le
   # changelog suivant, calculé depuis ces tags, reprendrait tout depuis le début.
@@ -978,6 +996,9 @@ cmd_tag() {
     die "$ref ne contient pas le commit de $REMOTE/$DEVELOP qui a écrit CHANGELOG.md en dernier (${prepared:-introuvable}). Soit la PR de release a été fusionnée en squash (elle doit l'être par commit de fusion), soit $DEVELOP porte une préparation plus récente : ouvrir et fusionner une PR vers $MAIN (scripts/release.sh pr)"
   tip="$(develop_tip_in "$sha")" ||
     die "$ref ne contient aucun commit de $REMOTE/$DEVELOP"
+  [ "$(git rev-list --parents -n 1 "$sha" | awk '{print NF}')" -eq 3 ] &&
+    [ "$(git rev-parse "$sha^2")" = "$tip" ] ||
+    die "$ref n'est pas une fusion dont le second parent est le candidat vérifié de $DEVELOP ($tip). Les correctifs hors $DEVELOP ne sont pas outillés. Aucun tag n'est posé."
   require_complete_sections "$tip" "ouvrir et fusionner une nouvelle PR vers $MAIN (scripts/release.sh pr), puis relancer scripts/release.sh tag."
   require_green "$sha" "$MAIN"
   # Le commit de fusion de main est neuf : personne ne l'a relu. L'avis porte
