@@ -250,6 +250,7 @@ describe("ANH-133 the stop request gets through whatever the contract", () => {
     ).toEqual(
       http
         .getRoutes()
+        .filter(([path])=>path.startsWith("/api/machine/"))
         .map(([path, method]) => `${method} ${path}`)
         .sort(),
     );

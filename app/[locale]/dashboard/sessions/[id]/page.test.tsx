@@ -34,6 +34,11 @@ vi.mock("@/components/training/TrainingDetailsCard", async () => ({
     "TrainingDetailsCard",
   ),
 }));
+vi.mock("@/components/training/SessionRecordCard", async () => ({
+  SessionRecordCard: (await import("@/test-support/pages")).standIn(
+    "SessionRecordCard",
+  ),
+}));
 
 /** The detail of one session, running or over, of training or of the former recording mode. */
 

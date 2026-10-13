@@ -125,6 +125,7 @@ class Manifest:
     preflight: tuple[Preflight, ...] | None
     geometry: GeometrySnapshot | None = None
     end_observation: EndObservation | None = None
+    files: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)

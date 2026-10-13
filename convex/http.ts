@@ -9,6 +9,7 @@ import type { Id } from "./_generated/dataModel";
 import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
 import { machineHealthSchema } from "./lib/machineHealth";
+import * as records from "./recordHttp";
 import {
   CONTRACT_VERSION,
   machineErrorResponse,
@@ -18,6 +19,31 @@ import {
 } from "./lib/contract";
 
 const http = httpRouter();
+http.route({
+  path: "/api/machine/records/upload-url",
+  method: "POST",
+  handler: records.uploadUrl,
+});
+http.route({
+  path: "/api/machine/records/commit",
+  method: "POST",
+  handler: records.commit,
+});
+http.route({
+  path: "/api/machine/records/status",
+  method: "GET",
+  handler: records.status,
+});
+http.route({
+  path: "/api/records/download",
+  method: "GET",
+  handler: records.download,
+});
+http.route({
+  path: "/api/records/download",
+  method: "OPTIONS",
+  handler: records.options,
+});
 
 /**
  * POST /api/machine/heartbeat
@@ -61,9 +87,16 @@ http.route({
     body = sent as typeof body;
 
     const rawHealth = sent.health;
-    const parsedHealth = rawHealth === undefined ? undefined : machineHealthSchema.safeParse(rawHealth);
+    const parsedHealth =
+      rawHealth === undefined
+        ? undefined
+        : machineHealthSchema.safeParse(rawHealth);
     if (parsedHealth !== undefined && !parsedHealth.success) {
-      return refuse(400, "invalid_request", "Invalid machine health measurements");
+      return refuse(
+        400,
+        "invalid_request",
+        "Invalid machine health measurements",
+      );
     }
 
     // Record the heartbeat

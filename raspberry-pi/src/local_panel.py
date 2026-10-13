@@ -205,6 +205,7 @@ from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
 from src.record.cursor import boot_identity
+from src.record.deposit import RecordDeposit
 from src.record.drive_tap import tap_drive
 from src.record.export import RecordExporter, RecordIo, listing
 from src.record.journal import STOP_TIMEOUT, Activity, Journal
@@ -1412,6 +1413,8 @@ class LocalPanel:
                     "(what was already written stays readable)"
                 )
         await self._ecg.client.disconnect()
+        if self._cloud is not None:
+            await self._cloud.close()
         if self._transport is not None:
             await self._transport.close()
         return detail
@@ -1762,6 +1765,11 @@ def build_panel(
             link=link_health,
             health=health,
             health_context=health_context,
+            deposit=(
+                None
+                if journal is None or owned is None
+                else RecordDeposit(journal.root, clock, owned, owned.upload)
+            ),
         )
     return LocalPanel(
         clock=clock,

@@ -33,6 +33,13 @@ the available card width and h-32, with no nested scroll region.
 
 ## 5. Components
 
+- Session recording card: the existing Card/Badge/Button/Dialog primitives;
+  status, verified count, archive and viewer actions, expandable paged file
+  list. Busy actions show file progress and cancellation; failures stay beside
+  the action. Deletion has an explicit confirmation. Viewer reuses the
+  simulation viewer's existing styles and canvas behavior; it receives
+  authenticated record data through a same-origin opener message, never a URL.
+
 - Card: CardHeader with title/description, CardContent for information;
   existing neutral border, rounded-xl and shadow-sm. Loading uses Skeleton;
   empty data is written explicitly. Static cards have no hover animation.

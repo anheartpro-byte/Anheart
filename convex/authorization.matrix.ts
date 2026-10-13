@@ -1971,6 +1971,47 @@ export const MATRIX: Entry[] = [
     ],
   },
   {
+    id: "recordStorage.list",
+    ref: api.recordStorage.list,
+    kind: "query",
+    build: async (w) => ({sessionId:await addSession(w,{machineId:w.machine,status:"completed",kind:"manual"})}),
+    cases: [
+      {actor:"anonymous",expect:refuse(NOT_AUTH),note:"sign-in required"},
+      {actor:"admin",expect:ok,note:"Anheart administrator"},
+      {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
+      {actor:"manager",scope:"own",expect:ok,note:"assigned manager"},
+      {actor:"patient",scope:"own",expect:empty,note:"raw records require maintenance access"},
+      {actor:"otherManager",scope:"other",expect:empty,note:"unassigned manager"},
+      {actor:"orgBAdmin",scope:"foreign",expect:empty,note:"other organisation"},
+      {actor:"orgBManager",scope:"foreign",expect:empty,note:"other organisation"},
+      {actor:"orgBPatient",scope:"foreign",expect:empty,note:"other organisation"},
+    ],
+  },
+  {
+    id: "recordStorage.remove",
+    ref: api.recordStorage.remove,
+    kind: "mutation",
+    build: async (w) => ({sessionId:await addSession(w,{machineId:w.machine,status:"completed",kind:"manual"})}),
+    cases: [
+      {actor:"anonymous",expect:refuse(NOT_AUTH),note:"sign-in required"},
+      {actor:"admin",expect:ok,note:"Anheart administrator"},
+      {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
+      {actor:"manager",scope:"own",expect:refuse(/Unauthorized/),note:"admin deletion only"},
+      {actor:"patient",scope:"own",expect:refuse(/Unauthorized/),note:"admin deletion only"},
+      {actor:"orgBAdmin",scope:"foreign",expect:refuse(/Session not found/),note:"other organisation"},
+      {actor:"orgBManager",scope:"foreign",expect:refuse(/Unauthorized/),note:"other organisation"},
+    ],
+    onSuccess: async (_res,w,_actor,_scope,args) => {
+      if(typeof args.sessionId!=="string") throw Error("Missing session identifier");
+      const rawId=args.sessionId;
+      const row=await w.t.run(async(ctx)=>{
+        const id=ctx.db.normalizeId("sessions",rawId);
+        return id===null?null:await ctx.db.get(id);
+      });
+      if(!row?.recordDeleted) throw Error("Deposit deletion was not recorded");
+    },
+  },
+  {
     id: "machineHealth.get",
     ref: api.machineHealth.get,
     kind: "query",
@@ -2358,10 +2399,15 @@ function summaryCases(): Case[] {
  * regenerated key) across every route are proven by `machineAuth.test.ts`.
  */
 export const ROUTE_COVERAGE: ReadonlyArray<{
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "OPTIONS";
   path: string;
   tests: string;
 }> = [
+  {method:"POST",path:"/api/machine/records/upload-url",tests:"recordStorage.test.ts (machine authentication, metadata, closed session)"},
+  {method:"POST",path:"/api/machine/records/commit",tests:"recordStorage.test.ts (machine authentication, idempotence, hash mismatch)"},
+  {method:"GET",path:"/api/machine/records/status",tests:"recordStorage.test.ts (machine authentication, session ownership)"},
+  {method:"GET",path:"/api/records/download",tests:"recordStorage.test.ts (Clerk identity, role and organisation)"},
+  {method:"OPTIONS",path:"/api/records/download",tests:"recordStorage.test.ts (CORS preflight contains no data)"},
   { method: "POST", path: "/api/machine/heartbeat", tests: "machineAuth.test.ts; httpRoutes.test.ts" },
   { method: "GET", path: "/api/machine/training/poll", tests: "httpRoutes.test.ts (auto, this machine)" },
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
