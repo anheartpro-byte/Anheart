@@ -958,7 +958,7 @@ describe("EX-5 a machine and an account of two different organisations never com
     ).rejects.toThrow(/Target user is not a gestionnaire/);
   });
 
-  it("names the account that holds an email only to its own organisation", async () => {
+  it("names the account that holds an email only to a caller with access", async () => {
     const w = await seedWorld(modules);
     const create = (actor: Actor, email: string) =>
       as(w.t, actor).mutation(api.users.createPatient, {
@@ -976,6 +976,15 @@ describe("EX-5 a machine and an account of two different organisations never com
     ).rejects.toThrow(
       /Email already in use by an existing user account \(orgBPatient Synthetic\)/,
     );
+    const unrelated = await create(
+      "manager",
+      "otherPatient@example.invalid",
+    ).then(
+      () => "created",
+      (error: Error) => error.message,
+    );
+    expect(unrelated).toMatch(/Email already in use$/);
+    expect(unrelated).not.toMatch(/otherPatient|Synthetic|user account/);
     // Another organisation: refused without a name or a role.
     for (const actor of ["manager", "orgAdmin"] as const) {
       const outcome = await create(actor, "orgBManager@example.invalid").then(

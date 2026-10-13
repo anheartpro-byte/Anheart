@@ -272,7 +272,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `status` | `pending` → `active` → `completed` ou `failed`. |
 | `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
 | `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
-| `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation. |
+| `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation ; une attribution indisponible à l'enregistrement est également tracée. |
 | `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
 | `origin` | `remote` (site) \| `local` (machine). |
 | `profileId`, `profileName`, `zoneLowBpm`, `zoneHighBpm`, `totalDurationS` | Programme lancé. |
@@ -284,6 +284,15 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 
 Index : `by_user`, `by_machine`, `by_machine_and_status`,
 `by_machine_and_local_ref`, `by_started_by`.
+
+Pour une nouvelle séance locale, l'attribution suit les droits courants du roster
+de la machine. Si elle ne peut pas être confirmée, la séance est conservée sans
+passager ni libellé d'identité déclaré, avec la mention
+`Passenger attribution unavailable at registration` dans `notes`. Les données
+de séance restent disponibles selon les droits habituels sur la machine.
+Une retransmission de la même référence locale retrouve la séance déjà créée,
+sans modifier son attribution historique. Cette règle est appliquée dans le
+source d'ANH-180 ; son effet en production dépend du redéploiement ANH-82.
 
 ### `training_telemetry` : télémétrie à 1 Hz
 

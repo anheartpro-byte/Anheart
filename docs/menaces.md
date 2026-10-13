@@ -238,6 +238,12 @@ F4, F5 · Convex · S, T, I, E · Critique, personne indirectement.
 
 **Manquant.** [ANH-132](https://linear.app/anheart/issue/ANH-132/tests-convex-matrice-dautorisation-par-role-et-organisation-contrat) couvre la matrice de toutes les fonctions publiques et routes ; [ANH-122](https://linear.app/anheart/issue/ANH-122/corriger-les-defauts-fonctionnels-du-site-releves-par-la-documentation) les défauts fonctionnels documentés. L'isolation par organisation d'[ANH-114](https://linear.app/anheart/issue/ANH-114/multi-organisation-separer-les-clients-dans-convex-et-le-site) existe dans le source intégré ; comme les autres, son effet sur le service rendu dépend du redéploiement. Le contrôle d'[ANH-177](https://linear.app/anheart/issue/ANH-177/convex-renforcer-deux-controles-dautorisation-men-08-men-17) existe dans le source intégré ; son effet sur le service rendu dépend du redéploiement [ANH-82](https://linear.app/anheart/issue/ANH-82/redeployer-convex-avec-le-nouveau-schema-sans-casser-le-site-en). Les routes héritées de l'ancien mode d'enregistrement ECG sont retirées du source ([ANH-135](https://linear.app/anheart/issue/ANH-135/retirer-lancien-mode-enregistrement-ecg-srcmain-routes-sessiondata)) : [`legacyRecordingRetired.test.ts`](../convex/legacyRecordingRetired.test.ts) vérifie qu'elles répondent 404 ; leur disparition du service rendu dépend aussi du redéploiement ANH-82.
 
+**Complément ANH-180.** La conservation et l'attribution des séances locales
+suivent la règle documentée dans [Convex](convex.md#sessions). Les messages de
+création de dossier respectent les droits de lecture de l'appelant. Les tests de
+matrice et de route accompagnent ces contrôles ; leur effet sur le service rendu
+reste conditionné au redéploiement ANH-82. Cette mise à jour ne clôt pas MEN-08.
+
 **Preuve de fermeture attendue.** Appel anonyme et identifiant de ressource d'une autre machine/organisation refusés pour chaque fonction ; export public ajouté sans cas de matrice fait échouer la gate.
 
 ## MEN-09 URL de fichier Convex exposée
