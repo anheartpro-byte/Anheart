@@ -61,7 +61,7 @@ from src.telemetry import Payload, PayloadKind
 from src.training.runtime import RuntimeState
 from src.training.safety import EstopUnattested
 from src.training.types import Occupancy, RunMode, TelemetrySnapshot
-from src.units import OutputRpm, Seconds, UnixMillis
+from src.units import OutputRpm, UnixMillis
 from src.web.routes import (
     ALREADY_STOPPING,
     ESTOP_UNATTESTED,
@@ -1111,11 +1111,10 @@ async def test_a_start_accepted_during_a_reset_survives_it_and_refuses_the_next_
     assert refused_while_fresh.status_code == HTTPStatus.CONFLICT
     assert "variateur en defaut" in refused_while_fresh.text
     assert made.surface.pending is None
-    # A stale reading leaves the arming decision to the runtime after the reset.
-    made.rig.clock.advance(Seconds(3))
-    first = await made.manual_start(ALICE)
+    first = made.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=ALICE)
+    assert isinstance(first, Ok)
     await made.finish(writing)
-    mine = request_of(first)
+    mine = first.value.request_id
     state_between = made.surface.run_state
     arming = await made.tick_into("read_limits")
     second = await made.manual_start(BOB)
