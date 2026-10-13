@@ -1889,7 +1889,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | 401 | jeton absent ou faux |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
-| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Pour un démarrage, un arrêt, une cible ou un reset, le corps est `{"detail", "code", "waiting_request_id"}` (voir « La boîte aux lettres » plus bas) |
+| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Un refus de la boîte aux lettres pour un démarrage, un arrêt, une cible ou un reset porte `{"detail", "code", "waiting_request_id"}` (voir plus bas). Le refus préalable d'un démarrage pour défaut variateur porte seulement `{"detail"}` |
 | 412 | arrêt d'urgence non attesté depuis ce démarrage (même corps, `code` `estop_unattested`) |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
 | 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
