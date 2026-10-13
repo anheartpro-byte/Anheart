@@ -684,7 +684,10 @@ valide. Le Pi relit toutes les pages du statut `complete`, compare toutes les
 empreintes avec ses fichiers locaux et écrit alors le marqueur adjacent
 `.deposit.json`, lié à `checksums.sha256`. La purge locale existante reste
 subordonnée à ce marqueur et à son délai ; un simple succès HTTP ne l'autorise
-jamais. Des sommes de contrôle réécrites par un compte local compromis ne
+jamais. Après suppression du dossier, la même purge retire son marqueur et
+son curseur `.sync.json` ; un refus de suppression est retenté à la purge
+suivante. Les curseurs des dossiers conservés et les écritures temporaires
+en cours restent intacts. Des sommes de contrôle réécrites par un compte local compromis ne
 constituent pas une preuve d'authenticité de la séance.
 
 Le téléchargement passe par `/api/records/download?fileId=…` avec un JWT Clerk

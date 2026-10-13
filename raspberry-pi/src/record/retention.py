@@ -49,6 +49,9 @@ from src.units import UnixMillis
 MARKER_SUFFIX: Final[str] = ".deposit.json"
 """The "deposited and confirmed" marker is ``<record directory name>.deposit.json``."""
 
+CURSOR_SUFFIX: Final[str] = ".sync.json"
+"""Per-record synchronisation metadata, removed once its record is gone."""
+
 CHECKSUMS: Final[str] = "checksums.sha256"
 
 RECORD_NAME: Final[re.Pattern[str]] = re.compile(r"\d{4}-\d{2}-\d{2}T\d{6}Z_[A-Za-z0-9_-]+")
@@ -161,8 +164,8 @@ def purge(
 ) -> PurgeReport:
     """Remove every record under ``root`` that :func:`purgeable` allows. Never raises.
 
-    The record goes first and its marker after: stopped in between, what is
-    left is a marker with no record, which the next purge removes. The other
+    The record goes first and its sidecars after: stopped in between, what is
+    left is metadata with no record, which the next purge removes. The other
     order could leave a deposited record with no marker, kept for ever.
 
     ``pulse`` is called after each record looked at: removing a long session is
@@ -171,6 +174,7 @@ def purge(
     try:
         candidates = records(root)
         markers = tuple(root.glob(f"*{MARKER_SUFFIX}"))
+        cursors = tuple(root.glob(f"*{CURSOR_SUFFIX}"))
     except OSError:
         return PurgeReport(removed=(), kept=0, failed=())
     removed: list[str] = []
@@ -191,11 +195,15 @@ def purge(
     for marker in markers:
         if not marker.with_name(marker.name.removesuffix(MARKER_SUFFIX)).exists():
             _forget(marker)
+    for cursor in cursors:
+        record_name = cursor.name.removesuffix(CURSOR_SUFFIX)
+        if RECORD_NAME.fullmatch(record_name) and not cursor.with_name(record_name).exists():
+            _forget(cursor)
     return PurgeReport(removed=tuple(removed), kept=kept, failed=tuple(failed))
 
 
 def _forget(marker: Path) -> None:
-    """Remove the marker of a record that is gone. Left for the next purge if refused."""
+    """Remove metadata of a record that is gone. Left for the next purge if refused."""
     try:
         marker.unlink(missing_ok=True)
     except OSError:
