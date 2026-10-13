@@ -141,7 +141,11 @@ class Dashboard:
         if handler is not None:
             return handler(body)
         # Unscripted, it is a dashboard of this console's contract with nothing waiting.
-        return launch_answer() if path == POLL_PATH else ok()
+        if path == POLL_PATH:
+            return launch_answer()
+        if path == "/api/machine/heartbeat":
+            return ok({SERVER_VERSION_FIELD: CONTRACT_VERSION})
+        return ok()
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         return self._reply("GET", path, dict(params or {}))
@@ -1356,14 +1360,23 @@ def test_an_unknown_resolve_error_fails_loudly() -> None:
         describe_resolve_error(cast("ResolveError", object()))
 
 
-async def test_an_unknown_transport_error_fails_loudly(tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", ["/api/machine/heartbeat", "/api/machine/profiles"])
+async def test_an_unknown_transport_error_fails_loudly(tmp_path: Path, path: str) -> None:
     r = rig(tmp_path)
     alien: Reply = Err(cast("CloudError", object()))
-    r.dashboard.answer("/api/machine/heartbeat", alien)
+    r.dashboard.answer(path, alien)
     with pytest.raises(AssertionError):
         await r.step()
     with pytest.raises(AssertionError):
         answer_of(alien)
+
+
+async def test_an_unknown_heartbeat_result_fails_loudly(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/heartbeat", cast("Reply", object()))
+
+    with pytest.raises(AssertionError):
+        await r.step()
 
 
 async def test_a_launch_without_the_rider_s_age_is_refused(tmp_path: Path) -> None:

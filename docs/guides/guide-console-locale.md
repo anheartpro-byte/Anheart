@@ -9,8 +9,8 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 [glossaire](../glossaire.md). Les limites de sécurité sont dans
 [securite.md](../securite.md).
 
-> **Ce qui a été vérifié pour écrire ce guide.** Toutes les captures d'écran et tous
-> les messages cités ont été obtenus le 1er octobre 2026 en lançant la vraie console
+> **Ce qui a été vérifié pour écrire ce guide.** La version initiale des captures et
+> des messages cités a été obtenue le 1er octobre 2026 en lançant la vraie console
 > sur un Mac, **en simulation complète** : variateur simulé, BITalino simulé, caméra
 > simulée, sans tableau de bord distant. Rien dans ce guide n'a été rejoué sur la
 > vraie machine. Les parties qui concernent le vrai Pi sont tirées du code et de
@@ -50,8 +50,11 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > barre latérale, **Serveur** et **Version**, la ligne de détail sous les pastilles et
 > une troisième pastille dans la barre de la vue mobile (§5, §9, §12, §13.10). Il vient
 > du code et des tests automatiques ; il n'a pas été rejoué dans un navigateur, ni face
-> à un vrai tableau de bord. **Aucune capture n'a été reprise** : celles de ce guide
-> montrent encore six pastilles, sans **Serveur** ni **Version**.
+> à un vrai tableau de bord à cette date. Les captures ont depuis été reprises le
+> 14 octobre 2026 : elles montrent **Serveur**, **Version** et **Service**, soit neuf
+> pastilles dans la barre latérale et trois dans la barre mobile. Le serveur des
+> captures est un interlocuteur HTTP local de recette ; le contrat 1.3 a aussi été
+> vérifié séparément contre Convex de développement, sans programmes.
 >
 > L'ajout du 10 octobre 2026 (ticket ANH-78) aligne la liste des défauts du variateur
 > de §13.9 sur la documentation de l'ATV320. Il vient du code et des tests
@@ -60,7 +63,8 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > L'ajout du 10 octobre 2026 (ticket ANH-162) décrit une neuvième pastille,
 > **Service**, le bandeau rouge `CONSOLE HORS SERVICE` et la remise en service de la
 > page Securite (§5). Il vient du code et des tests automatiques ; il n'a pas été
-> rejoué dans un navigateur, et aucune capture ne le montre.
+> rejoué dans un navigateur à cette date. La pastille apparaît dans les captures
+> reprises le 14 octobre ; le bandeau hors service n'est pas illustré ici.
 >
 > L'ajout du 11 octobre 2026 (ticket ANH-190) décrit ce que disent maintenant les
 > notes sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** et **Reset
@@ -1190,8 +1194,7 @@ Repères :
 
 Repères :
 
-1. Les pastilles d'état : six sur la capture, huit depuis le 9 octobre 2026 avec
-   **Serveur** et **Version** (§5).
+1. Les neuf pastilles d'état, dont **Serveur**, **Version** et **Service** (§5).
 2. La navigation complète, avec les capteurs.
 3. Toucher la zone de droite (le contenu) referme le menu.
 
@@ -2341,11 +2344,13 @@ Pour être clair sur ce que ce guide garantit :
 
 ### Annexe : liste des captures
 
-Ces captures datent d'avant le 9 octobre 2026 : leur barre latérale montre six
-pastilles, sans **Serveur** ni **Version**, et la barre de la vue mobile deux pastilles
-au lieu de trois. Trois ont été reprises depuis : `console-07`, le 10 octobre 2026,
-dont la barre latérale montre huit pastilles, puis `console-14` et `console-15`, le
-11 octobre 2026, qui en montrent neuf (avec **Service**).
+Les 21 captures ont été reprises le 14 octobre 2026 sur la console réelle en
+simulation, avec un serveur HTTP local de recette. La barre latérale montre neuf
+pastilles, dont **Serveur**, **Version** et **Service** ; la barre mobile en montre
+trois. Les vues desktop font 1440 pixels de large, avec une hauteur adaptée au
+contenu ; les vues mobiles utilisent une largeur logique de 390 pixels et un DPR
+de 3. Les défauts et déconnexions sont injectés uniquement dans les simulateurs.
+Les reprises antérieures sont détaillées ci-dessous comme historique.
 
 | Fichier | Ce qu'il montre |
 |---|---|

@@ -214,6 +214,7 @@ type CloudError = Unreachable | Refused
 type Document = Mapping[str, object]
 UPLOAD_CHUNK_BYTES: Final[int] = 16 * 1024
 UPLOAD_BYTES_PER_SECOND: Final[int] = 256 * 1024
+MAX_RESPONSE_BYTES: Final[int] = 1024 * 1024
 
 
 class CloudTransport(Protocol):
@@ -278,18 +279,23 @@ class HttpxTransport:
     async def get(
         self, path: str, params: Mapping[str, str] | None = None
     ) -> Result[Document, CloudError]:
-        try:
-            response = await self._client.get(path, params=dict(params or {}))
-        except httpx.HTTPError as error:
-            return Err(Unreachable(f"GET {path}: {error!r}"))
-        return _answer(response)
+        request = self._client.build_request("GET", path, params=dict(params or {}))
+        return await self._send(request)
 
     async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        request = self._client.build_request("POST", path, content=json.dumps(body))
+        return await self._send(request)
+
+    async def _send(self, request: httpx.Request) -> Result[Document, CloudError]:
+        request.headers["Accept-Encoding"] = "identity"
         try:
-            response = await self._client.post(path, content=json.dumps(body))
+            response = await self._client.send(request, stream=True)
+            try:
+                return await _bounded_answer(response)
+            finally:
+                await response.aclose()
         except httpx.HTTPError as error:
-            return Err(Unreachable(f"POST {path}: {error!r}"))
-        return _answer(response)
+            return Err(Unreachable(f"{request.method} {request.url.path}: {type(error).__name__}"))
 
     async def close(self) -> None:
         """Release the connection pool."""
@@ -320,11 +326,29 @@ class HttpxTransport:
             },
             content=paced(),
         )
-        try:
-            response = await self._client.send(request)
-        except httpx.HTTPError as error:
-            return Err(Unreachable(f"Record upload: {type(error).__name__}"))
+        return await self._send(request)
+
+
+async def _bounded_answer(response: httpx.Response) -> Result[Document, CloudError]:
+    encoding = (
+        response.headers["Content-Encoding"].strip().lower()
+        if "Content-Encoding" in response.headers
+        else "identity"
+    )
+    if encoding != "identity":
+        return Err(Unreachable("Unsupported response encoding", response.status_code))
+    if response.is_stream_consumed:
+        if len(response.content) > MAX_RESPONSE_BYTES:
+            return Err(Unreachable("Response exceeds byte limit", response.status_code))
         return _answer(response)
+    body = bytearray()
+    async for chunk in response.aiter_raw(chunk_size=UPLOAD_CHUNK_BYTES):
+        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+            return Err(Unreachable("Response exceeds byte limit", response.status_code))
+        body.extend(chunk)
+    return _answer(
+        httpx.Response(response.status_code, content=bytes(body), headers=response.headers)
+    )
 
 
 def _answer(response: httpx.Response) -> Result[Document, CloudError]:
@@ -812,6 +836,22 @@ class CloudSync:
             )
         began = self._clock.monotonic()
         sent = await self._transport.post("/api/machine/heartbeat", body)
+        match sent:
+            case Ok(document):
+                refusal = server_refusal(document.get(SERVER_VERSION_FIELD))
+                self._link.heartbeat_answered(refusal)
+                if refusal is not None:
+                    self._refuse_server(refusal, None)
+            case Err(error):
+                match error:
+                    case Unreachable():
+                        self._link.heartbeat_failed(error.detail)
+                    case Refused():
+                        self._link.heartbeat_failed(f"HTTP {error.status}")
+                    case _ as unreachable:
+                        assert_never(unreachable)
+            case _ as unreachable:
+                assert_never(unreachable)
         self._last_rtt = elapsed(began, self._clock.monotonic()) if isinstance(sent, Ok) else None
         self._note(sent)
 

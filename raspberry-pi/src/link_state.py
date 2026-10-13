@@ -188,7 +188,15 @@ class LinkHealth:
     and change nothing else.
     """
 
-    __slots__ = ("_born", "_foreign", "_heard", "_said", "_trouble")
+    __slots__ = (
+        "_born",
+        "_foreign",
+        "_heard",
+        "_heartbeat_refusal",
+        "_heartbeat_trouble",
+        "_said",
+        "_trouble",
+    )
 
     def __init__(self, born: Monotonic) -> None:
         """``born``: when the console started; a link is not unreachable before it was tried."""
@@ -197,6 +205,15 @@ class LinkHealth:
         self._said: _Said | None = None
         self._foreign: str | None = None
         self._trouble: _Trouble | None = None
+        self._heartbeat_refusal: str | None = None
+        self._heartbeat_trouble: str = ""
+
+    def heartbeat_answered(self, refusal: str | None) -> None:
+        self._heartbeat_refusal = None if refusal is None else bounded(refusal)
+        self._heartbeat_trouble = ""
+
+    def heartbeat_failed(self, detail: str) -> None:
+        self._heartbeat_trouble = bounded(f"heartbeat : {detail}")
 
     # --- what the link tells it ------------------------------------------
 
@@ -256,8 +273,11 @@ class LinkHealth:
             # What the routes that carry the session last said still stands.
             if said is None:
                 return LinkStatus(LinkState.WAITING, "" if trouble is None else trouble.detail, age)
-            if said.state is LinkState.REACHABLE and self._foreign is not None:
-                return LinkStatus(LinkState.INCOMPATIBLE, self._foreign, age)
+            if said.state is LinkState.REACHABLE:
+                refusal = self._heartbeat_refusal or self._foreign
+                if refusal is not None:
+                    return LinkStatus(LinkState.INCOMPATIBLE, refusal, age)
+                return LinkStatus(said.state, self._heartbeat_trouble, age)
             return LinkStatus(said.state, said.detail, age)
         # They have said nothing recognisable for too long.
         detail = NO_EXCHANGE if trouble is None else trouble.detail

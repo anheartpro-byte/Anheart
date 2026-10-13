@@ -129,6 +129,7 @@ http.route({
       JSON.stringify({
         success: true,
         serverTime: Date.now(),
+        server_contract_version: CONTRACT_VERSION,
       }),
       {
         status: 200,

@@ -1620,7 +1620,7 @@ mesure.
 | Écrit après chaque acquittement | fichier temporaire privé dans le même dossier, `fsync`, puis renommage : un lecteur voit l'ancien curseur ou le nouveau, jamais la moitié d'un |
 | Privé | mode 600, donné à l'appel qui crée le fichier : le curseur et la liste `.sync-baseline.json` sont créés par `create_private` (`src/record/writer.py`), comme tout fichier d'un enregistrement ou posé à côté ([15.7](#157-ce-que-lenregistrement-dit-des-personnes-et-sa-protection)). Le curseur est remplacé à chaque acquittement, ce qu'un fichier écrit une fois ne demande pas : il est donc créé sous un nom à lui, `fsync`, puis renommé sur l'ancien |
 | Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
-| Un curseur dont le dossier n'existe plus | retiré au démarrage suivant de la console, avec tout fichier temporaire laissé par une console tuée pendant une écriture. Rien d'autre n'est retiré à cet endroit : ni le journal hors séance (`logbook/`), ni un marqueur de dépôt, même resté seul (la purge le retire elle-même, [15.5](#155-rétention--rien-nest-purgé-sans-dépôt-confirmé)) |
+| Un curseur dont le dossier n'existe plus | retiré par la purge de rétention, puis retenté à la purge suivante si la suppression est refusée. Le nettoyage au démarrage le retire aussi, avec les fichiers temporaires laissés par une console tuée pendant une écriture. Les fichiers temporaires en cours d'écriture ne sont jamais touchés par la purge périodique ([15.5](#155-rétention--rien-nest-purgé-sans-dépôt-confirmé)) |
 | Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait avant que cette console tourne pour la première fois avec un tableau de bord configuré (version antérieure de ce logiciel, ou pas de clé). Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur), et la console dit alors combien elle en met de côté (plus bas) |
 | Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, ou disque qui a refusé le curseur). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
 
@@ -2396,19 +2396,29 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.1`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.3`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.1`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.3`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. Les deux derniers valent `null` :
   la console n'a encore ni fichier de paramètres médicaux signé ni empreinte de
   configuration.
+* **Chaque réponse de heartbeat** annonce `server_contract_version`. Sans version
+  lisible de la même majeure, la pastille Serveur ne peut pas lire `joignable`,
+  même sans programmes. Une interrogation réussie ne remplace pas cette preuve.
+  Un échec du heartbeat reste indiqué dans le motif même si les autres envois
+  réussissent ; le prochain heartbeat compatible efface ce motif.
+* **Chaque réponse HTTP** est lue en flux avec une limite de 1 Mio, succès et
+  erreurs compris, y compris après un dépôt de fichier. La connexion de réponse
+  est fermée après lecture, refus ou interruption. Le client demande une réponse
+  sans compression et refuse une compression non demandée avant de lire le corps,
+  afin que cette limite borne aussi la mémoire de décodage.
 * **La version logicielle** est lue une fois, au démarrage, dans le fichier
   `raspberry-pi/VERSION` (`/app/VERSION` dans l'image Docker). Le dépôt y porte
   le tag de la dernière version préparée (`pi-1.0.0` aujourd'hui, `pi-0.0.0-dev`
@@ -2516,14 +2526,15 @@ La matrice (version du Pi, majeure de contrat, version Convex minimale) est
 tenue dans [convex.md](convex.md#matrice-de-compatibilité), une seule fois pour
 les deux côtés.
 
-Non fait par ce logiciel :
+Enregistrement et limites :
 
-* Hors séance, l'incompatibilité n'est écrite dans aucun enregistrement :
-  `events.jsonl` n'existe que pendant une séance. Pendant une séance, elle y
-  est consignée comme un événement `warning` dont le détail commence par
+* Hors séance, l'incompatibilité est consignée dans `logbook/events.jsonl`
+  ([15.9](#159-le-journal-hors-séance)). Pendant une séance, elle va dans son
+  `events.jsonl`, comme événement `warning` dont le détail commence par
   `dashboard:` ([15.1](#151-où-et-quand)).
-* Aucun déploiement Convex réel n'a été contacté avec ce contrat : les tests
-  utilisent un transport factice des deux côtés.
+* Le contrat 1.3 a été vérifié contre Convex de développement avec une console
+  en simulation, programmes désactivés : annonce du serveur reçue et état
+  `joignable`. Cette recette ne vaut pas déploiement de production.
 * La pastille **Serveur** dit l'état du lien, pas ce qu'il reste à envoyer :
   le nombre de séances que le tableau de bord n'a pas encore reçues entières
   n'est pas montré sur la page.
@@ -2974,25 +2985,21 @@ regarde que les dossiers d'enregistrement directement sous la racine.
 
 Le curseur de synchronisation d'un enregistrement
 (`<nom du dossier>.sync.json`, [8.1](#81-ce-qui-est-envoyé-vient-du-disque))
-est lui aussi à côté du dossier. La purge ne le retire pas : c'est la
-synchronisation qui retire, à chaque démarrage de la console, tout curseur
-dont le dossier n'existe plus. Les deux ne se gênent pas : la purge retire un
-dossier et son marqueur de dépôt, jamais un curseur ; la synchronisation
-retire un curseur resté seul, jamais un marqueur. Entre une purge et le
-démarrage suivant, le curseur d'un dossier purgé reste seul et ne sert à
-personne ; un enregistrement purgé pendant qu'il attendait d'être envoyé est
-laissé, le journal le dit, et le suivant est envoyé. Elle tient au même endroit un fichier
+est lui aussi à côté du dossier. La purge le retire après suppression du dossier,
+en même temps que son marqueur de dépôt. Un nettoyage refusé est retenté à la purge
+suivante ; les curseurs des dossiers conservés et les écritures temporaires restent
+intacts. La synchronisation nettoie aussi les curseurs orphelins au démarrage.
+Un enregistrement absent pendant qu'il attendait d'être envoyé est laissé,
+le journal le dit, et le suivant est envoyé. Elle tient au même endroit un fichier
 `.sync-baseline.json` : la liste, faite une fois, des enregistrements qui
 étaient là sans curseur avant elle. La purge ne le touche pas ; le supprimer
 ne fait rien envoyer d'ancien (la liste est refaite de ce qui n'a pas de
 curseur à ce moment-là).
 
-> **Aujourd'hui, rien n'écrit ce marqueur.** Le dépôt hors de la machine
-> (Convex Storage, ANH-130) n'existe pas encore et attend un avis juridique.
-> Tant qu'il n'appelle pas `confirm_deposit()`, **aucun enregistrement n'est
-> jamais purgé** et le disque se remplit, jusqu'au refus de départ de 15.4.
-> D'ici là, libérer de la place est un geste manuel : exporter (15.6), puis
-> supprimer le dossier à la main.
+Le dépôt Convex Storage (ANH-130) écrit ce marqueur après vérification de
+l'inventaire distant et des empreintes de tous les fichiers. La rétention locale
+reste subordonnée à cette confirmation et au délai configuré ; les décisions
+d'hébergement et de conservation des données restent suivies séparément.
 
 ### 15.6 Export
 

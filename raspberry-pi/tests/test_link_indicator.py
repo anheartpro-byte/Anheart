@@ -160,7 +160,7 @@ async def test_one_lost_heartbeat_changes_nothing_and_two_in_a_row_read_unreacha
     def heartbeat(_body: Mapping[str, object]) -> Reply:
         nonlocal beats
         beats += 1
-        return DOWN if beats in lost else ok()
+        return DOWN if beats in lost else ok({SERVER_VERSION_FIELD: CONTRACT_VERSION})
 
     r.dashboard.handlers[HEARTBEAT] = heartbeat
     seen: set[LinkState] = set()
@@ -954,6 +954,10 @@ class Faltering:
         if route == POLL_PATH:
             return httpx.Response(
                 200, json={"session": None, SERVER_VERSION_FIELD: CONTRACT_VERSION}
+            )
+        if route == HEARTBEAT:
+            return httpx.Response(
+                200, json={"success": True, SERVER_VERSION_FIELD: CONTRACT_VERSION}
             )
         return httpx.Response(200, json={"success": True})
 

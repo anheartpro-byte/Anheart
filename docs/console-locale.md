@@ -395,7 +395,7 @@ lit `incompatible` tout de suite.
 | `en erreur` | rouge | le tableau de bord est là, et depuis 25 s il ne prend rien de ce que la console envoie : il ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429), ou bien il répond encore à la question d'arrêt d'une séance alors que le heartbeat et les envois échouent | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau. Pendant ce temps le tableau de bord ne reçoit rien de la machine |
 
 La ligne sous les pastilles donne le motif, puis l'âge de la dernière réponse :
-`serveur incompatible (contrat 1.1 vs 2) · derniere reponse il y a 2 s`,
+`serveur incompatible (contrat 1.3 vs 2) · derniere reponse il y a 2 s`,
 `HTTP 401 (unauthorized) · derniere reponse il y a 4 s`,
 `HTTP 500 · derniere reponse il y a 2 s`,
 `HTTP 404 : pas une reponse du tableau de bord`,
@@ -407,6 +407,17 @@ envoie, seuls y entrent le code HTTP, son code stable et les majeures qu'il dit 
 (les quatre premières, puis le nombre des autres) ; sa phrase reste dans le journal de
 la console. L'âge est celui de la dernière réponse reconnue comme venant du tableau de
 bord, question d'arrêt comprise.
+
+Depuis le contrat 1.3, le heartbeat doit annoncer `server_contract_version`.
+Une réponse `{}` en 200 ne donne jamais `joignable`, même lorsque les programmes
+sont désactivés : la console indique un contrat serveur inconnu. Une version
+incompatible annoncée par le heartbeat reste affichée jusqu'à un heartbeat
+compatible ; une interrogation réussie ne l'efface pas.
+
+Si le heartbeat échoue tandis que d'autres échanges réussissent, le motif
+`heartbeat : …` reste visible sous la pastille jusqu'au prochain heartbeat
+compatible. `joignable` peut donc coexister avec ce motif : les autres échanges
+aboutissent, mais le dernier heartbeat n'a pas abouti.
 
 Deux règles suffisent pour la lire :
 
@@ -423,7 +434,8 @@ Deux règles suffisent pour la lire :
 Ce qui en découle :
 
 - **Elle ne clignote pas sur une requête lente.** 25 s valent deux heartbeats et demi
-  (un toutes les 10 s) : un heartbeat perdu ne se voit pas, deux de suite si. Pendant
+  (un toutes les 10 s) : un heartbeat perdu conserve la couleur mais affiche son
+  motif d'échec ; deux pertes de suite sans autre succès changent l'état. Pendant
   ces 25 s la pastille garde son état et c'est l'âge de la dernière réponse, sur la
   ligne du dessous, qui grandit. Le retour, lui, est immédiat : la première réponse qui
   prend ce que la console envoie la remet à `joignable`.
