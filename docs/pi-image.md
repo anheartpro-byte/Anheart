@@ -574,10 +574,10 @@ main, vérifier qu'aucune console ne tourne : `sudo docker ps --all`.
 
 **Aucun outil de banc ou de diagnostic (`bench_console.py`,
 `bench_comm_latency.py`, `probe_atv320.py`, `scan_modbus.py`, SoMove) sur une
-machine dont le service tourne.** Le verrou qui interdit deux programmes sur le
-câble du variateur est un fichier du conteneur de la console : un outil lancé
-sur le Pi lui-même, ou dans un autre conteneur, **n'est pas refusé**
-([README du Pi](../raspberry-pi/README.md#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur)).
+machine dont le service tourne.** Le service partage désormais le verrou du
+câble avec l'hôte. Un outil Anheart coopérant est refusé avant d'ouvrir le
+transport ; un outil tiers qui ignore ce verrou reste hors de cette garantie
+([README du Pi](../raspberry-pi/README.md#sur-un-raspberry-pi-installé--le-verrou-est-partagé)).
 
 ```sh
 sudo systemctl stop anheart
@@ -1223,7 +1223,7 @@ nouvelles versions.
 | Les serveurs de temps sont ceux de Debian, sur Internet. Un site qui ferme la sortie NTP (UDP 123) laisse l'horloge « NON FIABLE » : y déclarer le serveur de temps du site (`/etc/chrony/sources.d/`) | à décider par site |
 | Le contrôle pré-vol qui regroupe l'horloge avec les autres contrôles, et l'horloge dans le battement de cœur vers le tableau de bord | ANH-142, ANH-148 |
 | Mises à jour à distance | ANH-116, ANH-168, ANH-169 |
-| Le verrou du câble du variateur (`/tmp/anheart-drive.lock`) est celui du conteneur : un outil de banc lancé sur le Pi **hors** du conteneur n'est pas refusé par la console. D'ici là, la règle est pour la personne : **aucun outil de banc ou de diagnostic tant que le service tourne** ([section 4](#outils-de-banc-et-de-diagnostic--arrêter-le-service-dabord)). Les sources de ces outils arrivent sur le Pi avec le dossier copié, mais rien n'y est installé pour les lancer (Python 3.11 du système, aucun environnement), et ils ne sont pas dans l'image | à concevoir (verrou partagé entre le Pi et le conteneur, ou outils lancés dans le conteneur), dans la suite de ANH-74 ; **condition avant de relier au vrai variateur une console lancée par ce service** |
+| Le service partage `/tmp/anheart-drive.lock` avec l'hôte par bind du même inode. Les outils Anheart membres de dialout sont exclus pendant toute la possession du câble, reconnexions comprises. Un conteneur lancé à la main doit recevoir le même montage | logiciel livré par ANH-224 ; contention et vrai pilote à éprouver au banc ([procédure](pi-stockage.md)) |
 | Un `systemctl start anheart` à la main, ou la relance après la mort du client Docker, arrête une console trouvée en marche sans lui demander si elle est au repos ([section 4](#une-seule-console-à-la-fois)) | limite assumée ; `scripts/install.sh`, lui, pose la question |
 | Une coupure franche de l'alimentation n'est pas simulée par la CI (l'étape 8 est un arrêt ordonné) | une personne avec le matériel, [section 6](#6-installer-un-vrai-raspberry-pi), étape 6 |
 | Raspberry Pi OS 12 est la série « Legacy » ; la série courante est Debian 13. En changer se fait en [section 7](#7-mettre-à-jour-changer-une-version-figée) | décision du chef de projet |
@@ -1404,8 +1404,8 @@ Le Pi doit devenir un appareil fermé (ticket ANH-151) : la console joignable
 seulement depuis le réseau que le Pi crée, rien d'autre qui écoute, pas de
 service sous root là où c'est évitable, un système qu'une coupure ne peut pas
 abîmer, des secrets et des données protégés. Le ticket est coupé en quatre
-lots. Les lots service, TLS et réseau sont implémentés et testés sans Pi.
-Le stockage et les essais matériels sont distingués dans la check-list ci-dessous.
+lots. Les lots service, TLS, réseau et stockage sont implémentés et testés
+sans Pi. Les essais matériels restent distingués dans la check-list ci-dessous.
 
 `scripts/install.sh` installe la console ; `scripts/harden.sh` ferme la
 machine autour d'elle. Le ticket le nommait `scripts/harden.sh` : il est avec
@@ -1465,8 +1465,8 @@ quand son logiciel est écrit.
 | Point d'accès Wi-Fi dédié à la console, liaison Internet séparée, aucun routage entre les deux | **logiciel fait**, radio à essayer | `harden.sh network`, [procédure](pi-reseau.md) | parseur NetworkManager et paquets dans deux espaces réseau Linux |
 | Pare-feu ; SSH par clés sur le réseau de la console seulement ; compte de service privé de sudo | **logiciel fait**, scan au banc à faire | même commande | nftables, sshd, visudo et tests TCP/routage Linux |
 | TLS sur la console, certificat propre au Pi ; HTTP clair refusé hors boucle locale | **logiciel fait**, tablette à essayer | certificat monté en lecture seule, contrôle de santé HTTPS | tests TLS sur vraies sockets et contrôle de santé avec autorité distincte refusée |
-| Système de fichiers racine en lecture seule, `/var/lib/anheart` persistant, journal persistant et borné | **non fait** (lot lecture seule) ; le journal persistant et borné existe déjà ([Le journal du système](#le-journal-du-système)) | une étape de `harden.sh` | |
-| Chiffrement du volume des données, ou purge après dépôt confirmé | **non fait** (lot lecture seule) ; dépend aussi de l'avis sur les données de santé (ANH-172) | | |
+| Racine avec overlay RAM, données et journal persistants et bornés | **logiciel fait**, boot Pi et coupure à essayer | `harden.sh storage`, [procédure](pi-stockage.md) | vraie couche overlay et données persistantes sous Linux |
+| Chiffrement du volume des données | **logiciel fait** pour un volume LUKS2 existant ; clé en fichier et anciennes copies : limites explicites | [ANH-224](pi-stockage.md), décision matérielle et avis ANH-172 encore nécessaires | bon/mauvais déverrouillage, copie, remount sur volume jetable |
 | Essai final sur un Pi réel | **non fait** | [essai du durcissement](#essai-du-durcissement--à-faire-au-banc) | |
 
 ### Ajouter une étape
@@ -1487,9 +1487,9 @@ Trois choses à savoir avant d'en écrire une :
   doit pas partir à chaque mise à jour de la console : elle se lance à la
   main, à la mise en service, et `install.sh` n'a pas à la connaître ;
 * **le test de bout en bout lance `harden.sh` sans nom d'étape** (étapes 11
-  et 12), donc les trois étapes par défaut. `network` est explicite et possède
-  son propre test Linux : il ne doit pas couper le réseau lors d'une simple
-  réinstallation ;
+  et 12), donc les trois étapes par défaut. `network` et `storage` sont
+  explicites et possèdent leurs propres tests Linux : ils ne doivent pas
+  couper le réseau ni préparer les montages lors d'une simple réinstallation ;
 * **la console tourne sous un compte sans droits** : ce qu'une étape lui
   donne à lire (un certificat, une clé) doit être lisible par le compte
   `anheart` **et** monté dans son conteneur par l'unité, dont l'image est en

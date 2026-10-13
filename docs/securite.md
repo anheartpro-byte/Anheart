@@ -1621,8 +1621,10 @@ console), et les trois scripts qu'une personne lance avec `sudo`.
   que les nœuds du câble et du capteur vont et viennent ; il n'en ouvre que
   trois classes. Dans ces classes, tout adaptateur série USB du groupe
   `dialout` lui est ouvert, pas seulement celui du variateur.
-* **Les enregistrements ne sont toujours pas chiffrés** : les droits de
-  fichiers ne valent que sur la machine en marche
+* **Le chiffrement dépend de la mise en service du volume LUKS2** : les droits
+  de fichiers seuls ne valent que sur la machine en marche. Le lot stockage
+  chiffre le volume, mais une clé gardée sur la même carte et les anciennes
+  copies en clair restent des limites explicites ([procédure](pi-stockage.md))
   ([menaces.md](menaces.md#men-18-enregistrements-de-séance-non-chiffrés-sur-le-disque-du-pi)).
 * **Une personne qui a `sudo` sur le Pi peut tout.** Ce que le ticket prévoit
   pour `sudo` et pour SSH est dans le lot du pare-feu.

@@ -95,7 +95,7 @@ fichier de verrou**. Sur un poste de développement ou un banc, ce sont tous les
 programmes de l'hôte, et tout ce qui suit s'applique. **Sur un Raspberry Pi
 installé par `scripts/install.sh`, ce n'est pas tout l'hôte** : la console y
 tourne dans un conteneur, lire d'abord
-[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur).
+[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-partagé).
 
 La console, le banc,
 la mesure de latence, `probe_atv320.py` et `scan_modbus.py` prennent le meme
@@ -129,27 +129,23 @@ retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
 cela n'autorise aucune reprise automatique du mouvement. Cette protection
 concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
 
-### Sur un Raspberry Pi installé : le verrou est celui du conteneur
+### Sur un Raspberry Pi installé : le verrou est partagé
 
 Sur un Pi installé par `scripts/install.sh`, la console tourne dans un
-conteneur Docker. `/tmp/anheart-drive.lock` y est le fichier **du conteneur**,
-pas celui du Pi.
+conteneur Docker. Le service monte le fichier hôte `/tmp/anheart-drive.lock`
+au même chemin dans le conteneur : les outils voient le même inode.
 
 - **Dans le conteneur**, la console tient le verrou comme décrit plus haut,
   dès qu'elle ouvre le câble (`MOTOR_BACKEND=serial`). En simulation elle
   n'ouvre aucun câble et ne prend aucun verrou.
-- **Un outil lancé sur le Pi lui-même, ou dans un second conteneur, n'est pas
-  refusé par ce verrou** : il ouvre un autre fichier du même nom, et le refus
-  `drive cable already owned` ne se produit pas.
-- Ce qui limite encore un second programme, d'après la lecture du code et
-  **sans essai entre le Pi et le conteneur** : le port série est ouvert en
-  exclusivité (pymodbus le demande à pyserial, qui pose un verrou `flock` sur
-  `/dev/ttyUSB0`, que le conteneur partage par son montage de `/dev`), et avec
-  une adresse `ftdi://` la bibliothèque USB réclame l'interface de
-  l'adaptateur. **Ni l'un ni l'autre n'est tenu entre une fermeture du port et
-  sa réouverture** : pymodbus ferme le port à chaque absence de réponse du
-  variateur et le rouvre à la transaction suivante. Un autre programme peut
-  prendre le câble dans cet intervalle.
+- Un outil Anheart lancé sur l'hôte et membre de `dialout` prend ce même
+  verrou et est refusé tant que la console le tient, même pendant une
+  reconnexion. Un conteneur lancé à la main doit recevoir le même bind ;
+  cette garantie ne vaut pas pour un conteneur sans ce montage.
+- Le pré-démarrage conserve l'inode et son contenu, refuse les liens et
+  protège le fichier contre le nettoyage de `/tmp`. Ne jamais le supprimer
+  pour forcer une acquisition. La preuve Linux sans matériel et la procédure
+  sont dans [pi-stockage.md](../docs/pi-stockage.md).
 
 **La règle, pour la personne : aucun outil de banc ou de diagnostic
 (`bench_console.py`, `bench_comm_latency.py`, `probe_atv320.py`,

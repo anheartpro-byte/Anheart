@@ -37,7 +37,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 import pytest
@@ -230,6 +230,7 @@ STUBBED: Final[tuple[str, ...]] = (
     "sleep",
     "journalctl",
     "systemctl",
+    "systemd-tmpfiles",
     "docker",
     "curl",
 )
@@ -395,6 +396,7 @@ def machine(tmp_path: Path) -> Machine:
     for source in (INSTALLER, HARDENER, UNINSTALLER, SERVICE_UNIT):
         shutil.copy(source, tree / "scripts" / source.name)
     shutil.copy(BIND_HELPER, tree / "scripts" / "pi" / BIND_HELPER.name)
+    shutil.copy(CONSOLE / "scripts" / "pi" / "prepare_drive_lock.py", tree / "scripts" / "pi")
     for source in (ENV_TEMPLATE, VERSION_FILE):
         shutil.copy(source, tree / source.name)
     tools = tmp_path / "bin"
@@ -1094,7 +1096,8 @@ def test_the_unit_stops_the_console_on_its_controlled_stop_and_never_loops_on_a_
         assert "/usr/bin/docker stop -t 60 anheart" in step
     # The one other step binds the sensor's serial node: it never talks to Docker.
     assert [step for step in around if step not in touching] == [
-        "-/usr/local/lib/anheart/bind-bitalino"
+        "-/usr/local/lib/anheart/bind-bitalino",
+        "/usr/bin/python3 /usr/local/lib/anheart/prepare-drive-lock.py",
     ]
 
 
@@ -1699,6 +1702,9 @@ def test_anh151_ex4_the_console_is_given_the_account_and_nothing_more() -> None:
     # Memory, bounded, and nothing in it can be executed.
     assert _options("--tmpfs") == [CONSOLE_TMP]
     assert _options("--network") == ["host"]
+    assert _options("--mount") == [
+        "type=bind,source=/tmp/anheart-drive.lock,target=/tmp/anheart-drive.lock"
+    ]
     # Its data, the relay's socket, and the machine's device nodes: nothing else is mounted.
     assert _options("--volume") == [
         "/dev:/dev",
@@ -1914,10 +1920,9 @@ def test_anh151_ex4_the_unit_says_what_stays_root_and_claims_nothing_else() -> N
     assert _directive("NoNewPrivileges") == ["yes"]
     assert _directive("ProtectSystem") == ["strict"]
     assert _directive("ProtectHome") == ["yes"]
-    # The unit's processes write nowhere but /run/anheart: no path is opened to
-    # them, and none is needed, because the daemon mounts the console's data.
-    for absent in ("ReadWritePaths", "User", "Group", "DynamicUser", "CapabilityBoundingSet"):
+    for absent in ("User", "Group", "DynamicUser", "CapabilityBoundingSet"):
         assert _directive(absent) == [], f"{absent}= would say the Docker client is not root"
+    assert _directive("ReadWritePaths") == [str(PurePosixPath("/", "tmp", "anheart-drive.lock"))]
     # Not narrower, and the reason is written next to it.
     assert _directive("NotifyAccess") == ["all"]
     text = _read(SERVICE_UNIT)
@@ -1991,9 +1996,10 @@ def test_anh151_ex4_the_sensor_serial_node_is_bound_on_the_machine_before_the_co
     # The unit runs it after it has stopped a console left behind, and before
     # its own; a failure of this step never prevents the start.
     before = _directive("ExecStartPre")
-    assert len(before) == 2
+    assert len(before) == 3
     assert "/usr/bin/docker stop -t 60 anheart" in before[0]
     assert before[1] == "-/usr/local/lib/anheart/bind-bitalino"
+    assert before[2] == "/usr/bin/python3 /usr/local/lib/anheart/prepare-drive-lock.py"
     assert 'readonly BIND_HELPER="$ROOT/usr/local/lib/anheart/bind-bitalino"' in _read(INSTALLER)
     # The image no longer tries: it has no right to.
     entrypoint = [line.strip() for line in _read(ENTRYPOINT).splitlines()]
