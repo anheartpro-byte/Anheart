@@ -15,7 +15,11 @@ def prepare() -> None:
     path = Path(root) / "tmp" / "anheart-drive.lock"
     user = pwd.getpwnam("anheart").pw_uid
     group = grp.getgrnam("dialout").gr_gid
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o660)
+    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "r+b", buffering=0) as stream:
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:

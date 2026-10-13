@@ -52,7 +52,10 @@ refusés. Si la console ou Docker tourne, rien n'est préparé.
 La première application copie les données existantes des services arrêtés
 avec leurs attributs, puis prépare les montages systemd, `crypttab`, la
 configuration overlayroot et régénère les initramfs. Elle ne démarre aucun
-service. Elle ne supprime aucune copie d'origine : ces copies restent sur
+service. Chaque copie terminée est synchronisée avant l'écriture atomique
+d'un reçu de migration : un nouvel appel reprend une copie inachevée, mais
+ne recopie jamais les anciens fichiers par-dessus les données chiffrées
+déjà utilisées. Elle ne supprime aucune copie d'origine : ces copies restent sur
 la racine inférieure, même après qu'un bind les masque. **Le chiffrement des
 nouveaux enregistrements ne chiffre pas rétroactivement ces anciennes
 copies.** Leur retrait ou l'effacement de l'ancien support exige une

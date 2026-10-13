@@ -92,8 +92,19 @@ for item in console docker journal; do
     esac
     [ ! -L "$store/$item" ] && [ ! -L "$source" ] || die 'refusing a symbolic link in storage paths'
     install -d -m 0700 "$store/$item"
-    if [ -d "$source" ] && [ "$(stat -Lc '%d:%i' "$source")" != "$(stat -Lc '%d:%i' "$store/$item")" ]; then
-        rsync -aHAX --numeric-ids "$source/" "$store/$item/"
+    migrated="$store/.migrated-$item"
+    if [ -e "$migrated" ] || [ -L "$migrated" ]; then
+        [ -f "$migrated" ] && [ ! -L "$migrated" ] && [ "$(cat "$migrated")" = "$identity" ] || die 'invalid migration receipt'
+    else
+        if [ -d "$source" ] && [ "$(stat -Lc '%d:%i' "$source")" != "$(stat -Lc '%d:%i' "$store/$item")" ]; then
+            rsync -aHAX --numeric-ids "$source/" "$store/$item/"
+        fi
+        sync -f "$store/$item"
+        receipt="$(mktemp "$store/.migration.XXXXXX")"
+        printf '%s\n' "$identity" > "$receipt"
+        sync -f "$receipt"
+        mv "$receipt" "$migrated"
+        sync -f "$store"
     fi
 done
 chown -Rh anheart:anheart "$store/console"
