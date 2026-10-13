@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "../globals.css";
 import { NextIntlClientProvider } from "next-intl";
@@ -61,6 +62,23 @@ export default async function LocaleLayout({
 
   return (
     <html lang={locale} suppressHydrationWarning>
+      <head>
+        {process.env.NODE_ENV === "development" &&
+          process.env.NEXT_PUBLIC_DISABLE_REACT_DEVTOOLS !== "1" && (
+            <>
+              <Script
+                src="https://unpkg.com/react-grab@0.2.0/dist/index.global.js"
+                crossOrigin="anonymous"
+                strategy="beforeInteractive"
+              />
+              <Script
+                src="https://unpkg.com/react-scan@0.5.7/dist/auto.global.js"
+                crossOrigin="anonymous"
+                strategy="beforeInteractive"
+              />
+            </>
+          )}
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { machineHealthValidator, healthMeasurementsValidator } from "./lib/machineHealth";
 
 /**
  * What the machine is doing right now, as the Pi's local panel reports it with
@@ -264,6 +265,8 @@ export default defineSchema({
     softwareVersion: v.optional(v.string()),
     contractVersion: v.optional(v.string()),
     lastVersionSeenAt: v.optional(v.number()),
+    health: v.optional(machineHealthValidator),
+    healthUpdatedAt: v.optional(v.number()),
   })
     .index("by_api_key", ["apiKey"])
     .index("by_apiKeySelector", ["apiKeySelector"])
@@ -413,6 +416,19 @@ export default defineSchema({
     .index("by_session_and_seq", ["sessionId", "seq"])
     .index("by_organization", ["organizationId"]),
 
+  machine_health_history: defineTable({
+    machineId: v.id("machines"),
+    organizationId,
+    bucket: v.number(),
+    updatedAt: v.number(),
+    samples: v.number(),
+    min: healthMeasurementsValidator,
+    max: healthMeasurementsValidator,
+    last: machineHealthValidator,
+  })
+    .index("by_machine_and_bucket", ["machineId", "bucket"])
+    .index("by_bucket", ["bucket"]),
+
   // Machine Heartbeats - For monitoring (can be cleaned up periodically)
   machine_heartbeats: defineTable({
     machineId: v.id("machines"),
@@ -420,5 +436,7 @@ export default defineSchema({
     batteryLevel: v.optional(v.number()),
     wifiStrength: v.optional(v.number()),
     activeSessionId: v.optional(v.id("sessions")),
-  }).index("by_machine_and_timestamp", ["machineId", "timestamp"]),
+  })
+    .index("by_machine_and_timestamp", ["machineId", "timestamp"])
+    .index("by_timestamp", ["timestamp"]),
 });

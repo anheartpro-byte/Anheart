@@ -111,6 +111,7 @@ from src.contract import (
     unsupported_refusal,
 )
 from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
+from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.record_uplink import (
@@ -539,10 +540,14 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_health",
+        "_health_context",
+        "_incidents_open_high",
         "_incompatible",
         "_last_heartbeat",
         "_last_poll",
         "_last_refused",
+        "_last_rtt",
         "_last_status",
         "_link",
         "_next_profiles",
@@ -575,6 +580,8 @@ class CloudSync:
         record_degraded: Callable[[], bool] | None = None,
         records: RecordSource | None = None,
         link: LinkHealth | None = None,
+        health: HealthWatch | None = None,
+        health_context: Callable[[], HealthContext] = HealthContext,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -584,6 +591,10 @@ class CloudSync:
         says of the link is kept for the console's page; ``None``: one of this object's
         own."""
         self._clock: Clock = clock
+        self._health: HealthWatch | None = health
+        self._health_context: Callable[[], HealthContext] = health_context
+        self._last_rtt: Seconds | None = None
+        self._incidents_open_high: int | None = None
         self._link: LinkHealth = LinkHealth(clock.monotonic()) if link is None else link
         self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
@@ -723,7 +734,18 @@ class CloudSync:
             # ``record_degraded`` in the wire's own spelling. Top level, never
             # inside ``live``: that object is validated field by field.
             body["recordDegraded"] = self._record_degraded()
+        if self._health is not None:
+            body["health"] = dict(
+                await self._health.sample(
+                    snapshot,
+                    self._health_context(),
+                    self._last_rtt,
+                    self._incidents_open_high,
+                )
+            )
+        began = self._clock.monotonic()
         sent = await self._transport.post("/api/machine/heartbeat", body)
+        self._last_rtt = elapsed(began, self._clock.monotonic()) if isinstance(sent, Ok) else None
         self._note(sent)
 
     async def _push_profiles(self, now: Monotonic) -> None:
@@ -769,6 +791,12 @@ class CloudSync:
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
+        incidents = polled.value.get("incidents_open_high")
+        self._incidents_open_high = (
+            incidents
+            if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0
+            else None
+        )
         if launch is None:
             return
         submitted = self._surface.submit_start(

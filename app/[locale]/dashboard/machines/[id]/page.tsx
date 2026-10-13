@@ -48,6 +48,7 @@ import {
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
+import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
@@ -310,6 +311,9 @@ export default function MachineDetailPage({
       )}
 
       {/* Launch rights - admins and gestionnaires of this machine */}
+      {canManage && !machine.isDeleted && (
+        <MachineHealthCard machineId={machineId} />
+      )}
       {canManage && !machine.isDeleted && (
         <LaunchRightsCard machineId={machineId} isAdmin={isAdmin} />
       )}

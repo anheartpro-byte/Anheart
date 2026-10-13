@@ -181,6 +181,22 @@ Recherche ; l'admin peut afficher les machines supprimées.
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
 
+La carte **Santé de la machine** est visible par les administrateurs et les
+gestionnaires autorisés. Elle présente le dernier rapport du Pi : température,
+charge et mémoire, espace disque, temps depuis démarrage, horloge, aller-retour
+Convex, liaisons et batterie, état thermique, enregistrements en attente et
+dégradés, hors-service après redémarrages, préflight, incidents et compteurs.
+Une source indisponible est écrite « Indisponible ». Après 30 secondes sans
+rapport, les valeurs sont explicitement historiques. Les avertissements portent
+sur CPU > 70 °C, disque < 1 Gio, horloge > 5 s en valeur absolue, batterie < 30 %,
+liaison coupée, enregistrement dégradé ou état hors service.
+
+L'historique sur 24 heures montre température et disque par périodes de cinq
+minutes (minimum, maximum, dernière valeur), avec un tableau accessible sous
+« Voir les mesures ». Une absence de mesure n'est pas interpolée ni remplacée
+par zéro. La batterie, le thermique, le préflight et les incidents restent
+inconnus lorsque leurs producteurs ne fournissent pas encore ces mesures.
+
 Admin et gestionnaire de la machine.
 
 | Bloc | Contenu | Qui agit |

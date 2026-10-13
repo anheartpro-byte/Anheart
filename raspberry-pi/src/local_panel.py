@@ -156,6 +156,7 @@ from src.cloud_sync import (
     SessionKind,
     SessionListener,
     StartedSession,
+    end_is_failure,
 )
 from src.contract import SoftwareVersion, read_software_version
 from src.control_surface import (
@@ -176,6 +177,7 @@ from src.ecg_pipeline import (
     load_treatment,
     treat_off_loop,
 )
+from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     DEFAULT_HR_CRITICAL_BPM,
@@ -285,6 +287,7 @@ from src.wall_clock import (
     WallClockProbe,
     WallClockState,
     WallClockWatch,
+    clock_offset_s,
     detail_of,
     is_trusted,
     system_probe,
@@ -762,6 +765,7 @@ class LocalPanel:
         "_config",
         "_drive",
         "_ecg",
+        "_health",
         "_hub",
         "_last_measured",
         "_listener",
@@ -805,9 +809,11 @@ class LocalPanel:
         recorder: SessionRecorder | None = None,
         wall_clock: WallClockWatch | None = None,
         service: ServiceDesk | None = None,
+        health: HealthWatch | None = None,
     ) -> None:
         self._clock: Clock = clock
         self._watchdog: ServiceWatchdog = watchdog
+        self._health: HealthWatch | None = health
         self._service: ServiceDesk | None = service
         self._stalled_at_stop: bool = False
         # Set once the control loop has completed a tick, so read the drive.
@@ -956,6 +962,9 @@ class LocalPanel:
         if sim_ecg is not None:
             sim_ecg.set_motor_rpm(self._last_measured)
         snapshot = await self._runtime.tick(now)
+        if self._health is not None:
+            reason = self._runtime.end_reason
+            self._health.observe(snapshot, None if reason is None else end_is_failure(reason))
         self._last_measured = snapshot.measured.motor_rpm
         withdrawn = self._runtime.take_withdrawn_target()
         if withdrawn is not None:
@@ -991,6 +1000,8 @@ class LocalPanel:
 
     def _begin_record(self, request: SessionRequest) -> None:
         """A session was just armed: open its record."""
+        if self._health is not None:
+            self._health.started()
         if self._recorder is not None:
             self._recorder.begin(request)
 
@@ -1564,6 +1575,7 @@ def build_panel(
     wall_clock: WallClockProbe | None = None,
     notify_socket: str | None = None,
     service: ServiceDesk | None = None,
+    health: HealthWatch | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -1720,6 +1732,17 @@ def build_panel(
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
     if config.cloud is not None:
+        if health is None:
+            health = HealthWatch(None if journal is None else journal.root)
+
+        def health_context() -> HealthContext:
+            return HealthContext(
+                bitalino_connected=ecg.status().connected,
+                clock_offset_s=None if watch is None else clock_offset_s(watch.current()),
+                record_degraded=None if recorder is None else recorder.is_degraded(),
+                restart_loop=None if service is None else service.status().out_of_service,
+            )
+
         if transport is None:
             owned = HttpxTransport(config.cloud)
             link: CloudTransport = owned
@@ -1737,6 +1760,8 @@ def build_panel(
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
             link=link_health,
+            health=health,
+            health_context=health_context,
         )
     return LocalPanel(
         clock=clock,
@@ -1754,6 +1779,7 @@ def build_panel(
         sensors=sensor_hub,
         presence=presence,
         listener=cloud,
+        health=health,
         cloud=cloud,
         transport=owned,
         recorder=recorder,

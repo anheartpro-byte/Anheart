@@ -16,7 +16,8 @@
     "coverage:convex": "vitest run --config vitest.convex.config.mts --coverage",
     "coverage:site": "vitest run --config vitest.site-coverage.config.mts --coverage",
     "test:dependency-security": "node --test scripts/ci/braces-depth-guard.test.mjs",
-    "test:release": "node --test scripts/release.test.mjs"
+    "test:release": "node --test scripts/release.test.mjs",
+    "doctor": "npx react-doctor@0.9.18"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.10",

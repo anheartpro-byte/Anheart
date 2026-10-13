@@ -8,6 +8,7 @@ import {
 import type { Id } from "./_generated/dataModel";
 import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
+import { machineHealthSchema } from "./lib/machineHealth";
 import {
   CONTRACT_VERSION,
   machineErrorResponse,
@@ -59,6 +60,12 @@ http.route({
     }
     body = sent as typeof body;
 
+    const rawHealth = sent.health;
+    const parsedHealth = rawHealth === undefined ? undefined : machineHealthSchema.safeParse(rawHealth);
+    if (parsedHealth !== undefined && !parsedHealth.success) {
+      return refuse(400, "invalid_request", "Invalid machine health measurements");
+    }
+
     // Record the heartbeat
     await ctx.runMutation(internal.machines.recordHeartbeat, {
       machineId: machine._id as Parameters<
@@ -70,6 +77,7 @@ http.route({
       softwareVersion: softwareVersionOf(body.software_version),
       // The header's value, which the gate just checked, not the body's copy.
       contractVersion: authResult.contract,
+      health: parsedHealth?.data,
     });
 
     // The local panel reports what the machine is doing with each heartbeat.
