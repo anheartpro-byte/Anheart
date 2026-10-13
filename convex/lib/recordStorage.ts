@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { z } from "zod";
 
 export const MAX_RECORD_FILE_BYTES = 16 * 1024 * 1024;
-export const MAX_RECORD_FILES = 20_000;
+export const MAX_RECORD_FILES = 40_000;
 export const MANIFEST_PAGE_SIZE = 1024;
 export const MAX_MANIFEST_PAGES = 128;
 export function recordBucket(path: string): number {
@@ -29,7 +29,7 @@ export const uploadRequest = z
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     size: z.number().int().min(0).max(MAX_RECORD_FILE_BYTES),
   })
-  .refine((file) => file.path !== "manifest.json" || file.size <= 1024 * 1024);
+  .refine((file) => file.path !== "manifest.json" || file.size <= 2 * 1024 * 1024);
 export const commitRequest = uploadRequest.safeExtend({
   storageId: z.string().min(1),
 });
@@ -42,7 +42,7 @@ export const depositManifest = z
   .refine(
     ({ files }) =>
       new Set(files).size === files.length &&
-      new TextEncoder().encode(JSON.stringify(files)).length <= 512 * 1024 &&
+      new TextEncoder().encode(JSON.stringify(files)).length <= 1024 * 1024 &&
       ["manifest.json", "ticks.csv", "events.jsonl", "checksums.sha256"].every(
         (path) => files.includes(path),
       ),
