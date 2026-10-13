@@ -65,6 +65,15 @@ Boîtier d'acquisition physiologique (Bluetooth). Il fournit l'ECG, et
 d'autres voies (EDA, RESP, EMG, LUX, SpO2) affichées pour surveillance
 seulement.
 
+**Certificat de la console, autorité** (`scripts/pi/make_console_tls.sh`, `src/web/tls.py`)\
+Ce qui permet à une tablette de vérifier, en TLS, qu'elle parle bien à la
+console de cette machine et non à un autre appareil du réseau. Le certificat
+est fait sur le Pi et signé par une autorité créée sur ce même Pi, dont la clé
+privée n'est pas gardée ; la tablette installe une fois le certificat public de
+cette autorité. Hors de la boucle locale, la console ne sert sa page qu'avec
+lui, ou ne démarre pas. Il ne dit rien de qui utilise la tablette : c'est le
+rôle du jeton. Voir [pi-image.md](pi-image.md#le-certificat-de-la-console).
+
 <a id="chien-de-garde"></a>
 **Chien de garde (watchdog)**\
 Ce qui agit quand un programme ne donne plus signe de vie. Il y en a trois,

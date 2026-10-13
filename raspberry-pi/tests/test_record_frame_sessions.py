@@ -405,15 +405,17 @@ def told_rig(
     *,
     answers_take_time: bool = True,
     limits: Limits = DEFAULT_LIMITS,
+    wrap: type[Told] = Told,
 ) -> tuple[RecordedRig, Told]:
     """The recording console of ``record_console_support``, over a drive that tells.
 
     ``answers_take_time=False``: the clock stands still within a tick, as on
     the rig of the other tests; every exchange of a tick begins at one instant.
+    ``wrap``: a drive that tells and does one more thing (ANH-222).
     """
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     journal = Journal(tmp_path / "records", clock, limits=limits)
-    rig, wrapper = make_rig(tmp_path, env=env, wrap=Told, clock=clock, journal=journal)
+    rig, wrapper = make_rig(tmp_path, env=env, wrap=wrap, clock=clock, journal=journal)
     assert isinstance(wrapper, Told)
     if answers_take_time:
         wrapper.clock = clock

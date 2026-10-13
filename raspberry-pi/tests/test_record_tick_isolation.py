@@ -470,6 +470,11 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
     would not have been seen. Every stop now arms a session, so the scenario
     makes a record per stop, thousands of them: their flushes to the device,
     which this test judges nothing about, are skipped.
+
+    ANH-222 EX-6: and so is the one read that ticket added to the tick that
+    arms a session and to the tick that ends one, ``Journal.frames_refused``:
+    how many frames the tap and the native driver's log have refused so far,
+    through both of them.
     """
     monkeypatch.setattr(journal_module, "STALL_AFTER", Seconds(1e9))
     skip_fsync(monkeypatch)
@@ -490,7 +495,11 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         native = reported()
         return Taken((*noted.observations, *native.observations), noted.lost + native.lost)
 
-    journal.listen(frames)
+    def refused() -> int:
+        """What the loop reads at the two ends of a session: both counts, taking nothing."""
+        return tap.refused() + exchanges.refused
+
+    journal.listen(frames, refused)
     drive_calls = asyncio.new_event_loop()
     cycles: list[int] = []
     whole_cycle = Scribe.cycle
@@ -519,8 +528,11 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         """What the loop asks of the journal in a tick. Either way in, a value is queued.
 
         A tick that arms a session first: over the record the stop before left open,
-        or with none open.
+        or with none open. Before it, and again further down, what the tick that arms
+        and the tick that ends a session read of the tap: how many frames it refused.
         """
+        heard = journal.frames_refused()
+        assert heard == 0, "there is room for a frame per stop: none was refused"
         arm()
         if recording[0]:
             queue_a_row()
@@ -552,6 +564,8 @@ def test_ex2_the_calls_of_a_tick_return_at_once_wherever_the_journal_thread_stan
         assert logged, "a line of the logbook was refused: nothing was queued at this stop"
         # What the tick says of itself, for the frames no record claims.
         journal.dispatched(clock.monotonic())
+        ended = journal.frames_refused()
+        assert ended == 0
         status = journal.status(clock.monotonic())
         assert status.recording is recording[0]
         assert status.free_bytes == journal.storage.free_bytes

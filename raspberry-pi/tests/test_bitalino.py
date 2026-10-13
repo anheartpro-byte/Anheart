@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import sys
 import threading
 import time
@@ -513,7 +514,7 @@ def test_an_already_paired_device_is_left_alone() -> None:
 
 
 @pytest.mark.parametrize("pairs", [True, False])
-def test_an_unpaired_device_is_paired_once(pairs: bool) -> None:
+def test_an_unpaired_device_is_paired_once(pairs: bool, caplog: pytest.LogCaptureFixture) -> None:
     answers = deque(["Paired: no", "", "Paired: yes" if pairs else "Paired: no"])
     calls: list[list[str]] = []
 
@@ -521,9 +522,16 @@ def test_an_unpaired_device_is_paired_once(pairs: bool) -> None:
         calls.append(list(argv))
         return answers.popleft()
 
-    assert ensure_paired(MAC, "1234", runner) is pairs
+    code = "8317"
+    with caplog.at_level(logging.DEBUG, logger="src.bitalino_client"):
+        paired = ensure_paired(MAC, code, runner)
+    assert paired is pairs
     assert calls[1][:2] == [sys.executable, "-c"]
-    assert calls[1][-2:] == [MAC, "1234"]  # through argv, never interpolated
+    assert calls[1][-2:] == [MAC, code]  # through argv, never interpolated
+    # The pairing code reaches bluetoothctl and nothing else: the journal, kept
+    # on the machine's disk, says which device is being paired, never with what.
+    assert f"Pairing with {MAC}..." in caplog.text
+    assert code not in caplog.text
 
 
 def test_a_missing_bluetoothctl_is_not_a_crash() -> None:
@@ -531,6 +539,26 @@ def test_a_missing_bluetoothctl_is_not_a_crash() -> None:
         raise FileNotFoundError(argv[0])
 
     assert not ensure_paired(MAC, run=runner)
+
+
+@pytest.mark.parametrize("timed_out", [True, False])
+def test_failed_pairing_never_logs_the_pin(
+    timed_out: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    code = "8317"
+
+    def runner(argv: Sequence[str], timeout: float) -> str:
+        if argv[0] == "bluetoothctl":
+            return "Paired: no"
+        if timed_out:
+            raise subprocess.TimeoutExpired(list(argv), timeout)
+        raise subprocess.CalledProcessError(1, list(argv), output=code, stderr=code)
+
+    with caplog.at_level(logging.WARNING, logger="src.bitalino_client"):
+        assert not ensure_paired(MAC, code, runner)
+    assert caplog.records
+    assert MAC in caplog.text
+    assert code not in caplog.text
 
 
 def test_the_real_command_runner_returns_stdout() -> None:

@@ -25,6 +25,40 @@ double-click stack up a start behind a stop; a single slot makes the second
 click an explicit refusal on screen, which is the answer that tells them
 something.
 
+One request, one fate, and the surface says it
+----------------------------------------------
+Several screens can ask at once, and the loop awaits the drive inside its
+tick: two requests can meet in one tick. So the slot is never taken over in
+silence, and every request the surface accepts is given an identifier
+(:meth:`ControlSurface.submit_start` and the others) that its answer and every
+event about it carry. What a request meets:
+
+===========  ==================================================================
+arrives      what the surface does
+===========  ==================================================================
+a start      accepted only at IDLE with the slot empty. While another start
+             waits or is being armed (STARTING) it is refused at once; so is
+             one that finds a reset, a target or a stop waiting. Never replaces.
+a target     accepted only while RUNNING with the slot empty. Never replaces.
+a reset      accepted with the slot empty and no start in flight. Never replaces.
+a stop       accepted whenever a session is starting or running, **whatever
+             waits in the slot**: it takes the slot, and the request it
+             displaces is told so (:attr:`EventKind.CANCELLED`). Refused only
+             when there is nothing to stop, or a stop is already under way.
+an e-stop    never refused and never in the slot. What waits there stays, and
+             the loop judges it under the latched stop (a start is refused).
+===========  ==================================================================
+
+Each accepted request then ends exactly one way, published as an event that
+carries its identifier: the loop took it (:attr:`EventKind.TAKEN`), the loop
+refused it (:attr:`EventKind.REFUSED`), or a stop displaced it before the loop
+got to it (:attr:`EventKind.CANCELLED`). The last few are kept for
+``GET /api/status`` (:attr:`ControlSurface.fates`), for a screen whose socket
+was down when the event went out.
+
+The identifier is display data. Nothing in the loop reads it to decide
+anything: it is generated here, opaque, and never derived from who asked.
+
 The emergency stop is the deliberate exception - see :meth:`ControlSurface.submit_estop`.
 It does not go in the mailbox, because a stop that waits for the loop to reach
 its next tick is not a stop.
@@ -57,10 +91,12 @@ once or not at all.
 from __future__ import annotations
 
 import logging
+import secrets
 from abc import abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Final, Protocol, final, runtime_checkable
+from typing import Final, Protocol, assert_never, final, runtime_checkable
 
 from src.clock import Clock
 from src.result import Err, Ok, Result
@@ -79,6 +115,20 @@ _logger: logging.Logger = logging.getLogger(__name__)
 
 LOCAL_SUBJECT: Final[str] = "local"
 """The subject id of a start typed at the console, where no rider is named."""
+
+FATES_KEPT: Final[int] = 16
+"""How many fates :attr:`ControlSurface.fates` keeps: what a screen can still ask about.
+
+A screen asks about its own last request after its socket dropped. Sixteen is
+several seconds of every button of several screens pressed in turn, and a
+fixed, small cost in every status answer.
+"""
+
+CANCELLED_BY_STOP: Final[str] = (
+    "un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait"
+)
+"""What a request displaced by a stop is told. One sentence, the same for every request:
+it names neither the request nor who stopped, and so can be kept in a record."""
 
 
 # =========================================================================
@@ -155,8 +205,18 @@ class EventKind(Enum):
     SESSION_RUNNING = "session_running"
     SESSION_IDLE = "session_idle"
     REFUSED = "refused"
-    # The loop's answer about a command or a manual target: the page writes it
-    # into the card of the session on screen.
+    # The loop could not act on a request it took from the mailbox, or took a
+    # manual target back by itself (that one answers nobody, and carries no
+    # request identifier).
+
+    TAKEN = "taken"
+    # The loop took a request from the mailbox and acted on it: the session is
+    # armed, the target is held, the reset is written, the stop is under way.
+    # Said by the console, so that no screen has to deduce it from a frame.
+
+    CANCELLED = "cancelled"
+    # A stop took the place of a request that was still waiting in the
+    # mailbox. The loop never saw that request.
 
     DASHBOARD = "dashboard"
     # What the dashboard link turned down on the machine's behalf. Never an
@@ -179,6 +239,13 @@ class SessionEvent:
     ``operator`` is never blank for an event that records a human decision -
     the safety supervisor refuses unattributed acknowledgements for the same
     reason. It is empty only for events the loop raises about itself.
+
+    ``request_id`` is the identifier of the request the event speaks of: the
+    one a ``*_requested`` event announces, the one a ``taken``, ``refused`` or
+    ``cancelled`` event answers, and for ``session_running`` and
+    ``session_idle`` the start the session came from. ``None`` when the event
+    is about no request. Display data: a screen tells its own requests from
+    another screen's by it, and nothing on the machine reads it back.
     """
 
     kind: EventKind
@@ -186,6 +253,7 @@ class SessionEvent:
     wall_clock: UnixMillis
     operator: str
     detail: str
+    request_id: str | None = None
 
 
 # =========================================================================
@@ -211,8 +279,9 @@ class RunState(Enum):
     # Nothing requested, nothing running. The only state a start is accepted in.
 
     STARTING = "starting"
-    # A start was accepted. The loop may not have picked it up yet, so the
-    # session may be zero ticks old - and a second start must still be refused.
+    # A start was accepted: it waits in the mailbox, or the loop is arming it.
+    # Held until the loop has answered for that start, and never dropped
+    # because a tick ended at rest while it waited: a second start is refused.
 
     RUNNING = "running"
     # The loop has confirmed a session is live.
@@ -241,6 +310,9 @@ class StartSession:
     operator: str
     total_duration_s: Seconds | None
     at: Monotonic
+    request_id: str
+    """The identifier of this request. Display data, like every ``request_id`` below."""
+
     subject_id: str = LOCAL_SUBJECT
     """Who rides. :data:`LOCAL_SUBJECT` for a start typed at the console."""
 
@@ -267,6 +339,7 @@ class EndSession:
     operator: str
     reason: str
     at: Monotonic
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +354,7 @@ class StartManual:
     occupancy: Occupancy
     operator: str
     at: Monotonic
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +364,7 @@ class SetManualTarget:
     output_rpm: OutputRpm
     operator: str
     at: Monotonic
+    request_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,10 +373,67 @@ class FaultReset:
 
     operator: str
     at: Monotonic
+    request_id: str
 
 
 type Command = StartSession | EndSession | StartManual | SetManualTarget | FaultReset
 """What the loop can find in the mailbox. Closed; match it with the nested form."""
+
+
+def is_start(command: Command | None) -> bool:
+    """Whether ``command`` asks for a session to start, programmed or manual."""
+    return isinstance(command, StartSession | StartManual)
+
+
+def words_of(command: Command) -> str:
+    """What ``command`` asks for, in the words its events carry. Never who asked."""
+    match command:
+        case StartSession():
+            return f"start {command.profile_id}"
+        case StartManual():
+            return f"manuel {command.occupancy.value}"
+        case SetManualTarget():
+            return f"cible {command.output_rpm:.2f} tr/min de sortie"
+        case FaultReset():
+            return "reset defaut"
+        case EndSession():
+            return command.reason
+    raise assert_never(command)
+
+
+# =========================================================================
+# What became of a request
+# =========================================================================
+
+
+@unique
+class Fate(Enum):
+    """The one way an accepted request ended. String values: they go over the wire."""
+
+    TAKEN = "taken"
+    # The loop took it from the mailbox and acted on it.
+
+    REFUSED = "refused"
+    # The loop took it from the mailbox and could not act on it.
+
+    CANCELLED = "cancelled"
+    # A stop took its place in the mailbox: the loop never saw it.
+
+
+@dataclass(frozen=True, slots=True)
+class RequestFate:
+    """What became of one request, as its event said it.
+
+    Kept for a screen that was not listening when the event went out. ``detail``
+    is the event's own: the loop's reason for a refusal, what was asked for a
+    request taken. It names no operator.
+    """
+
+    request_id: str
+    fate: Fate
+    detail: str
+    at: Monotonic
+    wall_clock: UnixMillis
 
 
 # =========================================================================
@@ -314,12 +446,18 @@ class SurfaceBusy:
     """The surface is not in a state that accepts this command.
 
     Carries the pending command as well as the state, because "busy" on its own
-    is the answer that makes an operator click again. The screen can say *what*
-    it is busy with.
+    is the answer that makes an operator click again. Of the pending command a
+    screen is told that one waits and its identifier, never its content: it may
+    be another operator's (``src/web/routes.py``).
+
+    ``in_the_way`` is the identifier of the request this one found in its way,
+    when there is one: the request waiting in the mailbox, or the start the
+    loop is arming.
     """
 
     state: RunState
     pending: Command | None
+    in_the_way: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,6 +496,13 @@ type CommandRefusal = NothingRunning | SurfaceBusy
 The surface only judges whether the mailbox can take it; whether the machine
 can act on it is the runtime's answer, published as a REFUSED event.
 """
+
+_FATE_EVENTS: Final[Mapping[Fate, EventKind]] = {
+    Fate.TAKEN: EventKind.TAKEN,
+    Fate.REFUSED: EventKind.REFUSED,
+    Fate.CANCELLED: EventKind.CANCELLED,
+}
+"""The event each fate is published as."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,16 +549,20 @@ class ControlSurface:
     __slots__ = (
         "_accepted",
         "_acknowledger",
+        "_boot",
         "_clock",
         "_ending",
         "_estop_latched",
         "_estop_receipt",
+        "_fates",
         "_last_seen",
         "_latest",
         "_live",
         "_pending",
         "_published",
         "_refused",
+        "_requests",
+        "_session_request",
         "_sink",
         "_starting",
         "_supervisor",
@@ -426,11 +575,19 @@ class ControlSurface:
         supervisor: SafetySupervisor,
         sink: TelemetrySink,
         acknowledger: Acknowledger | None = None,
+        boot: str | None = None,
     ) -> None:
         """Wire the surface to the clock, the supervisor and the telemetry sink.
 
         ``acknowledger`` clears latches on :meth:`acknowledge`; the supervisor
         when omitted. See :class:`Acknowledger`.
+
+        ``boot`` is what the request identifiers of this surface begin with. A
+        few random characters when omitted, drawn once, here: a console that
+        restarts counts its requests from one again, and a screen that outlived
+        it must not take the new console's third request for the third request
+        it sent to the old one. Nothing else in this module asks the operating
+        system for anything.
         """
         self._clock: Clock = clock
         self._supervisor: SafetySupervisor = supervisor
@@ -450,6 +607,13 @@ class ControlSurface:
         self._accepted: int = 0
         self._refused: int = 0
         self._published: int = 0
+
+        # What the screens are told about requests. Display data: no decision
+        # of this class or of the loop reads any of the four.
+        self._boot: str = secrets.token_hex(4) if boot is None else boot
+        self._requests: int = 0
+        self._fates: tuple[RequestFate, ...] = ()
+        self._session_request: str | None = None
 
     # =====================================================================
     # Reading
@@ -511,6 +675,28 @@ class ControlSurface:
     def counters(self) -> tuple[int, int, int]:
         """``(accepted, refused, published)``, for the status page."""
         return (self._accepted, self._refused, self._published)
+
+    @property
+    def fates(self) -> tuple[RequestFate, ...]:
+        """What became of the last :data:`FATES_KEPT` requests answered, oldest first.
+
+        For the status page: a screen whose socket was down when the event of
+        its request went out finds the answer here. A request that still waits
+        in the mailbox, or that the loop is acting on at this instant, is not
+        in it yet.
+        """
+        return self._fates
+
+    @property
+    def session_request(self) -> str | None:
+        """The identifier of the start the session in progress came from, or ``None``.
+
+        From the moment that start is accepted until the surface is idle again:
+        while it waits, while the loop arms it, while the session runs and
+        while it stops. ``None`` at rest, and after a start that was refused or
+        displaced. Display data.
+        """
+        return self._session_request
 
     # =====================================================================
     # The emergency stop
@@ -608,7 +794,10 @@ class ControlSurface:
         1. the emergency-stop wiring must be attested this boot
            (:meth:`~src.training.safety.SafetySupervisor.require_estop_confirmed`);
         2. no latched safety verdict may stand;
-        3. the surface must be IDLE.
+        3. the surface must be IDLE **and its mailbox empty**. A start never
+           takes the place of a request that waits: while another start waits
+           or is being armed this one is refused at once, and so is one that
+           finds a reset, a target or a stop still waiting for the loop.
 
         Note what is **not** checked here: whether ``profile_id`` exists. That
         needs the profile store, which is a file read, and this module does no
@@ -622,29 +811,22 @@ class ControlSurface:
         standing = self._supervisor.standing
         if standing is not None and standing.latched:
             return self._refuse_start(SafetyHolding(standing))
-        state = self.run_state
-        if state is not RunState.IDLE:
-            return self._refuse_start(SurfaceBusy(state=state, pending=self._pending))
+        busy = self._in_the_way_of_a_start()
+        if busy is not None:
+            return self._refuse_start(busy)
 
         command = StartSession(
             profile_id=profile_id,
             operator=operator,
             total_duration_s=total_duration_s,
             at=self._clock.monotonic(),
+            request_id=self._next_request(),
             subject_id=subject_id or LOCAL_SUBJECT,
             subject_hr_max=subject_hr_max,
             subject_age=subject_age,
             cloud_session_id=cloud_session_id,
         )
-        self._starting = True
-        self._pending = command
-        self._accepted += 1
-        self._publish(
-            EventKind.START_REQUESTED,
-            command.at,
-            operator,
-            f"start {profile_id}",
-        )
+        self._accept_start(command)
         return Ok(command)
 
     def submit_start_manual(
@@ -657,14 +839,16 @@ class ControlSurface:
         standing = self._supervisor.standing
         if standing is not None and standing.latched:
             return self._refuse_start(SafetyHolding(standing))
-        state = self.run_state
-        if state is not RunState.IDLE:
-            return self._refuse_start(SurfaceBusy(state=state, pending=self._pending))
-        command = StartManual(occupancy=occupancy, operator=operator, at=self._clock.monotonic())
-        self._starting = True
-        self._pending = command
-        self._accepted += 1
-        self._publish(EventKind.START_REQUESTED, command.at, operator, f"manuel {occupancy.value}")
+        busy = self._in_the_way_of_a_start()
+        if busy is not None:
+            return self._refuse_start(busy)
+        command = StartManual(
+            occupancy=occupancy,
+            operator=operator,
+            at=self._clock.monotonic(),
+            request_id=self._next_request(),
+        )
+        self._accept_start(command)
         return Ok(command)
 
     def submit_manual_target(
@@ -674,14 +858,21 @@ class ControlSurface:
 
         No event is published for the request itself: the operator adjusts the
         target in steps, and the setpoint that follows is in every snapshot.
+        What the loop made of it is published, like every other answer.
         """
         state = self.run_state
         if state is not RunState.RUNNING:
             return self._refuse_command(NothingRunning(state))
-        if self._pending is not None:
-            return self._refuse_command(SurfaceBusy(state=state, pending=self._pending))
+        waiting = self._pending
+        if waiting is not None:
+            return self._refuse_command(
+                SurfaceBusy(state=state, pending=waiting, in_the_way=waiting.request_id)
+            )
         command = SetManualTarget(
-            output_rpm=output_rpm, operator=operator, at=self._clock.monotonic()
+            output_rpm=output_rpm,
+            operator=operator,
+            at=self._clock.monotonic(),
+            request_id=self._next_request(),
         )
         self._pending = command
         self._accepted += 1
@@ -697,27 +888,60 @@ class ControlSurface:
         shown stopped.
         """
         state = self.run_state
-        if state is RunState.STARTING or self._pending is not None:
-            return self._refuse_command(SurfaceBusy(state=state, pending=self._pending))
-        command = FaultReset(operator=operator, at=self._clock.monotonic())
+        waiting = self._pending
+        if waiting is not None:
+            return self._refuse_command(
+                SurfaceBusy(state=state, pending=waiting, in_the_way=waiting.request_id)
+            )
+        if state is RunState.STARTING:
+            # The loop is arming a start it has already taken from the mailbox.
+            return self._refuse_command(
+                SurfaceBusy(state=state, pending=None, in_the_way=self._session_request)
+            )
+        command = FaultReset(
+            operator=operator, at=self._clock.monotonic(), request_id=self._next_request()
+        )
         self._pending = command
         self._accepted += 1
-        self._publish(EventKind.FAULT_RESET_REQUESTED, command.at, operator, "reset defaut")
+        self._publish(
+            EventKind.FAULT_RESET_REQUESTED,
+            command.at,
+            operator,
+            words_of(command),
+            command.request_id,
+        )
         return Ok(command)
 
     def submit_end(self, *, operator: str, reason: str) -> Result[EndSession, EndRefusal]:
-        """Ask for the running session to end on the controlled ramp."""
+        """Ask for the running session to end on the controlled ramp.
+
+        **Never refused, and never made to wait, because of what the mailbox
+        holds.** A stop takes the slot whatever is in it: a start the loop has
+        not taken yet, a target, a reset. What it displaces is not lost in
+        silence: its screen is told, under its own identifier, that a stop
+        took its place (:attr:`EventKind.CANCELLED`). The only refusals are
+        the two that have nothing to do with the slot: no session to stop, and
+        a stop already under way.
+        """
         state = self.run_state
         if state is RunState.IDLE:
             return self._refuse_end(NothingRunning(state))
         if state is RunState.STOPPING:
             return self._refuse_end(SurfaceBusy(state=state, pending=self._pending))
 
-        command = EndSession(operator=operator, reason=reason, at=self._clock.monotonic())
+        command = EndSession(
+            operator=operator,
+            reason=reason,
+            at=self._clock.monotonic(),
+            request_id=self._next_request(),
+        )
+        displaced = self._pending
         self._ending = True
         self._pending = command
         self._accepted += 1
-        self._publish(EventKind.END_REQUESTED, command.at, operator, reason)
+        self._publish(EventKind.END_REQUESTED, command.at, operator, reason, command.request_id)
+        if displaced is not None:
+            self._cancel(displaced)
         return Ok(command)
 
     def take_command(self) -> Command | None:
@@ -753,32 +977,81 @@ class ControlSurface:
             return
         self._live = True
         self._starting = False
-        self._publish(EventKind.SESSION_RUNNING, self._clock.monotonic(), "", "session running")
+        self._publish(
+            EventKind.SESSION_RUNNING,
+            self._clock.monotonic(),
+            "",
+            "session running",
+            self._session_request,
+        )
 
     def note_idle(self) -> None:
-        """The loop reports the session is over. Idempotent.
+        """The loop reports that no session is in progress. Idempotent.
 
         Clears the start/stop intentions but **not** the emergency-stop latch: a
         session ending is not somebody having answered for why it was stopped.
         Only :meth:`acknowledge` clears that.
+
+        **And not an intention whose request still waits in the mailbox.** The
+        loop awaits the drive inside its tick, so a start (or a stop) can be
+        accepted while a tick is under way, and that tick then ends at rest
+        with the request it never saw still in the slot. Calling the surface
+        idle at that point let a second start be accepted over the first. The
+        loop's report is about the tick that has just ended; the request is for
+        the next one. So ``session_idle`` is published when the last intention
+        is cleared, once, and not while a request it stands for is waiting.
         """
-        if not (self._live or self._starting or self._ending):
+        waiting = self._pending
+        starting = self._starting and is_start(waiting)
+        ending = self._ending and isinstance(waiting, EndSession)
+        if (self._live, self._starting, self._ending) == (False, starting, ending):
             return
         self._live = False
-        self._starting = False
-        self._ending = False
-        self._publish(EventKind.SESSION_IDLE, self._clock.monotonic(), "", "session idle")
+        self._starting = starting
+        self._ending = ending
+        if starting or ending:
+            return
+        over = self._session_request
+        self._session_request = None
+        self._publish(EventKind.SESSION_IDLE, self._clock.monotonic(), "", "session idle", over)
 
-    def note_refused(self, operator: str, detail: str) -> None:
-        """The loop could not act on a command it took from the mailbox. Say so, once.
+    def note_taken(self, command: Command) -> None:
+        """The loop took ``command`` from the mailbox and acted on it. Say so, once.
+
+        Published as it happens, with the request's identifier, so that the
+        screen that asked reads "taken" from the console and not from a frame
+        that happens to show a session. What it says is that the loop acted:
+        the session is armed, the target is held, the reset is written, the
+        stop is under way. What the machine does next is in the snapshots.
+        """
+        self._conclude(command, Fate.TAKEN, words_of(command))
+
+    def note_refused(self, command: Command, detail: str) -> None:
+        """The loop could not act on ``command``, taken from the mailbox. Say so, once.
 
         A start that the runtime refused leaves the surface idle again, so the
-        operator can correct and retry; the reason goes out as an event.
+        operator can correct and retry; the reason goes out as an event, under
+        the request's identifier. Only the refusal of a START does that: a
+        reset or a target refused while a start waits in the mailbox says
+        nothing about that start, which keeps its place.
         """
         self._refused += 1
-        self._starting = False
-        self._publish(EventKind.REFUSED, self._clock.monotonic(), operator, detail)
+        if is_start(command):
+            self._starting = False
+            self._session_request = None
+        self._conclude(command, Fate.REFUSED, detail)
         _logger.warning("command refused by the loop")
+
+    def note_withdrawn(self, detail: str) -> None:
+        """The machine took back a manual target it had accepted. Say so, once.
+
+        Nobody's request: the event names no operator and carries no request
+        identifier, and every screen showing the session is told. It touches
+        neither the mailbox nor an intention.
+        """
+        self._refused += 1
+        self._publish(EventKind.REFUSED, self._clock.monotonic(), "", detail)
+        _logger.warning("manual target withdrawn by the loop")
 
     def note_remote_refusal(self, detail: str) -> None:
         """The dashboard link turned something down on this machine's behalf. Say so.
@@ -866,7 +1139,14 @@ class ControlSurface:
     # Internals
     # =====================================================================
 
-    def _publish(self, kind: EventKind, at: Monotonic, operator: str, detail: str) -> None:
+    def _publish(
+        self,
+        kind: EventKind,
+        at: Monotonic,
+        operator: str,
+        detail: str,
+        request_id: str | None = None,
+    ) -> None:
         """Build and hand one event to the sink."""
         self._sink.publish_event(
             SessionEvent(
@@ -875,6 +1155,74 @@ class ControlSurface:
                 wall_clock=self._clock.unix_millis(),
                 operator=operator,
                 detail=detail,
+                request_id=request_id,
+            )
+        )
+
+    def _next_request(self) -> str:
+        """A new request identifier: this boot's prefix and a count. Opaque to everyone else."""
+        self._requests += 1
+        return f"{self._boot}-{self._requests}"
+
+    def _in_the_way_of_a_start(self) -> SurfaceBusy | None:
+        """What keeps a start out of the mailbox, or ``None`` when it may go in."""
+        state = self.run_state
+        waiting = self._pending
+        if state is RunState.STARTING:
+            return SurfaceBusy(state=state, pending=waiting, in_the_way=self._session_request)
+        if state is not RunState.IDLE:
+            return SurfaceBusy(state=state, pending=waiting)
+        if waiting is not None:
+            # Idle, and a reset or a target still waits for the loop: it keeps its place.
+            return SurfaceBusy(state=state, pending=waiting, in_the_way=waiting.request_id)
+        return None
+
+    def _accept_start(self, command: StartSession | StartManual) -> None:
+        """Put an accepted start in the empty mailbox, and say that it was asked."""
+        self._starting = True
+        self._session_request = command.request_id
+        self._pending = command
+        self._accepted += 1
+        self._publish(
+            EventKind.START_REQUESTED,
+            command.at,
+            command.operator,
+            words_of(command),
+            command.request_id,
+        )
+
+    def _cancel(self, displaced: Command) -> None:
+        """A stop has taken the place of ``displaced`` in the mailbox. Tell its screen.
+
+        A start that is displaced no longer exists: nothing is starting. The
+        stop that displaced it stands, and the surface reads STOPPING until the
+        loop has taken that stop and reported itself idle.
+        """
+        if is_start(displaced):
+            self._starting = False
+            self._session_request = None
+        self._conclude(displaced, Fate.CANCELLED, CANCELLED_BY_STOP)
+
+    def _conclude(self, command: Command, fate: Fate, detail: str) -> None:
+        """Record the one fate of ``command`` and publish it, under its identifier.
+
+        Kept first, published second: a screen that asks the status instead of
+        listening must find at least what the others were told.
+        """
+        at = self._clock.monotonic()
+        wall_clock = self._clock.unix_millis()
+        said = RequestFate(
+            request_id=command.request_id, fate=fate, detail=detail, at=at, wall_clock=wall_clock
+        )
+        self._fates = (*self._fates, said)[-FATES_KEPT:]
+        self._sink.publish_event(
+            SessionEvent(
+                kind=_FATE_EVENTS[fate],
+                at=at,
+                wall_clock=wall_clock,
+                operator=command.operator,
+                detail=detail,
+                request_id=command.request_id,
             )
         )
 

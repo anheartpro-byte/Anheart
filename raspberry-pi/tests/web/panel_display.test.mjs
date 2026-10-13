@@ -89,10 +89,9 @@ function panel() {
   const send = context.api;
   // A machine that answers nothing until the test says what it answers.
   context.api = () => new Promise(() => undefined);
-  // A page whose socket is open and has been delivering frames for a long time.
+  // A page whose socket is open.
   context.state.connected = true;
   context.state.lastFrameAt = clock.now;
-  context.state.streamFrom = { stream: context.state.stream, at: Number.NEGATIVE_INFINITY };
   const node = (id) => {
     assert.ok(nodes.has(id), `the page has no #${id}`);
     return nodes.get(id);
@@ -212,6 +211,8 @@ function status(overrides = {}) {
     live: [],
     retained_hr_samples: 0,
     pending: null,
+    requests: [],
+    session_request: null,
     attendant_last_seen: null,
     clients: 1,
     evictions: 0,
@@ -1565,24 +1566,69 @@ function manualRow(target = 0, overrides = {}) {
 const manualFrame = (at, target = 0, overrides = {}) =>
   snapshot({ at, mode: "manuel", phase: "hold", manual: manualRow(target), ...overrides });
 
-// What the loop publishes when it refuses a command, or takes a target back (no operator then).
-const refusal = (at, detail, operator = "op") => ({ kind: "refused", at, wall_clock: 0, operator, detail });
+const never = () => new Promise(() => undefined);
+
+// The console gives every request it accepts an identifier of its own, in the 202: this boot's
+// prefix and a count. Every event about that request then carries it.
+let requestsAccepted = 0;
+const newRequest = () => `c0ffee-${(requestsAccepted += 1)}`;
+// A request of another screen: an identifier this page was never given.
+const ANOTHER = "c0ffee-autre-ecran";
+
+// What the console publishes about one request: the loop took it, the loop refused it, or a STOP
+// took its place in the mailbox. `id` is null for the one refusal that answers nobody: a manual
+// target the machine takes back by itself.
+const said = (kind, at, id, detail, operator = "op") => ({ kind, at, wall_clock: 0, operator, detail, request_id: id });
+const taken = (at, id, detail = "") => said("taken", at, id, detail);
+const refusal = (at, detail, operator = "op", id = null) => said("refused", at, id, detail, operator);
+const CANCELLED = "un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait";
+const cancelled = (at, id) => said("cancelled", at, id, CANCELLED);
 
 const HELD = "consigne refusee : le verdict hr_stale tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible";
 const TAKEN_BACK =
   "cible de 249 tr/min moteur remise a 0 : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. " +
   "Attendre une frequence cardiaque fiable, puis redonner la cible";
+const SENT_5 = "cible envoyee : 5.00 output rpm - pas encore prise par la machine";
+const TAKEN_5 = "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)";
+const LOST_TARGET = "cet ecran ne sait pas ce que la machine a fait de sa cible : sa liaison a ete coupee.";
 
-// The operator composes `rpm` and presses "Appliquer"; the console takes the target into its mailbox at `at`.
+// The operator composes `rpm` and presses "Appliquer"; the console takes the target into its
+// mailbox at `at`. Returns the identifier the console gave that request.
 async function apply(context, rpm, at) {
+  const id = newRequest();
   context.state.manualDraft = rpm;
   context.api = (path, options) =>
     path === "/api/manual/target"
-      ? Promise.resolve({ kind: "manual_target", operator: "op", detail: options.body.output_rpm.toFixed(2) + " output rpm", at })
-      : new Promise(() => undefined);
+      ? Promise.resolve({ kind: "manual_target", operator: "op", detail: options.body.output_rpm.toFixed(2) + " output rpm", at, request_id: id })
+      : never();
   context.doManualApply();
   await settle();
+  return id;
 }
+
+// A request the console refuses at once, as the page's own request code hands the answer over:
+// a status, a fixed sentence, a code, and the identifier of the request found in the way, if any.
+const refusedAtOnce = (detail, code, waiting = null) => Object.assign(new Error(detail), { status: 409, code, waiting });
+const REQUEST_WAITING =
+  "demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), " +
+  "rien n'a ete envoye. Reessayer dans un instant.";
+const START_PENDING =
+  "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris " +
+  "ou est en train de l'armer. Rien n'a ete envoye.";
+
+// How many times the page has asked the console for its status.
+function statusAsked(context, answerWith = never) {
+  const asked = { count: 0 };
+  context.api = (path) => {
+    if (path !== "/api/status") return never();
+    asked.count += 1;
+    return answerWith();
+  };
+  return asked;
+}
+
+// One line of `requests` in /api/status: what became of one request, as its event said it.
+const fate = (id, what, at, detail = "") => ({ request_id: id, fate: what, detail, at, wall_clock: 0 });
 
 test("the 202 of Appliquer says the target is sent, not that the machine is on its way", async () => {
   // Given a manual session at standstill, and a target the console has only put in its mailbox.
@@ -1590,20 +1636,32 @@ test("the 202 of Appliquer says the target is sent, not that the machine is on i
   frame(manualFrame(59.8));
   await apply(context, 5, 60);
   // Then the note claims nothing the loop has not said yet.
-  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(node("manual-note").textContent, SENT_5);
   assert.equal(node("manual-note").classes.has("note-bad"), false);
   // And a frame taken before the command changes nothing: it cannot speak about it.
   frame(manualFrame(59.9));
-  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(node("manual-note").textContent, SENT_5);
+});
+
+test("a frame that shows the target applied is not the console's answer: the page does not say taken for it", async () => {
+  // Given a target sent, and frames that show 249 tr/min moteur applied: this screen's target, or
+  // the same one typed at another screen.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  await apply(context, 5, 60);
+  frame(manualFrame(60.2, 249));
+  frame(manualFrame(60.4, 249));
+  // Then the page deduces nothing: the note still waits for the console to say what became of it.
+  assert.equal(node("manual-note").textContent, SENT_5);
 });
 
 test("a target the loop refuses turns the note into that refusal", async () => {
   // Given a target sent over an arm that a verdict holds at standstill.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8, 0, verdict("freeze", "hr_stale", false)));
-  await apply(context, 5, 60);
-  // When the loop refuses it on its next tick, as an event.
-  context.addEvent(refusal(60.1, HELD));
+  const id = await apply(context, 5, 60);
+  // When the loop refuses it on its next tick, as an event that carries the request's identifier.
+  context.addEvent(refusal(60.1, HELD, "op", id));
   // Then the note is the refusal, in red, word for word, and no longer says "sent".
   const note = node("manual-note");
   assert.ok(note.textContent.includes(HELD), note.textContent);
@@ -1617,42 +1675,72 @@ test("a target the loop refuses turns the note into that refusal", async () => {
   assert.ok(note.textContent.includes(HELD), note.textContent);
 });
 
-test("a refusal that reaches the screen before the 202 is not overwritten by it", async () => {
-  // Given a refusal the socket delivered first: it is stamped after the command it answers.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  context.addEvent(refusal(60.1, HELD));
-  // When the 202 of that command arrives.
-  await apply(context, 5, 60);
-  // Then the note still says refused, and stays so once the frames have shown the target not held.
-  assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
-  frame(manualFrame(60.2));
-  frame(manualFrame(61.2));
-  assert.ok(node("manual-note").textContent.includes(HELD), node("manual-note").textContent);
-  assert.equal(context.state.manualSent, null);
-  // And a later target is not taken for answered by that older refusal.
-  await apply(context, 4, 70);
-  assert.equal(node("manual-note").textContent, "cible envoyee : 4.00 output rpm - pas encore prise par la machine");
+test("an answer that reaches the screen before the 202 of its request is applied when the 202 comes", async () => {
+  // Given the console's answer delivered first by the socket: the page does not know yet that the
+  // identifier it carries is the one its own request is about to be given.
+  for (const [answer, expected] of [
+    [(id) => refusal(60.1, HELD, "op", id), (text) => text.startsWith("refus de la machine") && text.includes(HELD)],
+    [(id) => taken(60.1, id), (text) => text === "cible prise par la machine : 5.00 output rpm"],
+    [(id) => cancelled(60.1, id), (text) => text.startsWith("demande annulee (") && text.endsWith(CANCELLED)],
+  ]) {
+    const { context, frame, node } = panel();
+    frame(manualFrame(59.8));
+    const id = `c0ffee-early-${(requestsAccepted += 1)}`;
+    context.addEvent(answer(id));
+    assert.equal(node("manual-note").textContent, "", "an answer about a request this page has not sent");
+    // When the 202 of that request arrives.
+    context.state.manualDraft = 5;
+    context.api = () => Promise.resolve({ kind: "manual_target", operator: "op", detail: "5.00 output rpm", at: 60, request_id: id });
+    context.doManualApply();
+    await settle();
+    // Then the note says that answer, and not "sent".
+    assert.ok(expected(node("manual-note").textContent), node("manual-note").textContent);
+    assert.equal(context.state.asked.target, undefined);
+    // And a later target is not taken for answered by that older answer.
+    await apply(context, 4, 70);
+    assert.equal(node("manual-note").textContent, "cible envoyee : 4.00 output rpm - pas encore prise par la machine");
+  }
 });
 
-test("the note says the machine took the target once a frame shows it applied", async () => {
+test("the note says the machine took the target when the console says so", async () => {
   // Given a target sent: 5.00 tr/min at the arm is 249 tr/min at the motor.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  // When the first frame taken after the command shows that target applied.
+  const id = await apply(context, 5, 60);
+  // When the loop takes it and the console says so.
+  context.addEvent(taken(60.1, id, "cible 5.00 tr/min de sortie"));
+  // Then the note says taken, from the console's own answer, before any frame.
+  const note = node("manual-note");
+  assert.equal(note.textContent, "cible prise par la machine : 5.00 output rpm");
+  assert.equal(note.classes.has("note-bad"), false);
+  assert.equal(context.state.asked.target, undefined);
+  // And the first frame taken after the answer adds what only a frame can show: it is followed.
   frame(manualFrame(60.2, 249));
-  // Then the note says so, from the machine's own report.
-  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
-  assert.equal(node("manual-note").classes.has("note-bad"), false);
-  assert.equal(context.state.manualSent, null);
+  assert.equal(note.textContent, TAKEN_5);
+});
+
+test("a frame taken before the answer and delivered after it says nothing about it", async () => {
+  // Given a target taken. The console sends a socket its events first: the frame of the tick
+  // before, still waiting to be sent, is delivered after the event of this tick.
+  const { context, frame, node } = panel();
+  frame(manualFrame(59.8));
+  const id = await apply(context, 5, 60);
+  context.addEvent(taken(60.1, id));
+  // When that older frame arrives, the applied target still 0.
+  frame(manualFrame(60.0, 0));
+  // Then the note is not wiped for a target "dropped", nor said followed from a frame that
+  // predates it.
+  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
 });
 
 test("the note stops saying the machine follows a target once the machine has dropped it", async () => {
   // Given a target the machine took, the arm on its way to it.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
+  const id = await apply(context, 5, 60);
+  context.addEvent(taken(60.1, id));
   frame(manualFrame(60.2, 249, { setpoint: turning(60), measured: turning(58) }));
   assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"));
   // While the machine holds it, the note stays.
@@ -1670,8 +1758,9 @@ test("a target taken while a verdict holds the setpoint is not said to be follow
   const held = verdict("freeze", "attendant_absent", false);
   const at120 = { setpoint: turning(120), measured: turning(120) };
   frame(manualFrame(59.8, 120, { ...at120, ...held }));
-  await apply(context, 5, 60);
+  const id = await apply(context, 5, 60);
   // When the machine takes the higher target and the freeze keeps the setpoint where it is.
+  context.addEvent(taken(60.1, id));
   frame(manualFrame(60.2, 249, { ...at120, ...held }));
   // Then the note says taken, and does not say followed.
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
@@ -1681,7 +1770,7 @@ test("a target taken while a verdict holds the setpoint is not said to be follow
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
   // When the warning lifts, the setpoint walks to the target again, and the note says so.
   frame(manualFrame(60.6, 249, { setpoint: turning(112), measured: turning(112) }));
-  assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)");
+  assert.equal(node("manual-note").textContent, TAKEN_5);
   // And the words come off again the moment a verdict holds the setpoint, latched or not.
   frame(manualFrame(60.8, 249, { setpoint: turning(118), measured: turning(116), ...verdict("freeze", "loop_stall", true) }));
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
@@ -1692,8 +1781,9 @@ test("under a freeze a target of 0 is a stop asked for, and the note says it is 
   const { context, frame, node } = panel();
   const held = verdict("freeze", "attendant_absent", false);
   frame(manualFrame(59.8, 249, { setpoint: turning(249), measured: turning(249), ...held }));
-  await apply(context, 0, 60);
+  const id = await apply(context, 0, 60);
   // When the machine takes it: under a freeze a stop asked for is walked down all the same.
+  context.addEvent(taken(60.1, id));
   frame(manualFrame(60.2, 0, { setpoint: turning(240), measured: turning(246), ...held }));
   // Then, of all targets under a freeze, this one is said followed.
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 0.00 output rpm (suivie aux limites de mouvement)");
@@ -1702,10 +1792,11 @@ test("under a freeze a target of 0 is a stop asked for, and the note says it is 
 test("wiping a taken note leaves alone what was written there since", async () => {
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
+  const id = await apply(context, 5, 60);
+  context.addEvent(taken(60.1, id));
   frame(manualFrame(60.2, 249));
   // The route refuses a later click: its answer replaces the note.
-  context.api = () => Promise.reject(new Error("the machine is running, not idle"));
+  context.api = () => Promise.reject(refusedAtOnce("the machine is running, not idle", "machine_running"));
   context.doManualApply();
   await settle();
   // When the machine then drops the target, that answer is not the note to wipe.
@@ -1713,17 +1804,18 @@ test("wiping a taken note leaves alone what was written there since", async () =
   assert.equal(node("manual-note").textContent, "the machine is running, not idle");
 });
 
-test("an applied target one motor rpm away from the one sent is not read as taken", async () => {
-  // Given a turning arm holding 249 tr/min moteur, and 5.02 tr/min sent (250 at the motor).
+test("a note saying taken goes when the frames show another target, one motor rpm away", async () => {
+  // Given 5.02 tr/min sent (250 at the motor) and taken.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8, 249));
-  await apply(context, 5.02, 60);
-  // When the frames keep showing 249: the new target was not taken.
-  frame(manualFrame(60.2, 249));
-  // Then the note does not say it was.
-  assert.equal(node("manual-note").textContent.includes("prise par la machine :"), false, node("manual-note").textContent);
-  frame(manualFrame(60.4, 250));
+  const id = await apply(context, 5.02, 60);
+  context.addEvent(taken(60.1, id));
+  frame(manualFrame(60.2, 250));
   assert.ok(node("manual-note").textContent.startsWith("cible prise par la machine"), node("manual-note").textContent);
+  // When the applied target becomes 249: another screen's, a whole motor rpm lower.
+  frame(manualFrame(60.4, 249));
+  // Then the note does not go on saying that the machine holds what this screen sent.
+  assert.equal(node("manual-note").textContent, "");
 });
 
 test("a target the machine takes back is written in the note of every screen showing the session", async () => {
@@ -1731,9 +1823,12 @@ test("a target the machine takes back is written in the note of every screen sho
     // Given a target the machine took, on the screen that sent it and on one that did not.
     const { context, frame, node } = panel();
     frame(manualFrame(59.8));
-    if (clicked) await apply(context, 5, 60);
+    if (clicked) {
+      const id = await apply(context, 5, 60);
+      context.addEvent(taken(60.1, id));
+    }
     frame(manualFrame(60.2, 249));
-    // When the machine puts it back to 0 before the first step: nobody's command, no operator.
+    // When the machine puts it back to 0 before the first step: nobody's request, no identifier.
     context.addEvent(refusal(60.4, TAKEN_BACK, ""));
     frame(manualFrame(60.4));
     // Then both notes say so, in red.
@@ -1743,39 +1838,78 @@ test("a target the machine takes back is written in the note of every screen sho
   }
 });
 
-test("with no word from the loop for a second of its clock, the note says the target was not taken", async () => {
-  // Given a target sent, and a refusal that never reached this screen (its socket reconnected).
+test("a target whose answer never reaches this screen: the note says it does not know, and asks the console", async () => {
+  // Given a target sent, and an answer that never comes over this socket.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
   await apply(context, 5, 60);
+  const status = statusAsked(context);
   // While the loop may still answer, the note waits.
   frame(manualFrame(60.8));
-  assert.equal(node("manual-note").textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
-  // When more than a second of the machine's clock has passed and the applied target is still 0.
-  frame(manualFrame(61.2));
-  // Then the note stops waiting, and says what the machine holds instead.
+  assert.equal(node("manual-note").textContent, SENT_5);
+  assert.equal(status.count, 0);
+  // When more than a second of the machine's clock has passed: on one socket the answer comes
+  // before any frame taken after the request, so it was lost.
+  frame(manualFrame(61.2, 249));
+  // Then the note says neither taken nor refused, whatever the frames show: it does not know.
   const note = node("manual-note");
-  assert.ok(note.textContent.startsWith("cible NON prise par la machine"), note.textContent);
-  assert.ok(note.textContent.includes("0.00 tr/min de sortie"), note.textContent);
+  assert.equal(note.textContent, LOST_TARGET);
   assert.ok(note.classes.has("note-bad"));
+  // And the console is asked, once.
+  assert.equal(status.count, 1);
+  frame(manualFrame(61.4, 249));
+  assert.equal(status.count, 1);
+  assert.equal(note.textContent, LOST_TARGET);
 });
 
-test("a target still unanswered when the session is over is said not taken", async () => {
+test("the status settles a target whose answer was lost: taken, refused or cancelled", async () => {
+  for (const [what, detail, expected] of [
+    ["taken", "cible 5.00 tr/min de sortie", (text) => text === TAKEN_5],
+    ["refused", HELD, (text) => text.startsWith("refus de la machine (") && text.endsWith(HELD)],
+    ["cancelled", CANCELLED, (text) => text.startsWith("demande annulee (") && text.endsWith(CANCELLED)],
+  ]) {
+    const { context, frame, node } = panel();
+    frame(manualFrame(59.8));
+    const id = await apply(context, 5, 60);
+    statusAsked(context);
+    frame(manualFrame(61.2, 249));
+    assert.equal(node("manual-note").textContent, LOST_TARGET);
+    // When the console's status lists what became of that request.
+    await answer(context, status({ at: 61.3, run_state: "running", requests: [fate(ANOTHER, "refused", 60.05, "x"), fate(id, what, 60.1, detail)] }));
+    frame(manualFrame(61.4, 249));
+    // Then the note says it, and nothing of the other screen's request listed with it.
+    assert.ok(expected(node("manual-note").textContent), `${what}: ${node("manual-note").textContent}`);
+    assert.equal(context.state.asked.target, undefined);
+  }
+});
+
+test("an answer about another screen's request is left to the event list, session on screen or not", async () => {
+  // Given a manual session on screen and a target of this screen the machine took.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  // When the machine is back at rest with no manual session, a second later.
-  frame(snapshot({ at: 61.2 }));
-  assert.equal(node("manual-note").textContent, "cible NON prise par la machine : la seance manuelle est terminee.");
-  assert.ok(node("manual-note").classes.has("note-bad"));
+  const id = await apply(context, 5, 60);
+  context.addEvent(taken(60.1, id));
+  frame(manualFrame(60.2, 249));
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+  // When the loop answers another screen: a target refused, a reset refused, a start cancelled.
+  context.addEvent(refusal(60.3, HELD, "autre ecran", ANOTHER));
+  context.addEvent(refusal(60.4, "reset refuse : mouvement encore commande (running, hold)", "autre ecran", "c0ffee-autre-2"));
+  context.addEvent(cancelled(60.5, "c0ffee-autre-3"));
+  context.addEvent(taken(60.6, "c0ffee-autre-4"));
+  frame(manualFrame(60.8, 249));
+  // Then the note still says what became of THIS screen's target, which the machine still holds.
+  assert.equal(node("manual-note").textContent, TAKEN_5);
+  assert.equal(node("manual-note").classes.has("note-bad"), false);
+  // And each of them is listed in the events.
+  assert.equal(node("events").children.length, 5);
 });
 
-test("a refusal that is not about a manual target is left to the event list", () => {
-  // Given a machine at rest: no manual session on screen, no target awaited.
+test("a refusal that answers nobody is written under the manual card only while a manual session is on screen", () => {
+  // Given a machine at rest: no manual session on screen.
   const { context, frame, node } = panel();
   frame(snapshot());
-  // When the loop refuses a programme somebody asked for.
-  context.addEvent(refusal(51, "demarrage refuse : age du passager requis pour une seance programmee"));
+  // When the loop publishes a refusal that carries no identifier.
+  context.addEvent(refusal(51, TAKEN_BACK, ""));
   // Then the manual card says nothing about it, and the event is listed as before.
   assert.equal(node("manual-note").textContent, "");
   assert.equal(node("events").children.length, 1);
@@ -1783,7 +1917,7 @@ test("a refusal that is not about a manual target is left to the event list", ()
 
 // What the dashboard link publishes when it turns something down (ANH-133): nobody's command, and
 // never about a manual target. It has its own kind for that reason.
-const dashboardNews = (at, detail) => ({ kind: "dashboard", at, wall_clock: 0, operator: "", detail });
+const dashboardNews = (at, detail) => ({ kind: "dashboard", at, wall_clock: 0, operator: "", detail, request_id: null });
 
 const INCOMPATIBLE = "serveur incompatible (contrat 1.0 vs inconnu)";
 
@@ -1791,47 +1925,51 @@ test("news from the dashboard link is listed and never read as the machine's ans
   // Given a manual session on screen and a target just sent, the loop's answer still awaited.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
+  const id = await apply(context, 5, 60);
   // When the link says, in that same instant, that the dashboard is of another contract.
   context.addEvent(dashboardNews(60.1, INCOMPATIBLE));
   // Then the manual card still waits for the machine's own answer, and claims no refusal.
   const note = node("manual-note");
-  assert.equal(note.textContent, "cible envoyee : 5.00 output rpm - pas encore prise par la machine");
+  assert.equal(note.textContent, SENT_5);
   assert.equal(note.classes.has("note-bad"), false);
-  assert.notEqual(context.state.manualSent, null);
-  // And the frame that shows the target applied is still read as the machine taking it.
+  assert.equal(context.state.asked.target.id, id);
+  // And the console's answer is still read as the machine taking it.
+  context.addEvent(taken(60.15, id));
   frame(manualFrame(60.2, 249));
-  assert.ok(note.textContent.startsWith("cible prise par la machine"), note.textContent);
+  assert.equal(note.textContent, TAKEN_5);
   // The news itself is in the event list, under its own kind.
   const listed = node("events").children;
-  assert.equal(listed.length, 1);
-  assert.ok(listed[0].textContent.includes("dashboard  " + INCOMPATIBLE), listed[0].textContent);
-  assert.ok(listed[0].classes.has("event-dashboard"));
+  assert.equal(listed.length, 2);
+  assert.ok(listed[1].textContent.includes("dashboard  " + INCOMPATIBLE), listed[1].textContent);
+  assert.ok(listed[1].classes.has("event-dashboard"));
 });
 
-test("the same words under the kind `refused` would be taken for the machine's answer", async () => {
-  // The witness for the test above: this is what the page does with a `refused` event, and why
-  // the link does not publish one.
+test("the same words under the kind `refused`, with no identifier, are written under the manual card", async () => {
+  // The witness for the test above: this is what the page does with a `refused` event that
+  // answers nobody, and why the link does not publish one.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
   await apply(context, 5, 60);
   context.addEvent(refusal(60.1, INCOMPATIBLE, ""));
   assert.ok(node("manual-note").textContent.startsWith("refus de la machine"), node("manual-note").textContent);
-  assert.equal(context.state.manualSent.refused, true);
+  // It answers no request: this screen's target is still awaited.
+  assert.notEqual(context.state.asked.target, undefined);
 });
 
-test("an Appliquer the console refuses outright shows that answer and awaits nothing", async () => {
+test("an Appliquer the console refuses outright shows that answer, then what becomes of the earlier target", async () => {
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  // When the next click is refused by the route itself (409).
-  context.api = () => Promise.reject(new Error("the machine is already stopping"));
+  const id = await apply(context, 5, 60);
+  // When the next click is refused by the route itself (409): the session is stopping.
+  const stopping = "no manual session is running (the machine is stopping)";
+  context.api = () => Promise.reject(refusedAtOnce(stopping, "no_manual_session"));
   context.doManualApply();
   await settle();
-  // Then the note is that answer, and no frame rewrites it with the fate of the earlier target.
-  assert.equal(node("manual-note").textContent, "the machine is already stopping");
-  frame(manualFrame(60.2, 249));
-  assert.equal(node("manual-note").textContent, "the machine is already stopping");
+  // Then the note is that answer, as the console wrote it.
+  assert.equal(node("manual-note").textContent, stopping);
+  // And the first target is not forgotten: the STOP that took its place is said when it comes.
+  context.addEvent(cancelled(60.1, id));
+  assert.ok(node("manual-note").textContent.endsWith(CANCELLED), node("manual-note").textContent);
 });
 
 /* ================== what the heart rate holds, before a target is typed ================== */
@@ -1926,15 +2064,15 @@ test("while the heart rate holds a rise, a higher target taken is not said to be
   frame(riderFrame(59.6, 120, at120));
   context.renderPanel(panelRow({ manual_rise_hold: "heart_rate_falling" }));
   // When a higher target is taken: no verdict stands, and yet the speed does not climb.
-  await apply(context, 5, 60);
+  context.addEvent(taken(60.1, await apply(context, 5, 60)));
   frame(riderFrame(60.2, 249, at120));
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
   // A lower target is a descent, and the heart rate holds no descent: followed.
-  await apply(context, 2, 61);
+  context.addEvent(taken(61.1, await apply(context, 2, 61)));
   frame(riderFrame(61.2, 100, at120));
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 2.00 output rpm (suivie aux limites de mouvement)");
   // Once the console says nothing holds any more, the rise is followed, and the note says so.
-  await apply(context, 5, 62);
+  context.addEvent(taken(62.1, await apply(context, 5, 62)));
   frame(riderFrame(62.2, 249, at120));
   assert.equal(node("manual-note").textContent, "cible prise par la machine : 5.00 output rpm");
   context.renderPanel(panelRow());
@@ -2901,46 +3039,52 @@ test("putting the console back in service takes its banner down and leaves that 
   assert.equal(announced(OUT), true);
 });
 
-/* ============ EX-4, what the loop made of a start or of a fault reset ============ */
+/* ============ what the loop made of a start or of a fault reset ============ */
 
-const never = () => new Promise(() => undefined);
-
-// What the console publishes for every start it takes into its mailbox, stamped with the instant
+// What the console publishes for every start it takes into its mailbox, under the identifier
 // its 202 carries: to every screen whose socket is open, the one that asked included.
-const startRequested = (at, operator, detail) => ({ kind: "start_requested", at, wall_clock: 0, operator, detail });
+const startRequested = (at, operator, detail, id = ANOTHER) => said("start_requested", at, id, detail, operator);
+// The two events the console publishes around a session, named after the start it came from.
+const sessionRunning = (at, id = null) => said("session_running", at, id, "session running", "");
+const sessionIdle = (at, id = null) => said("session_idle", at, id, "session idle", "");
 
-// The console takes a start into its mailbox at `at`: it publishes the request, then answers 202.
-// A screen whose socket is down gets the 202 and not the event.
-function accepted(context, command, said) {
-  if (context.state.connected) {
-    context.addEvent(startRequested(command.at, command.operator, said));
+// The console takes a request into its mailbox: it publishes the request, then answers 202 with
+// the identifier it gave it. A screen whose socket is down gets the 202 and not the event.
+function accepted(context, command, words) {
+  if (context.state.connected && words) {
+    context.addEvent(startRequested(command.at, command.operator, words, command.request_id));
   }
   return Promise.resolve(command);
 }
 
-// The operator starts a manual bench session; the console takes the request into its mailbox at `at`.
+// The operator starts a manual bench session; the console takes the request into its mailbox at
+// `at`. Returns the identifier the console gave it.
 async function startManual({ context, node }, at) {
+  const id = newRequest();
   node("manual-bench").checked = true;
   node("manual-operator").value = "op";
   context.api = (path) =>
     path === "/api/manual/start"
-      ? accepted(context, { kind: "manual_start", operator: "op", detail: "bench", at }, "manuel bench")
+      ? accepted(context, { kind: "manual_start", operator: "op", detail: "bench", at, request_id: id }, "manuel bench")
       : never();
   context.doManualStart();
   await settle();
+  return id;
 }
 
 // The operator starts a programme; the console takes the request into its mailbox at `at`.
 async function startProgramme({ context, node }, at, detail = "standard_30_min") {
+  const id = newRequest();
   context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
   node("profile").value = "standard_30_min";
   node("operator").value = "op";
   context.api = (path) =>
     path === "/api/session/start"
-      ? accepted(context, { kind: "start", operator: "op", detail, at }, "start standard_30_min")
+      ? accepted(context, { kind: "start", operator: "op", detail, at, request_id: id }, "start standard_30_min")
       : never();
   context.doStart();
   await settle();
+  return id;
 }
 
 // The telemetry socket of this screen opens again: a new socket, which delivers nothing of what the
@@ -2950,28 +3094,16 @@ function reopenSocket({ context }) {
   context.state.connected = true;
 }
 
-// The 409 the console answers while its mailbox holds a request, as it writes it: the waiting
-// request printed as the console holds it, another operator's name and a clock reading included.
-const mailboxTaken = (detail) => Object.assign(new Error(detail), { status: 409 });
-const TARGET_WAITS =
-  "the machine is running (pending: SetManualTarget(output_rpm=5.1, operator='autre ecran', at=18536.818417375)); try again in a moment";
-const START_WAITS =
-  "the machine is starting, not idle (pending: StartSession(profile_id='standard_30_min', operator='autre ecran', " +
-  "total_duration_s=2700.0, at=24511.358085541, subject_id='local', subject_hr_max=None, subject_age=None, cloud_session_id=None))";
-const RESET_BEHIND_START =
-  "the machine is starting (pending: StartSession(profile_id='standard_30_min', operator='autre ecran', " +
-  "total_duration_s=2700.0, at=24511.358085541, subject_id='local', subject_hr_max=None, subject_age=None, " +
-  "cloud_session_id=None)); try again in a moment";
-const MAILBOX_TAKEN =
-  "demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), " +
-  "rien n'a ete envoye. Reessayer dans un instant.";
-
 // The operator asks for a fault reset; the console takes the request into its mailbox at `at`.
 async function askReset({ context }, at) {
+  const id = newRequest();
   context.api = (path) =>
-    path === "/api/drive/fault-reset" ? Promise.resolve({ kind: "fault_reset", operator: "op", detail: "", at }) : never();
+    path === "/api/drive/fault-reset"
+      ? Promise.resolve({ kind: "fault_reset", operator: "op", detail: "", at, request_id: id })
+      : never();
   context.doFaultReset();
   await settle();
+  return id;
 }
 
 const OBF = { name: "dc_bus_overvoltage", mnemonic: "ObF", meaning: "surtension", raw_code: 18, message: "ObF (LFT 18): surtension" };
@@ -2980,14 +3112,16 @@ const faultedFrame = (at, overrides = {}) =>
 
 const START_REFUSED = "demarrage refuse : variateur en defaut (ObF, LFT 18)";
 const SENT_MANUAL = "demande envoyee : manual_start bench - pas encore prise par la machine";
-const NOT_TAKEN = "demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.";
+const SENT_RESET = "demande envoyee : fault_reset - pas encore prise par la machine";
+const START_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.";
+const RESET_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de reset : sa liaison a ete coupee.";
 
-test("the 202 of a manual start says the request is sent, then the frames say the machine took it", async () => {
+test("the 202 of a manual start says the request is sent, then the console says the machine took it", async () => {
   // Given a machine at rest and the operator's click on Demarrer MANUEL.
   const page = panel();
-  const { frame, node } = page;
+  const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
+  const id = await startManual(page, 60);
   // Then the 202 is not read as the machine's answer: the loop has not judged the start yet.
   const note = node("manual-note");
   assert.equal(note.textContent, SENT_MANUAL);
@@ -2995,67 +3129,74 @@ test("the 202 of a manual start says the request is sent, then the frames say th
   // A frame taken after the request, before the loop got to it, changes nothing.
   frame(snapshot({ at: 60.1 }));
   assert.equal(note.textContent, SENT_MANUAL);
-  // When a frame taken after the request shows the manual session.
-  frame(manualFrame(60.3));
-  // Then the note says so, from the machine's own report.
-  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
+  // When the loop arms the session and the console says so, under this request's identifier.
+  context.addEvent(taken(60.2, id, "manuel bench"));
+  // Then the note says so, from the console's own answer.
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench");
   assert.equal(note.classes.has("note-bad"), false);
+  // And the frame of that tick adds what a frame shows: the session begins with a target of 0.
+  frame(manualFrame(60.2));
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
+});
+
+test("a session on screen is not the console's answer: the page does not say pris for it", async () => {
+  // Given a start sent, and frames that show a manual session: this screen's, or another's.
+  const page = panel();
+  const { frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  await startManual(page, 60);
+  frame(manualFrame(60.3));
+  frame(manualFrame(60.5));
+  // Then the page deduces nothing from them.
+  assert.equal(node("manual-note").textContent, SENT_MANUAL);
 });
 
 test("a manual start the loop refuses turns the note into that refusal", async () => {
   const page = panel();
   const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
+  const id = await startManual(page, 60);
   // When the loop refuses on its next tick: the drive shows a fault.
-  context.addEvent(refusal(60.1, START_REFUSED));
+  context.addEvent(refusal(60.1, START_REFUSED, "op", id));
   // Then the note is that refusal, in red, word for word, and no longer says "sent".
   const note = node("manual-note");
   assert.ok(note.textContent.startsWith("refus de la machine ("), note.textContent);
   assert.ok(note.textContent.endsWith(") : " + START_REFUSED), note.textContent);
   assert.ok(note.classes.has("note-bad"));
-  // And the frames that follow, at rest, neither turn it into a start nor add "not taken".
+  // And the frames that follow, at rest, neither turn it into a start nor add "does not know".
   for (let tick = 1; tick <= 10; tick += 1) {
     frame(snapshot({ at: 60.1 + tick * 0.2 }));
   }
   assert.ok(note.textContent.endsWith(START_REFUSED), note.textContent);
 });
 
-test("a refusal that reaches the screen before the 202 of a start is not overwritten by it", async () => {
+test("a refusal that reaches the screen before the 202 of a start is applied when the 202 comes", async () => {
   const page = panel();
   const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  // Given the refusal delivered first by the socket: it is stamped after the request it answers.
-  context.addEvent(refusal(60.1, START_REFUSED));
-  await startManual(page, 60);
+  // Given the refusal delivered first by the socket, under the identifier the 202 will carry.
+  const id = `c0ffee-early-${(requestsAccepted += 1)}`;
+  context.addEvent(refusal(60.1, START_REFUSED, "op", id));
+  node("manual-bench").checked = true;
+  context.api = (path) =>
+    path === "/api/manual/start" ? Promise.resolve({ kind: "manual_start", operator: "op", detail: "bench", at: 60, request_id: id }) : never();
+  context.doManualStart();
+  await settle();
   // Then the 202 does not put "sent" over it.
   assert.ok(node("manual-note").textContent.endsWith(START_REFUSED), node("manual-note").textContent);
-  // An older refusal says nothing of a later start, already shown or delivered late.
+  // An older refusal says nothing of a later start: it carries another identifier.
   await startManual(page, 70);
   assert.equal(node("manual-note").textContent, SENT_MANUAL);
-  context.addEvent(refusal(69.5, START_REFUSED));
+  context.addEvent(refusal(70.1, START_REFUSED, "op", id));
   assert.equal(node("manual-note").textContent, SENT_MANUAL);
-});
-
-test("with no word from the loop for a second of its clock, the note says the start was not taken", async () => {
-  const page = panel();
-  const { frame, node } = page;
-  frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
-  frame(snapshot({ at: 60.9 }));
-  assert.equal(node("manual-note").textContent, SENT_MANUAL);
-  // When a second of the machine's clock has gone by with no session and no refusal on this screen.
-  frame(snapshot({ at: 61.1 }));
-  // Then the note stops saying the request is on its way.
-  assert.equal(node("manual-note").textContent, NOT_TAKEN);
-  assert.ok(node("manual-note").classes.has("note-bad"));
 });
 
 test("the note stops saying the machine took the start once the session is over", async () => {
   const page = panel();
-  const { frame, node } = page;
+  const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
+  const id = await startManual(page, 60);
+  context.addEvent(taken(60.2, id));
   frame(manualFrame(60.3));
   assert.ok(node("manual-note").textContent.startsWith("demarrage pris par la machine"));
   // When the session ends: a STOP, a verdict, another screen.
@@ -3064,98 +3205,250 @@ test("the note stops saying the machine took the start once the session is over"
   assert.equal(node("manual-note").textContent, "");
   // And it leaves alone what was written there since.
   frame(snapshot({ at: 79 }));
-  await startManual(page, 80);
+  const again = await startManual(page, 80);
+  context.addEvent(taken(80.2, again));
   frame(manualFrame(80.3));
   node("manual-note").textContent = "cible envoyee : 5.00 output rpm - pas encore prise par la machine";
   frame(snapshot({ at: 90, mode: "arret", phase: "cooldown" }));
   assert.ok(node("manual-note").textContent.startsWith("cible envoyee"));
 });
 
-test("a refusal and a session both after a start: the note says neither", async () => {
-  // Given a start, and a refusal dated after it: it may answer another screen's request.
-  const page = panel();
-  const { context, frame, node } = page;
-  frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
-  context.addEvent(refusal(60.1, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "autre"));
-  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
-  // When a manual session is then on screen: this start's, or another screen's after this one was refused.
-  frame(manualFrame(60.3));
-  // Then the page claims neither that this start was taken nor that it was refused.
-  assert.equal(node("manual-note").textContent, "");
-});
-
 test("a programme start follows the same rule, in the note of the Seance page", async () => {
   const page = panel();
   const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  await startProgramme(page, 60);
+  const first = await startProgramme(page, 60);
   const note = node("start-note");
   assert.equal(note.textContent, "demande envoyee : start standard_30_min - pas encore prise par la machine");
   // Refused by the loop: the rider's age is missing.
   const refused = "demarrage refuse : age du passager requis pour une seance programmee";
-  context.addEvent(refusal(60.1, refused));
+  context.addEvent(refusal(60.1, refused, "op", first));
   assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
   assert.ok(note.classes.has("note-bad"));
-  // Asked again and taken: the frames show the programme running.
-  await startProgramme(page, 70);
+  // Asked again and taken: the console says so, and the frames show the programme running.
+  const second = await startProgramme(page, 70);
+  context.addEvent(taken(70.2, second, "start standard_30_min"));
+  assert.equal(note.textContent, "demarrage pris par la machine : start standard_30_min");
   frame(snapshot({ at: 70.3, mode: "seance", phase: "baseline" }));
   assert.equal(note.textContent, "demarrage pris par la machine : start standard_30_min");
   // The note goes with the session.
   frame(snapshot({ at: 80 }));
   assert.equal(note.textContent, "");
-  // And a start never answered at all is said so.
-  await startProgramme(page, 90);
-  frame(snapshot({ at: 91.1 }));
-  assert.equal(note.textContent, NOT_TAKEN);
 });
 
 test("a fault reset the loop refuses turns its note into that refusal", async () => {
   const page = panel();
   const { context, frame, node } = page;
   frame(faultedFrame(59.8));
-  await askReset(page, 60);
+  const id = await askReset(page, 60);
   const note = node("fault-note");
-  assert.equal(note.textContent, "demande envoyee : fault_reset - pas encore prise par la machine");
+  assert.equal(note.textContent, SENT_RESET);
   assert.equal(note.textContent.includes("reset demande"), false);
   // A frame taken before the request, and delivered after its 202, is not its answer.
   frame(snapshot({ at: 59.9 }));
-  assert.equal(note.textContent, "demande envoyee : fault_reset - pas encore prise par la machine");
+  assert.equal(note.textContent, SENT_RESET);
   // When the loop refuses: another verdict stands in front of the fault.
   const refused = "reset refuse : acquitter d'abord le verdict operator_estop";
-  context.addEvent(refusal(60.1, refused));
+  context.addEvent(refusal(60.1, refused, "op", id));
   // Then the note says so, and a fault that goes by itself later does not turn it into a success.
   assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
   frame(snapshot({ at: 60.4 }));
   assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
 });
 
-test("after a fault reset the note says what the frames show: the fault gone, or still reported", async () => {
+test("after a fault reset the machine took, the note says what the frames show: the fault gone, or still reported", async () => {
   const page = panel();
-  const { frame, node } = page;
+  const { context, frame, node } = page;
   frame(faultedFrame(59.8));
-  await askReset(page, 60);
+  const id = await askReset(page, 60);
   const note = node("fault-note");
+  // A fault that goes without the console saying it took the reset proves nothing of the request.
+  frame(snapshot({ at: 60.05 }));
+  assert.equal(note.textContent, SENT_RESET);
+  frame(faultedFrame(60.08));
+  // When the loop writes the reset to the drive, and says so.
+  context.addEvent(taken(60.1, id, "reset defaut"));
+  assert.equal(note.textContent, "reset pris par la machine");
   // A drive that drops its fault at once.
   frame(snapshot({ at: 60.3 }));
-  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
+  assert.equal(note.textContent, "reset pris par la machine : le variateur ne signale plus de defaut");
+  assert.equal(note.classes.has("note-bad"), false);
   // The note is true for as long as the frames show no fault: wiped when one is back.
   frame(faultedFrame(70));
   assert.equal(note.textContent, "");
-  // A drive that takes its time, with no refusal on this screen: said after a second, then corrected.
-  await askReset(page, 80);
-  frame(faultedFrame(81.1));
-  assert.equal(
-    note.textContent,
-    "le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.",
-  );
+  // A drive that takes its time: nothing is said of its fault for a second, then it is, in red,
+  // and the note is corrected when the fault goes.
+  const again = await askReset(page, 80);
+  context.addEvent(taken(80.1, again));
+  frame(faultedFrame(80.9));
+  assert.equal(note.textContent, "reset pris par la machine");
+  frame(faultedFrame(81.2));
+  assert.equal(note.textContent, "reset pris par la machine : le variateur signale encore le defaut");
   assert.ok(note.classes.has("note-bad"));
   frame(snapshot({ at: 83 }));
-  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
+  assert.equal(note.textContent, "reset pris par la machine : le variateur ne signale plus de defaut");
   assert.equal(note.classes.has("note-bad"), false);
 });
 
-/* ------ "pris" is said of this screen's own start only on an unbroken stream ------ */
+test("the note of a fault reset is left alone once something else has been written there", async () => {
+  // Given a reset the machine took, its fault still reported a second later.
+  const page = panel();
+  const { context, frame, node } = page;
+  frame(faultedFrame(59.8));
+  const id = await askReset(page, 60);
+  context.addEvent(taken(60.1, id));
+  frame(faultedFrame(61.2));
+  // And a second click that gets no answer at all: its failure is what the note now says.
+  context.api = () => Promise.reject(new TypeError("Failed to fetch"));
+  context.doFaultReset();
+  await settle();
+  const note = node("fault-note");
+  assert.equal(note.textContent, "Failed to fetch");
+  // When the fault then goes.
+  frame(snapshot({ at: 63 }));
+  // Then the page does not write, over that failure, a note that belonged to the first request.
+  assert.equal(note.textContent, "Failed to fetch");
+});
+
+/* ------ the four requests, and the three answers the console can give to each ------ */
+
+// Each request the loop answers: how the operator asks, the note, and what it reads.
+const ASKS = [
+  {
+    kind: "a manual start",
+    ask: (page, at) => startManual(page, at),
+    note: "manual-note",
+    sent: SENT_MANUAL,
+    taken: "demarrage pris par la machine : manual_start bench",
+    lost: START_LOST,
+    before: () => snapshot({ at: 59.8 }),
+  },
+  {
+    kind: "a programme start",
+    ask: (page, at) => startProgramme(page, at, "standard_30_min over 2700 s"),
+    note: "start-note",
+    sent: "demande envoyee : start standard_30_min over 2700 s - pas encore prise par la machine",
+    taken: "demarrage pris par la machine : start standard_30_min over 2700 s",
+    lost: START_LOST,
+    before: () => snapshot({ at: 59.8 }),
+  },
+  {
+    kind: "a manual target",
+    ask: (page, at) => apply(page.context, 5, at),
+    note: "manual-note",
+    sent: SENT_5,
+    taken: "cible prise par la machine : 5.00 output rpm",
+    lost: LOST_TARGET,
+    before: () => manualFrame(59.8),
+  },
+  {
+    kind: "a fault reset",
+    ask: (page, at) => askReset(page, at),
+    note: "fault-note",
+    sent: SENT_RESET,
+    taken: "reset pris par la machine",
+    lost: RESET_LOST,
+    before: () => faultedFrame(59.8),
+  },
+];
+
+for (const request of ASKS) {
+  test(`${request.kind}: taken, refused, cancelled by a STOP - each is said when the console says it`, async () => {
+    for (const [answer, reads] of [
+      [(id) => taken(60.1, id), (text) => text === request.taken],
+      [(id) => refusal(60.1, "refus pour une raison", "op", id), (text) => text.startsWith("refus de la machine (") && text.endsWith(") : refus pour une raison")],
+      [(id) => cancelled(60.1, id), (text) => text.startsWith("demande annulee (") && text.endsWith(") : " + CANCELLED)],
+    ]) {
+      const page = panel();
+      const { context, frame, node } = page;
+      frame(request.before());
+      const id = await request.ask(page, 60);
+      assert.equal(node(request.note).textContent, request.sent);
+      context.addEvent(answer(id));
+      assert.ok(reads(node(request.note).textContent), node(request.note).textContent);
+      // Told a second time, by the status this time, it changes nothing.
+      const shown = node(request.note).textContent;
+      await answer0(context, id);
+      assert.equal(node(request.note).textContent, shown);
+    }
+  });
+
+  test(`${request.kind}: what the console answers to ANOTHER screen is never written under this one's button`, async () => {
+    // Given this screen's request, still waiting for its answer.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(request.before());
+    const id = await request.ask(page, 60);
+    // When the console answers three requests of other screens, one of each kind of answer.
+    context.addEvent(startRequested(60.02, "autre ecran", "manuel bench", "c0ffee-autre-1"));
+    context.addEvent(taken(60.1, "c0ffee-autre-1"));
+    context.addEvent(refusal(60.1, START_REFUSED, "autre ecran", "c0ffee-autre-2"));
+    context.addEvent(cancelled(60.1, "c0ffee-autre-3"));
+    // Then this screen's note still says its own request is waiting.
+    assert.equal(node(request.note).textContent, request.sent);
+    // And its own answer, when it comes, is the one it says.
+    context.addEvent(refusal(60.2, "refus pour une raison", "op", id));
+    assert.ok(node(request.note).textContent.endsWith(") : refus pour une raison"), node(request.note).textContent);
+    // A later answer to another screen does not replace it either.
+    context.addEvent(refusal(60.3, START_REFUSED, "autre ecran", "c0ffee-autre-4"));
+    assert.ok(node(request.note).textContent.endsWith(") : refus pour une raison"), node(request.note).textContent);
+  });
+
+  test(`${request.kind} whose answer was published while this screen had no socket: it does not know, asks, and the status settles it`, async () => {
+    for (const [what, detail, reads] of [
+      ["refused", "refus pour une raison", (text) => text.startsWith("refus de la machine (") && text.endsWith(") : refus pour une raison")],
+      ["cancelled", CANCELLED, (text) => text.startsWith("demande annulee (") && text.endsWith(") : " + CANCELLED)],
+    ]) {
+      // Given this screen's telemetry socket down: no frame and no event reaches it.
+      const page = panel();
+      const { context, frame, node } = page;
+      frame(request.before());
+      dropSocket(page);
+      const id = await request.ask(page, 60);
+      const note = node(request.note);
+      assert.equal(note.textContent, request.sent);
+      // The loop answers, and that event is published while this screen has no socket: it is not
+      // sent again. When the socket comes back and delivers its first frame.
+      const asked = statusAsked(context);
+      reopenSocket(page);
+      frame(snapshot({ at: 60.6, mode: "manuel", manual: manualRow(249) }));
+      // Then the note says that this screen does not know, whatever that frame shows, and the
+      // console is asked.
+      assert.equal(note.textContent, request.lost);
+      assert.ok(note.classes.has("note-bad"));
+      assert.equal(asked.count, 1);
+      // When the status lists what became of the request.
+      await answer(context, status({ at: 60.7, requests: [fate(id, what, 60.1, detail)] }));
+      // Then the note says it.
+      assert.ok(reads(note.textContent), `${what}: ${note.textContent}`);
+    }
+  });
+
+  test(`${request.kind}: a console that no longer knows the request leaves the note saying that this screen does not know`, async () => {
+    // Given a request whose answer was lost with the socket.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(request.before());
+    await request.ask(page, 60);
+    dropSocket(page);
+    reopenSocket(page);
+    frame(snapshot({ at: 60.6 }));
+    assert.equal(node(request.note).textContent, request.lost);
+    // When the console's status lists other requests and not this one: the console restarted, or
+    // has answered sixteen requests since.
+    await answer(context, status({ at: 60.7, requests: [fate(ANOTHER, "taken", 60.2), fate("c0ffee-autre-2", "refused", 60.3, "x")] }));
+    frame(snapshot({ at: 62 }));
+    // Then the page claims nothing.
+    assert.equal(node(request.note).textContent, request.lost);
+  });
+}
+
+// The status tells again what an event already told: one answer, applied once.
+async function answer0(context, id) {
+  await answer(context, status({ at: 60.5, requests: [fate(id, "refused", 60.1, "une autre raison")] }));
+}
+
+/* ------ a start taken is said "pris" only for as long as its session is the one in progress ------ */
 
 // The two starts: how the operator asks, the frame that shows the session, the note, and what it reads.
 const STARTS = [
@@ -3166,18 +3459,15 @@ const STARTS = [
     note: "manual-note",
     sent: SENT_MANUAL,
     taken: "demarrage pris par la machine : manual_start bench (cible 0)",
-    unknown: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.",
-    words: ["manual_start", "bench", "cible 0"],
-    doubt: "une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : ",
-    // The click alone, and what the console answers and publishes for it.
+    unsure:
+      "la machine a pris le demarrage demande par cet ecran (manual_start bench), mais sa liaison a ete coupee depuis : " +
+      "cet ecran ne sait pas si la seance en cours est encore celle-la.",
     press: ({ context, node }) => {
       node("manual-bench").checked = true;
       node("manual-operator").value = "op";
       context.doManualStart();
     },
-    command: (at) => ({ kind: "manual_start", operator: "op", detail: "bench", at }),
     path: "/api/manual/start",
-    published: "manuel bench",
   },
   {
     kind: "a programme start",
@@ -3186,420 +3476,280 @@ const STARTS = [
     note: "start-note",
     sent: "demande envoyee : start standard_30_min over 2700 s - pas encore prise par la machine",
     taken: "demarrage pris par la machine : start standard_30_min over 2700 s",
-    unknown: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.",
-    words: ["standard_30_min", "2700"],
-    doubt: "une seance est en cours. Cet ecran ne sait pas si la machine a pris sa demande : ",
+    unsure:
+      "la machine a pris le demarrage demande par cet ecran (start standard_30_min over 2700 s), mais sa liaison a ete coupee depuis : " +
+      "cet ecran ne sait pas si la seance en cours est encore celle-la.",
     press: ({ context, node }) => {
       context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
       node("profile").value = "standard_30_min";
       node("operator").value = "op";
       context.doStart();
     },
-    command: (at) => ({ kind: "start", operator: "op", detail: "standard_30_min over 2700 s", at }),
     path: "/api/session/start",
-    published: "start standard_30_min",
   },
 ];
-const START_LOST = "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.";
+
+// A start the machine took, said so on a socket that stayed up.
+async function startTaken(start, page) {
+  page.frame(snapshot({ at: 59.8 }));
+  const id = await start.ask(page, 60);
+  page.context.addEvent(taken(60.1, id));
+  page.context.addEvent(sessionRunning(60.15, id));
+  page.frame(start.running(60.2));
+  assert.equal(page.node(start.note).textContent, start.taken);
+  return id;
+}
 
 for (const start of STARTS) {
-  test(`${start.kind} sent with the socket down is not said taken when a session then shows`, async () => {
-    // Given this screen's telemetry socket down: no frame and no event reaches it.
+  test(`${start.kind}: the end of the session wipes "pris" even when no frame of it was delivered`, async () => {
+    // Given a start the machine took, and a session that then ends: its frames are ones the
+    // console coalesced away for this screen, a socket that stalled for a moment.
+    const page = panel();
+    const { context, frame, node } = page;
+    const id = await startTaken(start, page);
+    context.addEvent(said("end_requested", 60.4, ANOTHER, "stop", "ecran B"));
+    // When the event of the session's end arrives: events are never coalesced.
+    context.addEvent(sessionIdle(60.65, id));
+    // Then the note no longer says "pris".
+    assert.equal(node(start.note).textContent, "");
+    // And another screen's session, shown by the next frame delivered, is not said to be this one's.
+    context.addEvent(startRequested(60.7, "ecran B", "manuel bench", "c0ffee-autre-9"));
+    context.addEvent(taken(60.75, "c0ffee-autre-9"));
+    frame(start.running(60.8));
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: the end of the session leaves alone what was written over "pris" since`, async () => {
+    const page = panel();
+    const { context, node } = page;
+    const id = await startTaken(start, page);
+    node(start.note).textContent = "autre chose";
+    context.addEvent(sessionIdle(61, id));
+    assert.equal(node(start.note).textContent, "autre chose");
+  });
+
+  test(`${start.kind}: a session over before this screen heard that its start was taken says nothing of it`, async () => {
+    // Given a start sent, and its session already said over by the console when the answer is
+    // learnt: from the status, after the events were lost.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    const id = await start.ask(page, 60);
+    context.addEvent(sessionIdle(60.9, id));
+    assert.equal(node(start.note).textContent, "");
+    // When a status written before that end, and delivered after it, lists the request as taken
+    // and the session as this start's.
+    await answer(context, status({ at: 60.5, run_state: "running", session_request: id, requests: [fate(id, "taken", 60.1)] }));
+    frame(start.running(60.6));
+    // Then the page does not say "pris" of a session the console has already said over.
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: a session begun and ended before the 202 of its start arrived is not said "pris"`, async () => {
+    // Given a click, and the console's events about that request delivered before its 202: the
+    // loop took it, and the session is already over.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    const id = `c0ffee-early-${(requestsAccepted += 1)}`;
+    const answered = deferred();
+    context.api = (path) => (path === start.path ? answered.promise : never());
+    start.press(page);
+    context.addEvent(taken(60.1, id));
+    context.addEvent(sessionIdle(60.3, id));
+    // When the 202 arrives.
+    answered.resolve({ kind: "start", operator: "op", detail: "x", at: 60, request_id: id });
+    await settle();
+    // Then nothing is said of a session that no longer exists.
+    assert.equal(node(start.note).textContent, "");
+    assert.equal(context.state.held.manual, undefined);
+    assert.equal(context.state.held.programme, undefined);
+  });
+
+  test(`${start.kind}: a new socket takes "pris" down, and the status of the console puts it back`, async () => {
+    // Given a start the machine took, then the socket of this screen dropped and reopened.
+    const page = panel();
+    const { context, frame, node } = page;
+    const id = await startTaken(start, page);
+    dropSocket(page);
+    const asked = statusAsked(context);
+    reopenSocket(page);
+    // When the new socket shows a session: this one, or another started since.
+    frame(start.running(70));
+    // Then the page does not go on saying "pris" as if it had seen everything, and asks the console.
+    const note = node(start.note);
+    assert.equal(note.textContent, start.unsure);
+    assert.ok(note.classes.has("note-bad"));
+    assert.equal(asked.count, 1);
+    frame(start.running(70.2));
+    assert.equal(note.textContent, start.unsure);
+    assert.equal(asked.count, 1);
+    // When the console answers that the session in progress came from this screen's start.
+    await answer(context, status({ at: 70.3, run_state: "running", session_request: id }));
+    // Then the note says "pris" again, and follows the frames as before.
+    assert.equal(note.textContent, start.taken);
+    assert.equal(note.classes.has("note-bad"), false);
+    // And the end of that session, heard on the new socket, wipes it.
+    context.addEvent(sessionIdle(80, id));
+    assert.equal(note.textContent, "");
+  });
+
+  test(`${start.kind}: after a new socket, a session that is another start's wipes the note`, async () => {
+    const page = panel();
+    const { context, frame, node } = page;
+    await startTaken(start, page);
+    dropSocket(page);
+    reopenSocket(page);
+    frame(start.running(70));
+    assert.equal(node(start.note).textContent, start.unsure);
+    // When the console answers that the session in progress came from another start: this
+    // screen's ended, and another began, while it had no socket.
+    await answer(context, status({ at: 70.3, run_state: "running", session_request: ANOTHER }));
+    assert.equal(node(start.note).textContent, "");
+    // The same when nothing is in progress.
+    const other = panel();
+    await startTaken(start, other);
+    dropSocket(other);
+    reopenSocket(other);
+    other.frame(start.running(70));
+    await answer(other.context, status({ at: 70.3, session_request: null }));
+    assert.equal(other.node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: a status asked before the new socket delivered anything does not put "pris" back`, async () => {
+    // Given a status request in flight when the socket drops: the console writes its answer, the
+    // session being this screen's; that session then ends unseen, and another screen starts one.
+    const page = panel();
+    const { context, frame, node } = page;
+    const id = await startTaken(start, page);
+    const inFlight = deferred();
+    context.api = () => inFlight.promise;
+    const loading = context.loadStatus();
+    dropSocket(page);
+    reopenSocket(page);
+    context.api = never;
+    frame(start.running(70));
+    assert.equal(node(start.note).textContent, start.unsure);
+    // When that older answer arrives.
+    inFlight.resolve(status({ at: 61, run_state: "running", session_request: id }));
+    await loading;
+    // Then it is not taken for the present.
+    assert.equal(node(start.note).textContent, start.unsure);
+    // An answer asked for after the new socket's first message is.
+    await answer(context, status({ at: 70.4, run_state: "running", session_request: id }));
+    assert.equal(node(start.note).textContent, start.taken);
+  });
+
+  test(`${start.kind}: with the socket still down, a status that names this start does not say "pris"`, async () => {
+    // Given a start the machine took, and a socket that dropped and has not come back.
+    const page = panel();
+    const { context, node } = page;
+    const id = await startTaken(start, page);
+    dropSocket(page);
+    // When the periodic status says the session in progress is this start's.
+    await answer(context, status({ at: 70, run_state: "running", session_request: id }));
+    // Then the note is left as it was: nothing was written over it, and nothing new is claimed.
+    assert.equal(node(start.note).textContent, start.taken);
+    // And at the first message of a new socket it stops saying "pris" until the console is heard.
+    reopenSocket(page);
+    page.frame(start.running(71));
+    assert.equal(node(start.note).textContent, start.unsure);
+  });
+
+  test(`${start.kind}: after a new socket, a frame that shows no session wipes the note without waiting for the console`, async () => {
     const page = panel();
     const { frame, node } = page;
+    await startTaken(start, page);
+    dropSocket(page);
+    reopenSocket(page);
+    frame(start.running(70));
+    assert.equal(node(start.note).textContent, start.unsure);
+    frame(snapshot({ at: 80 }));
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind} sent with the socket down, taken, its session still in progress: the status says "pris"`, async () => {
+    // Given a start sent with no socket, which the loop took: this screen heard nothing of it.
+    const page = panel();
+    const { context, frame, node } = page;
     frame(snapshot({ at: 59.8 }));
     dropSocket(page);
-    // And a start the console takes into its mailbox.
-    await start.ask(page, 60);
+    const id = await start.ask(page, 60);
     const note = node(start.note);
     assert.equal(note.textContent, start.sent);
-    // The loop refuses it, and that event is published while this screen has no socket: it is not
-    // sent again. Another screen then starts a session, and the loop takes that one.
-    // When the socket comes back and its first frame shows a session.
+    // When the socket comes back: the page does not know, says so, and asks.
     reopenSocket(page);
     frame(start.running(61.5));
-    // Then the note does not say the machine took this request, and says why the screen cannot tell.
-    assert.equal(note.textContent, start.unknown);
-    assert.ok(note.classes.has("note-bad"));
-    // Nor does it repeat the words of the request: they would read as those of the session on screen.
-    for (const word of start.words) {
-      assert.equal(note.textContent.includes(word), false, word);
-    }
-    // And it stays so for as long as that session is shown, then goes with it. Another start
-    // request does not change the reason it gives: the first one stands.
-    frame(start.running(70));
-    assert.equal(note.textContent, start.unknown);
-    page.context.addEvent(startRequested(71, "ecran B", start.published));
-    assert.equal(note.textContent, start.unknown);
-    frame(snapshot({ at: 80 }));
-    assert.equal(note.textContent, "");
+    assert.equal(note.textContent, START_LOST);
+    // When the console lists the request as taken and names it as the start of the session in progress.
+    await answer(context, status({ at: 61.6, run_state: "running", session_request: id, requests: [fate(id, "taken", 60.2)] }));
+    // Then the note says "pris", with the words of this screen's request.
+    assert.equal(note.textContent, start.taken);
+    assert.equal(note.classes.has("note-bad"), false);
   });
 
-  test(`${start.kind} whose socket dropped and reopened before the session showed is not said taken either`, async () => {
-    // Given a live screen and a start the console takes into its mailbox.
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    // When the socket drops and another opens before a frame shows the session: what the machine
-    // published in between is lost to this screen.
-    dropSocket(page);
-    reopenSocket(page);
-    frame(start.running(60.4));
-    // Then the page does not stand behind "pris".
-    assert.equal(node(start.note).textContent, start.unknown);
-  });
-
-  test(`${start.kind} sent while a new socket was still opening is not said taken either`, async () => {
-    // Given a socket that has dropped and a new one the page has asked for, not open yet.
+  test(`${start.kind} sent with the socket down, taken, its session since over: nothing is said of the session on screen`, async () => {
     const page = panel();
     const { context, frame, node } = page;
     frame(snapshot({ at: 59.8 }));
     dropSocket(page);
-    context.state.stream += 1;
-    // And a start sent at that moment: what the machine publishes until the socket opens is lost.
-    await start.ask(page, 60);
-    // When that socket opens and its first frame shows a session.
-    context.state.connected = true;
-    frame(start.running(60.6));
-    // Then the page does not stand behind "pris": the socket was not delivering when the request left.
-    assert.equal(node(start.note).textContent, start.unknown);
-  });
-
-  test(`${start.kind} is said taken, with its own words, when the socket stayed up all along`, async () => {
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.3));
-    assert.equal(node(start.note).textContent, start.taken);
-    assert.equal(node(start.note).classes.has("note-bad"), false);
-  });
-
-  test(`${start.kind} sent with the socket down, and no session a second later: unknown, not "NON pris"`, async () => {
-    // Given a start sent with no socket: the session may have started and ended unseen.
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    dropSocket(page);
-    await start.ask(page, 60);
-    // When the socket is back and its frames, a second after the request, show no session.
+    const id = await start.ask(page, 60);
     reopenSocket(page);
-    frame(snapshot({ at: 60.9 }));
-    assert.equal(node(start.note).textContent, start.sent);
-    frame(snapshot({ at: 61.1 }));
-    // Then the note says that this screen does not know, not that the machine did not take it.
+    // A session is on screen: another screen's, started after this one's ended.
+    frame(start.running(61.5));
     assert.equal(node(start.note).textContent, START_LOST);
-    assert.ok(node(start.note).classes.has("note-bad"));
+    await answer(context, status({ at: 61.6, run_state: "running", session_request: ANOTHER, requests: [fate(id, "taken", 60.2)] }));
+    // Then the note does not say that the session on screen is this screen's.
+    assert.equal(node(start.note).textContent, "");
+  });
+
+  test(`${start.kind}: the socket that counts is the one open at the click, not at the 202`, async () => {
+    // Given a click with the socket down, and a socket that reopens before the 202 arrives: what
+    // the console published for this request meanwhile was not delivered.
+    const page = panel();
+    const { context, frame, node } = page;
+    frame(snapshot({ at: 59.8 }));
+    dropSocket(page);
+    const answered = deferred();
+    context.api = (path) => (path === start.path ? answered.promise : never());
+    start.press(page);
+    reopenSocket(page);
+    frame(snapshot({ at: 60.05 }));
+    answered.resolve({ kind: start.path === "/api/manual/start" ? "manual_start" : "start", operator: "op", detail: "x", at: 60, request_id: newRequest() });
+    await settle();
+    const asked = statusAsked(context);
+    // When a second of the machine's clock has gone by with no answer.
+    frame(snapshot({ at: 61.2 }));
+    // Then the page says that it does not know, and asks the console.
+    assert.equal(node(start.note).textContent, START_LOST);
+    assert.equal(asked.count, 1);
   });
 }
 
-/* ------ "pris" also wants this screen's start request to have been the only one before the loop ------ */
-
-const RIVAL = "une autre demande de demarrage est aussi arrivee a la machine.";
-const UNSEEN = "il n'a pas recu l'evenement de sa propre demande.";
-// The two events the console publishes around a start besides the requests themselves.
-const sessionIdle = (at) => ({ kind: "session_idle", at, wall_clock: 0, operator: "", detail: "" });
-const sessionRunning = (at) => ({ kind: "session_running", at, wall_clock: 0, operator: "", detail: "" });
-
-for (const start of STARTS) {
-  // The sequence two screens received, in this order, on sockets that never dropped: the request
-  // of screen A, session_idle, the request of screen B 85 ms later, session_running, and no
-  // refusal. The console answered 202 to both; one session runs.
-  test(`${start.kind} followed by another screen's before the loop took either is not said taken (screen A)`, async () => {
-    // Given this screen's start, taken into the mailbox.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    const note = node(start.note);
-    assert.equal(note.textContent, start.sent);
-    // When another screen's start is accepted before the loop has emptied the mailbox, and a
-    // session then shows.
-    context.addEvent(sessionIdle(60.05));
-    context.addEvent(startRequested(60.085, "ecran B", start.published));
-    context.addEvent(sessionRunning(60.2));
-    frame(start.running(60.2));
-    // Then the page does not say that the machine took this screen's request: it says that another
-    // start request reached the machine as well, without the words of its own.
-    assert.equal(note.textContent, start.doubt + RIVAL);
-    assert.ok(note.classes.has("note-bad"));
-    for (const word of start.words) {
-      assert.equal(note.textContent.includes(word), false, word);
-    }
-    // And the note goes with the session.
-    frame(snapshot({ at: 80 }));
-    assert.equal(note.textContent, "");
-  });
-
-  test(`${start.kind} accepted while another screen's still waited is not said taken either (screen B)`, async () => {
-    // Given another screen's start on the stream, which the loop has not answered: no refusal,
-    // no frame of a later tick.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    context.addEvent(startRequested(60, "ecran A", start.published));
-    // The frame of the tick during which it was accepted began before it: it answers nothing.
-    frame(snapshot({ at: 59.95 }));
-    context.addEvent(sessionIdle(60.05));
-    // When this screen's start is accepted all the same, and a session then shows.
-    await start.ask(page, 60.085);
-    context.addEvent(sessionRunning(60.2));
-    frame(start.running(60.2));
-    // Then this screen cannot tell which of the two the loop took, whichever came last.
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind} that was the only request on the stream is said taken`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    context.addEvent(sessionRunning(60.2));
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind} is said taken when its own event reaches the screen after the 202`, async () => {
-    // Given the 202 delivered first, then the event the console published for that same request.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    context.api = (path) => (path === start.path ? Promise.resolve(start.command(60)) : never());
-    start.press(page);
-    await settle();
-    context.addEvent(startRequested(60, "op", start.published));
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind} more than two seconds after another screen's that the loop refused is said taken`, async () => {
-    // Given another screen's start, and the loop's refusal of it: the stream has shown it resolved.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 55.8 }));
-    context.addEvent(startRequested(56, "ecran A", start.published));
-    context.addEvent(refusal(56.1, START_REFUSED, "ecran A"));
-    // When this screen's start follows, more than two seconds later, and a session shows.
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    // Then nothing contests it.
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind} less than two seconds after another screen's is not said taken, even one the loop refused`, async () => {
-    // Given another screen's start just before, refused by the loop: the page does not try to
-    // work out which tick judged what.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 57.8 }));
-    context.addEvent(startRequested(58.1, "ecran A", start.published));
-    context.addEvent(refusal(58.2, START_REFUSED, "ecran A"));
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind} after another screen's whole session is said taken`, async () => {
-    // Given another screen's start a while ago, and its session, begun and ended since.
-    const page = panel();
-    const { context, frame, node } = page;
-    context.addEvent(startRequested(30, "ecran A", start.published));
-    frame(start.running(30.2));
-    context.addEvent(sessionRunning(30.25));
-    frame(snapshot({ at: 45 }));
-    context.addEvent(sessionIdle(45.05));
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind}: a refusal dated before an older request does not resolve it`, async () => {
-    // Given another screen's start a while ago, and a refusal of an earlier command delivered
-    // after it: it says nothing of that request.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 54.8 }));
-    context.addEvent(startRequested(55, "ecran A", start.published));
-    context.addEvent(refusal(54.9, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "ecran C"));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind} whose own event reached the screen twice is not said taken`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    context.addEvent(startRequested(60, "op", start.published));
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind} after an older request the stream never showed resolved is not said taken`, async () => {
-    // Given another screen's start a while ago on this socket: no refusal of it, and no session
-    // that began and ended since. On a machine that slow, it may still wait.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 54.8 }));
-    context.addEvent(startRequested(55, "ecran A", start.published));
-    context.addEvent(sessionIdle(55.1));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind} whose own request event never reached the screen is not said taken`, async () => {
-    // Given a 202, and a stream that never dropped but did not carry the event of this request.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    context.api = (path) => (path === start.path ? Promise.resolve(start.command(60)) : never());
-    start.press(page);
-    await settle();
-    frame(start.running(60.2));
-    // Then the page has not seen every event: it does not stand behind "pris", and says why.
-    assert.equal(node(start.note).textContent, start.doubt + UNSEEN);
-  });
-
-  test(`${start.kind}: the stream that counts is the one open at the click, not at the 202`, async () => {
-    // Given a click on a live socket, and a 202 that is slow to come back.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    const answer = deferred();
-    context.api = (path) => (path === start.path ? answer.promise : never());
-    start.press(page);
-    // When the socket drops and another opens before the 202 arrives: the events published in
-    // between, the loop's refusal among them, are lost to this screen.
-    dropSocket(page);
-    reopenSocket(page);
-    context.addEvent(startRequested(60, "op", start.published));
-    answer.resolve(start.command(60));
-    await settle();
-    frame(start.running(60.4));
-    // Then the page does not stand behind "pris".
-    assert.equal(node(start.note).textContent, start.unknown);
-  });
-
-  test(`${start.kind} sent after the socket reopened is judged on the new socket, not on the one of an earlier request`, async () => {
-    // Given a first start on a first socket, which drops before any frame answers it.
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    dropSocket(page);
-    // When another socket opens and delivers frames, and the operator asks again on that one.
-    reopenSocket(page);
-    frame(snapshot({ at: 60.5 }));
-    await start.ask(page, 63);
-    frame(start.running(63.2));
-    // Then this request is said taken: its stream is unbroken, whatever the first one's was.
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-}
-
-for (const start of STARTS) {
-  test(`${start.kind} sent less than two seconds after its socket began to deliver is not said taken`, async () => {
-    // Given a socket that has just opened: a page just loaded, or a link just back. Another
-    // screen's start request, a moment earlier, is one this socket never carried.
-    const page = panel();
-    const { context, frame, node } = page;
-    dropSocket(page);
-    reopenSocket(page);
-    frame(snapshot({ at: 58.5 }));
-    // When this screen starts at once, and a session shows.
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    // Then the page does not know who else asked before it could see: it does not say "pris".
-    assert.equal(node(start.note).textContent, start.doubt + "sa liaison venait de s'ouvrir.");
-    assert.ok(node(start.note).classes.has("note-bad"));
-    // Two seconds of frames later, a start is judged as any other.
-    context.addEvent(sessionRunning(60.25));
-    frame(snapshot({ at: 80 }));
-    context.addEvent(sessionIdle(80.05));
-    await start.ask(page, 90);
-    frame(start.running(90.2));
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind}: a request left unanswered on a socket since closed contests nothing on the new one`, async () => {
-    // Given another screen's start seen on a first socket, on a machine up for hours, never answered
-    // there: the Pi restarted. The new console holds nothing of it, and its clock reads earlier.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 20000 }));
-    context.addEvent(startRequested(20000.1, "ecran A", start.published));
-    dropSocket(page);
-    reopenSocket(page);
-    // When this screen starts on the new socket, some seconds after its first frame, and a session shows.
-    frame(snapshot({ at: 50 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    // Then nothing contests this request.
-    assert.equal(node(start.note).textContent, start.taken);
-  });
-
-  test(`${start.kind} sent twice in the window where the console accepts both does not know which one ran`, async () => {
-    // Given a first start of this screen, and a second click the console also answers 202.
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    await start.ask(page, 60.085);
-    frame(start.running(60.2));
-    // Then two start requests reached the machine: the note does not say which one it took.
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-}
-
-test("the page keeps the last few start requests of the stream, not all of them", () => {
-  const { context } = panel();
-  for (let index = 0; index < 20; index += 1) {
-    context.addEvent(startRequested(60 + index, "ecran A", "manuel bench"));
-  }
-  assert.equal(context.state.startLog.length, 8);
-  assert.equal(context.state.startLog[7].at, 79);
-});
-
-test("the note of a fault reset is not a note about a session: the events of a start leave it alone", async () => {
+test("the note of a fault reset is not a note about a session: the end of a session leaves it alone", async () => {
   const page = panel();
   const { context, frame, node } = page;
   frame(faultedFrame(59.8));
-  await askReset(page, 60);
+  const id = await askReset(page, 60);
+  context.addEvent(taken(60.1, id));
   frame(snapshot({ at: 60.3 }));
-  const gone = "le variateur ne signale plus de defaut";
+  const gone = "reset pris par la machine : le variateur ne signale plus de defaut";
   assert.equal(node("fault-note").textContent, gone);
   context.addEvent(startRequested(61, "ecran B", "manuel bench"));
-  context.addEvent(refusal(61.1, START_REFUSED, "ecran B"));
+  context.addEvent(refusal(61.1, START_REFUSED, "ecran B", ANOTHER));
   context.addEvent(sessionIdle(61.2));
-  assert.equal(node("fault-note").textContent, gone);
-});
-
-test("a fault reset says what the frames show whatever the socket did: it claims nothing of the request", async () => {
-  const page = panel();
-  const { frame, node } = page;
-  frame(faultedFrame(59.8));
   dropSocket(page);
-  await askReset(page, 60);
   reopenSocket(page);
-  frame(snapshot({ at: 61.5 }));
-  assert.equal(node("fault-note").textContent, "le variateur ne signale plus de defaut");
+  frame(snapshot({ at: 62 }));
+  assert.equal(node("fault-note").textContent, gone);
 });
 
 test("the note of a manual start says (cible 0) only while the frames show the applied target at 0", async () => {
   // Given a manual start the machine took: the session begins with a target of 0.
   const page = panel();
   const { frame, node } = page;
-  frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
-  frame(manualFrame(60.3));
+  await startTaken(STARTS[0], page);
   const note = node("manual-note");
-  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
   // When another screen applies a target: the frames show it, and this screen wrote nothing.
   frame(manualFrame(65, 249));
   // Then the note no longer states a target the machine does not hold.
@@ -3613,272 +3763,136 @@ test("the note of a manual start says (cible 0) only while the frames show the a
   assert.equal(note.textContent, "");
 });
 
-test("a manual session first shown with a target already applied is not said to start at 0", async () => {
+test("a frame taken before the answer and delivered after it neither wipes a start taken nor adds to it", async () => {
+  // Given a start the console says taken. The frame of the tick before, at rest, is still to be
+  // delivered: the console sends a socket its events first.
   const page = panel();
-  const { frame, node } = page;
+  const { context, frame, node } = page;
   frame(snapshot({ at: 59.8 }));
-  await startManual(page, 60);
-  frame(manualFrame(60.3, 249));
+  const id = await startManual(page, 60);
+  context.addEvent(taken(60.2, id));
+  frame(snapshot({ at: 60.0 }));
+  // Then the note is not wiped for a session "over".
   assert.equal(node("manual-note").textContent, "demarrage pris par la machine : manual_start bench");
-});
-
-test("the first refusal after a start stands: a second one does not replace it", async () => {
-  // Given a programme start, and the loop's refusal on its next tick.
-  const page = panel();
-  const { context, node } = page;
-  await startProgramme(page, 60);
-  const first = "demarrage refuse : age du passager requis pour une seance programmee";
-  context.addEvent(refusal(60.1, first));
-  const note = node("start-note");
-  assert.ok(note.textContent.endsWith(") : " + first), note.textContent);
-  // When a second refusal follows in the same second: another screen's, for something else.
-  context.addEvent(refusal(60.3, "consigne refusee : au-dessus du plafond", "autre ecran"));
-  // Then the first stays: the note does not follow every refusal the machine publishes.
-  assert.ok(note.textContent.endsWith(") : " + first), note.textContent);
-});
-
-for (const start of [
-  { kind: "a manual start", ask: (page, at) => startManual(page, at), note: "manual-note", running: (at) => manualFrame(at) },
-  {
-    kind: "a programme start",
-    ask: (page, at) => startProgramme(page, at),
-    note: "start-note",
-    running: (at) => snapshot({ at, mode: "seance", phase: "baseline" }),
-  },
-]) {
-  test(`${start.kind} a slow machine refuses more than a second later is said refused, not "NON pris"`, async () => {
-    // Given a start on a machine whose loop takes its time: no frame for a second and a half.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    // When the loop refuses it then, and the frame of that tick follows.
-    context.addEvent(refusal(61.5, START_REFUSED));
-    frame(snapshot({ at: 61.5 }));
-    // Then the note is that refusal: it does not say that the reason did not reach this screen.
-    const note = node(start.note);
-    assert.ok(note.textContent.endsWith(") : " + START_REFUSED), note.textContent);
-  });
-
-  test(`${start.kind} refused late, its frame not delivered, then another screen's session: not said taken`, async () => {
-    // Given a start the loop refuses a second and a half later; the frame of that tick is one the
-    // console did not deliver to this screen (a newer one replaced it).
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    context.addEvent(refusal(61.5, START_REFUSED));
-    // When another screen then starts a session and the next frame shows it.
-    context.addEvent(startRequested(61.6, "autre ecran", "manuel bench"));
-    frame(start.running(61.9));
-    // Then the note does not say that the machine took this screen's request.
-    assert.equal(node(start.note).textContent, "");
-  });
-}
-
-test("a reset left watching its fault does not take a later refusal for its own", async () => {
-  // Given a reset with no answer on this screen for a second: the fault is still reported.
-  const page = panel();
-  const { context, frame, node } = page;
-  frame(faultedFrame(59.8));
-  await askReset(page, 60);
-  frame(faultedFrame(61.1));
-  const late = "le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.";
-  const note = node("fault-note");
-  assert.equal(note.textContent, late);
-  // When the machine refuses something else, seconds later, to this screen or another.
-  context.addEvent(refusal(65, START_REFUSED, "autre ecran"));
-  // Then that refusal is not written under the reset button.
-  assert.equal(note.textContent, late);
-  // And the note is still corrected when the fault goes.
-  frame(snapshot({ at: 66 }));
-  assert.equal(note.textContent, "le variateur ne signale plus de defaut");
-});
-
-test("the late note of a reset is left alone once something else has been written there", async () => {
-  // Given a reset whose fault is still reported a second later.
-  const page = panel();
-  const { context, frame, node } = page;
-  frame(faultedFrame(59.8));
-  await askReset(page, 60);
-  frame(faultedFrame(61.1));
-  // And a second click that gets no answer at all: its failure is what the note now says.
-  context.api = () => Promise.reject(new TypeError("Failed to fetch"));
-  context.doFaultReset();
-  await settle();
-  const note = node("fault-note");
-  assert.equal(note.textContent, "Failed to fetch");
-  // When the fault then goes.
-  frame(snapshot({ at: 63 }));
-  // Then the page does not write, over that failure, a note that belonged to the first request.
-  assert.equal(note.textContent, "Failed to fetch");
-});
-
-/* ------ the console's 409 while its mailbox holds a request ------ */
-
-test("a target refused because another screen's request waits is said in the page's own sentence", async () => {
-  // Given a manual session on screen and no target of this screen waiting.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  context.state.manualDraft = 6;
-  // When Appliquer is answered 409: the mailbox holds another screen's target, printed in the answer.
-  context.api = () => Promise.reject(mailboxTaken(TARGET_WAITS));
-  context.doManualApply();
-  await settle();
-  // Then the note is one sentence of the page, and nothing of what the console printed.
-  const note = node("manual-note");
-  assert.equal(note.textContent, MAILBOX_TAKEN);
-  assert.ok(note.classes.has("note-bad"));
-  for (const word of ["pending", "SetManualTarget", "autre ecran", "18536"]) {
-    assert.equal(note.textContent.includes(word), false, word);
-  }
-  assert.equal(context.state.manualSent, null);
-});
-
-test("once a tick has gone by since this screen's target, a 409 for a waiting request is another one's, not a second click", async () => {
-  // Given a target of this screen and a frame taken after it: the mailbox no longer holds it,
-  // though the frames do not show yet what the loop made of it.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  await apply(context, 5, 60);
   frame(manualFrame(60.2));
-  assert.notEqual(context.state.manualSent, null);
-  // When Appliquer is answered 409 for a request that waits: it is not this screen's.
-  context.api = () => Promise.reject(mailboxTaken(TARGET_WAITS));
-  context.doManualApply();
-  await settle();
-  // Then the note does not say that this screen's own target is still waiting.
-  assert.equal(node("manual-note").textContent, MAILBOX_TAKEN);
+  assert.equal(node("manual-note").textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
 });
 
-test("a 409 that names no waiting request is shown as it is, also while a target of this screen waits", async () => {
-  // Given a target of this screen in the mailbox, and no frame since.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  // When Appliquer is answered 409 because the session is ending: no request is said to wait.
-  const ending = "no manual session is running (the machine is stopping)";
-  context.api = () => Promise.reject(mailboxTaken(ending));
-  context.doManualApply();
-  await settle();
-  // Then the page does not say that the first target still waits for the machine.
-  assert.equal(node("manual-note").textContent, ending);
+test("the page keeps the last answers of the console, not all of them", () => {
+  const { context } = panel();
+  for (let index = 0; index < 50; index += 1) {
+    context.addEvent(taken(60 + index, `c0ffee-autre-${index}`));
+  }
+  assert.equal(context.state.fates.length, 32);
+  assert.equal(context.state.fates[31].id, "c0ffee-autre-49");
+  for (let index = 0; index < 50; index += 1) {
+    context.addEvent(sessionIdle(120 + index, `c0ffee-autre-${index}`));
+  }
+  assert.equal(context.state.sessionsOver.length, 32);
 });
 
-for (const [what, press, noteId, detail] of [
-  ["a manual start", (page) => { page.node("manual-bench").checked = true; page.context.doManualStart(); }, "manual-note", START_WAITS],
+/* ------ a request the console refuses at once ------ */
+
+test("the page's request code hands over the code of a refusal and the request in its way", async () => {
+  // Given the console's answer as the browser receives it.
+  const { context, send } = panel();
+  context.fetch = () =>
+    Promise.resolve({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      json: () => Promise.resolve({ detail: START_PENDING, code: "start_pending", waiting_request_id: "c0ffee-7" }),
+    });
+  const refused = await send("/api/manual/start", { method: "POST", body: {} }).catch((error) => error);
+  assert.equal(refused.message, START_PENDING);
+  assert.equal(refused.status, 409);
+  assert.equal(refused.code, "start_pending");
+  assert.equal(refused.waiting, "c0ffee-7");
+  // An answer of the console that is not one of these refusals carries neither.
+  context.fetch = () =>
+    Promise.resolve({ ok: false, status: 400, statusText: "Bad Request", json: () => Promise.resolve({ detail: "an operator name is required" }) });
+  const plain = await send("/api/manual/start", { method: "POST", body: {} }).catch((error) => error);
+  assert.equal(plain.code, null);
+  assert.equal(plain.waiting, null);
+});
+
+for (const [what, press, noteId] of [
+  ["a manual start", (page) => { page.node("manual-bench").checked = true; page.context.doManualStart(); }, "manual-note"],
   ["a programme start", (page) => {
     page.context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
     page.node("profile").value = "standard_30_min";
     page.context.doStart();
-  }, "start-note", START_WAITS],
-  ["a fault reset", (page) => page.context.doFaultReset(), "fault-note", RESET_BEHIND_START],
+  }, "start-note"],
+  ["a fault reset", (page) => page.context.doFaultReset(), "fault-note"],
+  ["a manual target", (page) => page.context.doManualApply(), "manual-note"],
 ]) {
-  test(`${what} refused because another request waits is said the same way`, async () => {
-    const page = panel();
-    page.context.api = () => Promise.reject(mailboxTaken(detail));
-    press(page);
-    await settle();
-    const note = page.node(noteId);
-    assert.equal(note.textContent, MAILBOX_TAKEN);
-    for (const word of ["pending", "StartSession", "autre ecran", "subject_age", "24511"]) {
-      assert.equal(note.textContent.includes(word), false, word);
+  test(`${what} the console refuses at once is said in the console's own sentence, whatever the code`, async () => {
+    for (const [detail, code] of [
+      [START_PENDING, "start_pending"],
+      [REQUEST_WAITING, "request_waiting"],
+      ["the machine is running, not idle", "machine_running"],
+      ["no manual session is running (the machine is stopping)", "no_manual_session"],
+    ]) {
+      const page = panel();
+      page.context.api = () => Promise.reject(refusedAtOnce(detail, code, ANOTHER));
+      press(page);
+      await settle();
+      const note = page.node(noteId);
+      assert.equal(note.textContent, detail);
+      assert.ok(note.classes.has("note-bad"));
     }
   });
 }
 
-test("a 409 that names no waiting request is the console's own answer, shown as it is", async () => {
+test("a second start while this screen's first still waits: the console's refusal, then what became of the first", async () => {
+  // Given this screen's start in the mailbox, and a second click before the loop has taken it.
   const page = panel();
-  const idle = "the machine is running, not idle";
-  page.node("manual-bench").checked = true;
-  page.context.api = () => Promise.reject(mailboxTaken(idle));
-  page.context.doManualStart();
+  const { context, frame, node } = page;
+  frame(snapshot({ at: 59.8 }));
+  const id = await startManual(page, 60);
+  context.api = () => Promise.reject(refusedAtOnce(START_PENDING, "start_pending", id));
+  context.doManualStart();
   await settle();
-  assert.equal(page.node("manual-note").textContent, idle);
+  const note = node("manual-note");
+  assert.equal(note.textContent, START_PENDING);
+  // Then the first request is still followed, and the note says what the loop made of it.
+  context.addEvent(taken(60.2, id));
+  frame(manualFrame(60.2));
+  assert.equal(note.textContent, "demarrage pris par la machine : manual_start bench (cible 0)");
 });
 
-/* ============ EX-5, the note of a manual target: refusals that are not about it ============ */
-
-const TAKEN_5 = "cible prise par la machine : 5.00 output rpm (suivie aux limites de mouvement)";
-
-test("a refusal answered to another screen does not stand once the machine holds the target sent", async () => {
-  // Given a target sent, and a refusal dated after it that answers another screen's request.
+test("a second click on Appliquer while this screen's first target still waits is said as a second request", async () => {
+  // Given a target in the mailbox, and a second click before the loop has taken it: the console
+  // names the request in the way by its identifier, and it is this screen's own.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  context.addEvent(refusal(60.1, HELD, "autre ecran"));
-  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
-  // When the frames show the machine holding the target this screen sent.
-  frame(manualFrame(60.2, 249));
-  // Then the note says what the machine reports about that target, not the other screen's refusal.
-  assert.equal(node("manual-note").textContent, TAKEN_5);
-  assert.equal(node("manual-note").classes.has("note-bad"), false);
-});
-
-test("nor does one that reached the screen before the 202 of the target", async () => {
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  context.addEvent(refusal(60.1, HELD, "autre ecran"));
-  await apply(context, 5, 60);
-  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
-  frame(manualFrame(60.2, 249));
-  assert.equal(node("manual-note").textContent, TAKEN_5);
-});
-
-test("two clicks astride a cycle: the first target taken back, the second taken, and the note says taken", async () => {
-  // Given a first target the machine took, and a second click as the machine takes the first back.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  frame(manualFrame(60.2, 249));
-  assert.equal(node("manual-note").textContent, TAKEN_5);
-  await apply(context, 5, 60.3);
-  context.addEvent(refusal(60.4, TAKEN_BACK, ""));
-  frame(manualFrame(60.4, 0));
-  assert.ok(node("manual-note").textContent.startsWith("refus de la machine"));
-  // When the next tick takes the second target.
-  frame(manualFrame(60.6, 249));
-  // Then the note no longer says refused of a target the machine holds.
-  assert.equal(node("manual-note").textContent, TAKEN_5);
-});
-
-test("a second click in the cycle of the first is refused in French, and the note then says what became of the first", async () => {
-  // Given a target in the mailbox, and a second click before the loop has taken it.
-  const { context, frame, node } = panel();
-  frame(manualFrame(59.8));
-  await apply(context, 5, 60);
-  const busy = "the machine is running (pending: SetManualTarget(output_rpm=5.0, operator='op', at=60.0)); try again in a moment";
-  context.api = () => Promise.reject(mailboxTaken(busy));
+  const id = await apply(context, 5, 60);
+  context.api = () => Promise.reject(refusedAtOnce(REQUEST_WAITING, "request_waiting", id));
   context.doManualApply();
   await settle();
-  // Then the note does not show the console's English sentence, and the first target is still awaited.
   const note = node("manual-note");
   assert.equal(
     note.textContent,
     "seconde demande refusee par la console : la cible 5.00 output rpm attend encore la machine (une demande a la fois). Reessayer dans un instant.",
   );
-  assert.notEqual(context.state.manualSent, null);
-  // And when the machine takes it, the note says so.
+  assert.equal(context.state.asked.target.id, id);
+  // And when the machine takes the first, the note says so.
+  context.addEvent(taken(60.1, id));
   frame(manualFrame(60.2, 249));
   assert.equal(note.textContent, TAKEN_5);
 });
 
-test("a 409 once the loop has had its tick is the console's own answer, shown as it is", async () => {
-  // Given a target sent, and a frame taken after it: the mailbox no longer holds it.
+test("a target refused because ANOTHER screen's request waits is not said to be a second click", async () => {
+  // Given a target of this screen still unanswered, and a 409 that names another request.
   const { context, frame, node } = panel();
   frame(manualFrame(59.8));
   await apply(context, 5, 60);
-  frame(manualFrame(60.2));
-  // When Appliquer is then refused: the session is ending.
-  const ending = "no manual session is running (the machine is stopping)";
-  context.api = () => Promise.reject(Object.assign(new Error(ending), { status: 409 }));
+  context.api = () => Promise.reject(refusedAtOnce(REQUEST_WAITING, "request_waiting", ANOTHER));
   context.doManualApply();
   await settle();
-  // Then that is not taken for a second click astride the first.
-  assert.equal(node("manual-note").textContent, ending);
-  assert.equal(context.state.manualSent, null);
-  // Nor is a request that got no answer at all, in the cycle of a first one or not.
-  await apply(context, 5, 70);
+  // Then the note is the console's sentence: this screen's first target is not the one in the way.
+  assert.equal(node("manual-note").textContent, REQUEST_WAITING);
+  // Nor is a request that got no answer at all.
   context.api = () => Promise.reject(new TypeError("Failed to fetch"));
   context.doManualApply();
   await settle();
@@ -3891,7 +3905,8 @@ test("with a person on board and a console that no longer answers, a rise taken 
   const at120 = { setpoint: turning(120), measured: turning(120) };
   frame(riderFrame(59.6, 120, at120));
   context.renderPanel(panelRow());
-  await apply(context, 5, 60);
+  const id = await apply(context, 5, 60);
+  context.addEvent(taken(60.1, id));
   frame(riderFrame(60.2, 249, at120));
   frame(riderFrame(60.4, 249, at120));
   assert.equal(node("manual-note").textContent, TAKEN_5);
@@ -4269,553 +4284,3 @@ for (const id of ["verdicts-grid", "system-grid"]) {
     assert.equal(rows(node(id))["verdict retenu"].textContent, "aucun");
   });
 }
-
-/* ============ "pris" is kept only while nothing the stream carries contradicts it ============ */
-
-for (const start of STARTS) {
-  test(`${start.kind}: another start request while the note says "pris" takes it down`, async () => {
-    // Given a start the machine took, said so.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-    // When another start request reaches the machine, which the console accepted.
-    context.addEvent(startRequested(60.3, "ecran B", start.published));
-    // Then the session on screen may no longer be this screen's: the note stops saying "pris".
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-    assert.ok(node(start.note).classes.has("note-bad"));
-    // And a frame that still shows a session does not bring it back.
-    frame(start.running(60.6));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-  });
-
-  test(`${start.kind}: a refusal dated after it, received while the note says "pris", takes it down`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-    // When the loop publishes a refusal a tick later.
-    const late = "demarrage refuse : la machine est deja running";
-    context.addEvent(refusal(60.5, late));
-    // Then the note shows what the machine refused, and no longer says that it took this request.
-    assert.ok(node(start.note).textContent.endsWith(") : " + late), node(start.note).textContent);
-    frame(start.running(60.6));
-    assert.ok(node(start.note).textContent.endsWith(") : " + late), node(start.note).textContent);
-  });
-
-  test(`${start.kind}: a refusal does not put its words over a note that already does not know`, async () => {
-    // Given two start requests in one cycle: this screen does not know which one the loop took.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    context.addEvent(startRequested(60.085, "ecran B", start.published));
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-    // When the loop refuses one of them a tick later.
-    context.addEvent(refusal(60.4, "demarrage refuse : la machine est deja running", "ecran B"));
-    if (start.note === "start-note") {
-      // Then the note still says that it does not know: that refusal may be the other screen's.
-      assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-    } else {
-      // The card of a manual session shows every refusal the machine publishes, as it always did.
-      assert.equal(node(start.note).textContent.includes("pris par la machine"), false);
-    }
-  });
-
-  test(`${start.kind}: a refusal dated before it does not take "pris" down`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    // A refusal of an older command, delivered late.
-    context.addEvent(refusal(59.9, "reset refuse : aucun defaut a acquitter (switch_on_disabled)", "ecran B"));
-    frame(start.running(60.4));
-    if (start.note === "start-note") {
-      assert.equal(node(start.note).textContent, start.taken);
-    } else {
-      // The card of a manual session shows every refusal the machine publishes: "pris" is gone
-      // there too, and the note says less.
-      assert.equal(node(start.note).textContent.includes("pris par la machine"), false);
-    }
-  });
-
-  test(`${start.kind}: the end of the session wipes "pris" even when no frame of it was delivered`, async () => {
-    // Given a start the machine took, and a session that then ends: its frames are ones the
-    // console coalesced away for this screen, a socket that stalled for a moment.
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    context.addEvent(sessionRunning(60.25));
-    context.addEvent({ kind: "end_requested", at: 60.4, wall_clock: 0, operator: "ecran B", detail: "stop" });
-    // When the event of the session's end arrives: events are never coalesced.
-    context.addEvent(sessionIdle(60.65));
-    // Then the note no longer says "pris".
-    assert.equal(node(start.note).textContent, "");
-    // And another screen's session, shown by the next frame delivered, is not said to be this one's.
-    context.addEvent(startRequested(60.7, "ecran B", start.published));
-    frame(start.running(60.8));
-    assert.equal(node(start.note).textContent, "");
-  });
-
-  test(`${start.kind}: the end of the session leaves alone what was written over "pris" since`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    node(start.note).textContent = "autre chose";
-    context.addEvent(startRequested(60.4, "ecran B", start.published));
-    context.addEvent(sessionIdle(61));
-    assert.equal(node(start.note).textContent, "autre chose");
-  });
-
-  test(`${start.kind}: a new socket takes "pris" down for as long as a session shows`, async () => {
-    // Given a start the machine took, then the socket of this screen dropped and reopened.
-    const page = panel();
-    const { frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.taken);
-    dropSocket(page);
-    reopenSocket(page);
-    // When the new socket shows a session: this one, or another started since.
-    frame(start.running(70));
-    // Then the page does not go on saying "pris": it has not seen what happened in between.
-    assert.equal(node(start.note).textContent, start.unknown);
-    frame(snapshot({ at: 80 }));
-    assert.equal(node(start.note).textContent, "");
-  });
-
-  test(`${start.kind}: the note that does not know which request ran goes with the session's end too`, async () => {
-    const page = panel();
-    const { context, frame, node } = page;
-    frame(snapshot({ at: 59.8 }));
-    await start.ask(page, 60);
-    context.addEvent(startRequested(60.085, "ecran B", start.published));
-    frame(start.running(60.2));
-    assert.equal(node(start.note).textContent, start.doubt + RIVAL);
-    context.addEvent(sessionRunning(60.25));
-    context.addEvent(sessionIdle(61));
-    assert.equal(node(start.note).textContent, "");
-  });
-
-  // The page's own request is the event stamped with the very instant of its 202, no other.
-  for (const [what, other] of [
-    ["just before", 59.9],
-    ["a few tenths of a second after", 60.3],
-    ["more than two seconds before, resolved", 57],
-  ]) {
-    test(`${start.kind}: another screen's event dated ${what} is not taken for this screen's own`, async () => {
-      // Given a 202, and on the stream another screen's start request alone: this screen's own
-      // event did not arrive.
-      const page = panel();
-      const { context, frame, node } = page;
-      frame(snapshot({ at: 56.8 }));
-      if (other < 60) {
-        context.addEvent(startRequested(other, "ecran B", start.published));
-        context.addEvent(refusal(other + 0.05, START_REFUSED, "ecran B"));
-        frame(snapshot({ at: 59.8 }));
-      }
-      context.api = (path) => (path === start.path ? Promise.resolve(start.command(60)) : never());
-      start.press(page);
-      await settle();
-      if (other > 60) {
-        context.addEvent(startRequested(other, "ecran B", start.published));
-      }
-      frame(start.running(60.5));
-      // Then the page does not say "pris".
-      assert.equal(node(start.note).textContent.includes("pris par la machine"), false, node(start.note).textContent);
-      assert.ok(node(start.note).textContent.startsWith(start.doubt), node(start.note).textContent);
-    });
-  }
-}
-
-/* ============ the family: a model of the console's mailbox, and every interleaving of three requests ============ */
-
-/*
-  What the console does with its mailbox, as src/control_surface.py and the control step of
-  src/local_panel.py do it, reduced to what bears on a start note:
-
-  - one command waits at a time. A start is accepted whenever the surface reads idle, also over a
-    command that waits: it takes its place, and nothing is published for the one replaced;
-  - the surface reads idle again as soon as a tick ends with no session, though a start accepted
-    during that tick still waits (`note_idle`), and after any refusal (`note_refused`);
-  - a tick empties the mailbox, judges the command (a start while a session runs is refused with a
-    `refused` event), takes the frame's instant AFTER that, ticks the runtime, publishes the
-    frame, then reports the session running or idle;
-  - requests are accepted while the loop awaits the drive: during the judging, and during the
-    runtime's tick;
-  - a reset is accepted when no start is in flight and the mailbox is empty, a target when a
-    session runs and the mailbox is empty, a stop when a session runs or is being started.
-
-  Every message goes out in the order the console emits it, with the session the runtime ran at
-  that moment: that is what a note saying "pris" is held against.
-*/
-function mailboxModel(manual) {
-  const model = { clock: 100, pending: null, starting: false, live: false, ending: false, session: null, started: [], target: 0, out: [] };
-  const reads = () => (model.ending ? "stopping" : model.live ? "running" : model.starting ? "starting" : "idle");
-  const emit = (message) => model.out.push({ ...message, session: model.session });
-  const publish = (kind, operator, detail) => emit({ event: { kind, at: model.clock, wall_clock: 0, operator, detail } });
-  const conflict = (detail) => ({ ok: false, error: Object.assign(new Error(detail), { status: 409 }) });
-  const waiting = () => (model.pending ? ` (pending: ${model.pending.printed})` : "");
-
-  // An HTTP request: the console's answer, after whatever it published for it.
-  model.submit = (request) => {
-    const state = reads();
-    if (request.kind === "start") {
-      if (state !== "idle") return conflict(`the machine is ${state}, not idle${waiting()}`);
-      model.clock += 0.004;
-      model.pending = request;
-      model.starting = true;
-      publish("start_requested", request.operator, request.published);
-      return { ok: true, body: { kind: request.reply, operator: request.operator, detail: request.detail, at: model.clock } };
-    }
-    if (request.kind === "reset") {
-      if (state === "starting" || model.pending) return conflict(`the machine is ${state}${waiting()}; try again in a moment`);
-      model.clock += 0.004;
-      model.pending = request;
-      publish("fault_reset_requested", request.operator, "reset defaut");
-      return { ok: true };
-    }
-    if (request.kind === "target") {
-      if (state !== "running") return conflict(`no manual session is running (the machine is ${state})`);
-      if (model.pending) return conflict(`the machine is ${state}${waiting()}; try again in a moment`);
-      model.pending = request;
-      return { ok: true };
-    }
-    if (state === "idle") return conflict(`there is no session to end (the machine is ${state})`);
-    if (state === "stopping") return conflict(`the machine is already ${state}`);
-    model.clock += 0.004;
-    model.ending = true;
-    model.pending = request;
-    publish("end_requested", request.operator, "stop");
-    return { ok: true };
-  };
-
-  const refuse = (command, detail) => {
-    model.starting = false;
-    publish("refused", command.operator, detail);
-  };
-
-  // One tick, in three steps, so that requests can be placed between them.
-  model.take = () => {
-    model.taken = model.pending;
-    model.pending = null;
-    model.clock += 0.02;
-  };
-  model.judge = () => {
-    const command = model.taken;
-    model.clock += 0.03;
-    if (command && command.kind === "start") {
-      if (model.session) {
-        refuse(command, "demarrage refuse : la machine est deja running");
-      } else {
-        model.session = command;
-        model.started.push(command);
-      }
-    } else if (command && command.kind === "reset") {
-      if (model.session) refuse(command, "reset refuse : mouvement encore commande (running)");
-    } else if (command && command.kind === "target") {
-      if (model.session && manual) model.target = 249;
-      else refuse(command, "consigne refusee : aucune seance manuelle en cours");
-    } else if (command && command.kind === "stop") {
-      model.session = null;
-      model.target = 0;
-    }
-    model.clock += 0.01;
-    // The frame's instant: taken once the command has been judged.
-    model.instant = model.clock;
-  };
-  model.publish = (cycle) => {
-    model.clock += 0.03;
-    emit({ frame: { at: model.instant, running: Boolean(model.session), target: model.target }, cycle });
-    if (model.session && !model.live) {
-      model.live = true;
-      model.starting = false;
-      publish("session_running", "", "session running");
-    } else if (!model.session && (model.live || model.starting || model.ending)) {
-      model.live = false;
-      model.starting = false;
-      model.ending = false;
-      publish("session_idle", "", "session idle");
-    }
-    model.clock = 100 + 0.2 * (cycle + 1);
-  };
-  return model;
-}
-
-const FAMILY_CYCLES = 3;
-const FAMILY_PLACES = ["before the tick", "during the judging", "during the runtime's tick"];
-// One quiet tick after the three: what was accepted last is judged and shown.
-const FAMILY_TICKS = FAMILY_CYCLES + 1;
-
-// One request of an interleaving, as the model takes it. `index` makes the words of a programme unique.
-function familyRequest({ kind, screen }, index, manual) {
-  const operator = kind === "start" ? `ecran ${screen}` : "un ecran";
-  if (kind !== "start") {
-    return { kind, operator, printed: `${kind}(operator='${operator}')` };
-  }
-  const seconds = 1800 + 60 * (index + 1);
-  const said = manual ? "manual_start bench" : `start standard_30_min over ${seconds} s`;
-  return {
-    kind,
-    screen,
-    operator,
-    said,
-    reply: manual ? "manual_start" : "start",
-    detail: manual ? "bench" : `standard_30_min over ${seconds} s`,
-    published: manual ? "manuel bench" : "start standard_30_min",
-    printed: `Start(operator='${operator}')`,
-  };
-}
-
-const describeFamily = (requests, dropped) =>
-  requests
-    .map(({ kind, screen, slot }) => `${kind}${kind === "start" ? ` by screen ${screen}` : ""} ${FAMILY_PLACES[slot % 3]} of cycle ${Math.floor(slot / 3) + 1}`)
-    .join(", ") + (dropped.length ? `; frame of cycle ${dropped.map((cycle) => cycle + 1).join(" and ")} not delivered` : "");
-
-/*
-  One interleaving, in two steps.
-
-  First the model alone: what each screen that asks for a start lives through, in order. Its own
-  clicks and the console's answers to them, every event, and every frame unless this run withholds
-  it (a frame the console coalesced away for a slow socket). Each message carries what a note is
-  held against: the session the runtime ran when the console emitted it, and the requests the loop
-  had taken by then.
-*/
-function familyHistories(requests, dropped, manual) {
-  const model = mailboxModel(manual);
-  const histories = new Map();
-  for (const { kind, screen } of requests) {
-    if (kind === "start") histories.set(screen, []);
-  }
-  let sent = 0;
-  const deliver = () => {
-    for (; sent < model.out.length; sent += 1) {
-      const message = model.out[sent];
-      if (message.frame && dropped.includes(message.cycle)) continue;
-      for (const history of histories.values()) history.push({ ...message, started: model.started.slice() });
-    }
-  };
-  const made = requests.map((request, index) => ({ ...familyRequest(request, index, manual), slot: request.slot }));
-  for (let cycle = 0; cycle < FAMILY_TICKS; cycle += 1) {
-    for (let place = 0; place < 3; place += 1) {
-      for (const request of made.filter((each) => each.slot === cycle * 3 + place)) {
-        // A click is sent before the console publishes anything for it, and answered after.
-        if (request.kind === "start") histories.get(request.screen).push({ press: true });
-        const outcome = model.submit(request);
-        deliver();
-        if (request.kind === "start") histories.get(request.screen).push({ answer: outcome, started: model.started.slice() });
-      }
-      if (place === 0) model.take();
-      else if (place === 1) model.judge();
-      else model.publish(cycle);
-      deliver();
-    }
-  }
-  return histories;
-}
-
-/*
-  Then the page code: one real page lives through one history. The invariant: IF its note says
-  "pris par la machine" THEN the session that runs is the one this screen asked for, in its own
-  words. It is held at every point where the page has been told what runs:
-
-  - after every message it receives, the request the note speaks of is one the loop took;
-  - after every frame it receives, the session that frame shows is that request's;
-  - after a `session_idle`, no note says "pris" any more.
-
-  Between the end of a session and the first message that says so, a note may still say "pris" of
-  the session that has just ended: that is the console's own delay, and the request was taken.
-  Returns what the note read at the end.
-*/
-async function liveFamilyHistory(history, screen, manual, where) {
-  const start = STARTS[manual ? 0 : 1];
-  const page = panel();
-  const note = page.node(start.note);
-  const hold = (step) => {
-    const text = note.textContent;
-    if (!text.startsWith("demarrage pris par la machine")) {
-      return;
-    }
-    const said = `${where()}: screen ${screen} says "${text}"`;
-    const mine = (request) => Boolean(request) && request.screen === screen && text.includes(request.said);
-    assert.ok(step.started.some(mine), `${said} of a request the loop never took`);
-    if (step.frame) {
-      const shown = step.session ? `the session of screen ${step.session.screen} (${step.session.said})` : "no session";
-      assert.ok(mine(step.session), `${said} while the frame it has just received shows ${shown}`);
-    }
-    if (step.event) {
-      assert.notEqual(step.event.kind, "session_idle", `${said} after the session ended`);
-    }
-  };
-  let answer = null;
-  for (const step of history) {
-    if (step.press) {
-      answer = deferred();
-      const held = answer.promise;
-      page.context.api = (path) => (path === start.path ? held : never());
-      start.press(page);
-      continue;
-    }
-    if (step.event) {
-      page.context.addEvent(step.event);
-    } else if (step.frame) {
-      const { at, running, target } = step.frame;
-      page.frame(!running ? snapshot({ at }) : manual ? manualFrame(at, target) : snapshot({ at, mode: "seance", phase: "baseline" }));
-    } else {
-      if (step.answer.ok) answer.resolve(step.answer.body);
-      else answer.reject(step.answer.error);
-      // The page handles the answer in the microtasks that follow: no turn of the event loop is needed.
-      for (let hop = 0; hop < 4; hop += 1) await null;
-    }
-    hold(step);
-  }
-  return note.textContent;
-}
-
-// What tells two histories apart for a page and for the invariant: everything the page receives,
-// and, for each message, whether the session and the requests taken are this screen's.
-function familyHistoryKey(history, screen) {
-  const own = (request) => (request.screen === screen ? request.said : "");
-  return JSON.stringify(
-    history.map((step) => {
-      if (step.press) return 0;
-      const taken = step.started.map(own).join("|");
-      if (step.answer) return [step.answer.ok ? step.answer.body : step.answer.error.message, taken];
-      const runs = step.session ? own(step.session) || "another" : null;
-      return [step.event ?? step.frame, runs, taken];
-    }),
-  );
-}
-
-/*
-  Plays one interleaving: each screen's history on a real page. A history already lived through,
-  message for message and with the same sessions behind it, is not played again (`played` keeps
-  what its note read): the page has no other input. Returns what each note read at the end.
-*/
-async function playFamily(requests, dropped, manual, played = new Map()) {
-  const notes = new Map();
-  for (const [screen, history] of familyHistories(requests, dropped, manual)) {
-    const key = `${manual} ${familyHistoryKey(history, screen)}`;
-    if (!played.has(key)) {
-      played.set(key, await liveFamilyHistory(history, screen, manual, () => describeFamily(requests, dropped)));
-    }
-    notes.set(screen, played.get(key));
-  }
-  return notes;
-}
-
-// Every interleaving of `count` requests: their kinds, where each falls in the three cycles, and
-// which screen asks for each start (screens are named in the order they first appear).
-function* familyInterleavings(count, kinds = ["start", "reset", "target", "stop"]) {
-  const slots = FAMILY_CYCLES * 3;
-  function* build(prefix, screens) {
-    if (prefix.length === count) {
-      if (prefix.some((request) => request.kind === "start")) yield prefix;
-      return;
-    }
-    const from = prefix.length ? prefix[prefix.length - 1].slot : 0;
-    for (let slot = from; slot < slots; slot += 1) {
-      for (const kind of kinds) {
-        if (kind !== "start") {
-          yield* build([...prefix, { kind, slot }], screens);
-          continue;
-        }
-        for (let screen = 1; screen <= screens + 1; screen += 1) {
-          yield* build([...prefix, { kind, slot, screen }], Math.max(screens, screen));
-        }
-      }
-    }
-  }
-  yield* build([], 0);
-}
-
-// The three orderings the reviews found, each of them one of the interleavings below.
-const FAMILY_NAMED = [
-  {
-    name: "two starts in one cycle",
-    requests: [{ kind: "start", slot: 1, screen: 1 }, { kind: "start", slot: 3, screen: 2 }],
-    dropped: [],
-  },
-  {
-    name: "three requests in two cycles",
-    requests: [{ kind: "reset", slot: 0 }, { kind: "start", slot: 1, screen: 1 }, { kind: "start", slot: 4, screen: 2 }],
-    dropped: [],
-  },
-  {
-    name: "start, stop, start with the stop's frames coalesced",
-    requests: [{ kind: "start", slot: 0, screen: 1 }, { kind: "stop", slot: 3 }, { kind: "start", slot: 6, screen: 2 }],
-    dropped: [1],
-  },
-];
-
-test("two starts in one cycle: one session runs, and neither screen says it took its request", async () => {
-  for (const manual of [true, false]) {
-    const notes = await playFamily(FAMILY_NAMED[0].requests, [], manual);
-    const doubt = STARTS[manual ? 0 : 1].doubt + RIVAL;
-    assert.equal(notes.get(1), doubt);
-    assert.equal(notes.get(2), doubt);
-  }
-});
-
-test("three requests in two cycles: the second start, refused a tick later, is never said taken", async () => {
-  for (const manual of [true, false]) {
-    const notes = await playFamily(FAMILY_NAMED[1].requests, [], manual);
-    // The session that runs is screen 1's; screen 2's request was refused once it was armed.
-    assert.equal(notes.get(2).includes("pris par la machine"), false, notes.get(2));
-    assert.equal(notes.get(1).includes("standard_30_min over 1860"), false, notes.get(1));
-  }
-});
-
-test("start, stop, start with the stop's frames coalesced: the first note does not stay over the next session", async () => {
-  for (const manual of [true, false]) {
-    const notes = await playFamily(FAMILY_NAMED[2].requests, [1], manual);
-    assert.equal(notes.get(1), "");
-  }
-});
-
-test(`every interleaving of up to three requests over three cycles: a note says "pris" only of the session its screen asked for`, async () => {
-  const seen = new Set();
-  const lived = new Map();
-  let played = 0;
-  let taken = 0;
-  const began = Date.now();
-  // What a run withholds: nothing, or the frame of the middle cycle.
-  for (const dropped of [[], [1]]) {
-    for (const count of [1, 2, 3]) {
-      for (const requests of familyInterleavings(count)) {
-        // Programme starts carry words of their own; manual starts are played up to two requests.
-        for (const manual of count < 3 ? [false, true] : [false]) {
-          const notes = await playFamily(requests, dropped, manual, lived);
-          played += 1;
-          for (const text of notes.values()) {
-            if (text.startsWith("demarrage pris par la machine")) taken += 1;
-          }
-          seen.add(`${manual ? "manual" : "programme"}: ${describeFamily(requests, dropped)}`);
-        }
-      }
-    }
-  }
-  // The orderings the reviews found are among them.
-  for (const named of FAMILY_NAMED) {
-    assert.ok(seen.has(`programme: ${describeFamily(named.requests, named.dropped)}`), named.name);
-  }
-  // And the invariant is not held by a page that never says "pris": a start alone is said taken.
-  const alone = await playFamily([{ kind: "start", slot: 0, screen: 1 }], [], false);
-  assert.equal(alone.get(1), "demarrage pris par la machine : start standard_30_min over 1860 s");
-  assert.ok(taken > 0);
-  console.log(
-    `# start-note family: ${played} interleavings, ${lived.size} distinct page histories played, ` +
-      `"pris" at the end of ${taken} notes, in ${Date.now() - began} ms`,
-  );
-});

@@ -112,7 +112,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | Module | Rôle | Garanties |
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
-| `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite. |
+| `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -122,7 +122,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/service_watchdog.py` | Ce que la console dit au gestionnaire de service (systemd) : prête, puis vivante, puis qu'elle s'arrête. | Une notification n'est envoyée que par la ligne qui suit un tic de contrôle revenu ; l'envoi est un datagramme local non bloquant, un échec est compté et oublié ; sans gestionnaire de service, rien n'est envoyé. Voir [3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service). Porte 100 %. |
 | `src/service_state.py` | Ce que la console garde de ses propres redémarrages, d'un processus au suivant : un fichier à côté des enregistrements. | Trois démarrages après un arrêt non propre en dix minutes mettent la console hors service ; un fichier absent ou abîmé, ou un disque qui refuse, ne le fait jamais ; la remise en service vaut tout de suite, quoi que réponde le disque (tests de propriétés). Porte 100 %. |
 | `src/presence/*` | Sûreté par caméra (seule une caméra **simulée** existe). | Voir [section 10](#10-la-caméra-présence). Porte 100 %. |
-| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum est exigé. Détails : [console-locale.md](console-locale.md). |
+| `src/web/*` | L'API HTTP, la WebSocket, la page (`static/index.html`, `app.js`), et le certificat de la console (`tls.py`). | Tous les gestionnaires sont des coroutines ; hors boucle locale, un jeton de 16 caractères minimum **et** un certificat sont exigés : la page n'y est servie qu'en TLS ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)). Détails : [console-locale.md](console-locale.md). |
 | `src/sim/*` | Le sujet simulé (`physiology.py`, FC pilotée par le g réel), l'ECG synthétique (`ecg.py`, comptes ADC bruts), le BITalino simulé (`bitalino.py`) et les autres voies (`sim/signals/*`). | Le vrai traitement ECG travaille sur les comptes simulés. Porte 100 %. |
 
 ### 2.6 L'enregistrement de séance (`src/record/`)
@@ -191,7 +191,12 @@ nominatif.
    de présence de la page est transmis (`note_presence`).
 2. La boîte aux lettres est vidée et son ordre donné au runtime (départ
    manuel, départ programmé, cible manuelle, réarmement de défaut, fin de
-   séance). Un refus revient à la page comme événement.
+   séance). Ce que le runtime en a fait revient à la page comme événement,
+   sous l'identifiant de la demande : `taken` s'il l'a pris, `refused` avec la
+   raison sinon. L'identifiant retourne à la boîte tel qu'il en est venu : le
+   runtime ne le voit pas. Le variateur est attendu pendant ce pas et pendant
+   le pas 4, et le serveur web répond entre-temps : une demande acceptée
+   pendant un tic est prise par le tic suivant, et la boîte lui garde sa place.
 3. En simulation, le variateur simulé avance, et le sujet simulé reçoit la
    vitesse mesurée.
 4. Le runtime fait son tic.
@@ -200,7 +205,11 @@ nominatif.
    événement `recording`. L'instant de ce tic est dit au journal, par une
    affectation : c'est ce qui lui permet de savoir quelles trames du variateur
    n'appartiennent à aucune séance
-   ([15.2](#152-aucune-écriture-dans-la-boucle)).
+   ([15.2](#152-aucune-écriture-dans-la-boucle)). Deux tics font une lecture
+   de plus, d'un entier en mémoire : celui qui arme une séance, juste avant de
+   toucher le variateur, et celui qui la termine lisent combien de trames la
+   liste du variateur a refusées jusque-là, pour que l'enregistrement compte
+   celles de sa séance et aucune autre.
 6. L'instantané est publié vers la page.
 
 Une fois le tic revenu, et seulement alors, la tâche de contrôle le dit au
@@ -2029,9 +2038,12 @@ sort avec le code 2.
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
-| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` obligatoire |
+| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
 | `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
+| `UI_TLS_CERT` | aucun | chemin du certificat de la console (PEM), tel que la console le voit | va avec `UI_TLS_KEY` : les deux, ou aucun. Obligatoire hors boucle locale. Renseigné, la console sert en TLS partout où elle écoute, boucle locale comprise |
+| `UI_TLS_KEY` | aucun | chemin de sa clé privée (PEM, **sans phrase secrète**) | va avec `UI_TLS_CERT`. Un fichier absent, illisible, qui n'est pas la clé du certificat, ou protégé par une phrase secrète : la console refuse de démarrer et dit lequel (code 2) |
+| `UI_TLS_NAMES` | aucun | adresses IPv4 et noms sous lesquels une tablette ouvre la console, ceux que porte le certificat, séparés par des virgules (`10.42.0.1,anheart.internal`) | chacun donne une origine acceptée par la WebSocket, en `https`, au port de la page. Refusée sans certificat (elle serait sans effet), et si une valeur n'est ni une adresse IPv4 ni un nom d'hôte |
 | `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
 | `HR_HARD_MAX_BPM` | `148` | palier dur du superviseur | 100..220 |
@@ -2071,7 +2083,7 @@ Deux clés des fichiers `.env` ne sont pas lues par `src/local_config.py` :
 
 | Clé | Lue par | Rôle |
 |---|---|---|
-| `BITALINO_MAC` | `docker/entrypoint.sh`, `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; le conteneur lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse au démarrage |
+| `BITALINO_MAC` | `scripts/pi/bind-bitalino.sh` (lancé par le service du Pi), `scripts/pi/preflight.sh`, `scripts/pair_device.sh` | adresse du BITalino appairé ; sur le Pi, le service lie `BITALINO_ADDRESS` (`/dev/rfcommN`) à cette adresse avant chaque démarrage de la console, qui n'a pas le droit de le faire elle-même ([pi-image.md](pi-image.md#sous-quel-compte)) |
 | `MPLBACKEND` | matplotlib (importé par BioSPPy), dans l'environnement du processus | `Agg` : pas d'affichage graphique. Le `Dockerfile` la fixe lui-même ; sur le Pi, le service la transmet aussi depuis `/etc/anheart/anheart.env` |
 
 Les clés de l'ancien enregistreur (`SAMPLE_RATE`, `OUTPUT_SAMPLE_RATE`,
@@ -2202,6 +2214,88 @@ l'enregistrement, lui, remplace par un alias. Une exception imprévue est
 journalisée avec son texte, quel qu'il soit. La voie sans signal est encore
 nommée (`Channel ... has no analog signal`), sans les deux mesures que cette
 ligne portait.
+
+### 12.5 La page en TLS hors de la boucle locale
+
+Ticket ANH-151, lot TLS, 10 octobre 2026. **Écrit et testé dans la gate du Pi ;
+pas actif sur un Pi installé**, où la page écoute sur la boucle locale
+([pi-image.md](pi-image.md#le-certificat-de-la-console)). Aucune tablette
+réelle n'a ouvert la page en TLS.
+
+**La règle.** Hors de la boucle locale, la page, les commandes et le jeton
+traversent un réseau, et ils le traversent en TLS ou pas du tout :
+
+| `UI_HOST` | `UI_TLS_CERT` et `UI_TLS_KEY` | Ce que fait la console |
+|---|---|---|
+| boucle locale (`127.0.0.1`, `::1`, `localhost`) | absents | HTTP en clair, comme avant : développement, simulateur, tests, écran du Pi |
+| boucle locale | présents | TLS, sur la boucle locale aussi |
+| toute autre adresse | présents | TLS |
+| toute autre adresse | absents | **refuse de démarrer**, code 2 : `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '…' in clear HTTP: …` |
+
+Il y a **un seul port et un seul transport**. Une console qui a un certificat
+ne parle que TLS sur `UI_PORT` : aucun second port en clair n'existe à côté,
+et rien ne répond à une requête en clair par une redirection. Un client qui
+parle HTTP en clair à ce port échoue à la poignée de main et sa connexion est
+fermée, sans réponse HTTP et sans ligne dans le journal
+(`tests/test_console_tls.py`). La console n'envoie pas non plus l'en-tête
+`Strict-Transport-Security` : il retirerait à l'opérateur, le jour où le
+certificat a expiré et où il faut arrêter la machine, le moyen de passer
+l'avertissement du navigateur.
+
+**Le certificat est lu une fois, au démarrage.** Le point d'entrée ouvre les
+deux fichiers avant de construire quoi que ce soit de la console : un
+certificat qu'elle ne peut pas servir est une erreur de configuration comme
+les autres, dite avec le fichier en cause, et la console sort avec le code 2,
+sur lequel le service ne la relance pas. Les messages (clé
+`UI_TLS_CERT/UI_TLS_KEY`) :
+
+| Message | Cause |
+|---|---|
+| `the certificate <chemin> is not a file the console can see` (ou `the private key …`) | fichier absent, ou dossier non monté dans le conteneur |
+| `the private key <chemin> cannot be read: Permission denied` | droits du fichier, compte de la console |
+| `<chemin> holds no PEM certificate` / `holds no PEM private key` | les deux chemins inversés, ou un autre fichier |
+| `the private key <chemin> is not the one of the certificate <chemin>` | clé et certificat de deux générations différentes |
+| `the private key <chemin> is protected by a passphrase: …` | la console démarre sans personne : une clé à phrase secrète est refusée, jamais demandée au terminal |
+| `the TLS library refuses <certificat> with <clé>: …` | fichier abîmé |
+
+Aucun de ces messages ne cite le contenu d'un fichier. Ensuite la console garde
+son certificat en mémoire : rien, sur le fil de la boucle de contrôle, n'attend
+jamais ces fichiers, et les remplacer ou les supprimer sous une console qui
+tourne ne change rien avant son prochain démarrage.
+
+**Les dates ne sont pas jugées par la console.** Un certificat expiré est servi
+comme un autre : c'est la tablette qui le juge, avec sa propre horloge. Une
+console qui refuserait de démarrer ou de servir parce que son certificat a
+expiré ferait d'un renouvellement en retard une machine que plus personne ne
+peut joindre, et parierait cela sur l'horloge d'un Pi sans pile. Ce qui
+prévient de l'échéance est `scripts/pi/make_console_tls.sh --check`
+([pi-image.md](pi-image.md#renouveler)). Ce que cela donne pour une séance en
+cours est en [securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
+
+**La WebSocket.** Elle passe par le même port, donc en TLS (`wss`), avec les
+deux mêmes contrôles qu'avant, faits avant l'acceptation : le jeton et
+l'en-tête `Origin`. Une console qui sert son certificat n'accepte que des
+origines `https` : celle de `UI_HOST` et celles de `UI_TLS_NAMES`, au port de
+la page (sans le port quand c'est 443, comme l'écrit un navigateur). L'origine
+`http` de sa propre adresse est refusée comme celle d'un inconnu. Une console
+en clair, donc en boucle locale, garde les origines qu'elle acceptait.
+
+**Le jeton dans l'URL de la WebSocket.** Un navigateur ne peut pas poser
+d'en-tête sur une WebSocket : le jeton y voyage en paramètre `?token=`. Hors de
+la boucle locale, cette URL ne circule qu'à l'intérieur de TLS, et la console
+ne tient pas de journal d'accès : le jeton n'est lisible ni sur le réseau ni
+dans le journal du service. Il reste visible sur la tablette elle-même (outils
+du navigateur), comme tout ce que la page détient.
+
+**Réglages TLS.** TLS 1.2 au minimum, suites par défaut de la bibliothèque,
+aucun certificat demandé au client : qui a le droit de parler à la console
+reste l'affaire du jeton, et demain de l'authentification de l'opérateur.
+`UI_HOST` peut être l'adresse du point d'accès ou `0.0.0.0` ; dans le second
+cas, `UI_TLS_NAMES` est nécessaire pour que la page ouverte à l'adresse du
+point d'accès voie sa WebSocket acceptée.
+
+`scripts/pi/preflight.sh` dit avant le démarrage ce que la console dirait :
+`UI_HOST=… needs UI_TLS_CERT and UI_TLS_KEY`.
 
 ---
 
@@ -2348,9 +2442,9 @@ Ce que fait la console :
 L'affichage sur la console est un événement de type `dashboard`, sans nom
 d'opérateur, dans la liste **Evenements** (voir
 [console-locale.md](console-locale.md)). Ce n'est pas un événement `refused` :
-la page lit un `refused` comme la réponse de la machine à propos de la cible
-manuelle à l'écran et l'écrit dans la carte Mode MANUEL, ce que cette nouvelle
-du lien n'est jamais. Il est
+la page lit un `refused` sans identifiant de demande comme une cible manuelle
+que la machine a reprise et l'écrit dans la carte Mode MANUEL, ce que cette
+nouvelle du lien n'est jamais. Il est
 émis pour chaque lancement refusé, quand la phrase change, et sinon rappelé
 toutes les 60 s tant que l'incompatibilité dure (`INCOMPATIBLE_REPEAT`) : la
 liste n'est envoyée qu'aux écrans connectés à ce moment-là, et une page ouverte
@@ -2505,7 +2599,9 @@ finir, ou la console ferme un enregistrement dont le runtime n'a pas donné de
 motif) et `superseded` (le fil du journal reçoit l'ouverture d'un
 enregistrement alors que le précédent n'a pas été fermé). Aucune des deux
 n'est attendue en fonctionnement normal : les voir dans un manifeste signale
-un défaut à examiner.
+un défaut à examiner. Un enregistrement ainsi remplacé dit, avant d'être
+clos, ce qui lui manque (la ligne `record_degraded:`, 15.3), comme un
+enregistrement fermé par la boucle : il était clos sans rien en dire.
 
 ### 15.2 Aucune écriture dans la boucle
 
@@ -2538,9 +2634,11 @@ jamais. Une première version prenait la liste sous un verrou partagé avec
 celui qui note : `test_record_tick_isolation.py`, qui arrête le fil du journal
 avant chacune de ses instructions et fait les appels d'un tic, l'a refusée
 (l'appel au variateur attendait quand ce fil était arrêté dans sa prise). Le
-même test fait à chaque arrêt l'appel d'un armement, `Journal.open`, et celui
-par lequel le tic dit son instant au journal, `Journal.dispatched` (plus bas) :
-eux non plus n'attendent ce fil nulle part.
+même test fait à chaque arrêt l'appel d'un armement, `Journal.open`, celui
+par lequel le tic dit son instant au journal, `Journal.dispatched`, et la
+lecture du compte des refus que font le tic qui arme une séance et celui qui
+la termine, `Journal.frames_refused` (plus bas) : eux non plus n'attendent ce
+fil nulle part.
 
 **Sur quoi cette prise sans verrou repose.** Trois choses, toutes les trois
 nécessaires :
@@ -2580,7 +2678,12 @@ Selon le variateur branché :
   puis note l'appel : les mêmes observations d'appel que la simulation
   (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`,
   `read_failed`, `read_limits`), avec les mêmes registres. Jamais les deux à
-  la fois.
+  la fois. Un appel qui lève une exception au lieu de répondre est noté lui
+  aussi, au moment où il lève, comme un appel échoué (`ok: false` ; une
+  lecture d'état est alors `read_failed`), puis l'exception poursuit telle
+  quelle : le dernier échange d'un tic qui a levé, celui qu'un lecteur
+  cherche, est dans l'enregistrement. Une séance où aucun appel ne lève
+  enregistre exactement ce qu'elle enregistrait.
 
 Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
 une observation impossible à construire est comptée de même, et ne remonte
@@ -2632,7 +2735,12 @@ d'aucune séance :
   mis en file ou son départ refusé. Le fil lit cet instant au début de son
   cycle, avant la liste et avant la file : ce que la boucle avait mis en file
   jusque-là, ce cycle l'écrit, et ce qui reste d'avant cet instant sans
-  enregistrement ouvert n'appartient à aucune séance.
+  enregistrement ouvert n'appartient à aucune séance. Lu après, ce pourrait
+  être l'instant du tic même qui vient d'armer une séance dont ce cycle n'a
+  pas compté l'ouverture : les premiers échanges de cet armement, déjà pris,
+  seraient lâchés sans être comptés pour personne. Cet ordre est tenu par un
+  test qui retient le fil pendant qu'il ferme un enregistrement, la séance
+  suivante s'armant entre-temps (`test_record_frame_boundaries.py`).
 
 Ce qui est ainsi lâché, c'est tout ce que la console demande au variateur
 hors séance : la scrutation au repos (une lecture d'état), la consigne nulle
@@ -2647,15 +2755,41 @@ n'est pas une perte : rien n'est compté.
 qu'une prise peut ajouter). En temps normal il en garde quelques-unes : celles
 du tic en cours. Au-delà de la borne, les plus anciennes sont lâchées, et
 comptées. Elles rejoignent ce que la prise a refusé : des trames que personne
-n'a lues, dont on ne sait que le nombre et entre quels instants elles ont
-commencé (ce que la prise refuse est ce qu'elle a reçu de plus récent, donc
-après la dernière trame qu'elle a gardée). Un enregistrement compte ces trames
-quand sa séance recouvre cet intervalle, et le dit
-(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`). Quand deux
-séances le recouvrent, les deux enregistrements les comptent, parce que rien
-ne dit laquelle des deux a perdu quoi : `drive_frames_lost` est donc un
-majorant, jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
-ne recouvre aucune séance n'est pas une perte.
+n'a gardées. Un enregistrement dit combien il lui en manque
+(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`), et ce nombre
+est fait de deux comptes :
+
+- **ce que la prise a refusé à cette séance : exactement si les deux lectures
+  de frontière réussissent.** La prise ne date
+  pas ce qu'elle refuse, elle le compte. La boucle lit ce compte à l'instant
+  où elle demande l'armement, puis à l'instant où elle ferme l'enregistrement
+  (`Journal.frames_refused` : un entier lu en mémoire, sans verrou ni attente,
+  et qui ne lève jamais) : ce sont les deux instants qui bornent déjà les
+  trames de la séance. L'enregistrement compte la différence. Ce que la prise
+  a refusé à une console au repos, avant ou après la séance, n'y est plus : la
+  revue d'ANH-215 avait relevé 64 trames dites pour 47 perdues (le repos avait
+  rempli la prise avant l'armement) et 835 pour 829 (le repos après la
+  séance, avant que le fil revienne). Et deux séances qui ont attendu à
+  travers le même débordement comptent chacune les leurs. Tant que la séance
+  dure, le compte va jusqu'à la première prise du cycle en cours. Rien n'est
+  ajouté aux autres tics ;
+- **ce que le fil a lâché lui-même au-delà de 8192, et ce que la prise a
+  refusé quand son compte n'a pas pu être lu au début de l'armement : un
+  majorant.** De ces trames on ne sait que le nombre et entre quels instants
+  elles ont commencé (ce que la prise refuse est ce qu'elle a reçu de plus
+  récent, donc après la dernière trame qu'elle a gardée). Un enregistrement
+  les compte quand sa séance recouvre cet intervalle ; quand deux séances le
+  recouvrent, les deux les comptent, parce que rien ne dit laquelle a perdu
+  quoi : jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
+  ne recouvre aucune séance n'est pas une perte. Le premier cas demande plus
+  de 8192 échanges en attente sans enregistrement ouvert : il n'a été produit
+  que dans des tests, sur le journal seul ou en réduisant la borne, jamais
+  sur la console avec ses bornes.
+- **Lecture de fin manquante, lecture d'armement présente : un majorant par
+  différence de compteurs.** Le fil utilise son dernier compte cumulatif,
+  lu en vidant la prise pour cette fermeture, moins le compte d'armement.
+  La lecture du fil vient après la fin et peut inclure des refus au repos
+  survenus depuis. Ce cas n'utilise pas le recouvrement d'intervalles.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -2712,7 +2846,11 @@ dans le battement de cœur vers le tableau de bord, champ `recordDegraded`
 (section 8). Dès que le disque accepte de nouveau une écriture, l'enregistrement
 le dit lui-même par un événement `warning` :
 `record_degraded: dropped=<n> failures=<n> last=<opération>:<erreur>`, avec
-`drive_frames_lost=<n>` avant `last=` quand des trames du variateur manquent.
+`drive_frames_lost=<n>` avant `last=` quand des trames du variateur manquent
+(ce que ce nombre compte, exactement ou en majorant : 15.2). La ligne est
+écrite quand ces comptes ont changé, au plus toutes les 2 s, et une dernière
+fois avant que l'enregistrement soit clos, qu'il le soit par la boucle ou
+parce qu'un autre le remplace (`superseded`).
 
 Une ligne coupée par un disque plein est retirée du fichier (retour à la
 dernière ligne complète) : l'enregistrement reste lisible et reprend si de la
@@ -2917,23 +3055,30 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   séance, archive temporaire d'un export). Le mode est donné à l'appel qui
   crée le fichier : il n'y a pas d'instant où il est lisible par d'autres, et
   le `umask` du processus ne peut que restreindre. Lancée à la main, la
-  console crée le tout sous le compte qui la lance. **Les enregistrements déjà
-  sur le disque ne sont pas modifiés** : ils gardent leurs modes 755 / 644,
-  sous la racine en 700 qui les protégeait déjà. La console ne les réécrit ni
-  au démarrage ni plus tard (ce serait parcourir des milliers de fichiers de
-  sa propre initiative) ; les resserrer est un geste manuel, machine au
-  repos : `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
+  console crée le tout sous le compte qui la lance. **La console ne modifie
+  pas les enregistrements déjà sur le disque** : elle ne les réécrit ni au
+  démarrage ni plus tard (ce serait parcourir des milliers de fichiers de sa
+  propre initiative). Ceux qu'une console plus ancienne avait écrits en
+  755 / 644 sont refermés **par l'installation**, sur le Pi : chaque
+  `sudo bash scripts/install.sh` (et `sudo bash scripts/harden.sh files`)
+  retire au groupe et aux autres tout droit sur ce qui est sous
+  `/var/lib/anheart`, sans lire ni écrire aucun contenu
+  ([pi-image.md](pi-image.md#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)).
+  Sur un poste de développement, ou pour un dossier racine placé ailleurs par
+  `RECORD_ROOT`, cela reste un geste manuel, machine au repos :
+  `chmod -R go= <dossier racine>`. **Il n'y a pas de chiffrement au
   repos** ([menaces.md](menaces.md), MEN-18). C'est la règle d'attente du
   ticket ; le choix entre chiffrement et purge après dépôt dépend de l'avis
   HDS / RGPD (ANH-172).
-- **Sur un Pi installé, la console tourne sous `root`**
-  ([pi-image.md](pi-image.md#sous-quel-compte)). Le dossier racine,
-  `/var/lib/anheart/records`, appartient au compte `anheart` (mode 700), mais
-  tout ce que la console y crée appartient à `root` : chaque dossier de
-  séance, ses fichiers, et le journal hors séance. Avec les modes 700 / 600,
-  **ils ne sont donc lisibles que par `root`, et plus par le compte
-  `anheart`**, qui les lisait tant qu'ils étaient en 755 / 644. Le compte
-  `anheart` voit encore les noms des dossiers, pas leur contenu. Pour lire un
+- **Sur un Pi installé, la console tourne sous le compte `anheart`**, sans
+  privilèges ([pi-image.md](pi-image.md#sous-quel-compte)), et tout ce qu'elle
+  crée lui appartient : le dossier racine `/var/lib/anheart/records`, chaque
+  dossier de séance, ses fichiers, le journal hors séance, l'état des
+  redémarrages. Le script d'entrée de l'image ferme en plus le masque de
+  création (`umask 077`) : ce que la console crée sans donner de mode (les
+  profils locaux, le verrou du câble) est privé aussi. Ce qu'une console
+  antérieure avait écrit sous `root` est rendu au compte par l'installation.
+  Le compte `anheart` ne peut pas ouvrir de session sur le Pi : pour lire un
   enregistrement, un technicien a deux moyens :
   1. **par la console**, machine au repos, sans compte sur le Pi : le bouton
      « Exporter l'enregistrement » de la page Configuration pour le plus
@@ -2946,9 +3091,10 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
      `sudo less /var/lib/anheart/records/logbook/events.jsonl`.
 
   Ne pas changer le propriétaire ni les modes des dossiers pour les lire : un
-  enregistrement contient l'ECG brut de la séance. Cela changera quand la
-  console tournera sous le compte `anheart`, sans privilèges (ANH-151) : les
-  nouveaux enregistrements appartiendront alors à ce compte.
+  enregistrement contient l'ECG brut de la séance, et la console, qui n'est
+  plus `root`, ne pourrait plus écrire dans un dossier qui ne serait plus le
+  sien. Une copie faite avec `sudo` appartient à `root` : la laisser hors de
+  `/var/lib/anheart`.
 - `config_hash` et `medical_parameters_version` sont des SHA-256 de la
   configuration appliquée (géométrie, plafonds, paliers cardiaques et autres
   limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni
@@ -2969,15 +3115,25 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   quand le fil du journal ne vient plus (4096 en attente), et celles que ce
   fil lâche lui-même au-delà de 8192 en attente d'un enregistrement. Elles
   sont comptées, et l'enregistrement le dit (15.2).
-- **À qui manquent les trames refusées, quand deux séances attendaient.** La
-  prise ne lit pas ce qu'elle refuse : elle ne donne qu'un nombre. Quand elle a
-  débordé pendant que deux séances attendaient le fil du journal, ce nombre
-  est compté pour chacune des deux dont la séance recouvre l'intervalle où ces
-  trames ont pu commencer, et il n'est pas partagé entre elles :
-  `drive_frames_lost` est un majorant. Il n'est compté que pour la seconde
-  quand la dernière trame gardée a commencé après la fin de la première.
-- L'échange pendant lequel le tic lève une exception : la prise note un appel
-  à son retour, et celui-là ne revient pas.
+- **Ce que `drive_frames_lost` ne dit pas exactement.** Ce que la prise a
+  refusé à une séance est compté pour elle seule, exactement quand les deux
+  lectures de frontière réussissent (15.2). Deux
+  comptes restent des majorants, comptés pour chaque séance dont l'intervalle
+  les recouvre et non partagés entre elles : les trames que le fil du journal
+  lâche lui-même au-delà de 8192 ; et tout ce que la prise a refusé quand son
+  compte n'a pas pu être lu au début de l'armement. Si seul le compte de fin
+  manque, un troisième majorant utilise la différence entre le dernier
+  compte lu par le fil et le compte d'armement : des refus au repos après la
+  séance peuvent y être inclus, sans recouvrement d'intervalles. Une faute de
+  lecture est journalisée ; ni le départ ni l'arrêt ne sont retenus. Le compte exact
+  sépare les refus par l'ordre dans lequel la boucle les fait : si un échange
+  était un jour fait par un autre fil que la boucle à l'instant même où une
+  séance commence ou finit, il pourrait être compté du mauvais côté, à une
+  trame près.
+- Avec le pilote ATV320, l'échange pendant lequel un tic lèverait une
+  exception : ce pilote note lui-même ses échanges, pas la prise (15.2), et ce
+  cas n'a été rejoué que sur le simulateur, où l'appel qui lève est maintenant
+  dans l'enregistrement.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge
@@ -3002,6 +3158,8 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 |---|---|---|
 | départ demandé | `operator_action` (`remote_command` depuis le tableau de bord) | `start_requested`, sans ses mots : ils nomment un programme par son identifiant |
 | départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur, sans l'identifiant du programme ni l'âge du passager qu'elle cite (`[redacted]`) |
+| départ, consigne ou réarmement qu'un STOP a déplacé avant que la boucle le prenne | `refusal` | `cancelled: un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` |
+| demande prise par la boucle (événement `taken` de la console) | aucune ligne | ce qu'elle a produit se lit dans les tics ; l'identifiant d'une demande n'est écrit nulle part |
 | acquittement | `verdict_ack` | `acknowledged: …` |
 | réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
 | attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |

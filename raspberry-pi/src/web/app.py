@@ -38,7 +38,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncGenerator, Generator
+import socket
+import ssl
+from collections.abc import AsyncGenerator, Callable, Generator
 from inspect import iscoroutinefunction
 from typing import Final, final, override
 
@@ -46,8 +48,10 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.routing import BaseRoute, Route, WebSocketRoute
 
+from src.result import Ok
 from src.web.deps import Services, WebConfig
 from src.web.routes import register_routes
+from src.web.tls import server_context
 from src.web.ws import register_socket
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -56,7 +60,7 @@ APP_TITLE: Final[str] = "AnHeart operator interface"
 
 APP_SUMMARY: Final[str] = (
     "Local control and telemetry for one centrifuge. Loopback by default; "
-    "off loopback it refuses to start without a shared token."
+    "off loopback it refuses to start without a shared token and a certificate."
 )
 
 
@@ -134,12 +138,13 @@ def create_app(*, services: Services, config: WebConfig) -> FastAPI:
         """
         paths = require_async_routes(instance)
         _logger.info(
-            "operator interface serving %d routes on %s:%d (loopback=%s, token=%s)",
+            "operator interface serving %d routes on %s:%d (loopback=%s, token=%s, tls=%s)",
             len(paths),
             config.host,
             config.port,
             config.is_loopback,
             "required" if config.requires_token else "none",
+            "off" if config.tls is None else "on",
         )
         yield
 
@@ -208,6 +213,41 @@ def unneutralised_signal_hooks() -> tuple[str, ...]:
     )
 
 
+type TlsContextFactory = Callable[[uvicorn.Config, Callable[[], ssl.SSLContext]], ssl.SSLContext]
+"""What uvicorn calls for the context it serves with (its ``ssl_context_factory``)."""
+
+
+def tls_context_factory(config: WebConfig) -> TlsContextFactory | None:
+    """What hands uvicorn this console's TLS context; ``None`` for clear HTTP.
+
+    The certificate is read HERE, while the server is being built and before
+    the console runs anything: the factory uvicorn later calls, from the task
+    that serves, only gives back what was read. No file is opened from that
+    task, and none is opened again for as long as the console runs.
+
+    Raises on a certificate that cannot be served. The console's entry point
+    has already refused such a configuration, with its reason and the exit
+    code of a configuration error, before anything was built: getting here
+    with one means the files changed in between, or that somebody builds a
+    server another way, and a console that then served in clear instead
+    would be the one outcome this must not have.
+    """
+    files = config.tls
+    if files is None:
+        return None
+    loaded = server_context(files)
+    if isinstance(loaded, Ok):
+        context = loaded.value
+
+        def use(
+            _settings: uvicorn.Config, _default: Callable[[], ssl.SSLContext]
+        ) -> ssl.SSLContext:
+            return context
+
+        return use
+    raise RuntimeError(f"refusing to serve: {loaded.error.detail}")
+
+
 def build_server(app: FastAPI, config: WebConfig) -> LoopSafeServer:
     """Build the uvicorn server, refusing a configuration that is not loop-safe.
 
@@ -216,6 +256,17 @@ def build_server(app: FastAPI, config: WebConfig) -> LoopSafeServer:
     otherwise write a line per request and per socket frame, and on an SD card
     that is a wear problem rather than a tidiness one; ``lifespan="on"`` so the
     startup assertion actually runs.
+
+    With a certificate (:attr:`WebConfig.tls`), the one listener speaks TLS and
+    nothing else: a client that speaks clear HTTP to it fails the handshake and
+    is closed, without an answer, a redirect or a line in the journal. The
+    handshake runs on the event loop like everything else and waits on nothing
+    but the network; one that never completes is closed by the loop's own
+    limit (60 s, Python's), and holds one descriptor until then.
+    ``limit_concurrency`` is deliberately left unset: once its count is
+    reached uvicorn answers 503 to every request, the operator's STOP on an
+    open page included. How many connections one device of the network may
+    hold is the firewall's business.
     """
     unneutralised = unneutralised_signal_hooks()
     if unneutralised:
@@ -241,11 +292,12 @@ def build_server(app: FastAPI, config: WebConfig) -> LoopSafeServer:
         # connects looks exactly like a machine that is not running.
         ws="auto",
         timeout_graceful_shutdown=2,
+        ssl_context_factory=tls_context_factory(config),
     )
     return LoopSafeServer(settings)
 
 
-async def serve(server: LoopSafeServer) -> None:
+async def serve(server: LoopSafeServer, sockets: list[socket.socket] | None = None) -> None:
     """Run the server until it is told to stop.
 
     Mounted by the session process as a task on **its own event loop**::
@@ -260,5 +312,10 @@ async def serve(server: LoopSafeServer) -> None:
     preference: ``src/control_surface.py`` and ``src/telemetry.py`` are
     lock-free on the premise that one thread touches them. Running this
     anywhere else makes every method in both modules a race.
+
+    ``sockets``: listening sockets already bound, served instead of binding
+    the configured address. The console never passes any. It is how a test
+    serves a console configured for an address of the network on this
+    machine's own loopback, without ever opening that machine to a network.
     """
-    await server.serve()
+    await server.serve(sockets=sockets)

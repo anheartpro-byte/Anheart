@@ -1,7 +1,7 @@
 # Manuel opérateur : la console de la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 10 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
+> Version du 11 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
 > cette date. Aucun client ne l'a encore utilisé.
 >
 > - Les captures d'écran viennent d'essais en simulation (machine simulée),
@@ -381,39 +381,44 @@ l'écran.*
   elle, pas au brouillon orange.
 - Une réponse qui commence par « demande envoyee : » ou « cible envoyee : »
   sous les boutons veut seulement dire que la demande est reçue. La machine
-  vérifie ensuite, et la même ligne change. Elle dit alors l'une de ces choses :
-  - « demarrage pris par la machine » ou « cible prise par la machine » :
-    après cette demande, l'écran a vu la séance démarrer, ou la machine
-    tenir cette cible. Pour un démarrage, il n'a vu ni refus, ni autre
-    demande de démarrage dans les deux secondes qui précèdent la vôtre ou
-    après elle. Cette ligne est remplacée par l'une des suivantes si un
-    refus ou une autre demande de démarrage arrive ensuite, et elle s'efface
-    quand la séance se termine.
-  - En rouge, « refus de la machine » suivi de la raison. Le refus apparaît
-    aussi dans la liste **Evenements** de la page **Seance**, sur une ligne
-    « refused ».
-  - En rouge, « demarrage NON pris par la machine » ou « cible NON prise par
-    la machine » : une seconde a passé sans que l'écran voie ni l'un ni
-    l'autre.
-  - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande » ou
-    « cet ecran ne sait pas ce que la machine a fait de sa demande de
-    demarrage », suivi de « sa liaison a ete coupee » : la liaison de l'écran
-    avec la console a été coupée entre votre clic et la réponse. La ligne ne
-    dit alors pas si la séance en cours vient de votre demande.
-  - En rouge, « Cet ecran ne sait pas si la machine a pris sa demande »,
-    suivi de « une autre demande de demarrage est aussi arrivee a la
-    machine » : une autre demande de démarrage est arrivée à la machine près
-    de la vôtre. Une séance est en cours ; la ligne ne dit pas laquelle des
-    deux demandes la machine a prise, et elle peut s'afficher alors que la
-    séance est la vôtre. La même phrase peut se terminer par « sa liaison
-    venait de s'ouvrir » (l'écran était relié à la console depuis moins de
-    deux secondes) ou par « il n'a pas recu l'evenement de sa propre
-    demande » (l'écran n'a pas vu passer votre demande) : dans les deux cas
-    la ligne ne dit pas non plus si la séance en cours est la vôtre.
+  vérifie ensuite, et la console dit ce qu'elle a fait de la demande faite
+  depuis cet écran. La même ligne dit alors l'une de ces choses :
+  - « demarrage pris par la machine » ou « cible prise par la machine » : la
+    machine a pris la demande faite depuis cet écran. Pour un démarrage, la
+    séance en cours est celle que vous avez demandée ; la ligne s'efface
+    quand cette séance se termine. Pour une cible, la ligne s'efface quand la
+    machine ne tient plus cette cible.
+  - En rouge, « refus de la machine » suivi de la raison : la machine a
+    refusé la demande faite depuis cet écran. Le refus apparaît aussi dans la
+    liste **Evenements** de la page **Seance**, sur une ligne « refused ».
+  - En rouge, « demande annulee » suivi de « un STOP est arrive avant que la
+    machine prenne cette demande, rien n'a ete fait » : quelqu'un a cliqué
+    **STOP**, sur cet écran ou sur un autre, avant que la machine ait pris
+    votre demande. Elle n'a pas été exécutée.
+  - En rouge, « demande refusee par la console : un demarrage est deja
+    demande » : un démarrage est déjà demandé, depuis cet écran ou depuis un
+    autre, et la machine ne l'a pas encore pris. Votre clic n'a pas été
+    envoyé à la machine.
   - En rouge, « demande refusee par la console : une autre demande attend
     encore la machine », ou « seconde demande refusee par la console » : un
     clic précédent, de cet écran ou d'un autre, n'est pas encore traité, et
     celui-ci n'a pas été envoyé à la machine.
+  - En rouge, « cet ecran ne sait pas ce que la machine a fait de sa demande
+    de demarrage » ou « cet ecran ne sait pas ce que la machine a fait de sa
+    cible », suivi de « sa liaison a ete coupee » : la liaison de l'écran
+    avec la console a été coupée entre votre clic et la réponse. L'écran
+    redemande alors la réponse à la console, et la ligne se corrige d'elle-même
+    quand il l'obtient.
+  - En rouge, « la machine a pris le demarrage demande par cet ecran », suivi
+    de « cet ecran ne sait pas si la seance en cours est encore celle-la » :
+    la machine avait pris votre démarrage, puis la liaison de l'écran avec la
+    console a été coupée. L'écran redemande à la console si la séance en
+    cours est toujours la vôtre, et la ligne se corrige d'elle-même quand il
+    obtient la réponse.
+
+  La ligne ne parle que des demandes faites depuis cet écran. Ce que la
+  machine répond à un autre écran se lit dans la liste **Evenements** de la
+  page **Seance**.
 
   > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
   > quand cette ligne dit que l'écran ne sait pas si la machine a pris sa
@@ -538,8 +543,8 @@ fréquence cardiaque du passager dans la zone du programme.
     c'est que l'attestation n'est pas faite, ou que **Etat** n'affiche pas
     « idle ».
 11. Regardez la liste **Evenements**, en bas de la page : vous devez voir
-    « start_requested », puis « session_running ». Une ligne « refused » veut
-    dire que la machine a refusé, avec la raison
+    « start_requested », puis « taken », puis « session_running ». Une ligne
+    « refused » veut dire que la machine a refusé, avec la raison
     ([section 10](#10-un-démarrage-est-refusé)).
 
 > **Dès que la séance est démarrée, personne ne s'approche du bras ni de la
@@ -1239,6 +1244,7 @@ voyez.
 | En séance manuelle, un message en anglais sous le bouton juste après un redémarrage de la console. Ou, dans **Evenements**, « demarrage refuse : cablage de l'arret d'urgence non atteste » | L'attestation n'est pas faite. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence). |
 | Un message contenant « demarrage refuse : verdict », ou un message en anglais alors que **Securite** n'affiche pas « none » | Un arrêt de sécurité attend un acquittement. | [Section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | Un message en anglais alors que **Etat** n'affiche pas « idle » | Une séance tourne déjà, ou un arrêt est en cours. | Attendez **Etat** « idle ». |
+| « demande refusee par la console : un demarrage est deja demande » | Un démarrage est déjà demandé, depuis cet écran ou depuis un autre, et la machine ne l'a pas encore pris. Votre clic n'a pas été envoyé à la machine. | Ne recliquez pas. Regardez **Mode** et la liste **Evenements**. |
 | « seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL » | Les séances programmées ne sont pas autorisées sur cette machine. | Appelez le support. |
 | Un message contenant « personne a bord refusee » | La machine n'est pas autorisée à tourner avec une personne à bord. | Ne cherchez pas à contourner. Appelez le support. |
 | « demarrage refuse : age du passager requis pour une seance programmee » | L'âge n'est pas saisi. | Saisissez l'âge du passager. |

@@ -62,6 +62,14 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > page Securite (§5). Il vient du code et des tests automatiques ; il n'a pas été
 > rejoué dans un navigateur, et aucune capture ne le montre.
 >
+> L'ajout du 11 octobre 2026 (ticket ANH-190) décrit ce que disent maintenant les
+> notes sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** et **Reset
+> defaut variateur** (§6, §9, §13.2, §13.9, §13.11, §14, §15) : la console dit
+> elle-même ce que chaque demande est devenue, et un second démarrage n'est plus
+> accepté pendant qu'un premier attend. Il a été rejoué dans un navigateur sans
+> interface, avec un et deux écrans, sur la console en simulation. Aucune capture n'a
+> été reprise : celles de ce guide peuvent montrer une note d'avant.
+
 > L'ajout du 11 octobre 2026 (ticket ANH-190) décrit le bandeau rouge
 > `VARIATEUR EN DEFAUT` et le refus d'un démarrage pendant un défaut (§6, §13.9), la
 > ligne `verrouille derriere go_silent` (§10, §11), ce que fait le bandeau
@@ -243,6 +251,8 @@ l'emporte sur `.env`.**
 | `UI_HOST` | non (défaut `127.0.0.1`) | | adresse d'écoute de la page |
 | `UI_PORT` | non (défaut `8080`) | jamais `8123` | port de la page |
 | `UI_TOKEN` | obligatoire si `UI_HOST` n'est pas `127.0.0.1` | au moins 16 caractères | mot de passe partagé de la page |
+| `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
+| `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
@@ -304,11 +314,14 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
 * sur l'écran du Pi : <http://127.0.0.1:8090/> (le port `UI_PORT` du modèle de
   configuration du Pi) ;
-* depuis un autre ordinateur du réseau : mettre dans `/etc/anheart/anheart.env`
-  `UI_HOST=0.0.0.0` et `UI_TOKEN=` suivi d'au moins 16 caractères, redémarrer la
-  console, puis ouvrir `http://<adresse IP du Pi>:8090/` et saisir le jeton dans la
-  page **Configuration** (voir §10). Sans jeton assez long, la console refuse de
-  démarrer.
+* depuis un autre appareil du réseau : **ce n'est pas encore possible sur un Pi
+  installé.** Depuis le 10 octobre 2026, une console qui écoute ailleurs que sur
+  la boucle locale exige, en plus de `UI_TOKEN` (au moins 16 caractères), son
+  certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) et ne sert sa page qu'en
+  `https://` ; sans l'un ou l'autre elle refuse de démarrer. Le script qui fait
+  ce certificat existe, mais l'installation du Pi ne le donne pas encore à la
+  console ([pi-image.md](../pi-image.md#le-certificat-de-la-console)). D'ici
+  là, la page s'ouvre sur l'écran du Pi.
 
 Ne lancez **jamais** en même temps la console et `scripts/bench_console.py` sur le
 même câble. Sur un même ordinateur, un seul programme à la fois possède la liaison
@@ -578,15 +591,21 @@ Règles de la cible :
   Une cible de **0** est un arrêt demandé : la vitesse baisse tout de suite. Quand elle
   arrive à 0 alors qu'une alerte tient encore, la séance se termine et se verrouille
   (`session_standstill`, §11) ; pour simplement terminer la séance, utilisez **STOP**.
-* **La note sous la grille dit ce que la machine a fait de la cible.** Après
-  **Appliquer**, elle affiche d'abord
+* **La note sous la grille dit ce que la machine a fait de la cible envoyée par cet
+  écran.** Après **Appliquer**, elle affiche d'abord
   `cible envoyee : ... - pas encore prise par la machine` : la console a reçu la
-  demande, la machine ne l'a pas encore jugée. Une fraction de seconde plus tard elle
-  devient `cible prise par la machine : ... (suivie aux limites de mouvement)`, ou, en
-  rouge, `refus de la machine (<heure>) : ...` suivi de la raison (§13.11). La ligne
-  `cible appliquee` reste la référence : si elle est restée ou revenue à `0.00`, la
-  machine n'y va pas. Quand la machine ne tient plus la cible (après un STOP, par
-  exemple), la note `cible prise ...` s'efface.
+  demande, la machine ne l'a pas encore jugée. Une fraction de seconde plus tard la
+  console répond, et la note devient
+  `cible prise par la machine : ... (suivie aux limites de mouvement)`, ou, en rouge,
+  `refus de la machine (<heure>) : ...` suivi de la raison (§13.11), ou encore, en
+  rouge, `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait`
+  si quelqu'un a cliqué STOP avant que la machine ait pris la cible. La note ne parle
+  que de la demande de **cet** écran : ce que la machine répond à un autre écran n'y
+  est pas écrit, seulement dans la liste **Evenements** (§9). Une exception : une
+  cible que la machine remet d'elle-même à 0 est écrite sur tous les écrans qui
+  montrent la séance. La ligne `cible appliquee` reste la référence : si elle est
+  restée ou revenue à `0.00`, la machine n'y va pas. Quand la machine ne tient plus la
+  cible (après un STOP, par exemple), la note `cible prise ...` s'efface.
 * **« Prise » ne veut pas dire « suivie ».** Les mots
   `(suivie aux limites de mouvement)` ne sont écrits que si la vitesse va vers la
   cible à cet instant. Ils sont retirés, et la note dit seulement
@@ -853,7 +872,9 @@ Repères (en bas de la capture, carte **Evenements**, le plus récent en haut) :
 
 1. `attested [Mohamed] ...` : l'attestation du câblage.
 2. `start_requested [Mohamed] manuel bench` : le démarrage demandé.
-3. `session_running session running` : la machine confirme.
+3. `session_running session running` : la machine confirme. Depuis le 11 octobre 2026
+   une ligne `taken [Mohamed] manuel bench` s'intercale avant celle-ci (la machine a
+   pris la demande) ; la capture date d'avant.
 4. En orange : `refused [Mohamed] consigne refusee : 32.00 tr/min de sortie hors de 0 ou [55, 1380] tr/min moteur`.
 
 Les types d'événements :
@@ -868,16 +889,18 @@ Les types d'événements :
 | `acknowledged` | verdict acquitté, avec les règles effacées |
 | `fault_reset_requested` | reset du variateur demandé |
 | `session_idle` | retour au repos |
-| `refused` (orange) | la machine a refusé une demande. Hors séance manuelle, pour un démarrage ou un reset, **c'est le seul endroit où le refus apparaît** : la page avait déjà répondu « accepté » |
+| `taken` | la machine a pris une demande et l'a exécutée : séance démarrée, cible tenue, reset envoyé au variateur, arrêt engagé. Le détail redit ce qui était demandé (`manuel bench`, `cible 5.00 tr/min de sortie`, `reset defaut`) |
+| `refused` (orange) | la machine a refusé une demande, avec la raison. L'écran qui a fait la demande le lit aussi sous son bouton ; les autres écrans ne le voient qu'ici |
+| `cancelled` (orange) | un STOP est arrivé avant que la machine prenne une demande qui attendait (un démarrage, une cible, un reset) : cette demande n'a pas été exécutée |
 | `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici. La ligne défile avec les autres ; l'état, lui, se lit en permanence sur la pastille **Serveur** (§5) |
 | `recording` | l'enregistrement de séance sur le disque du Pi se dégrade (`enregistrement de seance degrade : …`) ou redevient normal (`enregistrement de seance retabli`). La séance et la sécurité continuent dans les deux cas. Non vu pendant la préparation de ce guide : ajouté après les captures, voir la [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale) |
 
-Important : une demande « acceptée » (démarrage, cible, reset) veut seulement dire
-« reçue ». La machine vérifie ensuite. Pour une **cible manuelle**, sa réponse
-s'écrit aussi dans la note de la carte Mode MANUEL (§6). Pour un **démarrage** ou un
-**reset**, la note du bouton garde la réponse immédiate de la console : hors séance
-manuelle, un refus n'apparaît **que** dans cette liste. Après ces actions, jetez un
-œil aux événements.
+Important : une demande « envoyée » (démarrage, cible, reset) veut seulement dire
+« reçue ». La machine vérifie ensuite, et la console dit ce qu'elle en a fait : une
+ligne `taken`, `refused` ou `cancelled` dans cette liste, et, sur l'écran qui a
+cliqué, la même réponse dans la note sous le bouton (§6, §14). La note d'un écran ne
+dit rien des demandes des autres écrans : pour savoir ce que la machine a répondu à
+quelqu'un d'autre, c'est cette liste qu'il faut lire.
 
 Cas particulier : une ligne `refused` **sans nom**, qui commence par
 `cible de ... tr/min moteur remise a 0`, n'est pas la réponse à un clic. La machine
@@ -1221,11 +1244,14 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
    `demande envoyee : manual_start bench - pas encore prise par la machine`, puis, une
    fraction de seconde plus tard, `demarrage pris par la machine : manual_start bench (cible 0)` ;
    le mode passe à `MANUEL`, la pastille de la carte à `BANC - personne a bord : NON`.
-   Si la note passe au rouge (`refus de la machine ...` ou `demarrage NON pris ...`), la
-   séance n'a pas démarré : lisez la raison, et la liste **Evenements** (§14).
-   Si elle dit en rouge `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.`,
-   la liaison de cet écran a été coupée autour du clic : une séance manuelle tourne,
-   et l'écran ne peut pas dire si c'est la vôtre ou celle d'un autre écran (§14).
+   Si la note passe au rouge (`refus de la machine ...`, `demande annulee ...`, ou
+   une phrase qui commence par `demande refusee par la console`), la séance que vous
+   avez demandée n'a pas démarré : lisez la raison (§14). Si un autre écran a demandé
+   un démarrage juste avant vous, c'est le sien qui attend, et le vôtre est refusé
+   tout de suite.
+   Si elle dit en rouge `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.`,
+   la liaison de cet écran a été coupée autour du clic. La page redemande alors la
+   réponse à la console, et la note se corrige d'elle-même dès qu'elle l'obtient (§14).
 6. Composez la cible : cliquez **+1 tr/min**. Le premier clic saute au minimum
    (1,10) ; chaque clic suivant ajoute 1. Après 27 clics, le brouillon affiche
    `27.10` en orange (capture `console-07-manuel-brouillon.png`).
@@ -1241,7 +1267,7 @@ vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
    montée de 0 à 27 tr/min a pris environ 1 min 45 s.
 10. Surveillez **Vitesse mesuree** jusqu'à 27,09 et `rampe : cible atteinte`
     (capture `console-09-manuel-27-atteint.png`).
-11. Si la note passe au rouge (`refus de la machine ...` ou `cible NON prise ...`), ou
+11. Si la note passe au rouge (`refus de la machine ...` ou `demande annulee ...`), ou
     si `cible appliquee` est restée ou revenue à `0.00`, voir §13.11.
 
 Pour changer de vitesse en cours de route : composez un nouveau brouillon avec les
@@ -1314,8 +1340,9 @@ Pas à pas :
 
    (remplacez le port, le profil, le nom et l'âge). La réponse
    `{"kind":"start",...}` veut dire « reçu », pas « démarré ».
-10. Regardez la liste **Evenements** : `start_requested`, puis `session_running`. Un
-    `refused` dit pourquoi la séance n'est pas partie (§14).
+10. Regardez la liste **Evenements** : `start_requested`, puis `taken`, puis
+    `session_running`. Un `refused` dit pourquoi la séance n'est pas partie (§14). Sur
+    la page, la note sous **Demarrer la seance** dit la même chose pour votre demande.
 11. Suivez la séance sur la page Seance : phase, fréquence cardiaque dans la bande de
     zone, **Mesure** (vitesse mesurée) (capture `console-19-seance-programmee-en-cours.png`).
     En simulation, la phase `baseline` (3 min) se passe à l'arrêt, puis la rotation
@@ -1718,13 +1745,13 @@ Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
    Sans nom : `an operator name is required ...`.
 4. Cliquez **Reset defaut variateur**. La note dit
    `demande envoyee : fault_reset - pas encore prise par la machine`, puis
-   `le variateur ne signale plus de defaut` quand le défaut a disparu (constaté 0,4 s
-   après le clic, en simulation). En rouge, `refus de la machine (...) : reset refuse : ...`
-   donne la raison d'un refus, et `le variateur signale toujours le defaut. ...` dit
-   qu'une seconde plus tard le défaut est encore là. Passé cette seconde, un refus
-   de la machine n'est plus écrit sous ce bouton : il ne répond pas à ce clic (pour
-   un démarrage, au contraire, un refus compte aussi quand la machine a mis plus
-   d'une seconde à le rendre).
+   `reset pris par la machine : le variateur ne signale plus de defaut` quand la
+   machine a envoyé le reset et que le défaut a disparu (constaté 0,16 s après le
+   clic, en simulation). En rouge, `refus de la machine (...) : reset refuse : ...`
+   donne la raison d'un refus, et
+   `reset pris par la machine : le variateur signale encore le defaut` dit qu'une
+   seconde après le reset le défaut est encore là. Le refus d'un reset demandé depuis
+   un autre écran n'est pas écrit sous ce bouton.
 5. Vérifiez que la pastille du variateur quitte `fault` (constaté : `ready`) et que
    le bandeau **VARIATEUR EN DEFAUT** a disparu.
 6. Regardez la pastille **Securite**. Si elle dit `none`, c'est fini : vous pouvez
@@ -1861,10 +1888,12 @@ Ce que vous voyez après avoir envoyé :
 4. La même raison est dans la liste **Evenements** (page Seance), sur une ligne orange
    `refused` (sans nom pour une cible reprise par la machine).
 
-Si la note dit `cible NON prise par la machine : la cible appliquee est ... La raison
-n'est pas arrivee a cet ecran.`, la machine n'a pas pris la cible et cet écran n'a pas
-reçu la raison (une courte coupure de la liaison suffit) : lisez **Securite**,
-l'encadré orange et la carte **Variateur**, puis renvoyez la cible.
+Si la note dit `cet ecran ne sait pas ce que la machine a fait de sa cible : sa
+liaison a ete coupee.`, la réponse de la machine n'est pas arrivée à cet écran (une
+courte coupure de la liaison suffit). La page la redemande à la console, et la note
+devient cette réponse dès qu'elle l'obtient. Si elle reste ainsi, lisez `cible
+appliquee`, **Securite**, l'encadré orange et la carte **Variateur**, puis renvoyez la
+cible.
 
 Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
 `puis redonner la cible` : une fois la cause traitée, **renvoyez la cible**.
@@ -1927,6 +1956,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut ...` | rayon non fourni | ajouter `ARM_RADIUS_M=` avec la valeur mesurée |
 | ✔ `configuration: UI_PORT: 8123 est le port de scripts/bench_console.py` | port réservé à l'outil de banc | garder 8080 ou un autre port |
 | `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback` | page ouverte au réseau sans jeton assez long | mettre un `UI_TOKEN` d'au moins 16 caractères |
+| `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '0.0.0.0' in clear HTTP: ...` | page ouverte au réseau sans certificat | revenir à `UI_HOST=127.0.0.1`, ou donner à la console son certificat ([pi-image.md](../pi-image.md#le-certificat-de-la-console)) |
+| `configuration: UI_TLS_CERT/UI_TLS_KEY: the certificate ... is not a file the console can see` (ou un autre motif) | le certificat ou sa clé ne peut pas être servi | lire le motif, qui nomme le fichier ([raspberry-pi.md, 12.5](../raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `configuration: MOTOR_BACKEND: '' : attendu 'sim' ou 'serial'` | variable absente ou fausse | la renseigner |
 | `configuration: ECG_SOURCE: ... attendu 'sim', 'serial' ou 'rfcomm'` | idem | la renseigner |
 | `configuration: BITALINO_ADDRESS: ... ECG_SOURCE=serial attend un port serie (/dev/rfcomm0, COM4) ou une adresse MAC` | adresse du boîtier manquante ou au mauvais format | corriger `BITALINO_ADDRESS` |
@@ -1945,11 +1976,11 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `nobody has attested the emergency stop this boot: ...` | attestation pas faite depuis le démarrage | §13.1 |
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |
 | ✔ `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | un verdict attend | lire la règle, traiter la cause, §13.6 |
-| `the machine is starting, not idle (pending: ...)` | double clic : une demande est déjà en attente | attendre une seconde |
+| ✔ `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` (rouge) | un démarrage est déjà demandé, par cet écran (double clic) ou par un autre, et la machine ne l'a pas encore pris : ce clic n'a pas été transmis. Jusqu'au 11 octobre 2026, deux démarrages demandés presque en même temps pouvaient être acceptés tous les deux | attendre la note du premier démarrage, ou regarder **Mode** |
 | `the machine is running, not idle` | une séance tourne déjà | STOP d'abord (§13.5) |
+| `the machine is stopping, not idle` | un arrêt est en cours, ou un arrêt d'urgence est verrouillé | attendre **Mode** `REPOS` et **Etat** `idle`, ou acquitter (§13.6) |
 | `demarrage refuse : variateur en defaut (<code>, LFT <n>). Rien n'a ete envoye a la machine : traiter le defaut (carte Variateur), puis redemander.` | le variateur signale un défaut (bandeau **VARIATEUR EN DEFAUT**) : la console refuse le démarrage au clic | §13.9 |
 | ✔ `no manual session is running (the machine is stopping)` (ou `idle`) | cible envoyée sans séance manuelle en cours | démarrer une séance manuelle |
-| `the machine is <état>; try again in a moment` | cible ou reset envoyé pendant qu'une autre demande attend | réessayer |
 | ✔ `STOP refuse : there is no session to end (the machine is idle)` | rien à arrêter | rien |
 | ✔ `STOP refuse : the machine is already stopping` | arrêt déjà en cours | attendre |
 | `the target must be a finite, non-negative output speed` | cible négative (API seulement) | corriger |
@@ -1972,22 +2003,17 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `cible envoyee : ... - pas encore prise par la machine` | la console a reçu la cible ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
 | ✔ `cible prise par la machine : ... (suivie aux limites de mouvement)` | la machine tient cette cible, et la vitesse va vers elle à cet instant | surveiller **Vitesse mesuree** |
 | `cible prise par la machine : ...` (sans `(suivie aux limites de mouvement)`) | la machine tient cette cible mais la vitesse n'y va pas à cet instant : une alerte la tient ou la baisse (`freeze` avec une cible autre que 0, `reduce`), ou la fréquence cardiaque retient une montée | lire **Securite** et l'encadré orange ; la ligne `rampe` dit `consigne maintenue, cible non atteinte` sous un gel. La vitesse ira vers la cible sans nouveau clic quand plus rien ne la retiendra (§11) |
-| ✔ `refus de la machine (<heure>) : ...` (rouge, carte Mode MANUEL) | la machine a refusé la cible, ou l'a remise à 0 ; la suite du message est celle de la liste Evenements | §13.11 |
-| `cible NON prise par la machine : la cible appliquee est ... La raison n'est pas arrivee a cet ecran.` | une seconde après l'envoi, la machine ne tient pas la cible et cet écran n'a pas reçu la raison | lire Securite, l'encadré orange et la carte Variateur ; renvoyer la cible (§13.11) |
-| `cible NON prise par la machine : la seance manuelle est terminee.` | la séance s'est terminée avant que la cible soit prise | redémarrer une séance |
-| ✔ `seconde demande refusee par la console : la cible ... attend encore la machine (une demande a la fois). Reessayer dans un instant.` (rouge) | double clic sur **Appliquer** : la console n'a qu'une place, et la première cible y attend encore | rien ; la note dit ensuite ce que devient la première cible |
-| ✔ `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` (rouge ; sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** ou **Reset defaut variateur**) | la place de la console est prise par une autre demande, celle d'un autre écran ou une précédente de celui-ci : ce clic n'a pas été transmis à la machine. La page n'affiche pas le texte de la console, qui contient la demande en attente et le nom de son auteur | attendre un instant et recommencer si c'est encore voulu |
+| ✔ `refus de la machine (<heure>) : ...` (rouge, carte Mode MANUEL) | la machine a refusé la cible envoyée par cet écran, ou a remis d'elle-même une cible à 0 (cette remise à 0 s'écrit sur tous les écrans qui montrent la séance) ; la suite du message est celle de la liste Evenements | §13.11 |
+| ✔ `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` (rouge ; sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** ou **Reset defaut variateur**) | quelqu'un, sur cet écran ou un autre, a cliqué STOP pendant que la demande de cet écran attendait encore : la machine ne l'a jamais prise | attendre **Etat** `idle`, puis redemander si c'est encore voulu |
+| `cet ecran ne sait pas ce que la machine a fait de sa cible : sa liaison a ete coupee.` (rouge), ou `... de sa demande de demarrage ...`, ou `... de sa demande de reset ...` | la liaison de cet écran a été coupée entre le clic et la réponse de la machine. La page redemande cette réponse à la console, et la note se corrige dès qu'elle l'a (constaté : en moins d'un centième de seconde après le retour de la liaison). Elle reste ainsi si la console ne répond pas, ou si elle a été relancée entre-temps | attendre un instant ; si la note reste, lire **Mode**, `cible appliquee`, **Securite** et la liste Evenements |
+| ✔ `seconde demande refusee par la console : la cible ... attend encore la machine (une demande a la fois). Reessayer dans un instant.` (rouge) | double clic sur **Appliquer** : la console n'a qu'une place, et la première cible de cet écran y attend encore | rien ; la note dit ensuite ce que devient la première cible |
+| ✔ `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` (rouge ; sous **Demarrer MANUEL**, **Appliquer**, **Demarrer la seance** ou **Reset defaut variateur**) | la place de la console est prise par une autre demande, celle d'un autre écran ou une précédente de celui-ci : ce clic n'a pas été transmis à la machine. La phrase est celle de la console ; elle ne dit rien de la demande en attente ni de son auteur | attendre un instant et recommencer si c'est encore voulu |
 | ✔ `demande envoyee : ... - pas encore prise par la machine` (démarrage manuel, démarrage de séance, reset) | la console a reçu la demande ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
-| ✔ `demarrage pris par la machine : ...` | la liaison de l'écran est restée ouverte depuis le clic (et l'était déjà deux secondes avant), une donnée reçue après la demande montre la séance démarrée, aucun refus n'est arrivé, et aucune autre demande de démarrage n'est arrivée à la machine dans les deux secondes qui précèdent celle-ci ni après elle. La note est retirée dès qu'une autre demande de démarrage ou un refus arrive ensuite, et à la fin de la séance. Après un démarrage manuel, `(cible 0)` n'est écrit que tant que la cible appliquée vaut 0 | continuer ; la note s'efface à la fin de la séance |
-| ✔ `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : sa liaison a ete coupee.` ou `une seance est en cours. ...` (rouge) | la liaison de cet écran a été coupée entre le clic et la donnée qui montre la séance : un refus a pu être perdu, et la séance peut être celle d'un autre écran. La note ne reprend pas les mots de la demande | ne pas tenir la séance affichée pour celle demandée ici : lire **Mode**, le temps restant et la carte, et demander à qui conduit l'autre écran |
-| ✔ `une seance manuelle est en cours. Cet ecran ne sait pas si la machine a pris sa demande : une autre demande de demarrage est aussi arrivee a la machine.` ou `une seance est en cours. ...` (rouge) | la liaison de l'écran est restée ouverte, mais une autre demande de démarrage est arrivée à la machine près de celle-ci (moins de deux secondes avant, ou après) : une seule séance tourne, et l'écran ne cherche pas à deviner si c'est la sienne. La note ne reprend pas les mots de la demande ; elle peut s'afficher alors que la séance est bien celle de cet écran | ne pas tenir la séance affichée pour celle demandée ici : lire **Mode**, le temps restant et la carte, et demander à qui conduit l'autre écran |
-| `... Cet ecran ne sait pas si la machine a pris sa demande : sa liaison venait de s'ouvrir.` (rouge) | la page venait d'être ouverte, ou sa liaison venait de revenir, moins de deux secondes avant le clic : elle n'a pas pu voir si un autre écran venait de demander un démarrage | comme ci-dessus |
-| `... Cet ecran ne sait pas si la machine a pris sa demande : il n'a pas recu l'evenement de sa propre demande.` (rouge) | la liaison est restée ouverte mais l'écran n'a pas vu passer sa propre demande dans la liste Evenements : il n'a pas tout reçu. Non observé | comme ci-dessus |
-| `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.` (rouge) | même coupure, et une seconde après la demande aucune séance n'est affichée : elle a pu ne pas démarrer, ou démarrer et finir sans que cet écran le voie | lire **Mode**, **Securite** et la liste Evenements d'un écran resté relié, puis redemander |
-| ✔ `refus de la machine (<heure>) : demarrage refuse : ...` ou `reset refuse : ...` (rouge, sous le bouton) | la machine a refusé le démarrage ou le reset ; la suite du message est celle de la liste Evenements | lire la raison dans ce tableau |
-| `demarrage NON pris par la machine : la raison n'est pas arrivee a cet ecran.` (rouge) | la liaison de l'écran est restée ouverte, et une seconde après la demande il n'y a ni séance ni refus sur cet écran | lire **Securite**, la carte **Variateur** et la liste Evenements, puis redemander |
-| ✔ `le variateur ne signale plus de defaut` | après un reset, les données ne montrent plus de défaut | acquitter `drive_fault` (§13.9) |
-| `le variateur signale toujours le defaut. Si la machine a refuse la demande, la raison n'est pas arrivee a cet ecran.` (rouge) | une seconde après la demande de reset, le défaut est encore là, sans refus reçu | lire la carte **Variateur** et la liste Evenements |
+| ✔ `demarrage pris par la machine : ...` | la console a répondu que la machine a pris le démarrage demandé par **cet** écran : la séance en cours est la sienne. Après un démarrage manuel, `(cible 0)` n'est écrit que tant que la cible appliquée vaut 0 | continuer ; la note s'efface à la fin de la séance |
+| `la machine a pris le demarrage demande par cet ecran (...), mais sa liaison a ete coupee depuis : cet ecran ne sait pas si la seance en cours est encore celle-la.` (rouge) | la note disait `demarrage pris par la machine`, puis la liaison de cet écran a été coupée et rétablie : la séance a pu finir, et une autre commencer, sans qu'il le voie. La page le redemande à la console ; la note redit `demarrage pris par la machine ...` si c'est toujours sa séance, et s'efface sinon | attendre un instant ; si la note reste, lire **Mode** et le temps restant, et demander à qui conduit l'autre écran |
+| ✔ `refus de la machine (<heure>) : demarrage refuse : ...` ou `reset refuse : ...` (rouge, sous le bouton) | la machine a refusé le démarrage ou le reset demandé par cet écran ; la suite du message est celle de la liste Evenements | lire la raison dans ce tableau |
+| ✔ `reset pris par la machine : le variateur ne signale plus de defaut` | la machine a envoyé le reset au variateur, et les données ne montrent plus de défaut | acquitter `drive_fault` (§13.9) |
+| `reset pris par la machine : le variateur signale encore le defaut` (rouge) | une seconde après le reset, le défaut est encore là | lire la carte **Variateur** : certains défauts demandent de couper l'alimentation (§13.9) |
 | `acquittement repris par la machine : <règle> est de nouveau verrouille, sa regle s'est declenchee de nouveau.` (rouge, sous **Acquitter**) | la console avait répondu 200, et la règle s'est verrouillée de nouveau au cycle suivant | traiter la cause ; pour `session_standstill` et `session_overrun`, la note ajoute que l'acquittement tiendra une fois **Mode** revenu à `REPOS`, et retire cette phrase quand le mode y revient. La note s'efface quand les données ne montrent plus cette règle verrouillée : acquittée de nouveau, ou cachée par une alerte plus sévère qui prend sa place à l'écran |
 | ✔ encadré `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE` | personne à bord : la fréquence cardiaque empêche la vitesse de monter (la raison suit) | §13.11 |
 | encadré `RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE` | personne à bord : la page ne reçoit plus cette information de la console | ne rien conclure ; lire la note après l'envoi |
@@ -2066,8 +2092,11 @@ La machine a refusé la cible, ou l'a remise à 0. La note sous la grille le dit
 rouge, `refus de la machine ...`, avec la raison (§13.11) ; la même ligne est dans la
 liste **Evenements** de la page Seance. Tant que la note dit seulement
 `cible envoyee : ... - pas encore prise par la machine`, la machine n'a pas encore
-répondu : cela dure une fraction de seconde. Si la note dit `cible NON prise ...`, la
-raison n'est pas arrivée à cet écran : lisez **Securite** et renvoyez la cible.
+répondu : cela dure une fraction de seconde. Si la note dit `demande annulee ...`, un
+STOP est arrivé avant que la machine prenne la cible. Si elle dit `cet ecran ne sait
+pas ce que la machine a fait de sa cible ...`, la réponse n'est pas arrivée à cet
+écran : la page la redemande, et la note se corrige seule ; sinon lisez `cible
+appliquee` et **Securite**, puis renvoyez la cible.
 
 **Le bras s'est arrêté pendant la séance, la cause a disparu, et rien ne repart.**
 C'est voulu. Quand la vitesse commandée revient à 0 en cours de séance sans que
@@ -2284,6 +2313,13 @@ Pour être clair sur ce que ce guide garantit :
   ordre choisi, et l'écran coupé de la console pendant son redémarrage. Un vrai
   redémarrage du Pi (son horloge repart de zéro) n'a pas été essayé : ce cas n'est
   tenu que par les tests automatiques de la page.
+* **Deux demandes presque en même temps, depuis deux écrans** (§14) : rejoué le
+  11 octobre 2026 avec deux écrans réels sur la console en simulation, le variateur
+  simulé étant ralenti pour que la console réponde à un écran pendant qu'elle attend
+  le variateur, comme le fait un vrai variateur sur sa liaison série. Avant, les deux
+  démarrages étaient acceptés ; depuis, le second est refusé tout de suite. Jamais
+  essayé sur un vrai variateur : l'instant exact où deux clics se rencontrent y est
+  différent, la règle de la console est la même.
 * **Règle `session_overrun`** (§11) : le repos sans verdict après une séance, le départ
   suivant sans redémarrage, la fin de séance ouverte tard qui ne laisse plus de
   verdict, et l'E-STOP ou le défaut du variateur au repos qui ne relance plus de

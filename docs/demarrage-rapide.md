@@ -249,7 +249,7 @@ Durées, nombres de tests et lancement d'un seul test :
 | Console et `bench_console.py` en même temps sur le même câble | deux programmes parlent au variateur | n'en lancer qu'un seul |
 | Un `raspberry-pi/.env` avec une vraie clé ou `MOTOR_BACKEND=serial` | la console tente le matériel ou Convex en ligne | les variables passées sur la ligne de commande priment sur `.env` : forcez `MOTOR_BACKEND=sim ECG_SOURCE=sim MACHINE_API_KEY=` |
 | `ARM_RADIUS_M` oublié | sortie immédiate, code 2 | c'est voulu : il n'y a pas de rayon par défaut |
-| `UI_HOST` autre que `127.0.0.1` sans jeton | sortie, code 2 | fournir `UI_TOKEN` d'au moins 16 caractères |
+| `UI_HOST` autre que `127.0.0.1` sans jeton ou sans certificat | sortie, code 2 | fournir `UI_TOKEN` d'au moins 16 caractères **et** le certificat de la console (`UI_TLS_CERT`, `UI_TLS_KEY`) : hors boucle locale la page n'est servie qu'en TLS ([raspberry-pi.md, 12.5](raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `CONVEX_URL` en `.convex.cloud` côté Pi | chaque requête du Pi répond 404 | utiliser l'hôte `.convex.site` |
 | Docker sur Mac | ne voit ni le câble FTDI ni le Bluetooth | lancer la console en natif |
 | Tester l'API à la main dans zsh avec un en-tête `-H` stocké dans une variable | réponses 422 | écrire l'en-tête `Content-Type: application/json` directement dans la commande `curl` |
