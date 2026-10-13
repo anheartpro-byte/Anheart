@@ -68,7 +68,18 @@ La référence technique complète (toutes les routes HTTP, tous les champs) res
 > elle-même ce que chaque demande est devenue, et un second démarrage n'est plus
 > accepté pendant qu'un premier attend. Il a été rejoué dans un navigateur sans
 > interface, avec un et deux écrans, sur la console en simulation. Aucune capture n'a
-> été reprise : celles de ce guide peuvent montrer une note d'avant.
+> été reprise pour ces notes : certaines captures peuvent montrer une note d'avant.
+>
+> L'ajout du 11 octobre 2026 (ticket ANH-190) décrit le bandeau rouge
+> `VARIATEUR EN DEFAUT` et le refus d'un démarrage pendant un défaut (§6, §13.9), la
+> ligne `verrouille derriere go_silent` (§10, §11), ce que fait le bandeau
+> `ARRET D'URGENCE VERROUILLE` sous `go_silent` et après un redémarrage de la console
+> (§13.5), la rampe pendant un `reduce` (§6), la phrase `NOT LATCHED` retirée d'un
+> bras manuel à l'arrêt (§11) et la note d'acquittement corrigée sous `NO LIVE DATA`
+> (§13.6). Il a été rejoué dans un navigateur sans interface, sur la console en
+> simulation, avant et après le changement ; ce qui dépend de la fréquence cardiaque
+> l'a été avec une personne à bord déclarée par l'API. Deux captures ont été reprises
+> (`console-14` et `console-15`, voir l'annexe).
 
 ---
 
@@ -549,6 +560,8 @@ Repères :
    moteur). Entre 0 et ce minimum, rien n'est accepté.
 9. `rampe` : `cible atteinte`, ou `en cours, arrivee ~m:ss`. Pendant un gel `freeze`,
    si la cible n'est ni atteinte ni nulle : `consigne maintenue, cible non atteinte`.
+   Pendant un `reduce`, qui fait baisser la vitesse quelle que soit la cible :
+   `en baisse vers 0.00 tr/min de sortie sous l'avertissement <règle>, la cible n'est pas suivie ; arrivee dans ~m:ss s'il dure`.
 10. La note sous la grille : dernier message (ici
     `demarrage pris par la machine : manual_start bench (cible 0)` : la machine a
     démarré la séance manuelle ; `(cible 0)` reste écrit tant que la cible appliquée
@@ -626,9 +639,19 @@ Repères :
 5. **Vitesse mesuree** : `6.43` et pastille `EN ROTATION` : le bras accélère.
 6. Barre latérale : Rotation `EN ROTATION`.
 
-Le bandeau n'apparaît que si la vitesse commandée marche vraiment vers la cible. Si
-un gel `freeze` la tient à distance d'une cible non nulle, il n'y a ni bandeau ni heure
-d'arrivée, et `rampe` affiche `consigne maintenue, cible non atteinte`.
+Le bandeau n'apparaît que si la vitesse commandée change vraiment. Si un gel `freeze`
+la tient à distance d'une cible non nulle, il n'y a ni bandeau ni heure d'arrivée, et
+`rampe` affiche `consigne maintenue, cible non atteinte`.
+
+Pendant un `reduce`, la vitesse commandée descend vers 0 quelle que soit la cible. Le
+bandeau reste affiché, puisque la vitesse change (ne bougez pas la tête), mais il ne
+parle plus de la cible : il dit
+`la vitesse baisse vers 0.00 tr/min de sortie sous l'avertissement <règle>, la cible n'est pas suivie ; arrivee dans ~m:ss s'il dure`,
+et la ligne `rampe` dit la même chose (`en baisse vers ...`). Jusqu'au 11 octobre
+2026 ils annonçaient une rampe « en cours » vers la cible, avec le temps qu'il aurait
+fallu pour y remonter. Si l'avertissement cesse avant l'arrêt, la vitesse remonte
+seule vers la cible (bandeau **REPRISE AUTOMATIQUE POSSIBLE**, §11) ; si elle arrive
+à 0, la séance est terminée (§11).
 
 Une fois la cible atteinte, le bandeau disparaît et `rampe` affiche `cible atteinte` :
 
@@ -676,7 +699,10 @@ juste après une coupure.
 | `plafond moteur` | `MOTOR_MAX_RPM` |
 
 En cas de défaut, un encadré rouge et un bouton **Reset defaut variateur**
-apparaissent (voir §13.9 et la capture `console-14-defaut-variateur.png`).
+apparaissent (voir §13.9 et la capture `console-14-defaut-variateur.png`). Depuis le
+11 octobre 2026, un bandeau rouge **VARIATEUR EN DEFAUT** le dit aussi en haut de
+toutes les pages, tant que le variateur signale le défaut : aucun démarrage n'est
+accepté pendant ce temps (§13.9).
 
 **BITalino** :
 
@@ -894,7 +920,8 @@ Repères :
    ressaisir dans un nouvel onglet).
 4. Carte **Systeme** :
    * `etat`, `e-stop verrouille`, `verdict retenu`, `plancher verrouille`,
-     `regles actives` : l'état de sécurité (détaillé page Securite) ;
+     `regles actives` : l'état de sécurité (détaillé page Securite). Une ligne
+     `verrouille derriere go_silent` s'y ajoute dans un seul cas (§11) ;
    * `echantillons FC retenus` : mesures cardiaques gardées en mémoire ;
    * `accompagnant vu` : dernier signal de présence de la page (voir §11) ;
    * `clients telemetrie` : nombre d'écrans ouverts sur la console ;
@@ -971,12 +998,13 @@ Repères :
 | Ligne | Sens |
 |---|---|
 | `regle` | la règle qui agit (`operator_estop`, `drive_fault`, `attendant_absent`, `presence_intrusion`...) |
-| `detail` | la phrase explicative : en anglais pour les règles du superviseur, en français pour les règles caméra ; un défaut variateur y reprend son libellé français. Pour un avertissement non verrouillé, tant que la séance peut encore prendre de la vitesse, elle se termine par `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` (voir plus bas) |
+| `detail` | la phrase explicative : en anglais pour les règles du superviseur, en français pour les règles caméra ; un défaut variateur y reprend son libellé français. Pour un avertissement non verrouillé, tant que la séance peut encore prendre de la vitesse, elle se termine par `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` (voir plus bas). Sur un bras manuel à l'arrêt dont la cible vaut 0, cette fin de phrase n'est pas écrite : rien n'y remontera |
 | `verrouille` | `oui` : ne s'efface que par un acquittement nommé. `non` : se lève seul quand sa cause disparaît |
 | `depuis` | depuis combien de secondes |
 | `e-stop verrouille` | un arrêt d'urgence est verrouillé : E-STOP de la page ou d'un autre écran, ou arrêt déclenché par la caméra. Quand la ligne dit `OUI`, l'acquittement exige la case du coup de poing |
 | `verdict retenu` | le verdict en vigueur en ce moment : le plus sévère de l'arrêt d'urgence, du plancher verrouillé et des règles actives. S'il est verrouillé, il attend un acquittement |
-| `plancher verrouille` | le verdict verrouillé le plus sévère, quelle que soit la règle qui l'a posé (défaut variateur, fréquence cardiaque, `session_standstill`, caméra...). L'arrêt d'urgence de l'opérateur est suivi à part, par la ligne `e-stop verrouille` : après un E-STOP seul, cette ligne dit `aucun` |
+| `plancher verrouille` | le verdict verrouillé le plus sévère, quelle que soit la règle qui l'a posé (défaut variateur, fréquence cardiaque, `session_standstill`, caméra, ou un arrêt que la console décide d'elle-même, par exemple `drive_precommanded` quand elle trouve le variateur déjà en marche). L'arrêt d'urgence de l'opérateur est suivi à part, par la ligne `e-stop verrouille` : après un E-STOP seul, cette ligne dit `aucun` |
+| `verrouille derriere go_silent` | cette ligne n'existe que sous `go_silent`, et seulement si un verdict était déjà verrouillé quand `go_silent` est arrivé. `go_silent` prend sa place dans les deux lignes du dessus, et plus rien ne s'acquitte : ce verdict est donc toujours verrouillé, et cette ligne le nomme (par exemple `reverse_rotation / quick_stop`). Si c'est un `quick_stop`, le bandeau **ARRET D'URGENCE VERROUILLE** est affiché (§13.5) |
 | `regles actives` | nombre de règles qui se déclenchent en ce moment, listées en dessous |
 | `accompagnant vu` | voir ci-dessous |
 
@@ -997,8 +1025,8 @@ pendant les phases `baseline`, `warmup` et `hold` ; en mode `MANUEL`, seulement 
 cible appliquée est au-dessus de la vitesse commandée. Sur un bras manuel tenu à
 l'arrêt il ne s'affiche pas : la cible y vaut 0 et rien ne remontera (§13.11). La
 phrase `NOT LATCHED ...` à la fin de la ligne `detail` dit la même chose en anglais,
-sur les pages Seance et Securite seulement ; elle reste écrite sur un bras manuel tenu
-à l'arrêt, où elle ne s'applique plus : fiez-vous au bandeau. Un bras ralenti n'est
+sur les pages Seance et Securite seulement ; depuis le 11 octobre 2026 elle n'est plus
+écrite non plus sur un bras manuel tenu à l'arrêt, cible à 0. Un bras ralenti n'est
 pas un bras qui s'arrête. Un STOP, lui, fait baisser la vitesse même quand la pastille
 Securite dit `freeze` (§13.5).
 
@@ -1429,31 +1457,37 @@ Repères :
 > À savoir :
 >
 > * Il s'affiche pour tout verdict `quick_stop` verrouillé, y compris celui d'une
->   règle de sécurité (par exemple `reverse_rotation`). Dans ce cas la ligne
->   `e-stop verrouille` dit `non` et l'acquittement ne demande pas la case du coup de
->   poing : lisez la ligne `regle`.
+>   règle de sécurité (par exemple `reverse_rotation`) ou celui que la console décide
+>   d'elle-même (`drive_precommanded`, quand elle trouve le variateur déjà en marche).
+>   Dans ce cas la ligne `e-stop verrouille` dit `non` et l'acquittement ne demande
+>   pas la case du coup de poing : lisez la ligne `regle`. Depuis le 11 octobre 2026,
+>   un écran sous `NO LIVE DATA` l'affiche aussi pour un arrêt décidé par la console
+>   elle-même, au tour d'état suivant (5 s au plus) : jusque-là il ne l'apprenait pas.
 > * Quand `go_silent` devient le verdict en cours (liaison perdue avec le variateur,
 >   par exemple), plus rien ne s'acquitte, et **un bandeau déjà affiché reste jusqu'au
 >   redémarrage de la console**, qu'il vienne d'un arrêt d'urgence ou du `quick_stop`
 >   d'une règle, et que l'écran l'ait appris par les données en continu ou, sous
->   `NO LIVE DATA`, par l'état qu'il relit toutes les 5 s. Dans le cas d'une règle la
->   console ne tient plus que `go_silent` (ligne `e-stop verrouille` : `non`), mais le
->   bandeau ne s'efface pas tout seul : personne n'a rien acquitté. Lisez la pastille
+>   `NO LIVE DATA`, par l'état qu'il relit toutes les 5 s. Personne n'a rien acquitté :
+>   l'arrêt est toujours verrouillé, derrière `go_silent`. Lisez la pastille
 >   **Securite**, `go_silent` en rouge ; sous `NO LIVE DATA` elle est barrée, lisez
->   alors la ligne `verdict retenu` de la page Securite. Un écran ouvert ou rechargé à
->   ce moment n'affiche pas ce bandeau pour le `quick_stop` d'une règle : la console
->   ne rapporte plus ce verrou.
-> * Sous `go_silent`, la console dit à chaque écran si un arrêt d'urgence est
->   verrouillé derrière, y compris un arrêt déclenché par la caméra : le bandeau
->   s'affiche donc aussi sur un écran ouvert ou rechargé après coup (ligne
->   `e-stop verrouille` : `OUI`, pastille Etat rouge). Et il disparaît quand la
->   console répond que l'arrêt d'urgence qu'elle montrait n'est plus tenu : il a été
->   acquitté juste avant `go_silent`, ou la console a été relancée.
+>   alors la ligne `verdict retenu` de la page Securite.
+> * Depuis le 11 octobre 2026, la console dit à chaque écran ce que `go_silent` a
+>   remplacé : la ligne `verrouille derriere go_silent` de la page Securite le nomme
+>   (§11), et **un écran ouvert ou rechargé sous `go_silent` affiche le bandeau pour
+>   le `quick_stop` d'une règle, comme l'écran qui a vu la séquence**. Jusque-là cet
+>   écran n'affichait rien.
+> * Sous `go_silent`, la console dit de même si un arrêt d'urgence est verrouillé
+>   derrière, y compris un arrêt déclenché par la caméra (ligne `e-stop verrouille` :
+>   `OUI`, pastille Etat rouge). Et le bandeau disparaît quand la console répond que
+>   l'arrêt d'urgence qu'elle montrait n'est plus tenu : il a été acquitté juste avant
+>   `go_silent`, ou la console a été relancée.
 > * Après un redémarrage de la console, le bandeau d'avant disparaît à la première
 >   donnée sans alerte. Si la nouvelle console repasse sous `go_silent` avant, il
->   disparaît pour un arrêt d'urgence (la console répond qu'elle n'en tient plus) ;
->   pour le `quick_stop` d'une règle, seulement si l'écran peut prouver le
->   redémarrage, sinon il reste jusqu'au rechargement de la page (§13.10).
+>   disparaît à sa première réponse d'état : chaque console porte un nom tiré au
+>   hasard à son lancement, l'écran voit que ce n'est plus celle qui lui a montré
+>   l'arrêt, et une console relancée ne tient rien de la précédente. Avant le
+>   11 octobre 2026 l'écran devait le deviner, et dans deux cas le bandeau restait
+>   jusqu'au rechargement de la page (§13.10).
 > * « Plus récent » se juge à l'horloge de la machine, pas à l'ordre d'arrivée sur
 >   l'écran. Une réponse en retard, demandée avant un acquittement et arrivée après,
 >   ne fait plus revenir le bandeau ; et de deux réponses croisées, l'écran garde
@@ -1461,9 +1495,10 @@ Repères :
 > * Limites qui restent, du côté prudent : si la liaison tombe (`NO LIVE DATA`) sur
 >   un arrêt verrouillé, le bandeau reste jusqu'au retour des données, même si l'arrêt
 >   a été acquitté entre-temps ; sous `go_silent`, un arrêt d'urgence posé depuis
->   un autre écran peut mettre jusqu'à 5 s à s'afficher ici ; et le bandeau du
->   `quick_stop` d'une règle peut rester après un redémarrage de la console suivi de
->   `go_silent`, jusqu'au rechargement de la page.
+>   un autre écran peut mettre jusqu'à 5 s à s'afficher ici ; et si le `quick_stop`
+>   d'une règle a été acquitté pendant que cet écran ne recevait plus de données, puis
+>   que `go_silent` est arrivé dans la même console, le bandeau reste jusqu'au
+>   rechargement de la page.
 >
 > Rejoué en simulation : E-STOP de la page, second écran, arrêt caméra, et perte de la
 > liaison au variateur au moment du clic (deux écrans). Le cas d'une règle
@@ -1537,7 +1572,11 @@ Rien ne l'efface tout seul.
    qui dit que plus rien ne retient la machine. La note
    `acquitte par <nom> : operator_estop` donne seulement la liste des règles effacées
    par ce clic : un verdict dont la cause dure, ou acquitté avant `REPOS`, est de
-   nouveau là au cycle suivant. **Etat** n'est pas le critère : il revient à `idle`
+   nouveau là au cycle suivant, et la note devient alors, en rouge,
+   `acquittement repris par la machine : ...`. Sous `NO LIVE DATA` cette correction
+   arrive au tour d'état suivant (5 s au plus) ; avant le 11 octobre 2026 la note
+   restait telle quelle tant que les données en continu n'étaient pas revenues.
+   **Etat** n'est pas le critère : il revient à `idle`
    après une séance terminée, et reste `running` quand la séance manuelle continue.
    Après un arrêt d'urgence, le bandeau rouge disparaît aussi.
 
@@ -1651,12 +1690,30 @@ Que faire :
 
 Repères :
 
-1. Carte **Variateur**, pastille rouge `fault`.
-2. `LFT brut 18` : le code brut lu sur le variateur.
-3. Encadré rouge : `DEFAUT ObF (LFT brut 18) : surtension du bus continu au freinage : ...`
+1. En haut, le bandeau rouge **VARIATEUR EN DEFAUT**, suivi de
+   `ObF (LFT brut 18) : aucun demarrage n'est accepte tant que le variateur signale ce defaut. Le traiter sur la carte Variateur (Tableau de bord)`.
+   Il est sur toutes les pages, tant que le variateur signale le défaut.
+2. Carte **Variateur**, pastille rouge `fault`.
+3. `LFT brut 18` : le code brut lu sur le variateur.
+4. Encadré rouge : `DEFAUT ObF (LFT brut 18) : surtension du bus continu au freinage : ...`
    (le code, puis ce qui s'est passé et quoi faire).
-4. Bouton **Reset defaut variateur**.
-5. Barre latérale : Securite `ramp_down` (règle `drive_fault`, verrouillée).
+5. Bouton **Reset defaut variateur**.
+6. Barre latérale : Securite `none`. Sur une console qui n'a encore lancé aucune
+   séance depuis son démarrage, un défaut apparu au repos ne lève pas de verdict :
+   c'est le bandeau qui le dit. Si le défaut arrive pendant une séance, ou après une
+   séance, la pastille dit en plus `ramp_down` (règle `drive_fault`, verrouillée), et
+   il y aura ce verdict à acquitter.
+
+**Un démarrage demandé pendant le défaut est refusé tout de suite.** La note sous le
+bouton dit, en rouge :
+`demarrage refuse : variateur en defaut (ObF, LFT 18). Rien n'a ete envoye a la machine : traiter le defaut (carte Variateur), puis redemander.`
+Jusqu'au 11 octobre 2026, rien ne signalait le défaut en dehors de la carte
+Variateur ; le premier clic sur **Demarrer MANUEL** était accepté, puis refusé une
+fraction de seconde plus tard par la machine, et ce refus laissait un verdict
+`drive_fault` à acquitter en plus du défaut. Constaté dans un navigateur, en
+simulation, avant et après : bandeau affiché 0,5 s après le défaut ; refus affiché
+tout de suite ; après le reset, bandeau disparu et démarrage suivant accepté, sans
+rien à acquitter.
 
 Lire le code : le mnémonique (`ObF`, `OCF`, `SLF1`...) est celui qu'affiche l'écran du
 variateur sur son propre écran. La phrase qui suit dit ce qui s'est passé et quoi faire. La table
@@ -1695,9 +1752,13 @@ Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
    `reset pris par la machine : le variateur signale encore le defaut` dit qu'une
    seconde après le reset le défaut est encore là. Le refus d'un reset demandé depuis
    un autre écran n'est pas écrit sous ce bouton.
-5. Vérifiez que la pastille du variateur quitte `fault` (constaté : `ready`).
-6. Allez dans **Securite** et acquittez le verdict `drive_fault` (§13.6 ; la case du
-   coup de poing n'est pas nécessaire ici). Constaté : `acquitte par Mohamed : drive_fault`.
+5. Vérifiez que la pastille du variateur quitte `fault` (constaté : `ready`) et que
+   le bandeau **VARIATEUR EN DEFAUT** a disparu.
+6. Regardez la pastille **Securite**. Si elle dit `none`, c'est fini : vous pouvez
+   redémarrer une séance. Si elle dit `ramp_down` (le défaut est arrivé pendant ou
+   après une séance), allez dans **Securite** et acquittez le verdict `drive_fault`
+   (§13.6 ; la case du coup de poing n'est pas nécessaire ici). Constaté :
+   `acquitte par Mohamed : drive_fault`.
 
 L'ordre compte : le reset est accepté même si le verdict `drive_fault` est encore
 verrouillé (c'est le seul verdict qu'il tolère), mais il est refusé si **un autre**
@@ -1709,8 +1770,8 @@ Pour un défaut **non réarmable** (constaté avec `OCF`) :
 
 1. Le reset est refusé :
    `reset refuse : defaut OCF non rearmable depuis la console : couper l'alimentation du variateur et inspecter`.
-2. L'acquittement de `drive_fault` réussit, mais le verdict revient immédiatement
-   tant que le défaut est là, et tout démarrage est refusé.
+2. Tout démarrage est refusé tant que le défaut est là. S'il y a un verdict
+   `drive_fault`, son acquittement réussit, mais le verdict revient immédiatement.
 3. Arrêtez la console (Ctrl C).
 4. **Coupez l'alimentation du variateur** et inspectez la cause (pour `OCF` : blocage
    mécanique, bobinage en court circuit). Ne remettez pas sous tension sans avoir
@@ -1744,9 +1805,10 @@ n'est pas barré au même instant : ce qui vient des données en continu l'est a
 2 s, la pastille Console, la pastille Serveur et celle du BITalino après 3,5 s,
 Etat et la pastille de l'attestation après 12 s.
 
-La note rouge de la carte Mode MANUEL (`a latched safety verdict stands (drive_fault) ...`)
-vient d'avant la coupure : un défaut variateur injecté au repos, puis un démarrage
-manuel refusé.
+Un bandeau rouge qui dépend de la dernière donnée reçue reste affiché sous
+`NO LIVE DATA` : **ARRET D'URGENCE VERROUILLE** (§13.5) et **VARIATEUR EN DEFAUT**
+(§13.9) disent ce que l'écran savait avant la coupure, pas ce qui est vrai maintenant.
+La capture a été prise sur une console saine, au repos : elle n'en montre aucun.
 
 Que faire :
 
@@ -1917,6 +1979,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` (rouge) | un démarrage est déjà demandé, par cet écran (double clic) ou par un autre, et la machine ne l'a pas encore pris : ce clic n'a pas été transmis. Jusqu'au 11 octobre 2026, deux démarrages demandés presque en même temps pouvaient être acceptés tous les deux | attendre la note du premier démarrage, ou regarder **Mode** |
 | `the machine is running, not idle` | une séance tourne déjà | STOP d'abord (§13.5) |
 | `the machine is stopping, not idle` | un arrêt est en cours, ou un arrêt d'urgence est verrouillé | attendre **Mode** `REPOS` et **Etat** `idle`, ou acquitter (§13.6) |
+| `demarrage refuse : variateur en defaut (<code>, LFT <n>). Rien n'a ete envoye a la machine : traiter le defaut (carte Variateur), puis redemander.` | le variateur signale un défaut (bandeau **VARIATEUR EN DEFAUT**) : la console refuse le démarrage au clic | §13.9 |
 | ✔ `no manual session is running (the machine is stopping)` (ou `idle`) | cible envoyée sans séance manuelle en cours | démarrer une séance manuelle |
 | ✔ `STOP refuse : there is no session to end (the machine is idle)` | rien à arrêter | rien |
 | ✔ `STOP refuse : the machine is already stopping` | arrêt déjà en cours | attendre |
@@ -1972,7 +2035,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux de `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` | corriger le profil ou la configuration (décision médicale) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | le variateur tournait déjà (ancien programme mort) | attendre l'arrêt, acquitter |
-| `demarrage refuse : variateur en defaut (<code>, LFT <n>)` | défaut variateur présent | §13.9 |
+| `demarrage refuse : variateur en defaut (<code>, LFT <n>)` | défaut variateur présent au moment où la machine arme la séance. Depuis la page, la console refuse en général avant, au clic (tableau précédent) | §13.9 |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sur le disque du Pi pour enregistrer la séance | exporter les enregistrements utiles, puis libérer de la place sur le Pi ([référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement du Pi est inutilisable | faire vérifier le disque et les droits du dossier par la personne qui administre le Pi |
 | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` | le disque du Pi ne répond plus depuis plus de 15 s | ne pas insister ; faire vérifier le disque par la personne qui administre le Pi |
@@ -2013,7 +2076,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `the arm came to a standstill inside the session (<cause> brought the setpoint to zero): the session has ended, and a stopped arm never restarts by itself. ...` | `session_standstill` | séance terminée, verrouillé ; la vitesse commandée est déjà à 0, lisez Rotation pour l'arrêt du bras ; rien ne repart ; acquitter une fois le mode à `REPOS` (§11) |
 | `the session has run <n> s against a programme of <m> s plus 30 s of grace: the phase machine has lost track` | `session_overrun` | la séance en cours a dépassé sa durée prévue de plus de 30 s : arrêt contrôlé, verrouillé. N'apparaît plus au repos après une séance finie, ni pendant une fin de séance qui se déroule normalement ; acquitter une fois le mode à `REPOS` (§11) |
 | `the session has run <n> s against an ending opened at <t> s with <d> s to bring the setpoint back to zero plus 30 s of grace: the phase machine has lost track` (ou `… to finish its descent and its monitored recovery …`) | `session_overrun` | une fin de séance ouverte à `<t>` s n'a pas ramené la vitesse commandée à 0, ou n'a pas fini sa récupération, dans le temps `<d>` qu'une fin de séance normale prend depuis la vitesse du moment de l'arrêt : arrêt contrôlé, verrouillé ; acquitter une fois le mode à `REPOS` et signaler (§11) |
-| `...; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` | fin de phrase ajoutée à toute règle non verrouillée (`freeze`, `reduce`), tant que la séance peut encore prendre de la vitesse | la règle se lèvera seule ; tant que le bras tourne, la vitesse pourra remonter sans clic (§11). Le bandeau orange **REPRISE AUTOMATIQUE POSSIBLE** dit la même chose en français, et lui seul tient compte de la cible manuelle |
+| `...; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking` | fin de phrase ajoutée à toute règle non verrouillée (`freeze`, `reduce`), tant que la séance peut encore prendre de la vitesse | la règle se lèvera seule ; tant que le bras tourne, la vitesse pourra remonter sans clic (§11). Le bandeau orange **REPRISE AUTOMATIQUE POSSIBLE** dit la même chose en français. Sur un bras manuel à l'arrêt dont la cible vaut 0, ni la phrase ni le bandeau ne sont affichés : rien n'y remontera |
 
 ## 15. FAQ et pièges
 
@@ -2280,8 +2343,9 @@ Pour être clair sur ce que ce guide garantit :
 
 Ces captures datent d'avant le 9 octobre 2026 : leur barre latérale montre six
 pastilles, sans **Serveur** ni **Version**, et la barre de la vue mobile deux pastilles
-au lieu de trois. Une seule a été reprise depuis, `console-07`, le 10 octobre 2026 : sa
-barre latérale montre les huit pastilles.
+au lieu de trois. Trois ont été reprises depuis : `console-07`, le 10 octobre 2026,
+dont la barre latérale montre huit pastilles, puis `console-14` et `console-15`, le
+11 octobre 2026, qui en montrent neuf (avec **Service**).
 
 | Fichier | Ce qu'il montre |
 |---|---|
@@ -2298,7 +2362,7 @@ barre latérale montre les huit pastilles.
 | `img/console-11-stop-rampe-arret.png` | rampe d'arrêt après STOP |
 | `img/console-12-estop-verrouille.png` | E-STOP pendant la rampe d'arrêt |
 | `img/console-13-securite-verdict-verrouille.png` | verdict E-STOP verrouillé, avant acquittement |
-| `img/console-14-defaut-variateur.png` | défaut variateur ObF et bouton de reset |
+| `img/console-14-defaut-variateur.png` | défaut variateur ObF au repos : bandeau VARIATEUR EN DEFAUT, encadré rouge et bouton de reset |
 | `img/console-15-liaison-coupee.png` | bandeau NO LIVE DATA, console arrêtée |
 | `img/console-16-camera-intrusion.png` | intrusion détectée par la caméra simulée |
 | `img/console-17-bitalino-deconnecte.png` | BITalino déconnecté pendant une séance manuelle |
@@ -2334,3 +2398,23 @@ autres ne changent pas : le bandeau `STOP NON CONFIRME`, le nouveau texte de
 `ARRET D'URGENCE NON CONFIRME` et les autres notes des boutons n'apparaissent sur
 aucune, et le bandeau `ARRET D'URGENCE VERROUILLE` des captures `console-12`,
 `console-13` et `console-16` garde le même aspect dans les situations qu'elles montrent.
+
+Deux captures ont été reprises le 11 octobre 2026, dans un navigateur sans interface,
+en simulation, sous les mêmes noms, aux mêmes dimensions, avec la même commande et le
+même port :
+
+- `console-14` : le bandeau rouge `VARIATEUR EN DEFAUT` n'existait pas, et la pastille
+  Securite y disait `ramp_down` après un démarrage refusé par la machine, ce qui
+  n'arrive plus (§13.9). Procédure : console qui vient de démarrer, attestation faite,
+  défaut `ObF` injecté au repos dans le variateur simulé, aucun démarrage demandé ;
+- `console-15` : l'ancienne avait été prise après un défaut `OCF` et un démarrage
+  refusé, dont la note rouge restait sous le bouton. Rejouée telle quelle, elle
+  montrerait aujourd'hui une autre note et un second bandeau rouge sous
+  `NO LIVE DATA`, sans rapport avec ce qu'elle illustre. Procédure retenue : console
+  saine au repos, attestation faite, case BANC cochée et nom saisi, console arrêtée,
+  capture prise une quinzaine de secondes après.
+
+Les autres ne changent pas : aucune ne montre un variateur en défaut, ni un `reduce`
+en séance manuelle, ni la ligne `verrouille derriere go_silent`. La page Securite des
+captures `console-02`, `console-03` et `console-13` garde les mêmes lignes dans les
+situations qu'elles montrent.

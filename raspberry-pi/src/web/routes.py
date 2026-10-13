@@ -64,6 +64,7 @@ from src.control_surface import (
     SurfaceBusy,
 )
 from src.geometry import MachineGeometry
+from src.motor.drive import DriveState, FaultReport
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.result import Err, Ok
@@ -95,9 +96,9 @@ from src.training.safety import (
     NothingLatched,
     Unattributed,
 )
-from src.training.types import Occupancy
-from src.units import OutputRpm, Seconds
-from src.web.deps import TOKEN_HEADER, Services, WebConfig
+from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
+from src.units import Monotonic, OutputRpm, Seconds, elapsed
+from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
 from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
@@ -112,6 +113,7 @@ from src.web.schemas import (
     EstopBody,
     EstopRow,
     FaultResetBody,
+    FaultRow,
     HealthRow,
     ManualStartBody,
     ManualTargetBody,
@@ -459,6 +461,7 @@ def _register_reads(
     hub = services.hub
     supervisor = services.supervisor
     store = services.store
+    verdicts: VerdictSource = supervisor if services.verdicts is None else services.verdicts
 
     @app.get("/api/status", dependencies=auth, tags=["system"])
     async def read_status() -> StatusRow:
@@ -473,6 +476,12 @@ def _register_reads(
         one thing awaited, the list of serial ports, is awaited first: from
         the clock read to the return nothing yields, and every verdict in the
         answer is the one that stood at ``at``.
+
+        The verdicts are read where every latch is seen
+        (:class:`~src.web.deps.VerdictSource`): the runtime on the console,
+        which also holds the ones it latched itself, and what ``GO_SILENT``
+        replaced. The drive's state is the last tick's, for as long as that
+        is evidence (:func:`_drive_seen`).
         """
         ports = await services.ports.list_ports()
         now = services.clock.monotonic()
@@ -480,16 +489,21 @@ def _register_reads(
         attested = supervisor.require_estop_confirmed()
         accepted, refused, published = surface.counters
         pending = surface.pending
+        drive_state, drive_fault = _drive_seen(surface.latest, now)
         return StatusRow(
             at=now,
+            instance=services.instance,
             run_state=surface.run_state.value,
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
             attestation=AttestationRow.of(attested.value) if isinstance(attested, Ok) else None,
             attestation_statement=ESTOP_ATTESTATION,
-            standing=SafetyRow.of(supervisor.standing, now),
-            floor=SafetyRow.of(supervisor.floor, now),
+            standing=SafetyRow.of(verdicts.standing, now),
+            floor=SafetyRow.of(verdicts.floor, now),
+            silenced=SafetyRow.of(verdicts.silenced, now),
+            drive_state=drive_state.name.lower(),
+            drive_fault=FaultRow.of(drive_fault),
             live=tuple(
                 row
                 for row in (SafetyRow.of(verdict, now) for verdict in supervisor.live)
@@ -521,7 +535,7 @@ def _register_reads(
         numbers rather than frozen ones.
         """
         snapshot = surface.latest
-        return None if snapshot is None else SnapshotRow.of(snapshot)
+        return None if snapshot is None else SnapshotRow.of(snapshot, services.instance)
 
     @app.get("/api/ecg", dependencies=auth, tags=["session"])
     async def read_ecg(after: int | None = None, limit: int | None = None) -> EcgRow:
@@ -657,6 +671,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         _require_programs_enabled(services)
         operator = _require_operator(body.operator)
         _require_known_profile(services, body.profile_id, body.total_duration_s)
+        _require_drive_not_faulted(services)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
@@ -736,6 +751,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         operator = _require_operator(body.operator)
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
+        _require_drive_not_faulted(services)
         submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
@@ -1086,6 +1102,63 @@ def _require_programs_enabled(services: Services) -> None:
     """Refuse a programmed session with a 403 while this build has none."""
     if not services.programs_enabled:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=PROGRAMS_DISABLED_DETAIL)
+
+
+def _drive_seen(
+    latest: TelemetrySnapshot | None, now: Monotonic
+) -> tuple[DriveState, FaultReport | None]:
+    """The drive as the control loop last read it, for as long as that is evidence at ``now``.
+
+    The newest snapshot's own reading, which is the idle poll's while nothing
+    was ever armed (two reads a second) and the session's afterwards. A
+    snapshot is as old as its tick, and stops being renewed when the loop
+    stops: so the reading is aged by the time since that snapshot, and past
+    :data:`~src.training.types.DRIVE_STATUS_STALE_AFTER` the answer is
+    ``COMM_LOST``. Unknown, never a fault, and never a healthy state, that
+    nobody has read lately. ``COMM_LOST`` too before the first tick.
+    """
+    if latest is None:
+        return DriveState.COMM_LOST, None
+    age = latest.drive_status_age
+    if age is None or age + elapsed(latest.at, now) > DRIVE_STATUS_STALE_AFTER:
+        return DriveState.COMM_LOST, None
+    return latest.drive_state, latest.fault
+
+
+DRIVE_FAULT_DETAIL: Final[str] = (
+    "demarrage refuse : variateur en defaut ({code}). Rien n'a ete envoye a la machine : "
+    "traiter le defaut (carte Variateur), puis redemander."
+)
+"""What a start is answered while the drive shows a fault. ``{code}``: mnemonic and LFT.
+
+It opens with the words the loop itself uses for the same refusal, so the
+operator reads one sentence for one cause whichever of the two answered.
+"""
+
+
+def _require_drive_not_faulted(services: Services) -> None:
+    """Refuse a start with a 409 while the loop's last reading shows the drive in fault.
+
+    A fault that appears on a console that has armed nothing raises no
+    verdict: the idle console reads the drive and judges only whether it
+    turns. A start was then accepted here (202) and refused a tick later by
+    the loop, which reads the drive before arming. The same test is applied
+    here, on the reading the page is shown (:func:`_drive_seen`), so the
+    answer comes with the click and nothing is put in the mailbox. No rule is
+    added, and nothing latches: once the drive no longer shows the fault, the
+    next reading says so and the next start is taken.
+
+    Only a reading that says FAULT, and is fresh, refuses. A healthy drive is
+    never refused here, and neither is one whose state is unknown: the loop
+    reads it itself before arming, as it always has.
+    """
+    state, fault = _drive_seen(services.surface.latest, services.clock.monotonic())
+    if state is not DriveState.FAULT:
+        return
+    code = "?" if fault is None else f"{fault.fault.mnemonic}, LFT {fault.raw_code}"
+    raise HTTPException(
+        status_code=HTTPStatus.CONFLICT, detail=DRIVE_FAULT_DETAIL.format(code=code)
+    )
 
 
 def _require_occupancy(value: str) -> Occupancy:

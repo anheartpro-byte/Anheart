@@ -91,6 +91,17 @@
     <strong>CONSOLE HORS SERVICE</strong>
     <span id="service-banner-detail">aucun depart n'est accepte</span>
   </div>
+  <!--
+    The drive reports a fault. On a console that has armed nothing this raises
+    no verdict, so the safety chip stays green, and a start is refused at the
+    click: it is said here, on every page, before anybody clicks, for as long
+    as the drive shows the fault. With the other reasons no start is taken:
+    red, under the out-of-service one.
+  -->
+  <div id="drive-fault-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>VARIATEUR EN DEFAUT</strong>
+    <span id="drive-fault-banner-detail">aucun demarrage n'est accepte tant que le variateur signale un defaut</span>
+  </div>
   <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
     <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
     <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>

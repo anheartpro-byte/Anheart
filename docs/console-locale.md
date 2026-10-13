@@ -239,7 +239,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Cinq rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Bandeaux en haut | Six rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, neuf pastilles (six sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
@@ -257,7 +257,7 @@ seconde) et par des interrogations périodiques :
 | `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle, version du logiciel, état du lien avec le tableau de bord, console en service ou hors service |
 | `/api/sensors` | 1 s | pages Capteurs |
 | `/api/camera` | 1 s | carte caméra de la page Securite |
-| `/api/status` | 5 s | état, verdicts, attestation, système |
+| `/api/status` | 5 s | état, verdicts (quel qu'en soit l'auteur), état du variateur, attestation, système |
 | `/api/presence` (POST) | 5 s | signal « l'accompagnant est là » |
 
 Si le WebSocket tombe, la page réessaie toutes les 1,5 s.
@@ -613,10 +613,20 @@ s'arrête au mode : `liaison ouverte · repos`.
 - Ce bandeau ne dépend pas du clic. Un écran le lève dès qu'une de ses trois sources
   dit qu'un arrêt d'urgence est verrouillé : la réponse à son propre clic, les
   instantanés du WebSocket (verdict `quick_stop` verrouillé), ou `/api/status`
-  (`estop_latched`, `supervisor_estop`, ou verdict retenu `quick_stop` verrouillé). Il
+  (`estop_latched`, `supervisor_estop`, verdict retenu `quick_stop` verrouillé, ou
+  `silenced`, le `quick_stop` verrouillé que `go_silent` a remplacé). Il
   apparaît donc aussi sur un écran qui n'a pas cliqué, après un arrêt posé par la
   caméra, et pour le `quick_stop` verrouillé d'une règle de sécurité
-  (`reverse_rotation` par exemple ; la ligne `e-stop verrouille` dit alors `non`).
+  (`reverse_rotation` par exemple ; la ligne `e-stop verrouille` dit alors `non`) ou
+  du runtime lui-même (`drive_precommanded`, `enable_unconfirmed`). Depuis le
+  11 octobre 2026 `/api/status` porte le verdict en vigueur quel qu'en soit l'auteur
+  (section 11) : un écran sans images lève donc aussi le bandeau pour un arrêt que le
+  runtime a verrouillé de lui-même. Rejoué dans un navigateur, WebSocket de l'écran
+  tombé, variateur simulé mis en marche par un autre maître pendant que la console est
+  au repos : la console verrouille `drive_precommanded / quick_stop` ; le bandeau,
+  absent pendant les 12 s observées avant ce changement, apparaît 2,9 s après le
+  verrou (au tour de statut suivant, 5 s au plus), et les lignes `verdict retenu` et
+  `plancher verrouille` passent de `aucun` à `drive_precommanded / quick_stop`.
 - Il ne se baisse que sur une donnée qui montre l'arrêt levé et que rien de plus récent
   ne contredit ; dans le doute il reste, sur toutes les pages. « Plus récent » se juge
   à l'horloge de la machine, que portent les images (`at`), le reçu du clic (`at`) et,
@@ -652,16 +662,35 @@ s'arrête au mode : `liaison ouverte · repos`.
     tenu : il a été acquitté juste avant `go_silent`, ou la console a été relancée (un
     bandeau affiché avant le redémarrage ne reste plus jusqu'au rechargement de la
     page) ;
-  - **ne le baisse pas** si le dernier verrou montré à la page, par les images ou par
-    le statut, était le `quick_stop` verrouillé d'une règle (`reverse_rotation` par
-    exemple) ou du runtime, et que c'est la même console qui passe à `go_silent`.
-    `go_silent` remplace alors ce verdict, le statut ne montre plus que `go_silent`,
-    personne n'a rien acquitté et plus rien ne s'acquitte : le bandeau reste, avec la
-    pastille **Securite** `go_silent` en rouge, jusqu'au redémarrage de la console.
-    Jusqu'au 10 octobre 2026 il restait de la même façon.
+  - le lève ou le garde de même pour le `quick_stop` verrouillé d'une règle
+    (`reverse_rotation` par exemple) ou du runtime que `go_silent` a remplacé dans
+    cette console. `go_silent` prend la place de ce verdict : `standing` et `floor`
+    ne montrent plus que lui, personne n'a rien acquitté et plus rien ne s'acquitte.
+    Depuis le 11 octobre 2026 la console dit ce qu'il a remplacé (`silenced`,
+    section 14) : la réponse de statut le montre, la ligne
+    `verrouille derriere go_silent` de la page Securite le nomme, et un écran ouvert
+    ou rechargé à ce moment affiche le bandeau comme celui qui a vu la séquence.
+    Jusque-là cet écran n'affichait aucun bandeau. Rejoué dans un navigateur
+    (`reverse_rotation` puis liaison au variateur perdue, page ouverte ensuite) ;
+  - **ne le baisse pas** sur une réponse sous `go_silent` qui ne montre rien derrière
+    lui, quand le dernier verrou montré à la page, par les images ou par le statut,
+    était le `quick_stop` d'une règle ou du runtime et que c'est la même console qui
+    répond. Une telle réponse ne peut vouloir dire qu'un acquittement que cet écran
+    n'a pas vu, donné juste avant `go_silent` : le bandeau reste, avec la pastille
+    **Securite** `go_silent` en rouge, jusqu'au redémarrage de la console.
 
   Pour ce dernier cas, la page ne baisse le bandeau sous `go_silent` que si un
-  redémarrage de la console est prouvé depuis que le verrou lui a été montré :
+  redémarrage de la console est prouvé depuis que le verrou lui a été montré. Depuis
+  le 11 octobre 2026 cette preuve est certaine : chaque image et chaque réponse de
+  statut portent le nom que la console se tire au hasard à son démarrage (`instance`,
+  32 chiffres hexadécimaux, le même tant que le processus vit, un autre après tout
+  redémarrage), et la page retient ce nom avec le verrou. Une réponse de statut
+  demandée après que le verrou a été montré, et qui porte un autre nom, vient d'une
+  console lancée depuis, qui ne tient rien de ce que tenait la précédente : le bandeau
+  se baisse à cette réponse. Une réponse demandée avant ne prouve rien, quel que soit
+  son nom, et un nom absent d'un côté ou de l'autre non plus.
+
+  Deux preuves plus anciennes restent pour une réponse qui ne porterait pas de nom :
   l'horloge de la machine est repartie de zéro, ou le nombre d'instantanés publiés par
   la console (troisième valeur de `counters`, qui ne fait que monter tant qu'elle
   tourne) a baissé. Pour un verrou montré par les images, retenu avec le WebSocket qui
@@ -673,16 +702,16 @@ s'arrête au mode : `liaison ouverte · repos`.
   verrou montré de nouveau, sur un nouveau WebSocket ou par une réponse de statut
   suivante, est celui de la console qui le montre : la preuve repart de là.
 
-  La preuve par le compte suppose une seule console derrière l'adresse que la page
-  interroge. C'est le cas tel que la console est lancée, un processus par adresse. Si
-  un intermédiaire répartissait un jour cette adresse entre deux consoles, la réponse
-  de l'autre se lirait comme un redémarrage : cette preuve ne tiendrait plus.
+  Ces preuves supposent une seule console derrière l'adresse que la page interroge.
+  C'est le cas tel que la console est lancée, un processus par adresse. Si un
+  intermédiaire répartissait un jour cette adresse entre deux consoles, la réponse de
+  l'autre se lirait comme un redémarrage : elles ne tiendraient plus.
 
-  Sans preuve, le bandeau reste jusqu'à une image sans verdict, une réponse de statut
-  hors `go_silent` qui ne montre plus d'arrêt verrouillé, ou le rechargement de la
-  page : c'est le cas d'une console arrêtée avant d'avoir répondu à un statut après le
-  verrou (moins de 5 s), ou d'une nouvelle console qui a déjà publié plus
-  d'instantanés que l'ancienne n'en avait publié.
+  Les deux cas que le compte laissait sans preuve sont ainsi réglés : une console
+  arrêtée avant d'avoir répondu à un statut après le verrou, et une nouvelle console
+  qui a déjà publié plus d'instantanés que l'ancienne. Rejoués dans un navigateur, le
+  bandeau de l'ancienne console restait jusqu'au rechargement de la page ; il se baisse
+  à la première réponse de statut de la nouvelle.
 
   Une réponse plus ancienne que le passage des images à `go_silent` peut lever le
   bandeau, jamais le baisser ; le statut est redemandé tout de suite quand les images
@@ -698,9 +727,10 @@ s'arrête au mode : `liaison ouverte · repos`.
   arrêt verrouillé, le bandeau reste à côté de `NO LIVE DATA` jusqu'à la prochaine
   image, même si le statut dit entre-temps l'arrêt levé ; sous `go_silent`, un arrêt
   d'urgence posé depuis un autre écran n'apparaît ici qu'au tour de statut suivant
-  (5 s au plus) ; et le bandeau du `quick_stop` d'une règle, après une console relancée
-  puis repassée sous `go_silent` sans que le redémarrage soit prouvé, reste jusqu'au
-  rechargement de la page.
+  (5 s au plus) ; et le `quick_stop` d'une règle acquitté pendant que cet écran ne
+  recevait plus d'images, puis suivi de `go_silent` dans cette même console, garde son
+  bandeau jusqu'au rechargement de la page (la console répond alors « rien derrière
+  `go_silent` », ce que la page ne prend pas seule pour un arrêt levé).
 - Si l'horloge de la machine repart de zéro (redémarrage du Pi), la page le voit : une
   image, ou une réponse demandée après celle qu'elle affiche, porte une heure plus
   ancienne. Ce qui arrive après ce redémarrage est alors tenu pour plus récent que ce
@@ -759,6 +789,17 @@ nulle : rien ne marche alors vers la cible, et la console n'annonce ni rampe ni 
 d'arrivée. Une descente vers 0 sous un `freeze` (STOP, ou cible remise à 0) est une
 vraie rampe : le bandeau s'affiche, avec son heure d'arrivée.
 
+**Sous un `reduce`, la consigne descend vers 0 quelle que soit la cible.** La console
+annonçait alors une rampe vers la cible, avec le temps qu'il faudrait pour y remonter
+(`vers 6.03 tr/min de sortie …, arrivee dans ~0:03`) alors que le bras s'en éloignait.
+Depuis le 11 octobre 2026 l'instantané dit où va la consigne (`manual.ramp_to`,
+section 14) et `ramp_eta_s` est le temps pour y arriver. Le bandeau reste affiché,
+puisque la vitesse change, et dit
+`la vitesse baisse vers 0.00 tr/min de sortie sous l'avertissement <règle>, la cible n'est pas suivie ; arrivee dans ~m:ss s'il dure`.
+Si l'avertissement se lève avant l'arrêt, la consigne remonte vers la cible (bandeau
+`REPRISE AUTOMATIQUE POSSIBLE`, section 11) ; si elle arrive à 0, la séance se termine
+(`session_standstill`).
+
 ### Carte « Mode MANUEL »
 
 **Au repos** (pas de séance manuelle) :
@@ -784,7 +825,7 @@ Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occu
 | `−1 tr/min` / `+1 tr/min` | baisse ou monte le brouillon de 1 tr/min **de sortie** (bras) |
 | grand nombre central | le brouillon, en tr/min de sortie. En **orange** tant qu'il diffère de la cible appliquée |
 | `Appliquer` | envoie le brouillon : `POST /api/manual/target`. Rien n'est envoyé avant ce clic |
-| grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss`, `cible atteinte`, ou `consigne maintenue, cible non atteinte` quand un `freeze` tient la consigne à distance d'une cible non nulle) |
+| grille | `cible appliquee`, `plafond`, `minimum de rotation` (chacun en tr/min sortie, moteur, Hz, Gc, Gr), `rampe` (`en cours, arrivee ~m:ss`, `cible atteinte`, `consigne maintenue, cible non atteinte` quand un `freeze` tient la consigne à distance d'une cible non nulle, ou `en baisse vers 0.00 tr/min de sortie sous l'avertissement <règle>, la cible n'est pas suivie ; arrivee dans ~m:ss s'il dure` quand un `reduce` la fait descendre) |
 | encadré orange `MONTEE RETENUE PAR LA FREQUENCE CARDIAQUE` | au-dessus de la cible, seulement avec une personne à bord : la fréquence cardiaque retient toute montée (voir plus bas) |
 
 Règles de la cible :
@@ -1036,6 +1077,39 @@ Pour un code absent de la table, l'encadré reprend le message du pilote tel que
 `DEFAUT code de defaut inconnu <code> (0x<code en hexadécimal>) : <signification>`.
 La table des 60 codes LFT est dans
 [raspberry-pi.md](raspberry-pi.md#6-les-défauts-du-variateur-table-lft).
+
+**Bandeau `VARIATEUR EN DEFAUT`.** Depuis le 11 octobre 2026, tant que le variateur
+signale un défaut, un bandeau rouge le dit en haut de toutes les pages :
+`VARIATEUR EN DEFAUT` suivi de
+`<mnémonique> (LFT brut <code>) : aucun demarrage n'est accepte tant que le variateur signale ce defaut. Le traiter sur la carte Variateur (Tableau de bord)`
+(`code inconnu (LFT brut <code>)` pour un code absent de la table,
+`code non lu sur le variateur` quand le variateur dit être en défaut sans que le code
+ait été lu). Il suit les images, cinq par seconde : il apparaît à la première image
+qui montre le défaut et disparaît à la première qui ne le montre plus (reset réussi,
+variateur remis sous tension). Sans images en direct il suit `/api/status`, qui porte
+l'état du variateur (`drive_state`, `drive_fault`, section 14) : une réponse écrite
+après la dernière image reçue le lève ou le baisse, au tour de statut (5 s au plus) ;
+une réponse plus ancienne que cette image ne parle pas à sa place, et sans réponse
+plus récente le mot de la dernière image reste, à côté de `NO LIVE DATA`. L'état
+`comm_lost` (variateur non lu) ne lève pas ce bandeau : il veut dire « inconnu ».
+
+**Pourquoi un bandeau.** Sur une console qui n'a encore rien armé, un défaut apparu
+au repos ne lève aucun verdict : la console au repos lit le variateur deux fois par
+seconde sans rien lui écrire, et ne juge que s'il tourne. La pastille **Securite**
+reste donc à `none`, et le défaut ne se lisait que sur cette carte. Un démarrage était
+alors accepté par la console (202) puis refusé un cycle plus tard par la boucle, qui
+relit le variateur avant d'armer ; ce refus laissait en plus un verdict `drive_fault`
+à acquitter. Désormais la console refuse ce démarrage elle-même, au clic, sur la
+lecture qu'elle montre à la page (section 13) : rien n'est mis dans la boîte aux
+lettres, aucun verdict ne se verrouille, et aucune règle de sécurité n'a été ajoutée.
+Une fois le défaut levé, le démarrage suivant est pris. Rejoué dans un navigateur,
+défaut `ObF` injecté au repos dans le variateur simulé : bandeau affiché 0,5 s après ;
+clic sur `Demarrer MANUEL` répondu 409, note rouge sous le bouton tout de suite ;
+`Reset defaut variateur`, bandeau disparu, démarrage suivant accepté. Avant ce
+changement : aucun bandeau, 202 puis refus 0,16 s plus tard, mode `ARRET` un instant,
+et `drive_fault / ramp_down` à acquitter après le reset. Après une séance, la console
+écrit au variateur à chaque cycle et un défaut au repos lève toujours le verdict
+`drive_fault`, comme avant : le bandeau s'y ajoute.
 
 Bouton **`Reset defaut variateur`** (visible seulement s'il y a un défaut) :
 `POST /api/drive/fault-reset`. Nommé, explicite, jamais automatique. La boucle le refuse
@@ -1299,17 +1373,26 @@ Voir la [section 16](#16-lenregistrement-de-séance-boîte-noire-locale).
   verrouillé le plus sévère du superviseur, quelle que soit la règle : défaut variateur,
   fréquence cardiaque, `session_standstill`, caméra…), `regles actives`,
   `accompagnant vu`. Puis la liste des règles actives (`action règle détail [verrouille]`).
-  `/api/status` ne donne que les verdicts du superviseur. Le runtime peut en verrouiller
-  un de lui-même (`drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`),
-  que ces deux lignes disaient `aucun`. Depuis le 10 octobre 2026, tant que des images
-  arrivent, elles affichent le verdict que portent les images quand il est au moins
-  aussi sévère que celui du statut (pour `plancher verrouille`, seulement s'il est
-  verrouillé). Sans images en direct, elles ne montrent que ce que dit le statut : un
-  verrou propre au runtime y manque alors, et seule la console pourrait l'y mettre.
-  Rejoué dans un navigateur, avec un variateur simulé laissé en marche avant le
-  démarrage de la console : les images portent `drive_precommanded / quick_stop`
-  verrouillé, `/api/status` ne montre aucun verdict ; les deux lignes disaient `aucun`,
-  elles disent `drive_precommanded / quick_stop`, sur Securite et sur Configuration.
+  Depuis le 11 octobre 2026, `/api/status` donne le verdict en vigueur et le plancher
+  verrouillé **quel qu'en soit l'auteur** : le superviseur, ou le runtime lui-même, qui
+  peut en verrouiller un sans passer par lui (`drive_precommanded`,
+  `enable_unconfirmed`, `disable_refused`, `tick_exception`, son propre `comms_lost`).
+  Jusque-là il ne donnait que ceux du superviseur, et ces deux lignes disaient `aucun`
+  sous un tel verdict dès que l'écran n'avait plus d'images. Tant que des images
+  arrivent, elles affichent toujours le verdict que portent les images quand il est au
+  moins aussi sévère que celui du statut (pour `plancher verrouille`, seulement s'il
+  est verrouillé) : les images arrivent cinq fois par seconde, le statut toutes les
+  cinq secondes. Rejoué dans un navigateur, WebSocket de l'écran tombé puis variateur
+  simulé mis en marche par un autre maître : `verdict retenu` et `plancher verrouille`
+  disent `drive_precommanded / quick_stop` au tour de statut suivant (2,9 s), au lieu
+  de `aucun`.
+- **`verrouille derriere go_silent`** : cette ligne n'apparaît, sur Securite et sur
+  Configuration, que sous `go_silent` et quand un verdict était verrouillé avant lui.
+  `go_silent` prend la place de ce verdict dans `verdict retenu` et dans
+  `plancher verrouille`, et refuse tout acquittement : ce verdict est donc toujours
+  verrouillé, et la ligne le nomme (`reverse_rotation / quick_stop`, par exemple, ou
+  `drive_fault / ramp_down`). L'arrêt d'urgence, tenu à part, reste dans
+  `e-stop verrouille`.
 
 Les règles elles-mêmes (identifiants, seuils, actions) sont décrites dans
 [raspberry-pi.md](raspberry-pi.md).
@@ -1324,7 +1407,11 @@ en anglais comme les phrases de verdict du superviseur (celles des règles camé
 sont en français, et celle d'un défaut variateur reprend le libellé français du
 défaut) :
 `; NOT LATCHED: it lifts by itself when its cause ends, and the speed then follows the programme or the manual target again, upwards too, with nobody clicking`.
-Elle n'est affichée que sur les pages Seance et Securite.
+Elle n'est affichée que sur les pages Seance et Securite. Depuis le 11 octobre 2026
+elle n'est plus ajoutée sur un bras manuel à l'arrêt dont la cible vaut 0 : rien n'y
+attend, et rien ne remontera quand l'avertissement se lèvera (une cible non nulle y
+est refusée tant qu'un verdict tient, section 6). Le verdict lui-même est inchangé :
+même règle, même action, même instant, seule cette phrase est retirée.
 
 **Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`.** La page le dit en français, sur toutes
 les pages, dans un bandeau orange en haut, tant que c'est vrai :
@@ -1345,10 +1432,16 @@ bandeau `… hr_stale tient la vitesse …` à 10,1 s, `… baisse la vitesse �
 bandeau disparu à 40,2 s, quand la baisse a ramené la consigne à 0 ; la séance s'est
 terminée au cycle suivant (`session_standstill`).
 
-Limite connue : sur un bras manuel tenu à l'arrêt par un avertissement non verrouillé,
-la phrase anglaise `NOT LATCHED …` figure encore dans le détail du verdict, alors que
-plus rien ne peut remonter. Le bandeau, lui, n'y est pas affiché. La phrase est
-ajoutée par le superviseur, qui ne connaît pas la cible manuelle.
+Sur ce bras manuel tenu à l'arrêt, la phrase anglaise `NOT LATCHED …` n'est plus dans
+le détail du verdict non plus (11 octobre 2026). Le superviseur, qui l'ajoute, ne
+connaît pas la cible manuelle : le runtime lui dit désormais, dans son observation,
+que rien n'attend (séance manuelle, consigne à 0 et cible à 0). Ce champ ne sert qu'à
+cette phrase ; aucune règle ne le lit. Rejoué dans un navigateur, séance manuelle avec
+une personne à bord déclarée par l'API, bras à l'arrêt, cible 0, ECG coupé : le détail
+de `hr_stale` se terminait par la phrase ; il ne la porte plus. Si une cible vient
+d'être acceptée quand l'avertissement apparaît, la phrase est dite pendant ce seul
+cycle : la cible attendait encore quand le verdict a été écrit, et la machine la
+remet à 0 à la fin de ce même cycle.
 
 **Un bras arrêté en cours de séance ne repart jamais seul : `session_standstill`.**
 Une fois que le bras a tourné dans une séance, une consigne qui revient à 0 sans que
@@ -1495,8 +1588,9 @@ La note sous le bouton parle du moment où elle a été écrite. Depuis le 10 oc
 la page l'efface ou la corrige quand ce qu'elle reçoit la rend fausse :
 
 - **un nouveau verrou l'efface.** Chaque source dit quelle règle elle montre verrouillée
-  (les images : le verdict en vigueur ; le statut : le plancher du superviseur et son
-  arrêt d'urgence). Une règle qu'aucune ne montrait est un nouveau verrou :
+  (les images : le verdict en vigueur ; le statut : le plancher verrouillé, quel qu'en
+  soit l'auteur, et l'arrêt d'urgence). Une règle qu'aucune ne montrait est un nouveau
+  verrou :
   `nothing is latched to acknowledge`, ou `acquitte par …`, ne reste plus sous le
   bouton. Un refus qui parle d'un verrou toujours là (`the emergency stop is still
   latched…`) reste ;
@@ -1513,13 +1607,28 @@ la page l'efface ou la corrige quand ce qu'elle reçoit la rend fausse :
   s'efface dès que les images ne montrent plus cette règle verrouillée (acquittée de
   nouveau, de cet écran ou d'un autre) : elle parle au présent.
   Passé cette seconde, un verrou qui revient est un nouveau verrou : la note s'efface.
-  L'un et l'autre se jugent sur les images. Sans images en direct, la note reste telle
-  qu'elle a été écrite ; seul le statut peut alors l'effacer, pour une règle qu'il
-  montre verrouillée et qu'aucune source ne montrait la dernière fois qu'elle a parlé.
-  Rejoué dans un navigateur avec `drive_fault` au repos (défaut encore présent) : la
-  note `acquitte par banc : drive_fault` restait ; elle passe au rouge 0,1 s après, au
+  L'un et l'autre se jugent sur les images tant qu'il en arrive. Rejoué dans un
+  navigateur avec `drive_fault` au repos (défaut encore présent) : la note
+  `acquitte par banc : drive_fault` restait ; elle passe au rouge 0,1 s après, au
   plus, sur quatre rejeux. La phrase sur `REPOS` n'est tenue que par les tests de la
-  page.
+  page ;
+- **sans images en direct, le statut juge à leur place** (11 octobre 2026). Jusque-là
+  la note restait telle qu'elle avait été écrite, `acquitte par …`, sous un verdict
+  que le statut montrait de nouveau verrouillé. Une réponse de statut écrite après
+  l'acquittement, et après la dernière image reçue, est lue comme une image : si elle
+  montre de nouveau verrouillée une règle effacée (dans le plancher, ou l'arrêt
+  d'urgence), la note devient `acquittement repris par la machine : …` ; elle est
+  gardée tant que le statut montre ce verrou et effacée quand il ne le montre plus ;
+  une réponse écrite plus d'une seconde après l'acquittement sans ce verrou vaut
+  « il a tenu ». Le statut arrive toutes les 5 s : la correction peut donc attendre
+  5 s au lieu de 0,2 s, et un verrou revenu pour une autre raison dans cet
+  intervalle est dit « repris » lui aussi (la règle s'est bien déclenchée de
+  nouveau : la note en dit plus, jamais moins). Il ne porte pas le mode : la phrase
+  sur `REPOS` n'est ni ajoutée ni retirée sur sa parole. Rejoué dans un navigateur,
+  avant et après ce changement, `drive_fault` verrouillé au repos, défaut encore
+  présent, WebSocket de l'écran tombé : la note `acquitte par banc : drive_fault`
+  restait sous un `plancher verrouille` revenu à `drive_fault / ramp_down` (12 s
+  observées) ; elle passe au rouge 3,9 s après le clic, au tour de statut suivant.
 
 ### Remise en service d'une console hors service
 
@@ -1647,6 +1756,7 @@ sous le bouton de l'écran qui a fait la demande, précédés de
 | `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | 409 | `request_waiting` : la boîte aux lettres (une seule place) tient une autre demande jusqu'au prochain cycle |
 | `the machine is running, not idle` | 409 | `machine_running` : une séance tourne déjà |
 | `the machine is stopping, not idle` | 409 | `machine_stopping` : un arrêt est en cours, ou un arrêt d'urgence est verrouillé |
+| `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>). Rien n'a ete envoye a la machine : traiter le defaut (carte Variateur), puis redemander.` | 409 | démarrage (manuel ou programmé) demandé alors que la dernière lecture du variateur le montre en défaut ; `(?)` quand le code n'a pas été lu. La console répond au clic, sans rien déposer dans la boîte aux lettres. Seule une lecture qui dit `fault` et date de moins de 2 s refuse : un variateur sain, ou d'état inconnu (`comm_lost`), n'est jamais refusé ici, et la boucle le relit elle-même avant d'armer (section 6) |
 | `no manual session is running (the machine is idle)` | 409 | cible envoyée sans séance manuelle |
 | `the machine is already stopping` | 409 | STOP pendant un arrêt |
 | `there is no session to end (the machine is idle)` | 409 | STOP sans séance |
@@ -1680,7 +1790,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
-| `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent |
+| `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
 | `demarrage refuse : console hors service : 3 demarrages apres un arret non propre en moins de 10 min. Faire verifier la machine, puis la remettre en service depuis cette page, par un operateur nomme` | la console est hors service ([section 4](#pastille-service--en-service-ou-hors-service)) ; aucun départ, manuel ou programmé, n'est armé, avant toute autre porte |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
@@ -1779,7 +1889,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | 401 | jeton absent ou faux |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
-| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Pour un démarrage, un arrêt, une cible ou un reset, le corps est `{"detail", "code", "waiting_request_id"}` (voir « La boîte aux lettres » plus bas) |
+| 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Un refus de la boîte aux lettres pour un démarrage, un arrêt, une cible ou un reset porte `{"detail", "code", "waiting_request_id"}` (voir plus bas). Le refus préalable d'un démarrage pour défaut variateur porte seulement `{"detail"}` |
 | 412 | arrêt d'urgence non attesté depuis ce démarrage (même corps, `code` `estop_unattested`) |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
 | 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
@@ -1799,8 +1909,8 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing`, `floor`, `live` (verdicts actifs), `retained_hr_samples`, `pending` (la demande qui attend dans la boîte, avec son `request_id`), `requests` (ce que sont devenues les 16 dernières demandes auxquelles la console a répondu, la plus ancienne d'abord : `request_id`, `fate` parmi `taken`, `refused`, `cancelled`, `detail`, `at`, `wall_clock` ; aucun nom d'opérateur), `session_request` (l'identifiant du démarrage dont vient la séance en cours, de son acceptation au retour à `idle` ; `null` au repos), `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
-| GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` | 200 |
+| GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `instance` (le nom que ce lancement de la console s'est tiré au hasard, 32 chiffres hexadécimaux : le même dans toutes ses réponses et toutes ses images, un autre après tout redémarrage ; donnée d'affichage), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing` (le verdict en vigueur, quel qu'en soit l'auteur, superviseur ou runtime : celui qu'une image prise à cet instant porterait), `floor` (le verdict verrouillé le plus sévère, quel qu'en soit l'auteur, arrêt d'urgence à part), `silenced` (le verdict verrouillé le plus sévère dont `go_silent` a pris la place, où qu'il soit tenu ; `null` hors `go_silent` et quand rien n'était verrouillé avant lui), `drive_state` et `drive_fault` (l'état du variateur et son défaut tels que la boucle les a lus en dernier, ceux du dernier instantané ; `comm_lost` avant le premier cycle et dès que cette lecture a plus de 2 s), `live` (verdicts actifs), `retained_hr_samples`, `pending` (la demande qui attend dans la boîte, avec son `request_id`), `requests` (ce que sont devenues les 16 dernières demandes auxquelles la console a répondu, la plus ancienne d'abord : `request_id`, `fate` parmi `taken`, `refused`, `cancelled`, `detail`, `at`, `wall_clock` ; aucun nom d'opérateur), `session_request` (l'identifiant du démarrage dont vient la séance en cours, de son acceptation au retour à `idle` ; `null` au repos), `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
+| GET | `/api/snapshot` | dernier instantané de télémétrie (`null` avant la première tick) : `phase`, `mode`, `heart_rate`, `live_bpm`, `target_bpm`, `setpoint`, `measured`, `setpoint_confirmed`, `drive_state`, `drive_status_age_s`, `drive_status_stale`, `current_a`, `fault`, `safety`, `safety_action`, `safety_rank`, `counters`, `manual` (dont `ramping`, `ramp_eta_s` et `ramp_to`, la vitesse vers laquelle la consigne marche : la cible, 0 sous un `reduce`, `null` quand un `freeze` la tient), `instance` (le même nom que dans `/api/status`) | 200 |
 | GET | `/api/ecg?after=<seq>&limit=<n>` | ECG récent par numéro de séquence ; `gap: true` si l'anneau a dépassé `after` | 200 |
 | GET | `/api/panel` | panneau de liaison : `motion_enabled`, `programs_enabled`, `motor_backend`, `drive` (lectures, échecs, latence, dernière erreur), `ecg` (compteurs BITalino, DSP), `heart_rate_trend_bpm_per_min`, `manual_rise_hold` (ce par quoi la fréquence cardiaque retient une montée en séance manuelle : `no_heart_rate`, `trend_unknown` ou `heart_rate_falling` ; `null` si rien ne retient, hors séance manuelle en cours, et toujours avec une capsule vide), `radius_m`, `gear_ratio`, `motor_max_rpm`, `software_version` (le contenu de `raspberry-pi/VERSION`, ou `pi-unknown`), `dashboard` (le lien avec le tableau de bord : `state` parmi `reachable`, `unreachable`, `incompatible`, `key_refused`, `server_error`, `waiting`, `not_configured` ; `label`, le mot que la page affiche ; `detail`, le motif, une ligne de texte de 160 caractères au plus, éventuellement vide ; `last_answer_age_s`, `null` tant que le tableau de bord n'a jamais répondu) ; `null` sans console ; `service` (`out_of_service`, `unclean_starts`, `threshold`, `window_s`, `unclean_stop`, `open_record`, `persisted` : la console est-elle en service, et ce que son dernier démarrage a trouvé) ; `watchdog` (`enabled`, `sent`, `failed`, `last_error` : ce que la boucle de contrôle a dit au gestionnaire de service) | 200 |
 | GET | `/api/camera` | `configured`, `camera`, `state`, `detail`, `latched_rule` | 200 |
@@ -1821,7 +1931,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 ; 412 |
+| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 (dont : variateur en défaut) ; 412 |
 | POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |
 | POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 
@@ -1829,7 +1939,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 ; 412 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 (dont : variateur en défaut) ; 412 |
 | POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
 | POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
 
@@ -1907,7 +2017,8 @@ répondu à temps. Détail dans
   hors boucle locale, **en `https` seulement** : l'origine `http` de sa propre adresse
   y est refusée. Un client sans `Origin` (outil, test) est admis, mais reste soumis au
   jeton.
-- Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés), `{"kind": "event"}`
+- Messages envoyés : `{"kind": "snapshot"}` (instantanés regroupés ; chacun porte
+  `instance`, le nom du lancement de la console qui sert ce WebSocket), `{"kind": "event"}`
   (chaque événement : `kind`, `at`, `wall_clock`, `operator`, `detail`, et depuis le
   11 octobre 2026 `request_id`, l'identifiant de la demande dont l'événement parle,
   `null` sinon ; pour `session_running` et `session_idle`, celui du démarrage dont
@@ -1930,32 +2041,45 @@ répondu à temps. Détail dans
   et le bandeau « LECTURE SEULE » de la page existent encore, mais ni l'un ni l'autre ne
   sont atteignables avec `src.local_panel`, qui construit la console avec
   `motion_enabled=True`.
-- La phrase anglaise ajoutée aux avertissements non verrouillés (section 11) figure
-  encore dans le détail du verdict d'un bras manuel tenu à l'arrêt, où plus rien ne
-  peut remonter. Le bandeau `REPRISE AUTOMATIQUE POSSIBLE`, lui, suit la cible.
-- Un défaut du variateur apparu au repos ne lève aucun verdict avant une tentative de
-  démarrage : le premier démarrage est accepté par la console (202) puis refusé par la
-  boucle. Depuis le 10 octobre 2026 la note du bouton le dit
-  (`refus de la machine … : demarrage refuse : variateur en defaut …`), mais le défaut
-  ne se voit toujours pas dans la pastille **Securite** avant ce clic.
-- `/api/status` ne montre pas un verdict que le runtime a verrouillé de lui-même : les
-  lignes `verdict retenu` et `plancher verrouille` le prennent dans les images tant
-  qu'il en arrive (section 11), et ne l'ont pas sans images en direct.
+- Un défaut du variateur apparu au repos, sur une console qui n'a encore rien armé,
+  ne lève toujours aucun verdict : la pastille **Securite** reste à `none`. Ce n'est
+  plus caché à l'opérateur : le bandeau `VARIATEUR EN DEFAUT` le dit sur toutes les
+  pages, et la console refuse le démarrage au clic, avec la raison (section 6). Aucune
+  règle de sécurité n'a été ajoutée pour cela.
+- Un démarrage demandé alors qu'un verdict verrouillé par le runtime lui-même tient
+  (`drive_precommanded`, par exemple) est encore accepté par la console (202), puis
+  refusé un cycle plus tard par la boucle : la porte de la console ne lit que le
+  superviseur. Le verdict, lui, est à l'écran avant le clic (pastille **Securite**,
+  bandeau, et maintenant `/api/status`), et la note du bouton donne le refus.
 - Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas, du côté prudent (section 5) :
   un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
-  d'urgence posé depuis un autre écran sous `go_silent` ; et le bandeau du `quick_stop`
-  d'une règle après une console relancée puis repassée sous `go_silent`, quand le
-  redémarrage n'est pas prouvé, que les images ou le statut aient levé ce bandeau. De
-  même, un `quick_stop` de règle acquitté pendant que l'écran est coupé de la console,
-  suivi de `go_silent`, garde son bandeau jusqu'au rechargement de la page. À
-  l'inverse, un écran ouvert ou rechargé sous `go_silent` n'affiche pas de bandeau
-  pour le `quick_stop` d'une règle que `go_silent` a remplacé : la console ne rapporte
-  plus ce verrou (c'était déjà le cas ; à traiter côté console). Des trois cas relevés
-  avant le 10 octobre 2026, deux
-  sont traités (réponse de statut tardive après un acquittement rapide, ordre de deux
-  réponses de statut) ; le troisième (console relancée puis `go_silent`) l'est pour
-  l'arrêt d'urgence lui-même, et pour le `quick_stop` d'une règle quand le redémarrage
-  est prouvé.
+  d'urgence posé depuis un autre écran sous `go_silent`, vu au tour de statut suivant
+  (les images sous `go_silent` ne disent rien de ce qu'il y a derrière) ; et le
+  `quick_stop` d'une règle acquitté pendant que l'écran ne recevait plus d'images, puis
+  suivi de `go_silent` dans la même console, qui garde son bandeau jusqu'au
+  rechargement de la page. Pour ce dernier la console dit maintenant ce qu'il faut
+  (« rien derrière `go_silent` ») ; la page ne s'en sert pas encore pour baisser le
+  bandeau.
+- Traités le 11 octobre 2026, côté console : `/api/status` porte le verdict en vigueur
+  et le plancher quel qu'en soit l'auteur, runtime compris (section 11) ; il dit ce que
+  `go_silent` a remplacé, et un écran ouvert ou rechargé sous `go_silent` affiche le
+  bandeau du `quick_stop` d'une règle comme celui qui a vu la séquence (section 5) ;
+  chaque réponse et chaque image portent le nom du lancement de la console, ce qui
+  rend certaine la preuve d'un redémarrage, y compris quand l'ancienne console n'a
+  répondu à aucun statut après le verrou ou que la nouvelle a déjà publié plus
+  d'instantanés (section 5) ; la phrase anglaise `NOT LATCHED …` n'est plus ajoutée
+  sur un bras manuel à l'arrêt dont la cible vaut 0 (section 11) ; la ligne `rampe` et
+  le bandeau de rampe ne disent plus « en cours » vers la cible sous un `reduce`
+  (section 6) ; la note d'un acquittement est jugée sur le statut quand aucune image
+  n'arrive (section 11).
+- Ce que la page ne peut toujours pas savoir. L'ordre entre une image et une réponse
+  de statut, ou entre deux réponses, se juge à l'horloge de la machine ; un
+  redémarrage du Pi (horloge repartie de zéro) est déduit d'une heure qui recule, pas
+  d'un repère que la console donnerait. Le nom du lancement ne sert qu'à prouver un
+  redémarrage pour le bandeau ; il n'ordonne rien. L'état du variateur dans
+  `/api/status` est celui du dernier cycle de la boucle, pas une lecture faite pour
+  cette réponse. Et sous `NO LIVE DATA` les pastilles alimentées par les images
+  (Mode, Rotation, Securite) restent barrées : le statut ne les remplace pas.
 - Traités le 10 octobre 2026 : les notes des boutons de démarrage et de reset, qui
   disaient `accepte : …` ou `reset demande : …` avant la réponse de la boucle
   (sections 6 et 9) ; la note d'une cible après un refus qui n'était pas le sien ou un

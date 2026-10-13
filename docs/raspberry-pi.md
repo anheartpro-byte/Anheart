@@ -474,7 +474,13 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
 6. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
-   défaut : refus (`DriveInFault`), **sans réarmement automatique**.
+   défaut : refus (`DriveInFault`), **sans réarmement automatique**. Depuis le
+   11 octobre 2026, la console refuse ce départ plus tôt quand elle le peut :
+   si le dernier relevé publié par la boucle, vieux de 2 s au plus, montre le
+   variateur en défaut, la route de démarrage répond 409 sans rien déposer
+   ([console-locale.md, section 6](console-locale.md#6-page--tableau-de-bord-)).
+   Cette porte-ci reste la seule qui compte : la route ne la remplace pas, et
+   un lancement venu du tableau de bord distant ne passe que par elle.
 7. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
@@ -666,8 +672,12 @@ scénarios de simulation. La console copie les profils livrés dans
   runtime sur ce qu'il a lui-même écrit ou décidé (la consigne est en rampe ;
   la consigne est revenue à 0 sans que personne l'ait demandé, champ
   `stopped_by` ; la séance est finie, champ `session_over` ; une fin de
-  séance est ouverte, champ `ending`). Aucun de ces
+  séance est ouverte, champ `ending` ; en séance manuelle, le bras est à
+  l'arrêt et aucune cible n'attend, champ `nothing_waits`). Aucun de ces
   champs n'est une demande, et `stopped_by` ne peut qu'ajouter un verdict.
+  `nothing_waits` (11 octobre 2026) n'est lu par aucune règle : il ne sert
+  qu'à la phrase affichée (voir « non verrouillé » plus bas), et le même
+  verdict, même règle, même action, même verrou, sort avec ou sans lui.
   `session_over` ne fait taire qu'une règle, `session_overrun` : il réunit
   deux faits (la séance a atteint la phase `DONE` depuis son départ, et la
   consigne en vigueur est 0) et vaut « non » par défaut. `ending` ne peut que
@@ -694,7 +704,9 @@ scénarios de simulation. La console copie les profils livrés dans
     régulation ou la cible**, sans geste de l'opérateur : c'est voulu tant que
     la vitesse a seulement été maintenue ou baissée, et la phrase du verdict le
     dit à l'écran (`SELF_CLEARING` : « NOT LATCHED: it lifts by itself… »)
-    tant que la séance peut encore prendre de la vitesse. Cela s'arrête à
+    tant que la séance peut encore prendre de la vitesse. Elle n'est pas
+    ajoutée sur un bras manuel à l'arrêt dont la cible vaut 0
+    (`nothing_waits`) : rien n'y remontera. Cela s'arrête à
     l'arrêt : une fois que le bras a tourné dans une séance, une consigne qui
     revient à 0 sans que personne l'ait demandé, amenée par un REDUCE ou par la
     régulation cardiaque elle-même, termine la séance sur le verrou
@@ -951,6 +963,15 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
+
+Ces verrous vivent dans le runtime, pas dans le plancher du superviseur.
+Depuis le 11 octobre 2026, `GET /api/status` les rapporte comme ceux du
+superviseur : `standing` et `floor` y sont ceux du runtime
+(`TrainingRuntime.standing`, `.floor`), le plus sévère des deux auteurs, et
+`silenced` nomme le verdict verrouillé qu'un `GO_SILENT` a remplacé, quel
+qu'en soit l'auteur (`SafetySupervisor.silenced`, `TrainingRuntime.silenced`).
+Ces lectures ne décident rien : la boucle ne lit ni `silenced` ni `floor`.
+Détail des champs : [console-locale.md, section 14](console-locale.md#14-référence-des-routes-http-et-websocket).
 
 Les règles `presence_*` de la caméra sont décrites en [section 10](#10-la-caméra-présence).
 

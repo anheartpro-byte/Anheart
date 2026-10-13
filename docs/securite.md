@@ -336,10 +336,13 @@ cohorte de 30 personnes : 350 courses) a été rejouée avant et après.
   séance qui se termine ou qui est finie, ni reprise dans un refus de départ.
   Elle est en anglais, comme les phrases de verdict du superviseur (celles des
   règles caméra sont en français), et n'apparaît que sur les pages Séance et
-  Sécurité. Elle reste affichée, telle quelle, sur un
-  bras tenu à l'arrêt en séance manuelle : la cible qu'elle dit « suivie de
-  nouveau » y vaut alors 0 (voir 7.6), donc rien n'y remonte sans une nouvelle
-  cible. Elle en dit là plus qu'il n'y a à craindre, jamais moins.
+  Sécurité. Depuis le 11 octobre 2026 elle n'est plus ajoutée non plus sur un
+  bras tenu à l'arrêt en séance manuelle, quand la consigne et la cible valent
+  0 (voir 7.6) : rien n'y remonte sans une nouvelle cible, et la phrase en
+  disait là plus qu'il n'y avait à craindre. Le runtime le dit au superviseur
+  par un champ de l'observation, `nothing_waits`, qu'aucune règle ne lit : le
+  verdict, lui, est le même avec ou sans ce champ. Dès qu'une cible est prise
+  ou que la consigne quitte 0, la phrase revient.
 
 ### 7.4 Ce que la règle ne couvre pas
 

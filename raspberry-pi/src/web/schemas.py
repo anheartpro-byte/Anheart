@@ -317,7 +317,8 @@ class ManualRow:
     """The manual session: target, ceiling and the ramp still to come.
 
     ``ramping`` is what lights the "do not move your head" banner: the
-    setpoint is still on its way to the target.
+    setpoint is being walked somewhere. ``ramp_to`` says where: the target,
+    or zero while a ``reduce`` lowers the speed whatever the target is.
     """
 
     occupancy: str
@@ -327,12 +328,15 @@ class ManualRow:
     min_run: SpeedRow
     ramping: bool
     ramp_eta_s: float | None
+    ramp_to: SpeedRow | None
+    """Where the setpoint is being walked to; null when a ``freeze`` holds it."""
 
     @classmethod
     def of(cls, view: ManualView | None) -> ManualRow | None:
         """Render the manual view, or ``None`` outside a manual session."""
         if view is None:
             return None
+        heading = view.ramp_to
         return cls(
             occupancy=view.occupancy.value,
             occupancy_label=view.occupancy.label,
@@ -341,6 +345,7 @@ class ManualRow:
             min_run=SpeedRow.of(view.min_run),
             ramping=view.ramping,
             ramp_eta_s=_finite(view.ramp_eta),
+            ramp_to=None if heading is None else SpeedRow.of(heading),
         )
 
 
@@ -476,10 +481,19 @@ class SnapshotRow:
 
     manual: ManualRow | None
 
+    instance: str = ""
+    """Which run of the console wrote this (:attr:`~src.web.deps.Services.instance`).
+
+    Added here, at the wire, and not part of the snapshot itself: the runtime
+    that takes a snapshot does not know which process serves it. Empty when
+    nobody said.
+    """
+
     @classmethod
-    def of(cls, snapshot: TelemetrySnapshot) -> SnapshotRow:
-        """Render a snapshot for the wire."""
+    def of(cls, snapshot: TelemetrySnapshot, instance: str = "") -> SnapshotRow:
+        """Render a snapshot for the wire, as written by the run ``instance``."""
         return cls(
+            instance=instance,
             at=snapshot.at,
             wall_clock=snapshot.wall_clock,
             phase=snapshot.phase.value,
@@ -1338,6 +1352,15 @@ class StatusRow:
     a frame. Display data only: nothing on the machine reads it back.
     """
 
+    instance: str
+    """Which run of the console wrote this answer (:attr:`~src.web.deps.Services.instance`).
+
+    The value every telemetry frame of this run carries, and another after any
+    restart of the console. Two values that differ are two consoles, and the
+    later one holds nothing of what the earlier one had latched: with it the
+    page no longer has to infer a restart from the clock or from a count.
+    """
+
     run_state: str
     estop_latched: bool
     """The interface's own flag: set by its E-STOP route, by nothing else."""
@@ -1354,7 +1377,39 @@ class StatusRow:
     attestation: AttestationRow | None
     attestation_statement: str
     standing: SafetyRow | None
+    """The verdict in force, WHOEVER latched it: the supervisor, or the runtime itself.
+
+    The verdict a frame taken at this instant would carry. It used to be the
+    supervisor's alone, which showed nothing under a verdict the runtime had
+    latched on its own behalf (:class:`~src.web.deps.VerdictSource`).
+    """
+
     floor: SafetyRow | None
+    """The most severe latched verdict, whoever holds it, the emergency stop apart."""
+
+    silenced: SafetyRow | None
+    """The latched verdict ``GO_SILENT`` stands over, or ``None``.
+
+    ``GO_SILENT`` replaces whatever was latched before it and refuses every
+    acknowledgement: that verdict is still latched, and ``standing`` and
+    ``floor`` no longer show it. A page opened at that moment announces a stop
+    from this field, as one that watched the sequence does from what it saw.
+    The emergency stop is apart, in ``supervisor_estop``.
+    """
+
+    drive_state: str
+    """The drive's state as the control loop last read it, by name.
+
+    The ``drive_state`` of the newest snapshot, for a screen that receives no
+    frame; ``comm_lost`` (unknown) before the first tick and once that reading
+    is too old to be evidence now. A drive in ``fault`` is refused every start
+    by the routes, with the reason: this is where a screen learns it before
+    anybody clicks.
+    """
+
+    drive_fault: FaultRow | None
+    """The fault that goes with ``drive_state``, when one was read; else ``None``."""
+
     live: tuple[SafetyRow, ...]
     retained_hr_samples: int
     pending: CommandRow | None
@@ -1432,13 +1487,17 @@ class WsEnvelope:
     notice: str = ""
 
     @classmethod
-    def of(cls, payload: Payload) -> WsEnvelope:
-        """Render one hub payload. Total over :class:`~src.telemetry.PayloadKind`."""
+    def of(cls, payload: Payload, instance: str = "") -> WsEnvelope:
+        """Render one hub payload. Total over :class:`~src.telemetry.PayloadKind`.
+
+        ``instance`` is the run of the console that serves the socket: a
+        snapshot leaves with it.
+        """
         snapshot = payload.snapshot
         event = payload.event
         return cls(
             kind=payload.kind.value,
-            snapshot=None if snapshot is None else SnapshotRow.of(snapshot),
+            snapshot=None if snapshot is None else SnapshotRow.of(snapshot, instance),
             event=None if event is None else EventRow.of(event),
             ecg=None,
             notice=payload.notice,

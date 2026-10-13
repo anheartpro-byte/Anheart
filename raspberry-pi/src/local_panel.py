@@ -1713,6 +1713,9 @@ def build_panel(
         camera=config.camera.value,
         records=None if journal is None else RecordExporter(journal.root, clock),
         service=service,
+        # The status reads the verdicts where every latch is seen: the runtime
+        # holds the ones it latched itself, which the supervisor never sees.
+        verdicts=runtime,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None

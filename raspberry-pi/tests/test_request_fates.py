@@ -1107,9 +1107,14 @@ async def test_a_start_accepted_during_a_reset_survives_it_and_refuses_the_next_
     the_reset = request_of(reset)
 
     writing = await made.tick_into("write_command")
-    first = await made.manual_start(ALICE)
+    refused_while_fresh = await made.manual_start(ALICE)
+    assert refused_while_fresh.status_code == HTTPStatus.CONFLICT
+    assert "variateur en defaut" in refused_while_fresh.text
+    assert made.surface.pending is None
+    first = made.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=ALICE)
+    assert isinstance(first, Ok)
     await made.finish(writing)
-    mine = request_of(first)
+    mine = first.value.request_id
     state_between = made.surface.run_state
     arming = await made.tick_into("read_limits")
     second = await made.manual_start(BOB)

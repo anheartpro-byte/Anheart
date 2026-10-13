@@ -238,15 +238,16 @@ dater d'une version antérieure de l'écran, qui n'en montrait que six.
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
 affiche « ARRET ». Et aucun des deux ne dit qu'un démarrage sera accepté :
-quand un défaut du variateur survient au repos, après une séance terminée
+quand un défaut du variateur survient au repos
 ([section 9.5](#95-le-variateur-passe-en-défaut)), **Mode** reste sur
 « REPOS » et **Etat** affiche « idle » alors que tout démarrage est refusé.
-C'est **Securite** qui le dit. Pour savoir où en est la machine, lisez
-**Mode**, **Rotation** et **Securite**, pas **Etat**.
+C'est le bandeau rouge « VARIATEUR EN DEFAUT » qui le dit, et **Securite**
+aussi quand le défaut survient après une séance terminée. Pour savoir où en
+est la machine, lisez **Mode**, **Rotation** et **Securite**, pas **Etat**.
 
 ### Les bandeaux en haut de l'écran
 
-Ils s'affichent tout en haut, sur toutes les pages. Cinq sont rouges, un est
+Ils s'affichent tout en haut, sur toutes les pages. Six sont rouges, un est
 orange. Plusieurs peuvent être affichés en même temps.
 
 | Bandeau | Ce que cela veut dire |
@@ -254,7 +255,8 @@ orange. Plusieurs peuvent être affichés en même temps.
 | « NO LIVE DATA » | L'écran ne reçoit plus de données. Les nombres affichés sont anciens : voir la [section 9.3](#93-bandeau-rouge-no-live-data). |
 | « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». S'il dit « aucune reponse de la console », la demande reste en attente : si elle aboutit, ce bandeau est remplacé par « ARRET D'URGENCE VERROUILLE ». S'il dit « la demande a echoue » et « n'est plus en attente », la demande est terminée : elle n'aboutira plus et l'écran ne la renvoie pas. Le bandeau indique alors depuis combien de temps elle a échoué, et il reste affiché jusqu'à ce que l'écran apprenne qu'un arrêt d'urgence est verrouillé, ou que la page soit rechargée. S'il dit « nouvelle demande sans reponse » et « la precedente a echoue », vous avez cliqué de nouveau après un échec : la nouvelle demande est en attente, la précédente est terminée ([section 8](#8-arrêter-la-machine)). |
 | « STOP NON CONFIRME » | Vous avez cliqué **STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable ». Il dit, avec les mêmes mots que le précédent, si une demande est encore en attente (« aucune reponse de la console », « nouvelle demande sans reponse ») ou si elle est terminée (« la demande a echoue », « n'est plus en attente »). Tant qu'il est affiché, la console n'a pas confirmé que la séance se termine. Il disparaît quand la console accepte ou refuse la demande, ou quand l'écran apprend que la séance se termine. Si la demande échoue sans réponse de la console, ou si la console répond par une erreur, il reste affiché et dit que la demande a échoué ([section 8](#8-arrêter-la-machine)). |
-| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : sur un écran qui affichait déjà ce bandeau, il reste alors affiché jusqu'au redémarrage de la console, et il peut encore rester après ce redémarrage, jusqu'au rechargement de la page. Un écran ouvert ou rechargé pendant que **Securite** affiche « go_silent » peut ne pas l'afficher. Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : le bandeau reste alors affiché jusqu'au redémarrage de la console, y compris sur un écran ouvert ou rechargé à ce moment. Après ce redémarrage, il disparaît quand l'écran reçoit la première réponse de la nouvelle console. Dans un cas il peut rester à tort, jusqu'au rechargement de la page : l'arrêt a été acquitté pendant que cet écran affichait « NO LIVE DATA », puis **Securite** est passée à « go_silent ». Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « VARIATEUR EN DEFAUT » | Le variateur signale un défaut. Le bandeau donne le code du défaut et reste affiché tant que le variateur le signale. Pendant ce temps, la console refuse tout démarrage : voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
 | « CONSOLE HORS SERVICE » | La console a redémarré plusieurs fois de suite après un arrêt anormal et refuse tout démarrage : voir la pastille **Service** plus haut. |
 | « REPRISE AUTOMATIQUE POSSIBLE » (orange) | La console garde ou baisse la vitesse à cause d'une alerte qui n'est pas verrouillée. Quand cette alerte disparaîtra, la vitesse remontera seule, sans aucun clic ([section 9.2](#92-la-console-agit-seule)). |
 
@@ -452,6 +454,11 @@ l'écran.*
   pas. Sur un bras qui tourne, cette cible est gardée, puis suivie sans autre
   clic quand « freeze » disparaît. Une cible de 0 et **STOP** font baisser la
   vitesse même pendant « freeze ».
+- Si **Securite** affiche « reduce », la console baisse la vitesse quelle que
+  soit la cible ([section 9.2](#92-la-console-agit-seule)). La ligne « rampe »
+  commence alors par « en baisse », et le bandeau orange dit « la vitesse
+  baisse » : ils donnent la vitesse vers laquelle la console descend, pas la
+  cible, et précisent « la cible n'est pas suivie ».
 - **Acquitter un « freeze » verrouillé pendant que le bras tourne relâche la
   vitesse.** Un « freeze » verrouillé ne disparaît pas seul : c'est
   l'acquittement qui le lève. Donné alors que **Mode** affiche « MANUEL », cet
@@ -1072,25 +1079,33 @@ La console essaie seule de se reconnecter au capteur.
 
 Le variateur est l'appareil qui alimente le moteur. En cas de défaut :
 
+- un bandeau rouge « VARIATEUR EN DEFAUT » s'affiche en haut de toutes les
+  pages, avec le code du défaut. Il reste tant que le variateur signale le
+  défaut ;
 - la carte **Variateur** affiche la pastille « fault » et un encadré rouge qui
   commence par « DEFAUT », avec un code et une phrase d'explication ;
 - un bouton **Reset defaut variateur** apparaît ;
-- la console termine la séance et verrouille l'arrêt ;
-- si une séance était en cours, **Mode** peut rester sur « ARRET » tant que
-  le variateur reste en défaut. C'est alors le réarmement réussi qui le ramène
-  à « REPOS » ;
+- si une séance était en cours, la console la termine et verrouille l'arrêt.
+  **Mode** peut rester sur « ARRET » tant que le variateur reste en défaut.
+  C'est alors le réarmement réussi qui le ramène à « REPOS » ;
 - si le défaut survient au repos, **Mode** reste sur « REPOS ». Après une
   séance terminée, programme mené à son terme compris, **Securite** affiche
-  alors l'arrêt verrouillé (« ramp_down », règle « drive_fault »).
+  alors l'arrêt verrouillé (« ramp_down », règle « drive_fault »). Avant
+  toute séance depuis le démarrage de la console, **Securite** peut rester
+  sur « none » : c'est le bandeau qui signale le défaut ;
+- tant que le bandeau est affiché, la console refuse tout démarrage. Le refus
+  s'écrit en rouge sous le bouton et commence par « demarrage refuse :
+  variateur en defaut ».
 
 Selon le défaut, le variateur peut ne plus freiner le moteur : le bras
 ralentit alors seul, sans contrôle, plus longtemps qu'après un arrêt normal.
 
 ![Défaut du variateur](../guides/img/console-14-defaut-variateur.png)
 
-*Défaut du variateur : pastille « fault », encadré rouge et bouton de
-réarmement. Sur cette capture, le défaut a été provoqué console au repos :
-Mode affiche « REPOS ». Capture prise en simulation.*
+*Défaut du variateur : bandeau rouge en haut, pastille « fault », encadré
+rouge et bouton de réarmement. Sur cette capture, le défaut a été provoqué
+console au repos, avant toute séance : Mode affiche « REPOS » et Securite
+« none ». Capture prise en simulation.*
 
 1. Attendez que **Rotation** affiche « a l'arret ». Puis regardez **Mode** :
    - s'il affiche « REPOS », il n'y a pas de phase à attendre : passez à
@@ -1109,8 +1124,9 @@ Mode affiche « REPOS ». Capture prise en simulation.*
 3. Appelez le support, sauf si la phrase indique une cause que vous êtes
    habilité à corriger.
 4. Pour réarmer : vérifiez que votre nom est saisi, puis cliquez **Reset
-   defaut variateur**. La pastille du variateur doit quitter « fault », et
-   **Mode** doit afficher « REPOS ».
+   defaut variateur**. La pastille du variateur doit quitter « fault », le
+   bandeau « VARIATEUR EN DEFAUT » doit disparaître, et **Mode** doit afficher
+   « REPOS ».
 5. Ensuite, acquittez l'alerte dans la page **Securite**, s'il y en a une
    ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Pour le seul
    défaut du variateur, la case du coup de poing n'est pas nécessaire. Si vous
