@@ -49,6 +49,7 @@ from src.result import Err, Ok, Result
 from src.telemetry import PayloadKind, TelemetryClient
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
+from src.wall_clock import WallClockProbe
 from src.web.app import create_app
 
 TICK: Final[Seconds] = Seconds(0.2)
@@ -334,11 +335,13 @@ def make_rig(
     clock: SteppedClock | None = None,
     transport: CloudTransportFactory | None = None,
     journal: Journal | None = None,
+    wall_clock: WallClockProbe | None = None,
 ) -> tuple[Rig, Wrapped | None]:
     """Build the console. ``wrap`` puts one faulty backend between runtime and simulator.
 
     ``journal`` makes it record its sessions (the tests of the session record);
-    without one nothing is written, as before.
+    without one nothing is written, as before. ``wall_clock`` makes it judge its
+    wall clock (the tests of ``test_wall_clock_console``); without one it judges nothing.
     """
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000)) if clock is None else clock
     config = config_of(env)
@@ -362,6 +365,7 @@ def make_rig(
         drive=side,
         transport=transport,
         journal=journal,
+        wall_clock=wall_clock,
     )
     rig = Rig(clock=clock, panel=panel, simulator=sim, watcher=panel.hub.subscribe(), config=config)
     return rig, wrapper

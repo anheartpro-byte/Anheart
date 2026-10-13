@@ -34,7 +34,7 @@ from hypothesis import strategies as st
 
 from src.result import is_err, is_ok
 from src.training.hr_control import StaleSequence
-from src.training.runtime import EndReason, RuntimeState
+from src.training.runtime import Ending, EndReason, RuntimeState
 from src.training.safety import (
     RULE_HR_CRITICAL,
     RULE_HR_HARD_MAX,
@@ -326,12 +326,25 @@ async def test_a_level_verdict_inside_an_ending_leaves_that_ending_as_it_was() -
     finishes at rest, and ``session_overrun`` has nothing to say about an
     ending that went as it should. One acknowledgement, once the session is
     over, clears it for good.
+
+    The ending is read on EVERY tick from the one that honours the stop, not
+    only once the session is over: the record the stop opened (its cause, the
+    instant it opened at, the speed it found) and the reason the session will
+    be closed with stay the stop's, on the tick the verdict rises as on every
+    other. Read at the end alone, the reason says the same thing whether the
+    record was kept or rewritten on every tick: the stop is asked for again
+    on each of them, after the verdict has ended its own.
     """
     rig = await _running_rig()
+    turning = rig.runtime.applied_rpm
     rig.runtime.request_stop("the operator pressed stop")
     await _one_second(rig)
+    opened = rig.runtime.ending
     setpoints = [rig.runtime.applied_rpm]
     stood: set[str] = set()
+    endings: set[Ending | None] = set()
+    reasons: set[EndReason | None] = set()
+    under_the_verdict: set[Ending | None] = set()
     fired_at: float | None = None
     first_seen = float(rig.now) + TICK
     for tick in range(round(100.0 / TICK)):
@@ -342,6 +355,10 @@ async def test_a_level_verdict_inside_an_ending_leaves_that_ending_as_it_was() -
         await rig.step(feed=False)
         setpoints.append(rig.runtime.applied_rpm)
         stood |= _live_rules(rig)
+        endings.add(rig.runtime.ending)
+        reasons.add(rig.runtime.end_reason)
+        if RULE_HR_HARD_MAX in _live_rules(rig):
+            under_the_verdict.add(rig.runtime.ending)
         if fired_at is None and RULE_HR_HARD_MAX in _live_rules(rig):
             fired_at = float(rig.now)
     at_rest = (rig.runtime.applied_rpm, rig.drive.commanded_rpm, round(rig.drive.shaft_rpm))
@@ -351,9 +368,16 @@ async def test_a_level_verdict_inside_an_ending_leaves_that_ending_as_it_was() -
     await rig.step(feed=False)
 
     assert setpoints[0] > 0
+    assert opened is not None
+    assert opened.reason is EndReason.OPERATOR_STOP
+    assert opened.action is SafetyAction.NONE
+    assert opened.setpoint == turning
     assert fired_at is not None
     assert 5.0 - EPSILON <= fired_at - first_seen <= 5.0 + TICK + EPSILON
     assert all(later <= earlier for earlier, later in pairwise(setpoints))
+    assert under_the_verdict == {opened}, "the verdict rewrote the ending the stop had opened"
+    assert endings == {opened}, "the ending moved after it was recorded"
+    assert reasons == {EndReason.OPERATOR_STOP}
     assert at_rest == (0, 0, 0)
     assert finished is RuntimeState.FINISHED
     assert rig.runtime.end_reason is EndReason.OPERATOR_STOP

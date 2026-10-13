@@ -181,6 +181,22 @@ Recherche ; l'admin peut afficher les machines supprimées.
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
 
+La carte **Santé de la machine** est visible par les administrateurs et les
+gestionnaires autorisés. Elle présente le dernier rapport du Pi : température,
+charge et mémoire, espace disque, temps depuis démarrage, horloge, aller-retour
+Convex, liaisons et batterie, état thermique, enregistrements en attente et
+dégradés, hors-service après redémarrages, préflight, incidents et compteurs.
+Une source indisponible est écrite « Indisponible ». Après 30 secondes sans
+rapport, les valeurs sont explicitement historiques. Les avertissements portent
+sur CPU > 70 °C, disque < 1 Gio, horloge > 5 s en valeur absolue, batterie < 30 %,
+liaison coupée, enregistrement dégradé ou état hors service.
+
+L'historique sur 24 heures montre température et disque par périodes de cinq
+minutes (minimum, maximum, dernière valeur), avec un tableau accessible sous
+« Voir les mesures ». Une absence de mesure n'est pas interpolée ni remplacée
+par zéro. La batterie, le thermique, le préflight et les incidents restent
+inconnus lorsque leurs producteurs ne fournissent pas encore ces mesures.
+
 Admin et gestionnaire de la machine.
 
 | Bloc | Contenu | Qui agit |
@@ -750,6 +766,28 @@ appel direct à `useMutation` ainsi qu'un `catch` vide ou réduit à un
 `console.error` dans un fichier qui appelle une mutation.
 
 ---
+
+### Enregistrements complets (ANH-130)
+
+La fiche d'une séance d'entraînement affiche son dépôt : absent, en cours,
+complet et vérifié, rejeté ou supprimé, avec le nombre de fichiers vérifiés.
+Les administrateurs et gestionnaires autorisés peuvent consulter les fichiers
+par pages et les télécharger. L'archive `.tar` n'est proposée qu'après
+vérification de tout l'inventaire. Une annulation interrompt les téléchargements
+du navigateur. Une perte d'accès ou une empreinte incorrecte produit un échec,
+jamais une archive présentée comme complète.
+
+« Ouvrir dans le visualiseur » devient disponible quand le manifeste, les ticks
+et les événements sont vérifiés. La nouvelle fenêtre reçoit les données, sans
+jeton d'accès. Les valeurs absentes restent inconnues, et une géométrie absente
+est explicitement signalée. Les blocs bruts sont dans l'archive, pas chargés
+automatiquement par ce visualiseur de séance.
+
+Les rôles `admin` et `org_admin` disposent d'une suppression avec confirmation.
+Le serveur vérifie à nouveau leur rôle et leur accès à la machine. Les fichiers
+sont supprimés et les téléchargements révoqués ; la séance et la télémétrie
+restent consultables. La rétention cloud est optionnelle et désactivée par
+défaut, voir [enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex).
 
 ## 7. Lancer le site en local
 

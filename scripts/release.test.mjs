@@ -802,6 +802,23 @@ test("ANH-195 EX-8 the commit status release.sh requires is the one the protecti
   assert.doesNotMatch(real("docs/release.md") + real(TEMPLATE), /deux approbations/i);
 });
 
+test("ANH-218 EX-7 no page that states the merge rule still asks for two reviewers", () => {
+  // Decision of the product owner, 5 October 2026: a merge takes one independent review, recorded as the
+  // commit status above, and no approval. The pages that state the rule, and the two templates a pull
+  // request is written on, must not ask for more than the process does. The history of a past pull
+  // request (docs/suivi-tickets.md) may still say that it had two.
+  const TWO = /deux\s+(approbations|reviewers|relecteurs|relectrices|revues\s+indépendantes)|two\s+(approvals|reviewers)/i;
+  for (const page of ["docs/roadmap.md", "docs/release.md", TEMPLATE, ".github/PULL_REQUEST_TEMPLATE.md"]) {
+    assert.doesNotMatch(real(page), TWO, page);
+  }
+  // The roadmap gives the rule in the same words as the release documents: one review, that status.
+  const roadmap = real("docs/roadmap.md");
+  assert.match(roadmap, new RegExp(`reçoit un avis indépendant, enregistré comme statut de commit \`${REVIEW}\``));
+  assert.match(roadmap, /n'est fusionné sans que l'avis indépendant écrive quels invariants il a vérifiés/);
+  assert.match(real(TEMPLATE), new RegExp(`une fois l'avis indépendant \`${REVIEW}\` réussi`));
+  assert.match(real(".github/PULL_REQUEST_TEMPLATE.md"), /Un avis d'agent indépendant existe sur ce même SHA/);
+});
+
 test("EX-2 prepare refuses when the CI state cannot be read", (t) => {
   const fx = fixture(t);
   refuses(fx.run(["prepare", ...ALL], { apiExit: "1" }), /lecture des vérifications CI impossible/);
@@ -1730,4 +1747,68 @@ test("EX-5 docs/release.md states which machine receives which version, and what
 test("EX-6 docs/roadmap.md and the docs index point to docs/release.md", () => {
   assert.match(real("docs/roadmap.md"), /\]\(release\.md\)/);
   assert.match(real("docs/README.md"), /\[release\.md\]\(release\.md\)/);
+});
+
+/** The lines of the first `sh` block of docs/release.md under a heading. */
+function commandsUnder(heading) {
+  const doc = real("docs/release.md");
+  const from = doc.indexOf(`\n${heading}\n`);
+  assert.notEqual(from, -1, `no heading ${heading}`);
+  const block = /```sh\n([\s\S]*?)\n```/.exec(doc.slice(from));
+  assert.ok(block, `no command under ${heading}`);
+  return block[1].split("\n");
+}
+
+// ANH-221: the command the check-list gave looked at two directories, and at
+// one end. The limits of motion (all of them [MED]) and the example
+// environment were outside it, and so was any file that lost the marker.
+test("ANH-221 the [MED] commands of docs/release.md find every file that carries the marker, at either end of a release", (t) => {
+  // Given: a release tagged with the marker in code, configuration, an example and a page...
+  const fx = fixture(t, [
+    [
+      "ANH-20 : valeurs à faire signer (#20)",
+      {
+        "raspberry-pi/src/local_config.py": "MIN_RIDER_AGE = 18  # [MED]\n",
+        "raspberry-pi/config/motion_limits.json": '{"_comment": "All values are [MED]", "g_per_s": 0.03}\n',
+        "raspberry-pi/.env.example": "# [MED] 18 is a conservative default\nMIN_RIDER_AGE=18\n",
+        "convex/training.ts": "// [MED] lowering it is a medical decision\nexport const MIN_RIDER_AGE = 18;\n",
+        "simulation/limits.py": "CEILING_G = 1.2  # [MED]\n",
+        "docs/securite.md": "Plafond de 1,2 g [MED].\n",
+        "raspberry-pi/src/clock.py": "TICK_S = 0.2\n",
+      },
+    ],
+  ]);
+  git(fx.work, "tag", "pi-0.1.0");
+  // ...then a value changed where the marker sits on another line, a file that
+  // lost its marker with its value, a new file that carries it, and one that never did.
+  fx.mergeTicket("ANH-21 : nouvelles limites (#21)", {
+    "raspberry-pi/config/motion_limits.json": '{"_comment": "All values are [MED]", "g_per_s": 0.05}\n',
+    "simulation/limits.py": "CEILING_G = 1.5\n",
+    "deploy/pi.env": "# [MED]\nMIN_RIDER_AGE=16\n",
+    "raspberry-pi/src/clock.py": "TICK_S = 0.1\n",
+  });
+  // When: the two commands run as the page writes them, `<base>` being the previous tag of the Pi.
+  const [list, diff] = commandsUnder("#### Lister les fichiers qui portent le marqueur").map((line) =>
+    line.replaceAll("<base>", "pi-0.1.0"),
+  );
+  const sh = (command) => execFileSync("sh", ["-c", command], { cwd: fx.work, env: GIT_ENV, encoding: "utf8" });
+  const listed = sh(list).trim().split("\n").sort();
+  const shown = [...sh(diff).matchAll(/^diff --git a\/(\S+) b\//gm)].map((match) => match[1]).sort();
+  // Then: the first lists every file that carries the marker at one end or the other, once each
+  // (the release template of the fixture is the real one, whose check-list names the marker)...
+  assert.deepEqual(
+    listed,
+    [
+      TEMPLATE,
+      "convex/training.ts",
+      "deploy/pi.env",
+      "docs/securite.md",
+      "raspberry-pi/.env.example",
+      "raspberry-pi/config/motion_limits.json",
+      "raspberry-pi/src/local_config.py",
+      "simulation/limits.py",
+    ],
+  );
+  // ...and the second shows what changed in them, and in them only.
+  assert.deepEqual(shown, ["deploy/pi.env", "raspberry-pi/config/motion_limits.json", "simulation/limits.py"]);
 });

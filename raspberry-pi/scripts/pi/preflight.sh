@@ -54,9 +54,21 @@ else
     if [ -n "$host" ] && [ "$host" != "127.0.0.1" ] && [ "$host" != "localhost" ]; then
         token="$(value UI_TOKEN)"
         if [ "${#token}" -lt 16 ]; then fail "UI_HOST=$host needs a UI_TOKEN of at least 16 characters"; fi
+        # Off loopback the console serves TLS or does not start. Only that the
+        # two keys are set is judged here: their paths are the console's own.
+        if [ -z "$(value UI_TLS_CERT)" ] || [ -z "$(value UI_TLS_KEY)" ]; then
+            fail "UI_HOST=$host needs UI_TLS_CERT and UI_TLS_KEY (sudo bash scripts/pi/make_console_tls.sh makes the certificate)"
+        fi
     fi
     if [ "$(value OCCUPANCY_OCCUPIED_ENABLED)" = "true" ] || [ "$(value PROGRAMS_ENABLED)" = "true" ]; then
         warn "a person on board or programmes are enabled: check the milestone sign-off (M5/M6)"
+    fi
+    if [ "$(value UI_TLS_CERT)" = /run/anheart-tls/console.crt ]; then
+        if bash "$(dirname "$0")/make_console_tls.sh" --dir /var/lib/anheart/tls --check; then
+            ok 'installed TLS material is usable'
+        else
+            fail 'installed TLS material is missing, unusable or nearing expiry'
+        fi
     fi
 fi
 

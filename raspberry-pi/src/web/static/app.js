@@ -34,6 +34,7 @@
 var STALE_FRAME_MS = 2000;      // no frame for this long: the screen is not live
 var RECONNECT_MS = 1500;        // socket retry interval
 var ESTOP_ANSWER_MS = 2000;     // an E-STOP request with no answer for this long is said so, loudly
+var STOP_ANSWER_MS = 2000;      // and so is a STOP request
 var PRESENCE_MS = 5000;         // attendant ping; the rule freezes after 60 s
 var STATUS_MS = 5000;           // status refresh (run state, verdicts, attestation)
 var STATUS_STALE_MS = 12000;    // two refreshes missed: what the status last said is not the present
@@ -45,7 +46,7 @@ var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
 var LOOP_ANSWER_S = 1;          // the loop empties its mailbox every 0.2 s: past this, on its clock, no answer is coming
-var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator"];
+var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator", "service-operator"];
 
 var state = {
   token: "",
@@ -66,22 +67,34 @@ var state = {
   status: null,          // the last /api/status answer
   statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
-  statusShown: 0,        // the one that produced `status`: an earlier answer arriving late is dropped
+  statusShownSent: 0,    // statusSent when `status` arrived: a request sent later is answered after it
+  statusBoot: 0,         // machineBoot when `status` arrived
+  machineBoot: 0,        // restarts of the machine's clock seen so far: a later one outdates an earlier one
   estopReceipt: null,    // this page's own E-STOP, until a frame or a status taken after it takes over
   estopReceiptSent: 0,   // statusSent when that receipt arrived: later requests are answered after the latch
   estopShown: false,     // what the emergency-stop banner shows; kept while nothing newer can tell
-  estopFrame: null,      // what the last frame said about it: "latched", "clear" or "silent"
-  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: {at, failed}
+  estopFrame: null,      // what the frames say about it, and since when: {says, since, at, boot, asked}
+  stream: 0,             // telemetry sockets opened so far: the frames of one socket come from one console
+  estopLatch: null,      // the latched stop the frames last showed, until they show it released (see noteConsoleRun): {rule, boot, stream, sent, count, restarted, instance}
+  statusLatch: null,     // the latched stop the status last showed, until a status shows it released (see noteStatusLatch): {rule, boot, sent, count, restarted, instance}
+  estopAsked: null,      // this page's E-STOP with no proof of a latch yet: a doubt (see openDoubt)
+  stopAsked: null,       // this page's STOP with no answer and no proof it was taken: a doubt as well
   view: "console",
   sensorKind: null,      // the sensor shown on the per-sensor page
   sensors: {},           // kind -> {row, lastAt, advancedAt, stale, nav, card}
   sensorOrder: [],       // kinds, in configuration order
   sensorsOkAt: 0,        // performance.now() of the last successful poll
   manualDraft: null,     // the target being edited, output rpm; null = follow the machine
-  manualSent: null,      // the target this page sent and the loop has not answered for: {at, rpm, detail}
-  manualTaken: null,     // the target the note says the machine took, and that note: {rpm, detail, text}
-  riseHeld: false,       // whether the console says the heart rate holds a manual rise (the box of the manual card)
-  manualRefusedAt: null, // the machine's clock at the loop's last refusal shown in the manual note
+  riseHeld: false,       // whether the heart rate holds a manual rise, or may: the console says so, or no longer answers
+  asked: {},             // a request this page sent, until the console has said what became of it: kind -> {id, at, said, stream, rpm, lost}
+  held: {},              // the note saying one was taken, for as long as that is true: kind -> {id, said, at, stream, rpm, sure, cleared, text}
+  fates: [],             // the console's last answers about requests, this page's or not: {id, fate, at, wall_clock, detail, stream}
+  sessionsOver: [],      // the starts whose session the console has said over (`session_idle`), newest last
+  streamOpened: null,    // the first message of the current socket: {stream, sent}, `sent` being statusSent then
+  ackGiven: null,        // the acknowledgement this page gave, until frames show whether it held: {at, cleared, text}
+  ackTaken: null,        // the note saying the machine took one back, for as long as the frames show that latch: {rule, waits}
+  latchSeen: {},         // the latched rule each source last reported: a rule new to all of them is a new latch
+  verdictShown: "",      // the frames' verdict as the status lines last showed it
   dirty: {},             // canvas id -> true when it needs a redraw
 };
 
@@ -220,7 +233,14 @@ function api(path, options) {
     }).then(function (body) {
       if (!response.ok) {
         var detail = body && body.detail ? body.detail : response.status + " " + response.statusText;
-        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        var refusal = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        // The console answered. A request that got no answer at all throws with no status.
+        refusal.status = response.status;
+        // What a start, a stop, a target or a reset refused at once carries next to its sentence:
+        // a code that does not change with the wording, and the request found in the way, if any.
+        refusal.code = body && body.code ? body.code : null;
+        refusal.waiting = body && body.waiting_request_id ? body.waiting_request_id : null;
+        throw refusal;
       }
       return body;
     });
@@ -288,8 +308,11 @@ function showView(name, kind) {
   if (name === "sensor") {
     state.sensorKind = kind || state.sensorKind;
   }
-  // The tab is named after the page shown, by the label of its entry in the navigation.
-  document.title = (name === "sensor" ? state.sensorKind : el("nav-" + name).textContent) + " - AnHeart";
+  // The tab is named after the page shown: by the label of its entry in the navigation, and for a
+  // sensor by the title its page carries.
+  var shown = state.sensors[state.sensorKind];
+  var title = name !== "sensor" ? el("nav-" + name).textContent : shown ? sensorTitle(shown.row) : state.sensorKind;
+  document.title = title + " - AnHeart";
   VIEWS.forEach(function (view) {
     show(el("view-" + view), view === name);
   });
@@ -345,7 +368,7 @@ var FRAME_FED = [
   "safety-action", "run-safety-action", "phase", "manual-state",
   "console-ecg-state", "ecg-state",
 ];
-var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard"];
+var PANEL_FED = ["console-mode", "console-ecg-link", "dashboard-link", "mobile-dashboard", "wall-clock", "service-state"];
 var STATUS_FED = ["run-state", "attest-state"];
 
 function markStale(ids, stale) {
@@ -376,6 +399,8 @@ function refreshLiveness() {
   // After its text: the banner is measured as it reads, not as it read last time.
   showBanner(el("banner"), !fresh, reworded);
   renderEstopUnanswered();
+  renderStopUnanswered();
+  renderDriveFault();
   markStale(FRAME_FED, !fresh);
   markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
   markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
@@ -395,110 +420,406 @@ function refreshLiveness() {
 }
 
 /*
-  What one report, a frame or a /api/status answer, says about a latched
-  emergency stop: "latched", "clear", or "silent" when it cannot say.
+  What one frame says about a latched emergency stop: "latched", "clear", or
+  "silent" when it cannot say.
 
-  go_silent outranks an emergency stop and takes its place as the standing
-  verdict, so a report whose standing verdict is go_silent hides any stop
-  latched behind it. It also refuses every acknowledgement: a stop that was
-  latched when go_silent took over is still latched, and no report can say
-  otherwise for as long as go_silent stands. Two fields of /api/status still
-  show through it, and a page opened at that moment has nothing else to go
-  by: the supervisor's own emergency-stop slot (`supervisor_estop`, whoever
-  latched it, the camera included) and the interface's flag (`estop_latched`).
+  go_silent outranks an emergency stop and takes its place as the verdict a
+  frame carries, so a frame under go_silent hides any stop latched behind it.
+  It also refuses every acknowledgement: a stop that was latched when
+  go_silent took over stays latched for as long as that console runs.
 */
-function estopOpinion(standing, flagged) {
-  if (flagged || (standing && standing.latched && standing.action === "quick_stop")) {
+function frameOpinion(snapshot) {
+  var standing = snapshot.safety;
+  if (standing && standing.latched && standing.action === "quick_stop") {
     return "latched";
   }
   return standing && standing.action === "go_silent" ? "silent" : "clear";
 }
 
 /*
-  A latched emergency stop has its own banner, for as long as it is latched.
-  It is decided here and nowhere else, from three sources: the standing
-  verdict of the latest frame, the latest /api/status answer, and the receipt
-  of this page's own E-STOP.
+  The latched quick stop a /api/status answer shows held BEHIND go_silent, or
+  null. go_silent takes the place of whatever was latched before it, and the
+  console says what that was (`silenced`): the stop of a rule, or of the
+  runtime, that nobody acknowledged and that nothing can acknowledge any more.
+  A screen that watched the sequence had seen that stop; one opened afterwards
+  reads it here. An answer without the field shows nothing either way.
+*/
+function silencedStop(status) {
+  var behind = status.silenced;
+  return behind && behind.latched && behind.action === "quick_stop" ? behind : null;
+}
 
-  - It is RAISED by any of them reporting a latched stop, whoever latched it
-    (this page, another screen, the camera, a rule), frames or no frames.
-  - It is LOWERED only by a report that can say the stop is released: a frame
-    that says so and is not older than the receipt, with no status answer
-    saying otherwise, or a status answer alone when no frame has ever come.
-  - In every other case it KEEPS what it shows. Under go_silent nothing can
-    say "released", so a banner that was up stays up; unknown is never read
-    as released.
+/*
+  What a /api/status answer says about it: "latched" or "clear". An answer can
+  always say, go_silent or not: it carries the latch itself, whoever set it
+  (`supervisor_estop`, and the interface's flag `estop_latched`), and the stop
+  that go_silent replaced (silencedStop). Under go_silent an answer that shows
+  none of them says that no emergency stop is held behind it.
+*/
+function statusOpinion(status) {
+  var standing = status.standing;
+  var stopped = Boolean(standing && standing.latched && standing.action === "quick_stop");
+  return estopLatched(status) || stopped || Boolean(silencedStop(status)) ? "latched" : "clear";
+}
+
+/*
+  What the frames say about a latched emergency stop, kept with the machine's
+  own clock: `at` is the instant of the latest frame, `since` that of the
+  first frame saying the same. Frames arrive in the order they were taken, so
+  a clock that has gone back is a machine that restarted (machineBoot).
+
+  A frame also releases the receipt of this page's own E-STOP, once one taken
+  after the latch can speak. Only a frame that has just arrived does: the last
+  one of a socket that has gone quiet proves nothing about a stop latched
+  since.
+*/
+function noteEstopFrame(snapshot) {
+  var last = state.estopFrame;
+  if (last && last.boot === state.machineBoot && snapshot.at < last.at) {
+    state.machineBoot += 1;
+  }
+  var says = frameOpinion(snapshot);
+  var same = Boolean(last) && last.says === says && last.boot === state.machineBoot;
+  state.estopFrame = {
+    says: says,
+    since: same ? last.since : snapshot.at,
+    at: snapshot.at,
+    boot: state.machineBoot,
+    asked: same && last.asked,
+  };
+  if (state.estopReceipt && says !== "silent" && snapshot.at >= state.estopReceipt.at) {
+    state.estopReceipt = null;
+  }
+  var latch = state.estopLatch;
+  if (says === "latched" && !(latch && latch.rule === snapshot.safety.rule && latch.stream === state.stream)) {
+    // Which stop it is, and which console showed it: the one at the other end of this socket,
+    // by the name that run of the console gives itself in every frame.
+    state.estopLatch = {
+      rule: snapshot.safety.rule,
+      boot: state.machineBoot,
+      stream: state.stream,
+      sent: state.statusSent,
+      count: null,
+      restarted: false,
+      instance: snapshot.instance || null,
+    };
+  } else if (says === "clear") {
+    // The frames themselves have shown it released.
+    state.estopLatch = null;
+  }
+}
+
+/*
+  The latched stop this page was last shown, by the frames (estopLatch) or by
+  the status (statusLatch), when go_silent then stands without the page having
+  been shown it released: may the status speak for it?
+
+  For the emergency stop itself, yes. The status carries that latch
+  (statusOpinion), go_silent or not, so it says whether the stop is still
+  held.
+
+  For any other latched quick stop, a rule's or the runtime's own, an answer
+  that still shows it behind go_silent says so itself (silencedStop): that is
+  "latched", and the banner stays on it. An answer under go_silent that shows
+  none is not taken, alone, for a release. Nothing is acknowledged under
+  go_silent: from the console that showed the latch, such an answer can only
+  mean an acknowledgement this screen never saw, given just before go_silent,
+  and a banner that went on it would go as the machine reaches its most severe
+  state. So that banner stays for as long as it is the same console that
+  showed the latch, whichever of the frames and the status showed it. It goes
+  with a console that restarted, which holds nothing of what the previous one
+  held, and only when the restart is proven. The proof is one of:
+
+  - the machine's clock restarted after the latch was shown (machineBoot); or
+  - a status answer asked after the latch was shown names another run of the
+    console than the one that showed it (anotherRun). Every frame and every
+    status answer carries the name its console drew when it started
+    (`instance`), which no later console draws again: this is the certain
+    proof, and the two below are what is left for an answer that carries no
+    name; or
+  - the count of snapshots the console has published, which only ever rises
+    while it runs (`counters` of the status), went down. For a latch the
+    frames showed, remembered with the socket that delivered it (one socket,
+    one console): between two status answers that were both asked after that
+    socket first showed it. Asked then, the first comes from the console that
+    showed it or a later one, and the second from a later one still. For a
+    latch the status showed: between that answer, which the console holding
+    the latch wrote, and one asked after it.
+
+  Equal counts prove nothing: two answers within one tick, or a loop that has
+  stalled, give the same count. A frame stream that broke and came back proves
+  no restart either: the link can drop under a console that keeps running.
+  And a latch shown again, over a new socket or by a later status, is the own
+  latch of the console that shows it: the proof starts again from there.
+  Unproven, the banner stays, until the frames show no verdict, a status shows
+  the stop released outside go_silent, or the page is reloaded.
+
+  Every proof holds for one console behind the address the page talks to,
+  which is how the console is run: with two behind it, an answer from the
+  other would read as a restart.
+*/
+function noteConsoleRun(status, sent) {
+  var published = status.counters[2];
+  [state.estopLatch, state.statusLatch].forEach(function (latch) {
+    if (latch && sent > latch.sent) {
+      latch.restarted =
+        latch.restarted || (latch.count !== null && published < latch.count) || anotherRun(latch, status);
+      latch.count = published;
+    }
+  });
+}
+
+/*
+  Whether a status answer was written by another run of the console than the
+  one that showed a latch. Only for an answer asked after the latch was shown
+  (the caller's test): the console that showed it was running then, one
+  console answers at a time, and a run that has ended does not answer again.
+  So an answer asked from then on under another name comes from a console
+  started since, which holds nothing of what the first one held. Without a
+  name on either side nothing is proven.
+*/
+function anotherRun(latch, status) {
+  return Boolean(latch.instance) && Boolean(status.instance) && status.instance !== latch.instance;
+}
+
+/*
+  A status answer that shows a latched stop is remembered as the frames' is:
+  which stop, the name of the run that wrote the answer, its count of
+  snapshots then, and the machine's clock. Each such answer is the console of
+  that moment showing its own latch, standing or held behind go_silent, so it
+  replaces what was remembered. An answer that shows no latched stop and no
+  go_silent has seen it released: only an acknowledgement, or a console that
+  restarted, takes a latched quick stop away without go_silent. Under
+  go_silent it is kept, for statusSpeaksForLatch to judge.
+*/
+function underGoSilent(status) {
+  return Boolean(status.standing) && status.standing.action === "go_silent";
+}
+
+function noteStatusLatch(status, sent) {
+  if (statusOpinion(status) === "latched") {
+    // Which stop: the emergency stop, else the one go_silent stands over, else the standing one.
+    var behind = silencedStop(status);
+    state.statusLatch = {
+      rule: estopLatched(status) ? "operator_estop" : behind ? behind.rule : status.standing.rule,
+      boot: state.machineBoot,
+      sent: sent,
+      count: status.counters[2],
+      restarted: false,
+      instance: status.instance || null,
+    };
+  } else if (!underGoSilent(status)) {
+    state.statusLatch = null;
+  }
+}
+
+function statusSpeaksFor(latch) {
+  return !latch || latch.rule === "operator_estop" || latch.restarted || state.machineBoot > latch.boot;
+}
+
+function statusSpeaksForLatch() {
+  return statusSpeaksFor(state.estopLatch) && statusSpeaksFor(state.statusLatch);
+}
+
+/*
+  Which of the latest frame and the status on screen the machine wrote last.
+  Both carry its clock: a frame the instant its tick began (its verdict is
+  read at the end of that tick, so it is never older than `at`), a status
+  answer the instant it was written. What arrived after a restart of that
+  clock is newer than what arrived before it, whatever the two clocks read.
+*/
+function frameOutdatesStatus(frame) {
+  return frame.boot > state.statusBoot || (frame.boot === state.statusBoot && frame.at > state.status.at);
+}
+
+/*
+  Whether the status on screen was written once the frames had turned to what
+  they say now. `since` is a tick that began after the last frame saying
+  anything else had read its verdict, so such an answer has seen everything
+  those earlier frames showed.
+*/
+function statusCoversFrames(frame) {
+  return state.statusBoot > frame.boot || (state.statusBoot === frame.boot && state.status.at >= frame.since);
+}
+
+/*
+  A latched emergency stop has its own banner, for as long as it is latched.
+  It is decided here and nowhere else, from three sources: the frames, the
+  latest /api/status answer, and the receipt of this page's own E-STOP. The
+  screen must never look safer than what the machine reports: the banner goes
+  only on a report that says the stop is released and that nothing newer
+  denies.
+
+  What RAISES it, whoever latched the stop (this page, another screen, the
+  camera, a rule, the runtime itself): the receipt, a frame showing a latched
+  stop, and a status answer showing one, standing or held behind go_silent,
+  unless a frame taken after that answer shows it released (asked before an
+  acknowledgement, the answer arrived after it).
+
+  What takes it DOWN, and what each proves:
+
+  - a frame with no latched stop and no go_silent, when no status has
+    answered yet or when it was taken after the status on screen: the frames
+    themselves show the stop released;
+  - a status answer that shows no latched stop, when no frame is newer, and
+    only where it can speak for every latched stop this page was shown
+    (statusTakesDown, statusSpeaksForLatch). Outside go_silent it can:
+    nothing but an acknowledgement, or a console that restarted, takes a
+    latched quick stop away there. Under go_silent it can for the emergency
+    stop itself, which the status carries behind go_silent, and for a latch
+    of a console proven restarted; under frames turned to go_silent the
+    answer must also have been written after they turned. The latched quick
+    stop of a rule that go_silent replaced, in the console that showed it,
+    keeps its banner, whether the frames or the status had shown it.
+
+  In every other case it KEEPS what it shows; unknown is never read as
+  released. So does a socket that goes quiet on a frame showing a latched
+  stop: only a later frame takes that banner down.
 
   The receipt holds the banner from the click until a frame taken after the
   latch can speak, or a status asked after it answers: the banner neither
   waits for a frame nor drops on one that was already on its way.
 
-  When the frames change their mind in a way they cannot settle alone, the
-  status is asked at once rather than at its next 5 s turn: go_silent may hide
-  a stop this page never saw latched, and a frame saying "released" against a
-  status saying "latched" may simply be the older of the two.
-
   The banner says "latched", never "stopped": the measured speed alone speaks
   about the shaft.
 */
 function renderEstopBanner() {
-  var snapshot = state.snapshot;
-  var status = state.status;
-  var frame = snapshot ? estopOpinion(snapshot.safety, false) : null;
-  var polled = status ? estopOpinion(status.standing, estopLatched(status)) : null;
-  if (state.estopReceipt && snapshot && frame !== "silent" && snapshot.at >= state.estopReceipt.at) {
-    state.estopReceipt = null;
-  }
-  if (frame === "latched" || polled === "latched" || state.estopReceipt) {
+  var frame = state.estopFrame;
+  var said = frame ? frame.says : null;
+  var polled = state.status ? statusOpinion(state.status) : null;
+  if (state.estopReceipt || said === "latched") {
     state.estopShown = true;
-  } else if (polled !== "silent" && (frame === "clear" || (frame === null && polled === "clear"))) {
+  } else if (polled === null) {
+    if (said === "clear") {
+      state.estopShown = false;
+    }
+  } else if (said === "clear" && frameOutdatesStatus(frame)) {
+    state.estopShown = false;
+  } else if (polled === "latched") {
+    state.estopShown = true;
+  } else if (statusTakesDown(frame)) {
     state.estopShown = false;
   }
   showBanner(el("estop-banner"), state.estopShown);
+  askStatusIfUnsettled();
+}
 
-  if (frame !== state.estopFrame) {
-    state.estopFrame = frame;
-    if (frame === "silent" || (frame === "clear" && polled !== null && polled !== "clear")) {
-      loadStatus().catch(function () {
-        /* the banner keeps its state; the periodic refresh asks again */
-      });
-    }
+/*
+  The status on screen shows no latched stop, and no frame is newer: may it
+  take the banner down? One gate for every such answer, go_silent or not: it
+  must speak for every latched stop this page was shown. Outside go_silent it
+  always does, having just released what the status had shown (noteStatusLatch)
+  while frames that are not under go_silent hold no latch of their own.
+*/
+function statusTakesDown(frame) {
+  var seen = !(frame && frame.says === "silent") || statusCoversFrames(frame);
+  return seen && statusSpeaksForLatch();
+}
+
+/*
+  When the frames have turned to something the status on screen does not
+  settle, the status is asked at once rather than at its next 5 s turn, once
+  for each turn of the frames:
+
+  - frames under go_silent, and no status written since: a stop may be latched
+    behind it that this page never saw, or the one it shows may be gone;
+  - frames saying "released" after a status that said "latched": that answer
+    is out of date, and so are the lines of the page it feeds.
+*/
+function askStatusIfUnsettled() {
+  var frame = state.estopFrame;
+  if (!frame || frame.asked) {
+    return;
+  }
+  var status = state.status;
+  var unsettled = frame.says === "silent"
+    ? !(status && statusCoversFrames(frame))
+    : frame.says === "clear" && Boolean(status) && statusOpinion(status) === "latched" && frameOutdatesStatus(frame);
+  if (unsettled) {
+    frame.asked = true;
+    loadStatus().catch(function () {
+      /* the banner keeps its state; the periodic refresh asks again */
+    });
   }
 }
 
 /*
-  An E-STOP this page asked for and has no proof of. The request is answered
-  in a few milliseconds when everything works; when the console is stuck or
-  the network is mute it simply stays out, and nothing used to tell the
-  operator, who was left waiting for an answer that was not coming.
+  A stop this page asked for, STOP or E-STOP, and has neither an answer to nor
+  proof of: a doubt. `pending` holds the instant of each request still out,
+  oldest first; `failed` is what the last one to fail said, and `failedAt`
+  when. `sent` counts the status requests sent when the doubt began: one sent
+  later was answered after the click.
 
-  ESTOP_ANSWER_MS after the first click left unanswered, a banner says so and
-  names the wired stop. A request that failed says so at once. The request
-  itself is never withdrawn: it may still get through, and then its receipt
-  takes the notice down. So does a frame or a status answer, arriving after
-  the click, that shows a stop latched: the machine has it, whichever way it
-  came. A report under go_silent shows nothing either way and leaves the
-  notice up.
+  A request is answered in a few milliseconds when everything works. When the
+  console is stuck or the network is mute it simply stays out, and nothing
+  used to tell the operator, who was left waiting for an answer that was not
+  coming. So a doubt is said in a banner of its own, and the banner says
+  exactly where the request stands:
 
-  The count runs from the first unanswered click, however many follow it: a
-  second click must not make the page look reassured for two more seconds.
+  - still out: for how long, counted from the oldest request still out,
+    however many clicks follow it. A second click must not make the page look
+    reassured for two more seconds;
+  - failed, with nothing still out: that it failed, how long ago, and that it
+    is no longer pending. A failed request is over. The page does not send it
+    again, and the banner stays until there is proof of a stop;
+  - failed, then asked again: both.
+
+  A request still out is never withdrawn: it may still get through.
 */
-function renderEstopUnanswered() {
-  var asked = state.estopAsked;
-  var waited = asked ? performance.now() - asked.at : 0;
-  var overdue = Boolean(asked) && (asked.failed !== null || waited >= ESTOP_ANSWER_MS);
+function openDoubt(doubt, clicked) {
+  var asked = doubt || { pending: [], failed: null, failedAt: 0, sent: state.statusSent };
+  asked.pending.push(clicked);
+  return asked;
+}
+
+/** The request sent at `clicked` ended with no answer, or with an error: it is no longer out. */
+function failDoubt(asked, clicked, message) {
+  asked.pending.splice(asked.pending.indexOf(clicked), 1);
+  asked.failed = message;
+  asked.failedAt = performance.now();
+}
+
+function doubtNotice(asked, use) {
+  var now = performance.now();
+  if (!asked.pending.length) {
+    return "la demande a echoue il y a " + answerAge((now - asked.failedAt) / 1000) +
+      " et n'est plus en attente : " + asked.failed + " - " + use;
+  }
+  var waited = Math.round((now - asked.pending[0]) / 1000) + " s";
+  if (asked.failed === null) {
+    return "aucune reponse de la console depuis " + waited + " - " + use;
+  }
+  return "nouvelle demande sans reponse depuis " + waited + ", la precedente a echoue : " + asked.failed +
+    " - " + use;
+}
+
+/*
+  One doubt, in its banner: shown at once when a request has failed, and
+  `limit` after the oldest request still out otherwise. The text is written
+  before the banner is measured, like the other banners.
+*/
+function renderDoubt(asked, limit, banner, detail, use) {
+  var overdue = Boolean(asked) && (asked.failed !== null || performance.now() - asked.pending[0] >= limit);
   var reworded = false;
   if (overdue) {
-    var detail = el("estop-unanswered-detail");
-    var notice = (asked.failed !== null
-      ? "la demande a echoue : " + asked.failed
-      : "aucune reponse de la console depuis " + Math.round(waited / 1000) + " s") +
-      " - UTILISEZ L'ARRET CABLE";
+    var notice = doubtNotice(asked, use);
     reworded = detail.textContent !== notice;
     text(detail, notice);
   }
-  // After its text, like the other banners: measured as it reads.
-  showBanner(el("estop-unanswered"), overdue, reworded);
+  showBanner(banner, overdue, reworded);
+}
+
+/*
+  The E-STOP in doubt. Its receipt takes the notice down, and so does a frame,
+  or a status asked after the click, that shows a stop latched: the machine
+  has it, whichever way it came. A frame under go_silent shows nothing either
+  way and leaves the notice up. The notice names the wired stop.
+*/
+function renderEstopUnanswered() {
+  renderDoubt(
+    state.estopAsked, ESTOP_ANSWER_MS, el("estop-unanswered"), el("estop-unanswered-detail"),
+    "UTILISEZ L'ARRET CABLE"
+  );
 }
 
 /** A report that has just arrived shows a stop latched: this page's E-STOP is no longer in doubt. */
@@ -506,6 +827,31 @@ function estopSeenLatched(opinion) {
   if (opinion === "latched" && state.estopAsked) {
     state.estopAsked = null;
     renderEstopUnanswered();
+  }
+}
+
+/*
+  The STOP in doubt, treated as the E-STOP is. An answer takes the notice
+  down, acceptance or refusal: a refusal is said in its own alert, as before.
+  So does a frame showing the session ending, or a status asked after the
+  click showing no session running: the stop is under way, whichever way it
+  came. A frame at rest is not that proof: a start may be waiting behind it.
+  The notice names the two stops that remain.
+*/
+var STOP_DOUBT_USE = "rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable";
+
+function renderStopUnanswered() {
+  renderDoubt(
+    state.stopAsked, STOP_ANSWER_MS, el("stop-unanswered"), el("stop-unanswered-detail"),
+    STOP_DOUBT_USE
+  );
+}
+
+/** This page's STOP is no longer in doubt: it was answered, or the session is seen ending. */
+function stopSettled() {
+  if (state.stopAsked) {
+    state.stopAsked = null;
+    renderStopUnanswered();
   }
 }
 
@@ -556,12 +902,78 @@ function renderResumeBanner(snapshot) {
 }
 
 /*
+  A drive in fault takes no start: the console refuses one with that reason,
+  at the click. It has to be seen BEFORE the click, and on a console that has
+  armed nothing a fault at rest raises no verdict: the safety chip stays
+  green, and the fault was only on the drive's own card, on two of the pages.
+  So it is said in a banner, on every page, for as long as the drive shows it.
+
+  Which report is believed, between the frames and the status (the console
+  gives the drive's state in both):
+
+  - live frames: the latest one, five a second;
+  - no live frame: the status on screen when the machine wrote it at or after
+    the last frame (frameOutdatesStatus, on the machine's own clock): a fault
+    that appears, or is reset, while this screen's socket is down is then
+    shown, or taken down, at the next status;
+  - otherwise the last frame: next to NO LIVE DATA its word stays, as that of
+    a latched stop does. Unknown is never read as "no fault".
+
+  The state `comm_lost` means the console does not know: no banner is raised
+  on it, and the drive's chip says so in red.
+*/
+function driveSeen() {
+  var status = state.status;
+  if (statusLeads() && status.drive_state !== undefined) {
+    return { state: status.drive_state, fault: status.drive_fault };
+  }
+  return state.snapshot ? { state: state.snapshot.drive_state, fault: state.snapshot.fault } : null;
+}
+
+/** The fault as the banner names it: the code on the drive's own display, and no more. */
+function faultCode(fault) {
+  if (!fault) {
+    return "code non lu sur le variateur";
+  }
+  return (fault.name === "unknown" ? "code inconnu" : fault.mnemonic) + " (LFT brut " + fault.raw_code + ")";
+}
+
+function renderDriveFault() {
+  var seen = driveSeen();
+  var faulted = Boolean(seen) && seen.state === "fault";
+  var reworded = false;
+  if (faulted) {
+    var detail = el("drive-fault-banner-detail");
+    var notice = faultCode(seen.fault) +
+      " : aucun demarrage n'est accepte tant que le variateur signale ce defaut. Le traiter sur la carte Variateur (Tableau de bord)";
+    reworded = detail.textContent !== notice;
+    text(detail, notice);
+  }
+  showBanner(el("drive-fault-banner"), faulted, reworded);
+}
+
+/*
   The banners take room at the top of the page, and the emergency-stop one
   stays for as long as a stop is latched. The stylesheet starts the sidebar
   and the mobile bar under them, at --banners-h: this keeps that height current.
 */
 function fitBanners() {
   document.documentElement.style.setProperty("--banners-h", el("banners").offsetHeight + "px");
+}
+
+/*
+  The footer is fixed over the bottom of the page, and the stylesheet keeps
+  the page and the sidebar clear of it by its height, --footer-h. A height
+  written in the stylesheet was a guess, and a short one: the two stops are
+  taller than it, and on a narrow screen the footer has another height again.
+  The last lines of a page then sat under the footer. So it is measured. The
+  value of the stylesheet stays until a height can be read.
+*/
+function fitFooter() {
+  var height = el("footer").offsetHeight;
+  if (height) {
+    document.documentElement.style.setProperty("--footer-h", height + "px");
+  }
 }
 
 /*
@@ -597,6 +1009,8 @@ function connect() {
   }
   var socket = new WebSocket(socketUrl());
   state.socket = socket;
+  // A new socket may be another console's: what the frames of this one show is its own.
+  state.stream += 1;
 
   socket.onopen = function () {
     state.connected = true;
@@ -714,8 +1128,25 @@ function renderSnapshot(snapshot) {
   renderConsole(snapshot);
   renderManual(snapshot);
   settleManualTarget(snapshot);
+  settleLoopAsks(snapshot);
+  settleAcknowledgement(frameReport(snapshot));
+  noteLatch("frame", snapshot.safety && snapshot.safety.latched ? snapshot.safety.rule : null);
+  var carried = snapshot.safety
+    ? snapshot.safety.rule + "/" + snapshot.safety.action + "/" + snapshot.safety.latched
+    : "";
+  if (carried !== state.verdictShown) {
+    // The status lines list the verdict the frames carry when it is the worse one: kept in step.
+    state.verdictShown = carried;
+    if (state.status) {
+      renderStatusGrids(state.status);
+    }
+  }
   renderManualHold();
-  estopSeenLatched(estopOpinion(snapshot.safety, false));
+  noteEstopFrame(snapshot);
+  estopSeenLatched(state.estopFrame.says);
+  if (snapshot.mode === "arret") {
+    stopSettled();
+  }
   renderEstopBanner();
   renderResumeBanner(snapshot);
 
@@ -900,6 +1331,81 @@ function renderDashboardLink(link) {
   text(el("dashboard-link-detail"), said.join(" · "));
 }
 
+/*
+  What the machine's wall clock is worth, as the console states it
+  (`wall_clock` in /api/panel): its word, why, and whether the dates the
+  console writes can be believed. The page decides nothing: it writes the
+  console's words, in orange when the clock is not one to believe. A console
+  that does not judge its clock sends none, and the line stays empty.
+*/
+function renderWallClock(clock) {
+  var node = el("wall-clock");
+  text(node, "horloge " + clock.label + (clock.detail ? " · " + clock.detail : ""));
+  node.className = "bind" + (clock.trusted ? "" : " bind-warn");
+}
+
+/*
+  Whether the console is in service, as it says in /api/panel (`service`), and
+  what it has told the service manager that watches it (`watchdog`).
+
+  Out of service is a standing state the console keeps across its restarts: it
+  has started several times after a stop that was not clean, and it arms
+  nothing until a named operator puts it back in service. So it is said three
+  times: a chip on every page, a red banner on every page, and the form that
+  lifts it on the safety page, shown only then.
+
+  The line under the chips says what the last start found: an unclean stop, the
+  session record it left open, a state the disk did not take, notifications the
+  service manager did not get. Nothing is written when there is nothing to say.
+*/
+function renderService(service, watchdog) {
+  var out = service.out_of_service;
+  var minutes = Math.round(service.window_s / 60);
+  pill(el("service-state"), out ? "HORS SERVICE" : "en service", out ? "bad" : "good");
+  show(el("service-restore"), out);
+  var detail = el("service-banner-detail");
+  var notice = service.threshold + " demarrages apres un arret non propre en moins de " + minutes +
+    " min : aucun depart n'est accepte. Faire verifier la machine, puis la remettre en service (page Securite), par un operateur nomme";
+  var reworded = detail.textContent !== notice;
+  text(detail, notice);
+  // In the stack with the other banners: the page makes room for it as for them.
+  showBanner(el("service-banner"), out, reworded);
+  var said = [];
+  if (service.unclean_stop) {
+    said.push(
+      "demarre apres un arret non propre" +
+        (service.open_record ? " (enregistrement " + service.open_record + " non clos)" : "")
+    );
+  }
+  if (service.unclean_starts > 0) {
+    said.push(service.unclean_starts + " sur " + service.threshold + " en " + minutes + " min avant la mise hors service");
+  }
+  if (!service.persisted) {
+    said.push("etat des redemarrages non enregistre sur le disque");
+  }
+  if (watchdog.enabled && watchdog.failed > 0) {
+    said.push("chien de garde : " + watchdog.failed + " notification(s) non envoyee(s)");
+  }
+  text(el("service-detail"), said.join(" · "));
+}
+
+function doRestoreService() {
+  api("/api/service/restore", { method: "POST", body: { operator: el("service-operator").value } })
+    .then(function (service) {
+      ok(
+        el("service-note"),
+        service.persisted
+          ? "console remise en service"
+          : "console remise en service jusqu'a son prochain redemarrage : l'etat n'a pas pu etre enregistre"
+      );
+      loadPanel();
+    })
+    .catch(function (error) {
+      problem(el("service-note"), error);
+      window.alert("remise en service refusee : " + error.message);
+    });
+}
+
 function renderPanel(panel) {
   state.panel = panel;
   state.panelAt = performance.now();
@@ -910,6 +1416,10 @@ function renderPanel(panel) {
   }
   pill(el("software-version"), panel.software_version, "");
   renderDashboardLink(panel.dashboard);
+  if (panel.wall_clock) {
+    renderWallClock(panel.wall_clock);
+  }
+  renderService(panel.service, panel.watchdog);
   state.motionEnabled = panel.motion_enabled;
   state.programsEnabled = panel.programs_enabled;
   pill(el("console-mode"), panel.motion_enabled ? "mouvement actif" : "LECTURE SEULE", panel.motion_enabled ? "warn" : "good");
@@ -962,14 +1472,37 @@ function loadPanel() {
 /* ------------------------------------------------------------ manual mode */
 
 /*
+  Whether the ramp the machine announces leads somewhere else than the target:
+  under a `reduce` the setpoint is walked down towards zero whatever the
+  target is, and the machine says so (`ramp_to`: where the setpoint is going,
+  and `ramp_eta_s` the time to get there). The line said "en cours, arrivee
+  ~..." there, with the time to climb back to a target the arm was moving away
+  from. An answer without `ramp_to` is read as before.
+*/
+function rampedAway(manual) {
+  return Boolean(manual.ramp_to) && manual.ramp_to.motor_rpm !== manual.target.motor_rpm;
+}
+
+/** That descent, in words: where it leads, under which warning, and when it gets there if the warning stays. */
+function loweredWords(snapshot, manual) {
+  var warning = snapshot.safety ? "l'avertissement " + snapshot.safety.rule : "un avertissement";
+  return "vers " + num(manual.ramp_to.output_rpm, 2) + " tr/min de sortie sous " + warning +
+    ", la cible n'est pas suivie ; arrivee dans ~" + secs(manual.ramp_eta_s) + " s'il dure";
+}
+
+/*
   The "rampe" line of the manual card. While a `freeze` holds the setpoint
   away from a target that is not zero, the machine announces no ramp and no
   arrival time (`ramping` false, `ramp_eta_s` null): nothing is on its way.
   That is a setpoint HELD, not a target reached, so "cible atteinte" is said
-  only when the setpoint of this same snapshot is the target.
+  only when the setpoint of this same snapshot is the target. And a setpoint
+  a `reduce` walks down is said to go down, not to be on its way to the target.
 */
 function rampLine(snapshot, manual) {
   if (manual.ramping) {
+    if (rampedAway(manual)) {
+      return "en baisse " + loweredWords(snapshot, manual);
+    }
     return "en cours, arrivee ~" + secs(manual.ramp_eta_s);
   }
   var setpoint = snapshot.setpoint;
@@ -1008,12 +1541,15 @@ function renderManual(snapshot) {
     ["minimum de rotation", speedLine(manual.min_run)],
     ["rampe", rampLine(snapshot, manual)],
   ]);
+  // The speed is changing either way, so the head must not move: the banner says where it goes.
   show(el("ramp-banner"), manual.ramping);
   if (manual.ramping) {
     text(
       el("ramp-banner-detail"),
-      "vers " + num(manual.target.output_rpm, 2) + " tr/min de sortie (Gr " +
-        num(manual.target.resultant_g, 3) + "), arrivee dans ~" + secs(manual.ramp_eta_s)
+      rampedAway(manual)
+        ? "la vitesse baisse " + loweredWords(snapshot, manual)
+        : "vers " + num(manual.target.output_rpm, 2) + " tr/min de sortie (Gr " +
+          num(manual.target.resultant_g, 3) + "), arrivee dans ~" + secs(manual.ramp_eta_s)
     );
   }
 }
@@ -1046,7 +1582,8 @@ function renderManualHold() {
   var known = Boolean(state.panel) && performance.now() - state.panelAt < PANEL_STALE_MS;
   var hold = known ? state.panel.manual_rise_hold : null;
   var unknown = Boolean(manual) && manual.occupancy !== "bench" && !known;
-  state.riseHeld = Boolean(manual) && Boolean(hold);
+  // Unknown counts as held for what the note of a target may say: see followsTarget().
+  state.riseHeld = Boolean(manual) && (Boolean(hold) || unknown);
   show(el("manual-hold"), Boolean(manual) && (Boolean(hold) || unknown));
   if (unknown) {
     text(el("manual-hold-title"), "RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE");
@@ -1127,53 +1664,435 @@ function stepGr(direction) {
   nudgeDraft(grToOutputRpm(tenth / 10, radius), direction > 0);
 }
 
+/*
+  What became of a request the loop must answer: a manual start, a programme
+  start, a manual target, a fault reset.
+
+  The console answers 202 as soon as its mailbox holds the request, and the
+  202 carries the identifier the console gave it (`request_id`). The loop then
+  takes the request or refuses it on its next tick, or a STOP takes its place
+  in the mailbox before that. The console says which, once, in an event that
+  carries the same identifier: `taken`, `refused` (with the loop's reason) or
+  `cancelled`. So the note under a button says what became of THIS screen's
+  request, from the console's own answer:
+
+  - at the 202: sent, not taken yet;
+  - at the answer: taken, refused (the reason, word for word), or cancelled by
+    a STOP. An answer can reach the screen before the 202 of what it answers:
+    the last answers are kept (state.fates) and looked up at the 202.
+
+  The page deduces nothing from a frame: a session on screen is not proof that
+  the loop took this screen's request, and the page does not say "pris" for
+  it. Nor does it read another screen's answer as its own: an answer that
+  carries another identifier goes to the list of events and nowhere else. One
+  `refused` event carries no identifier, the manual target the machine takes
+  back by itself. Nobody asked for that, and every screen showing the manual
+  session writes it under the card.
+
+  The one thing a screen cannot know by itself is what the console published
+  while its socket was down: those events are not sent again. So the page asks
+  the console. /api/status lists what became of the last requests, by
+  identifier, and the page asks for it at the first message of a socket that
+  is not the one open at the click, and when a second of the machine's clock
+  has gone by after a request with no answer. Until the console's answer has
+  settled it, the note says that this screen does not know, and nothing else:
+  nothing from the frames.
+
+  "Taken" is kept only for as long as it is true:
+
+  - of a start, while the session it started is the one in progress. The
+    console says when that ends (`session_idle`), and a frame taken after the
+    answer that no longer shows the session says it too. After a change of
+    socket the page cannot tell whether the session on screen is still that
+    one (it may have ended, and another begun, unseen): it says so and asks
+    the console, whose `session_request` is the start the session in progress
+    came from. The note is taken up again, or wiped, on an answer asked for
+    after the new socket delivered its first message. An older answer may
+    have been written before something this screen then missed;
+  - of a target, while the machine holds that target (the frames);
+  - of a reset, as what the frames have shown since: the fault gone, or still
+    reported a second later. A fault that shows again after it went is
+    another fault, and the note is wiped.
+
+  What a note adds from the frames follows them: "(cible 0)" after a manual
+  start, "(suivie aux limites de mouvement)" after a target. A frame can be
+  delivered after an event that is newer than it: a frame taken before the
+  answer says nothing about it, and is left out.
+*/
+var FATES_KEPT = 32; // answers kept for a 202 that arrives after them; the console itself keeps 16
+var REQUESTS = {
+  manual: {
+    note: function () {
+      return el("manual-note");
+    },
+    sent: "demande envoyee : ",
+    session: true,
+    shows: function (snapshot) {
+      return snapshot.mode === "manuel";
+    },
+    taken: function (held, frame) {
+      var atZero = Boolean(frame) && Boolean(frame.manual) && frame.manual.target.motor_rpm === 0;
+      return "demarrage pris par la machine : " + held.said + (atZero ? " (cible 0)" : "");
+    },
+    lost: "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.",
+  },
+  programme: {
+    note: function () {
+      return el("start-note");
+    },
+    sent: "demande envoyee : ",
+    session: true,
+    shows: function (snapshot) {
+      return snapshot.mode === "seance";
+    },
+    taken: function (held) {
+      return "demarrage pris par la machine : " + held.said;
+    },
+    lost: "cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.",
+  },
+  target: {
+    note: function () {
+      return el("manual-note");
+    },
+    sent: "cible envoyee : ",
+    shows: function (snapshot, held) {
+      var manual = snapshot.mode === "repos" ? null : snapshot.manual;
+      return Boolean(manual) && holdsTarget(manual, held.rpm);
+    },
+    taken: function (held, frame) {
+      var manual = frame ? frame.manual : null;
+      return takenNote(held.said, Boolean(manual) && followsTarget(frame, manual));
+    },
+    lost: "cet ecran ne sait pas ce que la machine a fait de sa cible : sa liaison a ete coupee.",
+  },
+  reset: {
+    note: function () {
+      return el("fault-note");
+    },
+    sent: "demande envoyee : ",
+    shows: function (snapshot, held) {
+      return !(held.cleared && snapshot.fault);
+    },
+    taken: function (held, frame) {
+      if (frame && !frame.fault) {
+        held.cleared = true;
+        return "reset pris par la machine : le variateur ne signale plus de defaut";
+      }
+      return "reset pris par la machine" + (stillFaulted(held, frame) ? " : le variateur signale encore le defaut" : "");
+    },
+    alarm: function (held, frame) {
+      return stillFaulted(held, frame);
+    },
+    lost: "cet ecran ne sait pas ce que la machine a fait de sa demande de reset : sa liaison a ete coupee.",
+  },
+};
+
+/** A drive can take a moment to drop its fault after a reset: said still faulted past a second. */
+function stillFaulted(held, frame) {
+  return Boolean(frame) && Boolean(frame.fault) && frame.at - held.at > LOOP_ANSWER_S;
+}
+
+function refusalWords(answer) {
+  return "refus de la machine (" + new Date(answer.wall_clock).toLocaleTimeString() + ") : " + answer.detail;
+}
+
+function cancelledWords(answer) {
+  return "demande annulee (" + new Date(answer.wall_clock).toLocaleTimeString() + ") : " + answer.detail;
+}
+
+/** The socket delivering frames and events as a request leaves, or null when none is open. */
+function liveStream() {
+  return state.connected ? state.stream : null;
+}
+
+function askConsole() {
+  loadStatus().catch(function () {
+    /* the periodic refresh asks again */
+  });
+}
+
+/** What the taken note of `kind` reads now. A frame taken before the answer says nothing of it. */
+function writeHeld(kind, held) {
+  var ask = REQUESTS[kind];
+  var snapshot = state.snapshot;
+  var frame = snapshot && snapshot.at >= held.at ? snapshot : null;
+  var said = ask.taken(held, frame);
+  held.text = said;
+  if (ask.alarm && ask.alarm(held, frame)) {
+    problem(ask.note(), said);
+  } else {
+    ok(ask.note(), said);
+  }
+}
+
+/**
+ * A start was taken, and this screen cannot tell whether the session in progress is still the one
+ * it started: its socket changed since, or the answer came from the status and not from an event.
+ */
+function doubtHeld(kind, held) {
+  held.sure = false;
+  held.text =
+    "la machine a pris le demarrage demande par cet ecran (" + held.said + "), mais sa liaison a ete coupee depuis : " +
+    "cet ecran ne sait pas si la seance en cours est encore celle-la.";
+  problem(REQUESTS[kind].note(), held.text);
+}
+
+/** The 202 of a request: sent, not taken yet. `stream` is liveStream() at the click. */
+function requestSent(kind, command, stream, rpm) {
+  var ask = REQUESTS[kind];
+  var said = kind === "target" ? command.detail : (command.kind + " " + command.detail).trim();
+  var asked = { id: command.request_id, at: command.at, said: said, stream: stream, rpm: rpm, lost: false };
+  delete state.held[kind];
+  state.asked[kind] = asked;
+  var answer = answerFor(asked.id);
+  if (answer) {
+    // The console's answer reached the screen before this 202.
+    settleRequest(kind, asked, answer);
+  } else {
+    ok(ask.note(), ask.sent + said + " - pas encore prise par la machine");
+  }
+}
+
+function answerFor(id) {
+  for (var i = 0; i < state.fates.length; i += 1) {
+    if (state.fates[i].id === id) {
+      return state.fates[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * One answer of the console about one request, from an event (`stream` is the socket that carried
+ * it) or from the status (`stream` is null). Kept, then applied to the request of this page it
+ * answers, if any. The same answer told twice, by an event and by the status, is applied once.
+ */
+function noteFate(answer, stream) {
+  if (answerFor(answer.id)) {
+    return;
+  }
+  answer.stream = stream;
+  state.fates.push(answer);
+  state.fates = state.fates.slice(-FATES_KEPT);
+  Object.keys(state.asked).forEach(function (kind) {
+    if (state.asked[kind].id === answer.id) {
+      settleRequest(kind, state.asked[kind], answer);
+    }
+  });
+}
+
+/** This page's request `asked` has its answer: the note says it. */
+function settleRequest(kind, asked, answer) {
+  var ask = REQUESTS[kind];
+  delete state.asked[kind];
+  if (answer.fate === "refused") {
+    problem(ask.note(), refusalWords(answer));
+    return;
+  }
+  if (answer.fate === "cancelled") {
+    problem(ask.note(), cancelledWords(answer));
+    return;
+  }
+  if (ask.session && state.sessionsOver.indexOf(asked.id) !== -1) {
+    // Taken, and the console has since said that session over: there is nothing left to say of it.
+    ok(ask.note(), "");
+    return;
+  }
+  var held = { id: asked.id, said: asked.said, at: answer.at, stream: answer.stream, rpm: asked.rpm, sure: true, cleared: false, text: "" };
+  state.held[kind] = held;
+  if (ask.session && held.stream !== state.stream) {
+    // Learnt from the status, or over a socket that is no longer the one open.
+    doubtHeld(kind, held);
+  } else {
+    writeHeld(kind, held);
+  }
+}
+
+/** The session is over, the console says (`request` is the start it came from, when it knows). */
+function sessionOver(request) {
+  if (request) {
+    state.sessionsOver.push(request);
+    state.sessionsOver = state.sessionsOver.slice(-FATES_KEPT);
+  }
+  Object.keys(REQUESTS).forEach(function (kind) {
+    var ask = REQUESTS[kind];
+    if (!ask.session) {
+      return;
+    }
+    var held = state.held[kind];
+    if (held) {
+      delete state.held[kind];
+      if (ask.note().textContent === held.text) {
+        ok(ask.note(), "");
+      }
+    }
+    var asked = state.asked[kind];
+    if (asked && asked.id === request) {
+      // The session this request started is over before this screen heard that it was taken.
+      delete state.asked[kind];
+      ok(ask.note(), "");
+    }
+  });
+}
+
+/**
+ * The first message of a socket. What the console published while this screen had no socket is
+ * lost: a request still unanswered has lost its answer, and a session said taken may be over.
+ */
+function noteStream() {
+  var opened = state.streamOpened;
+  if (opened && opened.stream === state.stream) {
+    return;
+  }
+  state.streamOpened = { stream: state.stream, sent: state.statusSent };
+  var ask = false;
+  Object.keys(REQUESTS).forEach(function (kind) {
+    var asked = state.asked[kind];
+    if (asked && asked.stream !== state.stream) {
+      loseRequest(kind, asked);
+      ask = true;
+    }
+    var held = state.held[kind];
+    if (held && REQUESTS[kind].session && held.stream !== state.stream) {
+      if (REQUESTS[kind].note().textContent !== held.text) {
+        delete state.held[kind];
+      } else if (held.sure) {
+        doubtHeld(kind, held);
+      }
+      ask = true;
+    }
+  });
+  if (ask) {
+    askConsole();
+  }
+}
+
+/** The answer to `asked` did not reach this screen: the note says so until the console is heard. */
+function loseRequest(kind, asked) {
+  if (!asked.lost) {
+    asked.lost = true;
+    problem(REQUESTS[kind].note(), REQUESTS[kind].lost);
+  }
+}
+
+/** One event, for this page's requests and for the notes saying one was taken. */
+function followRequests(event) {
+  noteStream();
+  if (event.request_id && (event.kind === "taken" || event.kind === "refused" || event.kind === "cancelled")) {
+    noteFate(
+      { id: event.request_id, fate: event.kind, at: event.at, wall_clock: event.wall_clock, detail: event.detail },
+      state.stream
+    );
+  } else if (event.kind === "refused") {
+    // Nobody's request: the machine took back a target it held. It is about the session on screen.
+    if (manualOnScreen()) {
+      problem(el("manual-note"), refusalWords(event));
+    }
+  } else if (event.kind === "session_idle") {
+    sessionOver(event.request_id);
+  }
+}
+
+/**
+ * One /api/status answer, `sent` being its rank among the requests this page sent. It lists what
+ * became of the last requests, and names the start the session in progress came from.
+ */
+function settleFromStatus(status, sent) {
+  status.requests.forEach(function (row) {
+    noteFate({ id: row.request_id, fate: row.fate, at: row.at, wall_clock: row.wall_clock, detail: row.detail }, null);
+  });
+  var opened = state.streamOpened;
+  if (!state.connected || !opened || opened.stream !== state.stream || sent <= opened.sent) {
+    // Asked before this socket delivered anything: the session it names may have ended unseen since.
+    return;
+  }
+  Object.keys(REQUESTS).forEach(function (kind) {
+    var ask = REQUESTS[kind];
+    var held = state.held[kind];
+    if (!held || !ask.session || held.sure) {
+      return;
+    }
+    if (ask.note().textContent !== held.text) {
+      delete state.held[kind];
+    } else if (status.session_request === held.id) {
+      // The session in progress is the one this screen started, and this socket has delivered
+      // everything the console published since it was asked: its end will be heard.
+      held.sure = true;
+      held.stream = state.stream;
+      writeHeld(kind, held);
+    } else {
+      delete state.held[kind];
+      ok(ask.note(), "");
+    }
+  });
+}
+
+/** One frame, for the request of `kind` still unanswered and for the note saying one was taken. */
+function settleRequestFrame(kind, snapshot) {
+  var ask = REQUESTS[kind];
+  var note = ask.note();
+  var held = state.held[kind];
+  if (held && note.textContent !== held.text) {
+    // Something else has been written there since: the note is no longer this one's to keep.
+    delete state.held[kind];
+  } else if (held && snapshot.at >= held.at && !ask.shows(snapshot, held)) {
+    // No longer true: the session is over, the machine has dropped the target, a fault is back.
+    delete state.held[kind];
+    ok(note, "");
+  } else if (held && snapshot.at >= held.at && held.sure) {
+    // Still true. What the note adds from the frames is said for as long as they show it.
+    if (ask.taken(held, snapshot) !== held.text) {
+      writeHeld(kind, held);
+    }
+  }
+  var asked = state.asked[kind];
+  if (asked && snapshot.at - asked.at > LOOP_ANSWER_S && !asked.lost) {
+    // On one socket the answer comes before any frame taken after the request: it was lost.
+    loseRequest(kind, asked);
+    askConsole();
+  }
+}
+
+/** One frame, for the starts and resets. */
+function settleLoopAsks(snapshot) {
+  noteStream();
+  settleRequestFrame("manual", snapshot);
+  settleRequestFrame("programme", snapshot);
+  settleRequestFrame("reset", snapshot);
+}
+
 function doManualStart() {
   var note = el("manual-note");
   if (!el("manual-bench").checked) {
     problem(note, "cochez la declaration BANC (personne a bord : NON) avant de demarrer");
     return;
   }
+  var stream = liveStream();
   api("/api/manual/start", {
     method: "POST",
     body: { occupancy: "bench", operator: rememberOperator(el("manual-operator").value) },
   })
     .then(function (command) {
       state.manualDraft = null;
-      ok(note, "accepte : " + command.kind + " " + command.detail + " (cible 0)");
+      requestSent("manual", command, stream);
       loadStatus();
     })
     .catch(function (error) {
+      // A refusal of the console's own is a fixed sentence of its own: shown as it is written.
       problem(note, error);
     });
 }
 
 /*
-  What became of a manual target. "Appliquer" is answered 202 as soon as the
-  mailbox holds the target: the loop judges it on its next tick, and may
-  refuse it, or take it and put it back to 0 before the first step. A note
-  that said "the machine is going there" at the 202 said it of a target the
-  machine never took.
+  What became of a manual target follows the rule above, with what the frames
+  add to a target taken.
 
-  So the note is written from what the machine reports, three times:
-
-  - at the 202: sent, not taken yet;
-  - a `refused` event is the loop's answer, and the note becomes that refusal
-    word for word. An event reaches this screen before the frame of the same
-    tick, and now and then before the 202 itself: a refusal already shown for
-    this command is not overwritten by it;
-  - the first frame taken after the command whose applied target is the one
-    sent says the machine took it. When a second of the machine's own clock
-    has gone by with neither, the target was not taken and the reason did not
-    reach this screen (a socket that reconnects loses its events).
-
-  A target the machine takes back later, and a refusal answered to another
-  screen, are `refused` events too. With a manual session on screen they go to
-  this note as well: they are about the target this card shows.
-
-  And "taken" is true only for as long as the machine holds that target. Once
-  the applied target is another one (a STOP, a verdict, another screen), the
-  note is wiped rather than left to say that the machine follows a target it
-  has dropped.
+  Taken is true only for as long as the machine holds that target. Once the
+  applied target is another one (a STOP, a verdict, another screen), the note
+  is wiped rather than left to say that the machine follows a target it has
+  dropped. The machine can also take a target back by itself, before the
+  first step: that is a `refused` event with no identifier, written under the
+  card of every screen that shows the session.
 
   Taken is not followed. The note adds "(suivie aux limites de mouvement)"
   only while the machine is walking the setpoint to the target, and takes the
@@ -1199,22 +2118,6 @@ function holdsTarget(manual, rpm) {
   return Math.abs(manual.target.motor_rpm - (rpm * ceiling.motor_rpm) / ceiling.output_rpm) < 0.501;
 }
 
-function noteLoopRefusal(event) {
-  var sent = state.manualSent;
-  var answers = Boolean(sent && event.at >= sent.at);
-  if (!answers && !manualOnScreen()) {
-    return;
-  }
-  if (answers) {
-    state.manualSent = null;
-  }
-  state.manualRefusedAt = event.at;
-  problem(
-    el("manual-note"),
-    "refus de la machine (" + new Date(event.wall_clock).toLocaleTimeString() + ") : " + event.detail
-  );
-}
-
 /*
   Whether the machine is walking the setpoint to the target it holds, as of
   this frame. A target taken is not always a target followed:
@@ -1223,7 +2126,10 @@ function noteLoopRefusal(event) {
     it down whatever the target is. A freeze holds it away from every target
     but one: zero is a stop asked for, and a stop is followed under a freeze;
   - with no verdict, the heart rate of a person on board can hold a rise: the
-    box above the target says so, and a target above the setpoint waits.
+    box above the target says so, and a target above the setpoint waits. When
+    the console no longer says whether it does, the box says "unknown", and a
+    rise is not said to be followed either: the note may say less than is
+    true, never more.
 */
 function followsTarget(snapshot, manual) {
   var safety = snapshot.safety;
@@ -1237,73 +2143,44 @@ function takenNote(detail, followed) {
   return "cible prise par la machine : " + detail + (followed ? " (suivie aux limites de mouvement)" : "");
 }
 
+/** One frame, for the manual target. */
 function settleManualTarget(snapshot) {
-  var manual = snapshot.mode === "repos" ? null : snapshot.manual;
-  var note = el("manual-note");
-  var taken = state.manualTaken;
-  if (taken && note.textContent !== taken.text) {
-    // Something else has been written there since: the note is no longer this one's to keep.
-    state.manualTaken = taken = null;
-  }
-  if (taken && !(manual && holdsTarget(manual, taken.rpm))) {
-    // The machine no longer holds the target the note says it took (a STOP, a
-    // verdict, another screen): the note would go on saying "taken". Wiped.
-    state.manualTaken = null;
-    ok(note, "");
-  } else if (taken) {
-    // Still held. "Followed" is said for as long as it is true, frame after frame.
-    var current = takenNote(taken.detail, followsTarget(snapshot, manual));
-    if (current !== taken.text) {
-      ok(note, current);
-      taken.text = current;
-    }
-  }
-  var sent = state.manualSent;
-  if (!sent || snapshot.at <= sent.at) {
-    return;
-  }
-  if (manual && holdsTarget(manual, sent.rpm)) {
-    var said = takenNote(sent.detail, followsTarget(snapshot, manual));
-    ok(note, said);
-    state.manualTaken = { rpm: sent.rpm, detail: sent.detail, text: said };
-  } else if (snapshot.at - sent.at <= LOOP_ANSWER_S) {
-    return;
-  } else if (manual) {
-    problem(
-      el("manual-note"),
-      "cible NON prise par la machine : la cible appliquee est " + num(manual.target.output_rpm, 2) +
-        " tr/min de sortie. La raison n'est pas arrivee a cet ecran."
-    );
-  } else {
-    problem(el("manual-note"), "cible NON prise par la machine : la seance manuelle est terminee.");
-  }
-  state.manualSent = null;
+  noteStream();
+  settleRequestFrame("target", snapshot);
 }
 
 function doManualApply() {
   var note = el("manual-note");
   var rpm = state.manualDraft || 0;
+  var stream = liveStream();
   api("/api/manual/target", {
     method: "POST",
     body: { output_rpm: rpm, operator: operatorName() },
   })
     .then(function (command) {
-      if (state.manualRefusedAt !== null && state.manualRefusedAt >= command.at) {
-        return;
-      }
-      state.manualSent = { at: command.at, rpm: rpm, detail: command.detail };
-      ok(note, "cible envoyee : " + command.detail + " - pas encore prise par la machine");
+      requestSent("target", command, stream, rpm);
     })
     .catch(function (error) {
-      state.manualSent = null;
+      var first = state.asked.target;
+      if (error.code === "request_waiting" && first && error.waiting === first.id) {
+        // A second click before the loop took the first: the console names the request in the way
+        // by its identifier, and it is this screen's own. The note will say what becomes of it.
+        problem(
+          note,
+          "seconde demande refusee par la console : la cible " + first.said +
+            " attend encore la machine (une demande a la fois). Reessayer dans un instant."
+        );
+        return;
+      }
       problem(note, error);
     });
 }
 
 function doFaultReset() {
+  var stream = liveStream();
   api("/api/drive/fault-reset", { method: "POST", body: { operator: operatorName() } })
     .then(function (command) {
-      ok(el("fault-note"), "reset demande : " + command.kind + " (le variateur doit le confirmer)");
+      requestSent("reset", command, stream);
     })
     .catch(function (error) {
       problem(el("fault-note"), error);
@@ -1357,9 +2234,7 @@ function renderZoneBand(bpm) {
 }
 
 function addEvent(event) {
-  if (event.kind === "refused") {
-    noteLoopRefusal(event);
-  }
+  followRequests(event);
   state.events.unshift(event);
   state.events = state.events.slice(0, 40);
   var list = el("events");
@@ -1467,6 +2342,11 @@ function channelName(channel) {
   return "A" + (channel + 1);
 }
 
+/** The title of a sensor, on its page, on its card and in the tab: one wording for the three. */
+function sensorTitle(row) {
+  return row.kind + " · " + row.label;
+}
+
 function metricValue(metric) {
   if (metric.value === null || metric.value === undefined || !isFinite(metric.value)) {
     return "-";
@@ -1571,7 +2451,7 @@ function buildSensorCard(row) {
   var root = make("button", "card sensor-card");
   root.type = "button";
   var head = make("h2");
-  var title = make("span", "", row.kind + " · " + row.label);
+  var title = make("span", "", sensorTitle(row));
   var badge = make("span", "pill");
   head.appendChild(title);
   head.appendChild(badge);
@@ -1678,7 +2558,7 @@ function renderSensorPage() {
     return;
   }
   var row = entry.row;
-  text(el("sensor-title"), row.kind + " · " + row.label);
+  text(el("sensor-title"), sensorTitle(row));
   pill(el("sensor-channel"), "canal " + channelName(row.channel), "");
   text(el("sensor-detail"), row.detail ? "Qualite : " + qualityText(row.quality) + " - " + row.detail : "Qualite : " + qualityText(row.quality));
   renderSensorHeader(entry);
@@ -1985,22 +2865,130 @@ function estopLatched(status) {
     Boolean(standing && standing.latched && standing.rule === "operator_estop");
 }
 
+/*
+  The verdict in force and the most severe latched one, as the Securite and
+  Configuration pages list them. /api/status gives both, whoever latched
+  them: the supervisor, or the runtime itself (a drive found running at
+  start-up, an enable that was not confirmed, a link it gave up on). It used
+  to give the supervisor's alone, and these lines said "aucun" under a
+  verdict of the runtime's that stood, on a screen with no live frame.
+
+  The status is asked every five seconds and the frames arrive five a second,
+  so while frames are arriving, a verdict they carry that is at least as
+  severe as the status's is the one listed: the lines do not wait for the next
+  status to follow a verdict the frames already show. With no live frame the
+  status is all there is, and it now says what stands.
+
+  Under go_silent a third line says what it replaced, when the console names
+  one (`silenced`): that verdict is still latched, and neither of the two
+  lines above shows it any more.
+*/
+function worseVerdict(polled, carried) {
+  return carried && (!polled || carried.rank >= polled.rank) ? carried : polled;
+}
+
+function verdictWords(verdict) {
+  return verdict ? verdict.rule + " / " + verdict.action : "aucun";
+}
+
+/** Whether frames are arriving: the socket is open and its last message is recent. */
+function framesLive() {
+  return state.connected && performance.now() - state.lastFrameAt < STALE_FRAME_MS;
+}
+
+function liveVerdict() {
+  return framesLive() && state.snapshot ? state.snapshot.safety : null;
+}
+
+function renderStatusGrids(status) {
+  var estop = estopLatched(status);
+  var live = liveVerdict();
+  var standing = verdictWords(worseVerdict(status.standing, live));
+  var floor = verdictWords(worseVerdict(status.floor, live && live.latched ? live : null));
+  // Shown only when there is one: with nothing behind go_silent the two grids are what they were.
+  var behind = status.silenced ? [["verrouille derriere go_silent", verdictWords(status.silenced), "flag-bad"]] : [];
+  grid(el("verdicts-grid"), [
+    ["e-stop verrouille", estop ? "OUI" : "non", estop ? "flag-bad" : ""],
+    ["verdict retenu", standing],
+    ["plancher verrouille", floor],
+  ].concat(behind, [
+    ["regles actives", String(status.live.length)],
+    ["accompagnant vu", attendantSeen(status)],
+  ]));
+  grid(el("system-grid"), [
+    ["etat", status.run_state],
+    ["e-stop verrouille", estop ? "OUI" : "non"],
+    ["verdict retenu", standing],
+    ["plancher verrouille", floor],
+  ].concat(behind, [
+    ["regles actives", String(status.live.length)],
+    ["echantillons FC retenus", String(status.retained_hr_samples)],
+    ["accompagnant vu", attendantSeen(status)],
+    ["clients telemetrie", String(status.clients)],
+    ["clients evinces", String(status.evictions)],
+    ["ecg", status.ecg_fs_hz + " Hz, seq " + status.ecg_seq],
+    ["profils", status.profile_ids.join(", ") || "aucun"],
+    ["revision", String(status.profile_rev)],
+    ["commandes acc/ref", status.counters[0] + " / " + status.counters[1]],
+    ["snapshots", String(status.counters[2])],
+  ]));
+}
+
+/*
+  One /api/status answer, applied unless the one on screen is newer.
+
+  Newer means written later by the machine, and the machine says when it
+  wrote each answer (`at`, its own clock). Two requests in flight together can
+  be answered in either order and arrive in either order: neither the order
+  they were sent in nor the order they come back in says which is the present.
+
+  One case the clock cannot settle alone. A request sent after the answer on
+  screen had arrived was answered after it, whatever the clock reads: if its
+  `at` is earlier, the machine's clock restarted (the Pi rebooted), and the
+  answer is the newer one. Without that, every answer after a reboot would be
+  dropped until the new clock caught up with the old one.
+*/
 function loadStatus() {
   var sent = (state.statusSent += 1);
   return api("/api/status").then(function (status) {
-    if (sent < state.statusShown) {
-      // Asked before the answer already on screen: it can only say something older.
-      return status;
+    if (state.status && status.at < state.status.at) {
+      if (sent <= state.statusShownSent) {
+        // In flight when the answer on screen arrived, and written before it: it can only say something older.
+        return status;
+      }
+      if (state.statusBoot === state.machineBoot) {
+        state.machineBoot += 1;
+      }
     }
-    state.statusShown = sent;
+    state.statusShownSent = state.statusSent;
+    state.statusBoot = state.machineBoot;
     state.status = status;
     state.statusAt = performance.now();
     if (state.estopReceipt && sent > state.estopReceiptSent) {
       // Asked after the E-STOP was latched: this answer carries it from here on.
       state.estopReceipt = null;
     }
-    estopSeenLatched(estopOpinion(status.standing, estopLatched(status)));
+    // An answer asked before a click says nothing about that click, even when it arrives after it.
+    if (state.estopAsked && sent > state.estopAsked.sent) {
+      estopSeenLatched(statusOpinion(status));
+    }
+    // "idle" with a request still in the mailbox is not a machine at rest: a start accepted during
+    // a tick waits there for the next one, and the session it starts is the one a STOP was meant for.
+    var atRest = status.run_state === "idle" && !status.pending;
+    if (state.stopAsked && sent > state.stopAsked.sent && (status.run_state === "stopping" || atRest)) {
+      stopSettled();
+    }
+    settleFromStatus(status, sent);
+    noteConsoleRun(status, sent);
+    noteStatusLatch(status, sent);
+    // With no live frame the status is all that says whether an acknowledgement held.
+    if (statusLeads()) {
+      settleAcknowledgement(statusReport(status));
+    }
+    noteLatch("floor", status.floor ? status.floor.rule : null);
+    noteLatch("estop", estopLatched(status) ? "operator_estop" : null);
     renderEstopBanner();
+    renderDriveFault();
     // Red for a latched emergency stop whoever latched it: after the camera's, the state reads "idle".
     pill(
       el("run-state"),
@@ -2029,14 +3017,7 @@ function loadStatus() {
     }
     el("start").disabled =
       !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
-    var estop = estopLatched(status);
-    grid(el("verdicts-grid"), [
-      ["e-stop verrouille", estop ? "OUI" : "non", estop ? "flag-bad" : ""],
-      ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
-      ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
-      ["regles actives", String(status.live.length)],
-      ["accompagnant vu", attendantSeen(status)],
-    ]);
+    renderStatusGrids(status);
     var live = el("verdicts-live");
     live.textContent = "";
     status.live.forEach(function (verdict) {
@@ -2045,22 +3026,6 @@ function loadStatus() {
         (verdict.latched ? "  [verrouille]" : "");
       live.appendChild(li);
     });
-    grid(el("system-grid"), [
-      ["etat", status.run_state],
-      ["e-stop verrouille", estop ? "OUI" : "non"],
-      ["verdict retenu", status.standing ? status.standing.rule + " / " + status.standing.action : "aucun"],
-      ["plancher verrouille", status.floor ? status.floor.rule + " / " + status.floor.action : "aucun"],
-      ["regles actives", String(status.live.length)],
-      ["echantillons FC retenus", String(status.retained_hr_samples)],
-      ["accompagnant vu", attendantSeen(status)],
-      ["clients telemetrie", String(status.clients)],
-      ["clients evinces", String(status.evictions)],
-      ["ecg", status.ecg_fs_hz + " Hz, seq " + status.ecg_seq],
-      ["profils", status.profile_ids.join(", ") || "aucun"],
-      ["revision", String(status.profile_rev)],
-      ["commandes acc/ref", status.counters[0] + " / " + status.counters[1]],
-      ["snapshots", String(status.counters[2])],
-    ]);
     var ports = el("ports");
     ports.textContent = "";
     if (!status.ports.length) {
@@ -2206,6 +3171,7 @@ function doStart() {
   if (!profile) {
     return;
   }
+  var stream = liveStream();
   api("/api/session/start", {
     method: "POST",
     body: {
@@ -2216,7 +3182,7 @@ function doStart() {
     },
   })
     .then(function (command) {
-      ok(el("start-note"), "accepte : " + command.kind + " " + command.detail);
+      requestSent("programme", command, stream);
       showView("run");
       loadStatus();
     })
@@ -2225,18 +3191,51 @@ function doStart() {
     });
 }
 
+/*
+  STOP. Like the emergency stop, it does not wait in silence for its answer:
+  see renderStopUnanswered().
+
+  The console can refuse a STOP (nothing to end, a stop already under way, no
+  operator name): that is an answer, said in an alert as it always was. A
+  request that got no answer, or an error of the console's own, is something
+  else: nothing says the session is ending, and the page says exactly that.
+*/
 function doStop() {
   state.manualDraft = null;
+  var clicked = performance.now();
+  var asked = (state.stopAsked = openDoubt(state.stopAsked, clicked));
+  renderStopUnanswered();
+  window.setTimeout(renderStopUnanswered, STOP_ANSWER_MS);
   api("/api/session/stop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed STOP" },
-  })
-    .then(function () {
-      loadStatus();
-    })
-    .catch(function (error) {
-      window.alert("STOP refuse : " + error.message);
-    });
+  }).then(
+    function () {
+      // Accepted. A doubt that proof has ended since, and a later one, are left alone.
+      if (state.stopAsked === asked) {
+        stopSettled();
+      }
+      loadStatus().catch(function () {
+        /* the frames show the session ending; the periodic refresh asks again */
+      });
+    },
+    function (error) {
+      var refused = error.status >= 400 && error.status < 500;
+      if (state.stopAsked === asked) {
+        if (refused) {
+          stopSettled();
+        } else {
+          failDoubt(asked, clicked, error.message);
+          renderStopUnanswered();
+        }
+      }
+      window.alert(
+        refused
+          ? "STOP refuse : " + error.message
+          : "la demande d'arret (STOP) a echoue : " + error.message + " - " + STOP_DOUBT_USE
+      );
+    }
+  );
 }
 
 /*
@@ -2254,31 +3253,37 @@ function doStop() {
 */
 function doEstop() {
   state.manualDraft = null;
-  if (!state.estopAsked) {
-    state.estopAsked = { at: performance.now(), failed: null };
-  }
+  var clicked = performance.now();
+  var asked = (state.estopAsked = openDoubt(state.estopAsked, clicked));
+  // At once: a notice already up for a request that failed must not go on saying nothing is pending.
+  renderEstopUnanswered();
   window.setTimeout(renderEstopUnanswered, ESTOP_ANSWER_MS);
+  // The two outcomes are two handlers of the same `then`, not a `then` and a `catch` after it:
+  // a fault of this page while it draws a receipt must not be reported as a request that failed.
   api("/api/session/estop", {
     method: "POST",
     body: { operator: operatorName(), reason: "operator pressed E-STOP" },
-  })
-    .then(function (receipt) {
+  }).then(
+    function (receipt) {
+      // What the receipt proves is recorded before anything is drawn.
       state.estopAsked = null;
-      renderEstopUnanswered();
       state.estopReceipt = receipt;
       state.estopReceiptSent = state.statusSent;
+      renderEstopUnanswered();
       renderEstopBanner();
       loadStatus().catch(function () {
         /* the receipt keeps the banner up; the periodic refresh asks again */
       });
-    })
-    .catch(function (error) {
-      if (state.estopAsked) {
-        state.estopAsked.failed = error.message;
+    },
+    function (error) {
+      // A doubt that proof has ended since is not reopened by an old request failing.
+      if (state.estopAsked === asked) {
+        failDoubt(asked, clicked, error.message);
       }
       renderEstopUnanswered();
       window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
-    });
+    }
+  );
 }
 
 function doAcknowledge() {
@@ -2287,13 +3292,180 @@ function doAcknowledge() {
     body: { operator: el("ack-operator").value, estop_released: el("ack-released").checked },
   })
     .then(function (record) {
-      ok(el("ack-note"), "acquitte par " + record.operator + (record.cleared.length ? " : " + record.cleared.join(", ") : ""));
+      var said = "acquitte par " + record.operator + (record.cleared.length ? " : " + record.cleared.join(", ") : "");
+      ok(el("ack-note"), said);
+      // The 200 says the latches were cleared, not that they stay so: the next frames do.
+      state.ackGiven = { at: record.at, cleared: record.cleared, text: said };
       loadStatus();
     })
     .catch(function (error) {
+      state.ackGiven = null;
       problem(el("ack-note"), error);
       window.alert("acquittement refuse : " + error.message);
     });
+}
+
+/*
+  The note under Acquitter speaks of the moment it was written. Two things
+  make it false afterwards, and the page sees both in what it receives.
+
+  A new latch. "nothing is latched to acknowledge", or "acquitte par ...",
+  left under the button while a verdict has latched since, reads as the state
+  of the machine. Each source says which rule it shows latched (the frames:
+  the verdict in force; the status: the latched floor, whoever holds it, and
+  the emergency stop). A rule that none of them showed is a new latch, and
+  wipes the note.
+
+  An acknowledgement that does not hold. The console answers 200 as soon as
+  the latches are cleared, and a rule whose cause is still there latches again
+  on the next tick: the frames may never show the verdict gone, so nothing
+  above sees a new latch. So after a 200 the reports written after it are
+  read: when one shows a rule the acknowledgement cleared latched again, the
+  note says so. For the two rules that end a session (session_standstill,
+  session_overrun) it also says when the acknowledgement will hold: once the
+  session is over, which the page shows as Mode back to REPOS.
+
+  The reports are the frames, five a second. With no live frame they are the
+  status answers, one every five seconds (statusLeads): the note used to stay
+  as it was written, "acquitte par ...", under a verdict the status showed
+  latched again. A status answer names the latches the console holds and no
+  mode, so the sentence about REPOS is neither added nor taken off on its
+  word: the note may say less than is true there, never more.
+
+  The two meet. A frame or a status may show the verdict gone between the
+  acknowledgement and the tick that takes it back: that latch is the one the
+  note then speaks of, not a new one that wipes it. And once a report written
+  more than a second after the acknowledgement shows the verdict gone, what a
+  source showed latched before the acknowledgement no longer stands: the same
+  rule, later, is a new latch, also for a source that has not answered since.
+*/
+var SESSION_END_RULES = { session_standstill: true, session_overrun: true };
+
+/*
+  What one report says for that note: when the machine wrote it (its own
+  clock), the rules it shows latched, the mode when it gives one, and under
+  which source noteLatch is told of a rule it shows (a status answer feeds
+  two: the emergency stop apart from the floor).
+*/
+function frameReport(snapshot) {
+  var safety = snapshot.safety;
+  return {
+    at: snapshot.at,
+    latched: safety && safety.latched ? [safety.rule] : [],
+    mode: snapshot.mode,
+    source: function () {
+      return "frame";
+    },
+  };
+}
+
+function statusReport(status) {
+  // The two places a console holds a latch: the emergency stop, and the latched floor. Not the
+  // verdict in force: a latched one is one of those two, and a more severe warning that is not
+  // latched can stand over the floor.
+  var latched = estopLatched(status) ? ["operator_estop"] : [];
+  if (status.floor) {
+    latched.push(status.floor.rule);
+  }
+  return {
+    at: status.at,
+    latched: latched,
+    mode: null,
+    source: function (rule) {
+      return rule === "operator_estop" ? "estop" : "floor";
+    },
+  };
+}
+
+/*
+  Whether the status on screen is the newest word this page has of the
+  machine: no frame is arriving, and the machine wrote that answer at or after
+  the last frame it sent here, on its own clock. An answer written before that
+  frame, however late it arrives, does not speak over it.
+*/
+function statusLeads() {
+  var frame = state.estopFrame;
+  return Boolean(state.status) && !framesLive() && !(frame && frameOutdatesStatus(frame));
+}
+
+function noteLatch(source, rule) {
+  var seen = state.latchSeen;
+  var known = Object.keys(seen).some(function (other) {
+    return seen[other] === rule;
+  });
+  seen[source] = rule;
+  if (rule && !known) {
+    state.ackGiven = null;
+    ok(el("ack-note"), "");
+  }
+}
+
+var ACK_HOLDS_AT_REST = " La seance n'est pas terminee : l'acquittement tiendra une fois Mode revenu a REPOS.";
+
+function takenBackNote(taken) {
+  return "acquittement repris par la machine : " + taken.rule +
+    " est de nouveau verrouille, sa regle s'est declenchee de nouveau." + (taken.waits ? ACK_HOLDS_AT_REST : "");
+}
+
+/*
+  The note saying an acknowledgement was taken back speaks in the present: it
+  is kept for as long as the reports show that rule latched, and wiped when
+  they no longer do (acknowledged again, from this screen or another). The
+  sentence about the session goes as soon as a frame shows Mode back to REPOS:
+  left there, it would go on saying that the session is not over.
+*/
+function followTakenBack(report) {
+  var taken = state.ackTaken;
+  if (!taken) {
+    return;
+  }
+  var note = el("ack-note");
+  if (note.textContent !== takenBackNote(taken)) {
+    // Something else has been written there since.
+    state.ackTaken = null;
+  } else if (report.latched.indexOf(taken.rule) === -1) {
+    state.ackTaken = null;
+    ok(note, "");
+  } else if (taken.waits && report.mode === "repos") {
+    taken.waits = false;
+    problem(note, takenBackNote(taken));
+  }
+}
+
+/** One report, a frame's or a status answer's (frameReport, statusReport), for the note under Acquitter. */
+function settleAcknowledgement(report) {
+  followTakenBack(report);
+  var given = state.ackGiven;
+  if (!given || report.at <= given.at) {
+    return;
+  }
+  var note = el("ack-note");
+  var again = report.latched.filter(function (rule) {
+    return given.cleared.indexOf(rule) !== -1;
+  })[0];
+  if (note.textContent !== given.text) {
+    // Something else has been written there since.
+    state.ackGiven = null;
+  } else if (again !== undefined) {
+    state.ackGiven = null;
+    // Known from here on: the noteLatch that follows this report must not read it as a new latch.
+    state.latchSeen[report.source(again)] = again;
+    state.ackTaken = {
+      rule: again,
+      // Only a frame says the mode: a status answer neither adds the sentence nor takes it off.
+      waits: Boolean(SESSION_END_RULES[again]) && report.mode !== null && report.mode !== "repos",
+    };
+    problem(note, takenBackNote(state.ackTaken));
+  } else if (report.at - given.at > LOOP_ANSWER_S) {
+    // A second of the machine's clock with the verdict gone: it held.
+    var seen = state.latchSeen;
+    Object.keys(seen).forEach(function (source) {
+      if (given.cleared.indexOf(seen[source]) !== -1) {
+        seen[source] = null;
+      }
+    });
+    state.ackGiven = null;
+  }
 }
 
 function doAttest() {
@@ -2383,6 +3555,7 @@ function start() {
   el("stop").onclick = doStop;
   el("estop").onclick = doEstop;
   el("ack").onclick = doAcknowledge;
+  el("service-restore-button").onclick = doRestoreService;
   el("attest").onclick = doAttest;
   el("manual-start").onclick = doManualStart;
   el("manual-apply").onclick = doManualApply;
@@ -2404,10 +3577,14 @@ function start() {
   if (window.ResizeObserver) {
     // Fires when a banner is shown, hidden or re-wrapped, and only then.
     new window.ResizeObserver(fitBanners).observe(el("banners"));
+    // And when the footer changes height: its status line goes on a narrow screen.
+    new window.ResizeObserver(fitFooter).observe(el("footer"));
   } else {
     // showBanner() already measures on show and hide; a resize can re-wrap the text.
     window.addEventListener("resize", fitBanners);
+    window.addEventListener("resize", fitFooter);
   }
+  fitFooter();
 
   showView("console");
   boot();

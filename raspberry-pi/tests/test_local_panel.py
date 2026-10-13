@@ -39,6 +39,7 @@ from src.local_panel import (
     DriveSide,
     EcgLink,
     LocalPanel,
+    ServiceDesk,
     UvicornRunner,
     bound_exit,
     build_drive,
@@ -86,6 +87,7 @@ from src.training.runtime import (
 )
 from src.training.types import Occupancy, Phase, SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Hertz, Monotonic, MotorRpm, OutputRpm, RawRegister, Seconds
+from src.wall_clock import WallClockProbe
 from src.web.deps import Services
 from tests.test_ecg_pipeline import FakeTreatment
 from tests.test_runtime import FakeDrive
@@ -506,8 +508,24 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
     built: list[LocalPanel] = []
     real = build_panel
 
-    def remembered(config: LocalConfig, *, clock: Clock, journal: Journal) -> LocalPanel:
-        panel = real(config, clock=clock, journal=journal, profiles_path=tmp_path / "p.json")
+    def remembered(
+        config: LocalConfig,
+        *,
+        clock: Clock,
+        journal: Journal,
+        wall_clock: WallClockProbe | None,
+        notify_socket: str | None,
+        service: ServiceDesk,
+    ) -> LocalPanel:
+        panel = real(
+            config,
+            clock=clock,
+            journal=journal,
+            wall_clock=wall_clock,
+            profiles_path=tmp_path / "p.json",
+            notify_socket=notify_socket,
+            service=service,
+        )
         built.append(panel)
         return panel
 
@@ -521,6 +539,8 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
     assert recorder.journal.root == tmp_path / "records"
     assert stat.S_IMODE(recorder.journal.root.stat().st_mode) == 0o700
     assert [t.name for t in threading.enumerate() if t.name == "record-journal"] == []
+    # ANH-163: and it judges its wall clock where the system can be asked (Linux, so the Pi).
+    assert (built[0].wall_clock is not None) == (sys.platform == "linux")
 
 
 async def test_the_stop_signals_are_routed_to_the_event_and_removed() -> None:
@@ -573,16 +593,23 @@ def test_main_refuses_a_bad_configuration_with_every_problem(
 def test_main_runs_the_console_on_a_good_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[LocalConfig] = []
     handed: list[Callable[[int], object]] = []
+    told: list[str | None] = []
 
-    async def fake(config: LocalConfig, *, stopped: Callable[[int], object]) -> int:
+    async def fake(
+        config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+    ) -> int:
         seen.append(config)
         handed.append(stopped)  # kept, never called: it would end this very process
+        told.append(notify_socket)
         return EXIT_OK
 
     monkeypatch.setattr(local_panel, "run_console", fake)
     assert main(BASE_ENV) == EXIT_OK
     assert seen[0].motor_backend is MotorBackend.SIM
     assert handed == [bound_exit], "ANH-191 EX-7: the entry point bounds its own exit"
+    # ANH-162: the service manager's socket is the one of the environment, or none.
+    assert main({**BASE_ENV, "NOTIFY_SOCKET": "/run/anheart/notify"}) == EXIT_OK
+    assert told == [None, "/run/anheart/notify"]
 
 
 # =========================================================================

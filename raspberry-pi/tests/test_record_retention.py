@@ -1,8 +1,7 @@
 """ANH-128 EX-6: a record is purged locally only once deposited, confirmed, and kept long enough.
 
-Nothing in the repository writes the confirmation marker yet (the deposit is
-another ticket), so in production :func:`purge` removes nothing. These tests
-write it through :func:`confirm_deposit`, the function the deposit will call.
+RecordDeposit writes the confirmation marker after verifying the remote inventory.
+These tests exercise the retention policy and removal of per-record metadata.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ import pytest
 from src.clock import ManualClock
 from src.local_panel import open_journal
 from src.record.codec import Privacy
+from src.record.cursor import cursor_of
 from src.record.journal import PURGE_PERIOD, Journal
 from src.record.reader import read
 from src.record.retention import (
@@ -95,6 +95,8 @@ def test_ex6_a_confirmed_record_is_purged_after_the_retention_and_not_a_day_befo
 ) -> None:
     record = closed_record(tmp_path, 1)
     other = closed_record(tmp_path, 2)
+    cursor_of(record).write_text("confirmed cursor")
+    cursor_of(other).write_text("pending cursor")
     assert isinstance(confirm_deposit(record, "kg2storage_7", CONFIRMED), Ok)
     deposit = confirmed_deposit(record)
     assert deposit is not None
@@ -103,12 +105,40 @@ def test_ex6_a_confirmed_record_is_purged_after_the_retention_and_not_a_day_befo
     just_before = UnixMillis(THIRTY_DAYS_LATER - 1)
     assert purge(tmp_path, just_before, 30) == PurgeReport(removed=(), kept=2, failed=())
     assert record.is_dir()
+    assert cursor_of(record).exists()
 
     report = purge(tmp_path, THIRTY_DAYS_LATER, 30)
     assert report == PurgeReport(removed=(record.name,), kept=1, failed=())
     assert not record.exists()
     assert not marker_of(record).exists(), "the marker goes with its record"
+    assert not cursor_of(record).exists(), "the cursor goes with its record"
     assert other.is_dir(), "the record that was never deposited is still there"
+    assert cursor_of(other).exists()
+
+
+def test_orphan_cursors_are_retried_without_touching_live_writes_or_unrelated_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = closed_record(tmp_path)
+    cursor_of(record).write_text("orphan cursor")
+    shutil.rmtree(record)
+    unrelated = tmp_path / "notes.sync.json"
+    temporary = tmp_path / ".sync-active.tmp"
+    baseline = tmp_path / ".sync-baseline.json"
+    for path in (unrelated, temporary, baseline):
+        path.write_text("keep")
+    real = Path.unlink
+
+    def refused(self: Path, missing_ok: bool = False) -> None:
+        raise OSError(errno.EACCES, f"not allowed (missing_ok={missing_ok}) on {self.name}")
+
+    monkeypatch.setattr(Path, "unlink", refused)
+    purge(tmp_path, TEN_YEARS_LATER, 0)
+    assert cursor_of(record).exists()
+    monkeypatch.setattr(Path, "unlink", real)
+    purge(tmp_path, TEN_YEARS_LATER, 0)
+    assert not cursor_of(record).exists()
+    assert all(path.read_text() == "keep" for path in (unrelated, temporary, baseline))
 
 
 def test_ex6_the_marker_sits_next_to_the_record_and_leaves_it_as_the_format_says(
@@ -299,6 +329,7 @@ def test_ex6_a_record_that_cannot_be_removed_stays_and_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = closed_record(tmp_path)
+    cursor_of(record).write_text("confirmed cursor")
     assert isinstance(confirm_deposit(record, "kg2storage", CONFIRMED), Ok)
 
     def refused(_path: Path) -> None:
@@ -309,6 +340,7 @@ def test_ex6_a_record_that_cannot_be_removed_stays_and_is_reported(
         removed=(), kept=0, failed=(record.name,)
     )
     assert record.is_dir()
+    assert cursor_of(record).exists()
 
 
 def test_ex6_a_missing_records_directory_purges_nothing_and_does_not_raise(

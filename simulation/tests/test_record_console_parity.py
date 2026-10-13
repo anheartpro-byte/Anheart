@@ -279,6 +279,40 @@ def test_anh210_a_scenario_record_is_stamped_with_the_version_of_the_build(
     assert _manifest(simulation)["software_version"] == built
 
 
+def test_anh163_a_scenario_record_does_not_judge_a_wall_clock_and_older_records_still_read(
+    tmp_path: Path,
+) -> None:
+    """``clocks.wall_trusted`` follows the rule of the fields added to schema 2.
+
+    The writer always emits it; the simulation, whose clock is deterministic,
+    writes ``null`` (it judges no wall clock). A record written before the
+    field existed has no such key: it is read as before, and says ``None``.
+    (What the console writes there is ``raspberry-pi/tests/test_wall_clock_console.py``.)
+    """
+    simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 5.0)
+    clocks = obj(_manifest(simulation)["clocks"])
+    assert "wall_trusted" in clocks
+    assert clocks["wall_trusted"] is None
+    assert clocks["ntp_offset_s"] is None
+    written = read(simulation)
+    assert isinstance(written, Ok)
+    assert written.value.manifest.clocks.wall_trusted is None
+    assert written.value.warnings == ()
+
+    # The same record as a writer of before this field left it.
+    manifest = simulation / "manifest.json"
+    today = manifest.read_text(encoding="utf-8")
+    before = today.replace(',"wall_trusted":null', "")
+    assert before != today
+    assert "wall_trusted" not in before
+    manifest.write_text(before, encoding="utf-8")
+    older = read(simulation)
+    assert isinstance(older, Ok), older
+    assert older.value.manifest.clocks.wall_trusted is None
+    assert older.value.manifest.clocks.utc_start == written.value.manifest.clocks.utc_start
+    assert len(older.value.rows) == len(written.value.rows)
+
+
 def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_path: Path) -> None:
     console = asyncio.run(_console_record(tmp_path, programme=True))
     simulation = _simulation_record(tmp_path, "auto_jog_150_dsp.json", 12.0)

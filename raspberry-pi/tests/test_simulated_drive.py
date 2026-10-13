@@ -978,7 +978,7 @@ async def test_a_reference_may_be_written_to_a_faulted_drive() -> None:
     """Harmless, and it is what the register does. It just is not followed."""
     clock = ManualClock()
     sim = await _started(clock)
-    sim.inject_fault(DriveFault.INTERNAL)
+    sim.inject_fault(DriveFault.INTERNAL_CPU)
     _ok(await sim.write_speed(MotorRpm(600)))
 
     # Silent, not fed: a latched fault makes the ttO watchdog irrelevant, and
@@ -1298,7 +1298,7 @@ async def test_emergency_disable_on_a_faulted_drive_still_zeroes_the_reference()
     clock = ManualClock()
     sim = await _started(clock)
     _ok(await sim.write_speed(MotorRpm(600)))
-    sim.inject_fault(DriveFault.INTERNAL)
+    sim.inject_fault(DriveFault.INTERNAL_CPU)
 
     assert sim.emergency_disable_blocking(Seconds(1.0)) is EmergencyStopOutcome.ACKNOWLEDGED
     assert _sim_state(sim) is SimState.FAULT

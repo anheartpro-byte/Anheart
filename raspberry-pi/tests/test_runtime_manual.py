@@ -22,12 +22,16 @@ What is pinned here, in the plan's words:
 from __future__ import annotations
 
 import math
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise
+from pathlib import Path
 from typing import Final, cast
 
 import pytest
 
+from src.geometry import MachineGeometry
 from src.local_panel import describe_reset_refusal
 from src.motor.drive import (
     CommTimeout,
@@ -37,8 +41,9 @@ from src.motor.drive import (
     DriveStatus,
 )
 from src.result import Err, Ok, is_ok
+from src.training import motion as motion_module
 from src.training import runtime as runtime_module
-from src.training.motion import DEFAULT_MOTION_LIMITS, motor_rate_limit
+from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, Ramp, motor_rate_limit
 from src.training.runtime import (
     RULE_DRIVE_PRECOMMANDED,
     AlreadyStarted,
@@ -72,6 +77,9 @@ from src.units import (
     StatusWord,
     motor_to_output_rpm,
 )
+from src.web.schemas import ManualRow, SnapshotRow
+from tests.test_failure_rig import OPERATOR as CONSOLE_OPERATOR
+from tests.test_record_endurance import Console
 from tests.test_runtime import (
     GEOMETRY,
     LIMITS,
@@ -325,6 +333,184 @@ async def test_the_programme_path_is_untouched_and_reads_as_a_session() -> None:
     assert refused == Err(NoManualSession(RuntimeState.RUNNING))
     snapshot = await rig.step()
     assert snapshot.manual is None
+
+
+# =========================================================================
+# The arrival time: the screen's work, not the tick's (ANH-218)
+# =========================================================================
+#
+# The banner "ramp in progress, arrival in 1:25" needs a walk of the motion
+# profile from the setpoint in force to the target. The tick used to make
+# that walk for every snapshot of a ramp: measured on the simulated console
+# during a climb from standstill to the nameplate speed, 1.2 ms a tick at the
+# median and 2.5 ms at the longest, where everything else the tick does took
+# 0.04 ms. The snapshot now names the ramp and whoever shows the arrival time
+# walks it. What the operator reads is the same number.
+
+
+@contextmanager
+def _walks() -> Generator[list[tuple[int, int]]]:
+    """Every walk of the motion profile made while this is open: ``(from, to)``, in order.
+
+    Whoever asks for it: the runtime and the snapshot both reach
+    :func:`~src.training.motion.ramp_duration` by this name. The answers a
+    ramp remembers are forgotten first, so that a walk made by an earlier test
+    cannot stand in for one this test would have made.
+    """
+    made: list[tuple[int, int]] = []
+    real = motion_module.ramp_duration
+
+    def counting(
+        start: MotorRpm, target: MotorRpm, limits: MotionLimits, geometry: MachineGeometry
+    ) -> Seconds | None:
+        made.append((int(start), int(target)))
+        return real(start, target, limits, geometry)
+
+    motion_module._walked.cache_clear()  # pyright: ignore[reportPrivateUsage]  # see above
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(motion_module, "ramp_duration", counting)
+        patch.setattr(runtime_module, "ramp_duration", counting)
+        yield made
+
+
+async def test_no_tick_of_a_manual_ramp_walks_the_motion_profile() -> None:
+    """A climb to the nameplate speed, a new target on the way down, then a stop.
+
+    Not one walk in any tick of the two ramps. The one walk a tick does make
+    is not for the screen: the first tick of an ending works out, once, the
+    descent ``session_overrun`` will give it.
+    """
+    rig = await _manual(ceiling=MotorRpm(1380))
+    with _walks() as made:
+        _target(rig, 1380)
+        climb = await rig.run(115.0)
+        _target(rig, 600)
+        down = await rig.run(20.0)
+        during_the_ramps = list(made)
+
+        speed = int(rig.runtime.applied_rpm)
+        rig.runtime.request_stop("operator: stop button")
+        stop = await rig.run(120.0)
+        in_all = list(made)
+
+    assert _setpoints(climb)[-1] == 1380
+    assert sum(1 for snapshot in climb if snapshot.manual and snapshot.manual.ramping) > 500
+    assert 600 < _setpoints(down)[-1] < 1380, "the second ramp was over: not this case"
+    assert during_the_ramps == [], "a tick walked the motion profile for the screen"
+    assert _setpoints(stop)[-1] == 0
+    assert in_all == [(speed, 0)], "the ending's own descent is the one walk a tick makes"
+
+
+async def test_the_arrival_time_of_a_snapshot_is_the_walk_from_what_that_snapshot_holds() -> None:
+    """What the operator reads has not changed, and it belongs to its snapshot.
+
+    Every snapshot of a climb and of a descent is kept, and read only once
+    the session has moved on and stopped: each gives the walk from ITS
+    setpoint to ITS target at the motion limits, the number the tick used to
+    put in it, and not anything about where the runtime is now.
+    """
+    rig = await _manual()
+    _target(rig, 300)
+    climb = await rig.run(25.0)
+    _target(rig, 150)
+    down = await rig.run(6.0)
+    rig.runtime.request_stop("operator: stop button")
+    await rig.run(40.0)
+    assert rig.runtime.applied_rpm == 0
+
+    read: list[float] = []
+    for snapshot in (*climb, *down):
+        view = snapshot.manual
+        assert view is not None
+        expected = motion_module.ramp_duration(
+            snapshot.setpoint.motor_rpm, view.target.motor_rpm, DEFAULT_MOTION_LIMITS, GEOMETRY
+        )
+        announced = view.ramp_eta
+        assert announced == expected, (snapshot.setpoint.motor_rpm, view.target.motor_rpm)
+        assert view.ramping == (snapshot.setpoint.motor_rpm != view.target.motor_rpm)
+        assert announced is not None
+        read.append(float(announced))
+
+    rising = read[: len(climb)]
+    assert rising[0] > 15.0
+    assert rising[-1] == 0.0
+    assert all(later <= earlier for earlier, later in pairwise(rising))
+    assert read[len(climb)] > 5.0, "the new target announced no ramp"
+
+
+async def test_every_reader_of_one_snapshot_shares_one_walk() -> None:
+    """Three pages open on the console render the same snapshot: the ramp is walked once."""
+    rig = await _manual()
+    _target(rig, 300)
+    snapshot = (await rig.run(2.0))[-1]
+    view = snapshot.manual
+    assert view is not None
+    with _walks() as made:
+        first = view.ramp_eta
+        again = view.ramp_eta
+        rendered = [ManualRow.of(view) for _ in range(3)]
+
+    start = int(snapshot.setpoint.motor_rpm)
+    assert 0 < start < 300
+    assert made == [(start, 300)]
+    assert first is not None
+    assert first > 0.0
+    assert again == first
+    assert [row.ramp_eta_s for row in rendered if row is not None] == [float(first)] * 3
+
+
+async def test_two_snapshots_of_the_same_state_carry_the_same_manual_view() -> None:
+    """A ramp is a value: at rest on its target, one tick's view equals the next one's."""
+    rig = await _manual()
+    _target(rig, 200)
+    await rig.run(30.0)
+    one, other = await rig.run(2 * float(TICK))
+    assert one.manual is not None
+    assert one.manual == other.manual
+    assert one.manual.ramp == Ramp(
+        start=MotorRpm(200),
+        target=MotorRpm(200),
+        limits=DEFAULT_MOTION_LIMITS,
+        geometry=GEOMETRY,
+    )
+    assert one.manual.ramp_eta == 0.0
+
+
+async def test_no_control_step_of_the_console_walks_the_motion_profile(tmp_path: Path) -> None:
+    """The whole step of the real console, its session record written, during a manual ramp.
+
+    Around the runtime's tick the console hands the snapshot to the session
+    record and publishes it to the page. Neither reads the arrival time: with
+    no page open nothing walks the profile at all, and the walk is made the
+    first time a page is rendered from the snapshot.
+    """
+    console = Console(tmp_path)
+    surface = console.panel.surface
+    attested = surface.attest_estop_wiring(CONSOLE_OPERATOR)
+    started = surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=CONSOLE_OPERATOR)
+    spent: list[float] = []
+    await console.run(1.0, spent)
+    with _walks() as made:
+        asked = surface.submit_manual_target(output_rpm=OutputRpm(5.0), operator=CONSOLE_OPERATOR)
+        await console.run(10.0, spent)
+        during_the_steps = list(made)
+        latest = surface.latest
+        assert latest is not None
+        shown = SnapshotRow.of(latest)
+        once_shown = list(made)
+    await console.panel.close()
+
+    assert isinstance(attested, Ok)
+    assert isinstance(started, Ok)
+    assert isinstance(asked, Ok)
+    assert latest.manual is not None
+    assert latest.manual.ramping, "the ramp was over: not this case"
+    assert during_the_steps == [], "a control step walked the motion profile"
+    assert once_shown == [(int(latest.setpoint.motor_rpm), int(latest.manual.target.motor_rpm))]
+    assert shown.manual is not None
+    assert shown.manual.ramp_eta_s == latest.manual.ramp_eta
+    assert shown.manual.ramp_eta_s is not None
+    assert shown.manual.ramp_eta_s > 0.0
 
 
 # =========================================================================
@@ -741,7 +927,7 @@ async def test_a_runtime_state_that_is_not_one_fails_loudly_in_the_mode(
 
 
 @pytest.mark.parametrize(
-    "fault", [DriveFault.OVERCURRENT, DriveFault.MOTOR_SHORT_CIRCUIT, DriveFault.POWER_REMOVAL]
+    "fault", [DriveFault.OVERCURRENT, DriveFault.MOTOR_SHORT_CIRCUIT, DriveFault.SAFETY_FUNCTION]
 )
 async def test_a_fault_that_is_not_resettable_is_never_reset_from_the_console(
     fault: DriveFault,

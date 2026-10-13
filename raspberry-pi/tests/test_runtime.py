@@ -2415,7 +2415,7 @@ async def test_a_shaft_that_will_not_stop_keeps_the_run_command_and_says_so() ->
 async def test_the_disable_sequence_gives_up_on_a_refused_word_rather_than_pressing_on() -> None:
     """Writing word 6 after word 7 was refused would remove a run command nobody ramped."""
     rig = await _running_rig()
-    rig.drive.inject_fault(DriveFault.INTERNAL)
+    rig.drive.inject_fault(DriveFault.INTERNAL_CPU)
     before = list(rig.drive.commands)
     await rig.run(20.0)
     assert rig.runtime.applied_rpm == 0

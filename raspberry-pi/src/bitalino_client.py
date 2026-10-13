@@ -425,11 +425,13 @@ def ensure_paired(mac: str, pin: str = BITALINO_PIN, run: CommandRunner = run_co
     try:
         if _is_paired(mac, run):
             return True
-        logger.info("Pairing with %s (PIN %s)...", mac, pin)
+        # The pairing code goes to bluetoothctl and nowhere else: not to the journal.
+        logger.info("Pairing with %s...", mac)
         run([sys.executable, "-c", _PAIR_SCRIPT, mac, pin], PAIR_TIMEOUT_S)
         paired = _is_paired(mac, run)
     except (OSError, subprocess.SubprocessError) as error:
-        logger.warning("Could not run bluetoothctl to pair %s: %s", mac, error)
+        # Subprocess errors include argv, which carries the pairing code.
+        logger.warning("Could not run bluetoothctl to pair %s: %s", mac, type(error).__name__)
         return False
     if not paired:
         logger.warning("%s is still not paired; run scripts/pair_device.sh once by hand", mac)
@@ -826,7 +828,12 @@ class BITalinoClient:
             )
 
     def _check_signal_integrity(self, channels: Sequence[ChannelData]) -> None:
-        """Warn once per acquisition about a channel carrying no analog signal."""
+        """Warn once per acquisition about a channel carrying no analog signal.
+
+        The channel is named; what was measured on it is not written: no value
+        taken from the samples goes to the log, not even of a channel judged
+        empty (``tests/test_log_format.py``). The two thresholds are constants.
+        """
         if self._integrity_checked:
             return
         self._integrity_checked = True
@@ -836,11 +843,9 @@ class BITalinoClient:
             spread = statistics.pstdev(values)
             if peak <= NO_SIGNAL_MAX and spread < NO_SIGNAL_STD:
                 logger.warning(
-                    "Channel %s has no analog signal (max=%d, std=%.2f) - check the "
-                    "sensor is plugged into its BITalino port.",
+                    "Channel %s has no analog signal - check the sensor is plugged into "
+                    "its BITalino port.",
                     ch.channel,
-                    int(peak),
-                    spread,
                 )
 
 

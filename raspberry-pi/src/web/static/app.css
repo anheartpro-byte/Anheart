@@ -26,7 +26,7 @@
   --warn: #f5a524;
   --good: #30a46c;
   --accent: #6ea8fe;
-  --footer-h: 5.5rem;
+  --footer-h: 6.5rem;  /* the height of the fixed footer: measured and kept current by app.js */
   --banners-h: 0px;  /* the height of the banner stack, kept current by app.js */
   --mono: ui-monospace, "DejaVu Sans Mono", "Courier New", monospace;
 }
@@ -116,6 +116,7 @@ body {
 .brand { font-weight: 700; letter-spacing: 0.08em; }
 .brand-sub { color: var(--ink-faint); font-size: 0.78rem; letter-spacing: 0.06em; }
 .bind { color: var(--ink-faint); font-family: var(--mono); font-size: 0.72rem; padding: 0 0.3rem; word-break: break-all; }
+.bind-warn { color: var(--warn); font-weight: 700; }
 
 .chips {
   display: grid;
@@ -383,6 +384,7 @@ input[type="text"], input[type="password"], input[type="number"], select {
 .ports li, .events li { padding: 0.2rem 0; border-bottom: 1px solid var(--line); color: var(--ink-dim); }
 .events li.event-emergency_stop { color: #ff9ea1; }
 .events li.event-refused { color: #f7c778; }
+.events li.event-cancelled { color: #f7c778; }
 .events li.event-dashboard { color: #f7c778; }
 
 .fault {

@@ -1,26 +1,87 @@
 # AnHeart operator console: the console's Docker image, started by systemd.
 #
-# Installed by scripts/install.sh, which also writes the drop-in
-# anheart.service.d/10-version.conf: the version shown by
-# `systemctl status anheart` and the image of that version (ANHEART_IMAGE).
-# Do not install this file by hand; docs/pi-image.md describes the one path.
+# Installed by scripts/install.sh, which also writes two drop-ins in
+# anheart.service.d/: 10-version.conf, the version shown by
+# `systemctl status anheart` and the image of that version (ANHEART_IMAGE), and
+# 20-account.conf, the account the console runs under (ANHEART_ACCOUNT,
+# ANHEART_GROUPS). Do not install this file by hand; docs/pi-image.md
+# describes the one path.
 #
 # What a start can and cannot do. The image runs the console and nothing else.
 # A console that starts is at rest and read-only: it starts no session, and a
 # drive it finds enabled is zeroed and latched until an operator acknowledges
 # it. That holds at boot and after a restart by systemd alike: a restart never
 # resumes a session.
+#
+# Who runs as what (docs/pi-image.md, "Sous quel compte"):
+#
+#   * the console, in its container: the account `anheart`, by number, with no
+#     capability, on a read-only image. It is the process a browser talks to;
+#   * the watchdog relay: the account `anheart`;
+#   * `docker run`, `docker stop` and the step that binds the sensor's serial
+#     node: root. The Docker daemon is root's, and whoever may ask it for a
+#     container may ask it for anything: no option of this unit bounds that.
 [Unit]
 Description=Console opérateur Anheart
 Requires=docker.service
 After=docker.service network-online.target bluetooth.target
 Wants=network-online.target
+# Watchdog relay (see ExecStart): without it the console would never be heard
+# and every start would time out. The start fails at once instead.
+AssertFileIsExecutable=/usr/bin/socat
+AssertFileIsExecutable=/usr/bin/setpriv
+# The limit of restarts: an eleventh start within 30 minutes is refused and
+# the unit stays failed (`systemctl reset-failed anheart` clears it). Long
+# before that, a console that comes back at all has put itself out of service
+# (three starts after an unclean stop within ten minutes) and says so on its
+# page; this limit is for the one that does not come back.
+StartLimitIntervalSec=1800
+StartLimitBurst=10
 
 [Service]
-Type=simple
-# Replaced by the drop-in. Left as it is, the start fails on a missing image
-# rather than run a version nobody chose.
+# The console says when it is ready, then that it is alive after every control
+# tick that completed (sd_notify, src/service_watchdog.py). Ten seconds
+# without hearing it: its control loop is stuck. The unit is then stopped the
+# way it is always stopped, SIGTERM first: a console whose event loop still
+# runs leaves by its controlled stop, and one that answers nothing is ended by
+# ExecStopPost below. Either way it is started again (Restart=), at rest. The
+# motor does not wait for any of this: a console that stops ticking stops
+# talking to the drive, whose own communication timeout stops it first.
+Type=notify
+# `all`, and it cannot be narrower: systemd is told by the relay, which is a
+# process of this unit without being its main process (`docker run` is) nor
+# the command of one of its lines. What is narrow is who may talk to the
+# relay: its socket is the account's, in a directory only the account enters
+# (/run/anheart/relay).
+NotifyAccess=all
+WatchdogSec=10
+WatchdogSignal=SIGTERM
+TimeoutAbortSec=15
+# Until the console says it is ready: a cold SD card takes its time.
+TimeoutStartSec=300
+# /run/anheart, made at each start. systemd takes it back, as root's and with
+# this mode, every time it runs one of the lines of this unit, the line of
+# the stop included: so what is the account's is not this directory but
+# `relay` inside it, which the start line makes and which systemd leaves alone.
+RuntimeDirectory=anheart
+RuntimeDirectoryMode=0755
+# For the processes of this unit themselves (the shell of each line, the
+# relay, the Docker client): no way to gain a privilege, the whole file system
+# read-only but /run/anheart and the shared drive lock, no home directory.
+# They write nowhere else: the
+# console's data are mounted by the Docker daemon, not by them. This binds the
+# relay, which reads what the console sends. It does not bind what root's
+# Docker client may ask of the daemon.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/tmp/anheart-drive.lock
+# Replaced by the drop-ins. Left as they are, the start fails on a missing
+# image and an unknown account rather than run a version nobody chose, or run
+# it as root.
 Environment=ANHEART_IMAGE=anheart-console:not-installed
+Environment=ANHEART_ACCOUNT=not-installed
+Environment=ANHEART_GROUPS=
 # One console at a time: the container is always named anheart, and one of
 # that name found at a start (left behind by a client that died, or started
 # another way) is stopped the way the console is always stopped (SIGTERM:
@@ -28,32 +89,83 @@ Environment=ANHEART_IMAGE=anheart-console:not-installed
 # at rest; scripts/install.sh does, before it starts or restarts this unit.
 # Nothing to do, and nothing reported as failed, when there is none.
 ExecStartPre=/bin/sh -c 'if /usr/bin/docker container inspect anheart >/dev/null 2>&1; then /usr/bin/docker stop -t 60 anheart; /usr/bin/docker rm anheart 2>/dev/null; fi; exit 0'
-# --privileged, /dev and the host's D-Bus: the USB-RS485 adapter of the ATV320
-# and the BITalino's RFCOMM node. --network host: the page binds to the Pi's
-# own loopback (UI_HOST=127.0.0.1). The journal already keeps what the console
-# prints, so Docker keeps no second copy (--log-driver none). --pull never: an
-# image that is not on this machine fails the start at once; nothing is ever
-# fetched from a registry.
-ExecStart=/usr/bin/docker run --rm --name anheart --log-driver none \
+# The BITalino's serial node (/dev/rfcommN) is made here, on the machine, by
+# root: making it takes a right over the network that the console does not
+# have. Best effort: with no sensor configured it does nothing, and a failure
+# never prevents the start (the console then shows the ECG link as down).
+ExecStartPre=-/usr/local/lib/anheart/bind-bitalino
+ExecStartPre=/usr/bin/python3 /usr/local/lib/anheart/prepare-drive-lock.py
+# What the console is given, and nothing more.
+#
+#   --user, --group-add       the account `anheart` and the group of the
+#                             serial devices, as numbers of this machine;
+#   --cap-drop ALL, no-new-privileges
+#                             no capability, and no way to gain one;
+#   --read-only, --tmpfs /tmp the image cannot be written; /tmp is 64 MB of
+#                             memory, where nothing can be executed;
+#   --device-cgroup-rule      the only device classes it may open: 188 the
+#                             USB serial adapters (ttyUSB*), 189 the USB
+#                             devices themselves (the same cable through
+#                             pyftdi), 216 the Bluetooth serial nodes
+#                             (rfcomm*). Each still needs the group above;
+#   --volume /dev:/dev        the machine's /dev, because these nodes come and
+#                             go with a cable or a sensor, and a console that
+#                             starts without them must find them later. It
+#                             shows every name and opens nothing else;
+#   --network host            the page binds to the Pi's own loopback
+#                             (UI_HOST=127.0.0.1).
+#
+# The journal already keeps what the console prints, so Docker keeps no second
+# copy (--log-driver none). --pull never: an image that is not on this machine
+# fails the start at once; nothing is ever fetched from a registry.
+#
+# The first line is the watchdog relay. systemd only listens to the processes
+# of this unit, and the console is a process of the container, not of the
+# unit. So socat, which is one, listens on /run/anheart/relay/notify (the
+# console is handed that directory, and the socket as its NOTIFY_SOCKET) and
+# passes each datagram on to systemd as it came. It adds nothing and invents
+# nothing: a console that says nothing is not heard. It runs as the account,
+# in a directory made for the account alone first: a start that cannot make
+# it fails at once. Then the shell becomes `docker run`, the unit's main
+# process.
+ExecStart=/bin/sh -c '/usr/bin/install -d -m 0700 -o anheart -g anheart /run/anheart/relay || exit 1; /usr/bin/setpriv --reuid=anheart --regid=anheart --clear-groups /usr/bin/socat -u UNIX-RECV:/run/anheart/relay/notify,unlink-early UNIX-SENDTO:"$$NOTIFY_SOCKET" & exec "$$@"' anheart \
+    /usr/bin/docker run --rm --name anheart --log-driver none \
     --pull never \
-    --privileged --network host \
-    --volume /var/run/dbus:/var/run/dbus \
+    --user ${ANHEART_ACCOUNT} $ANHEART_GROUPS \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+    --mount type=bind,source=/tmp/anheart-drive.lock,target=/tmp/anheart-drive.lock \
+    --network host \
+    --device-cgroup-rule "c 188:* rw" \
+    --device-cgroup-rule "c 189:* rw" \
+    --device-cgroup-rule "c 216:* rw" \
     --volume /dev:/dev \
     --volume /var/lib/anheart/data:/app/data \
     --volume /var/lib/anheart/records:/app/data/records \
+    --volume /var/lib/anheart/tls:/run/anheart-tls:ro \
+    --volume /run/anheart/relay:/run/anheart \
+    --env NOTIFY_SOCKET=/run/anheart/notify \
     --env-file /etc/anheart/anheart.env \
     ${ANHEART_IMAGE}
 # SIGTERM is the console's controlled stop: it zeroes the speed reference and
 # releases the drive link. 60 s for the ramp, before Docker escalates.
-ExecStop=/usr/bin/docker stop -t 60 anheart
+#
+# Then this line waits, ten seconds at most, for the unit's main process, the
+# Docker client, to end by itself: it ends with the console's exit code a
+# moment after the console is gone. systemd ends what is left of the unit as
+# soon as this line returns, and a client it had to end would report that
+# signal in place of the console's code.
+ExecStop=/bin/sh -c '/usr/bin/docker stop -t 60 anheart; stopped=$$?; waited=0; while [ "$$waited" -lt 100 ] && kill -0 "$$MAINPID" 2>/dev/null; do waited=$$((waited + 1)); /bin/sleep 0.1; done; exit "$$stopped"'
 # Whatever ended the unit, no console outlives it.
 ExecStopPost=/bin/sh -c '/usr/bin/docker container inspect anheart >/dev/null 2>&1 && /usr/bin/docker stop -t 60 anheart; exit 0'
 TimeoutStopSec=90
 # Exit code 2 is a configuration error (the console lists every problem and
-# exits): restarting would only loop on it.
+# exits): restarting would only loop on it. Every other failure (a crash, a
+# kill, the watchdog) is followed by a new start two seconds later, within the
+# limit of the [Unit] section.
 Restart=on-failure
 RestartPreventExitStatus=2
-RestartSec=10
+RestartSec=2
 SyslogIdentifier=anheart
 
 [Install]

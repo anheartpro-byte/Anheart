@@ -45,12 +45,12 @@ matériel.
 | Élément | D'où il vient | Où |
 |---|---|---|
 | Géométrie de la machine (axe, bras 1,84 m, contrepoids, capsule 2,425 m) | **extraite de la vraie CAO** (`CAO/Gaura_Assy_2907.STEP`) | `simulation/cad/machine_geometry.json` |
-| Variateur ATV320 (CiA402, rampes, roue libre, chien de garde ttO, 66 codes de défaut LFT) | simulateur de production `SimulatedDrive` | `raspberry-pi/src/motor/simulated.py` |
+| Variateur ATV320 (CiA402, rampes, roue libre, chien de garde ttO, 60 codes de défaut LFT) | simulateur de production `SimulatedDrive` | `raspberry-pi/src/motor/simulated.py` |
 | Cœur du passager (réponse au g, retard, dérive, fatigue, malaise vagal, pic) | modèle de production `Physiology` | `raspberry-pi/src/sim/physiology.py` |
 | ECG et BITalino (mode `dsp` : vraie chaîne BioSPPy) | `sim/bitalino.py`, `sim/ecg.py`, `signal_processing.py` | `raspberry-pi/src/` |
 | Autres capteurs (EDA, SpO2, respiration, EMG, luminosité) | générateurs de signaux | `raspberry-pi/src/sim/signals/`, testés par `raspberry-pi/tests/test_sensor_*.py` |
 | Caméra de présence (intrusion, scintillement, image figée, perte) | caméra scriptable `SimulatedPresence` | `raspberry-pi/src/presence/simulated.py`, testée par `raspberry-pi/tests/test_presence_*.py` |
-| Pannes (199 cas : liaison, défauts variateur, ECG, processus, opérateur) | matrice d'injection | `simulation/failures.py` |
+| Pannes (187 cas : liaison, défauts variateur, ECG, processus, opérateur) | matrice d'injection | `simulation/failures.py` |
 | 30 personnes fictives de 10 à 50 ans | cohorte tirée d'une graine | `simulation/cohort/` |
 
 La caméra et les capteurs autres que l'ECG sont simulés **dans les tests du
@@ -380,13 +380,13 @@ refusé (âge minimum 18 ans par défaut). Le résultat attendu aujourd'hui est
 **89 PASS, 1 XFAIL, 0 FAIL**. La durée varie de 20 à 45 s selon la charge de
 la machine (41,6 s ici, une gate tournant en parallèle).
 
-### 2d. La matrice de pannes (199 cas)
+### 2d. La matrice de pannes (187 cas)
 
 ```sh
 $PY -m simulation.quick --failures
 ```
 
-Lignes non `PASS` et fin de la sortie réelle :
+Lignes non `PASS` et fin de la sortie réelle (ici avec `--workers 2`) :
 
 ```text
 SKIPPED ecg_connect_failure_dsp                     needs --dsp              0.0  0.00     -    0  0.00
@@ -396,7 +396,7 @@ SKIPPED ecg_dsp_mains                               needs --dsp              0.0
 SKIPPED ecg_dsp_stopped                             needs --dsp              0.0  0.00     -    0  0.00
 SKIPPED ecg_dsp_corrupted                           needs --dsp              0.0  0.00     -    0  0.00
 SKIPPED ecg_dsp_gaps                                needs --dsp              0.0  0.00     -    0  0.00
-199 runs: 192 PASS, 7 SKIPPED - 45.77 s wall (8 workers)
+187 runs: 180 PASS, 7 SKIPPED - 88.49 s wall (2 workers)
 ```
 
 Les 7 `SKIPPED` sont les cas qui ont besoin de la **vraie** chaîne ECG. Pour
@@ -914,7 +914,7 @@ $PY -m simulation.quick --cohort
 
 ### 7b. Ajouter une panne
 
-Les 199 cas sont construits en Python dans `simulation/failures.py`, pas en
+Les 187 cas sont construits en Python dans `simulation/failures.py`, pas en
 fichiers. Chaque cas est un `FailureCase` : un document de scénario (même
 schéma que la recette 6) et ce qui doit être vrai après.
 

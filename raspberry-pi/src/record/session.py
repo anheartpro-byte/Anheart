@@ -39,7 +39,10 @@ What is NOT written, on purpose:
 
 The drive's frames are not written from here either, and do not go through
 this object at all: they wait in :mod:`src.record.drive_tap` and the journal
-thread takes them.
+thread takes them. All this object says of them is when a session begins and
+ends, and how many their list had refused at each of those two instants
+(:meth:`SessionRecorder.frames_refused`): the record then counts what its own
+session lost, and nothing else.
 """
 
 from __future__ import annotations
@@ -78,6 +81,7 @@ from src.record.journal import (
     JournalStatus,
     RawBatch,
     Sensors,
+    just_before,
 )
 from src.record.logbook import note
 from src.record.rows import JsonValue, Row
@@ -89,6 +93,7 @@ from src.training.runtime import RecordStorageLow, RuntimeLimits, TrainingRuntim
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, Phase, TelemetrySnapshot
 from src.units import Metres, Monotonic, OutputRpm, elapsed, output_rpm_to_g
+from src.wall_clock import WallClockState, is_trusted
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
 
@@ -285,10 +290,28 @@ class SessionRequest:
 
     subject_id: str = LOCAL_SUBJECT
     cloud_session_id: str | None = None
+    arming_began: Monotonic | None = None
+    """The console's clock just before the runtime was asked to arm: the drive's
+    exchanges of the arming come after it, an idle console's polling before.
+    ``None``: not known, and the record takes the drive's frames from its own start."""
+
+    arming_refused: int | None = None
+    """What :meth:`SessionRecorder.frames_refused` said at that same instant: the
+    frames the drive's list had refused before this arming, which are not this
+    session's. ``None``: not read, and the record counts what it lost to that
+    list by its stretch, an upper bound."""
 
 
-def manifest_for(stamp: Stamp, request: SessionRequest, clock: Clock) -> Manifest:
-    """The opening manifest of one session. Identifiers only, never a name."""
+def manifest_for(
+    stamp: Stamp, request: SessionRequest, clock: Clock, wall_trusted: bool | None = None
+) -> Manifest:
+    """The opening manifest of one session. Identifiers only, never a name.
+
+    ``wall_trusted``: whether a time service keeps the wall clock that dates
+    this record (``clocks.wall_trusted``); ``None`` when nobody judged it.
+    ``ntp_offset_s`` stays ``None``: the console does not know the signed
+    offset its time service measured, and writes no number it did not read.
+    """
     identity = uuid4().hex
     started = utc_stamp(clock)
     subject = request.subject_id.strip()
@@ -309,7 +332,12 @@ def manifest_for(stamp: Stamp, request: SessionRequest, clock: Clock) -> Manifes
         software_version=stamp.software_version,
         contract_version=CONTRACT_VERSION,
         medical_parameters_version=stamp.medical_parameters_version,
-        clocks=Clocks(monotonic_start=clock.monotonic(), utc_start=started, ntp_offset_s=None),
+        clocks=Clocks(
+            monotonic_start=clock.monotonic(),
+            utc_start=started,
+            ntp_offset_s=None,
+            wall_trusted=wall_trusted,
+        ),
         started_at=started,
         ended_at=None,
         end_reason=None,
@@ -433,7 +461,9 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             return EventKind.OPERATOR_ACTION
         case SurfaceEvent.ACKNOWLEDGED:
             return EventKind.VERDICT_ACK
-        case SurfaceEvent.REFUSED:
+        case SurfaceEvent.REFUSED | SurfaceEvent.CANCELLED:
+            # A request the loop refused, or one a stop displaced before the loop
+            # took it: either way it was asked, written above as asked, and not done.
             return EventKind.REFUSAL
         case SurfaceEvent.DASHBOARD:
             # News of the dashboard link (a server of another contract, a launch
@@ -442,8 +472,15 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             # refusal. The record's vocabulary is closed and has no kind of its
             # own for it: a warning, told apart by its ``dashboard:`` prefix.
             return EventKind.WARNING
-        case SurfaceEvent.SESSION_RUNNING | SurfaceEvent.SESSION_IDLE | SurfaceEvent.RECORDING:
-            # States the ticks already carry, and the recorder's own messages.
+        case (
+            SurfaceEvent.SESSION_RUNNING
+            | SurfaceEvent.SESSION_IDLE
+            | SurfaceEvent.TAKEN
+            | SurfaceEvent.RECORDING
+        ):
+            # States the ticks already carry (a request the loop took shows in
+            # them: the session, the target, the fault gone), and the recorder's
+            # own messages.
             return None
     raise assert_never(kind)
 
@@ -498,6 +535,7 @@ class SessionRecorder:
         "_sim_state",
         "_stamp",
         "_status",
+        "_wall_clock",
     )
 
     def __init__(
@@ -510,9 +548,13 @@ class SessionRecorder:
         leg_tip: Metres,
         sim_state: Callable[[], str] | None = None,
         link_stats: Callable[[], LinkStats] | None = None,
+        wall_clock: Callable[[], WallClockState] | None = None,
     ) -> None:
         """``sim_state``: the simulated drive's internal state, when there is a simulator.
-        ``link_stats``: the acquisition link's loss counters, when it has any."""
+        ``link_stats``: the acquisition link's loss counters, when it has any.
+        ``wall_clock``: what the wall clock is worth, as last read by the console
+        (memory only: :meth:`~src.wall_clock.WallClockWatch.current`); ``None`` on a
+        console built without a probe, whose manifests then say nothing of it."""
         self._clock: Clock = clock
         self._journal: Journal = journal
         self._stamp: Stamp = stamp
@@ -520,6 +562,7 @@ class SessionRecorder:
         self._leg_tip: Metres = leg_tip
         self._sim_state: Callable[[], str] | None = sim_state
         self._link_stats: Callable[[], LinkStats] | None = link_stats
+        self._wall_clock: Callable[[], WallClockState] | None = wall_clock
         self._live: _Live | None = None
         self._status: JournalStatus = journal.status(clock.monotonic())
         self._said: tuple[Cause | None, str | None] = (None, None)
@@ -573,12 +616,27 @@ class SessionRecorder:
         clock = self._clock
         # A new record: what the recorder itself got wrong was about the previous one.
         self._faults = 0
+        origin = clock.monotonic()
+        if request.arming_began is None:
+            # Nobody timed the arming: the frames of the record, and the count of
+            # those it loses, begin with the record.
+            since, refused = origin, self._journal.frames_refused()
+        else:
+            since, refused = request.arming_began, request.arming_refused
         if self._live is not None:
-            # The previous session's end was never observed; close what is open.
-            self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None))
-        live = _Live(origin=clock.monotonic(), names=names_of(request.operator))
+            # The previous session's end was never observed; close what is open. The
+            # drive's frames are its own up to the arming of this one, and no further.
+            self._journal.close(
+                Closing(clock.unix_millis(), INTERRUPTED, None, just_before(since), refused)
+            )
+        live = _Live(origin=origin, names=names_of(request.operator))
         self._live = live
-        self._journal.open(manifest_for(self._stamp, request, clock), _EMAILS)
+        self._journal.open(
+            manifest_for(self._stamp, request, clock, self._wall_trusted()),
+            _EMAILS,
+            since=since,
+            refused=refused,
+        )
         kind = "manual" if request.program is None else "auto"
         self._event(
             live,
@@ -587,6 +645,24 @@ class SessionRecorder:
             f"{kind} session started",
             operator_alias(request.operator),
         )
+
+    def _wall_trusted(self) -> bool | None:
+        """Whether the wall clock that dates the record being opened is kept by a time service.
+
+        Never costs the record: a state that cannot be read is a clock nobody
+        answers for, so the record is opened and says ``False``.
+        """
+        source = self._wall_clock
+        if source is None:
+            return None
+        try:
+            return is_trusted(source())
+        except Exception:  # an observer of the clock: the record is opened whatever it does
+            _logger.exception(
+                "session recorder: the wall clock state could not be read; "
+                "the record is opened and says its clock is not trusted"
+            )
+            return False
 
     @_total
     def observe(
@@ -640,6 +716,11 @@ class SessionRecorder:
                     stop_reason=None if stop is None else self._text(live, stop),
                     shutdown_detail=None if detail is None else self._text(live, detail),
                 ),
+                # Read now, not ``now``: the exchanges of this last tick began after the
+                # tick's own instant, and they are the session's. The next ones are not.
+                until=self._clock.monotonic(),
+                # And at that same instant, what the drive's list has refused so far.
+                refused=self._journal.frames_refused(),
             )
         )
         self._live = None
@@ -772,13 +853,29 @@ class SessionRecorder:
     @_total
     def refresh(self, now: Monotonic) -> None:
         """Read the journal's health. Called every tick: it runs the stall detector,
-        refreshes :attr:`degraded`, and prepares a sentence when the health changed."""
+        refreshes :attr:`degraded`, and prepares a sentence when the health changed.
+
+        ``now`` is the instant of that tick, read once its mailbox was
+        dispatched: any arming asked for before it is over. The journal is
+        told so (:meth:`Journal.dispatched`), which is how it knows which of
+        the drive's frames wait for a record and which belong to no session."""
+        self._journal.dispatched(now)
         status = self._journal.status(now)
         self._status = status
         said = (status.cause, None if status.error is None else status.error.detail)
         if said != self._said:
             self._said = said
             self._notice = describe_status(status, self._journal.root)
+
+    def frames_refused(self) -> int | None:
+        """How many drive frames their bounded list has refused so far, for an arming.
+
+        The console reads it with the instant an arming begins
+        (:attr:`SessionRequest.arming_began`), before it asks the runtime to
+        arm. One ``int`` read in memory, and total
+        (:meth:`Journal.frames_refused`): ``None`` when nobody can say.
+        """
+        return self._journal.frames_refused()
 
     def take_notice(self) -> str | None:
         """The sentence for the operator since the last call, or ``None``. Read once."""

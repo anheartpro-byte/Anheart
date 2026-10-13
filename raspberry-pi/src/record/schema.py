@@ -31,6 +31,14 @@ class Clocks:
     monotonic_start: Monotonic
     utc_start: str
     ntp_offset_s: Seconds | None
+    wall_trusted: bool | None = None
+    """Whether a time service was keeping the wall clock that gave ``utc_start``.
+
+    ``False``: nobody answered for that clock when the record was opened, and
+    its dates may be wrong by however long the machine had been off. ``None``:
+    the producer did not judge its clock (the simulation, and every record
+    written before this field existed). Optional when read; the writer always
+    emits it."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
@@ -117,6 +125,7 @@ class Manifest:
     preflight: tuple[Preflight, ...] | None
     geometry: GeometrySnapshot | None = None
     end_observation: EndObservation | None = None
+    files: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)

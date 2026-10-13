@@ -65,6 +65,25 @@ Boîtier d'acquisition physiologique (Bluetooth). Il fournit l'ECG, et
 d'autres voies (EDA, RESP, EMG, LUX, SpO2) affichées pour surveillance
 seulement.
 
+**Certificat de la console, autorité** (`scripts/pi/make_console_tls.sh`, `src/web/tls.py`)\
+Ce qui permet à une tablette de vérifier, en TLS, qu'elle parle bien à la
+console de cette machine et non à un autre appareil du réseau. Le certificat
+est fait sur le Pi et signé par une autorité créée sur ce même Pi, dont la clé
+privée n'est pas gardée ; la tablette installe une fois le certificat public de
+cette autorité. Hors de la boucle locale, la console ne sert sa page qu'avec
+lui, ou ne démarre pas. Il ne dit rien de qui utilise la tablette : c'est le
+rôle du jeton. Voir [pi-image.md](pi-image.md#le-certificat-de-la-console).
+
+<a id="chien-de-garde"></a>
+**Chien de garde (watchdog)**\
+Ce qui agit quand un programme ne donne plus signe de vie. Il y en a trois,
+du plus rapide au plus lent. Le [ttO](#tto) du variateur arrête le moteur quand
+la console ne lui écrit plus : c'est le seul qui arrête quelque chose. Le
+chien de garde du service (systemd, `WatchdogSec=10`) arrête puis relance la
+console quand sa boucle de contrôle ne termine plus de tic. Le chien de garde
+matériel du Pi (`bcm2835_wdt`) redémarre le Pi quand le système entier est
+figé. Voir [pi-image.md](pi-image.md#le-chien-de-garde).
+
 **CiA402**\
 Norme de profil de variateur (machine d'états : SWITCH_ON_DISABLED,
 READY_TO_SWITCH_ON, SWITCHED_ON, OPERATION_ENABLED, FAULT…). Le logiciel
@@ -115,6 +134,15 @@ Pi, `simulation/scripts/check.sh` pour la simulation. Voir
 
 **GO_SILENT** : voir [Niveaux d'action](#niveaux-daction).\
 
+<a id="hors-service"></a>
+**Hors service** (`src/service_state.py`)\
+État d'une console qui a démarré trois fois en dix minutes après un arrêt non
+propre (mort, exception, boucle figée). Elle tourne, affiche
+`CONSOLE HORS SERVICE`, lit le variateur et arrête celui qu'elle trouve en
+marche, mais n'arme aucune séance. Seul un opérateur nommé la remet en
+service, depuis la page Securite. Voir
+[raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service).
+
 **HSP** (registre du variateur, *High SPeed*)\
 Vitesse maximale réglée dans le variateur, en Hz (ici 50 Hz, soit 1380 tr/min
 moteur). Le logiciel refuse un plafond de vitesse au-dessus de HSP.
@@ -139,7 +167,7 @@ relue après écriture (l'« écho ») ; un écho qui ne suit pas déclenche
 `setpoint_unconfirmed`.
 
 **LFT** (registre du variateur, *Last FaulT*)\
-Le code du dernier défaut du variateur. La table complète (66 codes) est dans
+Le code du dernier défaut du variateur. La table complète (60 codes) est dans
 [raspberry-pi.md](raspberry-pi.md). « nOF » signifie « pas de défaut ».
 
 **MANUEL (séance manuelle)**\

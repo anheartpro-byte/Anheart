@@ -39,11 +39,12 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 from __future__ import annotations
 
 import re
+from abc import abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum, IntEnum, unique
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from src.motor.drive import DriveState, FaultReport
 from src.units import (
@@ -736,14 +737,34 @@ class RunMode(Enum):
     being brought out of service. Never "stopped" - read the MEASURED speed."""
 
 
+class RampAhead(Protocol):
+    """The ramp still to come to a manual target, timed only when somebody asks.
+
+    A manual view names its ramp without walking it. How long the ramp will
+    take is a walk of the motion profile, tick for tick, from the setpoint in
+    force to the target: several hundred steps from standstill to the
+    nameplate speed. Only a screen reads it, so it is the screen's reading
+    that pays for it, and never the control tick that took the snapshot.
+
+    The one implementation is :class:`~src.training.motion.Ramp`. It is a
+    protocol here because that module reads the machine's geometry, which
+    reads this one.
+    """
+
+    @abstractmethod
+    def duration(self) -> Seconds | None:
+        """Seconds the ramp takes at the motion limits; ``None`` when it would never arrive."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ManualView:
     """The manual session, as the operator's screen needs it.
 
     ``target`` is what the operator asked for, ``ceiling`` the highest target
     this occupancy accepts, ``min_run`` the slowest non-zero one. The setpoint
-    actually in force is the snapshot's own ``setpoint``; the gap between the
-    two is the ramp still to come, and ``ramp_eta`` says how long it will take.
+    actually in force is the snapshot's own ``setpoint``. Where it is being
+    walked to is ``ramp_to``: the target, except while a verdict walks it
+    elsewhere. ``ramp_eta`` says how long that walk will take.
     """
 
     occupancy: Occupancy
@@ -752,20 +773,45 @@ class ManualView:
     min_run: SpeedView
 
     ramping: bool
-    """Whether the setpoint is still on its way to the target: "do not move your head".
+    """Whether the setpoint is being walked somewhere: "do not move your head".
 
-    ``False`` too while a FREEZE holds the setpoint away from a non-zero
-    target: nothing is on its way then, and a screen must not say otherwise.
-    Compare ``target`` with the snapshot's ``setpoint`` to tell "reached" from
-    "held".
+    To the target, or down to zero while a REDUCE lowers the speed whatever
+    the target is (``ramp_to`` says which). ``False`` while a FREEZE holds the
+    setpoint away from a non-zero target: nothing is on its way then, and a
+    screen must not say otherwise. Compare ``target`` with the snapshot's
+    ``setpoint`` to tell "reached" from "held".
     """
 
-    ramp_eta: Seconds | None
-    """Seconds until the setpoint reaches the target at the motion limits.
+    ramp: RampAhead | None
+    """The ramp from the setpoint in force to ``ramp_to``, as it stood in this snapshot.
 
-    ``None`` when unknown, and when a FREEZE holds the setpoint away from the
-    target: there is no arrival to announce.
+    ``None`` when a FREEZE holds the setpoint away from the target: there is
+    no arrival to announce. A setpoint already where it is going has a ramp
+    too, of no length.
     """
+
+    ramp_to: SpeedView | None
+    """Where the setpoint is being walked to; ``None`` exactly when ``ramp`` is.
+
+    The operator's ``target``, with one exception: under a REDUCE the runtime
+    walks the setpoint down towards zero whatever the target is, and follows
+    the target again only if the warning lifts before the arm has stopped. A
+    ramp announced towards the target then, with the time it would take to
+    climb back to it, described a walk that was not happening.
+    """
+
+    @property
+    def ramp_eta(self) -> Seconds | None:
+        """Seconds until the setpoint reaches ``ramp_to`` at the motion limits.
+
+        ``None`` when unknown, and when a FREEZE holds the setpoint away from
+        the target. Under a REDUCE it is the time to zero if the warning
+        stands that long. Worked out when read, from what this snapshot holds:
+        the answer is the one the tick that took the snapshot would have
+        given, whenever it is asked for (see :class:`RampAhead`).
+        """
+        ramp = self.ramp
+        return None if ramp is None else ramp.duration()
 
 
 #: A drive observation older than this is no longer evidence about the machine.

@@ -4,7 +4,7 @@
 > Ce document explique la logique de la roadmap, l'ordre des jalons, les fils de travail et comment suivre le projet.
 > Mis à jour le 2 octobre 2026 (revue chef de projet : 27 tickets ajoutés ANH-127 à ANH-153, 20 sous-tickets ANH-154 à ANH-173, 3 fermés comme remplacés, 10 fils de travail, étiquettes Fil / Taille / Qui / Matériel).
 >
-> **Deux documents Linear à lire avant de prendre un ticket :** *Processus de développement* (branches `develop` et `main`, une PR par ticket, un développeur et deux reviewers agents, CI verte, commentaire de clôture) et *File d'exécution pour les agents* (l'ordre des tickets).
+> **Deux documents Linear à lire avant de prendre un ticket :** *Processus de développement* (branches `develop` et `main`, une PR par ticket, un développeur et un avis indépendant d'agent, CI verte, commentaire de clôture) et *File d'exécution pour les agents* (l'ordre des tickets).
 >
 > **Une release** (passage de `develop` à `main`) suit [release.md](release.md) : versions `pi-X.Y.Z`, `cloud-X.Y.Z` et `web-X.Y.Z`, changelog, check-list, niveau de validation de chaque version du Pi.
 
@@ -12,8 +12,8 @@
 
 | Couche | État |
 |---|---|
-| Raspberry Pi (console locale, pilotage, sécurité) | **Fait et testé en simulation** : ~3190 tests, 100 % de branches sur la chaîne de sécurité, 66 défauts variateur gérés, 6 capteurs, caméra/présence prête (simulée), âge minimum, séances auto/manuel. **Jamais validé sur la vraie machine avec ces fonctions.** Pas de persistance disque des séances, pas de version logicielle envoyée, console protégée par un seul jeton partagé. |
-| Simulation (`simulation/`) | **Fait** : géométrie issue de la CAO, 67 scénarios, cohorte de 30 personnes de 10 à 50 ans, 199 pannes toutes réussies, visualiseur 2D, résultat instantané. Ne sait pas encore rejouer une séance réelle. |
+| Raspberry Pi (console locale, pilotage, sécurité) | **Fait et testé en simulation** : ~3190 tests, 100 % de branches sur la chaîne de sécurité, 60 défauts variateur gérés, 6 capteurs, caméra/présence prête (simulée), âge minimum, séances auto/manuel. **Jamais validé sur la vraie machine avec ces fonctions.** Pas de persistance disque des séances, pas de version logicielle envoyée, console protégée par un seul jeton partagé. |
+| Simulation (`simulation/`) | **Fait** : géométrie issue de la CAO, 67 scénarios, cohorte de 30 personnes de 10 à 50 ans, 187 pannes toutes réussies, visualiseur 2D, résultat instantané. Ne sait pas encore rejouer une séance réelle. |
 | Convex | **Version précédente en production.** Le nouveau schéma (`convex/training.ts`, droits de lancement, télémétrie, champs de séance auto/manuel) est **déployé sur le développement** depuis le 1er octobre 2026 et testé de bout en bout avec une console simulée ([deploiement.md](deploiement.md)). Il reste à **redéployer la production** (ANH-82). Aucun test Convex, pas d'organisations, pas d'audit, pas de version de contrat. |
 | Tableau de bord (site) | **Site Next.js déjà en production** (ancienne version). Les nouvelles pages (machine en direct, droits de lancement, séances auto) tournent en local contre le Convex de développement : toutes ouvertes dans un navigateur le 2 octobre 2026, captures réelles dans le guide. Pas encore déployées, pas de test automatisé. Défauts relevés dans ANH-122 (scindé en ANH-154 à ANH-160). |
 | Déploiement | **Simulation hébergée** en ligne (`anheart-simulation.vercel.app`). **Image Docker du Pi** prête et essayée en simulation, jamais sur un vrai Pi. Pas de CI, pas de CD, pas d'OTA, pas de supervision. Le processus de release est écrit et outillé ([release.md](release.md)), mais aucune release n'a encore été faite. |
@@ -84,7 +84,7 @@ Les jalons disent *quand* une chose est due. Un agent travaille par *fil* : une 
   - toute PR passe la CI (gates Pi, simulation, Convex, site, audit) et reçoit un avis indépendant, enregistré comme statut de commit `agent-review/R1` sur son commit de tête ;
   - toute PR qui change un comportement met à jour `docs/` ;
   - une release suit [release.md](release.md), et une machine ne reçoit qu'une version du Pi validée pour son état ;
-  - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que les deux reviewers écrivent quels invariants ils ont vérifiés ;
+  - rien de ce qui touche la chaîne de sécurité (`raspberry-pi/src/training`, `src/motor`, `src/ecg_pipeline.py`, `src/presence`, `src/record`, `src/preflight.py`, `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) n'est fusionné sans que l'avis indépendant écrive quels invariants il a vérifiés ;
   - le Pi décide : tout ce qui descend du cloud est revalidé par le Pi ;
   - une clé de sûreté change à deux, et sur place ;
   - une valeur `[MED]` ne change qu'avec une décision médicale écrite et signée ;

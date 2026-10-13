@@ -48,6 +48,8 @@ simulation/
   cohort/generate.py          the seeded 30-subject cohort generator -> cohort/cohort.json
   cohort/battery.py           every subject x {auto jog, auto standard 30 min, manual 27 rpm bench}
   quick.py                    CLI: python -m simulation.quick (instant verdicts + report.html/json)
+  endurance.py                CLI: python -m simulation.endurance (the whole console for 24 simulated hours, or in real time)
+  endurance_measures.py       what that scenario reads (memory, tick, descriptors, data folder) and its thresholds
   SESSION_TESTS.md            acceptance-test mapping, implemented cases and remaining proposals
   tests/                      pytest + hypothesis
   scripts/check.sh            the gate (ruff, basedpyright strict, mypy strict, tests, 100% coverage)
@@ -213,10 +215,14 @@ Measured on 2026-10-05, macOS arm64, Python 3.12.13, from source
 
 | Command suffix after `$PY -m simulation.quick` | Result | Wall time |
 |---|---|---|
-| `--failures --workers 2` | 192 PASS, 7 SKIPPED | 87.81 s |
-| `--failures --dsp --workers 2` | 199 PASS, no skips or XFAIL | 182.30 s |
+| `--failures --workers 2` | 180 PASS, 7 SKIPPED | 88.49 s |
+| `--failures --dsp --workers 2` | 187 PASS, no skips or XFAIL | 210.87 s |
 | `--cohort --workers 2` | 89 PASS, 1 XFAIL (S07 jog) | 61.99 s |
 | `S07 --workers 1` | 2 PASS, 1 XFAIL | 3.83 s |
+
+The two `--failures` rows were measured again on 2026-10-10 (macOS arm64,
+Python 3.12.13, same options, other jobs running on the host), once the drive's
+fault table followed the ATV320's own documents: 187 cases where there were 199.
 
 These are quick-run timings, not the full pytest/coverage gate. The full battery
 also checks properties, parsers, lifecycle and recording behavior; budget tens
@@ -359,7 +365,7 @@ fraction is the share of HOLD ticks with a usable rate inside the zone;
 
 ## The failure matrix (`failures.py`)
 
-199 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
+187 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
 true afterwards. For every case `tests/test_failures.py` asserts: every
 invariant (motor at 0 after teardown, no torque, LFRD 0 where writable, no NaN,
 safety dominating, no frame after going silent), the output disabled or - when
@@ -368,9 +374,9 @@ the verdicts, an operator message containing the named words, the phase the
 injection landed in, a deadline for detection where it matters, and (ECG signal
 cases) no false heart rate graded usable (within 15 bpm of the truth). A second
 test asserts no case, known defect or not, leaves torque or a turning shaft.
-Measured 2026-10-05 with `--failures --dsp --workers 2`: 199 PASS, 0 XFAIL,
-0 SKIPPED. Without `--dsp`: 192 PASS and 7 SKIPPED; that is not full DSP coverage. Every one of the drive's 66 fault codes (the complete Schneider LFT
-enumeration) plus an unknown code is injected in an auto and a manual session,
+Measured 2026-10-10 with `--failures --dsp --workers 2`: 187 PASS, 0 XFAIL,
+0 SKIPPED. Without `--dsp`: 180 PASS and 7 SKIPPED; that is not full DSP coverage. Every one of the drive's 60 fault codes (the LFT enumeration of the ATV320,
+Schneider NVE41316 V3.5) plus an unknown code is injected in an auto and a manual session,
 and every one ends in a controlled stop with the code named to the operator.
 
 The authoritative case names, categories, expected end reasons, rules,
@@ -483,7 +489,7 @@ acceptance. Current verdicts come from the commands above.
     than using two raw endpoints. The cohort's ectopic/noisy subjects and
     the noisy-ECG scenario exercise that response.
 
-The fault matrix uses `LFT_FAULT_CODES`: all 66 named faults plus an unknown
+The fault matrix uses `LFT_FAULT_CODES`: all 60 named faults plus an unknown
 code in AUTO and MANUAL. `NO_FAULT_STORED` / nOF is not a fault. These cases
 verify the simulator and software decisions; they do not verify a physical
 drive's commissioned ttO, SLL, braking or STO wiring.

@@ -8,7 +8,7 @@ par une file bornée et un fil d'écriture à part, sans jamais écrire dans la
 boucle de contrôle. Ce branchement (file, cadence de `fsync`, comportement en
 cas d'erreur, refus de départ, rétention, export) est décrit dans
 [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
-Ce document-ci ne décrit que le format.
+Ce document décrit le format et son dépôt vérifié dans Convex (ANH-130).
 
 ## Arborescence
 
@@ -60,7 +60,7 @@ pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côt�
 d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
 `.sync-baseline.json`) le crée de la même façon.
 
-**Ce qui part au tableau de bord.** De tout enregistrement fait depuis le
+**Télémétrie synchronisée.** De tout enregistrement fait depuis le
 premier démarrage de la console avec un tableau de bord configuré sur ce
 répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
 (ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
@@ -72,6 +72,11 @@ démarrage où une clé est de nouveau en place. Les enregistrements antérieurs
 garder locaux les seconds, sont dans
 [raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console).
 
+**Fichiers complets.** Après acquittement de la fin de séance, les nouveaux
+enregistrements clos munis de l'inventaire `files` sont aussi déposés dans
+Convex Storage : manifeste, traces variateur, capteurs et blocs bruts compris.
+Le journal hors séance reste local. Voir [Dépôt vérifié](#dépôt-vérifié-dans-convex).
+
 ## Manifeste
 
 Tous les champs suivants sont présents, y compris ceux dont la valeur est
@@ -80,6 +85,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | Champ | Type et signification |
 | --- | --- |
 | `schema_version` | entier, exactement `2` |
+| `files` | inventaire des chemins relatifs attendus, fixé à la clôture ; facultatif pour relire les anciens schémas 2, obligatoire pour un nouveau dépôt complet |
 | `record_id` | identifiant opaque de l'enregistrement |
 | `machine_id` | identifiant de la machine ; `simulation` pour les scénarios |
 | `organization_id` | identifiant de l'organisation ; `synthetic` en simulation |
@@ -108,6 +114,25 @@ mesurée, en secondes, est `clocks.ntp_offset_s` ; `null` signifie inconnue,
 jamais zéro présumé. L'heure UTC sert à la corrélation entre machines ; les
 instants `t` des flux sont relatifs au début monotone. Des observations de
 préparation antérieures au départ peuvent avoir un `t` négatif.
+
+`clocks.wall_trusted` dit ce que valait l'horloge murale qui a donné
+`utc_start`, à l'ouverture de l'enregistrement :
+
+| Valeur | Sens |
+| --- | --- |
+| `true` | un service de temps tenait cette horloge : `utc_start` et `started_at` peuvent être crus |
+| `false` | personne n'en répondait (aucune source de temps jointe depuis l'allumage de la machine, ou état illisible) : ces dates peuvent être fausses de toute la durée pendant laquelle la machine était éteinte. Les instants `t`, eux, restent justes : ils sont monotones |
+| `null`, ou champ absent | le producteur n'a pas jugé son horloge : la simulation (son horloge est déterministe), et tout enregistrement écrit avant ce champ |
+
+Le champ suit la règle des champs ajoutés au schéma 2 : optionnel à la lecture
+(son absence vaut `null`, un enregistrement plus ancien se relit et se rejoue
+comme avant), émis explicitement par le writer. La version du schéma ne change
+pas. Dans l'autre sens, un lecteur d'une version antérieure refuse un
+manifeste qui le porte, comme il refuse toute clé qu'il ne connaît pas : après
+un retour à une version antérieure de la console, les enregistrements écrits
+par la plus récente ne se relisent qu'avec elle. La console écrit `true` ou
+`false` ([raspberry-pi.md](raspberry-pi.md#124-lhorloge-murale-et-le-journal-de-la-console)) ;
+elle laisse `ntp_offset_s` à `null`, faute de connaître l'écart mesuré.
 
 La copie `profile` conserve `total_duration_s`, `baseline_s`, `warmup_max_s`,
 `hold_min_s`, `cooldown_s`, `recovery_s`, `zone_low_bpm`, `zone_high_bpm`,
@@ -288,7 +313,7 @@ son `detail` :
 | --- | --- |
 | `bitalino_loss:` | la console : la liaison d'acquisition a perdu ou comblé des échantillons (compteurs de la liaison) |
 | `dashboard:` | la console : une nouvelle du lien avec le tableau de bord montrée à l'opérateur, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` |
-| `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur, puis `last=<opération>:<erreur>` |
+| `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur (ce que ce nombre compte : [Observations du variateur](#observations-du-variateur)), puis `last=<opération>:<erreur>`. Une ligne par changement de ces comptes : la dernière de l'enregistrement fait foi, et elle est écrite avant sa clôture, y compris quand il est clos `superseded` |
 | `simulation:` | la simulation : ce qu'elle a fait au modèle |
 
 ## Observations du variateur
@@ -344,13 +369,47 @@ l'entrée, sans qu'elles prennent de place sous la borne). Sur un variateur qui 
 rien (le simulateur), elle l'enveloppe d'une prise qui note chaque appel, avec
 le vocabulaire et les registres des observations d'appel décrites ci-dessous
 (`src/record/drive_tap.py`,
-[raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Les
-trames perdues parce que personne ne venait les prendre sont comptées dans
-l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`). Les lignes
-commencent avec l'enregistrement : la scrutation d'une console au repos n'y
-est pas, et les échanges qui précèdent l'ouverture n'y sont que s'ils
-attendaient encore quand le fil du journal a ouvert l'enregistrement, moins
-d'un cycle en temps normal (leur `t` est alors négatif).
+[raspberry-pi.md](raspberry-pi.md#152-aucune-écriture-dans-la-boucle)). Un
+appel qui lève une exception au lieu de répondre y est noté au moment où il
+lève, comme un appel échoué (`ok: false`, valeurs inconnues à `null` ; une
+lecture d'état est alors `read_failed`). Les
+trames perdues faute de place (la prise pleine parce que personne ne venait,
+ou trop de trames en attente d'un enregistrement) sont comptées dans
+l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`) : combien
+de trames du variateur manquent à cet enregistrement.
+
+- Pour les trames que la prise a refusées, ce nombre est **exact si les deux
+  lectures de frontière réussissent** : la
+  console lit le compte des refus au début de l'armement et à la fin de la
+  séance, et l'enregistrement compte la différence. Ce qu'une console au repos
+  s'est vu refuser avant ou après la séance n'y est pas.
+- Il reste un **majorant**, jamais inférieur à la perte réelle, dans trois
+  cas : les trames que le fil du journal a lâchées lui-même faute de place ;
+  et tout refus de la prise quand son compte n'a pas pu être lu au début de
+  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
+  recouvre celui où elles ont pu commencer, donc par deux enregistrements
+  quand deux séances le recouvrent.
+- Si seul le compte de fin manque, le fil soustrait le compte d'armement du
+  dernier compte qu'il a lu en vidant la prise pour cette fermeture. Cette
+  lecture arrive après la fin : elle peut inclure des refus au repos après
+  la séance. C'est donc aussi un majorant, mais calculé par différence de
+  compteurs, sans attribution par recouvrement d'intervalles.
+
+La ligne ne dit pas elle-même lequel des deux comptes a servi. Sur la console,
+le premier est le seul attendu : le second n'a été obtenu qu'en test (une
+borne réduite, une lecture du compte rendue fautive), et une lecture du compte
+qui échoue est écrite dans le journal de la console. Le format ne change pas :
+c'est le même texte dans le `detail` d'un événement `warning`, qu'un lecteur
+plus ancien lit comme avant, et le nombre n'est jamais plus grand que celui
+que la console écrivait jusque-là pour la même séance. Les lignes sont celles de la séance, du début de
+son armement à sa fin : ce que la console demande au variateur hors séance
+(scrutation au repos, consigne nulle après une séance, départ refusé,
+réarmement de défaut) n'y est pas, ni avant ni après, même quand cela
+attendait avec les trames de la séance que le fil du journal vienne les
+prendre. Les échanges de l'armement précèdent l'ouverture de l'enregistrement
+(leur `t` est négatif) : ils y sont tous, parce que le fil du journal garde ce
+qu'il prend pendant un armement jusqu'à l'ouverture de l'enregistrement
+([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
 `DriveBackend`, pas une capture du fil Modbus RTU. Il conserve chaque appel
@@ -562,11 +621,88 @@ Pas de nom de passager, d'adresse e-mail, de nom libre de profil, de vidéo,
 d'image de présence, de clé machine, de jeton ou de mot de passe. Pas de
 consigne interpolée, de battement synthétisé pour masquer une perte, ni de
 vérité physiologique réelle inventée. Pas de preuve de chiffrement au repos,
-de consentement ou de conformité réglementaire. Pas de dépôt Storage,
-synchronisation ni capture RTU native : ces fonctionnalités relèvent
-des tickets suivants. Le branchement de la console réelle et la rétention
+de consentement ou de conformité réglementaire. Le dépôt Storage est décrit
+ci-dessous ; la synchronisation du tableau de bord et la capture RTU native
+sont décrites dans les documents de la console. Le branchement de la console réelle et la rétention
 locale existent (ANH-128) et sont décrits dans
 [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
 
 La relecture indépendante de ce document et du SHA final reste une étape
 d'acceptation du ticket ; ce document ne vaut pas signature de reviewer.
+
+## Dépôt vérifié dans Convex
+
+Le writer clôt le manifeste avec l'inventaire des fichiers avant de calculer
+`checksums.sha256`. Les anciens enregistrements sans inventaire restent lisibles
+et conservés localement ; ils ne sont pas déclarés déposés par extrapolation.
+
+`RecordDeposit` travaille seulement hors séance, après acquittement de la fin
+par le serveur. Le démarrage d'une séance annule son travail réseau. Ses lectures
+et mises à jour de curseur passent par un worker disque dédié, jamais par le
+cycle moteur. Il envoie le manifeste en premier et attend sa vérification.
+Chaque fichier suivant reçoit une réservation liée à la machine, à la séance,
+au chemin, à la taille et au SHA-256 ; le POST natif Storage utilise seulement
+l'URL signée de ce déploiement et son type de contenu réservé, sans clé machine.
+
+Quatre transferts au plus tournent ensemble, chacun cadencé à 256 KiB/s, par
+lots de 64 fichiers. Une erreur déclenche un recul de 2 à 300 secondes. Le
+curseur adjacent `.sync.json` garde les reçus non acquittés ; un redémarrage
+réutilise ces reçus et le statut serveur. Le balayage serveur toutes les cinq
+minutes retrouve aussi un fichier envoyé dont la réponse a été perdue, et
+retire ses doublons. Il ne traite que les objets portant une réservation connue.
+
+Un enregistrement local illisible ou en échec ne bloque pas les suivants :
+la sélection continue après lui et réessaie ensuite. Une suppression cloud
+est conservée dans le curseur comme révocation, y compris après redémarrage ;
+les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
+La réservation signale un fichier rejeté même s'il n'est pas dans la page de
+statut courante, afin de remplacer son ancien reçu Storage supprimé.
+
+Limites : 40 000 fichiers, 16 MiB par fichier, 2 MiB pour le manifeste et
+1 MiB pour son inventaire JSON. Cela couvre les quelque 36 000 blocs bruts
+d'un programme de deux heures ; la séance manuelle reste limitée à une heure.
+Les chemins sont relatifs, ASCII, sans `..`,
+et longs de 160 caractères au plus. Le serveur conserve l'inventaire par pages
+de 1 024 chemins au plus ; les lectures de fichiers retournent 256 lignes au
+plus. Ces bornes permettent les nombreux petits blocs bruts sans dépasser la
+limite native des tableaux Convex. Un fichier hors limites reste sur le Pi.
+
+Les blocs bruts sont refusés avant allocation au-delà de 1 MiB décodé
+(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). La borne fichier de 16 MiB
+reste inférieure aux 100 MiB de réponse HTTP et ménage la mémoire de l'action
+de vérification (64 MiB). Références consultées le 13 octobre 2026 :
+[limites Convex](https://docs.convex.dev/production/state/limits) et
+[dépôt natif des fichiers](https://docs.convex.dev/file-storage/upload-files).
+Le POST natif doit finir dans les deux minutes ; à 256 KiB/s, un fichier de
+16 MiB prend au minimum 64 secondes. Une liaison plus lente peut faire échouer
+ce délai et déclencher une reprise, sans effacer la copie locale.
+
+Convex vérifie la taille et le SHA-256 des octets déposés. Une séance passe de
+`none` à `partial`, puis `complete` seulement lorsque chaque fichier de
+l'inventaire est vérifié ; un rejet la place en `rejected` jusqu'à une reprise
+valide. Le Pi relit toutes les pages du statut `complete`, compare toutes les
+empreintes avec ses fichiers locaux et écrit alors le marqueur adjacent
+`.deposit.json`, lié à `checksums.sha256`. La purge locale existante reste
+subordonnée à ce marqueur et à son délai ; un simple succès HTTP ne l'autorise
+jamais. Après suppression du dossier, la même purge retire son marqueur et
+son curseur `.sync.json` ; un refus de suppression est retenté à la purge
+suivante. Les curseurs des dossiers conservés et les écritures temporaires
+en cours restent intacts. Des sommes de contrôle réécrites par un compte local compromis ne
+constituent pas une preuve d'authenticité de la séance.
+
+Le téléchargement passe par `/api/records/download?fileId=…` avec un JWT Clerk
+et une autorisation vérifiée à chaque lecture. Aucun `storageId`, jeton ou URL
+publique n'est transmis dans les métadonnées de la carte. L'archive `.tar` est
+assemblée par le navigateur à partir des fichiers autorisés et revérifiés.
+Le visualiseur reçoit les données du manifeste, des ticks et des événements
+par un message entre fenêtres de même origine, sans JWT ; les blocs bruts
+restent disponibles dans l'archive.
+
+La rétention cloud est désactivée par défaut. `RECORD_RETENTION_DAYS`, entier
+strictement positif, active une purge quotidienne des dépôts expirés selon
+la fin de séance. Un administrateur autorisé peut aussi supprimer un dépôt :
+le téléchargement est révoqué immédiatement, puis fichiers et pages sont
+retirés par lots de 100. La séance et sa télémétrie restent présentes. Les
+réservations sont gardées comme tombstones pour reconnaître et supprimer les
+envois tardifs effectués avec d'anciennes URL signées. Les durées de conservation
+et la décision relative aux données de santé restent du ressort d'ANH-172.

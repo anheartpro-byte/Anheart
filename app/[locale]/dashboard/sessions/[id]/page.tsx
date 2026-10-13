@@ -33,6 +33,7 @@ import { fr, enUS } from "date-fns/locale";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { isTrainingKind } from "@/lib/training";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
+import { SessionRecordCard } from "@/components/training/SessionRecordCard";
 import {
   SessionKindBadge,
   SessionOriginBadge,
@@ -171,6 +172,7 @@ export default function SessionDetailPage({
 
       {/* Training parameters, end reason and telemetry (auto / manual) */}
       {isTraining && <TrainingDetailsCard sessionId={sessionId} />}
+      {isTraining && <SessionRecordCard key={sessionId} sessionId={sessionId} />}
 
       {/* Former ECG recording mode: read-only history */}
       {!isTraining && (

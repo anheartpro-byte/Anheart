@@ -95,7 +95,7 @@ fichier de verrou**. Sur un poste de développement ou un banc, ce sont tous les
 programmes de l'hôte, et tout ce qui suit s'applique. **Sur un Raspberry Pi
 installé par `scripts/install.sh`, ce n'est pas tout l'hôte** : la console y
 tourne dans un conteneur, lire d'abord
-[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-celui-du-conteneur).
+[la section qui lui est propre](#sur-un-raspberry-pi-installé--le-verrou-est-partagé).
 
 La console, le banc,
 la mesure de latence, `probe_atv320.py` et `scan_modbus.py` prennent le meme
@@ -129,27 +129,23 @@ retenter la fermeture. Chaque reconnexion doit reprendre le verrou ;
 cela n'autorise aucune reprise automatique du mouvement. Cette protection
 concerne les outils Anheart : un logiciel tiers tel que SoMove doit rester ferme.
 
-### Sur un Raspberry Pi installé : le verrou est celui du conteneur
+### Sur un Raspberry Pi installé : le verrou est partagé
 
 Sur un Pi installé par `scripts/install.sh`, la console tourne dans un
-conteneur Docker. `/tmp/anheart-drive.lock` y est le fichier **du conteneur**,
-pas celui du Pi.
+conteneur Docker. Le service monte le fichier hôte `/tmp/anheart-drive.lock`
+au même chemin dans le conteneur : les outils voient le même inode.
 
 - **Dans le conteneur**, la console tient le verrou comme décrit plus haut,
   dès qu'elle ouvre le câble (`MOTOR_BACKEND=serial`). En simulation elle
   n'ouvre aucun câble et ne prend aucun verrou.
-- **Un outil lancé sur le Pi lui-même, ou dans un second conteneur, n'est pas
-  refusé par ce verrou** : il ouvre un autre fichier du même nom, et le refus
-  `drive cable already owned` ne se produit pas.
-- Ce qui limite encore un second programme, d'après la lecture du code et
-  **sans essai entre le Pi et le conteneur** : le port série est ouvert en
-  exclusivité (pymodbus le demande à pyserial, qui pose un verrou `flock` sur
-  `/dev/ttyUSB0`, que le conteneur partage par son montage de `/dev`), et avec
-  une adresse `ftdi://` la bibliothèque USB réclame l'interface de
-  l'adaptateur. **Ni l'un ni l'autre n'est tenu entre une fermeture du port et
-  sa réouverture** : pymodbus ferme le port à chaque absence de réponse du
-  variateur et le rouvre à la transaction suivante. Un autre programme peut
-  prendre le câble dans cet intervalle.
+- Un outil Anheart lancé sur l'hôte et membre de `dialout` prend ce même
+  verrou et est refusé tant que la console le tient, même pendant une
+  reconnexion. Un conteneur lancé à la main doit recevoir le même bind ;
+  cette garantie ne vaut pas pour un conteneur sans ce montage.
+- Le pré-démarrage conserve l'inode et son contenu, refuse les liens et
+  protège le fichier contre le nettoyage de `/tmp`. Ne jamais le supprimer
+  pour forcer une acquisition. La preuve Linux sans matériel et la procédure
+  sont dans [pi-stockage.md](../docs/pi-stockage.md).
 
 **La règle, pour la personne : aucun outil de banc ou de diagnostic
 (`bench_console.py`, `bench_comm_latency.py`, `probe_atv320.py`,
@@ -209,13 +205,26 @@ With no stop asked for a FREEZE holds the setpoint as before, and every stronger
 verdict still decides first. ARRET/COOLDOWN say that the setpoint is falling or
 zero; they do not prove measured standstill.
 
-**Current limitations:** a programme's own cooldown on its timeline, with no
-stop asked for, is still held by a FREEZE until the FREEZE lifts, a stronger
-verdict arrives or `session_overrun` ends the session. Separately, an ongoing session can resume
-regulation automatically when an unlatched FREEZE/REDUCE warning disappears,
-including after REDUCE brought the setpoint to zero
-([ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).
-These are current implementation limits, not a statement of a future resume policy.
+**A programme's own descent comes down too.** From the entry into its
+cooldown a programme's setpoint walks to zero at the motion limits, under a
+FREEZE exactly as with no verdict, latched or not, and it never rises again.
+The session then ends as a programme run to its end, at its planned duration,
+unless the cause of an unlatched FREEZE lasts until the latched RAMP_DOWN of
+its rule (60 s without a heart rate, 120 s without the attendant), which ends
+the session as before (ANH-189, `docs/securite.md` 7.8). A manual session has
+no descent of its own: there a FREEZE holds the setpoint until a stop or a
+target of zero.
+
+**Current limitation:** an ongoing session resumes regulation by itself when
+an unlatched FREEZE/REDUCE warning disappears while the arm is still turning.
+A stopped arm does not restart by itself: once the arm has turned in a
+session, a setpoint that comes back to zero with nobody asking for it ends the
+session on a latch (`session_standstill`,
+[ANH-176](https://linear.app/anheart/issue/ANH-176/le-bras-peut-repartir-seul-en-cours-de-seance-quand-un-avertissement)).
+One movement still starts without a click: a programme's first step after its
+BASELINE, a warning having come and gone meanwhile (`docs/securite.md` 7.4).
+This is a current implementation limit, not a statement of a future resume
+policy.
 
 **Two kinds of training session:**
 
@@ -263,9 +272,38 @@ enables the unit, starts it and waits for `GET /healthz`. It is safe to run
 again: nothing that is in place is changed, and a running console is restarted
 only when its image or unit changed and only when it says it is at rest.
 
+The console does not run as root. In its container it is the account
+`anheart`, with no capability, on a read-only image, and may open the device
+classes of the drive cable and of the sensor and no other. Everything under
+`/var/lib/anheart` is that account's alone (read it with `sudo`), the
+configuration is root's alone, and nothing updates the system's packages by
+itself any more. `install.sh` sets all of that through `scripts/harden.sh`,
+which can be run on its own: `sudo bash scripts/harden.sh --dry-run` says what
+it would change and changes nothing. The Docker client of the unit is still
+root, because the Docker daemon is. See `docs/pi-image.md`, "Sous quel
+compte" and section 10.
+
 The console that starts is at rest. Nothing starts a session at boot or after a
 restart by systemd: a start needs an operator, and the emergency-stop
 attestation is per boot.
+
+systemd also watches the console: it must hear from the control loop at least
+every 10 s (the console says so after each control tick that completed, and
+from nowhere else), and a console that freezes or dies is stopped and started
+again, at rest. A console that starts three times within ten minutes after an
+unclean stop comes up out of service: it runs, says `CONSOLE HORS SERVICE` on
+its page, and arms nothing until a named operator puts it back in service
+there. None of this stops the motor: a console that stops ticking stops
+talking to the drive, whose own communication timeout does. See
+`docs/pi-image.md`, "Le chien de garde".
+
+The page is served in clear on the Pi's own loopback, which is how it is
+installed today. Off loopback the console serves TLS or does not start:
+`scripts/pi/make_console_tls.sh` makes the console's certificate on the Pi
+(under an authority of that Pi alone, whose private key is not kept), and
+`UI_TLS_CERT`, `UI_TLS_KEY` and `UI_TLS_NAMES` hand it to the console. The
+installation does not use it yet, and no tablet has been tried. See
+`docs/pi-image.md`, "Le certificat de la console".
 
 ### Control the service
 
@@ -276,7 +314,8 @@ sudo systemctl stop anheart       # controlled stop: reference zeroed, link rele
 sudo systemctl restart anheart    # at rest only, e.g. after editing /etc/anheart/anheart.env
 curl -fsS http://127.0.0.1:8090/healthz
 sudo bash scripts/pi/preflight.sh # read-only checks of the configuration and links
-sudo bash scripts/uninstall.sh    # removes the service; keeps configuration and data
+sudo bash scripts/harden.sh --dry-run   # what is not as closed as it must be; changes nothing
+sudo bash scripts/uninstall.sh    # removes the service and every system setting written for it; keeps configuration, data and account
 ```
 
 In `/etc/anheart/anheart.env` a line is `KEY=value` and nothing else: Docker

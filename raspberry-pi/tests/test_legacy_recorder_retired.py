@@ -70,7 +70,7 @@ RETIRED_REFERENCE: Final[re.Pattern[str]] = re.compile(
 
 #: Keys of the ``.env`` templates that no Python module reads, and who does.
 KEYS_READ_OUTSIDE_PYTHON: Final[Mapping[str, str]] = {
-    "BITALINO_MAC": "docker/entrypoint.sh binds the RFCOMM node to it",
+    "BITALINO_MAC": "scripts/pi/bind-bitalino.sh binds the RFCOMM node to it, on the machine",
     "MPLBACKEND": "matplotlib, imported by BioSPPy",
 }
 
@@ -254,9 +254,7 @@ def test_the_image_runs_the_console_through_the_entrypoint() -> None:
 
 def test_the_container_health_check_asks_the_console_healthz() -> None:
     command = _healthcheck_command()
-    assert command[:2] == ["python", "-c"]
-    assert "/healthz" in command[2]
-    assert "UI_PORT" in command[2], "the check must follow the port the console listens on"
+    assert command == ["python", "-m", "src.health_probe"]
     # The unit that runs the image leaves that check in place (tests/test_pi_install.py).
     assert "health" not in SERVICE_UNIT.read_text(encoding="utf-8").lower()
 
@@ -267,7 +265,11 @@ def test_the_systemd_unit_and_the_installer_start_the_console() -> None:
     started = _captures(r"^ExecStart=(.+)$", unit)
     assert len(started) == 1
     words = started[0].split()
-    assert words[:2] == ["/usr/bin/docker", "run"]
+    # A shell line starts the watchdog relay, then becomes `docker run` with every
+    # argument that follows (tests/test_pi_install.py runs that line for real).
+    run = words.index("/usr/bin/docker")
+    assert words[run : run + 2] == ["/usr/bin/docker", "run"]
+    assert words[run - 3 : run] == ["exec", '"$$@"\'', "anheart"]
     # The image is the last word: no command and no entrypoint replace the image's own.
     assert words[-1] == "${ANHEART_IMAGE}"
     assert "--entrypoint" not in words

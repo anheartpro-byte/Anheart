@@ -8,10 +8,24 @@ on:
   schedule:
     - cron: '17 1 * * *'
   workflow_dispatch:
+    inputs:
+      # The nightly endurance of the session record, asked for by hand: the
+      # step of `pi (tests 1)` that otherwise runs on the nightly event alone.
+      # Off unless ticked, so that a manual run costs what it always did. It
+      # starts that step and nothing else: the other nightly endurance, the
+      # one of the whole console in `simulation (report)`, runs on the nightly
+      # event alone and has no box.
+      endurance:
+        description: "Lancer aussi l'endurance nocturne de l'enregistrement de séance, et elle seule : une journée simulée, jusqu'à 35 minutes de plus dans « pi (tests 1) ». L'endurance de la console entière, dans « simulation (report) », ne tourne que la nuit."
+        required: false
+        type: boolean
+        default: false
   # Called by the release pipeline (release.yml), on the commit of `main` it
   # is about to publish. A called workflow sees the event of its caller, a
   # manual run: no gate is skipped by the path rule, and the synthetic report
-  # runs with its `--dsp` scenarios, as on any manual run.
+  # runs with its `--dsp` scenarios, as on any manual run. It declares no
+  # input: a caller cannot ask for the endurance of the session record, and
+  # the release pipeline runs neither of the two nightly endurances.
   workflow_call:
 
 permissions:
@@ -208,13 +222,19 @@ jobs:
         run: |
           echo "Runner: $(nproc) CPUs, $(lscpu | sed -n 's/^Model name: *//p')"
           bash raspberry-pi/scripts/check.sh
-      # The nightly run only, and in one part only: a simulated day of
-      # sessions with the session record written, heap, object count and tick
-      # cost judged per session (raspberry-pi/tests/test_record_endurance.py).
-      # The same loop runs for a few simulated minutes in the tests above, on
+      # The nightly run, or a manual run that asks for it (the `endurance`
+      # box of the button), and in one part only: a simulated day of sessions
+      # with the session record written, heap, object count and tick cost
+      # judged per session (raspberry-pi/tests/test_record_endurance.py). The
+      # same loop runs for a few simulated minutes in the tests above, on
       # every run. A failure here fails this part, hence `pi-gate`.
+      # `inputs.endurance` is the box of a manual run of THIS workflow and
+      # nothing else: empty on every other event, and in a run called by
+      # another workflow, which can hand this one no input. Compared with
+      # `true` so that no text, the word "false" included, can stand for a
+      # ticked box.
       - name: Pi endurance, a simulated day of sessions with the session record written
-        if: ${{ github.event_name == 'schedule' && matrix.endurance }}
+        if: ${{ (github.event_name == 'schedule' || inputs.endurance == true) && matrix.endurance }}
         timeout-minutes: 35
         working-directory: raspberry-pi
         env:
@@ -393,7 +413,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.python != 'false') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # 90 minutes for the synthetic report (with its `--dsp` scenarios at
+    # night), and the 240 of the nightly endurance step below.
+    timeout-minutes: 330
     env:
       PYTHONPATH: .:raspberry-pi
     steps:
@@ -412,6 +434,7 @@ jobs:
           uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
           uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
       - name: Synthetic simulation report
+        timeout-minutes: 90
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -420,6 +443,18 @@ jobs:
             args+=(--dsp)
           fi
           raspberry-pi/.venv/bin/python -m simulation.quick "${args[@]}"
+      # The nightly run only: 24 simulated hours of the whole console
+      # (simulation/endurance.py: the real runtime, the acquisition, the
+      # session record on disk and the dashboard link, against the dashboard
+      # double of the tests), judged on its resident memory, the duration of
+      # its tick, its open descriptors and its data folder. The same scenario
+      # runs a few simulated minutes in the battery, on every run
+      # (simulation/tests/test_endurance.py). A failure here fails this job,
+      # hence `simulation-gate`. Its report is kept with the synthetic ones.
+      - name: Console endurance, 24 simulated hours of sessions
+        if: ${{ github.event_name == 'schedule' }}
+        timeout-minutes: 240
+        run: raspberry-pi/.venv/bin/python -m simulation.endurance simulated --hours 24 --out simulation/out/ci/endurance
       - name: Keep the synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -431,6 +466,9 @@ jobs:
           path: |
             simulation/out/ci/report.json
             simulation/out/ci/report.html
+            simulation/out/ci/endurance/endurance.json
+            simulation/out/ci/endurance/endurance.md
+            simulation/out/ci/endurance/console.log
 
   # The required check. It passes only if every part above succeeded AND the
   # records they left prove that every test of the battery ran exactly once,
@@ -495,6 +533,17 @@ jobs:
           SIMULATION_GATE_EVIDENCE: ${{ runner.temp }}/simulation-evidence
           QUALITY_REPORT_DIR: ${{ runner.temp }}/quality
         run: bash simulation/scripts/check.sh
+      # Part of the gate: the hosted simulation engine, the wrapper Vercel
+      # serves (deploy/simulation-vercel/app.py) and the entry point of the
+      # Git layout (simulation_app.py). Its tests drive the real simulation
+      # runtime through the HTTP routes of the wrapper; no job ran them. In
+      # this job because it is the required check of the simulation, with the
+      # environment those tests need already installed, and because the path
+      # rule runs it for every file they read. From the repository root, where
+      # pyproject.toml gives pytest its paths. Nothing here reaches Vercel.
+      - name: Test the hosted simulation engine
+        if: ${{ !cancelled() }}
+        run: raspberry-pi/.venv/bin/python -m pytest deploy/simulation-vercel/tests
       - name: Publish coverage and synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

@@ -610,8 +610,14 @@ test("EX-2 stage 1 runs the jobs of ci.yml and of pi-install.yml themselves, wit
   // Everything: the six required checks, and the install of the Pi, which is no job of ci.yml.
   for (const gate of ["pi-gate", "simulation-gate", "convex-tests", "web", "audit", "docs"]) assert.ok(jobsOf(CI).has(gate), gate);
   assert.deepEqual([...jobsOf(INSTALL).keys()], ["pi-install"]);
-  // Left out on purpose, and said so in docs/release.md: the nightly endurance runs on the nightly event alone.
-  assert.match(jobsOf(CI).get("pi-tests") ?? "", /^ {8}if: \$\{\{ github\.event_name == 'schedule' && matrix\.endurance \}\}$/m);
+  // Left out on purpose, and said so in docs/release.md: the nightly endurance runs on the nightly event, or
+  // on a manual run of ci.yml that ticks its own box. This pipeline hands ci.yml no input (checked above:
+  // `workflow_call` declares none, and the job that calls it has no `with`), so the box is empty here.
+  assert.match(
+    jobsOf(CI).get("pi-tests") ?? "",
+    /^ {8}if: \$\{\{ \(github\.event_name == 'schedule' \|\| inputs\.endurance == true\) && matrix\.endurance \}\}$/m,
+  );
+  assert.doesNotMatch(RELEASE, /endurance/, "the release pipeline asks for the endurance");
   assert.match(read("docs/release.md"), /l'endurance nocturne/);
 });
 

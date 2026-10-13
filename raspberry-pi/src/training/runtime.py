@@ -217,6 +217,7 @@ from src.training.idle_recovery import UnknownEpisode
 from src.training.motion import (
     DEFAULT_MOTION_LIMITS,
     MotionLimits,
+    Ramp,
     carry_after,
     next_setpoint,
     ramp_duration,
@@ -1242,6 +1243,7 @@ class TrainingRuntime:
         "_session_over",
         "_setpoint_changed_at",
         "_shutdown",
+        "_silenced",
         "_silent",
         "_snapshot",
         "_started_at",
@@ -1436,6 +1438,9 @@ class TrainingRuntime:
         self._attendant_last_seen: Monotonic | None = None
         self._previous_tick_at: Monotonic | None = None
         self._latched: SafetyVerdict | None = None
+        # What this module's own latch held when GO_SILENT took its place, for
+        # the screen alone: written by _latch, read by the `silenced` property.
+        self._silenced: SafetyVerdict | None = None
         self._shutdown: ShutdownReport | None = None
 
     # =====================================================================
@@ -1585,6 +1590,55 @@ class TrainingRuntime:
         """The standing demand, with "nobody is asking for anything" reading as NONE."""
         verdict = self.standing
         return SafetyAction.NONE if verdict is None else verdict.action
+
+    @property
+    def floor(self) -> SafetyVerdict | None:
+        """The most severe LATCHED verdict, whoever holds it: this module, or the supervisor.
+
+        The supervisor's floor does not hold what this module latched on its
+        own behalf (a drive found running, an enable that was not confirmed, a
+        link it gave up on), so a screen that read the supervisor alone listed
+        no latched verdict under one that stood. Ties go to this module's own
+        latch, as in :attr:`standing`. For the screen: every decision of the
+        tick reads :attr:`standing`, never this.
+        """
+        return self._worst(self._latched, self._supervisor.floor)
+
+    @property
+    def silenced(self) -> SafetyVerdict | None:
+        """The most severe latched verdict ``GO_SILENT`` stands over, or ``None``.
+
+        ``GO_SILENT`` takes the place of whatever was latched before it, and
+        refuses every acknowledgement: a stop that was latched when it came is
+        still latched, and neither :attr:`standing` nor :attr:`floor` shows it
+        any more. A screen that watched the sequence had seen that stop; one
+        opened afterwards was shown ``GO_SILENT`` and nothing behind it. This
+        is what stands behind it, wherever it is held:
+
+        * what this module's own latch held when its ``GO_SILENT`` replaced it;
+        * that latch itself, when the ``GO_SILENT`` is the supervisor's;
+        * what the supervisor's floor held when its ``GO_SILENT`` replaced it
+          (:attr:`~src.training.safety.SafetySupervisor.silenced`);
+        * that floor itself, when the ``GO_SILENT`` is this module's.
+
+        The emergency stop is not in it: the supervisor holds that one in a
+        slot of its own, which nothing replaces
+        (:attr:`~src.training.safety.SafetySupervisor.estop`). ``None`` while
+        ``GO_SILENT`` does not stand, and when nothing was latched behind it.
+        Once it names a verdict it names one for as long as this process
+        lives: nothing is acknowledged under ``GO_SILENT``. For the screen: no
+        decision of the tick reads it. Pure.
+        """
+        if self.standing_action is not SafetyAction.GO_SILENT:
+            return None
+        held = (self._silenced, self._latched, self._supervisor.silenced, self._supervisor.floor)
+        return self._worst(
+            *(
+                verdict
+                for verdict in held
+                if verdict is not None and verdict.action is not SafetyAction.GO_SILENT
+            )
+        )
 
     def snapshot(self) -> TelemetrySnapshot:
         """The last published picture of the session. Pure; safe to read between ticks."""
@@ -2752,6 +2806,10 @@ class TrainingRuntime:
         given that ending's own descent and recovery before it is judged
         (ANH-185).
 
+        ``nothing_waits`` changes no verdict at all: it only keeps an unlatched
+        one from saying that the speed will follow the manual target upwards
+        again, over an arm whose target is zero (:meth:`_nothing_waits`).
+
         ``measured_rpm`` and ``current`` go to ``None`` the moment the status is
         stale, never to a fabricated zero - a made-up 0 rpm is exactly the lie
         that would make ``no_load`` and ``reverse_rotation`` judge a machine that
@@ -2785,7 +2843,28 @@ class TrainingRuntime:
             stopped_by=self._stopped_by,
             session_over=self._session_is_over(),
             ending=self._ending_in_progress(),
+            nothing_waits=self._nothing_waits(),
         )
+
+    def _nothing_waits(self) -> bool:
+        """Whether a manual arm is at rest with nothing asked of it: two facts, together.
+
+        A manual session, a setpoint in force of zero, and a target of zero.
+        A warning that lifts over such an arm is followed by nothing: while
+        any verdict stands over a setpoint of zero a non-zero target is
+        refused (:meth:`set_manual_target`) and one that was waiting is taken
+        back (:meth:`_withdraw_waiting_target`), so the target is still zero
+        when the warning goes. A target accepted with nothing standing, on the
+        tick a warning appears, is still waiting when this is read: the
+        sentence is said for that one tick, and the target is taken back at
+        its end.
+
+        Read by the supervisor for the wording of an unlatched verdict and for
+        nothing else (:attr:`~src.training.safety.SafetyObservation.nothing_waits`):
+        over this arm the verdict no longer says that the speed follows the
+        manual target again, upwards too, with nobody clicking.
+        """
+        return self._manual is not None and self._applied_rpm == 0 and self._manual_target == 0
 
     def _session_is_over(self) -> bool:
         """Whether this session has run to its end and commands nothing: two facts, together.
@@ -2943,10 +3022,16 @@ class TrainingRuntime:
         trip needs a tick - which :meth:`start` does not have. A more severe
         latch replaces a less severe one; an equally severe one does not, so the
         *first* thing that took the machine out of service keeps its instant.
+
+        What ``GO_SILENT`` replaces is kept beside it, for the screen
+        (:attr:`silenced`): that stop is still latched, and nothing is
+        acknowledged from then on.
         """
         current = self._latched
         if current is not None and action <= current.action:
             return
+        if action is SafetyAction.GO_SILENT:
+            self._silenced = current
         self._latched = SafetyVerdict(
             action=action, rule=rule, detail=detail, latched=True, since=now
         )
@@ -3167,19 +3252,24 @@ class TrainingRuntime:
         verdict) is bounded twice, and this one only once. It walks at the
         motion limits towards the controller's demand, and that demand comes
         down on the control law's own ramp: at once by ``slew x`` the age of
-        its last decision (a head start of 3 to 78 rpm with the shipped
-        15 rpm/s and 5 s period), then by ``floor(slew x dt)`` whole rpm a
-        tick, which at 5 Hz is 2 or 3 rpm according to the tick's measured
-        length, against 2.48 for the shipped motion limits. While the head
-        start lasts the motion limits are what binds and the two descents are
-        the same, tick for tick. Once it is spent the ordinary one goes at
-        the control law's pace. So this walk is never faster than the motion
+        its last decision, in whole rpm rounded down (a head start of 2 to
+        77 rpm read on the software rig with the shipped 15 rpm/s and 5 s
+        period, where a tick measures a hair under its 0.2 s; 3 to 78 by the
+        nominal figures), then by ``floor(slew x dt)`` whole rpm a tick,
+        which at 5 Hz is 2 or 3 rpm according to the tick's measured length,
+        against 2.48 for the shipped motion limits. While the head start
+        lasts the motion limits are what binds and the two descents are the
+        same, tick for tick. Once it is spent the ordinary one goes at the
+        control law's pace. So this walk is never faster than the motion
         limits and never behind an ordinary descent, and it can be AHEAD of
-        one, with the shipped limits too: by up to 2.6 s from 193 rpm on the
-        shipped programme, in 9 of the 26 places the control period can fall
-        (measured on the software rig, never on the machine). It is also the
-        walk a programme's own cooldown takes when the timeline reaches it,
-        or goes on with it, under a FREEZE (ANH-189).
+        one, with the shipped limits too. By how much depends on the speed
+        it starts from, a longer descent outlasting a longer head start: on
+        the shipped programme, by up to 2.6 s from 193 rpm, in 9 of the 26
+        places the control period can fall, and by up to 4.4 s from the
+        profile's ceiling of 276 rpm, in 15 of them (measured on the software
+        rig, never on the machine). It is also the walk a programme's own
+        cooldown takes when the timeline reaches it, or goes on with it,
+        under a FREEZE (ANH-189).
 
         The time base. The hold arm leaves the profiler none, and a REDUCE on
         a programme walks its own ramp and leaves a stale one. Followed
@@ -4210,23 +4300,51 @@ class TrainingRuntime:
         does not move was the screen's half of ANH-175. A FREEZE holds every
         target but zero (:meth:`_stop_asked`), so a descent to zero keeps its
         ramp and its arrival time under one, because it is really under way.
+
+        Nor is a ramp towards the target announced under a REDUCE. There the
+        setpoint is walked down towards zero whatever the target is
+        (:meth:`_follow_manual`, :meth:`_descend`), and the view said "ramp in
+        progress" with the time it would take to climb back to a target the
+        arm was moving away from. The ramp in force is named instead: from the
+        setpoint to zero, and ``ramp_to`` says so. The target is followed
+        again only if the warning lifts before the arm has stopped.
+
+        The ramp is NAMED here and not walked. This runs at the end of every
+        tick, and the arrival time is a walk of the motion profile from the
+        setpoint in force to where it is going: work for the screen alone,
+        which on every tick of a climb cost thirty times the rest of the tick.
+        The snapshot carries what the walk reads
+        (:class:`~src.training.motion.Ramp`) and whoever shows the arrival
+        time walks it, once per snapshot, after the tick:
+        ``ManualView.ramp_eta`` answers exactly what this method used to
+        compute, from the same four values.
+
+        For the screen: nothing in the tick reads this view.
         """
         manual = self._manual
         if manual is None:
             return None
         applied = self._applied_rpm
         target = MotorRpm(0) if self._ending is not None else self._manual_target
-        frozen = self.standing_action is SafetyAction.FREEZE
-        held = frozen and target not in (0, applied)
+        action = self.standing_action
+        held = action is SafetyAction.FREEZE and target not in (0, applied)
+        # Where the setpoint is being walked to: under a REDUCE, down to zero.
+        heading = MotorRpm(0) if action is SafetyAction.REDUCE else target
         return ManualView(
             occupancy=manual.occupancy,
             target=self._speed_view(target),
             ceiling=self._speed_view(manual.ceiling),
             min_run=self._speed_view(self._motion.min_run),
-            ramping=applied != target and not held,
-            ramp_eta=(
+            ramping=applied != heading and not held,
+            ramp=(
                 None
                 if held
-                else ramp_duration(applied, target, self._motion, self._motion_geometry)
+                else Ramp(
+                    start=applied,
+                    target=heading,
+                    limits=self._motion,
+                    geometry=self._motion_geometry,
+                )
             ),
+            ramp_to=None if held else self._speed_view(heading),
         )

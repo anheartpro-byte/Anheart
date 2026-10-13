@@ -1,7 +1,7 @@
 # Manuel opérateur : la console de la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 9 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
+> Version du 11 octobre 2026. Ce manuel décrit le logiciel tel qu'il existe à
 > cette date. Aucun client ne l'a encore utilisé.
 >
 > - Les captures d'écran viennent d'essais en simulation (machine simulée),
@@ -198,7 +198,7 @@ cartes apparaissent en majuscules à l'écran.
 
 Elles sont à gauche, sur toutes les pages. Vert : normal. Orange : quelque
 chose est en cours. Rouge : problème ou arrêt. Les six premières parlent de la
-machine, les deux dernières de la console elle-même. La capture ci-dessus peut
+machine, les trois dernières de la console elle-même. La capture ci-dessus peut
 dater d'une version antérieure de l'écran, qui n'en montrait que six.
 
 | Pastille | Ce qu'elle affiche | Ce que cela veut dire |
@@ -223,31 +223,41 @@ dater d'une version antérieure de l'écran, qui n'en montrait que six.
 | | « injoignable », « incompatible », « cle refusee », « en erreur » | La console n'échange plus normalement avec le site web. Une séance déjà en cours continue selon les règles de la console, et ses mesures restent enregistrées sur la machine. L'affichage du site peut se figer, et le site peut ne plus pouvoir demander l'arrêt ([section 7](#7-séance-lancée-depuis-le-site)). Une ligne sous les pastilles en donne le motif. |
 | | « non configure » | Cette console n'est pas reliée au site web. |
 | **Version** | par exemple « pi-0.0.0-dev » | La version du logiciel de la console. |
+| **Service** | « en service » | La console accepte de démarrer une séance, si rien d'autre ne s'y oppose. |
+| | « HORS SERVICE » | La console a redémarré plusieurs fois de suite après un arrêt anormal. Elle continue d'afficher la machine, mais elle refuse tout démarrage tant que quelqu'un ne l'a pas remise en service, avec son nom, depuis la page **Securite** (bouton **Remettre en service**). Le bandeau rouge « CONSOLE HORS SERVICE » s'affiche en même temps. Remettre la console en service ne démarre rien. |
 
 > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
 > quand **Serveur** n'affiche pas « joignable » pendant une séance ou avant
 > d'en commencer une, en particulier pour une séance lancée depuis le site
 > ([section 7](#7-séance-lancée-depuis-le-site)), et qui prévenir.
 
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand **Service** affiche « HORS SERVICE » : qui prévenir, ce qu'il faut
+> faire vérifier sur la machine, et qui a le droit de la remettre en service.
+
 **Etat** et **Mode** peuvent se contredire. Quand c'est la console qui décide
 de terminer la séance, **Etat** peut rester sur « running » alors que **Mode**
 affiche « ARRET ». Et aucun des deux ne dit qu'un démarrage sera accepté :
-quand un défaut du variateur survient au repos, après une séance terminée
+quand un défaut du variateur survient au repos
 ([section 9.5](#95-le-variateur-passe-en-défaut)), **Mode** reste sur
 « REPOS » et **Etat** affiche « idle » alors que tout démarrage est refusé.
-C'est **Securite** qui le dit. Pour savoir où en est la machine, lisez
-**Mode**, **Rotation** et **Securite**, pas **Etat**.
+C'est le bandeau rouge « VARIATEUR EN DEFAUT » qui le dit, et **Securite**
+aussi quand le défaut survient après une séance terminée. Pour savoir où en
+est la machine, lisez **Mode**, **Rotation** et **Securite**, pas **Etat**.
 
 ### Les bandeaux en haut de l'écran
 
-Ils s'affichent tout en haut, sur toutes les pages. Trois sont rouges, un est
+Ils s'affichent tout en haut, sur toutes les pages. Six sont rouges, un est
 orange. Plusieurs peuvent être affichés en même temps.
 
 | Bandeau | Ce que cela veut dire |
 |---|---|
 | « NO LIVE DATA » | L'écran ne reçoit plus de données. Les nombres affichés sont anciens : voir la [section 9.3](#93-bandeau-rouge-no-live-data). |
-| « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». La demande reste en attente : si elle aboutit, ce bandeau est remplacé par le suivant ([section 8](#8-arrêter-la-machine)). |
-| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « ARRET D'URGENCE NON CONFIRME » | Vous avez cliqué **E-STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « UTILISEZ L'ARRET CABLE ». S'il dit « aucune reponse de la console », la demande reste en attente : si elle aboutit, ce bandeau est remplacé par « ARRET D'URGENCE VERROUILLE ». S'il dit « la demande a echoue » et « n'est plus en attente », la demande est terminée : elle n'aboutira plus et l'écran ne la renvoie pas. Le bandeau indique alors depuis combien de temps elle a échoué, et il reste affiché jusqu'à ce que l'écran apprenne qu'un arrêt d'urgence est verrouillé, ou que la page soit rechargée. S'il dit « nouvelle demande sans reponse » et « la precedente a echoue », vous avez cliqué de nouveau après un échec : la nouvelle demande est en attente, la précédente est terminée ([section 8](#8-arrêter-la-machine)). |
+| « STOP NON CONFIRME » | Vous avez cliqué **STOP** et la console n'a pas répondu depuis 2 secondes, ou la demande a échoué. Le bandeau se termine par « rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable ». Il dit, avec les mêmes mots que le précédent, si une demande est encore en attente (« aucune reponse de la console », « nouvelle demande sans reponse ») ou si elle est terminée (« la demande a echoue », « n'est plus en attente »). Tant qu'il est affiché, la console n'a pas confirmé que la séance se termine. Il disparaît quand la console accepte ou refuse la demande, ou quand l'écran apprend que la séance se termine. Si la demande échoue sans réponse de la console, ou si la console répond par une erreur, il reste affiché et dit que la demande a échoué ([section 8](#8-arrêter-la-machine)). |
+| « ARRET D'URGENCE VERROUILLE » | Un arrêt d'urgence logiciel est verrouillé : un E-STOP, ou un arrêt d'urgence décidé par la console. Le bandeau reste affiché jusqu'à l'acquittement ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Si **Securite** passe à « go_silent », plus rien ne s'acquitte : le bandeau reste alors affiché jusqu'au redémarrage de la console, y compris sur un écran ouvert ou rechargé à ce moment. Après ce redémarrage, il disparaît quand l'écran reçoit la première réponse de la nouvelle console. Dans un cas il peut rester à tort, jusqu'au rechargement de la page : l'arrêt a été acquitté pendant que cet écran affichait « NO LIVE DATA », puis **Securite** est passée à « go_silent ». Il dit que l'arrêt est verrouillé, pas que le bras est arrêté : il le rappelle lui-même par les mots « verrouille ne veut pas dire arrete ». |
+| « VARIATEUR EN DEFAUT » | Le variateur signale un défaut. Le bandeau donne le code du défaut et reste affiché tant que le variateur le signale. Pendant ce temps, la console refuse tout démarrage : voir la [section 9.5](#95-le-variateur-passe-en-défaut). |
+| « CONSOLE HORS SERVICE » | La console a redémarré plusieurs fois de suite après un arrêt anormal et refuse tout démarrage : voir la pastille **Service** plus haut. |
 | « REPRISE AUTOMATIQUE POSSIBLE » (orange) | La console garde ou baisse la vitesse à cause d'une alerte qui n'est pas verrouillée. Quand cette alerte disparaîtra, la vitesse remontera seule, sans aucun clic ([section 9.2](#92-la-console-agit-seule)). |
 
 ### Les pages
@@ -369,10 +379,50 @@ l'écran.*
   vitesse possible (ligne « minimum de rotation »).
 - La ligne « cible appliquee » dit ce que la machine vise vraiment. Fiez-vous à
   elle, pas au brouillon orange.
-- Une réponse qui commence par « accepte : » ou « cible envoyee : » sous les
-  boutons veut seulement dire que la demande est reçue. La machine vérifie
-  ensuite. Si elle refuse, le refus apparaît dans la liste **Evenements** de la
-  page **Seance**, sur une ligne « refused ».
+- Une réponse qui commence par « demande envoyee : » ou « cible envoyee : »
+  sous les boutons veut seulement dire que la demande est reçue. La machine
+  vérifie ensuite, et la console dit ce qu'elle a fait de la demande faite
+  depuis cet écran. La même ligne dit alors l'une de ces choses :
+  - « demarrage pris par la machine » ou « cible prise par la machine » : la
+    machine a pris la demande faite depuis cet écran. Pour un démarrage, la
+    séance en cours est celle que vous avez demandée ; la ligne s'efface
+    quand cette séance se termine. Pour une cible, la ligne s'efface quand la
+    machine ne tient plus cette cible.
+  - En rouge, « refus de la machine » suivi de la raison : la machine a
+    refusé la demande faite depuis cet écran. Le refus apparaît aussi dans la
+    liste **Evenements** de la page **Seance**, sur une ligne « refused ».
+  - En rouge, « demande annulee » suivi de « un STOP est arrive avant que la
+    machine prenne cette demande, rien n'a ete fait » : quelqu'un a cliqué
+    **STOP**, sur cet écran ou sur un autre, avant que la machine ait pris
+    votre demande. Elle n'a pas été exécutée.
+  - En rouge, « demande refusee par la console : un demarrage est deja
+    demande » : un démarrage est déjà demandé, depuis cet écran ou depuis un
+    autre, et la machine ne l'a pas encore pris. Votre clic n'a pas été
+    envoyé à la machine.
+  - En rouge, « demande refusee par la console : une autre demande attend
+    encore la machine », ou « seconde demande refusee par la console » : un
+    clic précédent, de cet écran ou d'un autre, n'est pas encore traité, et
+    celui-ci n'a pas été envoyé à la machine.
+  - En rouge, « cet ecran ne sait pas ce que la machine a fait de sa demande
+    de demarrage » ou « cet ecran ne sait pas ce que la machine a fait de sa
+    cible », suivi de « sa liaison a ete coupee » : la liaison de l'écran
+    avec la console a été coupée entre votre clic et la réponse. L'écran
+    redemande alors la réponse à la console, et la ligne se corrige d'elle-même
+    quand il l'obtient.
+  - En rouge, « la machine a pris le demarrage demande par cet ecran », suivi
+    de « cet ecran ne sait pas si la seance en cours est encore celle-la » :
+    la machine avait pris votre démarrage, puis la liaison de l'écran avec la
+    console a été coupée. L'écran redemande à la console si la séance en
+    cours est toujours la vôtre, et la ligne se corrige d'elle-même quand il
+    obtient la réponse.
+
+  La ligne ne parle que des demandes faites depuis cet écran. Ce que la
+  machine répond à un autre écran se lit dans la liste **Evenements** de la
+  page **Seance**.
+
+  > **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+  > quand cette ligne dit que l'écran ne sait pas si la machine a pris sa
+  > demande.
 - Pour changer de vitesse : composez un nouveau brouillon, puis **Appliquer**.
 - Vous pouvez ramener vous-même le bras à l'arrêt en appliquant une cible de
   0. Si **Securite** affiche « none » à ce moment, la séance continue :
@@ -404,6 +454,11 @@ l'écran.*
   pas. Sur un bras qui tourne, cette cible est gardée, puis suivie sans autre
   clic quand « freeze » disparaît. Une cible de 0 et **STOP** font baisser la
   vitesse même pendant « freeze ».
+- Si **Securite** affiche « reduce », la console baisse la vitesse quelle que
+  soit la cible ([section 9.2](#92-la-console-agit-seule)). La ligne « rampe »
+  commence alors par « en baisse », et le bandeau orange dit « la vitesse
+  baisse » : ils donnent la vitesse vers laquelle la console descend, pas la
+  cible, et précisent « la cible n'est pas suivie ».
 - **Acquitter un « freeze » verrouillé pendant que le bras tourne relâche la
   vitesse.** Un « freeze » verrouillé ne disparaît pas seul : c'est
   l'acquittement qui le lève. Donné alors que **Mode** affiche « MANUEL », cet
@@ -488,8 +543,8 @@ fréquence cardiaque du passager dans la zone du programme.
     c'est que l'attestation n'est pas faite, ou que **Etat** n'affiche pas
     « idle ».
 11. Regardez la liste **Evenements**, en bas de la page : vous devez voir
-    « start_requested », puis « session_running ». Une ligne « refused » veut
-    dire que la machine a refusé, avec la raison
+    « start_requested », puis « taken », puis « session_running ». Une ligne
+    « refused » veut dire que la machine a refusé, avec la raison
     ([section 10](#10-un-démarrage-est-refusé)).
 
 > **Dès que la séance est démarrée, personne ne s'approche du bras ni de la
@@ -648,6 +703,16 @@ dater d'une version antérieure de l'écran.*
 - Si une fenêtre « STOP refuse : » s'ouvre, lisez-la. Soit il n'y a rien à
   arrêter, soit un arrêt est déjà en cours, soit aucun nom d'opérateur n'est
   saisi. **Si le bras tourne et que STOP est refusé, cliquez E-STOP.**
+- Si une fenêtre annonce que « la demande d'arret (STOP) a echoue », ce n'est
+  pas un refus : la console n'a pas répondu, ou a répondu par une erreur, et
+  rien ne confirme que la séance s'arrête. Le bandeau rouge
+  « STOP NON CONFIRME » reste alors affiché en haut de l'écran
+  ([section 3](#3-lire-lécran)). Le même bandeau s'affiche, sans fenêtre,
+  quand la console ne répond pas dans les 2 secondes. Il se termine par les
+  mots « E-STOP, ou l'arret cable ».
+
+> **À compléter par Anheart avant la semaine pilote :** la conduite à tenir
+> quand le bandeau « STOP NON CONFIRME » est affiché et que le bras tourne.
 
 ### E-STOP, l'arrêt d'urgence de l'écran
 
@@ -1014,25 +1079,33 @@ La console essaie seule de se reconnecter au capteur.
 
 Le variateur est l'appareil qui alimente le moteur. En cas de défaut :
 
+- un bandeau rouge « VARIATEUR EN DEFAUT » s'affiche en haut de toutes les
+  pages, avec le code du défaut. Il reste tant que le variateur signale le
+  défaut ;
 - la carte **Variateur** affiche la pastille « fault » et un encadré rouge qui
   commence par « DEFAUT », avec un code et une phrase d'explication ;
 - un bouton **Reset defaut variateur** apparaît ;
-- la console termine la séance et verrouille l'arrêt ;
-- si une séance était en cours, **Mode** peut rester sur « ARRET » tant que
-  le variateur reste en défaut. C'est alors le réarmement réussi qui le ramène
-  à « REPOS » ;
+- si une séance était en cours, la console la termine et verrouille l'arrêt.
+  **Mode** peut rester sur « ARRET » tant que le variateur reste en défaut.
+  C'est alors le réarmement réussi qui le ramène à « REPOS » ;
 - si le défaut survient au repos, **Mode** reste sur « REPOS ». Après une
   séance terminée, programme mené à son terme compris, **Securite** affiche
-  alors l'arrêt verrouillé (« ramp_down », règle « drive_fault »).
+  alors l'arrêt verrouillé (« ramp_down », règle « drive_fault »). Avant
+  toute séance depuis le démarrage de la console, **Securite** peut rester
+  sur « none » : c'est le bandeau qui signale le défaut ;
+- tant que le bandeau est affiché, la console refuse tout démarrage. Le refus
+  s'écrit en rouge sous le bouton et commence par « demarrage refuse :
+  variateur en defaut ».
 
 Selon le défaut, le variateur peut ne plus freiner le moteur : le bras
 ralentit alors seul, sans contrôle, plus longtemps qu'après un arrêt normal.
 
 ![Défaut du variateur](../guides/img/console-14-defaut-variateur.png)
 
-*Défaut du variateur : pastille « fault », encadré rouge et bouton de
-réarmement. Sur cette capture, le défaut a été provoqué console au repos :
-Mode affiche « REPOS ». Capture prise en simulation.*
+*Défaut du variateur : bandeau rouge en haut, pastille « fault », encadré
+rouge et bouton de réarmement. Sur cette capture, le défaut a été provoqué
+console au repos, avant toute séance : Mode affiche « REPOS » et Securite
+« none ». Capture prise en simulation.*
 
 1. Attendez que **Rotation** affiche « a l'arret ». Puis regardez **Mode** :
    - s'il affiche « REPOS », il n'y a pas de phase à attendre : passez à
@@ -1051,8 +1124,9 @@ Mode affiche « REPOS ». Capture prise en simulation.*
 3. Appelez le support, sauf si la phrase indique une cause que vous êtes
    habilité à corriger.
 4. Pour réarmer : vérifiez que votre nom est saisi, puis cliquez **Reset
-   defaut variateur**. La pastille du variateur doit quitter « fault », et
-   **Mode** doit afficher « REPOS ».
+   defaut variateur**. La pastille du variateur doit quitter « fault », le
+   bandeau « VARIATEUR EN DEFAUT » doit disparaître, et **Mode** doit afficher
+   « REPOS ».
 5. Ensuite, acquittez l'alerte dans la page **Securite**, s'il y en a une
    ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)). Pour le seul
    défaut du variateur, la case du coup de poing n'est pas nécessaire. Si vous
@@ -1170,6 +1244,7 @@ voyez.
 | En séance manuelle, un message en anglais sous le bouton juste après un redémarrage de la console. Ou, dans **Evenements**, « demarrage refuse : cablage de l'arret d'urgence non atteste » | L'attestation n'est pas faite. | [Section 4](#4-avant-toute-séance-attester-larrêt-durgence). |
 | Un message contenant « demarrage refuse : verdict », ou un message en anglais alors que **Securite** n'affiche pas « none » | Un arrêt de sécurité attend un acquittement. | [Section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | Un message en anglais alors que **Etat** n'affiche pas « idle » | Une séance tourne déjà, ou un arrêt est en cours. | Attendez **Etat** « idle ». |
+| « demande refusee par la console : un demarrage est deja demande » | Un démarrage est déjà demandé, depuis cet écran ou depuis un autre, et la machine ne l'a pas encore pris. Votre clic n'a pas été envoyé à la machine. | Ne recliquez pas. Regardez **Mode** et la liste **Evenements**. |
 | « seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL » | Les séances programmées ne sont pas autorisées sur cette machine. | Appelez le support. |
 | Un message contenant « personne a bord refusee » | La machine n'est pas autorisée à tourner avec une personne à bord. | Ne cherchez pas à contourner. Appelez le support. |
 | « demarrage refuse : age du passager requis pour une seance programmee » | L'âge n'est pas saisi. | Saisissez l'âge du passager. |

@@ -47,7 +47,8 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
 from uuid import uuid4
@@ -55,12 +56,12 @@ from uuid import uuid4
 from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as validated
 
+from src.record.retention import CURSOR_SUFFIX as _CURSOR_SUFFIX
 from src.record.retention import RECORD_NAME
 from src.record.writer import create_private, describe_os_error
 from src.result import Err, Ok, Result
 
-CURSOR_SUFFIX: Final[str] = ".sync.json"
-"""The cursor of a record is ``<record directory name>.sync.json``, next to it."""
+CURSOR_SUFFIX: Final[str] = _CURSOR_SUFFIX
 
 TEMP_PREFIX: Final[str] = ".sync-"
 TEMP_SUFFIX: Final[str] = ".tmp"
@@ -129,6 +130,9 @@ class Cursor:
 
     refused: int = 0
     """Requests the dashboard refused for good; what they carried was passed over."""
+
+    record_uploads: Mapping[str, str] = field(default_factory=dict[str, str])
+    record_deposit_revoked: bool = False
 
     def __post_init__(self) -> None:
         """Refuse a cursor no sending can have written: it is read as unusable."""

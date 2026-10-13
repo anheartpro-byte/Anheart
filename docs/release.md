@@ -8,12 +8,13 @@ machine a le droit de recevoir.
 > **État réel (10 octobre 2026).** Le script, le modèle de PR, le changelog et le
 > registre Convex existent et sont testés (`npm run test:release`,
 > `npm run test:convex`), et la CI lance ces deux suites à chaque exécution
-> ([section 7](#7-tests)). **Une première release est préparée, aucune n'est
-> encore publiée** : le script a écrit `pi-1.0.0`, `cloud-1.0.0` et `web-1.0.0`
-> dans les fichiers de version et leurs sections dans `CHANGELOG.md`, le Pi au
-> niveau `bench`. Aucun tag n'existe : ils seront posés sur `main` par la
-> pipeline, après la fusion de la PR de release, en suivant la
-> [section 3](#3-le-déroulé). Le registre Convex n'est
+> ([section 7](#7-tests)). **Une première release est fusionnée dans `main`,
+> aucune n'est encore publiée** : le script a écrit `pi-1.0.0`, `cloud-1.0.0` et
+> `web-1.0.0` dans les fichiers de version et leurs sections dans
+> `CHANGELOG.md`, le Pi au niveau `bench`, et la PR de release a été fusionnée
+> dans `main` le 10 octobre 2026. Aucun tag n'existe et cette release n'est
+> déployée nulle part : la pipeline posera les tags sur `main` puis déploiera,
+> à partir de l'étape 7 de la [section 3](#3-le-déroulé). Le registre Convex n'est
 > déployé nulle part. La règle « une machine ne reçoit qu'une version validée
 > pour son état » est écrite et testée, mais rien ne l'applique encore : voir
 > la [section 2](#2-le-niveau-de-validation-dune-version-du-pi).
@@ -24,8 +25,8 @@ machine a le droit de recevoir.
 > branche à jour, ni vérification Vercel n'y sont exigés. Le relevé des deux
 > branches est dans
 > [deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
-> La fusion elle-même n'a encore été faite que dans les tests du script et en
-> simulation.
+> La fusion elle-même a été faite une fois pour de bon, le 10 octobre 2026,
+> pour la première release.
 >
 > **Pipeline de release (10 octobre 2026, ANH-219).** Après la fusion dans
 > `main`, un bouton fait le reste dans l'ordre : il teste tout, exige CodeQL
@@ -66,7 +67,9 @@ Les fichiers `VERSION` contiennent le tag entier (`pi-0.1.0`). `package.json`
 contient la version sans préfixe (`0.1.0`), parce que npm l'exige ; le site
 ajoute `web-`.
 
-Tant qu'un composant n'a jamais été publié, sa version vaut `0.0.0-dev`.
+Tant qu'aucune release d'un composant n'a été préparée, sa version vaut
+`0.0.0-dev`. Une version est **préparée** quand le script l'a écrite dans ces
+fichiers et dans le changelog, et **publiée** quand son tag est posé sur `main`.
 
 Quel chiffre augmenter :
 
@@ -269,10 +272,17 @@ branche que `main`. Chaque étape attend la réussite de la précédente.
 Laissé de côté, exprès :
 
 - **l'endurance nocturne** de l'enregistrement de séance (une journée simulée,
-  jusqu'à 35 minutes) : elle ne tourne que sur le déclenchement nocturne de
-  `ci.yml`, qui la lance chaque nuit sur la tête de `main`. La même boucle
+  jusqu'à 35 minutes) : elle tourne sur le déclenchement nocturne de
+  `ci.yml`, qui la lance chaque nuit sur la tête de `main`, et sur un
+  lancement manuel de `ci.yml` dont la case `endurance` est cochée. Cette
+  pipeline appelle `ci.yml` sans rien lui passer : elle ne la lance pas. La même boucle
   tourne quelques minutes simulées dans les tests du Pi de chaque exécution,
   donc ici aussi ;
+- **l'endurance nocturne de la console entière** (24 heures simulées, jusqu'à
+  240 minutes, une étape de `simulation (report)`) : le déclenchement
+  nocturne seul, sans case pour la lancer à la main. Le même scénario tourne quelques minutes
+  simulées dans la batterie de simulation de chaque exécution, donc ici aussi
+  ([framework-de-test.md](framework-de-test.md#17-endurance-de-la-console)) ;
 - les tests marqués `hardware` : ils demandent le variateur et le BITalino
   réels, et aucun runner n'en a ;
 - les tests du site dans un navigateur : ils n'existent pas encore (ANH-83) ;
@@ -690,15 +700,37 @@ pour une première release.
 | Ligne | Preuve |
 |---|---|
 | Gates vertes | le lien du run CI du candidat. Le script l'a déjà vérifié, la case le rend lisible. |
-| Docs à jour | pour chaque ligne du changelog, la page de `docs/` modifiée par sa PR, ou « aucun changement de comportement ». |
+| Docs à jour | pour chaque ligne du changelog, la page de `docs/` modifiée par sa PR, ou « aucun changement de comportement ». Chaque fichier est nommé par son chemin depuis la racine du dépôt : seul un fichier sous `docs/` compte comme page de `docs/`. Le `README.md` de la racine ou d'un composant, si la PR le modifie, se cite à part et n'en tient pas lieu. |
 | Menaces revues | la [check-list de revue des menaces](release-threat-review.md) remplie : reviewer indépendant, date, SHA, verdict. |
-| Matrice de compatibilité | la section « Versions et compatibilité » (créée par ANH-133) cite les versions publiées. |
-| Rapport de simulation | la commande et ses options sont décrites dans [framework-de-test.md](framework-de-test.md#6-verdicts-instantanés--simulationquick). La CI nocturne produit le même rapport. |
+| Matrice de compatibilité | la section « Versions et compatibilité » (créée par ANH-133) cite les versions que cette release prépare. |
+| Rapport de simulation | la commande et ses options sont décrites dans [framework-de-test.md](framework-de-test.md#6-verdicts-instantanés--simulationquick). La CI nocturne produit le même rapport. L'empreinte de `report.json` ne se compare pas d'un lancement à l'autre : le fichier porte la durée mesurée de la batterie et celle de chaque exécution (`wall_s`). Ce qui se compare est `counts` et, pour chaque exécution, `name`, `group`, `status`, `end`, `violations` et `known_defect` : la preuve donne ces compteurs et le résultat de chaque exécution, pas une empreinte du fichier. |
 | Rejeu des séances réelles | `python -m simulation.run <fichier> --out <dossier>` pour chaque fichier de `simulation/scenarios/real/`. |
-| Valeurs `[MED]` | `git grep -l '\[MED\]' origin/develop -- raspberry-pi/src convex` liste les fichiers concernés ; `git diff <base>..origin/develop -- <ces fichiers>` montre ce qui a changé. |
+| Valeurs `[MED]` | les deux commandes de [Lister les fichiers qui portent le marqueur](#lister-les-fichiers-qui-portent-le-marqueur) : la première liste chaque fichier du dépôt qui porte `[MED]` à l'un des deux bouts de la release, la seconde montre ce qui y a changé. |
 | Verrous | `git diff <base>..origin/develop -- raspberry-pi/src/local_config.py raspberry-pi/.env.example raspberry-pi/.env.pi.example` ne change aucun des deux défauts, et les deux fichiers d'exemple portent `=false`. |
 | Niveau de validation | `bench` : cette check-list. Au-dessus : le compte rendu de revue. |
 | Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance la pipeline et de celle qui approuve ses quatre écritures. Qu'aucune séance ne soit en cours se vérifie au moment d'approuver le déploiement de Convex, pas ici ([étape 8 du déroulé](#3-le-déroulé)). |
+
+#### Lister les fichiers qui portent le marqueur
+
+```sh
+git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u
+git diff <base>..origin/develop -- $(git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u)
+```
+
+La première commande cherche dans tout le dépôt, sans se limiter à un dossier,
+et aux deux bouts : un fichier qui portait le marqueur à `<base>` et ne le
+porte plus sur `origin/develop` y figure aussi. Outre le code
+(`raspberry-pi/src`, `convex`), elle trouve
+`raspberry-pi/config/motion_limits.json`, dont toutes les valeurs sont `[MED]`,
+et `raspberry-pi/.env.example`. Les pages de `docs/`, le modèle de PR de
+release et les tests qui nomment le marqueur sortent avec eux : ils ne règlent
+rien, mais une page qui annonce une autre valeur que le code est à corriger.
+
+Le marqueur désigne un fichier, pas une ligne : dans `motion_limits.json` il
+est dans le commentaire d'en-tête, et les valeurs sont sur les lignes
+suivantes. C'est donc le diff entier de ces fichiers qui se relit, pas les
+seules lignes où `[MED]` est écrit. Si la première commande ne liste rien, la
+seconde n'a pas lieu d'être.
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -773,7 +805,11 @@ npm run test:convex     # le registre, sa matrice d'autorisation, la règle, la 
 `scripts/release.test.mjs` construit pour chaque test un dépôt git jetable avec
 son `origin`, et remplace `gh` par un double : aucun test ne touche GitHub ni le
 dépôt réel. Il vérifie aussi les fichiers de version du dépôt, le pied de page
-du site, et que la check-list du modèle de PR est celle de ce document.
+du site, et que la check-list du modèle de PR est celle de ce document. Il
+lance enfin, dans un dépôt jetable, les deux commandes `[MED]` de la
+[section 5](#lister-les-fichiers-qui-portent-le-marqueur) telles qu'elles y
+sont écrites : elles doivent lister chaque fichier qui porte le marqueur à
+l'un des deux bouts, où qu'il soit dans le dépôt.
 
 La pipeline de release a son propre fichier,
 `scripts/ci/release-workflow.test.mjs`, lancé par le job `docs` avec les autres
@@ -821,7 +857,7 @@ n'a changé.
 
 | Quoi | Qui ou quel ticket |
 |---|---|
-| Faire la première release réelle (`pi-0.1.0`, `cloud-0.1.0`, `web-0.1.0`) | le responsable du produit, [section 3](#3-le-déroulé) |
+| Publier la première release (`pi-1.0.0`, `cloud-1.0.0`, `web-1.0.0`), fusionnée dans `main` le 10 octobre 2026 : fixer la fenêtre de déploiement, puis poser les tags et déployer par la pipeline | le responsable du produit, [section 3](#3-le-déroulé), étapes 7 à 9 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant la première release |
 | Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant la première release partielle |

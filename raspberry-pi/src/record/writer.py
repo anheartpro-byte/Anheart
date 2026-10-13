@@ -292,6 +292,18 @@ class Writer:
                 ended_at=ended,
                 end_reason=self.privacy.text(end_reason),
                 end_observation=observation,
+                files=tuple(
+                    sorted(
+                        {
+                            "checksums.sha256",
+                            *(
+                                path.relative_to(self.path).as_posix()
+                                for path in self.path.rglob("*")
+                                if path.is_file()
+                            ),
+                        }
+                    )
+                ),
             )
             encoded = encode(document(MANIFEST, manifest), self.privacy)
             with TemporaryDirectory(prefix=".record-", dir=self.path.parent) as temporary:

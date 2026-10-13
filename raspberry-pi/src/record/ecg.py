@@ -11,6 +11,7 @@ from src.sensors.base import SensorKind
 SAMPLE_RATE: Final = 1000
 INT16_MIN: Final = -32768
 INT16_MAX: Final = 32767
+MAX_RAW_BLOCK_BYTES: Final[int] = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True, config=CONFIG)
@@ -44,6 +45,8 @@ def encode_block(block: RawBlock) -> bytes:
     header = block.header
     if header.seq < 0 or header.n_samples <= 0 or not header.channels:
         raise ValueError("invalid ECG block dimensions")
+    if header.n_samples * len(header.channels) * 2 > MAX_RAW_BLOCK_BYTES:
+        raise ValueError("ECG block exceeds upload-safe size")
     if len(set(header.channels)) != len(header.channels):
         raise ValueError("duplicate ECG channels")
     if any(channel not in {kind.value for kind in SensorKind} for channel in header.channels):

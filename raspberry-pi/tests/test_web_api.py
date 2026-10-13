@@ -100,6 +100,7 @@ from src.web.deps import (
     FilesystemPortLister,
     SerialPortInfo,
     Services,
+    TlsFiles,
     WebConfig,
 )
 from src.web.schemas import (
@@ -125,6 +126,12 @@ REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 TOKEN: Final[str] = "a-token-of-at-least-sixteen-characters"  # noqa: S105  # a test fixture
 ORIGIN: Final[str] = "http://127.0.0.1:8080"
 FOREIGN_ORIGIN: Final[str] = "http://clinic-wifi-printer.local"
+
+SOME_CERTIFICATE: Final[TlsFiles] = TlsFiles(
+    certificate_path=Path("/etc/anheart/tls/console.crt"),
+    key_path=Path("/etc/anheart/tls/console.key"),
+)
+"""Two paths, for the tests of the bind rules: nothing here opens them."""
 
 
 def free_port() -> int:
@@ -551,8 +558,11 @@ async def test_a_second_start_is_refused(client: httpx.AsyncClient, rig: Rig) ->
 
     second = await client.post("/api/session/start", headers=auth(), json=body)
     assert second.status_code == HTTPStatus.CONFLICT
-    assert RunState.STARTING.value in detail(second)
-    assert isinstance(rig.surface.pending, StartSession)
+    assert second.json()["code"] == "start_pending"
+    assert "un demarrage est deja demande" in detail(second)
+    waiting = rig.surface.pending
+    assert isinstance(waiting, StartSession)
+    assert waiting.request_id == first.json()["request_id"], "the first start keeps its place"
 
 
 async def test_a_stop_with_nothing_running_is_refused(client: httpx.AsyncClient) -> None:
@@ -1003,6 +1013,78 @@ async def test_the_status_page_shows_the_stop_of_its_own_button_in_the_same_fiel
     cleared = parse(StatusRow, await client.get("/api/status", headers=auth()))
     assert cleared.estop_latched is False
     assert cleared.supervisor_estop is None
+
+
+async def test_the_status_is_stamped_with_the_clock_of_the_frames_and_of_the_receipt(
+    client: httpx.AsyncClient, rig: Rig
+) -> None:
+    """The page orders an answer by this stamp, not by when it asked (ANH-190).
+
+    One clock for the three things the emergency-stop banner is decided from:
+    a snapshot's ``at``, the receipt's ``at``, and this. An answer written
+    before the latch and one written after it are told apart by it, whichever
+    reaches the screen first.
+    """
+    rig.clock.advance(Seconds(5.0))
+    rig.surface.publish(make_snapshot(at=rig.clock.monotonic()))
+    frame = parse(SnapshotRow, await client.get("/api/snapshot", headers=auth()))
+    before = parse(StatusRow, await client.get("/api/status", headers=auth()))
+    assert before.at == pytest.approx(5.0)
+    assert before.at == pytest.approx(frame.at)
+
+    rig.clock.advance(Seconds(1.5))
+    pressed = await client.post("/api/session/estop", headers=auth(), json={"operator": OPERATOR})
+    receipt = parse(EstopRow, pressed)
+    rig.clock.advance(Seconds(0.5))
+    after = parse(StatusRow, await client.get("/api/status", headers=auth()))
+
+    assert before.at < receipt.at < after.at
+    assert after.at == pytest.approx(7.0)
+    assert before.supervisor_estop is None
+    assert after.supervisor_estop is not None
+
+
+@dataclass(slots=True)
+class LatchingPorts:
+    """A port lister during whose scan an emergency stop is latched, a second later."""
+
+    clock: ManualClock
+    supervisor: SafetySupervisor
+
+    async def list_ports(self) -> tuple[SerialPortInfo, ...]:
+        self.clock.advance(Seconds(1.0))
+        self.supervisor.latch_estop("latched while the status was being written")
+        return ()
+
+
+async def test_what_a_status_says_is_what_stood_at_its_stamp(tmp_path: Path) -> None:
+    """Nothing is read on one side of the port scan and stamped on the other.
+
+    The scan is the one thing the route awaits, on a worker thread, and it can
+    be slow. A stop latched meanwhile must not come back in an answer stamped
+    before it: the page would then take that answer for older than a frame
+    which does not show the stop yet.
+    """
+    rig = build_rig(tmp_path)
+    services = Services(
+        clock=rig.clock,
+        surface=rig.surface,
+        hub=rig.hub,
+        supervisor=rig.supervisor,
+        store=rig.store,
+        ports=LatchingPorts(clock=rig.clock, supervisor=rig.supervisor),
+        geometry=GEOMETRY,
+    )
+    app = create_app(services=services, config=rig.config)
+    rig.clock.advance(Seconds(5.0))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+        status = parse(StatusRow, await session.get("/api/status", headers=auth()))
+
+    held = status.supervisor_estop
+    assert held is not None, "a stop latched before the stamp is missing from the answer"
+    assert status.at == pytest.approx(6.0)
+    assert held.age_s == pytest.approx(0.0)
 
 
 async def test_the_ecg_endpoint_serves_only_what_is_new(
@@ -1554,10 +1636,15 @@ def test_the_run_state_is_pessimistic_while_stopping() -> None:
         surface.submit_start(profile_id=PROFILE_ID, operator=OPERATOR, total_duration_s=None), Ok
     )
     assert state_of(surface) is RunState.STARTING
+    assert surface.take_command() is not None
     surface.note_running()
     assert state_of(surface) is RunState.RUNNING
     assert isinstance(surface.submit_end(operator=OPERATOR, reason="done"), Ok)
     assert state_of(surface) is RunState.STOPPING
+    # The loop reports itself at rest before it has taken the stop: still stopping.
+    surface.note_idle()
+    assert state_of(surface) is RunState.STOPPING
+    assert surface.take_command() is not None
     surface.note_idle()
     assert state_of(surface) is RunState.IDLE
 
@@ -1944,8 +2031,14 @@ def test_serving_off_loopback_with_a_short_token_is_refused() -> None:
 
 
 def test_serving_off_loopback_with_a_real_token_is_allowed() -> None:
-    """A tablet at a fixed address is a real deployment, not a mistake."""
-    config = WebConfig(host="192.168.1.20", port=8080, token="x" * MIN_TOKEN_LENGTH)
+    """A tablet at a fixed address is a real deployment, not a mistake.
+
+    With a certificate, since ANH-151: off loopback the console serves TLS or
+    does not start (``tests/test_console_tls.py``).
+    """
+    config = WebConfig(
+        host="192.168.1.20", port=8080, token="x" * MIN_TOKEN_LENGTH, tls=SOME_CERTIFICATE
+    )
     assert config.requires_token
     assert not config.is_loopback
 
@@ -1991,10 +2084,11 @@ def test_an_extra_origin_can_be_allowed_explicitly() -> None:
         host="192.168.1.20",
         port=8080,
         token="x" * MIN_TOKEN_LENGTH,
-        extra_origins=("http://tablet.local",),
+        tls=SOME_CERTIFICATE,
+        extra_origins=("https://tablet.local",),
     )
-    assert config.origin_allowed("http://tablet.local")
-    assert not config.origin_allowed("http://other.local")
+    assert config.origin_allowed("https://tablet.local")
+    assert not config.origin_allowed("https://other.local")
 
 
 def test_a_wrong_token_never_matches() -> None:

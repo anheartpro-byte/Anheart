@@ -36,6 +36,14 @@ What both guarantee:
   note at once; the journal thread never touches it.
 * **total**: an observation that cannot be built is one observation lost,
   counted like a refused one. It never reaches the caller.
+* **a call that raises is noted too**: the tap notes a call when it returns,
+  and one that raises instead is noted then, as a call that failed, before
+  the exception goes on to the caller unchanged. A session that makes no such
+  call records exactly what it did before.
+* **what was refused can be read at any moment** (:attr:`Tapped.refused`):
+  one ``int``, without taking anything. The console reads it when an arming
+  begins and when the session ends, so that a record counts what its own
+  session was refused and nothing a console at rest was.
 """
 
 from __future__ import annotations
@@ -204,6 +212,10 @@ class CallTap:
         waiting = [self._waiting.popleft() for _ in range(len(self._waiting))]
         return Taken(tuple(waiting), self._lost)
 
+    def refused(self) -> int:
+        """What :attr:`Taken.lost` would say now, taking nothing. No lock: one ``int``."""
+        return self._lost
+
     def _note(
         self,
         kind: CallKind,
@@ -239,21 +251,37 @@ class CallTap:
     def acquisition_evidence(self) -> AcquisitionEvidence:
         return self._inner.acquisition_evidence
 
+    # A call that raises is noted where it raises, as one that failed, and raises on:
+    # the last exchange of a tick that raised is the one a reader looks for. ``try``
+    # costs a call that returns nothing.
+
     async def open(self) -> Result[None, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.open()
+        try:
+            result = await self._inner.open()
+        except BaseException:
+            self._note(CallKind.OPEN, started, ok=False)
+            raise
         self._note(CallKind.OPEN, started, ok=isinstance(result, Ok))
         return result
 
     async def close(self) -> Result[None, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.close()
+        try:
+            result = await self._inner.close()
+        except BaseException:
+            self._note(CallKind.CLOSE, started, ok=False)
+            raise
         self._note(CallKind.CLOSE, started, ok=isinstance(result, Ok))
         return result
 
     async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.write_command(word)
+        try:
+            result = await self._inner.write_command(word)
+        except BaseException:
+            self._note(CallKind.COMMAND, started, ok=False, said=lambda: (CMD_LOGICAL, int(word)))
+            raise
         self._note(
             CallKind.COMMAND,
             started,
@@ -264,7 +292,11 @@ class CallTap:
 
     async def write_speed(self, rpm: MotorRpm) -> Result[None, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.write_speed(rpm)
+        try:
+            result = await self._inner.write_speed(rpm)
+        except BaseException:
+            self._note(CallKind.SPEED, started, ok=False, said=lambda: (LFRD_LOGICAL, int(rpm)))
+            raise
         self._note(
             CallKind.SPEED,
             started,
@@ -275,7 +307,11 @@ class CallTap:
 
     async def read_status(self) -> Result[DriveStatus, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.read_status()
+        try:
+            result = await self._inner.read_status()
+        except BaseException:
+            self._note(CallKind.READ_FAILED, started, ok=False)
+            raise
         if isinstance(result, Err):
             self._note(CallKind.READ_FAILED, started, ok=False)
         else:
@@ -285,7 +321,11 @@ class CallTap:
 
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
         started = self._clock.monotonic()
-        result = await self._inner.read_limits()
+        try:
+            result = await self._inner.read_limits()
+        except BaseException:
+            self._note(CallKind.READ_LIMITS, started, ok=False)
+            raise
         if isinstance(result, Err):
             self._note(CallKind.READ_LIMITS, started, ok=False)
         else:
@@ -301,7 +341,11 @@ class CallTap:
 
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         started = self._clock.monotonic()
-        outcome = self._inner.emergency_disable_blocking(timeout)
+        try:
+            outcome = self._inner.emergency_disable_blocking(timeout)
+        except BaseException:
+            self._note(CallKind.EMERGENCY_ZERO, started, ok=False, said=lambda: (LFRD_LOGICAL, 0))
+            raise
         self._note(
             CallKind.EMERGENCY_ZERO,
             started,
@@ -309,6 +353,15 @@ class CallTap:
             said=lambda: (LFRD_LOGICAL, 0),
         )
         return outcome
+
+
+def exchange_refusals(log: ExchangeLog) -> Callable[[], int]:
+    """How many exchanges the native driver's log has refused so far, read without draining."""
+
+    def refused() -> int:
+        return log.refused
+
+    return refused
 
 
 def exchange_source(log: ExchangeLog) -> FrameSource:
@@ -341,6 +394,10 @@ class Tapped:
 
     backend: DriveBackend
     source: FrameSource
+    refused: Callable[[], int]
+    """How many observations were refused or could not be built since startup: what
+    :attr:`Taken.lost` says, read without taking anything. Memory only, no lock: the
+    loop calls it when an arming begins and when a session ends."""
 
 
 def tap_drive(
@@ -358,6 +415,6 @@ def tap_drive(
     if isinstance(backend, ObservableDrive):
         log = ExchangeLog(clock, capacity, transport=sdk_frames)
         backend.observe_exchanges(log)
-        return Tapped(backend, exchange_source(log))
+        return Tapped(backend, exchange_source(log), exchange_refusals(log))
     tap = CallTap(backend, clock, capacity)
-    return Tapped(tap, tap.take)
+    return Tapped(tap, tap.take, tap.refused)

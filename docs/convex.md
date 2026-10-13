@@ -446,7 +446,33 @@ pour une erreur d'âge, et le site écarte déjà ce cas de l'affichage.
 ### `machine_heartbeats`
 
 Historique des heartbeats (`timestamp`, `batteryLevel`, `wifiStrength`,
-`activeSessionId`). Aucun nettoyage n'est programmé.
+`activeSessionId`). Les lignes de plus de 24 heures sont supprimées par lots
+de 100 à chaque heartbeat de la machine et par la tâche quotidienne à 03:17 UTC.
+
+### Santé machine (ANH-148)
+
+Le heartbeat accepte un objet `health` optionnel. Chaque mesure absente du Pi
+est `null`, jamais zéro par défaut : `cpu_temp_c`, `cpu_load_1m`, `mem_used_pct`,
+`disk_free_mb` (MiB sur le volume des enregistrements), `uptime_s`,
+`clock_offset_s` (erreur estimée du service d'heure), `link_rtt_ms` (dernier
+heartbeat réussi), `bitalino_battery_pct`, `drive_thermal_state`,
+`records_pending`, `incidents_open_high`. Les champs `bitalino_link` et
+`drive_link` valent `up`, `down` ou `null`; `record_degraded` et `restart_loop`
+sont booléens ou `null`. `preflight_last` vaut `ok`, `warn`, `block` ou `null`.
+`counters` contient `rotation_hours`, `sessions_total`, `sessions_failed` et
+`drive_faults_by_code` (au plus 128 codes), chacun nullable.
+
+Un objet mal formé refuse tout le heartbeat (400). `machines.health` et
+`healthUpdatedAt` portent le dernier rapport; un ancien client omettant health
+efface ces deux champs. `machine_health_history` garde des périodes de cinq
+minutes avec minimum, maximum et dernier rapport, pendant 90 jours. Sa purge
+quotidienne poursuit les lots pleins par une mutation planifiée. Aucune purge
+de `training_telemetry` n'est activée sans politique de conservation distincte.
+
+`machineHealth.get` applique les droits d'accès à la machine et renvoie le
+rapport et les dernières 24 heures. La carte indique les valeurs anciennes
+après 30 secondes; les seuils d'avertissement sont CPU > 70 °C, disque < 1 Gio,
+écart d'heure absolu > 5 s et batterie < 30 %.
 
 ---
 
@@ -922,7 +948,7 @@ n'est pas lu.
 
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
-| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null}` (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
+| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs |
@@ -1370,7 +1396,7 @@ régressions locales exécutables.
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
 | 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG, pas de résumé et pas de rapport pour une séance auto/manuelle : le résumé et le rapport viendront de l'enregistrement de séance (ANH-89). |
 | 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
-| 9 | **Historique non purgé.** | `machine_heartbeats` grossit d'une ligne toutes les 10 s par machine. |
+| 9 | **Corrigé par ANH-148 : historique borné.** | Heartbeats conservés 24 h, santé agrégée par 5 min conservée 90 jours. Purge quotidienne et par machine active, sans purge de télémétrie. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
 | 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |
 
@@ -1508,11 +1534,35 @@ un, ou rend obligatoire ce qui ne l'était pas, monte la **majeure** : les deux
 côtés doivent alors être livrés ensemble, et une machine restée sur l'ancienne
 majeure est refusée au lieu d'être comprise de travers.
 
+### Dépôt complet des séances (ANH-130)
+
+`session_record_files` rattache chaque fichier à sa séance, sa machine et son
+organisation, avec chemin relatif, identifiant Storage privé, taille, SHA-256,
+date d'envoi et verdict de vérification. L'index séance/chemin garantit les
+reprises idempotentes. `session_record_uploads` réserve les envois par nonce ;
+`session_record_manifest_pages` borne l'inventaire et `record_upload_sweeps`
+garde le point de reprise du nettoyage des réponses perdues.
+
+Les trois routes machine du contrat 1.2 utilisent l'authentification machine
+existante et refusent une séance non close, étrangère ou supprimée. Le manifeste
+doit être vérifié avant les autres fichiers. La vérification asynchrone lit les
+octets Storage et compare taille et SHA-256 ; elle n'efface jamais un objet dont
+la réservation n'est pas propriétaire. `recordStorage.list` et le téléchargement
+JWT `/api/records/download` contrôlent l'utilisateur et l'accès à la machine.
+La suppression exige `admin` ou `org_admin`. Les limites, la reprise, la purge
+et les réservations conservées sont détaillées dans
+[enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex).
+
+Une console 1.2 face à un serveur antérieur garde ses fichiers localement lorsque
+les routes de dépôt répondent 404. La télémétrie continue selon les capacités
+de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
+
 ### Ce que chaque mineure ajoute
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
 | `1.0` | Le contrat de départ. |
+| `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
 | `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
 
 Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
@@ -1521,7 +1571,7 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.1` et s'en sert : elle envoie les événements,
+La console de ce dépôt est en `1.2`. Elle conserve les ajouts de `1.1` : elle envoie les événements,
 dit l'âge de ses séances, et compte sur l'idempotence pour renvoyer sans
 doublon. Face à un Convex resté en `1.0`, elle fonctionne, moins bien : la
 route des événements lui répond 404, les événements restent dus sur son
@@ -1538,12 +1588,17 @@ mineure : Convex d'abord
 | Version du Pi (`raspberry-pi/VERSION`) | Majeure de contrat | Version Convex minimale |
 |---|---|---|
 | `pi-0.0.0-dev` (développement, avant la première release) | 1 (contrat `1.1`) | `cloud-0.0.0-dev` (développement) : le code de la branche `develop` qui sert la majeure 1 |
-| `pi-1.0.0` | 1 (contrat `1.1`) | `cloud-1.0.0`, première version publiée qui sert la majeure 1 |
+| `pi-1.0.0` | 1 (contrat `1.1`) | `cloud-1.0.0`, première version préparée qui sert la majeure 1 |
 
 Cette matrice est tenue à jour à chaque release (check-list de
-[release.md](release.md)) : une ligne par version publiée du Pi. La première
-version préparée est `pi-1.0.0`, avec `cloud-1.0.0` ; la ligne de développement
-reste pour les consoles construites avant elle.
+[release.md](release.md)) : une ligne par version du Pi préparée pour une
+release. Une version est **préparée** quand ses fichiers de version et son
+changelog sont écrits, et **publiée** quand son tag est posé sur `main`, ce que
+fait la pipeline de release ([release.md](release.md#la-pipeline-de-release)).
+La première, `pi-1.0.0` avec `cloud-1.0.0`, a été fusionnée dans `main` le
+10 octobre 2026 ; aucun tag n'était posé à cette date : elle est préparée, pas
+publiée. La ligne de développement reste pour les consoles construites avant
+elle.
 
 Limites à connaître :
 
