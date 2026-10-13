@@ -36,7 +36,7 @@ MIN_BACKOFF: Final[Seconds] = Seconds(2)
 SUCCESS_DELAY: Final[Seconds] = Seconds(0.25)
 FILES_PER_STEP: Final[int] = 64
 UPLOAD_CONCURRENCY: Final[int] = 4
-MAX_STATUS_PAGES: Final[int] = 80
+MAX_STATUS_PAGES: Final[int] = 160
 
 
 @dataclass(frozen=True, slots=True, config=ConfigDict(extra="ignore"))

@@ -658,8 +658,10 @@ les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
 La réservation signale un fichier rejeté même s'il n'est pas dans la page de
 statut courante, afin de remplacer son ancien reçu Storage supprimé.
 
-Limites : 20 000 fichiers, 16 MiB par fichier, 1 MiB pour le manifeste et
-512 KiB pour son inventaire JSON. Les chemins sont relatifs, ASCII, sans `..`,
+Limites : 40 000 fichiers, 16 MiB par fichier, 2 MiB pour le manifeste et
+1 MiB pour son inventaire JSON. Cela couvre les quelque 36 000 blocs bruts
+d'un programme de deux heures ; la séance manuelle reste limitée à une heure.
+Les chemins sont relatifs, ASCII, sans `..`,
 et longs de 160 caractères au plus. Le serveur conserve l'inventaire par pages
 de 1 024 chemins au plus ; les lectures de fichiers retournent 256 lignes au
 plus. Ces bornes permettent les nombreux petits blocs bruts sans dépasser la
