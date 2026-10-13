@@ -446,7 +446,33 @@ pour une erreur d'âge, et le site écarte déjà ce cas de l'affichage.
 ### `machine_heartbeats`
 
 Historique des heartbeats (`timestamp`, `batteryLevel`, `wifiStrength`,
-`activeSessionId`). Aucun nettoyage n'est programmé.
+`activeSessionId`). Les lignes de plus de 24 heures sont supprimées par lots
+de 100 à chaque heartbeat de la machine et par la tâche quotidienne à 03:17 UTC.
+
+### Santé machine (ANH-148)
+
+Le heartbeat accepte un objet `health` optionnel. Chaque mesure absente du Pi
+est `null`, jamais zéro par défaut : `cpu_temp_c`, `cpu_load_1m`, `mem_used_pct`,
+`disk_free_mb` (MiB sur le volume des enregistrements), `uptime_s`,
+`clock_offset_s` (erreur estimée du service d'heure), `link_rtt_ms` (dernier
+heartbeat réussi), `bitalino_battery_pct`, `drive_thermal_state`,
+`records_pending`, `incidents_open_high`. Les champs `bitalino_link` et
+`drive_link` valent `up`, `down` ou `null`; `record_degraded` et `restart_loop`
+sont booléens ou `null`. `preflight_last` vaut `ok`, `warn`, `block` ou `null`.
+`counters` contient `rotation_hours`, `sessions_total`, `sessions_failed` et
+`drive_faults_by_code` (au plus 128 codes), chacun nullable.
+
+Un objet mal formé refuse tout le heartbeat (400). `machines.health` et
+`healthUpdatedAt` portent le dernier rapport; un ancien client omettant health
+efface ces deux champs. `machine_health_history` garde des périodes de cinq
+minutes avec minimum, maximum et dernier rapport, pendant 90 jours. Sa purge
+quotidienne poursuit les lots pleins par une mutation planifiée. Aucune purge
+de `training_telemetry` n'est activée sans politique de conservation distincte.
+
+`machineHealth.get` applique les droits d'accès à la machine et renvoie le
+rapport et les dernières 24 heures. La carte indique les valeurs anciennes
+après 30 secondes; les seuils d'avertissement sont CPU > 70 °C, disque < 1 Gio,
+écart d'heure absolu > 5 s et batterie < 30 %.
 
 ---
 

@@ -5,6 +5,8 @@ import {
   internalMutation,
 } from "./_generated/server";
 import { v } from "convex/values";
+import { machineHealthValidator, HEARTBEAT_RETENTION_MS } from "./lib/machineHealth";
+import { recordMachineHealth } from "./machineHealth";
 import {
   ORGANIZATION_ADMIN_ROLES,
   STAFF_ROLES,
@@ -594,6 +596,7 @@ export const recordHeartbeat = internalMutation({
     activeSessionId: v.optional(v.string()),
     softwareVersion: v.optional(v.string()),
     contractVersion: v.optional(v.string()),
+    health: v.optional(machineHealthValidator),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -616,6 +619,8 @@ export const recordHeartbeat = internalMutation({
     await ctx.db.patch(args.machineId, {
       lastHeartbeat: now,
       status: newStatus,
+      health: args.health,
+      healthUpdatedAt: args.health === undefined ? undefined : now,
       ...(args.contractVersion === undefined
         ? {}
         : {
@@ -637,6 +642,13 @@ export const recordHeartbeat = internalMutation({
       wifiStrength: args.wifiStrength,
       activeSessionId: sessionId,
     });
+
+    if (args.health !== undefined) await recordMachineHealth(ctx, machine, args.health, now);
+    const expired = await ctx.db.query("machine_heartbeats")
+      .withIndex("by_machine_and_timestamp", (q) =>
+        q.eq("machineId", args.machineId).lte("timestamp", now - HEARTBEAT_RETENTION_MS))
+      .take(100);
+    for (const heartbeat of expired) await ctx.db.delete(heartbeat._id);
 
     return null;
   },

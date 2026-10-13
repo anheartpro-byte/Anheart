@@ -14,4 +14,6 @@ crons.interval(
   {},
 );
 
+crons.daily("purge-machine-health", { hourUTC: 3, minuteUTC: 17 }, internal.machineHealth.purge, {});
+
 export default crons;

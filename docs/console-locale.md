@@ -1,5 +1,26 @@
 # La console locale du Raspberry Pi
 
+## Santé distante de la machine (ANH-148)
+
+Le heartbeat transmet les mesures système disponibles toutes les dix secondes.
+La collecte utilise un worker disque dédié, borné à une seconde; un disque
+bloqué produit des valeurs inconnues et ne bloque pas la boucle moteur.
+Les compteurs vivent en mémoire sur cette boucle et sont enregistrés à chaque
+collecte dans `health-counters.json`, à côté du dossier des enregistrements.
+Un fichier illisible donne des compteurs inconnus, sans remise à zéro implicite.
+Une séance restée ouverte au dernier point de sauvegarde compte comme échouée
+au redémarrage. Une coupure peut perdre au plus les observations faites depuis
+la dernière sauvegarde réussie; ces compteurs ne remplacent pas le journal.
+Les heures de rotation additionnent uniquement les intervalles observés d'au
+plus une seconde avec une vitesse mesurée positive aux deux extrémités.
+
+La batterie BITalino, l'état thermique du variateur et le dernier préflight
+restent inconnus tant que leurs producteurs ne les fournissent pas.
+`incidents_open_high` reprend le dernier poll compatible qui fournit un entier
+positif ou nul; sans ce champ il reste inconnu. Le nombre d'enregistrements en
+attente ne baisse qu'après confirmation de dépôt, pas après l'envoi de télémétrie.
+La carte distante affiche ces inconnues et l'ancienneté du rapport explicitement.
+
 La console locale est la page web servie par le Pi lui-même (`python -m src.local_panel`).
 C'est **l'admin de la machine** : toute séance, manuelle ou automatique, passe par elle.
 Le tableau de bord distant ([tableau-de-bord.md](tableau-de-bord.md)) ne fait que la refléter
