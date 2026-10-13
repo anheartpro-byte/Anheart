@@ -216,6 +216,8 @@ function status(overrides = {}) {
     live: [],
     retained_hr_samples: 0,
     pending: null,
+    requests: [],
+    session_request: null,
     attendant_last_seen: null,
     clients: 1,
     evictions: 0,
@@ -852,7 +854,7 @@ test("a start the console refuses for the fault shows the console's own sentence
   // Then the note says why, in red, at the click: the loop was never asked.
   assert.equal(node("manual-note").textContent, refusal);
   assert.equal(node("manual-note").classes.has("note-bad"), true);
-  assert.deepEqual(Object.keys(context.state.loopAsked), []);
+  assert.deepEqual(Object.keys(context.state.asked), []);
 });
 
 /* ================= item 5: an acknowledgement judged on the status when no frame is live ================= */
