@@ -767,6 +767,28 @@ appel direct à `useMutation` ainsi qu'un `catch` vide ou réduit à un
 
 ---
 
+### Enregistrements complets (ANH-130)
+
+La fiche d'une séance d'entraînement affiche son dépôt : absent, en cours,
+complet et vérifié, rejeté ou supprimé, avec le nombre de fichiers vérifiés.
+Les administrateurs et gestionnaires autorisés peuvent consulter les fichiers
+par pages et les télécharger. L'archive `.tar` n'est proposée qu'après
+vérification de tout l'inventaire. Une annulation interrompt les téléchargements
+du navigateur. Une perte d'accès ou une empreinte incorrecte produit un échec,
+jamais une archive présentée comme complète.
+
+« Ouvrir dans le visualiseur » devient disponible quand le manifeste, les ticks
+et les événements sont vérifiés. La nouvelle fenêtre reçoit les données, sans
+jeton d'accès. Les valeurs absentes restent inconnues, et une géométrie absente
+est explicitement signalée. Les blocs bruts sont dans l'archive, pas chargés
+automatiquement par ce visualiseur de séance.
+
+Les rôles `admin` et `org_admin` disposent d'une suppression avec confirmation.
+Le serveur vérifie à nouveau leur rôle et leur accès à la machine. Les fichiers
+sont supprimés et les téléchargements révoqués ; la séance et la télémétrie
+restent consultables. La rétention cloud est optionnelle et désactivée par
+défaut, voir [enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex).
+
 ## 7. Lancer le site en local
 
 Prérequis : Node.js, les dépendances (`npm install` ou `bun install`), un

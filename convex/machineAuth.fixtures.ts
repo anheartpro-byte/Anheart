@@ -41,6 +41,9 @@ export function machineHeaders(apiKey: string): Record<string, string> {
 }
 
 export const machineRoutes = [
+  ["POST", "/api/machine/records/upload-url"],
+  ["POST", "/api/machine/records/commit"],
+  ["GET", "/api/machine/records/status"],
   ["POST", "/api/machine/heartbeat"],
   ["GET", "/api/machine/training/poll"],
   ["GET", "/api/machine/roster"],

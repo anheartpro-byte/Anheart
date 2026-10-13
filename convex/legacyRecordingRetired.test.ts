@@ -64,12 +64,12 @@ describe("ANH-135 the recording routes are gone", () => {
     ["POST", "/api/machine/data"],
   ] as const;
 
-  it("registers only the heartbeat, the roster, the profiles and the training routes", () => {
+  it("registers training and record-deposit routes without the retired acquisition API", () => {
     const paths = http.getRoutes().map(([path]) => path);
-    expect(paths).toHaveLength(10);
+    expect(paths).toHaveLength(15);
     for (const path of paths) {
       expect(path).toMatch(
-        /^\/api\/machine\/(heartbeat|roster|profiles|training\/[a-z]+)$/,
+        /^\/api\/(machine\/(heartbeat|roster|profiles|training\/[a-z]+|records\/(upload-url|commit|status))|records\/download)$/,
       );
     }
   });

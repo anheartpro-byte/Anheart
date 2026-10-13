@@ -85,10 +85,11 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from abc import abstractmethod
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, cast
@@ -211,6 +212,8 @@ class Refused:
 
 type CloudError = Unreachable | Refused
 type Document = Mapping[str, object]
+UPLOAD_CHUNK_BYTES: Final[int] = 16 * 1024
+UPLOAD_BYTES_PER_SECOND: Final[int] = 256 * 1024
 
 
 class CloudTransport(Protocol):
@@ -225,6 +228,20 @@ class CloudTransport(Protocol):
     @abstractmethod
     async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
         """POST ``body`` to ``path``. The answered document, or why there is none."""
+
+
+class DepositTask(Protocol):
+    @abstractmethod
+    def pause(self) -> None:
+        """Cancel transfer work when a session starts, without waiting for it."""
+
+    @abstractmethod
+    def schedule(self) -> None:
+        """Schedule idle transfer work when its retry delay has elapsed."""
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Cancel and await the owned transfer task before closing its transport."""
 
 
 def _parse_document(text: str) -> Document | None:
@@ -242,9 +259,14 @@ def _parse_document(text: str) -> Document | None:
 class HttpxTransport:
     """:class:`CloudTransport` over ``httpx``, with a short timeout: the loop must not wait."""
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_storage_origin")
 
     def __init__(self, config: CloudConfig, *, client: httpx.AsyncClient | None = None) -> None:
+        origin = httpx.URL(config.url)
+        host = origin.host
+        if host.endswith(".convex.site"):
+            host = host.removesuffix(".convex.site") + ".convex.cloud"
+        self._storage_origin: tuple[str, str, int | None] = (origin.scheme, host, origin.port)
         self._client: httpx.AsyncClient = client or httpx.AsyncClient(
             base_url=config.url,
             timeout=httpx.Timeout(3.0),
@@ -272,6 +294,37 @@ class HttpxTransport:
     async def close(self) -> None:
         """Release the connection pool."""
         await self._client.aclose()
+
+    async def upload(
+        self, url: str, content_type: str, content: bytes
+    ) -> Result[Document, CloudError]:
+        try:
+            target = httpx.URL(url)
+        except httpx.InvalidURL:
+            return Err(Unreachable("Invalid storage URL"))
+        if (target.scheme, target.host, target.port) != self._storage_origin:
+            return Err(Unreachable("Storage origin mismatch"))
+
+        async def paced() -> AsyncIterator[bytes]:
+            for offset in range(0, len(content), UPLOAD_CHUNK_BYTES):
+                chunk = content[offset : offset + UPLOAD_CHUNK_BYTES]
+                yield chunk
+                await asyncio.sleep(len(chunk) / UPLOAD_BYTES_PER_SECOND)
+
+        request = httpx.Request(
+            "POST",
+            target,
+            headers={
+                "Content-Type": content_type,
+                "Content-Length": str(len(content)),
+            },
+            content=paced(),
+        )
+        try:
+            response = await self._client.send(request)
+        except httpx.HTTPError as error:
+            return Err(Unreachable(f"Record upload: {type(error).__name__}"))
+        return _answer(response)
 
 
 def _answer(response: httpx.Response) -> Result[Document, CloudError]:
@@ -540,6 +593,7 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_deposit",
         "_health",
         "_health_context",
         "_incidents_open_high",
@@ -582,6 +636,7 @@ class CloudSync:
         link: LinkHealth | None = None,
         health: HealthWatch | None = None,
         health_context: Callable[[], HealthContext] = HealthContext,
+        deposit: DepositTask | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -591,6 +646,7 @@ class CloudSync:
         says of the link is kept for the console's page; ``None``: one of this object's
         own."""
         self._clock: Clock = clock
+        self._deposit: DepositTask | None = deposit
         self._health: HealthWatch | None = health
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
@@ -657,6 +713,8 @@ class CloudSync:
         # The first question about its stop is asked as soon as it may be,
         # whenever the last one about the session before was.
         self._last_status = None
+        if self._deposit is not None:
+            self._deposit.pause()
         self._uplink.begin(
             ArmedSession(
                 declaration=declaration_of(started),
@@ -692,6 +750,15 @@ class CloudSync:
         self._check_launch_timeout(now)
         # The sending last, so a refusal found above goes out in this same step.
         await self._uplink.step()
+        if self._deposit is not None:
+            if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING) or self._awaiting:
+                self._deposit.pause()
+            else:
+                self._deposit.schedule()
+
+    async def close(self) -> None:
+        if self._deposit is not None:
+            await self._deposit.close()
 
     def _observe(self) -> None:
         """Tell the sending that the runtime has finished the running session."""

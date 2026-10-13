@@ -8,7 +8,7 @@ par une file bornée et un fil d'écriture à part, sans jamais écrire dans la
 boucle de contrôle. Ce branchement (file, cadence de `fsync`, comportement en
 cas d'erreur, refus de départ, rétention, export) est décrit dans
 [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
-Ce document-ci ne décrit que le format.
+Ce document décrit le format et son dépôt vérifié dans Convex (ANH-130).
 
 ## Arborescence
 
@@ -60,7 +60,7 @@ pour le manifeste final et les sommes de contrôle. Qui pose un fichier à côt�
 d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
 `.sync-baseline.json`) le crée de la même façon.
 
-**Ce qui part au tableau de bord.** De tout enregistrement fait depuis le
+**Télémétrie synchronisée.** De tout enregistrement fait depuis le
 premier démarrage de la console avec un tableau de bord configuré sur ce
 répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
 (ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
@@ -72,6 +72,11 @@ démarrage où une clé est de nouveau en place. Les enregistrements antérieurs
 garder locaux les seconds, sont dans
 [raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console).
 
+**Fichiers complets.** Après acquittement de la fin de séance, les nouveaux
+enregistrements clos munis de l'inventaire `files` sont aussi déposés dans
+Convex Storage : manifeste, traces variateur, capteurs et blocs bruts compris.
+Le journal hors séance reste local. Voir [Dépôt vérifié](#dépôt-vérifié-dans-convex).
+
 ## Manifeste
 
 Tous les champs suivants sont présents, y compris ceux dont la valeur est
@@ -80,6 +85,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | Champ | Type et signification |
 | --- | --- |
 | `schema_version` | entier, exactement `2` |
+| `files` | inventaire des chemins relatifs attendus, fixé à la clôture ; facultatif pour relire les anciens schémas 2, obligatoire pour un nouveau dépôt complet |
 | `record_id` | identifiant opaque de l'enregistrement |
 | `machine_id` | identifiant de la machine ; `simulation` pour les scénarios |
 | `organization_id` | identifiant de l'organisation ; `synthetic` en simulation |
@@ -615,11 +621,83 @@ Pas de nom de passager, d'adresse e-mail, de nom libre de profil, de vidéo,
 d'image de présence, de clé machine, de jeton ou de mot de passe. Pas de
 consigne interpolée, de battement synthétisé pour masquer une perte, ni de
 vérité physiologique réelle inventée. Pas de preuve de chiffrement au repos,
-de consentement ou de conformité réglementaire. Pas de dépôt Storage,
-synchronisation ni capture RTU native : ces fonctionnalités relèvent
-des tickets suivants. Le branchement de la console réelle et la rétention
+de consentement ou de conformité réglementaire. Le dépôt Storage est décrit
+ci-dessous ; la synchronisation du tableau de bord et la capture RTU native
+sont décrites dans les documents de la console. Le branchement de la console réelle et la rétention
 locale existent (ANH-128) et sont décrits dans
 [raspberry-pi.md](raspberry-pi.md#15-lenregistrement-de-séance-boîte-noire-locale).
 
 La relecture indépendante de ce document et du SHA final reste une étape
 d'acceptation du ticket ; ce document ne vaut pas signature de reviewer.
+
+## Dépôt vérifié dans Convex
+
+Le writer clôt le manifeste avec l'inventaire des fichiers avant de calculer
+`checksums.sha256`. Les anciens enregistrements sans inventaire restent lisibles
+et conservés localement ; ils ne sont pas déclarés déposés par extrapolation.
+
+`RecordDeposit` travaille seulement hors séance, après acquittement de la fin
+par le serveur. Le démarrage d'une séance annule son travail réseau. Ses lectures
+et mises à jour de curseur passent par un worker disque dédié, jamais par le
+cycle moteur. Il envoie le manifeste en premier et attend sa vérification.
+Chaque fichier suivant reçoit une réservation liée à la machine, à la séance,
+au chemin, à la taille et au SHA-256 ; le POST natif Storage utilise seulement
+l'URL signée de ce déploiement et son type de contenu réservé, sans clé machine.
+
+Quatre transferts au plus tournent ensemble, chacun cadencé à 256 KiB/s, par
+lots de 64 fichiers. Une erreur déclenche un recul de 2 à 300 secondes. Le
+curseur adjacent `.sync.json` garde les reçus non acquittés ; un redémarrage
+réutilise ces reçus et le statut serveur. Le balayage serveur toutes les cinq
+minutes retrouve aussi un fichier envoyé dont la réponse a été perdue, et
+retire ses doublons. Il ne traite que les objets portant une réservation connue.
+
+Un enregistrement local illisible ou en échec ne bloque pas les suivants :
+la sélection continue après lui et réessaie ensuite. Une suppression cloud
+est conservée dans le curseur comme révocation, y compris après redémarrage ;
+les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
+La réservation signale un fichier rejeté même s'il n'est pas dans la page de
+statut courante, afin de remplacer son ancien reçu Storage supprimé.
+
+Limites : 20 000 fichiers, 16 MiB par fichier, 1 MiB pour le manifeste et
+512 KiB pour son inventaire JSON. Les chemins sont relatifs, ASCII, sans `..`,
+et longs de 160 caractères au plus. Le serveur conserve l'inventaire par pages
+de 1 024 chemins au plus ; les lectures de fichiers retournent 256 lignes au
+plus. Ces bornes permettent les nombreux petits blocs bruts sans dépasser la
+limite native des tableaux Convex. Un fichier hors limites reste sur le Pi.
+
+Les blocs bruts sont refusés avant allocation au-delà de 1 MiB décodé
+(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). La borne fichier de 16 MiB
+reste inférieure aux 100 MiB de réponse HTTP et ménage la mémoire de l'action
+de vérification (64 MiB). Références consultées le 13 octobre 2026 :
+[limites Convex](https://docs.convex.dev/production/state/limits) et
+[dépôt natif des fichiers](https://docs.convex.dev/file-storage/upload-files).
+Le POST natif doit finir dans les deux minutes ; à 256 KiB/s, un fichier de
+16 MiB prend au minimum 64 secondes. Une liaison plus lente peut faire échouer
+ce délai et déclencher une reprise, sans effacer la copie locale.
+
+Convex vérifie la taille et le SHA-256 des octets déposés. Une séance passe de
+`none` à `partial`, puis `complete` seulement lorsque chaque fichier de
+l'inventaire est vérifié ; un rejet la place en `rejected` jusqu'à une reprise
+valide. Le Pi relit toutes les pages du statut `complete`, compare toutes les
+empreintes avec ses fichiers locaux et écrit alors le marqueur adjacent
+`.deposit.json`, lié à `checksums.sha256`. La purge locale existante reste
+subordonnée à ce marqueur et à son délai ; un simple succès HTTP ne l'autorise
+jamais. Des sommes de contrôle réécrites par un compte local compromis ne
+constituent pas une preuve d'authenticité de la séance.
+
+Le téléchargement passe par `/api/records/download?fileId=…` avec un JWT Clerk
+et une autorisation vérifiée à chaque lecture. Aucun `storageId`, jeton ou URL
+publique n'est transmis dans les métadonnées de la carte. L'archive `.tar` est
+assemblée par le navigateur à partir des fichiers autorisés et revérifiés.
+Le visualiseur reçoit les données du manifeste, des ticks et des événements
+par un message entre fenêtres de même origine, sans JWT ; les blocs bruts
+restent disponibles dans l'archive.
+
+La rétention cloud est désactivée par défaut. `RECORD_RETENTION_DAYS`, entier
+strictement positif, active une purge quotidienne des dépôts expirés selon
+la fin de séance. Un administrateur autorisé peut aussi supprimer un dépôt :
+le téléchargement est révoqué immédiatement, puis fichiers et pages sont
+retirés par lots de 100. La séance et sa télémétrie restent présentes. Les
+réservations sont gardées comme tombstones pour reconnaître et supprimer les
+envois tardifs effectués avec d'anciennes URL signées. Les durées de conservation
+et la décision relative aux données de santé restent du ressort d'ANH-172.

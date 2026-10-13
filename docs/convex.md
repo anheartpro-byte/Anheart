@@ -1534,11 +1534,35 @@ un, ou rend obligatoire ce qui ne l'était pas, monte la **majeure** : les deux
 côtés doivent alors être livrés ensemble, et une machine restée sur l'ancienne
 majeure est refusée au lieu d'être comprise de travers.
 
+### Dépôt complet des séances (ANH-130)
+
+`session_record_files` rattache chaque fichier à sa séance, sa machine et son
+organisation, avec chemin relatif, identifiant Storage privé, taille, SHA-256,
+date d'envoi et verdict de vérification. L'index séance/chemin garantit les
+reprises idempotentes. `session_record_uploads` réserve les envois par nonce ;
+`session_record_manifest_pages` borne l'inventaire et `record_upload_sweeps`
+garde le point de reprise du nettoyage des réponses perdues.
+
+Les trois routes machine du contrat 1.2 utilisent l'authentification machine
+existante et refusent une séance non close, étrangère ou supprimée. Le manifeste
+doit être vérifié avant les autres fichiers. La vérification asynchrone lit les
+octets Storage et compare taille et SHA-256 ; elle n'efface jamais un objet dont
+la réservation n'est pas propriétaire. `recordStorage.list` et le téléchargement
+JWT `/api/records/download` contrôlent l'utilisateur et l'accès à la machine.
+La suppression exige `admin` ou `org_admin`. Les limites, la reprise, la purge
+et les réservations conservées sont détaillées dans
+[enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex).
+
+Une console 1.2 face à un serveur antérieur garde ses fichiers localement lorsque
+les routes de dépôt répondent 404. La télémétrie continue selon les capacités
+de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
+
 ### Ce que chaque mineure ajoute
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
 | `1.0` | Le contrat de départ. |
+| `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
 | `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
 
 Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
@@ -1547,7 +1571,7 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.1` et s'en sert : elle envoie les événements,
+La console de ce dépôt est en `1.2`. Elle conserve les ajouts de `1.1` : elle envoie les événements,
 dit l'âge de ses séances, et compte sur l'idempotence pour renvoyer sans
 doublon. Face à un Convex resté en `1.0`, elle fonctionne, moins bien : la
 route des événements lui répond 404, les événements restent dus sur son

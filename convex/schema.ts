@@ -1,6 +1,10 @@
 import { defineSchema, defineTable } from "convex/server";
+import { recordState } from "./lib/recordStorage";
 import { v } from "convex/values";
-import { machineHealthValidator, healthMeasurementsValidator } from "./lib/machineHealth";
+import {
+  machineHealthValidator,
+  healthMeasurementsValidator,
+} from "./lib/machineHealth";
 
 /**
  * What the machine is doing right now, as the Pi's local panel reports it with
@@ -277,6 +281,12 @@ export default defineSchema({
   // Sessions - training sessions (auto, manual), plus the read-only history
   // of the retired ECG recording mode (rows without `kind`).
   sessions: defineTable({
+    record: v.optional(recordState),
+    recordExpectedFiles: v.optional(v.array(v.string())),
+    recordExpectedCount: v.optional(v.number()),
+    recordDeleted: v.optional(v.boolean()),
+    recordVerifiedCount: v.optional(v.number()),
+    recordRejectedCount: v.optional(v.number()),
     organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     // The rider. Optional only for sessions started at the machine with no
@@ -430,6 +440,54 @@ export default defineSchema({
     .index("by_bucket", ["bucket"]),
 
   // Machine Heartbeats - For monitoring (can be cleaned up periodically)
+  session_record_files: defineTable({
+    sessionId: v.id("sessions"),
+    machineId: v.id("machines"),
+    organizationId: v.id("organizations"),
+    path: v.string(),
+    storageId: v.id("_storage"),
+    sha256: v.string(),
+    size: v.number(),
+    uploadedAt: v.number(),
+    verified: v.boolean(),
+    rejection: v.optional(v.string()),
+    lastVerificationAt: v.optional(v.number()),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_session_and_path", ["sessionId", "path"])
+    .index("by_machine", ["machineId"]),
+
+  session_record_uploads: defineTable({
+    sessionId: v.id("sessions"),
+    machineId: v.id("machines"),
+    organizationId: v.id("organizations"),
+    path: v.string(),
+    sha256: v.string(),
+    size: v.number(),
+    nonce: v.string(),
+    createdAt: v.number(),
+    revoked: v.boolean(),
+  })
+    .index("by_session_and_path", ["sessionId", "path"])
+    .index("by_session", ["sessionId"])
+    .index("by_nonce", ["nonce"]),
+
+  session_record_manifest_pages: defineTable({
+    sessionId: v.id("sessions"),
+    storageId: v.id("_storage"),
+    bucket: v.number(),
+    page: v.number(),
+    paths: v.array(v.string()),
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_session_and_bucket", ["sessionId", "bucket"])
+    .index("by_session_bucket_page", ["sessionId", "bucket", "page"]),
+
+  record_upload_sweeps: defineTable({
+    name: v.literal("uploads"),
+    cutoff: v.number(),
+  }).index("by_name", ["name"]),
+
   machine_heartbeats: defineTable({
     machineId: v.id("machines"),
     timestamp: v.number(),

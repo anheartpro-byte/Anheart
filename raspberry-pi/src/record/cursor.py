@@ -47,7 +47,8 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
 from uuid import uuid4
@@ -129,6 +130,9 @@ class Cursor:
 
     refused: int = 0
     """Requests the dashboard refused for good; what they carried was passed over."""
+
+    record_uploads: Mapping[str, str] = field(default_factory=dict[str, str])
+    record_deposit_revoked: bool = False
 
     def __post_init__(self) -> None:
         """Refuse a cursor no sending can have written: it is read as unusable."""
