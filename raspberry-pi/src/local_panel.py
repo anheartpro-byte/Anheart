@@ -987,6 +987,14 @@ class LocalPanel:
         if self._recorder is not None:
             self._recorder.begin(request)
 
+    def _frames_refused(self) -> int | None:
+        """What the drive's list has refused so far, for the record of the arming that begins.
+
+        Memory only, and it never raises (:meth:`SessionRecorder.frames_refused`).
+        ``None``: nothing is recorded, or nobody can say.
+        """
+        return None if self._recorder is None else self._recorder.frames_refused()
+
     async def _dispatch(self) -> None:
         """Hand the mailbox's command to the runtime. Exhaustive over ``Command``."""
         command = self._surface.take_command()
@@ -1028,14 +1036,21 @@ class LocalPanel:
         if blocked is not None:
             self._surface.note_refused(operator, blocked)
             return
-        # Read before the drive is touched: the record's frames start with the arming.
+        # Read before the drive is touched: the record's frames start with the arming,
+        # and so does the count of those it loses.
         asked = self._clock.monotonic()
+        refused = self._frames_refused()
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
             self._surface.note_refused(operator, describe_start_refusal(started.error))
             return
         self._begin_record(
-            SessionRequest(occupancy=occupancy, operator=operator, arming_began=asked)
+            SessionRequest(
+                occupancy=occupancy,
+                operator=operator,
+                arming_began=asked,
+                arming_refused=refused,
+            )
         )
         untrusted = self._untrusted_clock()
         if untrusted is not None:
@@ -1083,8 +1098,10 @@ class LocalPanel:
             return
         program = prepared.value
         subject = Subject(subject_id=command.subject_id, operator=operator)
-        # Read before the drive is touched: the record's frames start with the arming.
+        # Read before the drive is touched: the record's frames start with the arming,
+        # and so does the count of those it loses.
         asked = self._clock.monotonic()
+        refused = self._frames_refused()
         started = await self._runtime.start(program, subject)
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
@@ -1097,6 +1114,7 @@ class LocalPanel:
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
                 arming_began=asked,
+                arming_refused=refused,
             )
         )
         if self._listener is not None:
@@ -1577,7 +1595,7 @@ def build_panel(
     if journal is not None:
         tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
         backend = tapped.backend
-        journal.listen(tapped.source)
+        journal.listen(tapped.source, tapped.refused)
     runtime = TrainingRuntime(
         clock=clock,
         drive=backend,
