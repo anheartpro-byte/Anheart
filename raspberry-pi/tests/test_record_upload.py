@@ -1037,12 +1037,9 @@ def deposited(root: Path, stamp: str, ref: str, cursor: Cursor) -> Path:
     return made.path
 
 
-def test_a_purge_between_two_starts_and_the_sweep_of_cursors_do_not_touch_each_other_s_files(
+def test_a_purge_removes_orphan_cursors_and_the_next_start_preserves_what_is_still_owed(
     tmp_path: Path,
 ) -> None:
-    """The retention removes a deposited record with its marker, and nothing of the
-    synchronisation; at the next start the synchronisation removes the cursor of the record
-    that is gone, and nothing of the retention. What is still owed is still listed."""
     whole = deposited(tmp_path, "2026-10-01T080000Z", "whole", Cursor(state="complete", end="sent"))
     half = deposited(tmp_path, "2026-10-02T080000Z", "half", Cursor(ticks_offset=10))
     kept = record_named(tmp_path, "2026-10-03T080000Z", "kept")
@@ -1056,14 +1053,14 @@ def test_a_purge_between_two_starts_and_the_sweep_of_cursors_do_not_touch_each_o
     assert report == PurgeReport(removed=(whole.name, half.name), kept=1, failed=())
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
         [
-            cursor_of(whole).name,
-            cursor_of(half).name,
             kept.name,
             cursor_of(kept).name,
             BASELINE_NAME,
             DIRECTORY,
         ]
-    ), "the record and its marker are gone; the cursors and the list are not the retention's"
+    ), "purged records leave no sidecars; the remaining cursor, baseline and logbook stay"
+    assert not cursor_of(whole).exists()
+    assert not cursor_of(half).exists()
 
     assert owed_records(tmp_path) == Ok(Listed((kept.name,)))
 

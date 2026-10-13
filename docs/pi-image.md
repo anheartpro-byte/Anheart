@@ -1208,20 +1208,20 @@ nouvelles versions.
 | Endurance sur le Pi : deux heures en simulation, puis une journée au banc, capsule vide ([section 9](#9-endurance--deux-heures-en-simulation-sur-le-pi-puis-une-journée-au-banc)) | une personne avec le matériel, ANH-164 |
 | Durée de construction de l'image sur un Pi 4 et sur un Pi 5 | idem, étape 4 |
 | Publier et signer l'image, la faire tirer par le Pi | chef de projet (registre, clé), ANH-126, ANH-168 |
-| Durcissement, lots suivants : point d'accès Wi-Fi dédié à la console et pare-feu ; TLS sur la console ; système en lecture seule et volume des données ([section 10](#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)) | ANH-151 |
+| Mettre en service et éprouver sur le matériel le point d'accès/pare-feu, TLS, la racine en lecture seule et le volume chiffré ; les outils logiciels sont livrés ([section 10](#10-durcissement--ce-que-fait-scriptshardensh-et-la-check-list-de-limage)) | ANH-151 pour la validation terrain ; logiciels ANH-223 et ANH-224 livrés |
 | Le câble du variateur et le BITalino sous le compte `anheart` n'ont jamais été essayés : la règle `udev` du câble Schneider, le nœud série lié par l'unité, les droits des nœuds ([Sous quel compte](#sous-quel-compte)) | une personne avec le matériel : [essai du durcissement](#essai-du-durcissement--à-faire-au-banc) |
 | Le client Docker de l'unité est root, parce que le démon Docker l'est ([ce qui reste sous root](#ce-qui-reste-sous-root)) | aucun ticket : il faudrait un Docker sans root, ou une console lancée sans Docker |
 | Le conteneur voit le nom de tous les périphériques de la machine (`/dev` est monté), même s'il n'en ouvre que trois classes | limite assumée : les nœuds du câble et du capteur vont et viennent |
 | `rpi-eeprom-update` n'est pas touché : il applique au démarrage une mise à jour du micrologiciel du Pi **déjà installée par un paquet**, donc seulement après un `apt` lancé par une personne | à constater sur un Pi ([essai du durcissement](#essai-du-durcissement--à-faire-au-banc)) ; à décider par le chef de projet |
-| Servir la page en TLS sur un Pi installé : la console et le script du certificat sont écrits et testés, l'installation ne s'en sert pas encore, et aucune tablette n'a été essayée ([Le certificat de la console](#le-certificat-de-la-console), avec la liste de ce qui reste) | ANH-151, puis une personne avec le matériel |
+| Servir la page en TLS sur un Pi installé et éprouver l'accès depuis une tablette réelle : le branchement des certificats et du healthcheck HTTPS au service est livré ([Le certificat de la console](#le-certificat-de-la-console)) | logiciels ANH-151/223 livrés ; essais par une personne avec le matériel |
 | Une console qui ne répond réellement à rien, pas même à son arrêt, n'a été exercée nulle part sous systemd : tout gel appliqué du dehors est levé par l'arrêt. Ce que l'unité fait alors (15 s, puis `docker stop`, qui tue au bout de 60 s) est lu, pas observé | à observer le jour où le cas se présente ; aucun essai sûr ne le produit |
 | Le chien de garde du service, la relance et le mode hors service n'ont jamais tourné sur un vrai Pi ; le chien de garde matériel n'a jamais été armé ni déclenché | une personne avec le matériel : [section 6](#6-installer-un-vrai-raspberry-pi), étape 7, puis la procédure de banc de [securite.md](securite.md#96-essai-au-banc--procédure-non-faite) |
 | Quand systemd tourne mais n'arrive plus à relancer la console (limite de dix démarrages atteinte, Docker bloqué), l'unité reste en échec et **le Pi ne redémarre pas de lui-même** : seul un système entier figé est redémarré par le chien de garde matériel. Le faire redémarrer aussi dans ce cas est une ligne de l'unité (`StartLimitAction=reboot`), au prix d'un Pi qui redémarre en boucle, donc difficile à joindre, quand la console ne peut pas démarrer du tout (image absente) | décision du chef de projet ; d'ici là, `systemctl reset-failed anheart` ou un redémarrage du Pi à la main |
-| L'état « hors service » n'est pas remonté au tableau de bord : il est sur la page de la console et dans son journal | ANH-148 (champs de santé du heartbeat) |
+| Constater sur Pi la remontée de l'état « hors service » : il est désormais transmis dans la santé (`restart_loop`) et affiché sur la fiche machine, en plus de la console et de son journal | logiciel ANH-148 livré ; essai matériel restant |
 | Essai de coupure secteur au banc ([section 6](#essai-de-coupure-secteur--à-faire-au-banc)) : il n'est pas fait, et lui seul montre le remplacement de `systemd-timesyncd`, la correction de l'heure au retour du réseau et ce que la coupure laisse du journal | une personne avec le matériel ; ANH-163 |
 | Horloge temps réel : aucun module n'est monté ni essayé. Le script en signale une et `chrony` la tiendrait à l'heure, mais la console ne lui fait pas confiance sans réseau ([section 4](#lheure)). Choisir un module, l'activer dans `/boot/firmware/config.txt`, puis écrire la règle de confiance | chef de projet (matériel), puis un ticket |
 | Les serveurs de temps sont ceux de Debian, sur Internet. Un site qui ferme la sortie NTP (UDP 123) laisse l'horloge « NON FIABLE » : y déclarer le serveur de temps du site (`/etc/chrony/sources.d/`) | à décider par site |
-| Le contrôle pré-vol qui regroupe l'horloge avec les autres contrôles, et l'horloge dans le battement de cœur vers le tableau de bord | ANH-142, ANH-148 |
+| Le contrôle pré-vol qui regroupe l'horloge avec les autres contrôles ; le décalage d'horloge est déjà transmis dans la santé du heartbeat lorsqu'il est disponible | ANH-142 ; transmission logicielle ANH-148 livrée |
 | Mises à jour à distance | ANH-116, ANH-168, ANH-169 |
 | Le service partage `/tmp/anheart-drive.lock` avec l'hôte par bind du même inode. Les outils Anheart membres de dialout sont exclus pendant toute la possession du câble, reconnexions comprises. Un conteneur lancé à la main doit recevoir le même montage | logiciel livré par ANH-224 ; contention et vrai pilote à éprouver au banc ([procédure](pi-stockage.md)) |
 | Un `systemctl start anheart` à la main, ou la relance après la mort du client Docker, arrête une console trouvée en marche sans lui demander si elle est au repos ([section 4](#une-seule-console-à-la-fois)) | limite assumée ; `scripts/install.sh`, lui, pose la question |
@@ -1289,7 +1289,10 @@ du tableau de bord sont copiés à part.
    ```
 
    Deux heures et quelques minutes. Code de sortie 0 : tous les seuils sont
-   tenus (`PASS`, ou `XFAIL` pour le défaut connu `rotation`).
+   tenus (`PASS`). La santé et le dépôt complet sont actifs avec un stockage
+   simulé vérifiant les octets. La rétention locale de cet essai est de zéro
+   jour ; le journal examine les purges toutes les six heures, donc les deux
+   heures prouvent les confirmations, et le scénario de 24 h prouve la purge.
 
 4. **Relever.** Le résumé est affiché à la fin et écrit dans
    `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
@@ -1380,8 +1383,9 @@ qu'un tic tient dans sa période ; le seuil « 99e centile sous 150 ms » se lit
 donc sur l'essai 9.1, en simulation. Mesurer la durée au banc demanderait que
 la console la publie elle-même, ce qu'aucun ticket ne prévoit à ce jour.
 
-À surveiller : **le dossier des enregistrements n'est pas borné aujourd'hui**
-(aucun dépôt hors machine n'existe, donc aucune purge). Une heure de séance
+À surveiller : **aucun enregistrement non confirmé n'est purgé**. Le dépôt
+complet d'ANH-130 écrit désormais la confirmation vérifiée ; la libération
+dépend aussi de la durée de rétention configurée. Une heure de séance
 ajoute environ 18 000 fichiers ; la console refuse d'armer une séance sous
 36 016 inodes libres ou 500 Mo libres. Les deux `df` de la journée donnent
 l'autonomie réelle de la carte.

@@ -999,10 +999,9 @@ Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
   xfail » y marquent d'anciens défauts corrigés) ;
 * **un seul** reste : le couple de cohorte **S07 × jog AUTO**
   (`KNOWN_VASOVAGAL_ONSET` dans `simulation/cohort/battery.py`) ;
-* hors pytest, le scénario d'endurance porte un défaut connu de la même sorte :
-  son seuil `rotation` (`KNOWN_UNBOUNDED_DATA` dans
-  `simulation/endurance_measures.py`, [section 17.4](#174-seuils)). Son rapport
-  l'affiche `XFAIL`, et `FIXED?` le jour où il ne tient plus.
+* depuis l'intégration d'ANH-130, le scénario d'endurance exige le dépôt
+  confirmé et la rotation : son seuil `rotation` est bloquant, sans `XFAIL`
+  ([section 17.4](#174-seuils)).
 
 ### 12.3 Le cas résiduel S07
 
@@ -4083,20 +4082,22 @@ comparant les premiers relevés aux derniers.
 | `tick` | 99e centile de la durée du tic sous 150 ms, sur tout l'essai | ticket |
 | `descriptors` | le maximum de la seconde moitié de l'essai ne dépasse pas celui de la première : un descripteur qui fuit monte sans fin, des descripteurs qui vont et viennent avec les séances non | ticket (« aucun descripteur qui fuit ») |
 | `data` | ce que le code garantit aujourd'hui : voir ci-dessous | ticket, ramené à ce qui est vrai |
-| `rotation` | le dossier est borné par la rotation : **défaut connu**, voir ci-dessous | ticket |
+| `rotation` | chaque enregistrement clos restant est confirmé ; purge observée après six heures sous la politique de test | ticket |
 | `sessions` | chaque séance finit comme prévu (arrêt de l'opérateur, ou fin du programme) et arrive entière au tableau de bord simulé ; aucun point refusé, rien de dû à la fin, rien d'inattendu | ajouté : un essai dont les séances ne tournent plus ne prouve rien |
 
 La **période de chauffe** est la première heure ; pour un essai de moins de
 deux heures, son premier quart. Un essai trop court pour laisser quatre relevés
 après elle échoue sur `rss` et `descriptors` : il ne passe pas par défaut.
 
-**Le dossier de données n'est pas borné aujourd'hui.** Le ticket demande un
-dossier « borné par la rotation ». La rétention ne retire un enregistrement
-qu'une fois son dépôt hors machine **confirmé**
-(`src/record/retention.py`), et rien ne confirme un dépôt : le dépôt n'existe
-pas encore. Tout enregistrement reste donc sur le disque, quel que soit son âge.
-Ce qui borne le dossier, c'est le refus d'armer : la console refuse un départ
-sous 500 Mo ou 36 016 inodes libres. Le scénario le dit de deux façons :
+**Le dépôt et la rotation sont maintenant exercés.** Le scénario emploie le
+vrai `RecordDeposit`, ses fichiers v2 et ses curseurs, avec un stockage simulé
+qui vérifie tailles et SHA-256. Sa politique de test est de zéro jour ; la
+purge du journal garde sa cadence réelle de six heures. Cela ne modifie pas
+la politique de conservation de production. En horloge accélérée, comme pour
+le journal, une étape de transfert est exécutée entre les cycles au repos ; en
+temps réel, le transfert tourne dans sa tâche annulable habituelle. La recette
+native contre Convex, avec coupure et reprise, est celle d'ANH-130. Le scénario
+vérifie deux choses distinctes :
 
 * `data` vérifie ce que ce refus suppose, et qui est vrai : un enregistrement ne
   prend pas plus de fichiers que l'armement n'en prévoit (cinq blocs bruts par
@@ -4105,13 +4106,17 @@ sous 500 Mo ou 36 016 inodes libres. Le scénario le dit de deux façons :
   journal hors séance tient dans ses deux fichiers ; rien d'autre n'est laissé à
   côté des enregistrements que leurs curseurs et la liste de la
   synchronisation ;
-* `rotation` est un **défaut connu**, au sens de la
-  [section 12](#12-les--xfail-strict--et-le-cas-résiduel-s07) : le rapport
-  l'affiche `XFAIL`, avec le nombre d'enregistrements clos et zéro dépôt
-  confirmé, et l'essai reste vert. Le jour où un dépôt est confirmé ou un
-  enregistrement purgé pendant l'essai, la ligne passe à `FIXED?` et l'essai
-  échoue : il faut alors écrire la vraie borne et retirer
-  `KNOWN_UNBOUNDED_DATA`.
+* `rotation` exige que tous les enregistrements clos encore présents aient
+  leur confirmation, et qu'une purge ait été observée après six heures.
+  Sinon le résultat est `FAIL`. Le stockage simulé libère les métadonnées des
+  dépôts confirmés ou purgés pour ne pas créer une fuite artificielle dans le
+  processus mesuré. Les rapports antérieurs ci-dessous conservent leur
+  verdict historique `XFAIL` ; ils ne prouvent pas ce nouveau parcours.
+
+Le rapport de synchronisation compte aussi les objets de santé reçus et le
+plus grand intervalle entre heartbeats. Chaque heartbeat doit porter sa santé ;
+l'intervalle doit rester inférieur ou égal à 11 s (cadence de 10 s examinée par
+pas d'une seconde). Les sources matérielles absentes restent inconnues.
 
 Ce qui grandit, mesuré : 82,1 Mo alloués par le système de fichiers (16,2 Mo de contenu) et 18 021 fichiers par heure de séance. Les fichiers sont presque tous des
 blocs d'acquisition brute, un toutes les 200 ms. Sur une carte de 32 Go
@@ -4238,16 +4243,17 @@ depuis `raspberry-pi/`), lancé une fois le même jour sur le même poste, passe
   dure la plus longue.
 
 Le critère d'acceptation du ticket, « job nocturne vert pendant 7 nuits
-consécutives », **n'est pas établi** : le déclenchement nocturne ne tourne que
-sur la branche par défaut, où cette étape n'est pas encore arrivée. Il se lira
-sur les exécutions nocturnes de `ci.yml`, sept nuits de suite, une fois l'étape
-sur `main`.
+consécutives », **n'est pas établi**. Il se vérifiera sur sept exécutions
+nocturnes consécutives de `ci.yml`, sur la branche par défaut, après
+l'intégration de cette étape dans `main`. Un lancement manuel ou une journée
+simulée ne remplace pas ces sept nuits.
 
 ### 17.8 Limites
 
-* **Santé de la machine** : le ticket demande un essai « santé active ». Le
-  heartbeat ne porte pas encore d'objet de santé (ANH-148 non fait). Les
-  heartbeats partent toutes les dix secondes et sont comptés ; rien de plus.
+* **Santé de la machine** : active dans le heartbeat depuis ANH-148, avec
+  contrôle du nombre de rapports et de leur intervalle dans l'endurance.
+  Les sources matérielles indisponibles restent inconnues ; leur exactitude
+  sur un Pi installé relève des essais matériels.
 * **Tableau de bord** : une doublure en mémoire, tenue au vrai par la trace
   rejouée du test d'acceptation de la synchronisation. Aucun réseau, donc
   aucune lenteur ni coupure de réseau dans cet essai.
@@ -4270,5 +4276,5 @@ sur `main`.
 
 | Fichier | Ce qu'il vérifie |
 |---|---|
-| `test_endurance.py` | le scénario : une journée simulée courte (séance manuelle, programme mené à son terme, seconde séance coupée par l'échéance) où chaque séance finit comme prévu et arrive entière au tableau de bord simulé, chaque tic est chronométré, chaque relevé porte les quatre mesures, le dossier grandit comme l'armement le prévoit et rien ne le borne ; un programme en cours à l'échéance arrêté par l'opérateur ; la même console en temps réel sur un port de `127.0.0.1`, arrêtée proprement, sans rien laisser ; la ligne de commande dans ses trois modes ; ce que le scénario doit remarquer au lieu d'y survivre : une séance qui ne finit pas, un départ qui n'est pas pris, un tableau de bord qui ne répond plus (séance non livrée, envoi dû), une console sans lien ou mal configurée ; la page qui lit le hub, et le chronomètre du tic qui s'arrête quand elle est évincée |
-| `test_endurance_measures.py` | l'instrument et le jugement : l'histogramme ne sous-estime jamais un centile ; la mémoire et les descripteurs lus dans `/proc` et, à défaut, par `ps` et `/dev/fd`, puis pour de bon sur la machine des tests ; le dossier de données mesuré enregistrement par enregistrement, un enregistrement clos une seule fois, un fichier qui disparaît pendant la mesure, ce qui traîne à côté des enregistrements, un dépôt confirmé, un enregistrement purgé ; chaque seuil sur un essai qui le tient et sur un essai qui le viole (mémoire qui monte ou qui baisse de plus de 10 %, tic à 150 ms, descripteur qui fuit, enregistrement trop gros, journal trop long, fichier inattendu, fin imprévue, séance non livrée) ; le défaut connu `rotation`, `XFAIL` aujourd'hui et `FIXED?` dès qu'un dépôt est confirmé ; le rapport, et un relevé de banc lu puis jugé, ou refusé avec le numéro de la ligne fautive |
+| `test_endurance.py` | le scénario : une journée simulée courte (séance manuelle, programme mené à son terme, seconde séance coupée par l'échéance) où chaque séance finit comme prévu et arrive entière au tableau de bord simulé, chaque tic est chronométré, chaque relevé porte les quatre mesures, chaque enregistrement est confirmé avant d'être purgeable, la santé est reçue à chaque heartbeat et les empreintes sont mesurées avant la purge ; un programme en cours à l'échéance arrêté par l'opérateur ; la même console en temps réel sur un port de `127.0.0.1`, arrêtée proprement, sans rien laisser ; la ligne de commande dans ses trois modes ; ce que le scénario doit remarquer au lieu d'y survivre : une séance qui ne finit pas, un départ qui n'est pas pris, un tableau de bord qui ne répond plus (séance non livrée, envoi dû), une console sans lien ou mal configurée ; la page qui lit le hub, et le chronomètre du tic qui s'arrête quand elle est évincée |
+| `test_endurance_measures.py` | l'instrument et le jugement : l'histogramme ne sous-estime jamais un centile ; la mémoire et les descripteurs lus dans `/proc` et, à défaut, par `ps` et `/dev/fd`, puis pour de bon sur la machine des tests ; le dossier de données mesuré enregistrement par enregistrement, un enregistrement clos une seule fois, un fichier qui disparaît pendant la mesure, ce qui traîne à côté des enregistrements, un dépôt confirmé, un enregistrement purgé ; chaque seuil sur un essai qui le tient et sur un essai qui le viole (mémoire qui monte ou qui baisse de plus de 10 %, tic à 150 ms, descripteur qui fuit, enregistrement trop gros, journal trop long, fichier inattendu, fin imprévue, séance non livrée) ; la rotation bloquante, les confirmations complètes, la purge attendue après six heures, la présence et la cadence des rapports de santé ; le rapport, et un relevé de banc lu puis jugé, ou refusé avec le numéro de la ligne fautive |

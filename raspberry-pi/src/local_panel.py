@@ -152,6 +152,7 @@ from src.clock import Clock, RealClock
 from src.cloud_sync import (
     CloudSync,
     CloudTransport,
+    DepositTask,
     HttpxTransport,
     SessionKind,
     SessionListener,
@@ -1579,6 +1580,7 @@ def build_panel(
     notify_socket: str | None = None,
     service: ServiceDesk | None = None,
     health: HealthWatch | None = None,
+    deposit: DepositTask | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -1766,9 +1768,13 @@ def build_panel(
             health=health,
             health_context=health_context,
             deposit=(
-                None
-                if journal is None or owned is None
-                else RecordDeposit(journal.root, clock, owned, owned.upload)
+                deposit
+                if deposit is not None
+                else (
+                    None
+                    if journal is None or owned is None
+                    else RecordDeposit(journal.root, clock, owned, owned.upload)
+                )
             ),
         )
     return LocalPanel(

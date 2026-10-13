@@ -30,11 +30,9 @@ And it judges a run against the thresholds of the ticket (:func:`judge`):
     session, the logbook stays within its two files, and nothing else is left
     next to the records;
 ``rotation``
-    the folder is bounded by the retention. **A documented known defect**
-    (:data:`KNOWN_UNBOUNDED_DATA`): the retention removes a record only once its
-    deposit off the machine is confirmed, and nothing confirms a deposit yet.
-    Reported ``XFAIL`` while that is so; the day a deposit is confirmed the
-    line turns ``FIXED?`` and the run fails until the true bound is written;
+    every remaining closed record is confirmed outside the machine; a run of
+    at least six hours must also observe a purge under its zero-day test policy.
+    An unconfirmed record fails this check and is never purged;
 ``sessions``
     every session ended the way the scenario planned it and reached the
     simulated dashboard whole, and the scenario met nothing it did not expect.
@@ -59,11 +57,13 @@ from pathlib import Path
 from stat import S_ISDIR
 from typing import Final
 
+from src.cloud_sync import HEARTBEAT_PERIOD
 from src.record.cursor import BASELINE_NAME, CURSOR_SUFFIX
 from src.record.journal import (
     FIXED_ENTRIES,
     LONGEST_SESSION,
     MIN_FREE_BYTES,
+    PURGE_PERIOD,
     RAW_BLOCKS_PER_SECOND,
 )
 from src.record.logbook import DIRECTORY as LOGBOOK
@@ -76,6 +76,7 @@ RSS_BAND: Final[float] = 0.10
 TICK_P99_LIMIT_MS: Final[float] = 150.0
 """The 99th centile of the control tick, in milliseconds, stays under this."""
 
+MAX_HEARTBEAT_GAP_MS: Final[int] = int((HEARTBEAT_PERIOD + 1) * 1000)
 WARM_UP_S: Final[float] = 3600.0
 """The first hour is left out of the memory and descriptor judgements: caches fill."""
 
@@ -94,12 +95,6 @@ BYTES_PER_SECOND_RESERVED: Final[float] = MIN_FREE_BYTES / LONGEST_SESSION
 
 LOGBOOK_LIMIT: Final[int] = 2 * LOGBOOK_FILE_BYTES + 4096
 """The logbook is two files of at most :data:`~src.record.logbook.MAX_BYTES`, and a directory."""
-
-KNOWN_UNBOUNDED_DATA: Final[str] = (
-    "aucun dépôt hors machine n'est confirmé (le dépôt n'existe pas encore) : la rétention "
-    "ne retire rien et le dossier grandit jusqu'au refus d'armer faute de place"
-)
-"""Why ``rotation`` is an expected failure today (see the module docstring)."""
 
 KIB: Final[int] = 1024
 MIB: Final[int] = 1024 * 1024
@@ -492,6 +487,8 @@ class Sync:
     """What reached the simulated dashboard over the run."""
 
     heartbeats: int
+    health_reports: int = 0
+    max_heartbeat_gap_ms: int = 0
     points: int
     rejected: int
     duplicates: int
@@ -709,23 +706,23 @@ def check_data(run: Run) -> Check | None:
 
 
 def check_rotation(run: Run) -> Check | None:
-    """The folder bounded by the retention: a documented known defect. ``None`` with no record."""
+    """Require confirmed remaining records and an observed scheduled purge."""
     data = run.data
-    if data is None or data.closed + data.purged == 0:
+    if data is None or (not run.sessions and data.closed + data.purged == 0):
         return None
     threshold = "borné par la rotation : les enregistrements déposés et confirmés sont purgés"
-    acted = data.deposited + data.purged
-    if acted:
-        measured = (
-            f"{data.deposited} dépôts confirmés, {data.purged} enregistrements purgés : le "
-            "défaut connu ne tient plus, écrire la vraie borne et retirer KNOWN_UNBOUNDED_DATA"
-        )
-        return Check("rotation", Status.FIXED, threshold, measured)
     measured = (
-        f"{data.closed} enregistrements clos, 0 dépôt confirmé, 0 purgé. Défaut connu : "
-        f"{KNOWN_UNBOUNDED_DATA}"
+        f"{data.closed} enregistrements clos, {data.deposited} dépôts confirmés, "
+        f"{data.purged} enregistrements purgés (rétention d'essai : 0 jour)"
     )
-    return Check("rotation", Status.XFAIL, threshold, measured)
+    complete = data.deposited == data.closed and data.deposited + data.purged >= len(run.sessions)
+    purged_when_due = run.covered < PURGE_PERIOD or data.purged > 0
+    return Check(
+        "rotation",
+        Status.PASS if complete and purged_when_due else Status.FAIL,
+        threshold,
+        measured,
+    )
 
 
 def check_sessions(run: Run) -> Check | None:
@@ -753,6 +750,8 @@ def check_sessions(run: Run) -> Check | None:
         problems.append(f"séances non livrées : {undelivered}")
     if sync.rejected or sync.owed:
         problems.append(f"{sync.rejected} points refusés, {sync.owed} envois encore dus")
+    if sync.health_reports != sync.heartbeats or sync.max_heartbeat_gap_ms > MAX_HEARTBEAT_GAP_MS:
+        problems.append("santé absente ou battements espacés de plus de 11 secondes")
     if problems:
         return Check("sessions", Status.FAIL, threshold, " ; ".join(problems))
     manual = sum(1 for session in sessions if session.kind is Kind.MANUAL)
@@ -850,6 +849,8 @@ def _sync(sync: Sync | None) -> Mapping[str, object] | None:
         return None
     return {
         "heartbeats": sync.heartbeats,
+        "health_reports": sync.health_reports,
+        "max_heartbeat_gap_ms": sync.max_heartbeat_gap_ms,
         "points": sync.points,
         "rejected": sync.rejected,
         "duplicates": sync.duplicates,

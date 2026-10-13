@@ -56,12 +56,12 @@ from uuid import uuid4
 from pydantic import ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as validated
 
+from src.record.retention import CURSOR_SUFFIX as _CURSOR_SUFFIX
 from src.record.retention import RECORD_NAME
 from src.record.writer import create_private, describe_os_error
 from src.result import Err, Ok, Result
 
-CURSOR_SUFFIX: Final[str] = ".sync.json"
-"""The cursor of a record is ``<record directory name>.sync.json``, next to it."""
+CURSOR_SUFFIX: Final[str] = _CURSOR_SUFFIX
 
 TEMP_PREFIX: Final[str] = ".sync-"
 TEMP_SUFFIX: Final[str] = ".tmp"

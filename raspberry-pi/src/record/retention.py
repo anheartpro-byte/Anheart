@@ -10,12 +10,11 @@ A record stays on the Pi's disk until BOTH are true:
 * the confirmation is older than the configured retention
   (``RECORD_LOCAL_RETENTION_DAYS``, 30 by default).
 
-**Nothing in this repository writes the marker yet.** The deposit itself
-(Convex Storage) is another ticket, waiting on a legal opinion; until it calls
-:func:`confirm_deposit`, :func:`purge` finds nothing to remove and every record
-stays where it is. That is the whole point of the default: a record that was
-not deposited is never purged automatically, whatever its age and however full
-the disk is.
+:class:`src.record.deposit.RecordDeposit` writes the marker only after the
+complete remote inventory is verified and every hash matches the local files.
+A record that was not confirmed is never purged automatically, whatever its
+age and however full the disk is. Cloud deletion does not fabricate a local
+confirmation, and the retention policy remains a separate decision.
 
 The marker is refused, and the record kept, whenever anything about it is in
 doubt: unreadable or malformed, of another version, about a record still open
@@ -23,8 +22,8 @@ doubt: unreadable or malformed, of another version, about a record still open
 (its ``checksum`` is the SHA-256 of ``checksums.sha256`` at confirmation, so a
 record modified afterwards is not "the deposited one" any more).
 
-Everything here touches the disk: it runs on the journal thread, between
-sessions (:mod:`src.record.journal`), never on the event loop.
+Everything here touches the disk: it runs on the journal or deposit I/O
+worker, between sessions, never on the event loop.
 """
 
 from __future__ import annotations
@@ -49,6 +48,9 @@ from src.units import UnixMillis
 
 MARKER_SUFFIX: Final[str] = ".deposit.json"
 """The "deposited and confirmed" marker is ``<record directory name>.deposit.json``."""
+
+CURSOR_SUFFIX: Final[str] = ".sync.json"
+"""Per-record synchronisation metadata, removed once its record is gone."""
 
 CHECKSUMS: Final[str] = "checksums.sha256"
 
@@ -162,8 +164,8 @@ def purge(
 ) -> PurgeReport:
     """Remove every record under ``root`` that :func:`purgeable` allows. Never raises.
 
-    The record goes first and its marker after: stopped in between, what is
-    left is a marker with no record, which the next purge removes. The other
+    The record goes first and its sidecars after: stopped in between, what is
+    left is metadata with no record, which the next purge removes. The other
     order could leave a deposited record with no marker, kept for ever.
 
     ``pulse`` is called after each record looked at: removing a long session is
@@ -172,6 +174,7 @@ def purge(
     try:
         candidates = records(root)
         markers = tuple(root.glob(f"*{MARKER_SUFFIX}"))
+        cursors = tuple(root.glob(f"*{CURSOR_SUFFIX}"))
     except OSError:
         return PurgeReport(removed=(), kept=0, failed=())
     removed: list[str] = []
@@ -192,11 +195,15 @@ def purge(
     for marker in markers:
         if not marker.with_name(marker.name.removesuffix(MARKER_SUFFIX)).exists():
             _forget(marker)
+    for cursor in cursors:
+        record_name = cursor.name.removesuffix(CURSOR_SUFFIX)
+        if RECORD_NAME.fullmatch(record_name) and not cursor.with_name(record_name).exists():
+            _forget(cursor)
     return PurgeReport(removed=tuple(removed), kept=kept, failed=tuple(failed))
 
 
 def _forget(marker: Path) -> None:
-    """Remove the marker of a record that is gone. Left for the next purge if refused."""
+    """Remove metadata of a record that is gone. Left for the next purge if refused."""
     try:
         marker.unlink(missing_ok=True)
     except OSError:
