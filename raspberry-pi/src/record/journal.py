@@ -41,8 +41,10 @@ it ended (:attr:`Closing.until`), whenever the thread comes for it: what it
 takes before the record of a session is open waits here, bounded, for that
 opening. What began in no session (a console at rest polling its drive, a
 start that was refused) is written nowhere. And the frames nobody could keep
-are counted for the records whose sessions they can have begun in
-(:class:`Gap`).
+are counted for the record of the session they began in: those their list
+refused, exactly, from what the loop read of that list's count at the two ends
+of the session (:attr:`Opening.refused`, :attr:`Closing.refused`); the others
+for every record whose session they can have begun in (:class:`Gap`).
 
 A long operation (closing a record of thousands of files, the retention) is
 still one cycle, but not a silent one: between two files the thread measures
@@ -212,6 +214,16 @@ class Opening:
     frames that began at that instant or later are the session's; what began
     before it is an idle console's polling, or an earlier session's."""
 
+    refused: int | None = None
+    """How many frames the drive's bounded list had refused since startup when that
+    arming began (:attr:`~src.record.drive_tap.Taken.lost`, read by the loop at
+    that instant). ``None``: nobody read it."""
+
+    left: int = 0
+    """The values the queue had refused the previous session when this one was opened:
+    that count starts again here. The record of that session says it when this
+    opening finds it never closed (``superseded``)."""
+
 
 @dataclass(frozen=True, slots=True)
 class Closing:
@@ -224,6 +236,12 @@ class Closing:
     """When that session ended, on the console's clock. The drive's frames that
     began at that instant or earlier are the session's; what began after it is
     not, however long it waited for the journal thread next to them."""
+
+    refused: int | None = None
+    """How many frames the drive's bounded list had refused since startup when that
+    session ended, read by the loop at that instant. With :attr:`Opening.refused`
+    it says how many that session lost to that list: neither more nor fewer.
+    ``None``: nobody read it."""
 
 
 type Item = Opening | Closing | Entry | Note
@@ -290,9 +308,12 @@ class Progress:
 
     frames_lost: int = 0
     """Drive observations that session's record did not get: refused by their bounded
-    list, impossible to build, or let go by the journal thread for lack of room. None
-    of them was read, so this is every one that can have begun in that session
-    (:class:`Gap`): never fewer than it lost, more when a neighbour lost some too."""
+    list, impossible to build, or let go by the journal thread for lack of room.
+    Those their list refused are counted between the two instants the loop read
+    its count, the arming and the end of the session: that many, exactly. The
+    others, and all of them when the loop could not read that count, are every
+    one that can have begun in that session (:class:`Gap`): never fewer than it
+    lost, more when a neighbour lost some too."""
 
     activity: Activity = Activity.IDLE
 
@@ -408,6 +429,11 @@ class Gap:
     later than ``ended``. A record counts a gap when its session overlaps that
     stretch; two sessions that both overlap it both count it, because nothing
     says which of them lost what. A gap that overlaps no session is no loss.
+
+    For what the tap refused there is better than a stretch whenever the loop
+    read the tap's count as the arming began (:attr:`Opening.refused`): the
+    record then counts by that, and the stretch only says for which records
+    the refusal is settled.
     """
 
     count: int
@@ -421,6 +447,33 @@ class Gap:
             Monotonic(min(self.began, other.began)),
             Monotonic(max(self.ended, other.ended)),
         )
+
+
+def _with(pending: Gap | None, gap: Gap) -> Gap:
+    """``gap`` added to the one that waits, if one does: a new loss never replaces it."""
+    return gap if pending is None else pending.joined(gap)
+
+
+def _unless_over(gap: Gap | None, dispatched: Monotonic) -> Gap | None:
+    """``gap``, unless it ended before the tick of ``dispatched``, with no record open.
+
+    It is then no session's (:meth:`Scribe._forget`). One that ended at that
+    very instant waits: it may be the next arming's.
+    """
+    return None if gap is not None and gap.ended < dispatched else gap
+
+
+def _settled(gap: Gap | None, since: Monotonic, until: Monotonic | None) -> tuple[int, Gap | None]:
+    """What a session can have lost of ``gap``, and what is kept of it for a later record.
+
+    The session ran from ``since`` to ``until``, both included (``None``: it is
+    still going). It counts the gap when the two stretches overlap, and the
+    gap is kept only if part of it lies after ``until``.
+    """
+    if gap is None:
+        return 0, None
+    count = gap.count if gap.ended >= since and (until is None or gap.began <= until) else 0
+    return count, (None if until is None or gap.ended <= until else gap)
 
 
 # =========================================================================
@@ -449,12 +502,14 @@ class Scribe:
         "_gap",
         "_logbook",
         "_logbook_synced_at",
+        "_marked",
         "_missing",
         "_path",
         "_probed_at",
         "_publish",
         "_published_at",
         "_purged_at",
+        "_refused",
         "_retention_days",
         "_room",
         "_root",
@@ -464,6 +519,7 @@ class Scribe:
         "_storage",
         "_synced_at",
         "_taken_at",
+        "_unheard",
         "_unlogged",
         "_untaken",
         "_waiting",
@@ -512,10 +568,18 @@ class Scribe:
         # next while no record is open: the arming of a session whose record is not
         # open yet, until its opening claims them. Never more than ``_room``.
         self._waiting: tuple[Observation, ...] = ()
-        # The frames nobody kept, that no record has counted or disowned yet.
+        # The frames this thread let go for lack of room, that no record has counted
+        # or disowned yet.
         self._gap: Gap | None = None
-        # How many of them the session of the record last opened can have lost.
+        # The same, for those the tap refused.
+        self._unheard: Gap | None = None
+        # How many of those two the session of the record last opened can have lost,
+        # judged by their stretch.
         self._missing: int = 0
+        # What the tap had refused when the arming of that record began, if the loop
+        # read it; and how many it has refused that session since, counted from there.
+        self._marked: int | None = None
+        self._refused: int = 0
         # When the arming of the record last opened began: its frames start there.
         self._since: Monotonic = clock.monotonic()
         self._error: RecordError | None = None
@@ -548,7 +612,7 @@ class Scribe:
             discarded=self._discarded,
             error=self._error,
             path=self._path,
-            frames_lost=self._missing,
+            frames_lost=self._missing + self._refused,
             activity=self._activity,
         )
 
@@ -587,26 +651,34 @@ class Scribe:
         (:meth:`_forget`). And it is bounded (:meth:`_keep`): past the bound
         the oldest are let go and counted, like those the tap refused
         (:class:`Gap`).
+
+        What the tap refused is counted for a record from what the loop read
+        of the tap's count: at the arming, and at the end of the session or,
+        while it lasts, at this cycle's first take. Not at a later take of
+        this cycle: a session whose closing this cycle will not see can have
+        ended before it, and what the tap refused a console at rest since
+        would be counted with it.
         """
         now = self._clock.monotonic()
-        # Read before anything is taken: see :meth:`_forget`.
+        # Read before anything is taken, and before the queue is counted: see :meth:`_forget`.
         dispatched = self._dispatched()
         self._untaken = None
         self._keep(self._taken())
+        heard = self._frames_lost
         count = len(queue)
         for _ in range(count):
             item = queue.popleft()
             self._consumed += 1
             self._samples += _sample_count(item)
             if isinstance(item, Opening):
-                self._hand_frames(just_before(item.since))
+                self._hand_frames(just_before(item.since), item.refused)
             elif isinstance(item, Closing):
                 if self._untaken is None:
                     self._keep(self._taken())
-                self._hand_frames(item.until)
+                self._hand_frames(item.until, item.refused)
             self._note(self._take(item, now, dropped, unlogged))
             self._pulse()
-        self._hand_frames(None)
+        self._hand_frames(None, heard)
         self._forget(dispatched)
         self._checkpoint(now, dropped)
         self._published_at = self._clock.monotonic()
@@ -664,7 +736,7 @@ class Scribe:
         refused = taken.lost - self._frames_lost
         if refused > 0:
             began = observations[-1].at if observations else self._taken_at
-            self._lose(Gap(refused, began, moment))
+            self._unheard = _with(self._unheard, Gap(refused, began, moment))
         self._frames_lost = taken.lost
         self._taken_at = moment
         return observations
@@ -682,18 +754,15 @@ class Scribe:
         if over > 0:
             shed = waiting[:over]
             waiting = waiting[over:]
-            self._lose(
+            self._gap = _with(
+                self._gap,
                 Gap(
                     over,
                     Monotonic(min(o.at for o in shed)),
                     Monotonic(max(o.at for o in shed)),
-                )
+                ),
             )
         self._waiting = waiting
-
-    def _lose(self, gap: Gap) -> None:
-        pending = self._gap
-        self._gap = gap if pending is None else pending.joined(gap)
 
     def _forget(self, dispatched: Monotonic) -> None:
         """With no record open, let go of what began before the last tick the loop reported.
@@ -718,11 +787,10 @@ class Scribe:
         if self._writer is not None:
             return
         self._waiting = tuple(o for o in self._waiting if o.at >= dispatched)
-        gap = self._gap
-        if gap is not None and gap.ended < dispatched:
-            self._gap = None
+        self._gap = _unless_over(self._gap, dispatched)
+        self._unheard = _unless_over(self._unheard, dispatched)
 
-    def _hand_frames(self, until: Monotonic | None) -> None:
+    def _hand_frames(self, until: Monotonic | None, refused: int | None) -> None:
         """Write to the record that is open, if one is, the waiting frames of its session.
 
         Its session: from the instant its arming began to ``until``, the
@@ -733,6 +801,16 @@ class Scribe:
         The frames nobody kept are settled the same way: the record counts
         the gap when its session overlaps it, and the gap is kept for a later
         record only if part of it lies after ``until``.
+
+        Except those the tap refused, when the loop read the tap's count as
+        the arming of this record began. They are then counted from that:
+        ``refused`` is the same count as far as it is known to belong to this
+        session, read by the loop when the session ended or, while it lasts,
+        by this thread at a take the session had not ended before. ``None``:
+        nobody read it at that end, and the latest this thread saw stands for
+        it: the take it made for that closing, which came after the end, so
+        more than the session lost if anything. (A cycle whose take failed
+        says so on its own, as a failure of the record: :meth:`_taken`.)
         """
         writer = self._writer
         if writer is None:
@@ -741,12 +819,14 @@ class Scribe:
         waiting = self._waiting
         due = tuple(o for o in waiting if o.at >= since and (until is None or o.at <= until))
         self._waiting = () if until is None else tuple(o for o in waiting if o.at > until)
-        gap = self._gap
-        if gap is not None:
-            if gap.ended >= since and (until is None or gap.began <= until):
-                self._missing += gap.count
-            if until is None or gap.ended <= until:
-                self._gap = None
+        shed, self._gap = _settled(self._gap, since, until)
+        unheard, self._unheard = _settled(self._unheard, since, until)
+        self._missing += shed
+        marked = self._marked
+        if marked is None:
+            self._missing += unheard
+        else:
+            self._refused = max(0, (self._frames_lost if refused is None else refused) - marked)
         origin = _started(writer.manifest)
         for observation in due:
             try:
@@ -807,8 +887,10 @@ class Scribe:
         previous = self._writer
         if previous is not None:
             # The producer closes a session before opening the next. One that
-            # was left open is still finalised, and says how it ended.
+            # was left open is still finalised, and says how it ended; before
+            # that, what it is missing, like one that is closed (:meth:`_close`).
             self._writer = None
+            self._warn(previous, now, opening.left)
             self._note(self._finalise(previous, self._clock, "superseded", None))
         self._session = opening.session
         self._failures = 0
@@ -816,6 +898,8 @@ class Scribe:
         self._warned = 0
         self._unlogged = 0
         self._missing = 0
+        self._refused = 0
+        self._marked = opening.refused
         self._error = None
         self._path = None
         self._since = opening.since
@@ -895,7 +979,7 @@ class Scribe:
 
     def _warn(self, writer: Writer, now: Monotonic, dropped: int) -> None:
         """Say in the record itself what it is missing, once per change, if the disk lets us."""
-        frames = self._missing
+        frames = self._missing + self._refused
         lost = dropped + self._failures + frames
         if lost == self._warned:
             return
@@ -929,6 +1013,8 @@ class Journal:
     ``_unlogged`` and ``_dispatched_at`` are the three producer fields that
     thread reads (two ``int``, for the warnings it writes into the record and
     into the logbook, and an instant, for the drive's frames no record claims).
+    ``_refusals`` is set once, where the console is built, and called by the
+    event loop thread only.
     """
 
     __slots__ = (
@@ -943,6 +1029,7 @@ class Journal:
         "_put",
         "_put_samples",
         "_queue",
+        "_refusals",
         "_root",
         "_scribe",
         "_session",
@@ -973,6 +1060,7 @@ class Journal:
         self._limits: Limits = limits
         self._period: Seconds = period
         self._queue: deque[Item] = deque()
+        self._refusals: Callable[[], int] | None = None
         # Nothing was armed before the console was built.
         self._dispatched_at: Monotonic = clock.monotonic()
         self._scribe: Scribe = Scribe(
@@ -999,28 +1087,65 @@ class Journal:
         """The records directory."""
         return self._root
 
-    def listen(self, frames: FrameSource) -> None:
+    def listen(self, frames: FrameSource, refused: Callable[[], int] | None = None) -> None:
         """Take the drive's observations from ``frames`` at every cycle, off the loop.
 
         Called once, where the console is built, before anything turns: from
         then on only the journal thread calls ``frames``.
+
+        ``refused``: how many of them their bounded list has refused so far,
+        read without taking any (:attr:`~src.record.drive_tap.Tapped.refused`).
+        Only the loop calls it, at the two ends of a session
+        (:meth:`frames_refused`). ``None``: nobody can say, and a record
+        counts what it lost to that list by its stretch (:class:`Gap`).
         """
         self._scribe.listen(frames)
+        self._refusals = refused
 
     # --- the producer: event loop thread only -----------------------------
 
-    def open(self, manifest: Manifest, privacy: Privacy, *, since: Monotonic | None = None) -> None:
+    def frames_refused(self) -> int | None:
+        """How many drive frames their bounded list has refused since startup, read now.
+
+        For the loop, at the instant an arming begins and at the instant a
+        session ends (:attr:`Opening.refused`, :attr:`Closing.refused`). It
+        reads one ``int`` in memory: no lock, no wait. Total: ``None`` when
+        nobody can say (no drive is listened to that way, or the read failed),
+        never an exception in the tick that asks.
+        """
+        read = self._refusals
+        if read is None:
+            return None
+        try:
+            return read()
+        except Exception:  # an observer of the drive: the count is then unknown, never raised
+            _logger.exception("session journal: the count of refused drive frames is unreadable")
+            return None
+
+    def open(
+        self,
+        manifest: Manifest,
+        privacy: Privacy,
+        *,
+        since: Monotonic | None = None,
+        refused: int | None = None,
+    ) -> None:
         """A session was armed: queue the creation of its record. Never refused.
 
         ``since``: when the arming began (:attr:`Opening.since`). ``None``:
         nobody can say, and the frames of the record begin with the record.
+        ``refused``: what :meth:`frames_refused` said at that instant
+        (:attr:`Opening.refused`).
         """
+        # What the queue refused the session before this one, before that count starts
+        # again: its record says so if nobody closed it (:attr:`Opening.left`).
+        left = self._dropped
         self._session += 1
         self._open = True
         self._dropped = 0
         self._unlogged = 0
         begun = _started(manifest) if since is None else since
-        self._enqueue(Opening(self._session, manifest, privacy, begun))
+        self._enqueue(Opening(self._session, manifest, privacy, begun, refused, left))
 
     def close(self, closing: Closing) -> None:
         """The session is over: queue the finalisation of its record. Never refused."""

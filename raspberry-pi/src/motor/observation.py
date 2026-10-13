@@ -94,6 +94,16 @@ class ExchangeLog:
         """What waits now, oldest first, left where it is."""
         return tuple(self._entries.copy())
 
+    @property
+    def refused(self) -> int:
+        """Exchanges refused so far because the log was full: what :meth:`drain` reports.
+
+        Read without taking anything out, and without the lock: one ``int``,
+        whole at any instant, for whoever needs the count at a moment of its
+        own choosing (the console, at the two ends of a session).
+        """
+        return self._refused
+
     def append(self, exchange: Exchange) -> None:
         if not self._transport and exchange.kind in TRANSPORT_KINDS:
             return

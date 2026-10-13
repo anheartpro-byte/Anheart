@@ -30,6 +30,7 @@ import asyncio
 import threading
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -523,7 +524,7 @@ def held_tap(monkeypatch: pytest.MonkeyPatch) -> list[Held]:
         tapped = tap_drive(backend, clock, sdk_frames=sdk_frames)
         held = Held(tapped.source)
         made.append(held)
-        return Tapped(tapped.backend, held)
+        return replace(tapped, source=held)
 
     monkeypatch.setattr(local_panel, "tap_drive", tapping)
     return made
@@ -724,10 +725,17 @@ async def test_the_exchanges_of_a_start_that_is_refused_are_in_no_record_and_are
     assert nothing_counted(recorded)
 
 
-async def test_what_a_small_tap_refused_while_two_sessions_waited_is_said_in_both_records(
+async def test_what_a_small_tap_refused_while_two_sessions_waited_is_said_in_each_for_its_own(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The third limit of the review: the overflow was counted for the first only, or for none."""
+    """The third limit of the review: the overflow was counted for the first only, or for none.
+
+    ANH-215 had both records say all of it, an upper bound, because the tap
+    says only how many it refused. Since ANH-222 the console reads that count
+    when an arming begins and when the session ends: each record says what
+    its own session was refused, and what the console was refused at rest
+    between the two is counted for neither.
+    """
     monkeypatch.setattr(session_module, "STORAGE_STALE_AFTER", Seconds(1e9))
 
     def small(backend: DriveBackend, clock: Clock, *, sdk_frames: bool) -> Tapped:
@@ -747,10 +755,11 @@ async def test_what_a_small_tap_refused_while_two_sessions_waited_is_said_in_bot
     assert len(made) > 40
     assert kinds_in(first) == made[:40], "the tap kept the oldest forty: all of the first session"
     assert kinds_in(second) == []
-    refused = len(drive.calls) - 40
-    said = f"record_degraded: dropped=0 failures=0 drive_frames_lost={refused}"
-    assert warnings_of(first) == [said]
-    assert warnings_of(second) == [said], "nothing says which of the two lost what: both say it"
+    said = "record_degraded: dropped=0 failures=0 drive_frames_lost="
+    assert warnings_of(first) == [f"{said}{len(made) - 40}"]
+    assert warnings_of(second) == [f"{said}{len(drive.made_in('second'))}"]
+    at_rest = len(drive.calls) - len(made) - len(drive.made_in("second"))
+    assert at_rest > 0, "the console was refused frames at rest too: they are in neither count"
 
 
 async def test_what_was_let_go_while_the_console_was_at_rest_is_not_counted_with_a_later_loss(
