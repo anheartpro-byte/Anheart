@@ -240,6 +240,8 @@ l'emporte sur `.env`.**
 | `UI_HOST` | non (défaut `127.0.0.1`) | | adresse d'écoute de la page |
 | `UI_PORT` | non (défaut `8080`) | jamais `8123` | port de la page |
 | `UI_TOKEN` | obligatoire si `UI_HOST` n'est pas `127.0.0.1` | au moins 16 caractères | mot de passe partagé de la page |
+| `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
+| `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
@@ -301,11 +303,14 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
 * sur l'écran du Pi : <http://127.0.0.1:8090/> (le port `UI_PORT` du modèle de
   configuration du Pi) ;
-* depuis un autre ordinateur du réseau : mettre dans `/etc/anheart/anheart.env`
-  `UI_HOST=0.0.0.0` et `UI_TOKEN=` suivi d'au moins 16 caractères, redémarrer la
-  console, puis ouvrir `http://<adresse IP du Pi>:8090/` et saisir le jeton dans la
-  page **Configuration** (voir §10). Sans jeton assez long, la console refuse de
-  démarrer.
+* depuis un autre appareil du réseau : **ce n'est pas encore possible sur un Pi
+  installé.** Depuis le 10 octobre 2026, une console qui écoute ailleurs que sur
+  la boucle locale exige, en plus de `UI_TOKEN` (au moins 16 caractères), son
+  certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) et ne sert sa page qu'en
+  `https://` ; sans l'un ou l'autre elle refuse de démarrer. Le script qui fait
+  ce certificat existe, mais l'installation du Pi ne le donne pas encore à la
+  console ([pi-image.md](../pi-image.md#le-certificat-de-la-console)). D'ici
+  là, la page s'ouvre sur l'écran du Pi.
 
 Ne lancez **jamais** en même temps la console et `scripts/bench_console.py` sur le
 même câble. Sur un même ordinateur, un seul programme à la fois possède la liaison
@@ -1889,6 +1894,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut ...` | rayon non fourni | ajouter `ARM_RADIUS_M=` avec la valeur mesurée |
 | ✔ `configuration: UI_PORT: 8123 est le port de scripts/bench_console.py` | port réservé à l'outil de banc | garder 8080 ou un autre port |
 | `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback` | page ouverte au réseau sans jeton assez long | mettre un `UI_TOKEN` d'au moins 16 caractères |
+| `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '0.0.0.0' in clear HTTP: ...` | page ouverte au réseau sans certificat | revenir à `UI_HOST=127.0.0.1`, ou donner à la console son certificat ([pi-image.md](../pi-image.md#le-certificat-de-la-console)) |
+| `configuration: UI_TLS_CERT/UI_TLS_KEY: the certificate ... is not a file the console can see` (ou un autre motif) | le certificat ou sa clé ne peut pas être servi | lire le motif, qui nomme le fichier ([raspberry-pi.md, 12.5](../raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `configuration: MOTOR_BACKEND: '' : attendu 'sim' ou 'serial'` | variable absente ou fausse | la renseigner |
 | `configuration: ECG_SOURCE: ... attendu 'sim', 'serial' ou 'rfcomm'` | idem | la renseigner |
 | `configuration: BITALINO_ADDRESS: ... ECG_SOURCE=serial attend un port serie (/dev/rfcomm0, COM4) ou une adresse MAC` | adresse du boîtier manquante ou au mauvais format | corriger `BITALINO_ADDRESS` |

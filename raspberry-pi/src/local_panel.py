@@ -180,9 +180,12 @@ from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     DEFAULT_HR_CRITICAL_BPM,
     DEFAULT_HR_HARD_MAX_BPM,
+    KEY_UI_TLS_CERT,
+    KEY_UI_TLS_KEY,
     RETIRED_KEYS,
     CameraSource,
     CloudConfig,
+    ConfigProblem,
     EcgSource,
     LocalConfig,
     MotorBackend,
@@ -288,6 +291,7 @@ from src.wall_clock import (
 )
 from src.web.app import build_server, create_app, serve
 from src.web.deps import FilesystemPortLister, Services
+from src.web.tls import server_context
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
 
@@ -990,6 +994,14 @@ class LocalPanel:
         if self._recorder is not None:
             self._recorder.begin(request)
 
+    def _frames_refused(self) -> int | None:
+        """What the drive's list has refused so far, for the record of the arming that begins.
+
+        Memory only, and it never raises (:meth:`SessionRecorder.frames_refused`).
+        ``None``: nothing is recorded, or nobody can say.
+        """
+        return None if self._recorder is None else self._recorder.frames_refused()
+
     async def _dispatch(self) -> None:
         """Hand the mailbox's command to the runtime, and say what became of it.
 
@@ -1047,15 +1059,22 @@ class LocalPanel:
         if blocked is not None:
             self._surface.note_refused(command, blocked)
             return
-        # Read before the drive is touched: the record's frames start with the arming.
+        # Read before the drive is touched: the record's frames start with the arming,
+        # and so does the count of those it loses.
         asked = self._clock.monotonic()
+        refused = self._frames_refused()
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
             self._surface.note_refused(command, describe_start_refusal(started.error))
             return
         self._surface.note_taken(command)
         self._begin_record(
-            SessionRequest(occupancy=occupancy, operator=operator, arming_began=asked)
+            SessionRequest(
+                occupancy=occupancy,
+                operator=operator,
+                arming_began=asked,
+                arming_refused=refused,
+            )
         )
         untrusted = self._untrusted_clock()
         if untrusted is not None:
@@ -1103,8 +1122,10 @@ class LocalPanel:
             return
         program = prepared.value
         subject = Subject(subject_id=command.subject_id, operator=operator)
-        # Read before the drive is touched: the record's frames start with the arming.
+        # Read before the drive is touched: the record's frames start with the arming,
+        # and so does the count of those it loses.
         asked = self._clock.monotonic()
+        refused = self._frames_refused()
         started = await self._runtime.start(program, subject)
         if isinstance(started, Err):
             self._refuse_programme(command, describe_start_refusal(started.error))
@@ -1118,6 +1139,7 @@ class LocalPanel:
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
                 arming_began=asked,
+                arming_refused=refused,
             )
         )
         if self._listener is not None:
@@ -1598,7 +1620,7 @@ def build_panel(
     if journal is not None:
         tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
         backend = tapped.backend
-        journal.listen(tapped.source)
+        journal.listen(tapped.source, tapped.refused)
     runtime = TrainingRuntime(
         clock=clock,
         drive=backend,
@@ -2206,13 +2228,31 @@ def describe_config(config: LocalConfig) -> str:
     tiers = config.tiers
     dashboard = "aucun" if config.cloud is None else config.cloud.url
     return (
-        f"Console du banc sur http://{web.host}:{web.port}/ - {modes} "
+        f"Console du banc sur {web.scheme}://{web.host}:{web.port}/ - {modes} "
         f"(plafond {config.motor_max_rpm} tr/min moteur; paliers "
         f"{tiers.hard_max_bpm}/{tiers.critical_bpm} bpm) - "
         f"variateur: {drive} - ECG ({config.ecg_source.value}): {ecg} - "
         f"rayon {config.geometry.radius} m, i = {config.geometry.ratio} - "
         f"tableau de bord: {dashboard}"
     )
+
+
+def tls_problem(config: LocalConfig) -> ConfigProblem | None:
+    """Why the console's certificate cannot be served; ``None`` when it can, or there is none.
+
+    The two files are opened here, before anything of the console is built: a
+    certificate that cannot be served is a configuration error like the
+    others, said with its reason and left with the exit code the service does
+    not restart on. It is not judged on its dates: an expired certificate is
+    served, and the tablet says so (:mod:`src.web.tls`).
+    """
+    files = config.web.tls
+    if files is None:
+        return None
+    loaded = server_context(files)
+    if isinstance(loaded, Err):
+        return ConfigProblem(f"{KEY_UI_TLS_CERT}/{KEY_UI_TLS_KEY}", loaded.error.detail)
+    return None
 
 
 def main(environ: Mapping[str, str] | None = None) -> int:
@@ -2231,6 +2271,10 @@ def main(environ: Mapping[str, str] | None = None) -> int:
             _logger.error("configuration: %s: %s", problem.key, problem.detail)
         return EXIT_CONFIG
     config = loaded.value
+    unserved = tls_problem(config)
+    if unserved is not None:
+        _logger.error("configuration: %s: %s", unserved.key, unserved.detail)
+        return EXIT_CONFIG
     _logger.warning("%s", describe_config(config))
     return asyncio.run(
         run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))

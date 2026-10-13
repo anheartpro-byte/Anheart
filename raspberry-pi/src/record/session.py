@@ -39,7 +39,10 @@ What is NOT written, on purpose:
 
 The drive's frames are not written from here either, and do not go through
 this object at all: they wait in :mod:`src.record.drive_tap` and the journal
-thread takes them.
+thread takes them. All this object says of them is when a session begins and
+ends, and how many their list had refused at each of those two instants
+(:meth:`SessionRecorder.frames_refused`): the record then counts what its own
+session lost, and nothing else.
 """
 
 from __future__ import annotations
@@ -291,6 +294,12 @@ class SessionRequest:
     """The console's clock just before the runtime was asked to arm: the drive's
     exchanges of the arming come after it, an idle console's polling before.
     ``None``: not known, and the record takes the drive's frames from its own start."""
+
+    arming_refused: int | None = None
+    """What :meth:`SessionRecorder.frames_refused` said at that same instant: the
+    frames the drive's list had refused before this arming, which are not this
+    session's. ``None``: not read, and the record counts what it lost to that
+    list by its stretch, an upper bound."""
 
 
 def manifest_for(
@@ -608,15 +617,25 @@ class SessionRecorder:
         # A new record: what the recorder itself got wrong was about the previous one.
         self._faults = 0
         origin = clock.monotonic()
-        since = origin if request.arming_began is None else request.arming_began
+        if request.arming_began is None:
+            # Nobody timed the arming: the frames of the record, and the count of
+            # those it loses, begin with the record.
+            since, refused = origin, self._journal.frames_refused()
+        else:
+            since, refused = request.arming_began, request.arming_refused
         if self._live is not None:
             # The previous session's end was never observed; close what is open. The
             # drive's frames are its own up to the arming of this one, and no further.
-            self._journal.close(Closing(clock.unix_millis(), INTERRUPTED, None, just_before(since)))
+            self._journal.close(
+                Closing(clock.unix_millis(), INTERRUPTED, None, just_before(since), refused)
+            )
         live = _Live(origin=origin, names=names_of(request.operator))
         self._live = live
         self._journal.open(
-            manifest_for(self._stamp, request, clock, self._wall_trusted()), _EMAILS, since=since
+            manifest_for(self._stamp, request, clock, self._wall_trusted()),
+            _EMAILS,
+            since=since,
+            refused=refused,
         )
         kind = "manual" if request.program is None else "auto"
         self._event(
@@ -700,6 +719,8 @@ class SessionRecorder:
                 # Read now, not ``now``: the exchanges of this last tick began after the
                 # tick's own instant, and they are the session's. The next ones are not.
                 until=self._clock.monotonic(),
+                # And at that same instant, what the drive's list has refused so far.
+                refused=self._journal.frames_refused(),
             )
         )
         self._live = None
@@ -845,6 +866,16 @@ class SessionRecorder:
         if said != self._said:
             self._said = said
             self._notice = describe_status(status, self._journal.root)
+
+    def frames_refused(self) -> int | None:
+        """How many drive frames their bounded list has refused so far, for an arming.
+
+        The console reads it with the instant an arming begins
+        (:attr:`SessionRequest.arming_began`), before it asks the runtime to
+        arm. One ``int`` read in memory, and total
+        (:meth:`Journal.frames_refused`): ``None`` when nobody can say.
+        """
+        return self._journal.frames_refused()
 
     def take_notice(self) -> str | None:
         """The sentence for the operator since the last call, or ``None``. Read once."""
