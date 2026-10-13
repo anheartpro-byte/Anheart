@@ -2403,6 +2403,7 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   path: string;
   tests: string;
 }> = [
+  { method: "POST", path: "/clerk/webhook", tests: "clerkWebhook.test.ts (signature, timestamp, replay, organization and membership ordering)" },
   {method:"POST",path:"/api/machine/records/upload-url",tests:"recordStorage.test.ts (machine authentication, metadata, closed session)"},
   {method:"POST",path:"/api/machine/records/commit",tests:"recordStorage.test.ts (machine authentication, idempotence, hash mismatch)"},
   {method:"GET",path:"/api/machine/records/status",tests:"recordStorage.test.ts (machine authentication, session ownership)"},

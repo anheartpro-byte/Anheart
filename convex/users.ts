@@ -17,6 +17,7 @@ import {
   getCurrentUser as getUserFromCtx,
   canAccessUser,
   canManageUser,
+  requireSharedProfileAuthority,
   findMembership,
   findUnlinkedDefaultOrganization,
   inScope,
@@ -39,6 +40,11 @@ async function mirrorMembership(
   role: OrganizationRole,
 ) {
   const membership = await findMembership(ctx, user._id, organizationId);
+  if (
+    membership &&
+    (!membership.active || membership.clerkEventAt !== undefined)
+  )
+    return;
   if (membership) {
     await ctx.db.patch(membership._id, { role, active: true });
   } else {
@@ -503,6 +509,7 @@ export const updatePatient = mutation({
     if (!(await canManageUser(ctx, args.userId, currentUser))) {
       throw new Error("Not authorized to edit this patient");
     }
+    await requireSharedProfileAuthority(ctx, args.userId, currentUser);
 
     // Check if user exists
     const targetUser = await ctx.db.get(args.userId);

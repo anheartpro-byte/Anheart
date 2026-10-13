@@ -165,7 +165,7 @@ export async function organizationFromClaims(
     .query("organizations")
     .withIndex("by_clerk_org_id", (q) => q.eq("clerkOrgId", claim))
     .unique();
-  if (!organization) {
+  if (!organization || organization.deletedAt !== undefined) {
     return { kind: "refused", reason: ORGANIZATION_NOT_SYNCHRONIZED };
   }
   const organizationRole = organizationRoleFromClaim(identity.org_role);
@@ -249,7 +249,11 @@ async function sessionOf(
     user._id,
     organization?._id,
   );
-  if (!organization || organizationRole === null) {
+  if (
+    !organization ||
+    organization.deletedAt !== undefined ||
+    organizationRole === null
+  ) {
     return { refusal: NO_ORGANIZATION };
   }
   return { organization, role: effectiveRole(organization, organizationRole) };
@@ -429,6 +433,25 @@ export async function canAccessUser(
   }
 
   return await canManageUser(ctx, targetUserId, currentUser);
+}
+
+export async function requireSharedProfileAuthority(
+  ctx: Ctx,
+  targetUserId: Id<"users">,
+  currentUser: CurrentUser,
+): Promise<void> {
+  if (currentUser.role === "admin") return;
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", targetUserId))
+    .collect();
+  const organizations = new Set(
+    memberships.filter((row) => row.active).map((row) => row.organizationId),
+  );
+  if (organizations.size > 1)
+    throw new ConvexError(
+      "Shared profile changes require an Anheart administrator",
+    );
 }
 
 /**

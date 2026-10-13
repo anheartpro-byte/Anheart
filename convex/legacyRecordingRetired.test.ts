@@ -66,10 +66,10 @@ describe("ANH-135 the recording routes are gone", () => {
 
   it("registers training and record-deposit routes without the retired acquisition API", () => {
     const paths = http.getRoutes().map(([path]) => path);
-    expect(paths).toHaveLength(15);
+    expect(paths).toHaveLength(16);
     for (const path of paths) {
       expect(path).toMatch(
-        /^\/api\/(machine\/(heartbeat|roster|profiles|training\/[a-z]+|records\/(upload-url|commit|status))|records\/download)$/,
+        /^(\/api\/(machine\/(heartbeat|roster|profiles|training\/[a-z]+|records\/(upload-url|commit|status))|records\/download)|\/clerk\/webhook)$/,
       );
     }
   });
@@ -318,7 +318,10 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
 
     const result = await migrate(w);
 
-    expect(result).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, sessionsFailed: 2 });
+    expect(result).toEqual({
+      machinesChecked: WORLD_MACHINE_COUNT,
+      sessionsFailed: 2,
+    });
     for (const id of [pending, active]) {
       const session = await read(w, id);
       expect(session?.status).toBe("failed");
@@ -430,7 +433,10 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
     vi.setSystemTime(NOW + 60_000);
     const second = await migrate(w);
 
-    expect(second).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, sessionsFailed: 0 });
+    expect(second).toEqual({
+      machinesChecked: WORLD_MACHINE_COUNT,
+      sessionsFailed: 0,
+    });
     expect(await read(w, pending)).toEqual(after);
   });
 
@@ -506,7 +512,10 @@ describe("ANH-135 migration: the recorder settings leave the machines", () => {
 
     const result = await migrate(w);
 
-    expect(result).toEqual({ machinesChecked: WORLD_MACHINE_COUNT, machinesCleared: 2 });
+    expect(result).toEqual({
+      machinesChecked: WORLD_MACHINE_COUNT,
+      machinesCleared: 2,
+    });
     const after = await w.t.run(async (ctx) => [
       await ctx.db.get(w.machine),
       await ctx.db.get(w.otherMachine),

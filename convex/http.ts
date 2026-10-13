@@ -10,6 +10,7 @@ import type { Infer } from "convex/values";
 import { liveStateValidator } from "./schema";
 import { machineHealthSchema } from "./lib/machineHealth";
 import * as records from "./recordHttp";
+import { receive as receiveClerkWebhook } from "./clerkWebhook";
 import {
   CONTRACT_VERSION,
   machineErrorResponse,
@@ -19,6 +20,11 @@ import {
 } from "./lib/contract";
 
 const http = httpRouter();
+http.route({
+  path: "/clerk/webhook",
+  method: "POST",
+  handler: receiveClerkWebhook,
+});
 http.route({
   path: "/api/machine/records/upload-url",
   method: "POST",

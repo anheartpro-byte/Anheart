@@ -8,11 +8,13 @@
  * @module
  */
 
+import type * as clerkWebhook from "../clerkWebhook.js";
 import type * as cloudVersion from "../cloudVersion.js";
 import type * as crons from "../crons.js";
 import type * as ecgData from "../ecgData.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_contract from "../lib/contract.js";
 import type * as lib_crypto from "../lib/crypto.js";
 import type * as lib_machineAuth from "../lib/machineAuth.js";
@@ -41,11 +43,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  clerkWebhook: typeof clerkWebhook;
   cloudVersion: typeof cloudVersion;
   crons: typeof crons;
   ecgData: typeof ecgData;
   http: typeof http;
   "lib/auth": typeof lib_auth;
+  "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/contract": typeof lib_contract;
   "lib/crypto": typeof lib_crypto;
   "lib/machineAuth": typeof lib_machineAuth;

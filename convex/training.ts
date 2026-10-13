@@ -40,6 +40,7 @@ import {
   getCurrentUserOrThrow,
   inScope,
   organizationRoleOf,
+  requireSharedProfileAuthority,
   sameOrganization,
   type CurrentUser,
 } from "./lib/auth";
@@ -259,6 +260,8 @@ export const listLaunchRights = query({
   handler: async (ctx, args) => {
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canAccessMachine(ctx, args.machineId, me))) return [];
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) return [];
     const rows = await ctx.db
       .query("machine_user_permissions")
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
@@ -266,6 +269,11 @@ export const listLaunchRights = query({
     const now = Date.now();
     const result = [];
     for (const row of rows) {
+      if (
+        (await organizationRoleOf(ctx, row.userId, machine.organizationId)) ===
+        null
+      )
+        continue;
       const user = await ctx.db.get(row.userId);
       if (!user) continue;
       const granter = await ctx.db.get(row.grantedBy);
@@ -297,6 +305,7 @@ export const setUserPhysiology = mutation({
     if (!(await canAccessUser(ctx, args.userId, me))) {
       throw new ConvexError("You do not manage this user");
     }
+    await requireSharedProfileAuthority(ctx, args.userId, me);
     // Each value is a whole number first, then within its range; null clears
     // it. Both are checked before anything is written.
     const patch: Partial<Pick<Doc<"users">, "hrMax" | "birthYear">> = {};
@@ -596,9 +605,15 @@ export const requestStop = mutation({
     const me = await getCurrentUserOrThrow(ctx);
     // A session of another organisation is a session that does not exist.
     const session = await ctx.db.get(args.sessionId);
-    if (!session || !inScope(me, session.organizationId))
+    if (
+      !session ||
+      (session.userId !== me._id && !inScope(me, session.organizationId))
+    )
       throw new ConvexError("Session not found");
-    if (!(await canAccessSession(ctx, session, me))) {
+    if (
+      session.userId !== me._id &&
+      !(await canAccessSession(ctx, session, me))
+    ) {
       throw new ConvexError("Not authorized to stop this session");
     }
     const now = Date.now();

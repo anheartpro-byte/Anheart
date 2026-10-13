@@ -615,6 +615,16 @@ Autres règles notables :
   organisation n'est jamais créée à partir d'un jeton. Sans organisation dans le jeton et
   tant que `ANHEART_ORG_ID` n'est pas définie, il rejoint l'organisation par
   défaut comme **`user`**. Sinon il est créé sans organisation.
+  Une appartenance inactive n'est jamais réactivée par ce passage ; un miroir
+  déjà reçu par webhook n'est pas réécrit depuis les revendications du jeton.
+- **Compte partagé entre organisations** : les champs communs du dossier
+  (nom, langue, FC maximale et année de naissance) sont modifiables par
+  l'admin Anheart seulement tant que plusieurs appartenances actives existent.
+  Les gestionnaires conservent leurs droits habituels sur un compte qui n'a
+  qu'une organisation active. Les données ne sont pas dupliquées par organisation.
+- **Demander l'arrêt de sa séance** : le passager peut le demander depuis une
+  autre organisation active de son compte. Cette exception ne donne aucun accès
+  supplémentaire aux mesures ou aux séances des autres personnes.
 - **Premier admin** : avec Clerk Organizations, c'est le premier `org:admin` de
   l'organisation Anheart dans Clerk. Pendant la transition, il faut encore
   passer à la main `role` à `admin` dans le tableau de bord Convex, sur la
@@ -625,7 +635,7 @@ Autres règles notables :
   compte lui-même n'est supprimé que s'il n'appartient à aucune autre.
   L'admin Anheart le supprime partout.
 - **E-mail déjà utilisé** (`users.createPatient`) : le message ne nomme le
-  compte en conflit qu'à un appelant de la même organisation ; sinon il dit
+  compte en conflit qu'à un appelant ayant le droit de le lire ; sinon il dit
   seulement « Email already in use ».
 - **Lier un dossier patient à un compte Clerk** (`users.linkPatientToClerk`) :
   la liaison exige l'adresse **vérifiée** de l'appelant. Elle n'aboutit que si
@@ -1340,14 +1350,50 @@ Ne définir `ANHEART_ORG_ID` qu'une fois le sélecteur d'organisation en place
 sur le site : sans organisation active dans sa session Clerk, un utilisateur
 n'a plus accès à rien.
 
-**Aucune organisation cliente n'est créée dans le miroir par ce lot**, ni par
-la migration, ni au premier passage d'un compte. Tant que le webhook Clerk
-([ANH-186](https://linear.app/anheart/issue/ANH-186/multi-organisation-lot-2-webhook-clerk-vers-le-miroir-convex-signature)) n'existe pas, un jeton
-qui nomme une organisation cliente est refusé (« This organization is not
-known to the server yet »). Seule l'appartenance d'un compte à une organisation
-**déjà présente dans le miroir** est écrite à son premier passage
-(`users.getOrCreateUser`). De même, le retrait d'un membre dans Clerk n'arrive
-dans le miroir (`active: false`) qu'avec ce webhook.
+Les organisations clientes arrivent par le webhook décrit ci-dessous ; ni la
+migration ni la première connexion ne les créent à partir d'un jeton. Tant que
+l'événement n'a pas été reçu, une organisation inconnue reste refusée.
+
+### Webhook Clerk vers le miroir
+
+`POST /clerk/webhook` reçoit `organization.created`, `organization.updated`,
+`organization.deleted` et `organizationMembership.created|updated|deleted`.
+La route vérifie la signature Svix HMAC-SHA256 sur le corps brut avec WebCrypto,
+avant de décoder le JSON. Les trois en-têtes `svix-id`, `svix-timestamp` et
+`svix-signature` sont requis ; l'horodatage de livraison doit être à moins de
+cinq minutes de l'horloge du serveur. Le corps est limité à 1 Mio.
+
+Un événement déjà traité (`clerk_webhook_events`, index `by_event_id`) est
+acquitté sans nouvelle écriture. Les dates de modification et d'événement
+empêchent une livraison ancienne d'écraser un état plus récent. Une organisation
+supprimée garde une trace de suppression et ses membres deviennent inactifs ;
+une livraison tardive ne la recrée pas. Une nouvelle invitation peut réactiver
+une appartenance avec un nouvel identifiant Clerk. Un événement d'appartenance
+peut créer l'organisation et le compte manquants ; il ne remplace pas les champs
+communs d'un compte existant. L'organisation Anheart par défaut est reliée quand
+l'identifiant reçu correspond à `ANHEART_ORG_ID`.
+
+**À configurer par le responsable du déploiement** : créer un endpoint Clerk
+vers l'URL `.convex.site/clerk/webhook` de l'environnement choisi, activer
+les six événements ci-dessus et poser son secret dans
+`CLERK_WEBHOOK_SIGNING_SECRET` sur le même déploiement Convex. Ne pas utiliser
+le secret de production pour la recette. Envoyer ensuite un événement signé
+de test et vérifier les lignes du miroir, puis rejouer la livraison : une seule
+ligne d'événement doit subsister. Sans secret, la route répond 503 ; signature
+refusée, 401 ; charge illisible, 400 ; événement accepté ou ignoré, 204.
+
+**Délai des droits portés par un jeton** : le rôle du jeton Clerk vérifié reste
+l'autorité de l'appelant jusqu'à son expiration. La réception d'un retrait dans
+le miroir ne révoque pas à elle seule un jeton déjà émis. Le retrait est immédiat
+pour le roster et les nouveaux liens de séance, qui lisent les appartenances
+actives ; une appartenance révoquée n'est pas réactivée par une reconnexion avec
+un ancien jeton. Une organisation supprimée est refusée dès réception.
+
+Le parcours d'invitation et la neutralité du refus d'une adresse déjà utilisée
+restent traités dans ANH-157 ; le webhook ne remplace pas ce parcours.
+
+Références du protocole : [vérification Svix](https://docs.svix.com/receiving/verifying-payloads/how-manual)
+et [ordre des événements Clerk](https://clerk.com/docs/guides/development/webhooks/overview).
 
 ---
 
