@@ -13,18 +13,19 @@ process (:mod:`simulation.endurance_measures`): resident memory, the duration
 of the control tick, open file descriptors, the size of the data folder. The
 run is then judged against the thresholds of the ticket, and a report is
 written (``endurance.json``, ``endurance.md``). Exit code 0 when every
-threshold is PASS or a documented known defect (XFAIL).
+threshold is PASS.
 
 Nothing here changes the console. The operator's commands go through its HTTP
-API; the dashboard is :class:`tests.fake_dashboard.FakeDashboard`, the double
-the acceptance test of the synchronisation uses, given to the console in place
+API; the dashboard is :class:`tests.fake_record_dashboard.RecordingDashboard`,
+which extends the synchronisation double with verified file receipts, given to the console in place
 of its HTTP transport: **no Convex deployment is ever contacted**, whatever
 ``CONVEX_URL`` says.
 
 ``simulated``
     A :class:`~src.clock.ManualClock` moved 200 ms at a time. Each simulated
     second is five control ticks (each timed), five acquisition steps, the
-    journal written through, one sensor refresh and one dashboard step: what
+    journal written through, one sensor refresh, one dashboard step and, while
+    idle, one file-deposit step: what
     the console's own tasks do in a real second. The heart-rate DSP runs on
     the loop, and only around the programmed sessions (``--dsp programmes``):
     it costs four times everything else the console does in a tick, and a
@@ -64,7 +65,7 @@ from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
-from tests.fake_dashboard import FakeDashboard
+from tests.fake_record_dashboard import RecordingDashboard
 
 from simulation.endurance_measures import (
     DataFolder,
@@ -91,6 +92,7 @@ from src.control_surface import EventKind
 from src.ecg_pipeline import EcgFrame, TreatFunction, Treatment, treat_ecg, treat_off_loop
 from src.local_config import LocalConfig, load_local_config
 from src.local_panel import LocalPanel, UvicornRunner, build_panel
+from src.record.deposit import RecordDeposit
 from src.record.journal import Journal
 from src.result import Err
 from src.telemetry import TelemetryClient
@@ -185,8 +187,8 @@ READY_WAIT: Final[float] = 0.1
 """The console's page is asked this many times, this far apart, before the run starts."""
 
 NOTE_HEALTH: Final[str] = (
-    "Santé de la machine dans le heartbeat : absente (ANH-148 non fait). Les heartbeats "
-    "partent et sont comptés, sans objet de santé."
+    "Santé active dans le heartbeat (ANH-148), valeurs absentes explicitement inconnues. "
+    "Les capteurs physiques ne sont pas validés par ce scénario."
 )
 
 NOTE_DASHBOARD: Final[str] = (
@@ -200,7 +202,10 @@ NOTE_HARDWARE: Final[str] = (
 )
 
 NOTE_DEPOSIT: Final[str] = (
-    "Dépôt hors machine des enregistrements : inexistant, donc aucune purge (seuil rotation)."
+    "Dépôt actif avec le vrai RecordDeposit et un stockage simulé qui vérifie les octets. "
+    "Politique d'essai : rétention locale de 0 jour, purge examinée toutes les six heures, "
+    "sans changer la production. "
+    "Le test natif Convex de 45 min / 6 canaux relève d'ANH-130."
 )
 
 NOTE_MEMORY: Final[str] = (
@@ -302,7 +307,8 @@ class Console:
     config: LocalConfig
     clock: Clock
     journal: Journal
-    dashboard: FakeDashboard
+    dashboard: RecordingDashboard
+    deposit: RecordDeposit
     folder: DataFolder
 
 
@@ -328,8 +334,9 @@ def build_console(
         raise ValueError("the endurance console needs its dashboard link (MACHINE_API_KEY)")
     defaults = work / "profiles.default.json"
     defaults.write_text(PROFILE_STORE, encoding="utf-8")
-    dashboard = FakeDashboard(now=lambda: int(clock.unix_millis()))
-    journal = Journal(work / "records", clock, retention_days=config.record.retention_days)
+    dashboard = RecordingDashboard(now=lambda: int(clock.unix_millis()))
+    journal = Journal(work / "records", clock, retention_days=0)
+    deposit = RecordDeposit(journal.root, clock, dashboard, dashboard.upload)
     panel = build_panel(
         config,
         clock=clock,
@@ -338,6 +345,7 @@ def build_console(
         treat=treat,
         transport=lambda _config: dashboard,
         journal=journal,
+        deposit=None if isinstance(clock, ManualClock) else deposit,
     )
     return Console(
         panel=panel,
@@ -345,6 +353,7 @@ def build_console(
         clock=clock,
         journal=journal,
         dashboard=dashboard,
+        deposit=deposit,
         folder=DataFolder(journal.root),
     )
 
@@ -501,6 +510,8 @@ class SimulatedWorld:
             await panel.cloud_stop_step()
         await panel.sensor_step()
         await panel.cloud_step()
+        if panel.runtime.state in (RuntimeState.IDLE, RuntimeState.FINISHED):
+            await self._console.deposit.step()
 
     async def sample(self, at: float) -> Sample:
         """One reading, taken between two seconds: nothing else runs meanwhile."""
@@ -587,6 +598,7 @@ class Ended:
     as_planned: bool
     record: str | None
     """The name of its record directory."""
+    footprint: Footprint
 
 
 class Day:
@@ -720,14 +732,14 @@ class Day:
             await self._wait(self._plan.manual // len(MANUAL_TARGETS))
         await self._operator.stop("fin de la séance manuelle")
         await self._finished(FINISH_LIMIT, cut=False)
-        self._note_end(Kind.MANUAL, started, EndReason.OPERATOR_STOP)
+        await self._note_end(Kind.MANUAL, started, EndReason.OPERATOR_STOP)
 
     async def _programme(self) -> None:
         started = self.elapsed
         await self._operator.start_programme(self._plan.programme)
         await self._started("programmed session")
         cut = await self._finished(PROGRAMME_LIMIT, cut=True)
-        self._note_end(
+        await self._note_end(
             Kind.PROGRAMME,
             started,
             EndReason.OPERATOR_STOP if cut else EndReason.PROGRAMME_COMPLETE,
@@ -739,10 +751,11 @@ class Day:
         if dsp is not None:
             dsp.on = on
 
-    def _note_end(self, kind: Kind, started: int, planned: EndReason) -> None:
+    async def _note_end(self, kind: Kind, started: int, planned: EndReason) -> None:
         runtime = self._console.panel.runtime
         reason = runtime.end_reason
         record = self._console.journal.status(self._console.clock.monotonic()).path
+        footprints = await self._world.records()
         self._ended = Ended(
             index=len(self.sessions) + 1,
             kind=kind,
@@ -751,6 +764,7 @@ class Day:
             end="none" if reason is None else reason.value,
             as_planned=reason is planned,
             record=None if record is None else record.name,
+            footprint=footprints.get("" if record is None else record.name, Footprint()),
         )
 
     async def _rest(self, *, before_programme: bool) -> None:
@@ -777,7 +791,6 @@ class Day:
         """Write the line of the session that last ended, then empty the simulated dashboard."""
         self._ended = None
         delivered, points = self._held(ended)
-        records = await self._world.records()
         self.points += points
         self.sessions.append(
             Session(
@@ -789,10 +802,13 @@ class Day:
                 as_planned=ended.as_planned,
                 delivered=delivered,
                 points=points,
-                record=records.get(ended.record or "", Footprint()),
+                record=ended.footprint,
             )
         )
         self._prune()
+        await asyncio.to_thread(
+            self._console.dashboard.forget_confirmed, self._console.journal.root
+        )
 
     def _prune(self) -> None:
         """Forget what the dashboard holds of closed sessions: the double must not grow.
@@ -818,7 +834,12 @@ class Day:
         # No programme will follow: the heart-rate DSP the last rest switched on is not needed.
         self._heart_rate(on=False)
         for _ in range(CLOSING_LIMIT):
-            if self._held(ended)[0] and self.owed == 0:
+            confirmed = await asyncio.to_thread(
+                self._console.dashboard.confirmed_or_purged,
+                self._console.journal.root / (ended.record or ""),
+                f"SESSION-{ended.index}",
+            )
+            if self._held(ended)[0] and self.owed == 0 and confirmed:
                 break
             await self._second()
         await self._deliver(ended)
@@ -833,6 +854,8 @@ class Day:
         """What reached the dashboard, to be read once the day is over."""
         return Sync(
             heartbeats=self.heartbeats,
+            health_reports=self._console.dashboard.health_reports,
+            max_heartbeat_gap_ms=self._console.dashboard.max_heartbeat_gap_ms,
             points=self.points,
             rejected=self._console.dashboard.rejected,
             duplicates=self.duplicates,
@@ -890,6 +913,7 @@ async def simulated(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         )
         anomaly = await day.attempt()
     sync = day.sync()
+    await console.deposit.close()
     await console.panel.close()
     data = console.folder.measure()
     leave(work, keep=keep_data)

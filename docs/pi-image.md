@@ -1289,7 +1289,10 @@ du tableau de bord sont copiés à part.
    ```
 
    Deux heures et quelques minutes. Code de sortie 0 : tous les seuils sont
-   tenus (`PASS`, ou `XFAIL` pour le défaut connu `rotation`).
+   tenus (`PASS`). La santé et le dépôt complet sont actifs avec un stockage
+   simulé vérifiant les octets. La rétention locale de cet essai est de zéro
+   jour ; le journal examine les purges toutes les six heures, donc les deux
+   heures prouvent les confirmations, et le scénario de 24 h prouve la purge.
 
 4. **Relever.** Le résumé est affiché à la fin et écrit dans
    `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
@@ -1380,8 +1383,9 @@ qu'un tic tient dans sa période ; le seuil « 99e centile sous 150 ms » se lit
 donc sur l'essai 9.1, en simulation. Mesurer la durée au banc demanderait que
 la console la publie elle-même, ce qu'aucun ticket ne prévoit à ce jour.
 
-À surveiller : **le dossier des enregistrements n'est pas borné aujourd'hui**
-(aucun dépôt hors machine n'existe, donc aucune purge). Une heure de séance
+À surveiller : **aucun enregistrement non confirmé n'est purgé**. Le dépôt
+complet d'ANH-130 écrit désormais la confirmation vérifiée ; la libération
+dépend aussi de la durée de rétention configurée. Une heure de séance
 ajoute environ 18 000 fichiers ; la console refuse d'armer une séance sous
 36 016 inodes libres ou 500 Mo libres. Les deux `df` de la journée donnent
 l'autonomie réelle de la carte.

@@ -21,7 +21,6 @@ from simulation.endurance_measures import (
     CSV_HEADER,
     EDGES,
     KIB,
-    KNOWN_UNBOUNDED_DATA,
     LOGBOOK_LIMIT,
     MIB,
     SAMPLES_SHOWN,
@@ -363,8 +362,8 @@ STEADY_DATA = DataState(
     closed=2,
     logbook=Footprint(size=900, allocated=8192, entries=2),
     stray=(),
-    deposited=0,
-    purged=0,
+    deposited=2,
+    purged=1,
 )
 
 
@@ -384,7 +383,15 @@ def steady(hours: float = 24.0) -> Run:
         ),
         tick=Quantiles(count=432_000, p50=0.9, p99=4.5, highest=80.0),
         sessions=(session(1), session(2)),
-        sync=Sync(heartbeats=8640, points=1200, rejected=0, duplicates=0, owed=0),
+        sync=Sync(
+            heartbeats=8640,
+            health_reports=8640,
+            max_heartbeat_gap_ms=10_000,
+            points=1200,
+            rejected=0,
+            duplicates=0,
+            owed=0,
+        ),
         data=STEADY_DATA,
         notes=("santé absente du heartbeat",),
     )
@@ -394,7 +401,7 @@ def by_name(checks: tuple[Check, ...]) -> dict[str, Check]:
     return {check.name: check for check in checks}
 
 
-def test_ex2_a_day_in_good_health_passes_every_threshold_and_shows_the_known_defect() -> None:
+def test_ex2_a_day_in_good_health_passes_every_threshold_including_rotation() -> None:
     checks = judge(steady())
 
     statuses = {check.name: check.status for check in checks}
@@ -403,11 +410,11 @@ def test_ex2_a_day_in_good_health_passes_every_threshold_and_shows_the_known_def
         "tick": Status.PASS,
         "descriptors": Status.PASS,
         "data": Status.PASS,
-        "rotation": Status.XFAIL,
+        "rotation": Status.PASS,
         "sessions": Status.PASS,
     }
-    assert passed(checks), "a documented known defect does not fail the run"
-    assert KNOWN_UNBOUNDED_DATA in by_name(checks)["rotation"].measured
+    assert passed(checks)
+    assert "2 dépôts confirmés, 1 enregistrements purgés" in by_name(checks)["rotation"].measured
 
 
 def test_ex2_the_first_hour_is_left_out_and_a_short_run_leaves_out_its_first_quarter() -> None:
@@ -512,27 +519,36 @@ def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None
     assert per_hour(replace(run, sessions=())) is None
 
 
-def test_ex2_the_rotation_is_a_known_defect_until_a_deposit_is_confirmed() -> None:
-    """Then the line turns FIXED? and the run red: the true bound has to be written."""
+def test_ex2_rotation_requires_confirmation_and_observed_purge_on_long_runs() -> None:
     run = steady()
     deposited = replace(STEADY_DATA, deposited=1)
-    purged = replace(STEADY_DATA, closed=1, purged=1)
-    empty = replace(STEADY_DATA, closed=0)
+    purged = replace(STEADY_DATA, closed=1, deposited=1, purged=1)
+    empty = replace(STEADY_DATA, closed=0, purged=0)
 
     today = check_rotation(run)
     one_day = check_rotation(replace(run, data=deposited))
     after_a_purge = check_rotation(replace(run, data=purged))
 
     assert today is not None
-    assert today.status is Status.XFAIL
-    assert "2 enregistrements clos, 0 dépôt confirmé, 0 purgé" in today.measured
+    assert today.status is Status.PASS
     assert one_day is not None
-    assert one_day.status is Status.FIXED
-    assert "retirer KNOWN_UNBOUNDED_DATA" in one_day.measured
+    assert one_day.status is Status.FAIL
     assert after_a_purge is not None
-    assert after_a_purge.status is Status.FIXED
-    assert not passed((one_day,)), "a known defect that no longer holds turns the run red"
-    assert check_rotation(replace(run, data=empty)) is None
+    assert after_a_purge.status is Status.PASS
+    assert not passed((one_day,))
+    no_purge = check_rotation(replace(run, data=replace(STEADY_DATA, purged=0)))
+    assert no_purge is not None
+    assert no_purge.status is Status.FAIL
+    short_run = check_rotation(replace(run, covered=30, data=replace(STEADY_DATA, purged=0)))
+    assert short_run is not None
+    assert short_run.status is Status.PASS
+    missing = check_rotation(replace(run, data=empty))
+    assert missing is not None
+    assert missing.status is Status.FAIL
+    lost = check_rotation(replace(run, data=replace(empty, deposited=0, purged=1)))
+    assert lost is not None
+    assert lost.status is Status.FAIL
+    assert check_rotation(replace(run, sessions=(), data=empty)) is None
     assert check_rotation(replace(run, data=None)) is None
 
 
@@ -549,6 +565,8 @@ def test_ex2_a_session_that_ends_otherwise_or_never_reaches_the_dashboard_fails(
     unplanned = check_sessions(replace(run, sessions=(tripped, session(2))))
     undelivered = check_sessions(replace(run, sessions=(session(1), lost)))
     refused = check_sessions(replace(run, sync=replace(sync, rejected=3, owed=1)))
+    missing_health = check_sessions(replace(run, sync=replace(sync, health_reports=0)))
+    delayed_health = check_sessions(replace(run, sync=replace(sync, max_heartbeat_gap_ms=12_000)))
     outside = check_sessions(replace(run, sync=None))
 
     assert fine is not None
@@ -560,6 +578,8 @@ def test_ex2_a_session_that_ends_otherwise_or_never_reaches_the_dashboard_fails(
         (unplanned, "1 fins imprévues (séance 1 : safety_verdict)"),
         (undelivered, "séances non livrées : [2]"),
         (refused, "3 points refusés, 1 envois encore dus"),
+        (missing_health, "santé absente"),
+        (delayed_health, "11 secondes"),
     ):
         assert verdict is not None
         assert verdict.status is Status.FAIL
@@ -598,14 +618,16 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
     assert obj(seq(report["samples"])[0])["allocated_blocks"] is None
     assert obj(report["tick_ms"]) == {"count": 432_000, "p50": 0.9, "p99": 4.5, "max": 80.0}
     assert obj(report["tick_period_ms"])["p99"] == 212.0
-    assert obj(report["data"])["bounded_by_rotation"] is False
+    assert obj(report["data"])["bounded_by_rotation"] is True
     assert obj(obj(report["data"])["per_recorded_hour"])["entries"] == 18048
     assert obj(report["sync"])["heartbeats"] == 8640
+    assert obj(report["sync"])["health_reports"] == 8640
+    assert obj(report["sync"])["max_heartbeat_gap_ms"] == 10_000
     assert [obj(line)["kind"] for line in seq(report["sessions"])] == ["manual", "programme"]
     assert report["notes"] == ["santé absente du heartbeat"]
     assert text == markdown(run, checks)
     assert text.startswith("## Endurance de la console (simulated) : PASS\n")
-    assert "| `rotation` | XFAIL |" in text
+    assert "| `rotation` | PASS |" in text
     assert "Écart entre deux tics : p50 200.0 ms, p99 212.0 ms, maximum 260.0 ms." in text
     assert "* santé absente du heartbeat" in text
     # A few readings in the summary, the last one always; all of them in the JSON.

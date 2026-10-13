@@ -22,7 +22,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from tests.fake_dashboard import FakeDashboard
+from tests.fake_record_dashboard import RecordingDashboard
 
 from simulation.endurance import (
     CLOSING_LIMIT,
@@ -78,7 +78,7 @@ async def test_ex1_a_short_simulated_day_chains_manual_and_programmed_sessions_a
     every_session_reached_the_simulated_dashboard_whole(run)
     every_tick_of_the_day_was_timed(run)
     every_reading_holds_the_four_measures(run)
-    the_data_folder_grew_as_the_arming_gate_plans_and_nothing_bounds_it(run)
+    the_data_folder_is_bounded_by_confirmed_deposits_and_rotation(run)
     the_console_s_data_is_removed_once_measured(tmp_path / "out")
 
 
@@ -116,7 +116,9 @@ def every_session_reached_the_simulated_dashboard_whole(run: Run) -> None:
     assert sync.points == sum(session.points for session in run.sessions)
     assert (sync.rejected, sync.owed) == (0, 0)
     # One heartbeat every ten seconds, session or not.
-    assert sync.heartbeats >= run.covered // 10 - 2
+    assert sync.heartbeats == sync.health_reports
+    assert sync.max_heartbeat_gap_ms <= 11_000
+    assert sync.heartbeats >= run.covered // 11 - 1
 
 
 def every_tick_of_the_day_was_timed(run: Run) -> None:
@@ -138,15 +140,16 @@ def every_reading_holds_the_four_measures(run: Run) -> None:
         assert sample.tick is not None
         assert sample.tick.count == 75
     entries = [sample.data_entries for sample in samples]
-    assert entries == sorted(entries), "nothing is removed from the data folder during the day"
-    assert entries[-1] > entries[0]
+    assert max(entries) > min(entries)
     assert {"rss", "descriptors"} <= set(statuses(run))
 
 
-def the_data_folder_grew_as_the_arming_gate_plans_and_nothing_bounds_it(run: Run) -> None:
+def the_data_folder_is_bounded_by_confirmed_deposits_and_rotation(run: Run) -> None:
     data = run.data
     assert data is not None
-    assert (len(data.records), data.closed, data.deposited, data.purged) == (3, 3, 0, 0)
+    assert data.closed + data.purged == 3
+    assert data.deposited == data.closed
+    assert data.purged == 0
     assert data.stray == ()
     for session in run.sessions:
         # Five raw blocks a second, and the handful of files every record has.
@@ -156,7 +159,7 @@ def the_data_folder_grew_as_the_arming_gate_plans_and_nothing_bounds_it(run: Run
         assert session.record.allocated >= session.record.size > 0
     verdicts = statuses(run)
     assert verdicts["data"] is Status.PASS
-    assert verdicts["rotation"] is Status.XFAIL, "the documented known defect, visible in each run"
+    assert verdicts["rotation"] is Status.PASS
 
 
 def the_console_s_data_is_removed_once_measured(out: Path) -> None:
@@ -302,10 +305,10 @@ async def test_ex1_a_start_the_console_has_not_taken_stops_the_scenario(
 async def test_ex1_a_dashboard_that_stops_answering_leaves_the_session_undelivered_and_owed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def unreachable(now: Callable[[], int]) -> FakeDashboard:
-        return FakeDashboard(now=now, online=False)
+    def unreachable(now: Callable[[], int]) -> RecordingDashboard:
+        return RecordingDashboard(now=now, online=False)
 
-    monkeypatch.setattr("simulation.endurance.FakeDashboard", unreachable)
+    monkeypatch.setattr("simulation.endurance.RecordingDashboard", unreachable)
 
     run = await simulated(10, tmp_path / "out", Plan(manual=3, rest=2, sample_every=20))
 

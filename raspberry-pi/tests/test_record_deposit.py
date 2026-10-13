@@ -786,6 +786,21 @@ async def test_custom_storage_origin_and_malformed_upload_url() -> None:
         await transport.close()
 
 
+async def test_console_closes_an_injected_deposit_while_its_upload_is_held(tmp_path: Path) -> None:
+    record = ready_record(tmp_path / "records")
+    clock = ManualClock()
+    server = DepositServer(hold_upload=asyncio.Event())
+    deposit = RecordDeposit(record.parent, clock, server, server.upload)
+    panel = build_panel(
+        config_of(), clock=clock, profiles_path=tmp_path / "profiles.json", deposit=deposit
+    )
+    deposit.schedule()
+    await asyncio.wait_for(server.uploading.wait(), 2)
+    await asyncio.wait_for(panel.close(), 2)
+    assert server.uploads_sent == 0
+    assert confirmed_deposit(record) is None
+
+
 @dataclass
 class MultiRecordServer:
     sessions: dict[str, DepositServer] = field(default_factory=dict[str, DepositServer])
