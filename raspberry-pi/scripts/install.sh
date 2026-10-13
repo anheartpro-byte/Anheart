@@ -161,23 +161,32 @@ env_value() {
 }
 
 console_url() {
-    local port
+    local port host scheme=http
     port="$(env_value UI_PORT)"
-    # The console is asked on the machine's own loopback, whatever UI_HOST is:
-    # a wildcard bind answers there too.
-    printf 'http://127.0.0.1:%s' "${port:-8080}"
+    host="$(env_value UI_HOST)"
+    case "$host" in
+        '' | 0.0.0.0) host=127.0.0.1 ;;
+        ::) host='[::1]' ;;
+        *:*) host="[$host]" ;;
+    esac
+    [ -z "$(env_value UI_TLS_CERT)" ] || scheme=https
+    printf '%s://%s:%s' "$scheme" "$host" "${port:-8080}"
 }
 
 # GET a path of the console. The token, when the machine has one, goes through
 # a curl configuration read on standard input: never on a command line.
 console_get() {
     local token
+    local trust=()
     token="$(env_value UI_TOKEN)"
+    if [ -n "$(env_value UI_TLS_CERT)" ]; then
+        trust=(--cacert "$STATE_DIR/tls/authority.crt")
+    fi
     if [ -n "$token" ]; then
         printf 'header = "x-anheart-token: %s"\n' "$token" \
-            | curl --silent --fail --max-time 3 --config - "$(console_url)$1"
+            | curl --silent --fail --max-time 3 ${trust[@]+"${trust[@]}"} --config - "$(console_url)$1"
     else
-        curl --silent --fail --max-time 3 "$(console_url)$1"
+        curl --silent --fail --max-time 3 ${trust[@]+"${trust[@]}"} "$(console_url)$1"
     fi
 }
 
@@ -322,7 +331,7 @@ create_account() {
 #   data/records  where the unit mounts `records` inside `data`: made here so
 #                 that it is the account's, and not root's as Docker makes it
 create_directories() {
-    mkdir -p "$STATE_DIR/data/records" "$STATE_DIR/records" "$CONFIG_DIR"
+    mkdir -p "$STATE_DIR/data/records" "$STATE_DIR/records" "$STATE_DIR/tls" "$CONFIG_DIR"
     note "$STATE_DIR/data, $STATE_DIR/records, $CONFIG_DIR"
 }
 
@@ -551,7 +560,7 @@ start_test() {
     say "Start test"
     local attempts=$((HEALTH_TIMEOUT_S / HEALTH_PERIOD_S)) attempt health=""
     for ((attempt = 0; attempt < attempts; attempt++)); do
-        health="$(curl --silent --fail --max-time 3 "$(console_url)/healthz" 2>/dev/null || true)"
+        health="$(console_get /healthz 2>/dev/null || true)"
         case "$health" in *'"status":"ok"'*) break ;; esac
         health=""
         service_active || break

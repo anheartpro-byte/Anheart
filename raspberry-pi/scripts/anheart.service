@@ -138,6 +138,7 @@ ExecStart=/bin/sh -c '/usr/bin/install -d -m 0700 -o anheart -g anheart /run/anh
     --volume /dev:/dev \
     --volume /var/lib/anheart/data:/app/data \
     --volume /var/lib/anheart/records:/app/data/records \
+    --volume /var/lib/anheart/tls:/run/anheart-tls:ro \
     --volume /run/anheart/relay:/run/anheart \
     --env NOTIFY_SOCKET=/run/anheart/notify \
     --env-file /etc/anheart/anheart.env \

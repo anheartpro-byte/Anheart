@@ -1315,8 +1315,9 @@ def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:
     assert "--no-healthcheck" not in unit
     assert "--health-" not in unit
     dockerfile = _read(DOCKERFILE)
-    assert re.search(r"^HEALTHCHECK .*\n\s+CMD .*/healthz", dockerfile, re.MULTILINE)
-    assert '"$(console_url)/healthz"' in _read(INSTALLER), "the start test asks /healthz too"
+    assert re.search(
+        r"^HEALTHCHECK .*\n\s+CMD python -m src.health_probe$", dockerfile, re.MULTILINE
+    )
 
 
 # =========================================================================
@@ -1703,6 +1704,7 @@ def test_anh151_ex4_the_console_is_given_the_account_and_nothing_more() -> None:
         "/dev:/dev",
         "/var/lib/anheart/data:/app/data",
         "/var/lib/anheart/records:/app/data/records",
+        "/var/lib/anheart/tls:/run/anheart-tls:ro",
         "/run/anheart/relay:/run/anheart",
     ]
 
@@ -2592,8 +2594,6 @@ def test_anh151_ex8_the_workflow_lints_every_script_that_runs_on_a_pi() -> None:
 
 
 def test_anh151_ex8_the_page_of_the_image_carries_the_check_list() -> None:
-    """``docs/pi-image.md``: one line of the check-list for each step of ``harden.sh``, and
-    the lots that are not written yet are said not to be."""
     page = _read(VERSIONS_PAGE)
     section = page.partition("\n## 10. Durcissement")[2]
     assert section, "the page has no section on the hardening"
@@ -2601,5 +2601,6 @@ def test_anh151_ex8_the_page_of_the_image_carries_the_check_list() -> None:
         assert f"`{step}`" in section, step
     for later in ("point d'accès", "pare-feu", "tls", "lecture seule"):
         assert later in section.casefold(), later
-    assert section.count("**non fait**") >= 4, "a lot that is not written is said not to be"
+    assert "| Essai final sur un Pi réel | **non fait** |" in section
+    assert "[procédure](pi-reseau.md)" in section
     assert "`sudo bash scripts/harden.sh --dry-run`" in section

@@ -63,6 +63,13 @@ else
     if [ "$(value OCCUPANCY_OCCUPIED_ENABLED)" = "true" ] || [ "$(value PROGRAMS_ENABLED)" = "true" ]; then
         warn "a person on board or programmes are enabled: check the milestone sign-off (M5/M6)"
     fi
+    if [ "$(value UI_TLS_CERT)" = /run/anheart-tls/console.crt ]; then
+        if bash "$(dirname "$0")/make_console_tls.sh" --dir /var/lib/anheart/tls --check; then
+            ok 'installed TLS material is usable'
+        else
+            fail 'installed TLS material is missing, unusable or nearing expiry'
+        fi
+    fi
 fi
 
 echo "3. Drive link"

@@ -50,12 +50,13 @@ clés), [raspberry-pi.md](raspberry-pi.md) (le logiciel lui-même) et
 >   le vrai câble du variateur et le vrai BITalino sous ce compte, dont les
 >   droits ne se constatent que sur un Pi
 >   ([section 6](#essai-du-durcissement--à-faire-au-banc)). Le point d'accès,
->   le pare-feu, TLS et le système en lecture seule sont les lots suivants :
->   **non faits**.
+>   le pare-feu et TLS sont désormais intégrés par
+>   [le lot réseau](pi-reseau.md). Le système racine en lecture seule reste
+>   le lot stockage. Aucun de ces essais n'est une validation du Pi réel.
 > - **TLS de la console (10 octobre 2026)** : la console sait servir sa page en
 >   TLS et un script fait son certificat sur le Pi. Écrit et testé dans la gate
->   du Pi ; **pas actif sur un Pi installé**, où la page reste sur la boucle
->   locale, et jamais essayé avec une tablette
+>   du Pi ; activé lors de la mise en service par `harden.sh network`,
+>   jamais essayé avec une tablette réelle
 >   ([section 4](#le-certificat-de-la-console)).
 > - **Pas fait** : l'image n'est ni publiée dans un registre ni signée
 >   ([section 1](#ce-qui-reste-pour-une-image-construite-et-signée-par-la-ci)).
@@ -890,10 +891,10 @@ Il n'existe pas d'autre révocation que ce retrait.
 | Que l'empreinte SHA-256 soit bien lisible sur la tablette avant d'accorder la confiance, et où | une personne avec le matériel |
 | L'adresse du point d'accès et le nom local, et que la tablette résolve ce nom sur un réseau sans accès à Internet. L'adresse est l'URL sûre ; le nom dépend du DNS du point d'accès | lot « point d'accès » d'ANH-151, puis une personne avec le matériel |
 | La procédure de renouvellement : sa période (le certificat dure 825 jours), qui la fait, et où l'échéance est suivie. Rien ne prévient aujourd'hui de l'échéance en dehors de `--check` | chef de projet ; ANH-115 pour la fiche de mise en service |
-| Monter `/etc/anheart/tls` en lecture seule dans le conteneur, donner le dossier au compte de la console, appeler le script à la mise en service | lots « service » et « durcissement » d'ANH-151 |
-| Quand la page quitte la boucle locale, **tout** ce qui interroge la console depuis le Pi parle TLS aussi : la question « au repos ? » de `scripts/install.sh`, le contrôle de santé de l'image, `scripts/pi/test_install.sh`, la page en plein écran. Le certificat porte `127.0.0.1` pour cela (`curl --cacert /etc/anheart/tls/authority.crt https://127.0.0.1:<port>/healthz`) | le lot qui ouvre la console au réseau |
-| Choisir l'adresse d'écoute. Une adresse précise qui n'existe pas encore au démarrage (interface du point d'accès pas montée) empêche le serveur de la page de démarrer, et la console sort : écouter sur toutes les adresses et laisser le pare-feu choisir l'interface n'a pas ce défaut | lot « point d'accès » d'ANH-151 |
-| Combien de connexions un même appareil du réseau peut tenir ouvertes : rien ne le borne dans la console, à dessein ([securite.md, section 10](securite.md#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151)) | lot « pare-feu » d'ANH-151 |
+| Le dossier `/var/lib/anheart/tls` est monté en lecture seule sous `/run/anheart-tls`, appartient au compte de la console et est créé à la mise en service | logiciel fait par ANH-223 ; essai installé au banc à faire |
+| L'installateur et le contrôle de santé utilisent HTTPS avec l'autorité locale et l'adresse configurée ; le Pi doit réellement posséder `10.42.0.1` | logiciel fait par ANH-223 ; essai installé au banc à faire |
+| La console écoute sur `10.42.0.1` ; le service demande l'activation du profil AP avant de lancer le conteneur, avec un délai de 60 s | logiciel fait ; disponibilité de la radio à vérifier au banc |
+| Le pare-feu borne les nouvelles connexions TLS à 32 simultanées par adresse IPv4, sans couper celles déjà établies | ANH-223 ; résistance à une charge hostile sur le Pi à mesurer |
 
 ---
 
@@ -1403,7 +1404,8 @@ Le Pi doit devenir un appareil fermé (ticket ANH-151) : la console joignable
 seulement depuis le réseau que le Pi crée, rien d'autre qui écoute, pas de
 service sous root là où c'est évitable, un système qu'une coupure ne peut pas
 abîmer, des secrets et des données protégés. Le ticket est coupé en quatre
-lots. **Seul le premier est fait.**
+lots. Les lots service, TLS et réseau sont implémentés et testés sans Pi.
+Le stockage et les essais matériels sont distingués dans la check-list ci-dessous.
 
 `scripts/install.sh` installe la console ; `scripts/harden.sh` ferme la
 machine autour d'elle. Le ticket le nommait `scripts/harden.sh` : il est avec
@@ -1411,13 +1413,13 @@ les autres scripts du Pi, dans `raspberry-pi/scripts/`.
 
 ```sh
 sudo bash scripts/harden.sh --dry-run    # dit ce qui changerait, ne change rien
-sudo bash scripts/harden.sh              # toutes les étapes
+sudo bash scripts/harden.sh              # les trois étapes par défaut
 sudo bash scripts/harden.sh files        # une étape, ou plusieurs, par leur nom
 sudo bash scripts/harden.sh --undo       # reprend ce que les étapes ont réglé
 bash scripts/harden.sh --list            # les étapes
 ```
 
-Ce qu'il garantit, pour chaque étape, présente ou à venir :
+Ce qu'il garantit pour les trois étapes par défaut (`account`, `files`, `updates`) :
 
 * **elle regarde d'abord**, et n'agit que sur ce qui diffère : une seconde
   exécution ne change rien ;
@@ -1450,7 +1452,8 @@ propriétaire pouvait faire ne change pas.
 ### La check-list de l'image
 
 Une ligne par exigence du ticket. La colonne « Vérifié » dit par quoi, sans
-Raspberry Pi ; tout ce qui est marqué **non fait** reste à écrire.
+Raspberry Pi ; un essai matériel marqué **non fait** reste à réaliser, même
+quand son logiciel est écrit.
 
 | Exigence | État | Par quoi | Vérifié sans Pi |
 |---|---|---|---|
@@ -1459,9 +1462,9 @@ Raspberry Pi ; tout ce qui est marqué **non fait** reste à écrire.
 | Configuration en 600, enregistrements en 700 | **fait** (lot 1) ; la configuration est à root et non au compte ([les secrets](#3-ce-que-fait-scriptsinstallsh)) | étape `files` | test de bout en bout, étapes 1, 2 et 11 |
 | Aucune mise à jour automatique des paquets | **fait** (lot 1) | étape `updates` | test de bout en bout, étapes 1, 11 et 12 |
 | `scripts/harden.sh` idempotent, essai à blanc, relu et exécuté en CI | **fait** (lot 1) | ce script, `uninstall.sh`, le job `pi-install` | ShellCheck, puis test de bout en bout, étapes 11 et 12 |
-| Point d'accès Wi-Fi dédié à la console, liaison Internet séparée, aucun routage entre les deux | **non fait** (lot réseau) | une étape `network` de `harden.sh` | |
-| Pare-feu ; SSH par clés sur le réseau de la console seulement ; `sudo` sans mot de passe retiré | **non fait** (lot réseau) | une étape `firewall` | |
-| TLS sur la console, certificat propre au Pi ; HTTP clair refusé hors boucle locale | **non fait** (lot TLS) | la console et son propre script | |
+| Point d'accès Wi-Fi dédié à la console, liaison Internet séparée, aucun routage entre les deux | **logiciel fait**, radio à essayer | `harden.sh network`, [procédure](pi-reseau.md) | parseur NetworkManager et paquets dans deux espaces réseau Linux |
+| Pare-feu ; SSH par clés sur le réseau de la console seulement ; compte de service privé de sudo | **logiciel fait**, scan au banc à faire | même commande | nftables, sshd, visudo et tests TCP/routage Linux |
+| TLS sur la console, certificat propre au Pi ; HTTP clair refusé hors boucle locale | **logiciel fait**, tablette à essayer | certificat monté en lecture seule, contrôle de santé HTTPS | tests TLS sur vraies sockets et contrôle de santé avec autorité distincte refusée |
 | Système de fichiers racine en lecture seule, `/var/lib/anheart` persistant, journal persistant et borné | **non fait** (lot lecture seule) ; le journal persistant et borné existe déjà ([Le journal du système](#le-journal-du-système)) | une étape de `harden.sh` | |
 | Chiffrement du volume des données, ou purge après dépôt confirmé | **non fait** (lot lecture seule) ; dépend aussi de l'avis sur les données de santé (ANH-172) | | |
 | Essai final sur un Pi réel | **non fait** | [essai du durcissement](#essai-du-durcissement--à-faire-au-banc) | |
@@ -1484,8 +1487,9 @@ Trois choses à savoir avant d'en écrire une :
   doit pas partir à chaque mise à jour de la console : elle se lance à la
   main, à la mise en service, et `install.sh` n'a pas à la connaître ;
 * **le test de bout en bout lance `harden.sh` sans nom d'étape** (étapes 11
-  et 12), donc toutes : une étape ajoutée doit soit tourner dans la machine de
-  remplacement, soit s'y reconnaître et le dire, sans rien casser ;
+  et 12), donc les trois étapes par défaut. `network` est explicite et possède
+  son propre test Linux : il ne doit pas couper le réseau lors d'une simple
+  réinstallation ;
 * **la console tourne sous un compte sans droits** : ce qu'une étape lui
   donne à lire (un certificat, une clé) doit être lisible par le compte
   `anheart` **et** monté dans son conteneur par l'unité, dont l'image est en

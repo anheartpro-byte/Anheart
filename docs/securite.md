@@ -54,7 +54,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Le tableau de bord ne peut ni arrêter la machine en tombant en panne, ni lancer une séance manuelle.** Il ne peut envoyer que deux choses : un lancement AUTO (qui repasse par toutes les portes de la console) et une demande d'arrêt (exécutée sur la rampe normale). | `cloud_sync.py` |
 | **Un tableau de bord d'un autre contrat n'arme rien.** Un lancement venu d'une réponse dont la majeure de contrat n'est pas celle de la console, ou qui n'annonce aucune version, n'atteint jamais la boîte aux lettres : la console l'affiche et le renvoie comme séance échouée. Dans l'autre sens, Convex refuse (426) toute requête d'une machine dont il ne sert pas la majeure, sauf celle qui porte la demande d'arrêt : un arrêt demandé au tableau de bord, ou une séance que le serveur ne tient plus pour active, arrête la séance en cours quelle que soit la version des deux côtés. C'est tout ce que la console retient d'une réponse d'une autre majeure : le pire qu'une telle réponse puisse faire est un arrêt ordinaire. | `contract.py`, `cloud_sync.py`, `convex/lib/contract.ts` |
 | **Les clients sont séparés dans Convex.** Chaque fonction publique répond dans l'organisation de l'appelant, lue dans le jeton vérifié et jamais dans un argument ; une machine, un patient, une séance ou une mesure d'une autre organisation est refusé comme s'il n'existait pas, y compris par identifiant direct. Ce qu'une machine écrit hérite de son organisation. Seul l'admin de l'organisation Anheart lit toutes les organisations. Vérifié en mémoire seulement (voir la limite en §3). | `convex/lib/auth.ts`, `convex/authorization.matrix.ts`, `convex/organizationIsolation.test.ts` |
-| **Hors de la boucle locale, la page de la console n'est servie qu'en TLS, ou la console ne démarre pas.** Un seul port, aucun port en clair à côté, aucune redirection ; la WebSocket n'y accepte que l'origine `https` ; un certificat que la console ne peut pas servir est une erreur de configuration, dite avant qu'elle ne construise quoi que ce soit. La séance, elle, ne dépend pas de TLS : des clients TLS qui ne finissent jamais ne déplacent pas le tic, et un certificat expiré n'empêche ni de servir ni d'arrêter ([section 10](#10-la-console-en-tls-hors-de-la-boucle-locale-anh-151)). Vérifié sur la boucle locale d'une machine de test ; pas sur un Pi installé, ni avec une tablette. | `web/deps.py`, `web/tls.py`, `web/app.py`, `scripts/pi/make_console_tls.sh` |
+| **Hors de la boucle locale, la page de la console n'est servie qu'en TLS, ou la console ne démarre pas.** Un seul port, aucun port en clair à côté, aucune redirection ; la WebSocket n'y accepte que l'origine `https` ; un certificat que la console ne peut pas servir est une erreur de configuration, dite avant qu'elle ne construise quoi que ce soit. La séance, elle, ne dépend pas de TLS : des clients TLS qui ne finissent jamais ne déplacent pas le tic, et un certificat expiré n'empêche ni de servir ni d'arrêter ([section 10](#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151)). Vérifié sur la boucle locale d'une machine de test ; pas sur un Pi installé, ni avec une tablette. | `web/deps.py`, `web/tls.py`, `web/app.py`, `scripts/pi/make_console_tls.sh` |
 | **Âge minimum** : une séance programmée exige un âge connu et d'au moins `MIN_RIDER_AGE` (18 par défaut). Le site et la console refusent tous les deux. | `local_panel.py`, `convex/training.ts` |
 | **Réglages prudents par défaut** : personne à bord refusée (`OCCUPANCY_OCCUPIED_ENABLED=false`), séances programmées désactivées (`PROGRAMS_ENABLED=false`), plafond 300 tr/min moteur (≈ 6 tr/min au bras). | `.env.example`, `local_config.py` |
 
@@ -76,7 +76,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Site et Convex : vérifiés en développement seulement.** Le nouveau Convex tourne sur le déploiement de développement ; il y a été testé de bout en bout avec une console simulée (1er octobre 2026) et toutes les pages du site y ont été ouvertes à la main (2 octobre 2026). Il n'est pas en production, et ces deux vérifications datent d'avant les changements intégrés depuis. Le source a reçu depuis des tests automatisés (fonctions Convex, composants et pages du site, sans navigateur, avec un seuil de couverture en CI : [framework-de-test.md](framework-de-test.md#seuils-de-couverture-de-convex-et-du-site-anh-203)) et le nouveau traitement des clés de machine (empreinte stockée à la place de la clé, machine supprimée refusée : [menaces.md](menaces.md), MEN-01) ; ce traitement n'a d'effet sur le service rendu qu'après le redéploiement ANH-82. Les formulaires n'ont pas été soumis depuis le navigateur, et plusieurs défauts restent (séance orpheline après un arrêt de la console, textes en anglais…). | Voir [deploiement.md](deploiement.md), [convex.md](convex.md) et le [guide du tableau de bord](guides/guide-tableau-de-bord.md#94-ce-que-les-vrais-écrans-ont-montré-2-octobre-2026). |
 | **Séparation des organisations : dans le source, pas en service.** Elle n'est déployée nulle part ; la migration des données existantes n'a tourné que dans les tests ; Clerk Organizations n'est pas configuré. Tant que la variable `ANHEART_ORG_ID` n'est pas définie, un jeton sans organisation agit dans l'organisation principale du compte, d'après le miroir tenu par Convex et non d'après Clerk. | Voir [convex.md](convex.md#3-règles-dautorisation) et la [procédure d'activation](convex.md#activer-le-multi-organisation). Le miroir par webhook et le site sont des lots suivants. |
 | **Déploiement du Pi jamais essayé sur un Pi.** L'image Docker et `scripts/anheart.service` lancent maintenant la console `src.local_panel`. L'image a été construite et essayée en simulation dans un conteneur ARM64, pas sur un vrai Pi, ni avec le variateur ou le BITalino réels. | Voir [deploiement.md](deploiement.md#7-le-raspberry-pi). Le premier démarrage sur la machine reste à faire. |
-| **TLS de la console : pas en service, jamais essayé avec une tablette.** Sur un Pi installé la page écoute sur la boucle locale ; l'installation ne fait pas encore le certificat et ne le donne pas à la console. Aucune tablette n'a installé l'autorité d'un Pi. TLS dit à la tablette qu'elle parle bien à la console ; il ne dit pas à la console qui parle : le jeton reste partagé. | Le point d'accès, le pare-feu et l'ouverture de la console au réseau du Pi sont le reste d'ANH-151 ; l'authentification de l'opérateur est ANH-152. Résiduel détaillé en [10.3](#103-ce-que-cela-ne-couvre-pas). |
+| **TLS de la console : intégré en logiciel, jamais essayé avec une tablette réelle.** Le lot réseau configure le certificat et son montage, puis les contrôles HTTPS de l'installateur et de l'image. TLS identifie la console pour la tablette ; le jeton reste partagé. | Radio, tablette et charge réseau réelle restent à essayer dans ANH-151 ; authentification nominative dans ANH-152. Résiduel détaillé en [11.3](#113-ce-que-cela-ne-couvre-pas). |
 | **La relance d'une console figée n'arrête pas le moteur, et n'a jamais tourné sur un Pi.** Le chien de garde du service agit 10 s après le dernier tic, la relance suit (13 s après un gel dans la machine de remplacement de la CI). Ce qui arrête le moteur entre-temps est le ttO du variateur et sa réaction à la perte de communication (SLL), qui ne sont ni relus ni réglés par le logiciel (ligne « ttO et SLL jamais relus » plus haut). Le chien de garde matériel du Pi n'a jamais été armé ni déclenché. | Si ttO est long ou si SLL vaut roue libre, un bras lancé continue ou ralentit seul pendant que la console redémarre ; la console relancée met alors la consigne à zéro et verrouille, sur la rampe du variateur, sans rien pouvoir freiner de plus. Essai au banc à faire : [9.6](#96-essai-au-banc--procédure-non-faite). |
 
 ## 4. Défauts trouvés par la simulation, et corrigés
@@ -1566,9 +1566,9 @@ Ticket
 depuis le réseau que le Pi crée, rien d'autre qui écoute, pas de service sous
 root, un système qu'une coupure ne peut pas abîmer, des secrets et des données
 protégés. Il est coupé en quatre lots. **Cette section décrit le premier, et
-lui seul : le service et ses fichiers.** Le point d'accès et le pare-feu, TLS,
-puis le système en lecture seule sont les trois autres, et **ne sont pas
-faits**.
+lui seul : le service et ses fichiers.** TLS est décrit dans la section
+suivante ; le réseau et son pare-feu sont intégrés par
+[ANH-223](pi-reseau.md). La racine en lecture seule relève du lot stockage.
 
 **Tout ce qui suit a tourné dans la machine de remplacement de la CI, en
 simulation. Rien sur un vrai Raspberry Pi, rien avec le vrai câble du
@@ -1605,9 +1605,9 @@ console), et les trois scripts qu'une personne lance avec `sudo`.
 
 ### 10.3 Ce que ce lot ne protège pas
 
-* **Rien ne change sur le réseau.** La console écoute comme avant, en HTTP,
-  derrière son jeton quand elle n'est pas sur la boucle locale. Un appareil
-  hostile sur le réseau de la console peut tenter ce qu'il pouvait tenter hier
+* **Le compte non privilégié ne contrôle pas le réseau.** Le lot TLS refuse
+  désormais le HTTP clair hors boucle locale, et le lot réseau ajoute le
+  pare-feu. Un appareil hostile du réseau de la console reste une menace
   ([menaces.md](menaces.md#men-05-appareil-hostile-sur-le-réseau-de-la-console)).
   Ce qui change est ce qu'il gagne s'il prend la main sur le processus de la
   console : un compte sans droits, dans une image qu'il ne peut pas écrire, et
@@ -1665,7 +1665,7 @@ brancher, est dans
 [pi-image.md](pi-image.md#essai-du-durcissement--à-faire-au-banc). **Tant
 qu'elle n'est pas faite, une console installée par ce lot n'a jamais parlé à
 un variateur ni à un capteur.**
-## 10. La console en TLS hors de la boucle locale (ANH-151)
+## 11. La console en TLS hors de la boucle locale (ANH-151)
 
 Ticket
 [ANH-151](https://linear.app/anheart/issue/ANH-151/durcissement-du-raspberry-pi-point-dacces-dedie-a-la-console-pare-feu),
@@ -1680,7 +1680,7 @@ test. Rien sur un vrai Raspberry Pi, rien avec une tablette.** Sur un Pi
 installé, la page écoute toujours sur la boucle locale
 ([pi-image.md](pi-image.md#le-certificat-de-la-console)).
 
-### 10.1 Ce que le changement apporte
+### 11.1 Ce que le changement apporte
 
 | Contrôle | Où |
 |---|---|
@@ -1690,7 +1690,7 @@ installé, la page écoute toujours sur la boucle locale
 | Le jeton, y compris dans l'URL de la WebSocket, ne circule hors de la boucle locale qu'à l'intérieur de TLS ; la console ne tient pas de journal d'accès | `web/app.py` |
 | Le certificat est celui **de ce Pi**, signé par une autorité créée sur ce Pi, dont la clé privée n'est jamais écrite nulle part et ne signe que lui. Ni le dépôt ni un autre Pi ne peuvent fabriquer un certificat qu'une tablette accepterait pour cette console | `scripts/pi/make_console_tls.sh` ; [pi-image.md](pi-image.md#ce-qui-a-été-décidé-et-pourquoi) |
 
-### 10.2 La séance ne dépend pas de TLS
+### 11.2 La séance ne dépend pas de TLS
 
 La poignée de main TLS tourne sur la boucle d'événements de la console, par
 petits pas qui n'attendent que le réseau : rien dans le tic de contrôle
@@ -1711,15 +1711,15 @@ machine ne peut pas être arrêtée** : ni la console ni la séance n'en dépend
 l'arrêt câblé n'en dépend pas, et la console ne retire pas au navigateur le
 moyen de passer l'avertissement d'un certificat expiré (pas d'en-tête HSTS).
 
-### 10.3 Ce que cela ne couvre pas
+### 11.3 Ce que cela ne couvre pas
 
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **Aucune tablette réelle.** Installer l'autorité, ouvrir la page et sa WebSocket, lire l'avertissement d'un certificat refusé : rien n'a été fait sur un appareil. Ce qu'une page déjà ouverte fait de ses connexions quand le certificat expire dépend du navigateur | une personne avec le matériel ; liste dans [pi-image.md](pi-image.md#ce-qui-reste-à-décider-et-à-essayer) |
-| **Pas en service sur un Pi installé.** L'unité, l'installation et les contrôles faits depuis le Pi (repos avant mise à jour, santé de l'image) parlent encore en clair à la boucle locale | reste d'ANH-151 |
+| **Pas encore éprouvé sur un Pi réel.** ANH-223 intègre le certificat au conteneur et les contrôles HTTPS de l'installateur et de l'image ; la mise en service se fait avec `harden.sh network` | [procédure](pi-reseau.md), essai matériel dans ANH-151 |
 | **La clé privée de la console est au repos sur le Pi**, en mode 600, lisible par le compte de la console : sa protection est celle de ce compte et du disque. Si elle est compromise, ou le Pi perdu, on refait le certificat et on retire l'ancienne autorité de chaque tablette. Il n'existe pas d'autre révocation que ce retrait | MEN-04 ; compte non privilégié déjà en place ; chiffrement du disque : lot stockage d'ANH-151 |
 | **Le renouvellement est à la main** et rien n'en prévient en dehors de `make_console_tls.sh --check`. Renouveler change l'autorité : chaque tablette est à reprendre | chef de projet ; [pi-image.md](pi-image.md#renouveler) |
 | **TLS n'identifie pas l'opérateur.** Il dit à la tablette qu'elle parle à la console. Le jeton reste un secret partagé, connu de toute tablette qui l'a saisi | ANH-152 |
 | **Un avertissement passé à la main.** Un opérateur qui passe l'avertissement d'une autorité non reconnue donne son jeton à qui répond. La console ne peut pas l'empêcher ; installer l'autorité le rend inutile | consigne à écrire par Anheart |
-| **Le nombre de connexions par appareil n'est pas borné par la console**, à dessein : la borne que propose son serveur s'appliquerait aussi aux requêtes d'une page déjà ouverte, STOP compris. Ce contrôle est attendu du pare-feu. Le comportement du processus à la limite de ses ressources **n'a pas été établi par un test** ; d'après le code, les connexions déjà ouvertes continuent et le tic n'ouvre aucun descripteur | pare-feu du point d'accès (reste d'ANH-151) ; MEN-05 reste ouverte |
+| **Le nombre de connexions par appareil n'est pas borné par la console**, à dessein : la borne que propose son serveur s'appliquerait aussi aux requêtes d'une page déjà ouverte, STOP compris. Le pare-feu d'ANH-223 limite les nouvelles connexions TLS par adresse IPv4 sans interrompre les connexions établies. Le comportement du processus à la limite de ses ressources **n'a pas été établi par un test** ; d'après le code, les connexions déjà ouvertes continuent et le tic n'ouvre aucun descripteur | pare-feu logiciel livré par ANH-223 ; charge réelle à mesurer au banc, MEN-05 reste ouverte |
 | **Une tablette compromise** voit tout ce que sa page voit, jeton compris. TLS n'y change rien | hors de ce lot |
