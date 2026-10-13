@@ -102,7 +102,7 @@ describe("ANH-130 verified session deposits", () => {
     const paths = [
       ...expected,
       ...Array.from(
-        { length: 9000 },
+        { length: 36_000 },
         (_, i) => `ecg_raw/${i.toString().padStart(6, "0")}.bin.gz`,
       ),
     ];
@@ -119,7 +119,7 @@ describe("ANH-130 verified session deposits", () => {
     const result = await as(w.t, "manager").query(api.recordStorage.list, {
       sessionId: w.sessionId,
     });
-    expect(result?.expectedCount).toBe(9004);
+    expect(result?.expectedCount).toBe(36_004);
     expect(result?.verifiedCount).toBe(1);
     const pages = await w.t.run(async (ctx) =>
       (await ctx.db.query("session_record_manifest_pages").collect()).map(
@@ -127,12 +127,12 @@ describe("ANH-130 verified session deposits", () => {
       ),
     );
     expect(Math.max(...pages)).toBeLessThanOrEqual(1024);
-    expect(pages.reduce((total, count) => total + count, 0)).toBe(9004);
+    expect(pages.reduce((total, count) => total + count, 0)).toBe(36_004);
     expect(
       await w.t.mutation(internal.recordStorage.requestUpload, {
         machineId: w.machine,
         sessionId: w.sessionId,
-        path: "ecg_raw/008999.bin.gz",
+        path: "ecg_raw/035999.bin.gz",
         sha256: "a".repeat(64),
         size: 1,
       }),

@@ -18,7 +18,7 @@ from src.units import UnixMillis
 ByteCount = NewType("ByteCount", int)
 Sha256 = NewType("Sha256", str)
 MAX_FILE_BYTES: Final[ByteCount] = ByteCount(16 * 1024 * 1024)
-MAX_FILES: Final[int] = 20_000
+MAX_FILES: Final[int] = 40_000
 MAX_PATH_LENGTH: Final[int] = 160
 SAFE_PATH: Final[re.Pattern[str]] = re.compile(
     r"(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+"

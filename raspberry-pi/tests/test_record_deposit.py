@@ -607,7 +607,17 @@ class PagedDepositServer(ScriptedDepositServer):
 
 @pytest.mark.parametrize(
     "outcome",
-    ["complete", "offline", "malformed", "deleted", "partial", "repeat", "missing", "endless"],
+    [
+        "complete",
+        "long",
+        "offline",
+        "malformed",
+        "deleted",
+        "partial",
+        "repeat",
+        "missing",
+        "endless",
+    ],
 )
 async def test_confirmation_requires_every_verified_page_and_stops_on_invalid_pagination(
     tmp_path: Path,
@@ -650,11 +660,22 @@ async def test_confirmation_requires_every_verified_page_and_stops_on_invalid_pa
     )
     if outcome == "endless":
         server.pages = {
-            f"page-{index}": Ok({**base, "cursor": f"page-{index + 1}"}) for index in range(80)
+            f"page-{index}": Ok({**base, "cursor": f"page-{index + 1}"}) for index in range(200)
+        }
+    elif outcome == "long":
+        server.pages = {
+            f"page-{index}": Ok(
+                {
+                    **base,
+                    "files": rows[1:] if index == 143 else [],
+                    "cursor": None if index == 143 else f"page-{index + 1}",
+                }
+            )
+            for index in range(144)
         }
     deposit = RecordDeposit(record.parent, ManualClock(), server, server.upload)
     await deposit.step()
-    assert (confirmed_deposit(record) is not None) == (outcome == "complete")
+    assert (confirmed_deposit(record) is not None) == (outcome in {"complete", "long"})
     assert server.uploads_sent == 0
     await deposit.close()
 
@@ -754,6 +775,27 @@ def test_corrupted_cursor_cannot_acknowledge_verified_receipts(tmp_path: Path) -
     record.with_name(record.name + ".sync.json").write_text("invalid", encoding="utf-8")
     assert isinstance(deposit_files.acknowledge(selected.value, frozenset()), Err)
     assert confirmed_deposit(record) is None
+
+
+def test_two_hour_raw_inventory_can_be_queued_before_individual_files_are_read(
+    tmp_path: Path,
+) -> None:
+    path = ready_record(tmp_path / "records")
+    original = MANIFEST.validate_json((path / "manifest.json").read_bytes())
+    assert original.files is not None
+    files = (*original.files, *(f"ecg_raw/{index:06}.bin.gz" for index in range(36_000)))
+    updated = replace(original, files=files)
+    (path / "manifest.json").write_bytes(MANIFEST.dump_json(updated))
+    (path / "checksums.sha256").write_text(
+        "".join(f"{'0' * 64}  {name}\n" for name in files if name != "checksums.sha256"),
+        encoding="ascii",
+    )
+    selected = next_record(path.parent)
+    assert isinstance(selected, Ok)
+    assert selected.value is not None
+    assert selected.value.files == files
+    assert isinstance(payload(selected.value, "ecg_raw/035999.bin.gz"), Err)
+    assert confirmed_deposit(path) is None
 
 
 async def test_recording_console_owns_and_releases_the_deposit_worker(tmp_path: Path) -> None:
