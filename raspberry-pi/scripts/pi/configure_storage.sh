@@ -19,12 +19,12 @@ key="$root/etc/anheart/data.key"
 store="$root/var/lib/anheart-storage"
 mapper=/dev/mapper/anheart-data
 for file in "$config" "$key" "$root/etc/machine-id"; do
-    [ -f "$file" ] && [ ! -L "$file" ] || die "not a regular file: $file"
+    if [ ! -f "$file" ] || [ -L "$file" ]; then die "not a regular file: $file"; fi
 done
 [ "$(stat -c '%a:%u:%g' "$key")" = 600:0:0 ] || die 'data.key must be root:root 600'
 [ "$(stat -c '%a:%u:%g' "$config")" = 600:0:0 ] || die 'storage.conf must be root:root 600'
 device="$(sed -n 's/^DATA_DEVICE=//p' "$config" | tail -n 1)"
-[[ "$device" =~ ^/dev/[a-zA-Z0-9_./:-]+$ ]] && [ -b "$device" ] || die 'DATA_DEVICE must name an existing block device'
+if [[ ! "$device" =~ ^/dev/[a-zA-Z0-9_./:-]+$ ]] || [ ! -b "$device" ]; then die 'DATA_DEVICE must name an existing block device'; fi
 identity="$(cat "$root/etc/machine-id")"
 [[ "$identity" =~ ^[0-9a-f]{32}$ ]] || die 'invalid machine-id'
 for unit in anheart.service docker.service; do
@@ -77,7 +77,7 @@ else
 fi
 marker="$store/.anheart-machine"
 if [ -e "$marker" ]; then
-    [ ! -L "$marker" ] && [ "$(cat "$marker")" = "$identity" ] || die 'the volume belongs to another machine'
+    if [ -L "$marker" ] || [ "$(cat "$marker")" != "$identity" ]; then die 'the volume belongs to another machine'; fi
 else
     [ -z "$(find "$store" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)" ] || die 'unclaimed volume is not empty'
     printf '%s\n' "$identity" > "$marker"
@@ -90,11 +90,11 @@ for item in console docker journal; do
         docker) source="$root/var/lib/docker" ;;
         journal) source="$root/var/log/journal" ;;
     esac
-    [ ! -L "$store/$item" ] && [ ! -L "$source" ] || die 'refusing a symbolic link in storage paths'
+    if [ -L "$store/$item" ] || [ -L "$source" ]; then die 'refusing a symbolic link in storage paths'; fi
     install -d -m 0700 "$store/$item"
     migrated="$store/.migrated-$item"
     if [ -e "$migrated" ] || [ -L "$migrated" ]; then
-        [ -f "$migrated" ] && [ ! -L "$migrated" ] && [ "$(cat "$migrated")" = "$identity" ] || die 'invalid migration receipt'
+        if [ ! -f "$migrated" ] || [ -L "$migrated" ] || [ "$(cat "$migrated")" != "$identity" ]; then die 'invalid migration receipt'; fi
     else
         if [ -d "$source" ] && [ "$(stat -Lc '%d:%i' "$source")" != "$(stat -Lc '%d:%i' "$store/$item")" ]; then
             rsync -aHAX --numeric-ids "$source/" "$store/$item/"
