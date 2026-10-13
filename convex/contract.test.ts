@@ -181,6 +181,10 @@ describe("ANH-133 EX-3 a request without a served major is refused with 426", ()
     const beat = await call(w, "POST", "/api/machine/heartbeat", "1.7", {});
     const poll = await call(w, "GET", "/api/machine/training/poll", "1.7");
     expect(beat.status).toBe(200);
+    expect(await beat.json()).toMatchObject({
+      success: true,
+      server_contract_version: CONTRACT_VERSION,
+    });
     expect(poll.status).toBe(200);
   });
 

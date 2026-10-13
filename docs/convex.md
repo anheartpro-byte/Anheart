@@ -948,7 +948,7 @@ n'est pas lu.
 
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
-| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime}` | toutes les 10 s |
+| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs |
@@ -1561,9 +1561,10 @@ de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
-| `1.0` | Le contrat de départ. |
+| `1.3` | Le heartbeat annonce `server_contract_version`. La console vérifie cette annonce pour son état de liaison, même sans programmes. Une réponse sans version lisible affiche un contrat inconnu. |
 | `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
 | `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
+| `1.0` | Le contrat de départ. |
 
 Une console restée en `1.0` fonctionne sans changement avec un Convex `1.1` :
 elle n'envoie aucun des champs ajoutés, ne lit pas ceux de la réponse, et
@@ -1571,7 +1572,10 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.2`. Elle conserve les ajouts de `1.1` : elle envoie les événements,
+La console de ce dépôt est en `1.3`. Face à un serveur antérieur sans version dans
+le heartbeat, elle conserve les échanges mais affiche un contrat serveur inconnu.
+Déployer Convex avant la console permet de maintenir une indication compatible.
+Elle conserve les ajouts de `1.1` : elle envoie les événements,
 dit l'âge de ses séances, et compte sur l'idempotence pour renvoyer sans
 doublon. Face à un Convex resté en `1.0`, elle fonctionne, moins bien : la
 route des événements lui répond 404, les événements restent dus sur son

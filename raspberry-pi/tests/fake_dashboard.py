@@ -143,6 +143,8 @@ class FakeDashboard:
         return reply
 
     def _handle(self, path: str, body: Body) -> Reply:
+        if path == "/api/machine/heartbeat":
+            return Ok({"success": True, SERVER_VERSION_FIELD: CONTRACT_VERSION})
         if path == LOCAL:
             return Ok({"sessionId": self._declared(body).session_id})
         if path not in (TELEMETRY, EVENTS, END):
