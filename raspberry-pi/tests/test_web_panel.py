@@ -20,6 +20,7 @@ from src.ecg_pipeline import EcgBridgeStats, EcgMetrics
 from src.geometry import MachineGeometry
 from src.link_state import MAX_DETAIL, NOT_CONFIGURED, LinkState, LinkStatus, label_of
 from src.local_config import EcgSource, MotorBackend
+from src.medical import MedicalStatus
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.result import Err, Ok, Result
 from src.training.runtime import IdleLink, RiseHold
@@ -29,6 +30,7 @@ from src.web.app import create_app
 from src.web.deps import Services
 from src.web.routes import MOTION_DISABLED_DETAIL, PROGRAMS_DISABLED_DETAIL
 from src.web.schemas import PanelRow
+from tests.medical_support import signed, unsigned
 from tests.test_web_api import (
     OPERATOR,
     PROFILE_ID,
@@ -292,7 +294,10 @@ def _ceiling(occupancy: Occupancy) -> Result[MotorRpm, OccupancyRefused]:
 
 
 def _manual_app(
-    rig: Rig, *, ceilings: Callable[[Occupancy], Result[MotorRpm, OccupancyRefused]] | None
+    rig: Rig,
+    *,
+    ceilings: Callable[[Occupancy], Result[MotorRpm, OccupancyRefused]] | None,
+    medical_refusal: str | None = None,
 ) -> httpx.AsyncClient:
     services = Services(
         clock=rig.clock,
@@ -304,6 +309,7 @@ def _manual_app(
         geometry=MachineGeometry(radius=Metres(1.5)),
         motion_enabled=True,
         programs_enabled=False,
+        medical_refusal=medical_refusal,
         ceilings=ceilings,
     )
     app = create_app(services=services, config=rig.config)
@@ -405,6 +411,64 @@ async def test_occupancy_is_parsed_and_gated_before_anything_is_submitted(rig: R
         assert programme.status_code == HTTPStatus.FORBIDDEN
         assert programme.json() == {"detail": PROGRAMS_DISABLED_DETAIL}
     assert rig.surface.pending is None
+
+
+async def test_anh139_a_programmed_start_in_bench_mode_is_refused_for_its_medical_parameters(
+    rig: Rig,
+) -> None:
+    """The 403 names the medical parameters, not the milestone: that is why programmes are off."""
+    rig.attest()
+    warning = unsigned().warning
+    assert warning is not None
+    async with _manual_app(rig, ceilings=_ceiling, medical_refusal=warning) as session:
+        programme = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        )
+    assert programme.status_code == HTTPStatus.FORBIDDEN
+    assert programme.json() == {"detail": warning}
+    assert rig.surface.pending is None
+
+
+@pytest.mark.parametrize("medical", [signed(), unsigned()], ids=["signed", "unsigned"])
+async def test_anh139_the_panel_serves_the_medical_parameters_for_the_footer_and_the_banner(
+    rig: Rig, medical: MedicalStatus
+) -> None:
+    status = replace(_status(link=None, metrics=None), medical=medical)
+    async with _console_app(rig, status) as session:
+        row = parse(PanelRow, await session.get("/api/panel", headers=auth()))
+    shown = row.medical_parameters
+    assert shown is not None
+    assert (shown.version, shown.issued_at, shown.signed_by) == (
+        "0.1.0",
+        "2026-10-14",
+        "cle-de-test",
+    )
+    assert shown.signed is medical.signed
+    assert shown.warning == medical.warning
+
+
+async def test_anh139_a_source_without_medical_parameters_serves_none(rig: Rig) -> None:
+    async with _console_app(rig, _status(link=None, metrics=None)) as session:
+        row = parse(PanelRow, await session.get("/api/panel", headers=auth()))
+    assert row.medical_parameters is None
+
+
+def test_anh139_the_page_shows_the_version_in_its_footer_and_the_bench_mode_in_a_banner() -> None:
+    """EX-3 and EX-4 on every page: the footer and the banner stack are outside every view."""
+    static = Path(__file__).resolve().parent.parent / "src" / "web" / "static"
+    markup = (static / "index.html").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    footer = markup[markup.index("<footer") :]
+    assert 'id="footer-medical"' in footer
+    banners = markup[markup.index('<div id="banners"') : markup.index("<!-- Narrow screens")]
+    assert 'id="medical-banner"' in banners
+    assert "PARAMETRES MEDICAUX NON SIGNES" in banners
+    body = script[script.index("function renderMedical") : script.index("function renderPanel")]
+    assert "medical.signed" in body
+    assert 'showBanner(el("medical-banner")' in body
+    assert "renderMedical(panel.medical_parameters)" in script
 
 
 async def test_the_manual_routes_are_forbidden_on_a_read_only_console(

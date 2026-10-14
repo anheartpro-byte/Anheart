@@ -544,6 +544,11 @@ class Services:
     programmed ones do not yet, and that route answers **403**.
     """
 
+    medical_refusal: str | None = None
+    """Why programmed sessions are refused on account of the medical parameters,
+    or ``None``: they are signed (``MedicalStatus.warning``). When set, that
+    route's **403** says it rather than the milestone."""
+
     ceilings: Callable[[Occupancy], Result[MotorRpm, OccupancyRefused]] | None = None
     """The motor-rpm ceiling for an occupancy, or why that occupancy is refused.
 

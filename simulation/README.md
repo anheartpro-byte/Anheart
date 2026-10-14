@@ -16,7 +16,7 @@ from `raspberry-pi/src`:
 | the rider's heart (g-driven, lag, drift, scripted events) | `sim/physiology.py` (`Physiology`) |
 | ECG, BITalino, DSP (in `dsp` mode) | `sim/bitalino.py`, `sim/ecg.py`, `signal_processing.py` via `ecg_pipeline.EcgBridge` |
 | geometry and every unit conversion | `geometry.py`, `units.py` |
-| programmes, profiles, anti-nausea limits | `training/plan.py`, `config/profiles.default.json`, `config/motion_limits.json` |
+| programmes, profiles, anti-nausea limits | `training/plan.py`, `config/profiles.default.json`, `config/medical_parameters.json` (the signed medical file, read by `src/medical.py`) |
 
 `raspberry-pi/` is only read. The simulation adds the loop, the scenario
 actions, a recording wrapper around the drive, a fast heart-rate sensor model,
@@ -342,7 +342,7 @@ states every distribution.
 
 `cohort/battery.py` runs every subject x {auto jog 145-155 bpm 30 min, auto
 `standard_30_min`, manual 27 rpm bench}: a programme first passes the same
-`MIN_RIDER_AGE` gate as the console, then resolves for the rider's HRmax through
+minimum-age gate as the console (`min_rider_age` of the medical file), then resolves for the rider's HRmax through
 `ProfileStore.resolve`, which refuses a zone above 90% of that HRmax.
 The battery then checks every invariant on each trace, and for auto runs: never above the
 programme ceiling, `hr_drop` must fire for a vasovagal-prone subject and must
@@ -350,7 +350,7 @@ NOT fire for anybody else (it is the presyncope rule). Tests:
 [`tests/test_cohort.py`](tests/test_cohort.py).
 
 Measured 2026-10-05 with `--cohort --workers 2`: 89 PASS, 1 XFAIL (S07's jog, README finding 1's residual), 0 FAIL. Every
-rider under `MIN_RIDER_AGE` (default 18: the 8 subjects aged 10-17) is refused
+rider under the minimum age (18 in the medical file: the 8 subjects aged 10-17) is refused
 for both programmes before anything turns (finding 8), and S08's jog is refused
 on HRmax (172 < 155 / 0.9). The false `hr_drop` pairs (13 COOLDOWN ends, two
 ectopic subjects stuck in BASELINE, two motion-artefact subjects) are gone
@@ -445,8 +445,9 @@ acceptance. Current verdicts come from the commands above.
    asserts saturation within the ceiling and completion; the simulation does
    not authorize raising the shipped limits.
 8. **FIXED — programmed starts lacked an age gate.**
-   `rider_age_refusal` refuses an unknown age or one below `MIN_RIDER_AGE`
-   (default 18). The cohort uses the same gate; eight current subjects aged
+   `rider_age_refusal` refuses an unknown age or one below the minimum age
+   (`min_rider_age` of the signed medical file, 18; it was `MIN_RIDER_AGE` in
+   `.env` until ANH-139). The cohort uses the same gate; eight current subjects aged
    10–17 are refused for both programmes. The historical test name
    `test_a_rider_under_16_is_refused_or_capped` remains, but the configured
    minimum also covers ages 16 and 17. Manual bench sessions have no rider.

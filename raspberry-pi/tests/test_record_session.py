@@ -25,11 +25,13 @@ from src.cloud_sync import DASHBOARD_OPERATOR
 from src.contract import SoftwareVersion
 from src.control_surface import CANCELLED_BY_STOP, SessionEvent
 from src.control_surface import EventKind as SurfaceEvent
+from src.local_config import load_local_config
 from src.local_panel import (
     describe_record_storage,
     describe_start_refusal,
     open_journal,
 )
+from src.medical import SHIPPED_DOCUMENT
 from src.motor.drive import DriveFault
 from src.record import journal as journal_module
 from src.record.journal import (
@@ -69,6 +71,7 @@ from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, Run
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, SafetyAction
 from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, UnixMillis
+from tests.medical_support import unsigned
 from tests.record_console_support import (
     recorded_rig,
     set_target,
@@ -346,7 +349,9 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         "pi-1.4.2",
     )
     assert re.fullmatch(r"[0-9a-f]{64}", base.config_hash)
-    assert re.fullmatch(r"[0-9a-f]{64}", base.medical_parameters_version)
+    # ANH-139 EX-4: the version of the signed medical file, as the heartbeat says it.
+    assert base.medical_parameters_version == SHIPPED_DOCUMENT.version == "0.1.0"
+    assert base.medical_warning is None
 
     secrets = {
         **env,
@@ -369,8 +374,16 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         DEFAULT_MOTION_LIMITS,
         version,
     )
-    assert other_tiers.medical_parameters_version != base.medical_parameters_version
+    # Applied limits are in the hash; the version is the file's, whatever is applied.
+    assert other_tiers.medical_parameters_version == base.medical_parameters_version
     assert other_tiers.config_hash != base.config_hash
+
+    loaded = load_local_config(env, unsigned())
+    assert isinstance(loaded, Ok)
+    bench = stamp_for(loaded.value, limits, safety, DEFAULT_MOTION_LIMITS, version)
+    assert bench.medical_parameters_version == f"unsigned-sha256:{SHIPPED_DOCUMENT.sha256}"
+    assert bench.medical_warning == loaded.value.medical.warning
+    assert bench.config_hash != base.config_hash
 
     serial = stamp_for(
         config_of({**env, "MOTOR_BACKEND": "serial", "MOTOR_PORT": "/dev/ttyUSB0"}),
@@ -596,6 +609,31 @@ def recorder_with_link(tmp_path: Path, stats: list[LinkStats]) -> tuple[SessionR
         link_stats=read_stats,
     )
     return recorder, journal
+
+
+@pytest.mark.parametrize("warning", [None, "parametres medicaux non signes (x) : banc"])
+def test_anh139_every_record_of_a_console_in_bench_mode_opens_with_a_warning(
+    tmp_path: Path, warning: str | None
+) -> None:
+    """EX-3: the bench mode's sentence, first thing in the record; nothing when signed."""
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    journal = Journal(tmp_path / "records", clock)
+    recorder = SessionRecorder(
+        clock=clock,
+        journal=journal,
+        stamp=replace(STAMP, medical_warning=warning),
+        radius=Metres(1.5),
+        leg_tip=Metres(2.43),
+    )
+    recorder.begin(SessionRequest(occupancy=Occupancy.BENCH, operator=OPERATOR))
+    journal.drain()
+    path = journal.status(Monotonic(0.0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    warnings = [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+    assert warnings == ([] if warning is None else [warning])
+    assert loaded.value.manifest.medical_parameters_version == STAMP.medical_parameters_version
 
 
 def test_ex5_a_batch_lost_by_the_bitalino_is_a_warning_with_the_loss_counters(

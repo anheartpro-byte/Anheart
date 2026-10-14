@@ -173,7 +173,7 @@ corrections, pas par un numéro exact. Les numéros ci-dessus sont ceux de la s�
 | Empreinte de l'image de base | `sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258` | même ligne |
 | Python | 3.12.15 | celui de l'image de base |
 | pip | celui de l'image de base, jamais mis à jour pendant la construction | |
-| Paquets Python | 51 paquets, chacun à une version exacte, avec ses empreintes | `raspberry-pi/requirements-lock.txt` |
+| Paquets Python | 54 paquets, chacun à une version exacte, avec ses empreintes | `raspberry-pi/requirements-lock.txt` |
 | Outils de construction | 3 paquets, idem | `raspberry-pi/requirements-build-lock.txt` |
 
 `pip` installe avec `--require-hashes` : un paquet absent des fichiers de
@@ -200,6 +200,7 @@ Les paquets que le code demande directement (`requirements-base.txt`,
 | `httpx` | `0.28.1` | base |
 | `pydantic` | `2.13.5` | base |
 | `python-dotenv` | `1.2.3` | base |
+| `cryptography` | `50.0.2` | base |
 | `pyobjc-framework-IOBluetooth` | `12.2.2` | base, macOS seulement : absent de l'image |
 | `bitalino` | `1.2.6` | prod |
 | `pexpect` | `4.9.0` | prod |

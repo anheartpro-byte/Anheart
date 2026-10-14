@@ -2632,6 +2632,7 @@ test("the STOP notice is in the stack every page shows, as an alarm, under that 
     "estop-banner",
     "service-banner",
     "drive-fault-banner",
+    "medical-banner",
     "resume-banner",
   ]);
   assert.ok(/id="stop-unanswered" class="banner hidden" role="alert"/.test(html));

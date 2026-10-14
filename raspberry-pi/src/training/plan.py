@@ -91,8 +91,9 @@ from dataclasses import dataclass, replace
 from enum import Enum, unique
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, NewType, cast, final
+from typing import Final, NewType, assert_never, cast, final
 
+from src.medical import SHIPPED_PARAMETERS, HrMaxFormula
 from src.result import Err, Ok, Result
 from src.training.types import Phase
 from src.units import (
@@ -135,23 +136,36 @@ inside. A profile whose cooldown is shorter than the ramp the machine actually
 has is a promise the machine cannot keep, so it is refused.
 """
 
-MIN_RECOVERY_S: Final[Seconds] = Seconds(60.0)
-"""Shortest recovery phase a profile may declare.
+MIN_RECOVERY_S: Final[Seconds] = SHIPPED_PARAMETERS.recovery_min_s
+"""Shortest recovery phase a profile may declare: ``recovery_min_s`` of the medical file.
 
 RECOVERY is the motor-stopped phase with the person still in the machine, and
 it is the highest vasovagal-risk window of the whole session - blood pressure
 falls when the centripetal load goes away. A profile that ends monitoring the
-moment the shaft stops is refused.
+moment the shaft stops is refused. 60 s in the shipped file (:mod:`src.medical`).
 """
 
-ZONE_CEILING_FRACTION: Final[float] = 0.9
+MIN_COOLDOWN_S: Final[Seconds] = SHIPPED_PARAMETERS.cooldown_min_s
+"""Shortest cool-down a profile may declare: ``cooldown_min_s`` of the medical file.
+
+A medical floor, checked apart from :data:`COMMISSIONED_DECEL_S`, which is what
+the drive can physically do: a profile must clear both. The shipped file sets
+it to the drive's ramp, 4 s, the only floor the software applied before the
+file existed; a longer one is a medical decision, signed there.
+"""
+
+ZONE_CEILING_FRACTION: Final[float] = SHIPPED_PARAMETERS.zone_ceiling_fraction
 """``zone_high_bpm`` may not exceed this fraction of ``subject_hr_max``.
 
-A target the subject cannot sustain is not a target; it is an instruction to
-the control law to keep accelerating. 90% of maximum is the conventional
-ceiling for the hard end of an aerobic zone, and it leaves the hard-maximum and
-critical tiers somewhere to live above it.
+``zone_ceiling_fraction`` of the medical file, 0.9 in the shipped one. A target
+the subject cannot sustain is not a target; it is an instruction to the control
+law to keep accelerating. 90% of maximum is the conventional ceiling for the
+hard end of an aerobic zone, and it leaves the hard-maximum and critical tiers
+somewhere to live above it.
 """
+
+HR_MAX_FORMULA: Final[HrMaxFormula] = SHIPPED_PARAMETERS.hr_max_formula
+"""How :func:`hr_max_from_age` estimates a maximum: ``hr_max_formula`` of the medical file."""
 
 SUBJECT_HR_MAX_MIN: Final[Bpm] = Bpm(100)
 """Lowest maximum heart rate this module will believe. See below."""
@@ -173,7 +187,11 @@ MAX_SUBJECT_AGE_YEARS: Final[int] = 100
 """Oldest age the estimate below is defensible for."""
 
 TANAKA_INTERCEPT: Final[float] = 208.0
-"""Intercept of ``HRmax = 208 - 0.7 x age`` (Tanaka et al., 2001)."""
+"""Intercept of ``HRmax = 208 - 0.7 x age`` (Tanaka et al., 2001).
+
+The formula as published: the medical file chooses it by name
+(``"hr_max_formula": "tanaka"``), and these two numbers are what that name means.
+"""
 
 TANAKA_SLOPE: Final[float] = 0.7
 """Slope of the same estimate.
@@ -186,7 +204,9 @@ better-fitting formula is the one used. Either way it remains an estimate: see
 """
 
 
-def hr_max_from_age(age_years: int) -> Result[Bpm, OutOfRange]:
+def hr_max_from_age(
+    age_years: int, formula: HrMaxFormula = HR_MAX_FORMULA
+) -> Result[Bpm, OutOfRange]:
     """Estimate a maximum heart rate from an age, refusing implausible ages.
 
     Provided because an operator knows the subject's age and usually does not
@@ -198,6 +218,9 @@ def hr_max_from_age(age_years: int) -> Result[Bpm, OutOfRange]:
     which is why :class:`TrainingProfile` stores the number rather than the age
     (see :func:`parse_profile`). ``Result`` rather than a clamp, because
     clamping an age of 300 to 100 answers a question nobody asked.
+
+    ``formula`` is the medical file's (:data:`HR_MAX_FORMULA`); a parameter so
+    the guard after the ``match`` is exercised by a test.
     """
     if age_years < MIN_SUBJECT_AGE_YEARS or age_years > MAX_SUBJECT_AGE_YEARS:
         return Err(
@@ -208,7 +231,10 @@ def hr_max_from_age(age_years: int) -> Result[Bpm, OutOfRange]:
                 high=float(MAX_SUBJECT_AGE_YEARS),
             )
         )
-    return Ok(Bpm(round(TANAKA_INTERCEPT - TANAKA_SLOPE * age_years)))
+    match formula:
+        case HrMaxFormula.TANAKA:
+            return Ok(Bpm(round(TANAKA_INTERCEPT - TANAKA_SLOPE * age_years)))
+    raise assert_never(formula)
 
 
 #: A profile id is lowercase ``snake_case``, starts with a letter, and is at
@@ -314,6 +340,11 @@ class Violation(Enum):
     # cooldown_s is shorter than COMMISSIONED_DECEL_S. See that constant: a
     # faster stop is not available on this machine, and commanding one buys a
     # freewheel instead of a ramp.
+
+    COOLDOWN_TOO_SHORT = "cooldown_too_short"
+    # cooldown_s is below MIN_COOLDOWN_S, the medical floor. Equal to the
+    # drive's ramp in the shipped file, so today a cooldown refused for one is
+    # refused for the other too, and both are said.
 
     RECOVERY_TOO_SHORT = "recovery_too_short"
     # recovery_s is below MIN_RECOVERY_S. The vasovagal window is minutes long
@@ -491,7 +522,10 @@ class TrainingProfile:
     """
 
     cooldown_s: Seconds
-    """Controlled ramp to zero. Floored by :data:`COMMISSIONED_DECEL_S`."""
+    """Controlled ramp to zero. Floored by :data:`COMMISSIONED_DECEL_S` and :data:`MIN_COOLDOWN_S`.
+
+    The first is what the drive can do, the second what the medical file asks.
+    """
 
     recovery_s: Seconds
     """Motor stopped, person still in the machine, monitoring continuing.
@@ -729,6 +763,12 @@ def _check_cooldown_not_faster_than_drive(profile: TrainingProfile) -> Violation
     return Violation.COOLDOWN_FASTER_THAN_DRIVE_RAMP
 
 
+def _check_cooldown_long_enough(profile: TrainingProfile) -> Violation | None:
+    if profile.cooldown_s >= MIN_COOLDOWN_S:
+        return None
+    return Violation.COOLDOWN_TOO_SHORT
+
+
 def _check_recovery_long_enough(profile: TrainingProfile) -> Violation | None:
     if profile.recovery_s >= MIN_RECOVERY_S:
         return None
@@ -836,6 +876,7 @@ _CHECKS: Final[tuple[Callable[[TrainingProfile], Violation | None], ...]] = (
     _check_name,
     _check_durations_positive,
     _check_cooldown_not_faster_than_drive,
+    _check_cooldown_long_enough,
     _check_recovery_long_enough,
     _check_hold_long_enough,
     _check_bpm_positive,

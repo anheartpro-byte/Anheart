@@ -74,6 +74,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/log_format.py` | La forme des lignes que la console écrit dans son journal : un objet JSON par ligne, champ `event`. | Une ligne par message, même avec un retour à la ligne ou une trace d'erreur. Ce que les lignes ne doivent pas porter est tenu par `tests/test_log_format.py`. |
 | `src/geometry.py` | `MachineGeometry` : rayon (sans défaut) et rapport (49,79 par défaut). Toute vitesse et tout g passent par là. | Un seul endroit convertit tr/min moteur ↔ tr/min de sortie ↔ Hz ↔ g. Porte 100 %. |
 | `src/local_config.py` | Lit et valide les clés `.env` de la console. | Signale **toutes** les erreurs d'un coup au démarrage. `ARM_RADIUS_M` n'a pas de défaut. Porte 100 %. |
+| `src/medical.py` | Les paramètres médicaux : lit une fois `config/medical_parameters.json`, en fait des types (`MedicalParameters`) et vérifie sa signature Ed25519 avec `config/medical.pub` (seul module de la console qui importe `cryptography`). | Aucune valeur médicale n'est écrite ailleurs dans le code de la console. Signature absente ou invalide : la console démarre en mode banc seulement ; fichier illisible : elle ne démarre pas ([12.6](#126-les-paramètres-médicaux-signés-anh-139)). Porte 100 %. |
 
 ### 2.2 Le variateur (`src/motor/`)
 
@@ -453,16 +454,18 @@ Avant tout mouvement, l'opérateur déclare l'occupation, figée pour la séance
 | Occupation | Sens | Plafond (`LocalConfig.ceiling_for`) | Règles de FC |
 |---|---|---|---|
 | `bench` (banc) | personne à bord : moteur désaccouplé, ou bras accouplé capsule vide | `MOTOR_MAX_RPM` (300 par défaut, jamais plus de 1380) | désactivées (la FC n'est pas celle d'un passager) ; toutes les autres règles actives |
-| `occupied` (personne à bord) | un passager, choisi dans la liste du tableau de bord ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) | **refusé** tant que `OCCUPANCY_OCCUPIED_ENABLED=false` ; sinon le plus bas de `MOTOR_MAX_RPM` et du plafond « premier essai » 1,2 g résultant au rayon de référence (environ 990 tr/min moteur à 1,5 m) | toutes actives ; une FC fraîche et fiable est exigée pour démarrer |
+| `occupied` (personne à bord) | un passager, choisi dans la liste du tableau de bord ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) | **refusé** tant que les paramètres médicaux ne sont pas signés ([12.6](#126-les-paramètres-médicaux-signés-anh-139)) ou que `OCCUPANCY_OCCUPIED_ENABLED=false` ; sinon le plus bas de `MOTOR_MAX_RPM` et du plafond avec personne à bord du fichier médical (`occupied_ceiling_g`, 1,2 g résultant dans le fichier livré, environ 990 tr/min moteur au rayon de référence de 1,5 m) | toutes actives ; une FC fraîche et fiable est exigée pour démarrer |
 
 Une séance de banc ne nomme aucun passager : un départ `bench` qui en nomme un
 est refusé. Une séance avec personne à bord en nomme un, que la liste tenue au
 moment de l'armement porte, avec une année de naissance réglée sur le site et un
-âge d'au moins `MIN_RIDER_AGE` ([section 11](#11-lâge-minimum-du-passager)), en
-manuel comme en programmé.
+âge d'au moins `min_rider_age` du fichier médical signé
+([section 11](#11-lâge-minimum-du-passager)), en manuel comme en programmé.
 
-La valeur 1,2 g est marquée `[MED][ING]` dans le code : un paramètre provisoire
-en attente de validation médicale et d'ingénierie (jalon M6).
+La valeur 1,2 g est un paramètre provisoire du fichier médical signé
+(`config/medical_parameters.json`, [12.6](#126-les-paramètres-médicaux-signés-anh-139)),
+en attente de validation médicale (ANH-98) et d'ingénierie (jalon M6). Aucun
+`.env` ne la change.
 
 ### 4.2 Portes communes à tout départ (`_refuse_arming`, `_arm`)
 
@@ -516,7 +519,7 @@ aucun.
 * Refusée si l'opérateur n'est pas nommé, si le plafond est hors de
   `[min_run, HSP]`, ou (personne à bord) sans FC fiable, sans passager de la
   liste du tableau de bord, sans année de naissance réglée sur le site, ou pour
-  un passager de moins de `MIN_RIDER_AGE`
+  un passager de moins de `min_rider_age` du fichier médical
   ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)).
 * L'opérateur fixe une **cible en tr/min de sortie** ; elle doit valoir 0 ou,
   convertie en tr/min moteur, être dans `[55, plafond]`. Hors de ce domaine elle
@@ -608,7 +611,10 @@ aucun.
 
 Portes supplémentaires, dans l'ordre (`LocalPanel._start_programme`) :
 
-1. `PROGRAMS_ENABLED=true` (sinon : « seances programmees desactivees
+1. Paramètres médicaux signés (sinon : « parametres medicaux non signes (…) :
+   console en mode banc seulement, aucune seance programmee ni personne a
+   bord », voir [12.6](#126-les-paramètres-médicaux-signés-anh-139)), puis
+   `PROGRAMS_ENABLED=true` (sinon : « seances programmees desactivees
    (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL »).
 2. Le passager et ses deux valeurs (`LocalPanel._rider_for`). Départ tapé à la
    console : un passager que la liste du tableau de bord tenue **à l'armement**
@@ -616,18 +622,19 @@ Portes supplémentaires, dans l'ordre (`LocalPanel._start_programme`) :
    ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) ; rien de ce qui
    est tapé à la console ne compte. Lancement venu du tableau de bord : les
    valeurs que porte le lancement.
-3. Âge du passager ≥ `MIN_RIDER_AGE` (voir [section 11](#11-lâge-minimum-du-passager)).
+3. Âge du passager ≥ `min_rider_age` du fichier médical (voir [section 11](#11-lâge-minimum-du-passager)).
 4. Plafond « personne à bord » disponible (`OCCUPANCY_OCCUPIED_ENABLED=true`) :
    un programme a toujours quelqu'un à bord.
 5. Le profil se résout, ajusté à la FC max de ce passager ; tous les contrôles
    cardiaques sont refaits pour cette personne (notamment
-   `zone_high ≤ 0,9 × FC max` et palier dur ≤ FC max).
+   `zone_high ≤ 0,9 × FC max`, 0,9 étant `zone_ceiling_fraction` du fichier
+   médical, et palier dur ≤ FC max).
 6. `max_rpm` du profil ≤ plafond personne à bord.
 7. Caméra (si configurée) : la porte de départ accepte.
 8. Horloge murale tenue par un service de temps ([4.2](#42-portes-communes-à-tout-départ-_refuse_arming-_arm)).
 9. Portes du runtime : celles de 4.2, plus les paliers cardiaques du profil
-   **égaux** à ceux du superviseur (`HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`), et un
-   plan de commande constructible.
+   **égaux** à ceux du superviseur (`hr_hard_max_bpm` / `hr_critical_bpm` du
+   fichier médical), et un plan de commande constructible.
 
 Un refus s'affiche sur la console et, pour un lancement venu du tableau de bord,
 est renvoyé comme séance échouée avec la raison.
@@ -719,7 +726,7 @@ affiche et ne les modifie pas.
   refusée sur une horloge murale que personne ne tient (4.2).
 * **Séance manuelle avec personne à bord** : le passager nommé doit être dans la
   liste, avoir une année de naissance réglée sur le site, et un âge d'au moins
-  `MIN_RIDER_AGE`, compté comme pour un programme (`roster.age_of`,
+  `min_rider_age` du fichier médical, compté comme pour un programme (`roster.age_of`,
   `LocalPanel._on_board_refusal`). La FC max n'est pas demandée : rien n'y est
   ajusté en manuel.
 * **Séance déclarée** : une séance lancée ici est envoyée à
@@ -820,8 +827,9 @@ lancée ici.
 ### 5.2 Les 18 règles du superviseur
 
 Valeurs par défaut de `SafetyLimits`. Seuls `hard_max_bpm` et `critical_bpm`
-n'ont pas de défaut dans la classe ; la console les prend de `HR_HARD_MAX_BPM` /
-`HR_CRITICAL_BPM` (148 / 158 par défaut).
+n'ont pas de défaut dans la classe ; la console les prend du fichier médical
+signé, `hr_hard_max_bpm` / `hr_critical_bpm` (148 / 158 dans le fichier livré,
+[12.6](#126-les-paramètres-médicaux-signés-anh-139)).
 
 | Id | Condition | Seuils par défaut | Action | Verrou |
 |---|---|---|---|---|
@@ -2197,8 +2205,9 @@ l'acquittement demande « champignon relâché » alors que personne ne l'a touc
 
 ## 11. L'âge minimum du passager
 
-* `MIN_RIDER_AGE` (défaut **18**, bornes 10..100) : âge minimum d'un passager à
-  bord, pour une séance **programmée** et, depuis le 15 octobre 2026 (décision du
+* `min_rider_age` du fichier médical signé (**18** dans le fichier livré,
+  bornes 10..100 vérifiées au démarrage) : âge minimum d'un passager à bord,
+  pour une séance **programmée** et, depuis le 15 octobre 2026 (décision du
   responsable produit), pour une séance **manuelle avec personne à bord**
   (`occupied`). Un âge **inconnu est un refus**.
 * L'âge vient de l'année de naissance réglée sur le site par un gestionnaire :
@@ -2211,9 +2220,11 @@ l'acquittement demande « champignon relâché » alors que personne ne l'a touc
   ou manuel avec personne à bord) ;
   « demarrage refuse : age du passager requis pour une seance programmee »
   (lancement distant sans âge) ; « demarrage refuse : passager de N ans,
-  minimum M ans (MIN_RIDER_AGE) ».
-* Marqué `[MED]` : abaisser ce seuil est une décision médicale, prise dans
-  `.env`, jamais depuis le tableau de bord.
+  minimum M ans (min_rider_age des parametres medicaux) ».
+* Abaisser ce seuil est une décision médicale : elle se signe dans
+  `config/medical_parameters.json` ([12.6](#126-les-paramètres-médicaux-signés-anh-139)),
+  jamais dans un `.env` (la clé `MIN_RIDER_AGE` n'est plus lue et empêche la
+  console de démarrer) ni depuis le tableau de bord.
 * Ne s'applique pas aux séances de banc : personne n'est à bord, et elles ne
   nomment aucun passager.
 
@@ -2248,26 +2259,22 @@ sort avec le code 2.
 | `UI_TLS_CERT` | aucun | chemin du certificat de la console (PEM), tel que la console le voit | va avec `UI_TLS_KEY` : les deux, ou aucun. Obligatoire hors boucle locale. Renseigné, la console sert en TLS partout où elle écoute, boucle locale comprise |
 | `UI_TLS_KEY` | aucun | chemin de sa clé privée (PEM, **sans phrase secrète**) | va avec `UI_TLS_CERT`. Un fichier absent, illisible, qui n'est pas la clé du certificat, ou protégé par une phrase secrète : la console refuse de démarrer et dit lequel (code 2) |
 | `UI_TLS_NAMES` | aucun | adresses IPv4 et noms sous lesquels une tablette ouvre la console, ceux que porte le certificat, séparés par des virgules (`10.42.0.1,anheart.internal`) | chacun donne une origine acceptée par la WebSocket, en `https`, au port de la page. Refusée sans certificat (elle serait sans effet), et si une valeur n'est ni une adresse IPv4 ni un nom d'hôte |
-| `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 |
-| `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
-| `HR_HARD_MAX_BPM` | `148` | palier dur du superviseur | 100..220 |
-| `HR_CRITICAL_BPM` | `158` | palier critique du superviseur | 100..220, > palier dur |
-| `MIN_RIDER_AGE` | `18` | âge minimum d'un passager à bord (séance programmée, ou manuelle `occupied`) | 10..100 |
+| `OCCUPANCY_OCCUPIED_ENABLED` | `false` | autorise « personne à bord » | booléen ; reste `false` jusqu'au jalon M6 ; forcé à `false` quand les paramètres médicaux ne sont pas signés ([12.6](#126-les-paramètres-médicaux-signés-anh-139)) |
+| `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen ; forcé à `false` quand les paramètres médicaux ne sont pas signés |
 | `PRESENCE_SOURCE` | `none` | caméra | `none`, `sim_empty`, `sim_occupied` |
 | `SENSORS` | `ECG` | voies acquises et affichées | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` ; `ECG` obligatoire |
 | `MACHINE_API_KEY` | vide | clé de la machine sur le tableau de bord ; vide = pas de lien | - |
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
-| `MOTION_LIMITS_PATH` | `config/motion_limits.json` | limites anti-nausée (relatif à `raspberry-pi/`) | fichier illisible = la console refuse de démarrer |
 | `RECORD_ROOT` | `data/records` | dossier des enregistrements de séance (relatif à `raspberry-pi/` s'il n'est pas absolu) | créé en mode 700 ; s'il est inutilisable, la console démarre et **refuse tout départ** ([15.4](#154-départ-refusé-sous-500-mo)) |
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
 | `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
+| `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MIN_RIDER_AGE`, `MOTION_LIMITS_PATH` | - | **ne sont plus lues** (ANH-139) : les valeurs médicales viennent du fichier signé ([12.6](#126-les-paramètres-médicaux-signés-anh-139)). Une valeur non vide encore réglée est une **erreur de configuration** : la console refuse de démarrer, dit laquelle (`configuration: MIN_RIDER_AGE: n'est plus lue : la valeur est parameters.min_rider_age de config/medical_parameters.json, signe ; retirer cette cle du .env`) et sort avec le code 2, sur lequel le service ne la relance pas. Deux sources pour une valeur médicale, c'est la non signée qui finit appliquée | à retirer du `.env` |
 | `ANHEART_SOFTWARE_VERSION` | - | **n'est plus lue.** La version écrite dans le manifeste (`software_version`) est le contenu de `raspberry-pi/VERSION` (`/app/VERSION` dans l'image), la même que celle de la page et du heartbeat ([section 14](#14-versions-et-compatibilité)). Une valeur encore réglée ne change rien et n'arrête plus le démarrage, même mal formée : la console l'écrit une fois dans son journal (`configuration: ANHEART_SOFTWARE_VERSION is set and no longer read`) | - |
 | `RECORD_DRIVE_SDK_FRAMES` | `false` | diagnostic de banc de la liaison variateur : enregistre aussi les appels du SDK Modbus avec leurs octets (chaque demande envoyée, chaque fragment reçu), en plus des transactions de registre. Environ 0,95 Mo par minute au lieu de 0,2 Mo avec le vrai pilote ([15.2](#152-aucune-écriture-dans-la-boucle)) ; sans effet sur le simulateur | `true` ou `false` |
 
-Contenu livré de `config/motion_limits.json` (tout est marqué `[MED]`, à valider
-par le médical) : 0,25 tr/min de sortie/s, 0,03 g/s, consigne non nulle minimale
-55 tr/min moteur, intervalle maximal 1,0 s.
+Les limites anti-nausée ne sont plus dans un fichier à part ni dans une clé :
+elles sont les `motion_limits` du fichier médical signé ([12.6](#126-les-paramètres-médicaux-signés-anh-139)).
 
 ### 12.2 Minimum pour une simulation complète
 
@@ -2501,6 +2508,93 @@ point d'accès voie sa WebSocket acceptée.
 `scripts/pi/preflight.sh` dit avant le démarrage ce que la console dirait :
 `UI_HOST=… needs UI_TLS_CERT and UI_TLS_KEY`.
 
+### 12.6 Les paramètres médicaux signés (ANH-139)
+
+Aucune valeur médicale ne se règle dans un `.env`. Elles sont toutes dans
+`config/medical_parameters.json`, signé, lu par `src/medical.py` : les
+décisions et leur procédure sont dans
+[securite.md, section 13](securite.md#13-décisions-médicales--un-fichier-signé-anh-139).
+Ce qui suit est ce qu'en fait la console.
+
+**Ce que le fichier règle, et qui le lit.** Valeurs du fichier livré, version
+`0.1.0`, identiques à celles que le code portait avant lui :
+
+| Membre de `parameters` | Valeur livrée | Lu par |
+|---|---|---|
+| `hr_hard_max_bpm` / `hr_critical_bpm` | 148 / 158 bpm | `LocalConfig.tiers` : les paliers du superviseur, ceux que chaque profil doit porter |
+| `min_rider_age` | 18 ans | `LocalConfig.min_rider_age` : porte d'âge d'une séance programmée ([section 11](#11-lâge-minimum-du-passager)) |
+| `occupied_ceiling_g` | 1,2 g résultant | `LocalConfig.ceiling_for(OCCUPIED)` ([4.1](#41-occupation-déclarée)) |
+| `zone_ceiling_fraction` | 0,9 | `plan.ZONE_CEILING_FRACTION` : `zone_high ≤ 0,9 × FC max` |
+| `hr_max_formula` | `tanaka` | `plan.hr_max_from_age` : 208 - 0,7 × âge |
+| `motion_limits` | 0,25 tr/min de sortie/s ; 0,03 g/s ; 55 tr/min moteur ; 1,0 s | `LocalConfig.motion` et `motion.DEFAULT_MOTION_LIMITS` : chaque rampe de consigne |
+| `recovery_min_s` | 60 s | `plan.MIN_RECOVERY_S` : récupération minimale d'un profil, et celle d'une séance manuelle avec personne à bord |
+| `cooldown_min_s` | 4 s | `plan.MIN_COOLDOWN_S` : retour au calme minimal d'un profil (refus `cooldown_too_short`), en plus de la rampe du variateur (`cooldown_faster_than_drive_ramp`, 4 s, réglage d'ingénierie qui reste dans le code) |
+
+Le fichier est lu une fois, à l'import de `src/medical.py`, et ses octets sont
+gardés : les valeurs appliquées et les octets dont la signature est vérifiée
+sont les mêmes, quoi qu'il arrive ensuite au fichier sur le disque. Au
+démarrage, `load_local_config` vérifie en plus chaque valeur contre les bornes
+que la console tient pour plausibles (paliers 100..220 bpm, âge 10..100 ans,
+bornes du limiteur de mouvement) : une valeur hors bornes est un problème de
+configuration (clé `config/medical_parameters.json:<membre>`, code 2), signée
+ou non.
+
+**Au démarrage.** Trois cas :
+
+| Cas | Ce que fait la console |
+|---|---|
+| Signature vérifiée avec `config/medical.pub` | démarrage normal ; `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` valent ce que dit le `.env` |
+| Signature absente ou illisible (`medical_parameters.sig`), qui ne se vérifie pas (un octet du fichier changé, une fin de ligne comprise), clé publique absente ou qui n'est pas une clé Ed25519 | **mode banc seulement** : voir ci-dessous |
+| Fichier absent, illisible, qui n'est pas du JSON strict (UTF-8, sans membre en double, sans `NaN`), ou dont un membre manque, est inconnu ou n'a pas le bon type | la console **ne démarre pas** : aucune valeur ne permet même une séance de banc (chaque rampe manuelle suit les limites de mouvement). L'erreur sort à l'import (`MedicalParametersUnusableError`), avec un code de sortie 1, comme pour des profils livrés inutilisables |
+
+**Le mode banc.** Quand la signature ne se vérifie pas :
+
+* `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` sont forcés à `false`, quoi
+  que dise le `.env` ; `LocalConfig` refuse d'exister autrement ;
+* une séance programmée, demandée à la console ou venue du tableau de bord, est
+  refusée avec la phrase du mode banc : « parametres medicaux non signes
+  (raison) : console en mode banc seulement, aucune seance programmee ni
+  personne a bord ». Elle est dite avant `PROGRAMS_ENABLED=false`, puisque c'est
+  la raison. La console continue d'interroger le tableau de bord en mode banc,
+  pour qu'un lancement en attente soit refusé avec cette phrase plutôt que
+  laissé en attente ; la route `/api/session/start` répond 403 avec la même
+  phrase ;
+* « personne à bord » en manuel est refusé avec « personne a bord refusee : »
+  suivie de la même phrase ;
+* la page affiche un bandeau rouge permanent « PARAMETRES MEDICAUX NON SIGNES »
+  sur toutes les pages, et son pied de page dit
+  « parametres medicaux 0.1.0 NON SIGNES » en rouge ;
+* chaque enregistrement de séance s'ouvre sur un événement `warning` qui porte
+  la même phrase, et son manifeste dit `medical_parameters_version:
+  unsigned-sha256:<empreinte du fichier>` ;
+* le heartbeat envoie `programsEnabled: false` et
+  `medical_parameters_version: null` ;
+* le journal de la console le dit au démarrage :
+  `medical parameters: parametres medicaux non signes (...)`.
+
+Une séance manuelle de banc (personne à bord : non) reste possible, aux valeurs
+du fichier non signé : les limites de mouvement et les paliers qu'il porte
+gouvernent alors une machine sans passager. Rien à la console ne lève le mode
+banc : seul un fichier signé à nouveau, puis un redémarrage.
+
+**La version, partout.** Signé, le fichier donne sa version (`0.1.0`) au pied de
+page de la console, au heartbeat (`medical_parameters_version`, voir
+[section 14](#14-versions-et-compatibilité)) et au manifeste de chaque
+enregistrement ; la bannière de démarrage du journal la cite
+(`parametres medicaux 0.1.0 signes`). `GET /api/panel` la sert dans
+`medical_parameters` (`version`, `signed`, `issued_at`, `signed_by`, `warning`).
+La fiche machine du site et la comparaison à la version attendue relèvent de la
+seconde PR du ticket (couche Convex) : rien ne les affiche aujourd'hui.
+
+**Mettre à jour un Pi déjà installé.** Le `.env` d'un Pi installé avant ce
+changement porte `MIN_RIDER_AGE=18` (le modèle `.env.pi.example` l'écrivait) et
+peut-être `HR_HARD_MAX_BPM` ou `HR_CRITICAL_BPM` : retirer ces lignes de
+`/etc/anheart/anheart.env` avant de démarrer la nouvelle version, sinon la
+console refuse de démarrer et le dit. `sudo bash scripts/pi/preflight.sh` le
+dit avant le démarrage (`FAIL  MIN_RIDER_AGE is no longer read: the medical
+values are in config/medical_parameters.json, signed; remove this line`).
+L'installateur ne réécrit jamais une configuration existante.
+
 ---
 
 ## 13. Le contrat de code strict et la gate
@@ -2595,9 +2689,13 @@ Ce que fait la console :
 * **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.5`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
-  `medical_parameters_version` et `config_hash`. Les deux derniers valent `null` :
-  la console n'a encore ni fichier de paramètres médicaux signé ni empreinte de
-  configuration.
+  `medical_parameters_version` et `config_hash`. `medical_parameters_version`
+  est la version du fichier médical quand sa signature a été vérifiée au
+  démarrage (`0.1.0` pour le fichier livré), `null` sinon : un fichier non
+  signé ne garantit aucune version ([12.6](#126-les-paramètres-médicaux-signés-anh-139)).
+  `config_hash` vaut `null` : la console n'envoie pas encore d'empreinte de
+  configuration. Le champ existait déjà dans le contrat (`string|null`) : sa
+  valeur ne change ni la version du contrat ni ce que Convex accepte.
 * **Chaque réponse de heartbeat** annonce `server_contract_version`. Sans version
   lisible de la même majeure, la pastille Serveur ne peut pas lire `joignable`,
   même sans programmes. Une interrogation réussie ne remplace pas cette preuve.
@@ -3324,10 +3422,15 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   plus `root`, ne pourrait plus écrire dans un dossier qui ne serait plus le
   sien. Une copie faite avec `sudo` appartient à `root` : la laisser hors de
   `/var/lib/anheart`.
-- `config_hash` et `medical_parameters_version` sont des SHA-256 de la
-  configuration appliquée (géométrie, plafonds, paliers cardiaques et autres
-  limites de sécurité, limites de mouvement, sources) ; ni la clé machine ni
-  le jeton de la console n'y entrent.
+- `config_hash` est un SHA-256 de la configuration appliquée (géométrie,
+  plafonds, paliers cardiaques et autres limites de sécurité, limites de
+  mouvement, âge minimum, empreinte et verdict du fichier médical, sources) ;
+  ni la clé machine ni le jeton de la console n'y entrent.
+- `medical_parameters_version` est la version du fichier médical signé
+  (`0.1.0` aujourd'hui) ; quand sa signature ne se vérifie pas,
+  `unsigned-sha256:` suivi de l'empreinte du fichier, et l'enregistrement
+  s'ouvre sur un événement `warning` qui dit le mode banc
+  ([12.6](#126-les-paramètres-médicaux-signés-anh-139)).
 
 ### 15.8 Ce qui n'est pas enregistré aujourd'hui
 

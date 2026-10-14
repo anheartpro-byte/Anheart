@@ -69,7 +69,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **HSP à 50 Hz.** Le code accepte jusqu'à 1380 tr/min moteur parce que le moteur est aujourd'hui désaccouplé. | HSP doit être abaissé avant d'accoupler le bras avec une personne. |
 | **Caméra simulée seulement.** Les règles de présence existent et sont testées, mais seule une caméra simulée existe ; le lecteur d'un vrai détecteur (`src/presence/detector_link.py`) n'est pas écrit. | Aucune détection réelle d'intrusion dans la zone. |
 | **Tout est validé en simulation.** Variateur simulé, physiologie simulée, cohorte fictive. | Le comportement réel du variateur, du bras et d'un corps humain peut différer. Aucune séance avec quelqu'un à bord n'a eu lieu. |
-| **Décisions médicales en attente [MED].** Limites anti-nausée, plafond 1,2 g résultant avec personne à bord, `MIN_RIDER_AGE=18`, paliers cardiaques 148/158 bpm, zones. | Ce sont des valeurs provisoires, pas des valeurs validées. Une zone « jog » vers 150 bpm demande des paliers plus hauts que les défauts : c'est une décision médicale. |
+| **Décisions médicales en attente [MED].** Limites anti-nausée, plafond 1,2 g résultant avec personne à bord, âge minimum 18 ans, paliers cardiaques 148/158 bpm, plafond de zone 0,9 × FC max, récupération et retour au calme minimaux. Elles sont dans un fichier signé, `config/medical_parameters.json`, mais **signé par une clé de test, à remplacer par la clé médicale d'ANH-98** ([section 13](#13-décisions-médicales--un-fichier-signé-anh-139)). | Ce sont des valeurs provisoires, pas des valeurs validées : la signature de test prouve que le fichier n'a pas changé depuis ce ticket, pas qu'un médecin l'a relu. Une zone « jog » vers 150 bpm demande des paliers plus hauts que ceux du fichier : c'est une décision médicale, à signer. |
 | **Réglages d'ingénierie estimés [ING].** Gains du régulateur (Kp = 3, Ti = 40 s), rayon réel du passager. | À mesurer et régler au banc. |
 | **`src/signal_processing.py` hors vérification de types.** Il calcule la FC qui entre dans la chaîne. Il est sous la couverture à 100 % de branches comme le reste de la chaîne, mais pas encore sous la vérification de types stricte (dette déclarée dans `pyproject.toml`). | Atténué par la confirmation indépendante (`ecg_pipeline.py`), mais pas éliminé. |
 | **Profils livrés = profils de banc.** `standard_30_min` et `standard_45_min` plafonnent à 276 tr/min moteur (5,5 tr/min au bras) et n'atteignent pas leur zone. | Ils se terminent proprement en saturant, mais n'entraînent personne. |
@@ -173,7 +173,9 @@ préalables :
    un arrêt accessible depuis la capsule, un frein si l'analyse de risques le demande.
 2. Vérifier ttO et SLL sur le variateur ; abaisser HSP.
 3. Mesurer `ARM_RADIUS_M` et `LEG_TIP_RADIUS_M` sur la vraie machine et le vrai passager.
-4. Faire signer toutes les valeurs [MED] par l'équipe médicale.
+4. Faire signer toutes les valeurs [MED] par l'équipe médicale : remplacer la
+   clé de test de `config/medical.pub` par la clé médicale et signer le
+   fichier `config/medical_parameters.json` (ANH-98, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)).
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
 
@@ -1757,3 +1759,106 @@ ticket : **ils ne sont pas faits.**
 | **L'analyse des secrets de GitHub et sa protection au push sont désactivées** ; gitleaks juge après le push | le chef de projet (réglage du dépôt) |
 | **Aucun compte à privilèges n'exige un second facteur** ; la durée des sessions est celle de Clerk ; un rôle retiré dans Clerk vaut jusqu'à l'expiration du jeton en cours | [MEN-07](menaces.md#men-07-prise-de-compte-clerk) ; lot Clerk d'ANH-153, réglages de Clerk au chef de projet |
 | **La nomenclature n'est ni durable (90 jours d'artefact) ni signée**, et la simulation hébergée n'en a pas | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
+
+## 13. Décisions médicales : un fichier signé (ANH-139)
+
+Ticket ANH-139, couche Pi. Les valeurs elles-mêmes ne sont pas une décision de
+ce ticket : ce sont celles que le code portait, toutes provisoires, en attente
+de la décision médicale d'ANH-98. Ce que le ticket établit, c'est d'où elles
+viennent et ce que la console fait quand rien ne prouve qu'elles sont signées.
+
+### 13.1 Un fichier, une signature, une clé
+
+* **Le fichier.** `raspberry-pi/config/medical_parameters.json` porte une
+  `version` (`MAJEUR.MINEUR.CORRECTIF`), la date de la décision (`issued_at`),
+  l'identifiant du signataire (`signed_by`, un identifiant, jamais un nom) et
+  les `parameters` : les paliers cardiaques (148 / 158 bpm), l'âge minimum
+  (18 ans), le plafond avec personne à bord (1,2 g résultant), la fraction de
+  la FC max que peut atteindre une zone (0,9), la formule qui estime la FC max
+  (`tanaka`), les quatre limites anti-nausée (0,25 tr/min de sortie/s,
+  0,03 g/s, 55 tr/min moteur, 1,0 s), la récupération minimale (60 s) et le
+  retour au calme minimal (4 s). Le tableau de ce que la console en fait est
+  dans [raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139).
+  Aucune de ces valeurs n'est plus écrite ailleurs dans le code du Pi : les
+  modules les lisent dans ce fichier, et les clés du `.env` qui en réglaient
+  certaines (`HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MIN_RIDER_AGE`,
+  `MOTION_LIMITS_PATH`) empêchent maintenant la console de démarrer. Restent
+  dans le code, à dessein : les bornes de plausibilité (FC 100..220 bpm, âge
+  10..100 ans, bornes du limiteur de mouvement), qui refusent un fichier mal
+  tapé même signé, et la rampe de décélération du variateur (4 s), qui est une
+  mesure d'ingénierie et non une décision médicale.
+* **La signature.** `config/medical_parameters.sig` est une signature Ed25519
+  détachée des octets exacts du fichier : un octet changé, une espace ou une
+  fin de ligne comprise, et elle ne se vérifie plus. `.gitattributes` empêche
+  toute conversion des fins de ligne de ces fichiers à l'extraction du dépôt.
+* **La clé.** `config/medical.pub` est la clé publique avec laquelle la console
+  vérifie, embarquée dans l'image avec le fichier. C'est la clé « médical » et
+  aucune autre : le catalogue de programmes (ANH-138) aura sa propre clé, et
+  une clé ne signe jamais pour l'autre. Sa moitié privée n'est jamais sur une
+  machine ni dans le dépôt.
+* **Vérifiable sans ce code.** Avec OpenSSL 3 :
+  `openssl pkeyutl -verify -pubin -inkey config/medical.pub -rawin -in config/medical_parameters.json -sigfile config/medical_parameters.sig`.
+
+### 13.2 La clé de test, à remplacer par la clé médicale d'ANH-98
+
+Le fichier livré est signé par une **clé de test, à remplacer par la clé
+médicale d'ANH-98** (`"signed_by": "cle-de-test"`, version `0.1.0`). Cette paire
+de clés a été créée pour ce ticket, a signé le fichier livré une fois, et sa
+clé privée a été **détruite** aussitôt : personne ne peut plus signer avec
+elle. Conséquence voulue : toute modification du fichier, même d'une valeur
+qui serait juste, met la console en mode banc tant que la clé médicale n'a
+pas remplacé `config/medical.pub` et signé le fichier. La signature de test ne
+dit rien de la validité médicale des valeurs.
+
+### 13.3 Ce que fait la console au démarrage
+
+`src/local_config.py` charge et vérifie le fichier à chaque démarrage
+(`src/medical.py`). Signature vérifiée : démarrage normal. Signature absente,
+qui ne se vérifie pas, ou clé publique absente ou illisible : la console démarre
+en **mode banc seulement**.
+
+* `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` sont forcés à `false`,
+  quoi que dise le `.env`.
+* Un bandeau rouge permanent « PARAMETRES MEDICAUX NON SIGNES » est sur toutes
+  les pages de la console ; le pied de page dit la version et « NON SIGNES ».
+* Chaque enregistrement de séance contient un événement `warning` avec la
+  raison.
+* Un lancement venu du tableau de bord est refusé : « refusee par la machine :
+  parametres medicaux non signes (raison) : console en mode banc seulement,
+  aucune seance programmee ni personne a bord ». Les textes de la console sont
+  écrits sans accents, comme tous ses messages.
+* Une séance manuelle sans personne à bord reste possible : la machine
+  n'emporte alors personne.
+
+Un fichier absent, illisible ou mal formé n'est pas le mode banc : aucune valeur
+n'existe alors pour faire tourner même une séance de banc, et la console ne
+démarre pas. Ce n'est vérifié que par les tests automatisés : aucun de ces cas
+n'a été essayé sur un Pi.
+
+### 13.4 Changer une valeur : la procédure du signataire
+
+Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
+
+1. Une fois : `python scripts/sign_medical_parameters.py generate-key <chemin hors du dépôt>`.
+   Crée la paire de clés médicale : la clé privée, chiffrée par une phrase
+   secrète demandée deux fois, au chemin donné (le script refuse un chemin dans
+   le dépôt), et la clé publique écrite dans `config/medical.pub`.
+2. Écrire la décision dans `config/medical_parameters.json` : les valeurs, une
+   nouvelle `version`, la date (`issued_at`) et l'identifiant du signataire.
+3. `python scripts/sign_medical_parameters.py sign <clé privée>` : refuse un
+   fichier que la console refuserait et une clé privée qui n'est pas celle de
+   `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie
+   comme la console.
+4. `python scripts/sign_medical_parameters.py verify` : ce que la console dira
+   au démarrage. Puis une PR ordinaire, relue ; la check-list de release
+   relit toute valeur `[MED]` qui change ([release.md](release.md)).
+
+### 13.5 Ce que cela ne couvre pas
+
+| Limite | Conséquence, et à qui elle revient |
+|---|---|
+| **Les valeurs ne sont pas validées.** La signature de test prouve l'intégrité depuis ce ticket, pas une décision médicale | ANH-98 : décision et signature par le médecin |
+| **Le site ne sait rien de la signature.** Convex ne garde pas encore la version attendue (`medical_parameters_versions`), la fiche machine n'affiche ni la version médicale ni « version médicale obsolète », Convex ne lit pas ses valeurs dans le fichier (`MIN_RIDER_AGE` et 0,9 restent écrits dans `convex/training.ts`) et aucun test ne compare les refus de zone du Pi et de Convex | seconde PR du ticket (couche Convex : EX-4 côté Convex, EX-6, test de parité) |
+| **Le catalogue de programmes ne référence pas la version médicale** ; le Pi ne refuse pas un programme validé pour une autre version | EX-5, avec le ticket de publication des programmes (ANH-138) |
+| **Qui peut écrire dans l'image peut remplacer la clé.** Le fichier, sa signature et la clé publique sont dans l'image de la console, en lecture seule pour elle. Quelqu'un qui reconstruit l'image ou est root sur le Pi peut remplacer les trois ensemble : la signature protège d'une modification par erreur ou hors de la procédure, pas d'un Pi compromis | MEN-04 ([menaces.md](menaces.md)) ; distribution signée du logiciel : MEN-10 |
+| **Jamais essayé sur un Pi.** Mode banc, bandeau, refus d'un lancement distant : vérifiés par les tests automatisés seulement (console construite sur le variateur simulé) | essai au banc à faire |

@@ -39,7 +39,7 @@ from simulation.cohort.generate import (
     tanaka,
 )
 from simulation.scenario import SIM_PROFILES_PATH
-from src.local_config import DEFAULT_MIN_RIDER_AGE
+from src.medical import SHIPPED_PARAMETERS
 from src.result import Err, Ok
 from src.training.plan import ProfileStore, UnknownProfile
 
@@ -68,7 +68,7 @@ def _refused_adult() -> CohortSubject:
     return next(
         s
         for s in SUBJECTS
-        if s.age_years >= DEFAULT_MIN_RIDER_AGE and _jog_gate(s).refusal is not None
+        if s.age_years >= SHIPPED_PARAMETERS.min_rider_age and _jog_gate(s).refusal is not None
     )
 
 
@@ -145,7 +145,7 @@ def test_the_real_gate_refuses_exactly_the_riders_the_brief_says() -> None:
         gate = _jog_gate(subject)
         assert (gate.refusal is not None) is gate.expected_refusal, subject
         assert (gate.refusal is not None) is (
-            subject.age_years < DEFAULT_MIN_RIDER_AGE or 0.9 * subject.hr_max < 155
+            subject.age_years < SHIPPED_PARAMETERS.min_rider_age or 0.9 * subject.hr_max < 155
         )
     assert eligibility(SUBJECTS[0], SessionType.MANUAL_BENCH) is None
     assert not _refused_adult().minor
@@ -153,7 +153,7 @@ def test_the_real_gate_refuses_exactly_the_riders_the_brief_says() -> None:
 
 MINORS: Final[tuple[CohortSubject, ...]] = tuple(s for s in SUBJECTS if s.minor)
 ADULTS: Final[tuple[CohortSubject, ...]] = tuple(
-    s for s in SUBJECTS if s.age_years >= DEFAULT_MIN_RIDER_AGE
+    s for s in SUBJECTS if s.age_years >= SHIPPED_PARAMETERS.min_rider_age
 )
 """Riders the console's age gate lets through to a programme."""
 

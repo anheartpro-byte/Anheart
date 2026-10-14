@@ -27,7 +27,7 @@ not counted as passing tests.
 | A1 | Nominal jog 145-155 bpm, 30 min, nominal subject | the control law reaches and holds the zone (>= 50 % of HOLD) and completes | sim `auto_jog_150_nominal` |
 | A2 | Every cohort subject x jog | the age gate and ProfileStore.resolve refuse underage riders or zones above 90% HRmax; eligible traces are judged | sim test_cohort.py; eight riders below18 plus S08 refused; only S07 jog remains XFAIL |
 | A3 | Every cohort subject x shipped standard_30_min | eligible nominal subjects saturate within276 motor rpm and complete; underage subjects are refused; a vasovagal event ends on safety | sim test_cohort.py |
-| A4 | Rider below MIN_RIDER_AGE (default18), or unknown age | programmed start refused before motion | sim test_the_real_gate_refuses_exactly_the_riders_the_brief_says and test_a_rider_under_16_is_refused_or_capped; panel age-gate tests |
+| A4 | Rider below the minimum age (18, `min_rider_age` of the signed medical file), or unknown age | programmed start refused before motion | sim test_the_real_gate_refuses_exactly_the_riders_the_brief_says and test_a_rider_under_16_is_refused_or_capped; panel age-gate tests |
 | A5 | Vasovagal collapse in WARMUP / HOLD | trend gate prevents increases after a measurable fall; hr_drop ends the session | sim vasovagal_auto_* pass; S07 jog onset remains XFAIL (README finding1); S04 refused by age gate |
 | A6 | Non-responder | saturates at the ceiling, never above it (windup) | sim `auto_jog_subject_nonresponder`, cohort S18 |
 | A7 | Fast / slow responder, drift, unfit, fit | nominal programme completes under the hard-max tier | sim auto_jog_subject_*; fast-responder case is an ordinary regression |
@@ -85,7 +85,7 @@ not counted as passing tests.
 | R4b | STOP under a FREEZE: operator STOP 12 s into a lost heart rate (auto, `hr_stale`), remote end under a latched `loop_stall` at 27 rpm (manual) | the setpoint walks down from the next tick under the FREEZE and reaches zero; ends as `operator_stop`, no standstill latched (ANH-175) | sim `stop_operator_auto_under_freeze`, `stop_remote_manual_under_latched_freeze`; `tests/test_stop_under_freeze.py` |
 | R5 | Dashboard unreachable / its step raising during a session | the session is unaffected, the error logged | panel `test_failure_process.py`, `test_cloud_sync.py` |
 | R6 | Remote launch while a local session runs | refused ("busy"), no poll while busy | panel `test_cloud_sync.py` |
-| R7 | Remote launch below MIN_RIDER_AGE (default18), or without age | refused before anything turns; subjectAge travels with the launch | panel test_a_launch_for_a_child_is_refused and test_a_launch_without_the_rider_s_age_is_refused PASS |
+| R7 | Remote launch below the minimum age (18, `min_rider_age` of the signed medical file), or without age | refused before anything turns; subjectAge travels with the launch | panel test_a_launch_for_a_child_is_refused and test_a_launch_without_the_rider_s_age_is_refused PASS |
 | R8 | Remote stop while the drive link is dead | the stop is still honoured by ttO; the dashboard learns the real end reason | proposed |
 | R9 | Launch lost in transit (no confirmation) | the machine does not start a session nobody confirmed; timeout reported | panel `test_a_launch_nobody_answers_times_out` |
 

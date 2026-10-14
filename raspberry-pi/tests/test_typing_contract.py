@@ -232,6 +232,7 @@ def test_safety_chain_lists_the_modules_the_heart_rate_flows_through() -> None:
         "src/geometry.py",
         "src/ecg_pipeline.py",
         "src/local_config.py",
+        "src/medical.py",
         "src/bitalino_rfcomm_macos.py",
         "src/local_panel.py",
         "src/panel_status.py",

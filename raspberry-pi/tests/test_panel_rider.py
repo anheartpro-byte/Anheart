@@ -345,7 +345,8 @@ async def test_a_child_is_refused_on_board_a_manual_session_and_the_age_is_not_w
         await pulse.beat(2)
     assert state_of(recorded) is RuntimeState.IDLE
     assert recorded.rig.refusals()[-1] == (
-        "demarrage refuse : passager de 9 ans, minimum 18 ans (MIN_RIDER_AGE)"
+        "demarrage refuse : passager de 9 ans, minimum 18 ans "
+        "(min_rider_age des parametres medicaux)"
     )
     assert recorded.records() == []
     on_disk = recorded.everything_on_disk()

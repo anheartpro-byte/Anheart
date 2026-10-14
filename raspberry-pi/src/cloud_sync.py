@@ -24,9 +24,12 @@ Down, from the dashboard to this machine, exactly three things:
   goes through :meth:`~src.control_surface.ControlSurface.submit_start` like a
   start typed at the console, so the same gates apply (emergency-stop wiring
   attested this boot, no standing verdict, the surface idle), and then through
-  the panel's own checks (programmes enabled, occupied ceiling, the preset
-  re-validated against this rider). Any refusal goes back as a failed session
-  with the reason;
+  the panel's own checks (medical parameters signed, programmes enabled,
+  occupied ceiling, the preset re-validated against this rider). Any refusal
+  goes back as a failed session with the reason. With unsigned medical
+  parameters the console still asks for launches, though programmes are off,
+  so that one waiting there is refused with that reason rather than left
+  waiting;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
   session runs, kept in memory only. It starts nothing: a start at the
@@ -137,6 +140,7 @@ from src.control_surface import (
 from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
+from src.medical import MedicalStatus
 from src.record_uplink import (
     Acked,
     Answer,
@@ -780,6 +784,7 @@ class CloudSync:
         "_last_rtt",
         "_last_status",
         "_link",
+        "_medical",
         "_next_profiles",
         "_online",
         "_programs_enabled",
@@ -807,6 +812,7 @@ class CloudSync:
         store: ProfileStore,
         tiers: CardiacTiers,
         programs_enabled: bool,
+        medical: MedicalStatus | None = None,
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
         record_degraded: Callable[[], bool] | None = None,
         records: RecordSource | None = None,
@@ -823,7 +829,9 @@ class CloudSync:
         then only declares and ends its sessions. ``link``: where what each exchange
         says of the link is kept for the console's page; ``None``: one of this object's
         own. ``roster``: the riders' list this link keeps up to date; ``None``: no list
-        is asked for."""
+        is asked for. ``medical``: the medical parameters and their verdict, whose
+        version the heartbeat announces when signed; ``None``: the heartbeat says there
+        is none."""
         self._clock: Clock = clock
         self._deposit: DepositTask | None = deposit
         self._roster: Roster | None = roster
@@ -839,6 +847,7 @@ class CloudSync:
         self._store: ProfileStore = store
         self._tiers: CardiacTiers = tiers
         self._programs_enabled: bool = programs_enabled
+        self._medical: MedicalStatus | None = medical
         self._software_version: SoftwareVersion = software_version
         # What was last said about the dashboard's contract and its refusals,
         # so that a standing condition is not said again at every exchange.
@@ -971,8 +980,11 @@ class CloudSync:
             "programsEnabled": self._programs_enabled,
             "software_version": self._software_version,
             "contract_version": CONTRACT_VERSION,
-            # This console has neither yet: said to be absent, not left out.
-            "medical_parameters_version": None,
+            # The signed version, or null: an unsigned file vouches for no version.
+            "medical_parameters_version": (
+                None if self._medical is None else self._medical.announced_version
+            ),
+            # This console has none yet: said to be absent, not left out.
             "config_hash": None,
         }
         session = self.current_session_id
@@ -1074,7 +1086,10 @@ class CloudSync:
     # --- launches from the dashboard ---------------------------------------
 
     async def _poll(self, now: Monotonic) -> None:
-        if not self._programs_enabled or self._runtime.state in (
+        # In the bench mode programmes are off, and a launch is still asked for:
+        # the panel refuses it, saying the medical parameters are not signed.
+        bench_mode = self._medical is not None and not self._medical.signed
+        if (not self._programs_enabled and not bench_mode) or self._runtime.state in (
             RuntimeState.RUNNING,
             RuntimeState.ENDING,
         ):

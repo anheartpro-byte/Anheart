@@ -527,7 +527,7 @@ def arm_windows(result: RunResult) -> tuple[ArmWindow, ...]:
 
 
 def check_motion_limits(result: RunResult, *, at_leg_tip: bool = False) -> tuple[Violation, ...]:
-    """The anti-nausea limits (config/motion_limits.json), judged on the MEASURED arm.
+    """The anti-nausea limits (config/medical_parameters.json), judged on the MEASURED arm.
 
     Angular acceleration always; g-dot at the reference radius, or - with
     ``at_leg_tip`` - at the leg tip, where the same speed change moves the load

@@ -79,12 +79,12 @@ from simulation.tracefile import Event, FinalState, Row, Trace, frame_to_json
 from src.bitalino_client import SampleBatch
 from src.clock import Clock, SimClock
 from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, treat_ecg
-from src.local_config import OCCUPIED_INITIAL_RESULTANT_G
 from src.local_panel import (
     describe_reset_refusal,
     describe_start_refusal,
     describe_target_refusal,
 )
+from src.medical import SHIPPED_PARAMETERS
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
 from src.record import commands
 from src.record.schema import EventKind, Manifest
@@ -92,8 +92,8 @@ from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.sim.physiology import Physiology, SubjectState
-from src.training.motion import MotionLimits, load_motion_limits
-from src.training.plan import INITIAL_REV, SHIPPED_DEFAULTS_PATH, Program, TrainingProfile
+from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits
+from src.training.plan import INITIAL_REV, Program, TrainingProfile
 from src.training.runtime import (
     RuntimeLimits,
     RuntimeState,
@@ -104,7 +104,6 @@ from src.training.runtime import (
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import (
-    Bpm,
     Metres,
     Millivolts,
     Monotonic,
@@ -137,11 +136,11 @@ RUNTIME_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
 )
 """Mirrors ``src.local_panel.RUNTIME_LIMITS`` (asserted equal in the tests)."""
 
-PANEL_SAFETY: Final[SafetyLimits] = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
-"""Mirrors ``src.local_panel.PANEL_HARD_MAX_BPM`` / ``PANEL_CRITICAL_BPM`` for manual sessions."""
-
-MOTION_LIMITS_PATH: Final = SHIPPED_DEFAULTS_PATH.parent / "motion_limits.json"
-"""``raspberry-pi/config/motion_limits.json``: the anti-nausea limits, as shipped."""
+PANEL_SAFETY: Final[SafetyLimits] = SafetyLimits(
+    hard_max_bpm=SHIPPED_PARAMETERS.hr_hard_max_bpm,
+    critical_bpm=SHIPPED_PARAMETERS.hr_critical_bpm,
+)
+"""The console's tiers for a manual session: those of ``config/medical_parameters.json``."""
 
 ECG_SAMPLE_RATE: Final[int] = 1000
 DSP_OUTPUT_RATE: Final[int] = 250
@@ -168,11 +167,13 @@ DSP_ONLY_ACTIONS: Final[tuple[type[object], ...]] = (BitalinoSignal,)
 
 
 def load_motion() -> MotionLimits:
-    """The shipped motion limits. Raises ``ValueError`` when unusable, as the console does."""
-    loaded = load_motion_limits(MOTION_LIMITS_PATH)
-    if isinstance(loaded, Err):
-        raise ValueError(f"motion limits unusable: {loaded.error}")
-    return loaded.value
+    """The shipped motion limits: the ``motion_limits`` of ``config/medical_parameters.json``.
+
+    Read and checked when :mod:`src.medical` and :mod:`src.training.motion` are
+    imported: a file the console could not use stops the simulation there, as
+    it stops the console.
+    """
+    return DEFAULT_MOTION_LIMITS
 
 
 # =========================================================================
@@ -414,12 +415,12 @@ def _safety_for(profile: TrainingProfile | None) -> SafetyLimits:
 
 
 def _manual_ceiling(scenario: Scenario, rig: RigGeometry) -> MotorRpm | None:
-    """``LocalConfig.ceiling_for``: the bench ceiling, or the first-trial 1.2 g if occupied."""
+    """``LocalConfig.ceiling_for``: the bench ceiling, or the medical file's ceiling if occupied."""
     if scenario.kind is not SessionKind.MANUAL:
         return None
     ceiling = scenario.manual.ceiling
     if scenario.manual.occupancy is Occupancy.OCCUPIED:
-        trial = rig.machine.motor_rpm_for(OCCUPIED_INITIAL_RESULTANT_G)
+        trial = rig.machine.motor_rpm_for(SHIPPED_PARAMETERS.occupied_ceiling_g)
         ceiling = MotorRpm(min(ceiling, trial))
     return ceiling
 

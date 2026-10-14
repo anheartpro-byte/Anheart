@@ -191,6 +191,9 @@ class Stamp:
     software_version: str
     config_hash: str
     medical_parameters_version: str
+    medical_warning: str | None = None
+    """The bench mode's sentence when the medical parameters are not signed: written
+    as a ``warning`` event at the start of every record. ``None``: they are."""
 
 
 def _digest(document: JsonValue) -> str:
@@ -212,16 +215,23 @@ def stamp_for(
     the one value the manifest, the console's page and the heartbeat all carry.
     It is a fact about the build, not a setting, and is in neither hash.
 
-    ``medical_parameters_version`` covers what a medical decision set: the
-    cardiac tiers and every other safety limit, the minimum rider age and the
-    motion (anti-nausea) limits. ``config_hash`` covers that and the rest of
-    what shapes a session: geometry, ceilings, gates, sources, the drive link.
-    The dashboard key and the console token are in neither.
+    ``medical_parameters_version`` is the version of the signed medical file
+    (``config/medical_parameters.json``) the console runs with; when its
+    signature does not verify, ``unsigned-sha256:`` and the digest of the file,
+    which an unsigned file cannot fake, and the record opens with a warning
+    (:attr:`Stamp.medical_warning`). ``config_hash`` covers what shapes a
+    session: the safety limits, the motion limits, the minimum rider age and
+    that same file's digest and verdict, then geometry, ceilings, gates,
+    sources, the drive link. The dashboard key and the console token are not
+    in it.
     """
+    status = config.medical
     medical: JsonValue = {
         "safety": _SAFETY.dump_json(safety).decode("utf-8"),
         "motion": _MOTION.dump_json(motion).decode("utf-8"),
         "min_rider_age": config.min_rider_age,
+        "file_sha256": status.document.sha256,
+        "signed": status.signed,
     }
     link = config.drive_link
     applied: JsonValue = {
@@ -249,7 +259,8 @@ def stamp_for(
         organization_id=record.organization_id,
         software_version=software_version,
         config_hash=_digest(applied),
-        medical_parameters_version=_digest(medical),
+        medical_parameters_version=status.recorded_version,
+        medical_warning=status.warning,
     )
 
 
@@ -645,6 +656,10 @@ class SessionRecorder:
             f"{kind} session started",
             operator_alias(request.operator),
         )
+        warning = self._stamp.medical_warning
+        if warning is not None:
+            # Every record of a console in bench mode says so, first thing.
+            self._event(live, live.origin, EventKind.WARNING, warning, SYSTEM)
 
     def _wall_trusted(self) -> bool | None:
         """Whether the wall clock that dates the record being opened is kept by a time service.

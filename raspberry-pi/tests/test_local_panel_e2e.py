@@ -183,7 +183,7 @@ OPERATOR: Final[str] = "dr. attending"
 RATIO: Final[float] = 49.79
 MIN_RUN: Final[int] = 55
 RATE: Final[float] = 0.25 * RATIO
-"""The motion limits of config/motion_limits.json, in motor rpm per second."""
+"""The motion limits of config/medical_parameters.json, in motor rpm per second."""
 
 
 def _client(panel: LocalPanel) -> httpx.AsyncClient:

@@ -55,8 +55,10 @@ RUN pip install --no-cache-dir --require-hashes -r requirements-build-lock.txt &
 # Fail the build early if the on-device DSP stack didn't install correctly.
 RUN python -c "from biosppy.signals import ecg; from scipy import signal; print('DSP stack OK')"
 
-# Copy application code, and the shipped presets and motion limits the console
-# loads at startup (config/ sits next to src/, see src/training/plan.py).
+# Copy application code, and the shipped presets and the signed medical
+# parameters the console loads at startup (config/ sits next to src/, see
+# src/training/plan.py and src/medical.py): the medical file, its signature and
+# the public key travel together, byte for byte.
 COPY src/ ./src/
 COPY config/ ./config/
 # The build's version (src/contract.py): shown on the console's page, announced

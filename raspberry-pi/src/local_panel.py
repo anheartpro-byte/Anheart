@@ -182,8 +182,6 @@ from src.ecg_pipeline import (
 from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
-    DEFAULT_HR_CRITICAL_BPM,
-    DEFAULT_HR_HARD_MAX_BPM,
     KEY_UI_TLS_CERT,
     KEY_UI_TLS_KEY,
     RETIRED_KEYS,
@@ -251,7 +249,7 @@ from src.sim.physiology import Physiology
 from src.sim.signals.base import SignalGenerator
 from src.sim.signals.registry import generator_for
 from src.telemetry import TelemetryHub
-from src.training.motion import MotionLimits, load_motion_limits
+from src.training.motion import MotionLimits
 from src.training.plan import (
     SHIPPED_DEFAULTS_PATH,
     ProfileStore,
@@ -333,12 +331,6 @@ ECG_SAMPLE_RATE: Final[int] = 1000
 DSP_OUTPUT_RATE: Final[int] = 250
 """The DSP decimates to 250 Hz, the telemetry ring's own rate."""
 
-PANEL_HARD_MAX_BPM: Final[Bpm] = DEFAULT_HR_HARD_MAX_BPM
-PANEL_CRITICAL_BPM: Final[Bpm] = DEFAULT_HR_CRITICAL_BPM
-"""The default cardiac tiers, those of ``config/profiles.default.json``. The
-supervisor is built with ``LocalConfig.tiers`` (``HR_HARD_MAX_BPM`` /
-``HR_CRITICAL_BPM``); a start refuses a profile that disagrees with them."""
-
 SENSOR_PERIOD: Final[Seconds] = Seconds(1.0)
 """Every sensor window is re-processed once a second, off the loop."""
 
@@ -364,7 +356,7 @@ RUNTIME_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
 )
 """The machine's commissioning slew (15 motor rpm/s), for a programme's control law.
 
-A manual session moves at the motion limits instead (``config/motion_limits.json``)."""
+A manual session moves at the motion limits instead (``config/medical_parameters.json``)."""
 
 PROGRAMS_DISABLED: Final[str] = (
     "seances programmees desactivees (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL"
@@ -647,6 +639,7 @@ class PanelReporter:
             wall_clock=None if wall_clock is None else wall_clock.current(),
             service=IN_SERVICE if service is None else service.status(),
             watchdog=self._watchdog.status(),
+            medical=config.medical,
         )
 
 
@@ -1101,7 +1094,8 @@ class LocalPanel:
 
         Before anything: a console out of service arms nothing. After the
         ceiling, the rider: a person on board is a rider the riders' list
-        holds now, at least ``MIN_RIDER_AGE`` (:meth:`_on_board_refusal`), and
+        holds now, at least the medical file's ``min_rider_age``
+        (:meth:`_on_board_refusal`), and
         the bench names nobody (:meth:`_manual_rider`).
         """
         occupancy = command.occupancy
@@ -1199,10 +1193,11 @@ class LocalPanel:
     async def _start_programme(self, command: StartSession) -> None:
         """A programmed session: every gate in order of increasing commitment, then arm.
 
-        1. programmes enabled in this build (``PROGRAMS_ENABLED``, milestone M5),
-           a rider whose maximum heart rate and age are known (:meth:`_rider_for`:
-           for a start at the console, a rider the riders' list holds now, with
-           both values set on the site), and an age at least ``MIN_RIDER_AGE``;
+        1. signed medical parameters, programmes enabled in this build
+           (``PROGRAMS_ENABLED``, milestone M5), a rider whose maximum heart
+           rate and age are known (:meth:`_rider_for`: for a start at the
+           console, a rider the riders' list holds now, with both values set on
+           the site), and an age at least the medical file's ``min_rider_age``;
         2. a person is on board by definition - the heart rate drives the speed -
            so the OCCUPIED ceiling must exist (``OCCUPANCY_OCCUPIED_ENABLED``,
            milestone M6);
@@ -1291,11 +1286,19 @@ class LocalPanel:
 
     def _admitted(self, rider: Result[RiderFacts, str]) -> Result[RiderFacts, str]:
         """Gate 1, before the machine is asked anything: the console is in service
-        (whether the start is typed here or comes down from the dashboard),
-        programmes are enabled, the rider is known and old enough."""
+        (whether the start is typed here or comes down from the dashboard), its
+        medical parameters are signed, programmes are enabled, the rider is
+        known and old enough.
+
+        Unsigned medical parameters are said before ``PROGRAMS_ENABLED``: in
+        the bench mode that flag is false because of them, and the reason a
+        launch from the dashboard is refused is the one sent back to it."""
         out = self._service_refusal()
         if out is not None:
             return Err(out)
+        unsigned = self._config.medical.warning
+        if unsigned is not None:
+            return Err(unsigned)
         if not self._config.programs_enabled:
             return Err(PROGRAMS_DISABLED)
         if isinstance(rider, Err):
@@ -1679,20 +1682,6 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
     raise assert_never(config.ecg_source)
 
 
-def load_panel_motion_limits(config: LocalConfig) -> MotionLimits:
-    """The motion limits file, relative to ``raspberry-pi/``. Raises ``ValueError`` when unusable.
-
-    Refusing to start beats starting with limits nobody signed: every manual
-    ramp is walked through these numbers.
-    """
-    path = config.motion_limits_path
-    resolved = path if path.is_absolute() else PROJECT_ROOT / path
-    loaded = load_motion_limits(resolved)
-    if isinstance(loaded, Ok):
-        return loaded.value
-    raise ValueError(f"the motion limits cannot be used: {loaded.error}")
-
-
 def build_panel(
     config: LocalConfig,
     *,
@@ -1758,7 +1747,7 @@ def build_panel(
     # What the dashboard link hears of itself, for the page. The link writes
     # it from its own task, the page's route reads it: both on the event loop.
     link_health = None if config.cloud is None else LinkHealth(clock.monotonic())
-    motion = load_panel_motion_limits(config)
+    motion = config.motion
     drive = build_drive(config, clock) if drive is None else drive
     safety = SafetyLimits(
         hard_max_bpm=config.tiers.hard_max_bpm, critical_bpm=config.tiers.critical_bpm
@@ -1857,6 +1846,7 @@ def build_panel(
         motion_enabled=True,
         panel=reporter,
         programs_enabled=config.programs_enabled,
+        medical_refusal=config.medical.warning,
         ceilings=config.ceiling_for,
         sensors=sensor_hub,
         presence=presence,
@@ -1898,6 +1888,7 @@ def build_panel(
             store=store,
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
+            medical=config.medical,
             software_version=version,
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
@@ -2169,7 +2160,10 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
     if age is None:
         return "demarrage refuse : age du passager requis pour une seance programmee"
     if age < minimum:
-        return f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans (MIN_RIDER_AGE)"
+        return (
+            f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans "
+            "(min_rider_age des parametres medicaux)"
+        )
     return None
 
 
@@ -2413,10 +2407,13 @@ def describe_config(config: LocalConfig) -> str:
     modes = "MANUEL + PROGRAMMES" if config.programs_enabled else "MANUEL BANC"
     tiers = config.tiers
     dashboard = "aucun" if config.cloud is None else config.cloud.url
+    medical = config.medical
+    signed = "signes" if medical.signed else "NON SIGNES"
     return (
         f"Console du banc sur {web.scheme}://{web.host}:{web.port}/ - {modes} "
         f"(plafond {config.motor_max_rpm} tr/min moteur; paliers "
-        f"{tiers.hard_max_bpm}/{tiers.critical_bpm} bpm) - "
+        f"{tiers.hard_max_bpm}/{tiers.critical_bpm} bpm; parametres medicaux "
+        f"{medical.version} {signed}) - "
         f"variateur: {drive} - ECG ({config.ecg_source.value}): {ecg} - "
         f"rayon {config.geometry.radius} m, i = {config.geometry.ratio} - "
         f"tableau de bord: {dashboard}"
@@ -2462,6 +2459,9 @@ def main(environ: Mapping[str, str] | None = None) -> int:
         _logger.error("configuration: %s: %s", unserved.key, unserved.detail)
         return EXIT_CONFIG
     _logger.warning("%s", describe_config(config))
+    unsigned = config.medical.warning
+    if unsigned is not None:
+        _logger.error("medical parameters: %s", unsigned)
     return asyncio.run(
         run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
     )

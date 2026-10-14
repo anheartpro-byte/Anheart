@@ -60,6 +60,13 @@ else
             fail "UI_HOST=$host needs UI_TLS_CERT and UI_TLS_KEY (sudo bash scripts/pi/make_console_tls.sh makes the certificate)"
         fi
     fi
+    # The medical values are in config/medical_parameters.json, signed (ANH-139):
+    # the console refuses to start while a .env still sets one of its own.
+    for key in HR_HARD_MAX_BPM HR_CRITICAL_BPM MIN_RIDER_AGE MOTION_LIMITS_PATH; do
+        if [ -n "$(value "$key")" ]; then
+            fail "$key is no longer read: the medical values are in config/medical_parameters.json, signed; remove this line"
+        fi
+    done
     if [ "$(value OCCUPANCY_OCCUPIED_ENABLED)" = "true" ] || [ "$(value PROGRAMS_ENABLED)" = "true" ]; then
         warn "a person on board or programmes are enabled: check the milestone sign-off (M5/M6)"
     fi

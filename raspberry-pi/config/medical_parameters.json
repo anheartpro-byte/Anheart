@@ -1,0 +1,22 @@
+{
+  "_comment": "[MED] Parametres medicaux de la console, tous a valider par l'equipe medicale (ANH-98). Signe par medical_parameters.sig, verifie avec medical.pub au demarrage de la console : un octet change ici sans nouvelle signature met la console en mode banc seulement. Signataire actuel : cle de test, a remplacer par la cle medicale d'ANH-98. Unites dans le nom de chaque cle (bpm, s, g, tr/min). motion_limits : output_rpm_per_s acceleration angulaire du bras (0,25 = 12,4 tr/min/s moteur avec i = 49,79), g_per_s vitesse de variation de la charge centripete, min_run_motor_rpm plus petite consigne non nulle (55 = 1,1 tr/min de sortie), max_interval_s plus long intervalle qu'un pas de consigne peut payer.",
+  "version": "0.1.0",
+  "issued_at": "2026-10-14",
+  "signed_by": "cle-de-test",
+  "parameters": {
+    "hr_hard_max_bpm": 148,
+    "hr_critical_bpm": 158,
+    "min_rider_age": 18,
+    "occupied_ceiling_g": 1.2,
+    "zone_ceiling_fraction": 0.9,
+    "hr_max_formula": "tanaka",
+    "motion_limits": {
+      "output_rpm_per_s": 0.25,
+      "g_per_s": 0.03,
+      "min_run_motor_rpm": 55,
+      "max_interval_s": 1.0
+    },
+    "recovery_min_s": 60.0,
+    "cooldown_min_s": 4.0
+  }
+}

@@ -1,1 +1,6 @@
 CAO/Gaura_Assy_2907.STEP filter=lfs diff=lfs merge=lfs -text
+# The medical parameters are signed byte for byte (raspberry-pi/src/medical.py):
+# no line-ending conversion on any checkout, or the signature no longer verifies.
+raspberry-pi/config/medical_parameters.json -text
+raspberry-pi/config/medical_parameters.sig binary
+raspberry-pi/config/medical.pub -text

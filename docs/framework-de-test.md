@@ -52,7 +52,7 @@ La simulation **ne réimplémente pas** la machine. Elle prend dans
 | le cœur du passager (réponse au g, retard, dérive, événements scriptés) | `sim/physiology.py` (`Physiology`) |
 | ECG, BITalino, traitement du signal (mode `dsp`) | `sim/bitalino.py`, `sim/ecg.py`, `signal_processing.py` via `ecg_pipeline.EcgBridge` |
 | géométrie et conversions d'unités | `geometry.py`, `units.py` |
-| programmes, profils, limites anti-nausée | `training/plan.py`, `config/profiles.default.json`, `config/motion_limits.json` |
+| programmes, profils, limites anti-nausée | `training/plan.py`, `config/profiles.default.json`, `config/medical_parameters.json` (signé, lu par `src/medical.py`) |
 
 La simulation ajoute seulement : la boucle, les actions de scénario, un
 enregistreur de toutes les trames envoyées au variateur, un modèle rapide de
@@ -795,7 +795,7 @@ min, AUTO `standard_30_min`, MANUEL 27 tr/min au banc}. Avant une séance AUTO,
 le programme est résolu pour la FC max du sujet par `ProfileStore.resolve` (le
 même appel que la console fait pour un lancement depuis le tableau de bord),
 qui doit refuser exactement quand `zone_high > 0,9 × FCmax` ; les sujets sous
-`MIN_RIDER_AGE` (18 par défaut) sont refusés. Pour les séances AUTO : jamais
+l'âge minimum du fichier médical (18 ans) sont refusés. Pour les séances AUTO : jamais
 au-dessus du plafond du programme ; `hr_drop` doit se déclencher pour un sujet
 à malaise vagal, et **ne doit pas** se déclencher (ni `hr_critical`) pour les
 autres.

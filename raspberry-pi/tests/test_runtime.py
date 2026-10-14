@@ -191,6 +191,7 @@ RIG_MOTION: Final[MotionLimits] = MotionLimits(
     output_accel=OutputRpmPerSecond(1.4),
     g_rate=GLoadPerSecond(0.5),
     min_run=MotorRpm(55),
+    max_interval=Seconds(1.0),
 )
 """The accelerated rig's anti-nausea limits: every programme setpoint change now walks them.
 
