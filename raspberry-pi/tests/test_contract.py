@@ -25,6 +25,7 @@ from hypothesis import strategies as st
 
 from src import contract
 from src.contract import (
+    ARMING_REFUSALS,
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
@@ -80,6 +81,18 @@ def test_ex1_the_code_of_a_refused_contract_is_one_of_the_shared_codes() -> None
     # And they are, all of them and no other, what this console takes for the
     # dashboard's own refusal.
     assert set(cast("dict[str, object]", codes)) == STABLE_CODES
+
+
+def test_ex1_the_refusals_of_a_start_are_the_shared_file_s() -> None:
+    refusals = shared()["arming_refusals"]
+    assert isinstance(refusals, dict)
+    listed = cast("dict[str, object]", refusals)
+    assert listed["route"] == "POST /api/machine/training/start"
+    assert listed["status"] == 409
+    codes = listed["codes"]
+    assert isinstance(codes, list)
+    assert set(cast("list[str]", codes)) == ARMING_REFUSALS
+    assert ARMING_REFUSALS <= STABLE_CODES
 
 
 # =========================================================================

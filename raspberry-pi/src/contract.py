@@ -21,6 +21,15 @@ body over the route's size. A console of an earlier minor reads the first as
 a refusal about the link, as it always read a 429: nothing is dropped, and the
 same request is made again later.
 
+Since 1.5 the dashboard checks a launch again when the console confirms its
+start, and may refuse it: 409 with one of :data:`ARMING_REFUSALS` (rights
+withdrawn, the launch expired, the rider's age or maximum heart rate changed,
+the rider in another session). The launch is then failed on the dashboard.
+This console confirms a launch after arming it, and reads that answer as it
+reads any refusal of its confirmation (:mod:`src.record_uplink`): it stops the
+session at once, on the ordinary ramp. Not arming at all is the console's
+part of ANH-144, still to come.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -63,7 +72,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.4")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.5")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -81,6 +90,20 @@ RATE_LIMITED: Final[ErrorCode] = ErrorCode("rate_limited")
 PAYLOAD_TOO_LARGE: Final[ErrorCode] = ErrorCode("payload_too_large")
 """The code of the 413 a server answers a body over a route's size."""
 
+ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
+    {
+        ErrorCode("expired_before_start"),
+        ErrorCode("machine_deleted_before_start"),
+        ErrorCode("organization_changed_before_start"),
+        ErrorCode("right_revoked_before_start"),
+        ErrorCode("age_refused_before_start"),
+        ErrorCode("hr_max_changed_before_start"),
+        ErrorCode("rider_busy"),
+    }
+)
+"""The codes of the 409 a server answers a start it refuses (contract 1.5,
+``arming_refusals`` of the shared file). Pinned to the shared file."""
+
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {
         CONTRACT_UNSUPPORTED,
@@ -92,6 +115,7 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("request_failed"),
         RATE_LIMITED,
         PAYLOAD_TOO_LARGE,
+        *ARMING_REFUSALS,
     }
 )
 """Every stable code the dashboard refuses a request under. Pinned to the shared file.

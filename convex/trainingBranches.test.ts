@@ -170,7 +170,11 @@ describe("a launch is refused when the machine cannot take it", () => {
     [
       "is already in a session",
       { status: "in_session" },
-      "Machine is already in a session",
+      // ANH-144: a stable code, which the site words (`errors.machine_busy`).
+      JSON.stringify({
+        code: "machine_busy",
+        message: "This machine already has a session waiting or running",
+      }),
     ],
     ["has its programmes disabled", { programsEnabled: false }, PROGRAMMES_OFF],
     [
@@ -1553,6 +1557,7 @@ describe("what a machine reports through its routes", () => {
         organizationId: w.organizationId,
         machineId: w.machine,
         userId: w.patient,
+        startedById: w.patient,
         status: "pending",
         startedAt: NOW,
         channels: ["ECG"],
