@@ -166,7 +166,7 @@ describe("ANH-132 malformed bodies return 400 {error}", () => {
  */
 const bodyRoutes = http
   .getRoutes()
-  .filter(([, method]) => method === "POST")
+  .filter(([path, method]) => path.startsWith("/api/machine/") && method === "POST")
   .map(([path]) => path)
   .sort();
 

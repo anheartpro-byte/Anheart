@@ -141,7 +141,7 @@ données doit recevoir **une fois** la migration, juste après le code :
 npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'
 ```
 
-Elle n'a encore été lancée sur aucun déploiement.
+Cette procédure reste à exécuter et vérifier en production (ANH-82).
 
 **Entre le déploiement du code et la fin de la migration**, aucune ligne n'a
 encore d'organisation. Pendant cet intervalle :
@@ -161,6 +161,8 @@ encore d'organisation. Pendant cet intervalle :
 **Consigne : déployer quand aucune séance n'est en cours, et lancer la
 migration aussitôt.** Procédure complète, variable `ANHEART_ORG_ID` et
 réglages Clerk : [convex.md](convex.md#activer-le-multi-organisation).
+Le webhook du miroir se configure ensuite par environnement, avec son propre
+secret et une livraison signée vérifiée : [procédure Clerk](convex.md#webhook-clerk-vers-le-miroir).
 
 ### 3.2 Vérifier un déploiement sans navigateur
 

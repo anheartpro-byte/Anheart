@@ -437,10 +437,8 @@ describe("EX-2 first sign-in mirrors the membership the token carries", () => {
     expect(listedInA.map((u) => u._id)).not.toContain(userId);
   });
 
-  it("updates the mirror of an existing account without moving its main organisation", async () => {
+  it("keeps an inactive membership unchanged when an existing account presents a token", async () => {
     const w = await seedWorld(modules);
-    // `stranger` is a patient of centre A; Clerk now also makes them a
-    // gestionnaire of centre B, and their old membership there was inactive.
     await w.t.run((ctx) =>
       ctx.db.insert("memberships", {
         userId: w.stranger,
@@ -461,12 +459,12 @@ describe("EX-2 first sign-in mirrors the membership the token carries", () => {
     expect(userId).toBe(w.stranger);
     const { user, memberships } = await mirrorOf(w, "stranger");
     expect(user?.organizationId).toBe(w.orgA);
-    expect(user?.role).toBe("gestionnaire");
+    expect(user?.role).toBe("user");
     expect(memberships).toHaveLength(2);
     expect(memberships).toContainEqual({
       organizationId: w.orgB,
-      role: "gestionnaire",
-      active: true,
+      role: "user",
+      active: false,
     });
     expect(memberships).toContainEqual({
       organizationId: w.orgA,

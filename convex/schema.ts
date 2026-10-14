@@ -89,6 +89,9 @@ export default defineSchema({
     // Absent only on the default organisation created by the migration, until
     // it is linked to the Clerk organisation named by ANHEART_ORG_ID.
     clerkOrgId: v.optional(v.string()),
+    clerkUpdatedAt: v.optional(v.number()),
+    clerkEventAt: v.optional(v.number()),
+    deletedAt: v.optional(v.number()),
     name: v.string(),
     slug: v.string(),
     createdAt: v.number(),
@@ -103,6 +106,9 @@ export default defineSchema({
   // Memberships - mirror of Clerk organisation memberships. A user may belong
   // to several organisations; `active: false` keeps the trace of a removal.
   memberships: defineTable({
+    clerkMembershipId: v.optional(v.string()),
+    clerkUpdatedAt: v.optional(v.number()),
+    clerkEventAt: v.optional(v.number()),
     userId: v.id("users"),
     organizationId: v.id("organizations"),
     role: organizationRoleValidator,
@@ -111,6 +117,11 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_organization", ["organizationId"])
     .index("by_user_and_organization", ["userId", "organizationId"]),
+
+  clerk_webhook_events: defineTable({
+    eventId: v.string(),
+    receivedAt: v.number(),
+  }).index("by_event_id", ["eventId"]),
 
   // Users - Extended Clerk user data with roles and relationships
   users: defineTable({
