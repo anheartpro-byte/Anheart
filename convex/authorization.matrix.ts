@@ -719,7 +719,9 @@ export const MATRIX: Entry[] = [
     id: "users.listGestionnaires",
     ref: api.users.listGestionnaires,
     kind: "query",
-    build: async () => ({}),
+    // "foreign": centre A named from centre B, to narrow the list to it.
+    build: async (w, _actor, scope) =>
+      scope === "foreign" ? { organizationId: w.orgA } : {},
     onSuccess: (res, w) => {
       expectExactly(
         ids(res),
@@ -741,6 +743,7 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "all gestionnaires" },
       { actor: "orgAdmin", expect: filtered, note: "the gestionnaires of centre A only" },
       { actor: "orgBAdmin", expect: filtered, note: "the gestionnaires of centre B only" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "[] when centre B names centre A" },
       { actor: "orgBManager", expect: empty, note: "[] for a non-admin" },
     ],
   },
@@ -2336,6 +2339,31 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "admin reads the register" },
       { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
       { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
+    ],
+  },
+
+  // =========================================================================
+  // organizations.ts
+  // =========================================================================
+  {
+    id: "organizations.listOrganizations",
+    ref: api.organizations.listOrganizations,
+    kind: "query",
+    build: async () => ({}),
+    onSuccess: (res, w) => {
+      expectExactly(
+        ids(res),
+        [w.anheartOrg, w.orgA, w.orgB],
+        "Organisations listed to the Anheart admin",
+      );
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: empty, note: "[]: only the Anheart admin creates machines" },
+      { actor: "manager", expect: empty, note: "[]: only the Anheart admin creates machines" },
+      { actor: "admin", expect: ok, note: "every organisation, to create a machine in" },
+      { actor: "orgAdmin", expect: empty, note: "[]: an organisation admin works in their own" },
+      { actor: "orgBAdmin", expect: empty, note: "[]: centre B lists no organisation" },
     ],
   },
 

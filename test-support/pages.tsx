@@ -350,6 +350,11 @@ export function account(
             name: "Centre A",
             slug: "centre-a",
           },
+    // A deployment before ANHEART_ORG_ID: the membership of the account is
+    // granted without an organisation claim, and roles change on the site.
+    organizationAccess: "granted",
+    organizationClaim: null,
+    rolesManagedInClerk: false,
     gestionnaireId: undefined,
     firstName,
     lastName,

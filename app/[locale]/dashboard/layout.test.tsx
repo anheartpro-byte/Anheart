@@ -25,6 +25,13 @@ vi.mock("@/components/dashboard/Header", async () => ({
 vi.mock("@/components/ui/light-rays", async () => ({
   LightRays: (await import("@/test-support/pages")).standIn("LightRays"),
 }));
+// What the gate draws has its own tests: here it lets the page through.
+vi.mock("@/components/dashboard/OrganizationGate", async () => ({
+  OrganizationGate: (await import("@/test-support/pages")).standIn(
+    "OrganizationGate",
+    ({ children }: { children?: ReactNode }) => children,
+  ),
+}));
 
 /** The frame every page of the dashboard is drawn in, in a browser. */
 

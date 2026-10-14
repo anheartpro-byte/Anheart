@@ -133,6 +133,7 @@ describe("ANH-132 completeness of the authorization matrix", () => {
     expect(withoutForeignCell).toEqual([
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
+      "organizations.listOrganizations", // Anheart admin only; [] to centre B
       "sessions.getCompletedSessionsForUser",
       "softwareReleases.listReleases", // Anheart-wide register, Anheart admin only
       "softwareReleases.recordRelease", // Anheart-wide register, Anheart admin only
@@ -140,7 +141,6 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       "users.createPatient", // creates in the caller's organisation
       "users.getCurrentUser",
       "users.getOrCreateUser",
-      "users.listGestionnaires",
       "users.updateUserProfile",
     ]);
   });

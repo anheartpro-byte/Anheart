@@ -10,6 +10,7 @@ import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { submitGestionnaireList } from "@/lib/machineForm";
+import { isAnheartAdmin } from "@/lib/organizationAccess";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,6 +21,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Form,
   FormControl,
@@ -37,6 +45,8 @@ const createMachineSchema = (messages: { nameRequired: string }) =>
     name: z.string().min(1, messages.nameRequired).max(100),
     location: z.string().max(200).optional(),
     gestionnaireIds: z.array(z.string()).optional(),
+    // Creation by the Anheart admin only: the machine's organisation.
+    organizationId: z.string().optional(),
   });
 
 type MachineFormValues = z.infer<ReturnType<typeof createMachineSchema>>;
@@ -46,6 +56,7 @@ interface MachineFormModalProps {
   onOpenChange: (open: boolean) => void;
   machine?: {
     _id: Id<"machines">;
+    organizationId?: Id<"organizations">;
     name: string;
     location?: string;
     gestionnaires?: Array<{
@@ -70,8 +81,29 @@ export function MachineFormModal({
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const gestionnaires = useQuery(api.users.listGestionnaires);
   const currentUser = useQuery(api.users.getCurrentUser);
+  // Only the Anheart admin creates machines, in any organisation: they choose
+  // it. Everyone else works in the organisation of the machine, or their own.
+  const choosesOrganization =
+    !isEditing && isAnheartAdmin(currentUser?.role);
+  const organizations = useQuery(
+    api.organizations.listOrganizations,
+    choosesOrganization ? {} : "skip",
+  );
+  const [chosenOrganization, setChosenOrganization] = useState<
+    Id<"organizations"> | undefined
+  >(undefined);
+  const machineOrganization = isEditing
+    ? machine.organizationId
+    : choosesOrganization
+      ? (chosenOrganization ?? currentUser?.organization?._id)
+      : undefined;
+  // Only the gestionnaires of the machine's organisation can be assigned: the
+  // server leaves out any other, so the form does not offer them.
+  const gestionnaires = useQuery(
+    api.users.listGestionnaires,
+    machineOrganization ? { organizationId: machineOrganization } : {},
+  );
   const createMachine = useMutationWithFeedback(api.machines.createMachine);
   const updateMachine = useMutationWithFeedback(api.machines.updateMachine);
   const assignMachineToGestionnaires = useMutationWithFeedback(
@@ -98,6 +130,7 @@ export function MachineFormModal({
   // Reset form when machine changes or modal opens
   useEffect(() => {
     if (open) {
+      setChosenOrganization(undefined);
       form.reset({
         name: machine?.name ?? "",
         location: machine?.location ?? "",
@@ -142,6 +175,7 @@ export function MachineFormModal({
           name: values.name,
           location: values.location || undefined,
           gestionnaireIds: values.gestionnaireIds as Id<"users">[] | undefined,
+          organizationId: machineOrganization,
         },
         { success: t("machines.createSuccess") },
       );
@@ -261,6 +295,39 @@ export function MachineFormModal({
                 </FormItem>
               )}
             />
+
+            {/* Organisation of a new machine (Anheart admin) */}
+            {choosesOrganization && organizations && organizations.length > 0 && (
+              <FormItem>
+                <FormLabel>{t("machines.form.organization")}</FormLabel>
+                <Select
+                  value={machineOrganization}
+                  onValueChange={(value) => {
+                    setChosenOrganization(value as Id<"organizations">);
+                    // The boxes were those of the previous organisation.
+                    form.setValue("gestionnaireIds", []);
+                  }}
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue
+                        placeholder={t("machines.form.organizationPlaceholder")}
+                      />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {organizations.map((organization) => (
+                      <SelectItem key={organization._id} value={organization._id}>
+                        {organization.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  {t("machines.form.organizationDescription")}
+                </FormDescription>
+              </FormItem>
+            )}
 
             {/* Gestionnaire Assignment (for admin creating/editing) */}
             {gestionnaires && gestionnaires.length > 0 && (

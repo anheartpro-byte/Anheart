@@ -3,6 +3,11 @@
 import { useState, use } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import {
+  isAnheartAdmin,
+  isOrganizationAdmin,
+  isStaff,
+} from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
@@ -84,8 +89,10 @@ export default function MachineDetailPage({
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
-  const canManage = user?.role === "admin" || user?.role === "gestionnaire";
-  const isAdmin = user?.role === "admin";
+  const canManage = isStaff(user?.role);
+  // Restoring a machine is the Anheart admin's; the other admin rights are
+  // also those of an organisation admin (lib/organizationAccess.ts).
+  const isAdmin = isAnheartAdmin(user?.role);
 
   const handleDelete = async () => {
     const result = await deleteMachine(
@@ -311,11 +318,14 @@ export default function MachineDetailPage({
       )}
 
       {/* Launch rights - admins and gestionnaires of this machine */}
-      {(canManage || user?.role === "org_admin") && !machine.isDeleted && (
+      {canManage && !machine.isDeleted && (
         <MachineHealthCard machineId={machineId} />
       )}
       {canManage && !machine.isDeleted && (
-        <LaunchRightsCard machineId={machineId} isAdmin={isAdmin} />
+        <LaunchRightsCard
+          machineId={machineId}
+          isAdmin={isOrganizationAdmin(user?.role)}
+        />
       )}
 
       {/* Danger Zone - Only show if not deleted */}

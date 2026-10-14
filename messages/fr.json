@@ -137,7 +137,8 @@
     "benefits": "Avantages",
     "markets": "Marchés",
     "faq": "FAQ",
-    "myMachines": "Mes machines"
+    "myMachines": "Mes machines",
+    "members": "Membres"
   },
   "sidebar": {
     "main": "Principal",
@@ -188,7 +189,9 @@
     "changePassword": "Changer le mot de passe",
     "twoFactor": "Authentification à deux facteurs",
     "saveChanges": "Enregistrer les modifications",
-    "saved": "Paramètres enregistrés avec succès"
+    "saved": "Paramètres enregistrés avec succès",
+    "rolesInClerk": "Les rôles se gèrent dans l'organisation, depuis la page Membres.",
+    "openMembers": "Ouvrir la page Membres"
   },
   "home": {
     "badge": "La gravité pour une vie meilleure",
@@ -384,7 +387,10 @@
       "createDescription": "Configurer une nouvelle machine Raspberry Pi",
       "namePlaceholder": "Raspberry Pi 1",
       "locationPlaceholder": "Salle 101",
-      "nameRequired": "Le nom est obligatoire"
+      "nameRequired": "Le nom est obligatoire",
+      "organization": "Organisation",
+      "organizationDescription": "La machine appartient à cette organisation ; seuls ses gestionnaires peuvent lui être assignés.",
+      "organizationPlaceholder": "Choisir une organisation..."
     }
   },
   "sessions": {
@@ -446,7 +452,10 @@
     "machinesSaved": "Machines enregistrées : {added, plural, =0 {aucune ajoutée} one {# ajoutée} other {# ajoutées}}, {removed, plural, =0 {aucune retirée} one {# retirée} other {# retirées}}.",
     "assignPatients": "Assigner des Patients",
     "assignPatientsDesc": "Sélectionner les patients que ce gestionnaire peut gérer",
-    "patientsSaved": "Patients enregistrés : {added, plural, =0 {aucun ajouté} one {# ajouté} other {# ajoutés}}, {removed, plural, =0 {aucun retiré} one {# retiré} other {# retirés}}."
+    "patientsSaved": "Patients enregistrés : {added, plural, =0 {aucun ajouté} one {# ajouté} other {# ajoutés}}, {removed, plural, =0 {aucun retiré} one {# retiré} other {# retirés}}.",
+    "accessDenied": "Accès refusé. Réservé aux administrateurs de l'organisation.",
+    "notFound": "Gestionnaire introuvable",
+    "membersInClerk": "Pour ajouter ou retirer un gestionnaire, invitez-le ou retirez-le depuis la page Membres. Ici, vous décidez de ses machines et de ses patients dans l'organisation."
   },
   "users": {
     "title": "Gestion des utilisateurs",
@@ -469,7 +478,8 @@
       "admin": "Administrateur",
       "gestionnaire": "Gestionnaire",
       "startedBy": "Démarrée par",
-      "user": "Patient"
+      "user": "Patient",
+      "org_admin": "Administrateur d'organisation"
     }
   },
   "reports": {
@@ -718,5 +728,22 @@
       "invalidHrMax": "La FC max doit être comprise entre 100 et 220 bpm",
       "invalidBirthYear": "Année de naissance invalide"
     }
+  },
+  "organization": {
+    "title": "Organisation",
+    "switching": "Changement d'organisation en cours. Le tableau de bord s'affichera dès que le serveur l'aura pris en compte.",
+    "refused": {
+      "no_active_organization": "Choisissez une organisation pour continuer.",
+      "organization_not_synchronized": "Cette organisation n'est pas encore connue du serveur. Réessayez dans quelques instants.",
+      "unknown_organization_role": "Votre rôle dans cette organisation n'est pas reconnu. Demandez à son administrateur de vérifier votre rôle.",
+      "malformed_organization_claim": "Votre session ne permet pas d'identifier votre organisation. Déconnectez-vous puis reconnectez-vous.",
+      "no_organization": "Votre compte n'appartient à aucune organisation. Demandez une invitation à votre administrateur."
+    },
+    "chooseBelow": "Organisation active :"
+  },
+  "members": {
+    "title": "Membres",
+    "description": "Inviter, retirer et changer le rôle des membres de l'organisation active. Ces changements se font dans Clerk et parviennent au serveur par son webhook.",
+    "accessDenied": "Accès refusé. Réservé aux administrateurs de l'organisation."
   }
 }

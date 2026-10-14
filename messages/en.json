@@ -137,7 +137,8 @@
     "benefits": "Benefits",
     "markets": "Markets",
     "faq": "FAQ",
-    "myMachines": "My machines"
+    "myMachines": "My machines",
+    "members": "Members"
   },
   "sidebar": {
     "main": "Main",
@@ -188,7 +189,9 @@
     "changePassword": "Change Password",
     "twoFactor": "Two-Factor Authentication",
     "saveChanges": "Save Changes",
-    "saved": "Settings saved successfully"
+    "saved": "Settings saved successfully",
+    "rolesInClerk": "Roles are managed in the organization, from the Members page.",
+    "openMembers": "Open the Members page"
   },
   "home": {
     "badge": "Gravity for Life",
@@ -384,7 +387,10 @@
       "createDescription": "Configure a new Raspberry Pi machine",
       "namePlaceholder": "Raspberry Pi 1",
       "locationPlaceholder": "Room 101",
-      "nameRequired": "Name is required"
+      "nameRequired": "Name is required",
+      "organization": "Organization",
+      "organizationDescription": "The machine belongs to this organization; only its managers can be assigned to it.",
+      "organizationPlaceholder": "Choose an organization..."
     }
   },
   "sessions": {
@@ -446,7 +452,10 @@
     "machinesSaved": "Machines saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}.",
     "assignPatients": "Assign Patients",
     "assignPatientsDesc": "Select which patients this gestionnaire can manage",
-    "patientsSaved": "Patients saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}."
+    "patientsSaved": "Patients saved: {added, plural, =0 {none added} other {# added}}, {removed, plural, =0 {none removed} other {# removed}}.",
+    "accessDenied": "Access denied. Organization admins only.",
+    "notFound": "Manager not found",
+    "membersInClerk": "To add or remove a manager, invite or remove them from the Members page. Here you decide their machines and patients in the organization."
   },
   "users": {
     "title": "User Management",
@@ -469,7 +478,8 @@
       "admin": "Administrator",
       "gestionnaire": "Manager",
       "startedBy": "Started by",
-      "user": "Patient"
+      "user": "Patient",
+      "org_admin": "Organization admin"
     }
   },
   "reports": {
@@ -718,5 +728,22 @@
       "invalidHrMax": "Max HR must be between 100 and 220 bpm",
       "invalidBirthYear": "Invalid birth year"
     }
+  },
+  "organization": {
+    "title": "Organization",
+    "switching": "Switching organization. The dashboard will show as soon as the server has taken it into account.",
+    "refused": {
+      "no_active_organization": "Choose an organization to continue.",
+      "organization_not_synchronized": "This organization is not known to the server yet. Try again in a few moments.",
+      "unknown_organization_role": "Your role in this organization is not recognized. Ask its admin to check your role.",
+      "malformed_organization_claim": "Your session does not identify your organization. Sign out, then sign in again.",
+      "no_organization": "Your account does not belong to any organization. Ask your admin for an invitation."
+    },
+    "chooseBelow": "Active organization:"
+  },
+  "members": {
+    "title": "Members",
+    "description": "Invite, remove and change the role of the members of the active organization. These changes are made in Clerk and reach the server through its webhook.",
+    "accessDenied": "Access denied. Organization admins only."
   }
 }

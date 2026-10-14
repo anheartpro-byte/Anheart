@@ -543,6 +543,13 @@ avec un message explicite (`ConvexError`, transmis au navigateur) :
 
 `users.getCurrentUser` ne lève pas dans ces cas : il renvoie le compte avec
 `organization: null` et `role: "user"`, pour que le site sache quoi afficher.
+Son champ `organizationAccess` nomme le cas, dans l'ordre du tableau :
+`organization_not_synchronized`, `unknown_organization_role`,
+`malformed_organization_claim`, `no_organization`, et
+`no_active_organization` pour un jeton sans `org_id` une fois
+`ANHEART_ORG_ID` définie ; `granted` quand l'organisation est acceptée. Le
+site dit au visiteur pourquoi il ne voit rien et lui propose de choisir une
+organisation ([tableau-de-bord.md §2](tableau-de-bord.md#2-rôles-et-accès)).
 
 Quand le jeton nomme une organisation connue, **le jeton seul décide** pour
 l'appelant : son appartenance dans le miroir `memberships` n'est pas consultée,
@@ -805,7 +812,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getOrCreateUser` (mutation) | connecté | Compatibilité historique ; aucun appel depuis l'accueil. Refuse de créer une seconde fiche lorsqu'une adresse correspond déjà à un compte ou à une invitation. Les nouveaux parcours passent par le webhook. |
-| `getCurrentUser` (query) | - | Le compte courant ou `null`, avec `role` (rôle de l'appel : `admin`, `org_admin`, `gestionnaire`, `user`) et `organization` (`{_id, name, slug}`, ou `null` si le serveur n'accepte aucune organisation pour l'appel). |
+| `getCurrentUser` (query) | - | Le compte courant ou `null`, avec `role` (rôle de l'appel : `admin`, `org_admin`, `gestionnaire`, `user`) et `organization` (`{_id, name, slug}`, ou `null` si le serveur n'accepte aucune organisation pour l'appel). Trois champs servent au site : `organizationAccess` (`granted` ou la raison du refus, voir ci-dessus), `organizationClaim` (l'`org_id` du jeton, accepté ou non, `null` sans revendication : le site le compare à l'organisation active de Clerk pour ne rien afficher tant qu'un changement d'organisation n'a pas atteint le serveur) et `rolesManagedInClerk` (vrai dès que `ANHEART_ORG_ID` est définie). |
 | `updateUserRole` | admin Anheart, pendant la transition seulement | Change le rôle d'un membre de son organisation. Refuse dès que `ANHEART_ORG_ID` est définie. |
 | `updateUserProfile` | connecté | Prénom, nom, langue de soi-même. |
 | `listUsers` | connecté | admin Anheart : tous (ou ceux d'un gestionnaire) ; admin d'organisation : les membres actifs de son organisation ; gestionnaire : ses patients dans son organisation ; user : lui-même. Filtre `role` optionnel. `role` est le rôle tenu dans l'organisation de l'appelant. |
@@ -815,9 +822,15 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | `deleteUser` | admin ; gestionnaire pour ses patients seulement | Retrait de l'organisation de l'appelant, ou suppression partout pour l'admin Anheart (voir [§3](#3-règles-dautorisation)). Pas soi-même. |
 | `linkPatientToClerk` | connecté, e-mail vérifié | Lie un patient pré-créé (`clerkId` vide) au compte Clerk, uniquement si l'e-mail **vérifié** de l'appelant est celui du dossier (voir [§3](#3-règles-dautorisation)). **Aucune page ne l'appelle aujourd'hui.** |
 | `assignGestionnaireToUser` / `removeGestionnaireFromUser` | admin ; un gestionnaire pour lui-même | Lien patient ↔ gestionnaire, dans l'organisation de l'appelant ; le patient et le gestionnaire doivent tous deux en être membres actifs, avec ces rôles. Pour l'admin Anheart, le lien se crée dans l'organisation principale du patient. |
-| `listGestionnaires` | admin | Les gestionnaires (tous pour l'admin Anheart, ceux de son organisation pour un admin d'organisation), avec leurs nombres de machines et de patients. `[]` pour tout autre rôle. |
+| `listGestionnaires` | admin | Les gestionnaires (tous pour l'admin Anheart, ceux de son organisation pour un admin d'organisation), avec leurs nombres de machines et de patients. `[]` pour tout autre rôle. Option `organizationId` : les gestionnaires de cette organisation seulement, liens comptés dans celle-ci (le formulaire de machine la passe) ; `[]` pour un admin d'organisation qui en nomme une autre que la sienne. |
 | `assignPatientsToGestionnaire` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des patients d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `user_gestionnaires` de cette organisation, insère les liens manquants et supprime ceux qui ne sont plus demandés. Un lien déjà présent n'est pas réécrit (il garde son auteur et sa date), et la même liste envoyée deux fois n'écrit rien. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : ses patients d'une autre organisation ne bougent pas. Seul un patient actif de cette organisation est lié ; tout autre identifiant (compte inconnu, patient d'une autre organisation, compte qui n'est pas un patient) est laissé de côté, avec la même réponse dans les trois cas. Un identifiant répété ne crée qu'un lien. Retourne `{added, removed}` : ce qui a été écrit. Une mutation Convex est une transaction sérialisable : deux appels concurrents sur le même gestionnaire s'appliquent l'un après l'autre, et la liste du dernier s'applique en entier. |
 | `getPatientsForGestionnaire`, `getGestionnairesForPatient` | admin / gestionnaire concerné | Lectures. |
+
+### `organizations.ts`
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `listOrganizations` (query) | admin Anheart | Les organisations connues du serveur et non supprimées dans Clerk, triées par nom : celles où l'admin Anheart peut créer une machine. `[]` pour tout autre rôle. |
 
 ### `machines.ts`
 
@@ -825,7 +838,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 |---|---|---|
 | `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin). Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
-| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
+| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `organizationId` (l'organisation de la machine, dont seuls les gestionnaires peuvent lui être assignés), `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin Anheart | Annule la suppression. |
@@ -1353,7 +1366,7 @@ mono-organisation.
    Quand l'utilisateur n'a pas d'organisation active, Clerk met `org_id` à
    `null` : Convex le traite comme « pas d'organisation active ».
 
-**C. Dans Convex (une fois le site capable de choisir une organisation)**
+**C. Dans Convex (le site sait choisir une organisation depuis ANH-187)**
 
 1. Définir la variable d'environnement du déploiement :
    ```bash
@@ -1368,9 +1381,11 @@ mono-organisation.
 3. Inviter le premier admin dans l'organisation Anheart depuis Clerk, avec le
    rôle `org:admin`.
 
-Ne définir `ANHEART_ORG_ID` qu'une fois le sélecteur d'organisation en place
-sur le site : sans organisation active dans sa session Clerk, un utilisateur
-n'a plus accès à rien.
+Ne définir `ANHEART_ORG_ID` qu'une fois en ligne la version du site qui porte
+le sélecteur d'organisation (ANH-187) : sans organisation active dans sa
+session Clerk, un utilisateur n'a plus accès à rien, et le site le lui dit en
+lui proposant d'en choisir une. Procédure d'amorçage pas à pas, côté site :
+[tableau-de-bord.md §2](tableau-de-bord.md#amorçage-dun-déploiement).
 
 Les organisations clientes arrivent par le webhook décrit ci-dessous ; ni la
 migration ni la première connexion ne les créent à partir d'un jeton. Tant que
@@ -1525,6 +1540,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/authorization.matrix.ts` | La **matrice d'autorisation** : la politique de chaque fonction publique, une ligne par rôle, par côté quand l'accès dépend de la propriété, et par organisation. Nom à deux points : non déployé. |
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
 | `convex/organizations.test.ts` | D'où viennent l'organisation et le rôle d'un appel : revendications acceptées et refusées, admin Anheart, premier passage d'un compte, et la transition avant et après `ANHEART_ORG_ID`. |
+| `convex/organizationChoice.test.ts` | Ce que le site lit pour travailler dans une organisation (ANH-187) : raison du refus de l'organisation de l'appel, `org_id` du jeton, rôles portés par Clerk ; organisations proposées à la création d'une machine ; gestionnaires d'une organisation et leurs liens comptés dans celle-ci. |
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
 | `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin, isStaff } from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
@@ -102,8 +103,9 @@ function LaunchForm({
 
   const me = useQuery(api.users.getCurrentUser);
   const machines = useQuery(api.training.listLaunchableMachines, {});
-  const isManager = me?.role === "admin" || me?.role === "gestionnaire";
-  const isAdmin = me?.role === "admin";
+  const isManager = isStaff(me?.role);
+  // An admin of the organisation picks among all its patients.
+  const isAdmin = isOrganizationAdmin(me?.role);
 
   const allUsers = useQuery(
     api.users.listUsers,

@@ -276,6 +276,9 @@ export const getMachine = query({
     v.object({
       _id: v.id("machines"),
       _creationTime: v.number(),
+      // The organisation the machine belongs to: only its gestionnaires can
+      // be assigned (the machine form lists those).
+      organizationId: v.optional(v.id("organizations")),
       name: v.string(),
       status: v.union(
         v.literal("online"),
@@ -345,6 +348,7 @@ export const getMachine = query({
     return {
       _id: machine._id,
       _creationTime: machine._creationTime,
+      organizationId: machine.organizationId,
       name: machine.name,
       status: machine.status,
       lastHeartbeat: machine.lastHeartbeat,

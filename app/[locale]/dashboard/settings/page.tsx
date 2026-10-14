@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Link } from "@/i18n/navigation";
+import { isAnheartAdmin } from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
@@ -61,8 +63,8 @@ export default function SettingsPage() {
     return <SettingsSkeleton />;
   }
 
-  // Only admin can access settings
-  if (user?.role !== "admin") {
+  // Only the Anheart admin can access settings
+  if (!user || !isAnheartAdmin(user.role)) {
     return (
       <div className="text-center py-12">
         <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -124,76 +126,96 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* Role Management */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              {t("settings.roleManagement")}
-            </CardTitle>
-            <CardDescription>
-              {t("settings.roleManagementDesc")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>{t("settings.selectUser")}</Label>
-              <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                <SelectTrigger className="w-full">
-                  <SelectValue
-                    placeholder={t("settings.selectUserPlaceholder")}
-                  />
-                </SelectTrigger>
-                <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
-                  {users
-                    ?.filter((u) => u._id !== user?._id)
-                    .map((u) => (
-                      <SelectItem
-                        key={u._id}
-                        value={u._id}
-                        className="truncate"
-                      >
-                        <span className="truncate">
-                          {u.firstName} {u.lastName}
-                        </span>
-                        <span className="text-muted-foreground ml-1">
-                          - {t(`users.roles.${u.role}`)}
-                        </span>
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
+        {/* Role Management: on the site until Clerk Organizations carries
+            the roles (ANHEART_ORG_ID set), in Clerk from then on. */}
+        {user.rolesManagedInClerk ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                {t("settings.roleManagement")}
+              </CardTitle>
+              <CardDescription>{t("settings.rolesInClerk")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild variant="outline">
+                <Link href="/dashboard/members">
+                  {t("settings.openMembers")}
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                {t("settings.roleManagement")}
+              </CardTitle>
+              <CardDescription>
+                {t("settings.roleManagementDesc")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>{t("settings.selectUser")}</Label>
+                <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue
+                      placeholder={t("settings.selectUserPlaceholder")}
+                    />
+                  </SelectTrigger>
+                  <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
+                    {users
+                      ?.filter((u) => u._id !== user?._id)
+                      .map((u) => (
+                        <SelectItem
+                          key={u._id}
+                          value={u._id}
+                          className="truncate"
+                        >
+                          <span className="truncate">
+                            {u.firstName} {u.lastName}
+                          </span>
+                          <span className="text-muted-foreground ml-1">
+                            - {t(`users.roles.${u.role}`)}
+                          </span>
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-            <div className="space-y-2">
-              <Label>{t("settings.newRole")}</Label>
-              <Select value={selectedRole} onValueChange={setSelectedRole}>
-                <SelectTrigger>
-                  <SelectValue
-                    placeholder={t("settings.selectRolePlaceholder")}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">
-                    {t("users.roles.admin")}
-                  </SelectItem>
-                  <SelectItem value="gestionnaire">
-                    {t("users.roles.gestionnaire")}
-                  </SelectItem>
-                  <SelectItem value="user">{t("users.roles.user")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+              <div className="space-y-2">
+                <Label>{t("settings.newRole")}</Label>
+                <Select value={selectedRole} onValueChange={setSelectedRole}>
+                  <SelectTrigger>
+                    <SelectValue
+                      placeholder={t("settings.selectRolePlaceholder")}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">
+                      {t("users.roles.admin")}
+                    </SelectItem>
+                    <SelectItem value="gestionnaire">
+                      {t("users.roles.gestionnaire")}
+                    </SelectItem>
+                    <SelectItem value="user">{t("users.roles.user")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-            <Button
-              onClick={handleRoleUpdate}
-              disabled={!selectedUserId || !selectedRole || updating}
-            >
-              <Save className="h-4 w-4 mr-2" />
-              {updating ? t("common.loading") : t("settings.updateRole")}
-            </Button>
-          </CardContent>
-        </Card>
+              <Button
+                onClick={handleRoleUpdate}
+                disabled={!selectedUserId || !selectedRole || updating}
+              >
+                <Save className="h-4 w-4 mr-2" />
+                {updating ? t("common.loading") : t("settings.updateRole")}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         {/* System Info */}
         <Card>

@@ -23,6 +23,10 @@ vi.mock("@/components/dashboard/AppSidebar", () => ({
 }));
 vi.mock("@/components/dashboard/Header", () => ({ Header: () => null }));
 vi.mock("@/components/ui/light-rays", () => ({ LightRays: () => null }));
+// What the gate draws has its own tests: here it lets the page through.
+vi.mock("@/components/dashboard/OrganizationGate", () => ({
+  OrganizationGate: ({ children }: { children?: ReactNode }) => children,
+}));
 
 describe("dashboard frame, drawn by the server", () => {
   it("draws the sidebar open and the page in the main area, with no document to read a cookie from", () => {

@@ -3,6 +3,7 @@
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/AppSidebar";
 import { Header } from "@/components/dashboard/Header";
+import { OrganizationGate } from "@/components/dashboard/OrganizationGate";
 import { LightRays } from "@/components/ui/light-rays";
 import { useMemo } from "react";
 
@@ -37,7 +38,7 @@ export default function DashboardLayout({
         />
         <Header />
         <main className="flex-1 overflow-y-auto p-6 relative z-10">
-          {children}
+          <OrganizationGate>{children}</OrganizationGate>
         </main>
       </SidebarInset>
     </SidebarProvider>

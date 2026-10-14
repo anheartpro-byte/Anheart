@@ -1,9 +1,11 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "convex/react";
+import { OrganizationSwitcher } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Link, usePathname } from "@/i18n/navigation";
+import { navigationFor } from "@/lib/organizationAccess";
 import {
   Sidebar,
   SidebarContent,
@@ -27,6 +29,7 @@ import {
   Settings,
   FileText,
   Gauge,
+  UserCog,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -36,84 +39,45 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+/** Every entry the sidebar can show, by key of the `nav` messages. */
+const ENTRIES: Record<string, NavItem> = {
+  gestionnaires: {
+    labelKey: "gestionnaires",
+    href: "/dashboard/gestionnaires",
+    icon: Users,
+  },
+  members: { labelKey: "members", href: "/dashboard/members", icon: UserCog },
+  users: { labelKey: "users", href: "/dashboard/users", icon: Users },
+  settings: { labelKey: "settings", href: "/dashboard/settings", icon: Settings },
+  patients: { labelKey: "patients", href: "/dashboard/patients", icon: Users },
+  machines: { labelKey: "machines", href: "/dashboard/machines", icon: Cpu },
+  myMachines: {
+    labelKey: "myMachines",
+    href: "/dashboard/my-machines",
+    icon: Gauge,
+  },
+  sessions: { labelKey: "sessions", href: "/dashboard/sessions", icon: Activity },
+  reports: { labelKey: "reports", href: "/dashboard/reports", icon: FileText },
+};
+
 export function AppSidebar() {
   const t = useTranslations("nav");
   const tSidebar = useTranslations("sidebar");
+  const locale = useLocale();
   const pathname = usePathname();
   const user = useQuery(api.users.getCurrentUser);
 
-  // Admin-only menu items
-  const adminNavigation: NavItem[] = [
-    {
-      labelKey: "gestionnaires",
-      href: "/dashboard/gestionnaires",
-      icon: Users,
-    },
-    {
-      labelKey: "users",
-      href: "/dashboard/users",
-      icon: Users,
-    },
-    {
-      labelKey: "settings",
-      href: "/dashboard/settings",
-      icon: Settings,
-    },
-  ];
+  // Which sections and entries a role is given: lib/organizationAccess.ts.
+  // Nothing beyond the dashboard while the server accepts no organisation.
+  const navigation = navigationFor(user);
+  const items = (keys: string[]) => keys.map((key) => ENTRIES[key]);
+  const adminNavigation = items(navigation.administration);
+  const managerNavigation = items(navigation.management);
+  const userNavigation = items(navigation.myHealth);
 
-  // Manager (gestionnaire) menu items
-  const managerNavigation: NavItem[] = [
-    {
-      labelKey: "patients",
-      href: "/dashboard/patients",
-      icon: Users,
-    },
-    {
-      labelKey: "machines",
-      href: "/dashboard/machines",
-      icon: Cpu,
-    },
-    {
-      labelKey: "myMachines",
-      href: "/dashboard/my-machines",
-      icon: Gauge,
-    },
-    {
-      labelKey: "sessions",
-      href: "/dashboard/sessions",
-      icon: Activity,
-    },
-    {
-      labelKey: "reports",
-      href: "/dashboard/reports",
-      icon: FileText,
-    },
-  ];
-
-  // User (patient) menu items
-  const userNavigation: NavItem[] = [
-    {
-      labelKey: "myMachines",
-      href: "/dashboard/my-machines",
-      icon: Gauge,
-    },
-    {
-      labelKey: "sessions",
-      href: "/dashboard/sessions",
-      icon: Activity,
-    },
-    {
-      labelKey: "reports",
-      href: "/dashboard/reports",
-      icon: FileText,
-    },
-  ];
-
-  // Determine which sections to show based on role
-  const showAdminSection = user?.role === "admin";
-  const showManagerSection =
-    user?.role === "gestionnaire" || user?.role === "admin";
-  const showUserSection = user?.role === "user";
+  const showAdminSection = adminNavigation.length > 0;
+  const showManagerSection = managerNavigation.length > 0;
+  const showUserSection = userNavigation.length > 0;
 
   const renderNavItem = (item: NavItem) => {
     const isActive =
@@ -156,6 +120,18 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        {/* The organisation worked in: every answer of the server is for it.
+            Members are managed in Clerk, from its "Manage" entry or the
+            Members page. Hidden when the sidebar is folded to icons. */}
+        {user && (
+          <div className="px-1 group-data-[collapsible=icon]:hidden">
+            <OrganizationSwitcher
+              hidePersonal
+              afterSelectOrganizationUrl={`/${locale}/dashboard`}
+              afterLeaveOrganizationUrl={`/${locale}/dashboard`}
+            />
+          </div>
+        )}
       </SidebarHeader>
 
       <SidebarContent>

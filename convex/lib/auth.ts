@@ -289,13 +289,28 @@ export async function getCurrentUserOrThrow(ctx: Ctx): Promise<CurrentUser> {
 }
 
 /**
- * The caller's account, and the organisation and role of the call when the
- * server accepts them (null otherwise). Returns null when signed out or not
- * registered. Never throws: this is what the site reads to decide what to show.
+ * The Clerk organisation the verified identity names (`org_id`), or null when
+ * it names none. Read as it is, before the server accepts or refuses it: the
+ * site compares it with the organisation Clerk shows as active, to know
+ * whether an answer already reflects an organisation switch.
  */
-export async function getCurrentUser(
-  ctx: Ctx,
-): Promise<{ user: Doc<"users">; session: Session | null } | null> {
+export function organizationClaimOf(identity: UserIdentity): string | null {
+  const claim = identity.org_id;
+  return typeof claim === "string" && claim !== "" ? claim : null;
+}
+
+/**
+ * The caller's account, and the organisation and role of the call when the
+ * server accepts them (null otherwise, with the reason in `refusal`). Returns
+ * null when signed out or not registered. Never throws: this is what the site
+ * reads to decide what to show.
+ */
+export async function getCurrentUser(ctx: Ctx): Promise<{
+  user: Doc<"users">;
+  session: Session | null;
+  refusal: string | null;
+  organizationClaim: string | null;
+} | null> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     return null;
@@ -303,7 +318,10 @@ export async function getCurrentUser(
   const user = await userOf(ctx, identity);
   if (!user) return null;
   const session = await sessionOf(ctx, identity, user);
-  return { user, session: "refusal" in session ? null : session };
+  const organizationClaim = organizationClaimOf(identity);
+  return "refusal" in session
+    ? { user, session: null, refusal: session.refusal, organizationClaim }
+    : { user, session, refusal: null, organizationClaim };
 }
 
 /**

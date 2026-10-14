@@ -28,6 +28,7 @@ import type * as machineHealth from "../machineHealth.js";
 import type * as machines from "../machines.js";
 import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
+import type * as organizations from "../organizations.js";
 import type * as patientInvitations from "../patientInvitations.js";
 import type * as recordHttp from "../recordHttp.js";
 import type * as recordStorage from "../recordStorage.js";
@@ -65,6 +66,7 @@ declare const fullApi: ApiFromModules<{
   machines: typeof machines;
   "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
+  organizations: typeof organizations;
   patientInvitations: typeof patientInvitations;
   recordHttp: typeof recordHttp;
   recordStorage: typeof recordStorage;

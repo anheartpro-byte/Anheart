@@ -11,11 +11,18 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answer,
+  asks,
   mutation,
   mutationCalls,
   resetConvex,
 } from "@/test-support/convex";
-import { closeWindow, windowOpen } from "@/test-support/ui";
+import {
+  choose,
+  chosen,
+  closeWindow,
+  options,
+  windowOpen,
+} from "@/test-support/ui";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dismissFeedback, getFeedbackToasts } from "@/lib/feedback";
 import { MachineFormModal } from "./MachineFormModal";
@@ -42,6 +49,10 @@ vi.mock(
 vi.mock(
   "@/components/ui/checkbox",
   async () => (await import("@/test-support/ui")).checkbox,
+);
+vi.mock(
+  "@/components/ui/select",
+  async () => (await import("@/test-support/ui")).select,
 );
 
 const fr = messages.fr;
@@ -391,6 +402,20 @@ describe("ANH-203 machine window: editing", () => {
     expect(onOpenChange.mock.calls).toEqual([[false]]);
   });
 
+  it("an organisation admin who ticks a gestionnaire sends the new list too", async () => {
+    // ANH-187: the server lets the admin of the machine's organisation assign.
+    signedInAs("org_admin");
+    answer("users:listGestionnaires", [ANNA, BORIS]);
+    const { screen } = open({ machine: MACHINE });
+    await click(box(screen, BORIS));
+
+    await submit(screen.form());
+
+    expect(mutation(ASSIGN).mock.calls).toEqual([
+      [{ machineId, gestionnaireIds: ["anna", "boris"] }],
+    ]);
+  });
+
   it("when the server refuses the machine's own update, the list is not sent and the window stays", async () => {
     signedInAs("admin");
     answer("users:listGestionnaires", [ANNA, BORIS]);
@@ -500,5 +525,120 @@ describe("ANH-203 machine window: editing", () => {
 
     expect(field(screen, "name").value).toBe("Centri Lyon");
     expect(field(screen, "location").value).toBe("Salle 9");
+  });
+});
+
+describe("ANH-187 machine window: the organisation of the machine", () => {
+  const ANHEART = {
+    _id: "org-anheart" as Id<"organizations">,
+    name: "Anheart",
+    slug: "anheart",
+  };
+  const CENTRE_A = {
+    _id: "org-centre-a" as Id<"organizations">,
+    name: "Centre A",
+    slug: "centre-a",
+  };
+
+  /** The Anheart admin, working in the Anheart organisation. */
+  function anheartAdmin() {
+    answer("users:getCurrentUser", {
+      _id: "me",
+      role: "admin",
+      organization: ANHEART,
+    });
+    answer("organizations:listOrganizations", [ANHEART, CENTRE_A]);
+    // Anna manages for Anheart, Boris for centre A.
+    answer("users:listGestionnaires", (args: Record<string, unknown>) =>
+      args.organizationId === CENTRE_A._id ? [BORIS] : [ANNA],
+    );
+  }
+
+  it("lets the Anheart admin choose the organisation of a new machine, starting on their own", () => {
+    anheartAdmin();
+
+    const { screen } = open();
+
+    expect(options(screen)).toEqual(["Anheart", "Centre A"]);
+    expect(chosen(screen)).toEqual(["Anheart"]);
+    expect(screen.text()).toContain(t.form.organizationDescription);
+    // Only the gestionnaires of that organisation are offered.
+    expect(asks("users:listGestionnaires").at(-1)).toEqual({
+      organizationId: ANHEART._id,
+    });
+    expect(screen.text()).toContain("Anna Petit");
+    expect(screen.text()).not.toContain("Boris Noir");
+  });
+
+  it("offers the gestionnaires of the organisation chosen, and creates the machine there", async () => {
+    anheartAdmin();
+    const { screen } = open();
+    await type(field(screen, "name"), "Centri Lyon");
+
+    await choose(screen, "Centre A");
+    expect(screen.text()).toContain("Boris Noir");
+    expect(screen.text()).not.toContain("Anna Petit");
+    await click(box(screen, BORIS));
+    await submit(screen.form());
+
+    expect(mutationCalls()).toEqual({
+      [CREATE]: [
+        [
+          {
+            name: "Centri Lyon",
+            location: undefined,
+            gestionnaireIds: [BORIS._id],
+            organizationId: CENTRE_A._id,
+          },
+        ],
+      ],
+    });
+  });
+
+  it("forgets a gestionnaire ticked in another organisation than the one finally chosen", async () => {
+    anheartAdmin();
+    const { screen } = open();
+    await type(field(screen, "name"), "Centri Lyon");
+    await click(box(screen, ANNA));
+
+    await choose(screen, "Centre A");
+    await submit(screen.form());
+
+    expect(mutationCalls()[CREATE]).toEqual([
+      [
+        {
+          name: "Centri Lyon",
+          location: undefined,
+          gestionnaireIds: [],
+          organizationId: CENTRE_A._id,
+        },
+      ],
+    ]);
+  });
+
+  it("asks an organisation admin for no organisation: they work in their own", () => {
+    signedInAs("org_admin");
+    answer("users:listGestionnaires", [ANNA]);
+
+    const { screen } = open();
+
+    expect(options(screen)).toEqual([]);
+    expect(asks("organizations:listOrganizations")).not.toContainEqual({});
+    expect(asks("users:listGestionnaires").at(-1)).toEqual({});
+  });
+
+  it("offers, when editing, the gestionnaires of the machine's organisation and no choice of organisation", () => {
+    anheartAdmin();
+
+    const { screen } = open({
+      machine: { ...MACHINE, organizationId: CENTRE_A._id },
+    });
+
+    expect(options(screen)).toEqual([]);
+    expect(asks("organizations:listOrganizations")).not.toContainEqual({});
+    expect(asks("users:listGestionnaires").at(-1)).toEqual({
+      organizationId: CENTRE_A._id,
+    });
+    expect(screen.text()).toContain("Boris Noir");
   });
 });
