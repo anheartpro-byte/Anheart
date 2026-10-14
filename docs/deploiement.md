@@ -319,7 +319,10 @@ D'où l'ordre du premier cas :
    fin, refusés, ne sont plus abandonnés : ils restent sur le disque de la
    console, qui les envoie quand les deux côtés partagent de nouveau une
    majeure (après sa propre mise à jour, donc son redémarrage, si c'est elle
-   qui était en retard). D'ici là la séance reste `active` dans Convex.
+   qui était en retard). D'ici là la séance reste `active` dans Convex ; avec
+   le Convex de ce dépôt, elle y passe « interrompue, fin inconnue » au bout
+   de 10 min, ses heartbeats étant refusés eux aussi, sans que la console soit
+   priée de l'arrêter ([convex.md](convex.md#7-tâche-planifiée)).
 
 `scripts/pi/preflight.sh` dit dans quelle situation se trouve une console avant
 de la démarrer ([section 7.5](#75-vérifier-puis-démarrer)).
@@ -458,8 +461,9 @@ qu'il a déjà. Ne pas supprimer `.sync-baseline.json` sans le vouloir : la
 liste serait refaite de tout ce qui n'a pas de curseur, et un enregistrement
 qui attendait d'être envoyé ne le serait plus (la console le dit, avec le
 nombre). Un enregistrement fait plus tard sans clé configurée est envoyé dès
-qu'une clé l'est de nouveau
-([raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)).
+qu'une clé l'est de nouveau, et aucun réglage ne l'empêche (décision du chef
+de projet du 14 octobre 2026 ; seul levier, manuel :
+[raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)).
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.
@@ -1358,6 +1362,11 @@ nommé la remette en service depuis sa page
 
 > Arrêter la console **pendant une séance** laisse la séance `active` dans
 > Convex (section 4). Terminer la séance à la console avant d'arrêter.
+> En attente du redéploiement ANH-82 : avec le code de ce dépôt, la console
+> envoie cette fin à son démarrage suivant (ANH-129), et Convex marque
+> « interrompue, fin inconnue » une séance dont il n'a plus de nouvelles
+> depuis 10 min (ANH-216, [convex.md](convex.md#7-tâche-planifiée)). Ni l'un
+> ni l'autre n'est en production.
 
 ### 7.7 Un seul chemin
 
@@ -1380,6 +1389,6 @@ est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
 | Rendre les boutons et la pipeline utilisables : environnements GitHub, secrets (dont `CONVEX_DEPLOY_KEY`), variables de serveur en type « Secret », fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 3 et 5 ; l'étape 4, la protection de `main`, est faite depuis le 7 octobre 2026). |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait aujourd'hui que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171. |
 | Donner aux préversions Vercel les valeurs de développement, puis retirer du bouton de préversion le champ d'accord | Un réglage dans Vercel, puis une PR (section 5.5, étape 6). |
-| Corriger la séance orpheline (section 4) | Un choix de conception : côté Pi ou côté Convex. |
+| Corriger la séance orpheline (section 4), puis mettre à jour cette section | Le redéploiement ANH-82 : le correctif est dans le code des deux côtés (ANH-129, fin envoyée au démarrage suivant ; ANH-216, séance marquée « interrompue, fin inconnue » après 10 min sans nouvelles), pas encore en production. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |
 | Lancer une première fois chaque bouton, la préversion de la simulation d'abord | Les réglages de la section 5.5 : aucun des deux workflows n'a encore tourné. |

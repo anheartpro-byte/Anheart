@@ -33,6 +33,8 @@ import {
 const sessionStatusValidator = v.union(
   v.literal("pending"),
   v.literal("active"),
+  // No news of it for a while, its end unknown (`training.interruptSilentSessions`).
+  v.literal("interrupted"),
   v.literal("completed"),
   v.literal("failed"),
 );

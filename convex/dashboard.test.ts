@@ -87,6 +87,29 @@ describe("dashboard.counters: what no figure counts", () => {
     expect(counted.sessions).toEqual({ active: 0, pending: 0 });
   });
 
+  it.each(["admin", "orgAdmin", "manager", "patient"] as const)(
+    "does not count for %s, as active, a session interrupted for lack of news (ANH-216)",
+    async (actor) => {
+      const w = await seedWorld(modules);
+      await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "interrupted",
+        kind: "auto",
+      });
+      await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "active",
+        kind: "auto",
+      });
+
+      const counted = await as(w.t, actor).query(api.dashboard.counters, {});
+
+      expect(counted.sessions).toEqual({ active: 1, pending: 0 });
+    },
+  );
+
   it("counts nothing of centre B for centre A, however much centre B holds", async () => {
     const w = await seedWorld(modules);
     await addMember(w, "orgBSecond", w.orgB, "user");

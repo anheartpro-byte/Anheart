@@ -108,6 +108,7 @@ function training(overrides: Partial<Training> = {}): Training {
     endedAt: STARTED + 1_800_000,
     stopRequestedAt: undefined,
     endReason: undefined,
+    interruptedAt: undefined,
     canStop: false,
     ...overrides,
   };
@@ -276,6 +277,65 @@ describe("session detail: a training session", () => {
       expect(screen.queryByText(fr.sessions.viewLive)).toBeNull();
     },
   );
+
+  it("says an interrupted session has no known end, when it was marked, and still offers its live view", async () => {
+    const markedAt = STARTED + 1_500_000;
+    answer(
+      api.sessions.getSession,
+      session({ status: "interrupted", endedAt: undefined }),
+    );
+    answer(
+      api.training.getTrainingSession,
+      training({
+        status: "interrupted",
+        endedAt: undefined,
+        interruptedAt: markedAt,
+        canStop: true,
+      }),
+    );
+    await open();
+
+    const header = within(
+      screen.getByRole("heading", { level: 1, name: "Paul Patient" })
+        .parentElement?.parentElement as HTMLElement,
+    );
+    expect(header.getByText(fr.sessions.status.interrupted)).toBeTruthy();
+    expect(screen.getByText(fr.sessionDetail.interruptedTitle)).toBeTruthy();
+    expect(
+      screen.getByText(
+        fr.sessionDetail.interruptedDescription.replace("{minutes}", "10"),
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        fr.sessionDetail.interruptedAt.replace(
+          "{date}",
+          format(markedAt, "PPp", { locale: frLocale }),
+        ),
+      ),
+    ).toBeTruthy();
+    expect(valueUnder(fr.sessions.duration)).toBe(fr.sessions.unknownEnd);
+    expect(screen.queryByText(fr.sessions.inProgress)).toBeNull();
+    expect(screen.queryByText(fr.sessionDetail.ended)).toBeNull();
+    expect(screen.queryByText(fr.sessionDetail.failedTitle)).toBeNull();
+    expect(linkTo(fr.sessions.viewLive)).toBe(
+      `/dashboard/sessions/${sessionId}/live`,
+    );
+  });
+
+  it("says an interrupted session has no known end before its training fields arrive", async () => {
+    answer(
+      api.sessions.getSession,
+      session({ status: "interrupted", endedAt: undefined }),
+    );
+    answer(api.training.getTrainingSession, undefined);
+    await open();
+
+    expect(screen.getByText(fr.sessionDetail.interruptedTitle)).toBeTruthy();
+    expect(
+      screen.queryByText(/Marquée interrompue le/),
+    ).toBeNull();
+  });
 
   it("says a pending session waits for the machine", async () => {
     answer(

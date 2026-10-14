@@ -22,6 +22,7 @@ import {
 } from "./lib/auth";
 import { generateApiKey } from "./lib/crypto";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
+import { interruptSilentSessions, resumeNamedSession } from "./training";
 // One threshold for the server's job and for the dashboard, which reads the
 // age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS } from "../lib/training";
@@ -657,6 +658,11 @@ export const recordHeartbeat = internalMutation({
       wifiStrength: args.wifiStrength,
       activeSessionId: sessionId,
     });
+    // The machine runs this session: if the server had marked it interrupted
+    // for lack of news, it is active again.
+    if (sessionId !== undefined) {
+      await resumeNamedSession(ctx, args.machineId, sessionId);
+    }
 
     if (args.health !== undefined) await recordMachineHealth(ctx, machine, args.health, now);
     const expired = await ctx.db.query("machine_heartbeats")
@@ -670,7 +676,9 @@ export const recordHeartbeat = internalMutation({
 });
 
 /**
- * Check for machines that have gone offline
+ * Check for machines that have gone offline, then for training sessions the
+ * server has had no news of for `SESSION_SILENCE_MS` (marked interrupted, end
+ * unknown: `training.interruptSilentSessions`).
  * Called by cron job every minute
  */
 export const checkOfflineMachines = internalMutation({
@@ -678,6 +686,7 @@ export const checkOfflineMachines = internalMutation({
   returns: v.object({
     checkedCount: v.number(),
     markedOfflineCount: v.number(),
+    interruptedSessionCount: v.number(),
   }),
   handler: async (ctx) => {
     const now = Date.now();
@@ -712,6 +721,7 @@ export const checkOfflineMachines = internalMutation({
     return {
       checkedCount: allActiveMachines.length,
       markedOfflineCount,
+      interruptedSessionCount: await interruptSilentSessions(ctx, now),
     };
   },
 });

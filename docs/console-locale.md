@@ -178,7 +178,11 @@ Points à savoir :
 
 - Les variables du processus **priment** sur `raspberry-pi/.env`. Si un `.env` existe et
   contient `MACHINE_API_KEY`, la console se relie au tableau de bord Convex. Forcer
-  `MACHINE_API_KEY=` (vide) pour rester strictement local.
+  `MACHINE_API_KEY=` (vide) pour rester strictement local. Ce qui est enregistré
+  pendant ce temps reste sur le disque, mais part au tableau de bord dès qu'une clé est
+  de nouveau posée si la console a déjà tourné une fois avec une clé sur ce dossier
+  d'enregistrements : aucun réglage ne l'empêche, le seul levier est manuel
+  ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)).
 - `MOTOR_BACKEND`, `ECG_SOURCE` et `ARM_RADIUS_M` sont obligatoires. Une erreur de
   configuration est signalée d'un coup et le processus sort avec le code 2, par exemple :
   `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut : rayon mesure de l'axe a l'occupant, en m`.

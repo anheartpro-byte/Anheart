@@ -41,6 +41,7 @@ import { useFreshnessJudge } from "@/hooks/use-freshness";
 import {
   datedAfterReception,
   formatClock,
+  SESSION_SILENCE_MS,
   TELEMETRY_FRESH_MS,
   type TelemetryPoint,
 } from "@/lib/training";
@@ -99,11 +100,14 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
 
   const isActive = training.status === "active";
   const isPending = training.status === "pending";
+  // No news of it for SESSION_SILENCE_MS: its end is unknown, and it may
+  // still be running. Nothing here is current.
+  const isInterrupted = training.status === "interrupted";
   // An active session whose machine has gone quiet, or sends measurements
   // that are not of now: nothing here is current.
   const silent = isActive && !receivedFresh;
   const late = isActive && receivedFresh && !measuredFresh;
-  const stale = silent || late;
+  const stale = silent || late || isInterrupted;
   // The point whose values are printed must itself be dated now: its own `t`
   // is read again here, whatever the session's answer said of it.
   const lastFresh =
@@ -111,11 +115,14 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   // Only a fresh point may stand for the current heart rate.
   const bpm = lastFresh && last?.bpm !== undefined ? last.bpm : undefined;
 
+  // An interrupted session has no end: it ran at least until its last point.
   const elapsedS = isPending
     ? 0
     : isActive
       ? (now - training.startedAt) / 1000
-      : ((training.endedAt ?? training.startedAt) - training.startedAt) / 1000;
+      : isInterrupted
+        ? Math.max(0, ((last?.t ?? training.startedAt) - training.startedAt) / 1000)
+        : ((training.endedAt ?? training.startedAt) - training.startedAt) / 1000;
   const remainingS =
     training.totalDurationS !== undefined
       ? training.totalDurationS - elapsedS
@@ -232,9 +239,21 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
             {t("training.session.stopRequested")}
           </Banner>
         )}
-        {stale && (
+        {(silent || late) && (
           <Banner tone="warn" icon={<AlertTriangle className="h-5 w-5" />}>
             {late ? t("training.live.lateDesc") : t("training.live.staleDesc")}
+          </Banner>
+        )}
+        {isInterrupted && (
+          <Banner tone="warn" icon={<AlertTriangle className="h-5 w-5" />}>
+            <span className="font-semibold">
+              {t("training.session.interrupted")}
+            </span>
+            <span className="block text-xs mt-1">
+              {t("training.session.interruptedDesc", {
+                minutes: SESSION_SILENCE_MS / 60_000,
+              })}
+            </span>
           </Banner>
         )}
         {training.status === "failed" && (

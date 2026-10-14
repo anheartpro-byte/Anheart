@@ -45,7 +45,13 @@ type Session = {
   machineName: string;
 };
 
-type StatusFilter = "all" | "pending" | "active" | "completed" | "failed";
+type StatusFilter =
+  | "all"
+  | "pending"
+  | "active"
+  | "interrupted"
+  | "completed"
+  | "failed";
 
 /** Sessions asked for at once: the first page, then each "Show more". */
 const PAGE_SIZE = 50;
@@ -119,9 +125,11 @@ export default function SessionsPage() {
           <span className="text-muted-foreground text-sm">
             {row.original.endedAt
               ? formatDuration(row.original.endedAt - row.original.startedAt)
-              : formatDistanceToNow(row.original.startedAt, {
-                  locale: dateLocale,
-                })}
+              : row.original.status === "interrupted"
+                ? t("sessions.unknownEnd")
+                : formatDistanceToNow(row.original.startedAt, {
+                    locale: dateLocale,
+                  })}
           </span>
         ),
       },
@@ -194,6 +202,10 @@ export default function SessionsPage() {
             <TabsTrigger value="all">{t("common.all")}</TabsTrigger>
             <TabsTrigger value="pending">{t("sessions.pending")}</TabsTrigger>
             <TabsTrigger value="active">{t("sessions.active")}</TabsTrigger>
+            {/* No news of them for a while: their end is unknown (ANH-216). */}
+            <TabsTrigger value="interrupted">
+              {t("sessions.interrupted")}
+            </TabsTrigger>
             <TabsTrigger value="completed">
               {t("sessions.completed")}
             </TabsTrigger>
@@ -258,7 +270,8 @@ export default function SessionsPage() {
                           `/dashboard/sessions/${row.original._id}/live`,
                         );
                       } else {
-                        // All other statuses (completed, pending, failed) go to details
+                        // All other statuses (completed, pending, interrupted,
+                        // failed) go to details
                         router.push(`/dashboard/sessions/${row.original._id}`);
                       }
                     }}

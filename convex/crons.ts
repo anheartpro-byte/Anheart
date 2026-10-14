@@ -17,7 +17,9 @@ crons.interval(
 
 /**
  * Check for offline machines every minute
- * Machines are marked offline if no heartbeat received in 90 seconds
+ * Machines are marked offline if no heartbeat received in 90 seconds, and
+ * training sessions the server has had no news of for 10 minutes are marked
+ * interrupted, end unknown (`training.interruptSilentSessions`)
  */
 crons.interval(
   "check-offline-machines",

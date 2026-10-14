@@ -91,6 +91,12 @@ const waiting = listed("D", {
   startedAt: NOW - 30_000,
   endedAt: undefined,
 });
+/** No news of it for 10 minutes: its end is unknown (ANH-216). */
+const interrupted = listed("E", {
+  status: "interrupted",
+  startedAt: NOW - 7_200_000,
+  endedAt: undefined,
+});
 
 /** The row of the table that names `text`. */
 function rowOf(text: string): HTMLElement {
@@ -135,7 +141,7 @@ describe("sessions list: what it asks and shows", () => {
     expect(
       screen.getByRole("heading", { name: fr.sessions.title }),
     ).toBeTruthy();
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByText(fr.sessions.noSessions)).toBeNull();
     expect(screen.queryByText(/sessions$/)).toBeNull();
@@ -218,6 +224,20 @@ describe("sessions list: what it asks and shows", () => {
     },
   );
 
+  it("gives an interrupted session no length and no time since its start: its end is unknown", async () => {
+    serverLists(interrupted);
+    await renderPage(<SessionsPage />);
+
+    const row = within(rowOf("Patient E"));
+    expect(row.getByText(fr.sessions.status.interrupted)).toBeTruthy();
+    expect(row.getByText(fr.sessions.unknownEnd)).toBeTruthy();
+    expect(
+      row.queryByText(
+        formatDistanceToNow(interrupted.startedAt, { locale: frLocale }),
+      ),
+    ).toBeNull();
+  });
+
   // Known and filed: the time since the start is counted on this computer's
   // clock, not on the server's. This is what the page does today.
   it("counts the time since the start of a session that has not ended, on this computer's clock", async () => {
@@ -273,7 +293,7 @@ describe("sessions list: when the server refuses the list", () => {
 
 describe("sessions list: the way to a session", () => {
   it("offers the live view of an active session, and the detail of any other", async () => {
-    serverLists(running, finished, failed, waiting);
+    serverLists(running, finished, failed, waiting, interrupted);
     await renderPage(<SessionsPage />);
 
     const live = within(rowOf("Patient A")).getByRole("link");
@@ -285,6 +305,7 @@ describe("sessions list: the way to a session", () => {
       ["Patient B", "session-B"],
       ["Patient C", "session-C"],
       ["Patient D", "session-D"],
+      ["Patient E", "session-E"],
     ]) {
       const link = within(rowOf(patient)).getByRole("link");
       expect(link.getAttribute("href")).toBe(`/dashboard/sessions/${id}`);
@@ -307,6 +328,7 @@ describe("sessions list: the way to a session", () => {
     ["finished", finished],
     ["failed", failed],
     ["pending", waiting],
+    ["interrupted", interrupted],
   ])(
     "opens the detail when the row of a %s session is clicked",
     async (_name, session) => {
@@ -327,11 +349,17 @@ describe("sessions list: tabs and search", () => {
     [
       "all",
       fr.common.all,
-      ["Patient A", "Patient B", "Patient C", "Patient D"],
+      ["Patient A", "Patient B", "Patient C", "Patient D", "Patient E"],
       {},
     ],
     ["pending", fr.sessions.pending, ["Patient D"], { status: "pending" }],
     ["active", fr.sessions.active, ["Patient A"], { status: "active" }],
+    [
+      "interrupted",
+      fr.sessions.interrupted,
+      ["Patient E"],
+      { status: "interrupted" },
+    ],
     [
       "completed",
       fr.sessions.completed,
@@ -342,7 +370,7 @@ describe("sessions list: tabs and search", () => {
   ])(
     "the %s tab asks the server for the sessions of that status, lists them and counts them",
     async (_name, tab, expected, filters) => {
-      serverListsByStatus(running, finished, failed, waiting);
+      serverListsByStatus(running, finished, failed, waiting, interrupted);
       const { user } = await renderPage(<SessionsPage />);
 
       await user.click(screen.getByRole("tab", { name: tab }));
@@ -361,10 +389,12 @@ describe("sessions list: tabs and search", () => {
       fr.common.all,
       fr.sessions.pending,
       fr.sessions.active,
+      fr.sessions.interrupted,
       fr.sessions.completed,
       fr.sessions.failed,
     ]);
     expect(fr.sessions.pending).toBe("En attente");
+    expect(fr.sessions.interrupted).toBe("Interrompues");
     expect(patientsListed()).toEqual(["Patient D"]);
   });
 

@@ -48,6 +48,11 @@ Sommaire :
   et peut encore refuser (câblage d'arrêt d'urgence non attesté, verdict de
   sécurité en cours, défaut variateur, programmes désactivés…). Un refus revient
   comme une séance `failed` avec la raison du Pi.
+- Seul le Pi termine une séance qu'il a démarrée. Une séance dont Convex n'a
+  plus de nouvelles depuis 10 min est marquée `interrupted` (« interrompue,
+  fin inconnue »), jamais `completed` ni `failed` : le Pi n'en est pas averti,
+  et elle redevient `active` ou se termine dès qu'il se manifeste
+  ([Tâche planifiée](#7-tâche-planifiée)).
 - Deux types de séance d'entraînement :
   - **auto** : un programme enregistré sur le Pi ; la fréquence cardiaque pilote
     la vitesse. C'est **le seul** type qu'on peut lancer depuis le site.
@@ -271,7 +276,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `machineId` | Machine. |
 | `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
 | `startedById` | Qui a lancé (site). |
-| `status` | `pending` → `active` → `completed` ou `failed`. |
+| `status` | `pending` → `active` → `completed` ou `failed`. Une séance `active` dont Convex n'a plus de nouvelles depuis 10 min passe `interrupted` (fin inconnue) ; elle redevient `active` au premier heartbeat de sa machine qui la nomme, et passe `completed` ou `failed` quand la machine envoie sa fin ([Tâche planifiée](#7-tâche-planifiée)). |
 | `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
 | `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation ; une attribution indisponible à l'enregistrement est également tracée. |
@@ -283,11 +288,13 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `localRef` | Clé d'idempotence côté Pi (séances locales). |
 | `stopRequestedAt` | Posé par `requestStop` : le Pi le lit et arrête. |
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … »). |
+| `interruptedAt` | Quand la tâche planifiée a marqué la séance `interrupted` (horloge du serveur). Présent exactement tant que la séance l'est. |
 
 Index : `by_user`, `by_machine`, `by_machine_and_status`,
 `by_machine_and_local_ref`, `by_started_by`, `by_organization`,
 `by_status_and_organization` (les séances actives ou en attente d'une
-organisation, ou de toutes : ce que compte `dashboard.counters`). Pour les
+organisation, ou de toutes : ce que compte `dashboard.counters`, et les
+séances actives que parcourt la tâche planifiée). Pour les
 listes de séances (ANH-158, [§5](#sessionsts-lectures-seulement)), six index
 qui finissent tous par `startedAt` : `by_started`, `by_status_and_started`,
 `by_organization_and_started`, `by_organization_and_status_and_started`,
@@ -757,10 +764,10 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
 | `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow` (voir `getMachineLive`), `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. |
-| `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` → pose `stopRequestedAt` (une seule fois). Autres statuts : rien. |
+| `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine | `pending` → `failed` avec « Cancelled before start by … ». `active` ou `interrupted` → pose `stopRequestedAt` (une seule fois) ; une séance `interrupted` reste ce qu'elle est, et le Pi lit la demande s'il revient avec la séance encore en cours. Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Pour une séance dont la machine dit l'âge, le `t` servi et `sinceT` sont sur l'horloge du serveur ; sinon ce sont les dates écrites par la machine ([Deux horloges](#deux-horloges)). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, et `canStop` (statut `pending`/`active` et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, `interruptedAt` pour une séance `interrupted`, et `canStop` (statut `pending`, `active` ou `interrupted`, et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
 
@@ -798,8 +805,8 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine, au format attendu par le Pi. |
 | `markTrainingStarted` | `pending` → `active`, `startedAt` = maintenant, machine `in_session`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine ou non `pending`. |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
-| `getTrainingStatus` | `{status, active, stopRequested}`. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
+| `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
 | `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
 | `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. |
 
@@ -905,9 +912,9 @@ routes d'entraînement.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
-| `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status`, `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
+| `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
 | `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
-| `getActiveSessionForMachine` | accès machine | Séance active. |
+| `getActiveSessionForMachine` | accès machine | Séance `active` (une séance `interrupted` n'en est pas une). |
 | `getCompletedSessionsForUser` | connecté | Les 100 séances `completed` les plus récentes que l'appelant peut lire. Plus appelée par le site de cette version (la page Rapports lit `listSessionsPaginated`) ; gardée pour le site de la version précédente, qui l'appelle encore entre le déploiement de Convex et celui du site. |
 
 **Les droits avant la limite (ANH-158).** Les trois listes lisent la même
@@ -1236,6 +1243,9 @@ Détails du contrat :
   Sinon seul le heartbeat est enregistré.
 - **Statut de la machine** : chaque heartbeat met `online`, ou `in_session` si
   `activeSessionId` est présent.
+- **Séance nommée** : si `activeSessionId` nomme une séance `interrupted` de
+  cette machine, elle redevient `active` (`interruptedAt` effacé). Une séance
+  d'une autre machine n'est pas touchée.
 - **Versions** : chaque heartbeat écrit `machines.softwareVersion` (le champ
   `software_version` s'il est bien formé : 64 caractères au plus, lettres,
   chiffres, `.`, `_`, `+`, `-` ; sinon le champ est effacé),
@@ -1333,6 +1343,46 @@ les appelait a été retiré du Pi.
 `online` ou `in_session` sans heartbeat depuis **90 s** (`LIVE_FRESH_MS`, le
 seuil du site) passe `offline`. Le site n'attend pas ce passage pour
 l'afficher hors ligne : il le fait à 90 s, sur `lastHeartbeat` et `serverNow`.
+
+**Séance sans nouvelles (ANH-216).** Le même passage marque `interrupted`,
+avec `interruptedAt`, toute séance d'entraînement `active` dont Convex n'a eu
+**aucune nouvelle depuis 10 min** (`SESSION_SILENCE_MS`, `lib/training.ts` ;
+`interruptSilentSessions`, `convex/training.ts`). Une nouvelle d'une séance,
+toujours datée par le serveur, c'est :
+
+- un heartbeat de **sa** machine qui la nomme (`activeSessionId`) : une
+  console qui fait tourner la séance la nomme à chaque heartbeat, toutes les
+  10 s ;
+- la réception de son point de plus grand `t` ou de son événement de plus
+  grand rang (une console qui rattrape une séance finie ne la nomme plus,
+  mais en envoie les mesures) ;
+- sa déclaration par la machine (`_creationTime` d'une séance locale) ou la
+  confirmation de son départ (`startedAt` d'un lancement du site).
+
+Le passage n'est donc pas celui de la machine hors ligne : une machine qui
+répond mais ne nomme plus la séance (console redémarrée sur un enregistrement
+illisible) la voit marquée aussi, et une machine muette 2 min ne fait rien
+marquer. Les séances de l'ancien mode (sans `kind`) ne sont pas touchées.
+
+`interrupted` n'est **pas une fin** : la séance peut tourner encore sur une
+machine dont le lien est coupé depuis 10 min. Rien n'est demandé à la
+machine : `getTrainingStatus` répond `active: true`, `requestStop` pose la
+demande d'arrêt qu'elle lira si elle revient, le premier heartbeat qui la
+nomme la rend `active`, et la fin qu'elle envoie, même tard, la passe
+`completed` ou `failed` avec sa date et sa raison. Ses points et ses
+événements sont stockés comme avant (aucune borne de fin : `endedAt` est
+absent). Le passage rend `{checkedCount, markedOfflineCount,
+interruptedSessionCount}`.
+
+**Avec les limites de débit (ANH-166).** Un heartbeat, un lot de points ou
+d'événements refusé en 429 n'écrit rien, il n'est donc pas une nouvelle.
+Une console qui fonctionne comme prévu n'atteint aucune de ces limites : un
+heartbeat toutes les 10 s pour une limite d'un par 5 s, et ses lots de
+télémétrie et d'événements sous les leurs. Une console qui en envoie trop
+voit les requêtes en trop refusées, pas les autres : il en passe toujours
+au moins une par 5 s. La déclaration, la confirmation du départ, la fin, la
+question de l'arrêt (`getTrainingStatus`) et `requestStop` ne sont pas
+limitées, ni la tâche planifiée.
 
 ---
 
@@ -1858,7 +1908,7 @@ régressions locales exécutables.
 | 8 | **Logiciel d'invitation et d'amorçage ANH-157.** | Action Clerk, liaison par webhook à adresse vérifiée et premier admin `org:admin`. La configuration et la recette de l'environnement sont requises avant mise en production (§8). |
 | 9 | **Corrigé par ANH-148 : historique borné.** | Heartbeats conservés 24 h, santé agrégée par 5 min conservée 90 jours. Purge quotidienne et par machine active, sans purge de télémétrie. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
-| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |
+| 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex, au plus 10 min sans nouvelles : elle passe alors `interrupted` (« interrompue, fin inconnue », [Tâche planifiée](#7-tâche-planifiée), ANH-216), et le reste si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)). Aucune fonction Convex ne termine une séance active sans la fin envoyée par la console. La machine repasse `online` au redémarrage. Ce marquage attend le redéploiement ANH-82 pour la production. |
 
 Fait le 1er octobre 2026 : déploiement sur l'environnement de développement,
 essai de bout en bout avec un Pi en simulation complète. Reste à faire, dans
@@ -1899,6 +1949,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
+| `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée, membre de deux organisations compté dans chacune), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
