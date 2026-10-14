@@ -279,6 +279,10 @@ test("one JavaScript package manager: npm, with package-lock.json for its lock",
   assert.deepEqual(locks, ["package-lock.json"]);
   const manifest = JSON.parse(atRoot("package.json"));
   assert.ok(manifest.packageManager === undefined || String(manifest.packageManager).startsWith("npm@"));
+  // A name npm accepts: npm 11 refuses to write the bill of materials of a package named "-t", as this one was.
+  assert.match(manifest.name, /^[a-z0-9][a-z0-9._-]*$/);
+  const lock = JSON.parse(atRoot("package-lock.json"));
+  assert.deepEqual([lock.name, lock.packages[""].name], [manifest.name, manifest.name]);
   // What installs the site, in a workflow or in a page of the documentation, is npm.
   const installers = /\b(bun|yarn|pnpm)( install| add| run|x)\b/;
   for (const path of tracked.filter((file) => /^\.github\/workflows\/.*\.ya?ml$|^docs\/.*\.md$|^README\.md$/.test(file))) {
